@@ -28,7 +28,9 @@ Auto-created indexes on startup: `next_msg`, `ordered_msg`, `stuck_msgs`, `find_
 
 ## Transaction Modes
 
-`TransactionalMode` enum controls two operating modes:
+Every queue operation runs in its own transaction — queue/dequeue and acknowledge/retry are separate
+single-document transactions. The `TransactionalMode` enum that used to make this a choice was removed in
+0.60; `FullyTransactional` was documented as broken for retries and dead-lettering.
 
 **`SingleOperationTransaction`** (recommended, and `builder()`'s default) — each queue op is its own atomic Mongo operation. Requires `messageHandlingTimeout`, which `builder()` defaults to `DEFAULT_MESSAGE_HANDLING_TIMEOUT` (30s). Stuck-message reset runs lazily per poll cycle when timeout elapsed.
 
@@ -75,7 +77,6 @@ All ITs need Docker (Testcontainers spins up MongoDB).
 ## Gotchas
 
 - **`builder()` defaults to `SingleOperationTransaction`, not `FullyTransactional`.** Until 0.40.x it produced `FullyTransactional` (it delegated to the constructor taking a `unitOfWorkFactory`) while `PostgresqlDurableQueues.builder()` produced `SingleOperationTransaction` — identical application code got different delivery semantics per database, with nothing in either API saying so. Converged on `SingleOperationTransaction` + a 30s `DEFAULT_MESSAGE_HANDLING_TIMEOUT` matching the PostgreSQL side, because `FullyTransactional` is the mode that is broken for retries/DLQ. **The constructors are unaffected** — each still produces the mode its javadoc names. Behaviour change for builder callers; see `docs/MIGRATION-NEXT_MAJOR.md`.
-- **The cross-DB ITs do not pin the default** — `DurableQueuesIT` and friends *branch* on `getTransactionalMode()`, so they pass whichever way it drifts. `MongoDurableQueuesBuilderDefaultsTest` / `PostgresqlDurableQueuesBuilderDefaultsTest` are what actually hold the two builders in agreement; don't delete them as redundant.
 - Collection name is lower-cased on construction; `MongoUtil.checkIsValidCollectionName()` is first-line defense but not exhaustive — never derive name from untrusted input.
 - `DurableQueuedMessage.getMessage()` requires `deserializeMessagePayloadFunction` to be injected before call; omitting `setDeserializeMessagePayloadFunction()` → NPE. Injection happens in `getNextMessageReadyForDelivery`, `getQueuedMessage`, and `queryQueuedMessages`.
 - `acknowledgeMessageAsHandled` matches on `isDeadLetterMessage=false`; if handler calls `markAsDeadLetterMessage` mid-flight then ack returns `true` via secondary DLQ check — this is intentional.

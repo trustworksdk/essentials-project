@@ -70,7 +70,7 @@ public final class DurableQueueConsumerDependencies<DURABLE_QUEUES extends Durab
 
     /**
      * @return the {@link UnitOfWorkFactory}. May be {@code null} when the {@link DurableQueues} implementation runs in
-     *         {@link TransactionalMode#SingleOperationTransaction}, where no caller-visible unit of work exists
+     *         {@code SingleOperationTransaction}, where no caller-visible unit of work exists
      */
     public UOW_FACTORY unitOfWorkFactory() {
         return unitOfWorkFactory;

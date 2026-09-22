@@ -51,9 +51,7 @@ public final class PostgresqlDurableQueuesBuilder {
     private String                                                        sharedQueueTableName         = DEFAULT_DURABLE_QUEUES_TABLE_NAME;
     private MultiTableChangeListener<TableChangeNotification>             multiTableChangeListener     = null;
     private Function<ConsumeFromQueue, QueuePollingOptimizer>             queuePollingOptimizerFactory = null;
-    private TransactionalMode                                             transactionalMode            = TransactionalMode.SingleOperationTransaction;
     /**
-     * Only used if {@link #transactionalMode} has value {@link TransactionalMode#SingleOperationTransaction}
      */
     private Duration                                                      messageHandlingTimeout       = Duration.ofSeconds(30);
 
@@ -136,7 +134,7 @@ public final class PostgresqlDurableQueuesBuilder {
     }
 
     /**
-     * @param messageHandlingTimeout Only required if <code>transactionalMode</code> is {@link TransactionalMode#SingleOperationTransaction}.<br>
+     * @param messageHandlingTimeout the timeout for messages being delivered but not yet acknowledged
      *                               The parameter defines the timeout for messages being delivered, but haven't yet been acknowledged.
      *                               After this timeout the message delivery will be reset and the message will again be a candidate for delivery<br>
      *                               Default is 30 seconds
@@ -147,17 +145,6 @@ public final class PostgresqlDurableQueuesBuilder {
         return this;
     }
 
-    /**
-     * @param transactionalMode The {@link TransactionalMode} for this {@link DurableQueues} instance. If set to {@link TransactionalMode#SingleOperationTransaction}
-     *                          then the consumer MUST call the {@link DurableQueues#acknowledgeMessageAsHandled(AcknowledgeMessageAsHandled)} explicitly in a new {@link UnitOfWork}<br>
-     *                          Note: The default consumer calls {@link DurableQueues#acknowledgeMessageAsHandled(AcknowledgeMessageAsHandled)} after successful message handling
-     *                          Default value {@link TransactionalMode#SingleOperationTransaction}
-     * @return this builder instance
-     */
-    public PostgresqlDurableQueuesBuilder setTransactionalMode(TransactionalMode transactionalMode) {
-        this.transactionalMode = transactionalMode;
-        return this;
-    }
 
     /**
      * Set whether to use the {@link CentralizedMessageFetcher} for optimized message fetching across multiple queues.
@@ -267,7 +254,6 @@ public final class PostgresqlDurableQueuesBuilder {
                                                        sharedQueueTableName,
                                                        multiTableChangeListener,
                                                        queuePollingOptimizerFactory,
-                                                       transactionalMode,
                                                        messageHandlingTimeout,
                                                        useCentralizedMessageFetcher,
                                                        centralizedMessageFetcherPollingInterval,

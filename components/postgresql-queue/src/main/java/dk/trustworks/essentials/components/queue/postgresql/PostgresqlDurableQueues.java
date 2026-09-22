@@ -105,11 +105,10 @@ public final class PostgresqlDurableQueues implements BatchMessageFetchingCapabl
     private final       Function<ConsumeFromQueue, QueuePollingOptimizer>                       queuePollingOptimizerFactory;
     /**
      * The {@code messageHandlingTimeout} applied by the constructors that do not take one, matching
-     * {@code PostgresqlDurableQueuesBuilder}'s default. Required by {@link TransactionalMode#SingleOperationTransaction}.
+     * {@code PostgresqlDurableQueuesBuilder}'s default.
      */
     public static final Duration                                                                DEFAULT_MESSAGE_HANDLING_TIMEOUT = Duration.ofSeconds(30);
 
-    private final TransactionalMode         transactionalMode;
     private       CentralizedMessageFetcher centralizedMessageFetcher;
     /**
      * Flag indicating whether to use the {@link CentralizedMessageFetcher} or the legacy
@@ -131,12 +130,10 @@ public final class PostgresqlDurableQueues implements BatchMessageFetchingCapabl
 
     private   Function<QueueName, QueuePollingOptimizer> centralizedQueuePollingOptimizerFactory;
     /**
-     * Only used if {@link #transactionalMode} has value {@link TransactionalMode#SingleOperationTransaction}
      */
     private   int                                        messageHandlingTimeoutMs;
     /**
      * Contains the timestamp of the last performed {@link #resetMessagesStuckBeingDelivered(QueueName)} check<br>
-     * Only used if {@link #transactionalMode} has value {@link TransactionalMode#SingleOperationTransaction}
      */
     protected ConcurrentMap<QueueName, Instant>          lastResetStuckMessagesCheckTimestamps = new ConcurrentHashMap<>();
 
@@ -277,7 +274,6 @@ public final class PostgresqlDurableQueues implements BatchMessageFetchingCapabl
              sharedQueueTableName,
              multiTableChangeListener,
              queuePollingOptimizerFactory,
-             TransactionalMode.SingleOperationTransaction,
              DEFAULT_MESSAGE_HANDLING_TIMEOUT,
              true,  // Use centralized message fetcher by default
              Duration.ofMillis(20), // With a 20ms polling interval by default
@@ -296,8 +292,7 @@ public final class PostgresqlDurableQueues implements BatchMessageFetchingCapabl
      *                                                 See the other constructors for the full security note on this parameter.
      * @param multiTableChangeListener                 optional {@link MultiTableChangeListener} that allows {@link PostgresqlDurableQueues} to use {@link QueuePollingOptimizer}
      * @param queuePollingOptimizerFactory             optional {@link QueuePollingOptimizer} factory that creates a {@link QueuePollingOptimizer} per {@link ConsumeFromQueue} command
-     * @param transactionalMode                        The {@link TransactionalMode} for this {@link DurableQueues} instance
-     * @param messageHandlingTimeout                   Only required if <code>transactionalMode</code> is {@link TransactionalMode#SingleOperationTransaction}
+     * @param messageHandlingTimeout                   the timeout for messages being delivered but not yet acknowledged
      * @param useCentralizedMessageFetcher             Whether to use the {@link CentralizedMessageFetcher} (true) or fallback to the traditional {@link DefaultDurableQueueConsumer} (false)
      * @param centralizedMessageFetcherPollingInterval Set the polling interval for the {@link CentralizedMessageFetcher}
      * @param centralizedQueuePollingOptimizerFactory  Optional factory function that creates a {@link QueuePollingOptimizer} for each queue when using centralized message fetching
@@ -312,7 +307,6 @@ public final class PostgresqlDurableQueues implements BatchMessageFetchingCapabl
                                    String sharedQueueTableName,
                                    MultiTableChangeListener<TableChangeNotification> multiTableChangeListener,
                                    Function<ConsumeFromQueue, QueuePollingOptimizer> queuePollingOptimizerFactory,
-                                   TransactionalMode transactionalMode,
                                    Duration messageHandlingTimeout,
                                    boolean useCentralizedMessageFetcher,
                                    Duration centralizedMessageFetcherPollingInterval,
@@ -343,7 +337,6 @@ public final class PostgresqlDurableQueues implements BatchMessageFetchingCapabl
 
         this.multiTableChangeListener = Optional.ofNullable(multiTableChangeListener);
         this.queuePollingOptimizerFactory = queuePollingOptimizerFactory != null ? queuePollingOptimizerFactory : this::createQueuePollingOptimizerFor;
-        this.transactionalMode = requireNonNull(transactionalMode, "No transactionalMode instance provided");
 
         // Initialize the centralized message fetcher
         if (useCentralizedMessageFetcher) {
@@ -355,10 +348,8 @@ public final class PostgresqlDurableQueues implements BatchMessageFetchingCapabl
             this.centralizedQueuePollingOptimizerFactory = centralizedQueuePollingOptimizerFactory != null ? centralizedQueuePollingOptimizerFactory : this::createCentralizedQueuePollingOptimizerFor;
         }
 
-        if (transactionalMode == TransactionalMode.SingleOperationTransaction) {
-            messageHandlingTimeoutMs = (int) requireNonNull(messageHandlingTimeout, "No messageHandlingTimeout provided").toMillis();
-            addInterceptor(new SingleOperationTransactionDurableQueuesInterceptor(unitOfWorkFactory));
-        }
+        messageHandlingTimeoutMs = (int) requireNonNull(messageHandlingTimeout, "No messageHandlingTimeout provided").toMillis();
+        addInterceptor(new SingleOperationTransactionDurableQueuesInterceptor(unitOfWorkFactory));
         this.multiTableChangeListener.ifPresent(listener -> listener.addDuplicationFilterAsFirst(new QueueNameDuplicationFilter()));
 
         initializeQueueTables();
@@ -718,11 +709,6 @@ public final class PostgresqlDurableQueues implements BatchMessageFetchingCapabl
     }
 
     @Override
-    public TransactionalMode getTransactionalMode() {
-        return transactionalMode;
-    }
-
-    @Override
     public Optional<UnitOfWorkFactory<? extends UnitOfWork>> getUnitOfWorkFactory() {
         return Optional.ofNullable(unitOfWorkFactory);
     }
@@ -839,7 +825,7 @@ public final class PostgresqlDurableQueues implements BatchMessageFetchingCapabl
      *   <li>The maximum polling interval is set to 20x the consumer's configured polling interval</li>
      * </ul>
      * @see SimpleQueuePollingOptimizer
-     * @see PostgresqlDurableQueues#PostgresqlDurableQueues(HandleAwareUnitOfWorkFactory, JSONSerializer, String, MultiTableChangeListener, Function, TransactionalMode, Duration)
+     * @see PostgresqlDurableQueues#PostgresqlDurableQueues(HandleAwareUnitOfWorkFactory, JSONSerializer, String, MultiTableChangeListener, Function, Duration)
      */
     private QueuePollingOptimizer createQueuePollingOptimizerFor(ConsumeFromQueue operation) {
         var pollingIntervalMs = operation.getPollingInterval().toMillis();
@@ -863,7 +849,6 @@ public final class PostgresqlDurableQueues implements BatchMessageFetchingCapabl
      *   <li>Polling interval decrease factor: 0.1 (90% decrease when messages found)</li>
      * </ul>
      * @throws IllegalStateException if called and the centralized message fetcher is not enabled
-     * @see PostgresqlDurableQueues#PostgresqlDurableQueues(HandleAwareUnitOfWorkFactory, JSONSerializer, String, MultiTableChangeListener, Function, TransactionalMode, Duration, boolean, Duration, Function, boolean)
      */
     private QueuePollingOptimizer createCentralizedQueuePollingOptimizerFor(QueueName queueName) {
         if (!useCentralizedMessageFetcher) {
@@ -962,10 +947,6 @@ public final class PostgresqlDurableQueues implements BatchMessageFetchingCapabl
             jsonPayload = jsonSerializer.serialize(message.getPayload());
         } catch (JSONSerializationException e) {
             throw new DurableQueueException(msg("Failed to serialize message payload of type", message.getPayload().getClass().getName()), e, queueName);
-        }
-
-        if (transactionalMode == TransactionalMode.FullyTransactional) {
-            unitOfWorkFactory.getRequiredUnitOfWork();
         }
 
         unitOfWorkFactory.usingUnitOfWork(unitOfWork -> {
@@ -1314,13 +1295,12 @@ public final class PostgresqlDurableQueues implements BatchMessageFetchingCapabl
      * than {@link #messageHandlingTimeoutMs}<br>
      * All messages found will have {@link QueuedMessage#isBeingDelivered()} and {@link QueuedMessage#getDeliveryTimestamp()}
      * reset<br>
-     * Only relevant for when using {@link TransactionalMode#SingleOperationTransaction}
      *
      * @param queueName the queue for which we're looking for messages stuck being marked as {@link QueuedMessage#isBeingDelivered()}
      */
     void resetMessagesStuckBeingDelivered(QueueName queueName) {
         // Reset stuck messages
-        if (transactionalMode == TransactionalMode.SingleOperationTransaction) {
+        {
             var now                            = Instant.now();
             var lastStuckMessageResetTimestamp = lastResetStuckMessagesCheckTimestamps.get(queueName);
             if (lastStuckMessageResetTimestamp == null || Duration.between(now, lastStuckMessageResetTimestamp).abs().toMillis() > messageHandlingTimeoutMs) {
@@ -1816,7 +1796,7 @@ public final class PostgresqlDurableQueues implements BatchMessageFetchingCapabl
      */
     private void resetMessagesStuckBeingDeliveredAcrossMultipleQueues(Collection<QueueName> queueNames) {
         requireNonNull(queueNames, "No queueNames provided");
-        if (transactionalMode != TransactionalMode.SingleOperationTransaction || queueNames.isEmpty()) {
+        if (queueNames.isEmpty()) {
             return;
         }
 

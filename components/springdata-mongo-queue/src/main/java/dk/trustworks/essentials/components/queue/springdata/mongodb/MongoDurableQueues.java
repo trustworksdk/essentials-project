@@ -67,8 +67,6 @@ import static org.springframework.data.mongodb.core.query.Query.query;
 
 /**
  * Spring-data MongoDB version of the {@link DurableQueues} concept.<br>
- * Supports both {@link TransactionalMode#FullyTransactional} in collaboration with a {@link UnitOfWorkFactory} in order to support queuing message together with business logic (such as failing to handle an Event, etc.)
- * as well as {@link TransactionalMode#SingleOperationTransaction}
  * <br>
  * <u><b>Security:</b></u><br>
  * To support customization of storage collection name, the {@link #getSharedQueueCollectionName()} will be directly used as Collection name,
@@ -102,7 +100,6 @@ public final class MongoDurableQueues implements DurableQueues {
 
     protected       SpringMongoTransactionAwareUnitOfWorkFactory        unitOfWorkFactory;
     protected final MongoTemplate                                       mongoTemplate;
-    private final   TransactionalMode                                   transactionalMode;
     private final   JSONSerializer                                      jsonSerializer;
     protected final String                                              sharedQueueCollectionName;
     private final   ConcurrentMap<QueueName, MongoDurableQueueConsumer> durableQueueConsumers = new ConcurrentHashMap<>();
@@ -121,7 +118,7 @@ public final class MongoDurableQueues implements DurableQueues {
     private          Subscription                      changeSubscription;
 
     /**
-     * Create {@link DurableQueues} running in {@link TransactionalMode#SingleOperationTransaction} with sharedQueueCollectionName: {@value DEFAULT_DURABLE_QUEUES_COLLECTION_NAME}, default {@link ObjectMapper}
+     * Create {@link DurableQueues} with sharedQueueCollectionName: {@value DEFAULT_DURABLE_QUEUES_COLLECTION_NAME}, default {@link ObjectMapper}
      * configuration
      *
      * @param mongoTemplate          the {@link MongoTemplate} used
@@ -130,8 +127,7 @@ public final class MongoDurableQueues implements DurableQueues {
      */
     public MongoDurableQueues(MongoTemplate mongoTemplate,
                               Duration messageHandlingTimeout) {
-        this(TransactionalMode.SingleOperationTransaction,
-             mongoTemplate,
+        this(             mongoTemplate,
              null,
              messageHandlingTimeout,
              createDefaultJSONSerializer(),
@@ -142,10 +138,9 @@ public final class MongoDurableQueues implements DurableQueues {
     /**
      * Create {@link DurableQueues} custom jsonSerializer and sharedQueueCollectionName
      *
-     * @param transactionalMode            The transactional behaviour mode of this {@link MongoDurableQueues}
      * @param mongoTemplate                the {@link MongoTemplate} used
      * @param unitOfWorkFactory            the {@link UnitOfWorkFactory} needed to access the database
-     * @param messageHandlingTimeout       Only relevant when using {@link TransactionalMode#SingleOperationTransaction} and defines the timeout for messages being delivered, but haven't yet been acknowledged.
+     * @param messageHandlingTimeout       The timeout for messages being delivered, but haven't yet been acknowledged.
      *                                     After this timeout the message delivery will be reset and the message will again be a candidate for delivery
      * @param jsonSerializer               the {@link JSONSerializer} that is used to serialize/deserialize message payloads
      * @param sharedQueueCollectionName    the name of the collection that will contain all messages (across all {@link QueueName}'s)<br>
@@ -169,25 +164,17 @@ public final class MongoDurableQueues implements DurableQueues {
      * @param queuePollingOptimizerFactory optional {@link QueuePollingOptimizer} factory that creates a {@link QueuePollingOptimizer} per {@link ConsumeFromQueue} command -
      *                                     if set to null {@link #createQueuePollingOptimizerFor(ConsumeFromQueue)} is used instead
      */
-    MongoDurableQueues(TransactionalMode transactionalMode,
-                                 MongoTemplate mongoTemplate,
+    MongoDurableQueues(                                 MongoTemplate mongoTemplate,
                                  SpringMongoTransactionAwareUnitOfWorkFactory unitOfWorkFactory,
                                  Duration messageHandlingTimeout,
                                  JSONSerializer jsonSerializer,
                                  String sharedQueueCollectionName,
                                  Function<ConsumeFromQueue, QueuePollingOptimizer> queuePollingOptimizerFactory) {
-        this.transactionalMode = requireNonNull(transactionalMode, "No transactionalMode instance provided");
         this.mongoTemplate = requireNonNull(mongoTemplate, "No mongoTemplate instance provided");
-        log.info("Using transactionalMode: {}", transactionalMode);
-        switch (transactionalMode) {
-            case FullyTransactional:
-                this.unitOfWorkFactory = requireNonNull(unitOfWorkFactory, "No unitOfWorkFactory instance provided");
-                break;
-            case SingleOperationTransaction:
-                this.messageHandlingTimeoutMs = (int) requireNonNull(messageHandlingTimeout, "No messageHandlingTimeout instance provided").toMillis();
-                log.info("Using messageHandlingTimeout: {} seconds", messageHandlingTimeout);
-                break;
-        }
+        // Retained for callers that supply one; each queue operation runs in its own transaction regardless.
+        this.unitOfWorkFactory = unitOfWorkFactory;
+        this.messageHandlingTimeoutMs = (int) requireNonNull(messageHandlingTimeout, "No messageHandlingTimeout instance provided").toMillis();
+        log.info("Using messageHandlingTimeout: {} seconds", messageHandlingTimeout);
         this.jsonSerializer = requireNonNull(jsonSerializer, "No messagePayloadObjectMapper");
         this.sharedQueueCollectionName = requireNonNull(sharedQueueCollectionName, "No sharedQueueCollectionName provided").toLowerCase(Locale.ROOT);
         this.queuePollingOptimizerFactory = queuePollingOptimizerFactory != null ? queuePollingOptimizerFactory : this::createQueuePollingOptimizerFor;
@@ -382,11 +369,6 @@ public final class MongoDurableQueues implements DurableQueues {
     }
 
     @Override
-    public final TransactionalMode getTransactionalMode() {
-        return transactionalMode;
-    }
-
-    @Override
     public final Optional<UnitOfWorkFactory<? extends UnitOfWork>> getUnitOfWorkFactory() {
         return Optional.ofNullable(unitOfWorkFactory);
     }
@@ -483,30 +465,25 @@ public final class MongoDurableQueues implements DurableQueues {
         var nextDeliveryTimestamp = isDeadLetterMessage ? null : addedTimestamp.plus(deliveryDelay.orElse(Duration.ZERO));
 
         var isOrderedMessage = message instanceof OrderedMessage;
-        log.trace("[{}:{}] Queuing {}{}message{} with nextDeliveryTimestamp {}. TransactionalMode: {}",
+        log.trace("[{}:{}] Queuing {}{}message{} with nextDeliveryTimestamp {}",
                   queueName,
                   queueEntryId,
                   isDeadLetterMessage ? "Dead Letter " : "",
                   isOrderedMessage ? "Ordered " : "",
                   isOrderedMessage ? msg(" {}:{}", ((OrderedMessage) message).getKey(), ((OrderedMessage) message).getOrder()) : "",
-                  nextDeliveryTimestamp,
-                  transactionalMode);
+                  nextDeliveryTimestamp);
 
-        if (transactionalMode == TransactionalMode.FullyTransactional) {
-            unitOfWorkFactory.getRequiredUnitOfWork();
-        }
 
         var durableQueuedMessage = createDurableQueuedMessage(queueName, isDeadLetterMessage, addedTimestamp, nextDeliveryTimestamp, message);
 
         mongoTemplate.save(durableQueuedMessage, this.sharedQueueCollectionName);
-        log.debug("[{}:{}] Queued {}{}message{} with nextDeliveryTimestamp {}. TransactionalMode: {}",
+        log.debug("[{}:{}] Queued {}{}message{} with nextDeliveryTimestamp {}",
                   queueName,
                   queueEntryId,
                   isDeadLetterMessage ? "Dead Letter " : "",
                   isOrderedMessage ? "Ordered " : "",
                   isOrderedMessage ? msg(" {}:{}", ((OrderedMessage) message).getKey(), ((OrderedMessage) message).getOrder()) : "",
-                  nextDeliveryTimestamp,
-                  transactionalMode);
+                  nextDeliveryTimestamp);
 
         return durableQueuedMessage.getId();
     }
@@ -569,9 +546,6 @@ public final class MongoDurableQueues implements DurableQueues {
         requireNonNull(operation, "You must provide a QueueMessages instance");
         operation.validate();
 
-        if (transactionalMode == TransactionalMode.FullyTransactional) {
-            unitOfWorkFactory.getRequiredUnitOfWork();
-        }
 
         return newInterceptorChainForOperation(operation,
                                                interceptors,
@@ -653,9 +627,6 @@ public final class MongoDurableQueues implements DurableQueues {
                                                (interceptor, interceptorChain) -> interceptor.intercept(operation, interceptorChain),
                                                () -> {
 
-                                                   if (transactionalMode == TransactionalMode.FullyTransactional) {
-                                                       unitOfWorkFactory.getRequiredUnitOfWork();
-                                                   }
 
                                                    var nextDeliveryTimestamp = Instant.now().plus(operation.getDeliveryDelay());
                                                    var queueEntryId          = operation.queueEntryId;
@@ -694,9 +665,6 @@ public final class MongoDurableQueues implements DurableQueues {
                                                interceptors,
                                                (interceptor, interceptorChain) -> interceptor.intercept(operation, interceptorChain),
                                                () -> {
-                                                   if (transactionalMode == TransactionalMode.FullyTransactional) {
-                                                       unitOfWorkFactory.getRequiredUnitOfWork();
-                                                   }
 
 
                                                    var queueEntryId                         = operation.queueEntryId;
@@ -730,9 +698,6 @@ public final class MongoDurableQueues implements DurableQueues {
                                                interceptors,
                                                (interceptor, interceptorChain) -> interceptor.intercept(operation, interceptorChain),
                                                () -> {
-                                                   if (transactionalMode == TransactionalMode.FullyTransactional) {
-                                                       unitOfWorkFactory.getRequiredUnitOfWork();
-                                                   }
 
                                                    var queueEntryId                         = operation.queueEntryId;
                                                    var findMessageToMarkAsDeadLetterMessage = query(where("id").is(queueEntryId));
@@ -766,9 +731,6 @@ public final class MongoDurableQueues implements DurableQueues {
                                                (interceptor, interceptorChain) -> interceptor.intercept(operation, interceptorChain),
                                                () -> {
 
-                                                   if (transactionalMode == TransactionalMode.FullyTransactional) {
-                                                       unitOfWorkFactory.getRequiredUnitOfWork();
-                                                   }
 
                                                    var nextDeliveryTimestamp = Instant.now().plus(operation.getDeliveryDelay());
 
@@ -811,9 +773,6 @@ public final class MongoDurableQueues implements DurableQueues {
                                                (interceptor, interceptorChain) -> interceptor.intercept(operation, interceptorChain),
                                                () -> {
                                                    log.debug("Acknowledging-Message-As-Handled regarding Message with id '{}'", operation.queueEntryId);
-                                                   if (transactionalMode == TransactionalMode.FullyTransactional) {
-                                                       unitOfWorkFactory.getRequiredUnitOfWork();
-                                                   }
 
 
                                                    var queueEntryId = operation.queueEntryId;
@@ -845,9 +804,6 @@ public final class MongoDurableQueues implements DurableQueues {
                                                interceptors,
                                                (interceptor, interceptorChain) -> interceptor.intercept(operation, interceptorChain),
                                                () -> {
-                                                   if (transactionalMode == TransactionalMode.FullyTransactional) {
-                                                       unitOfWorkFactory.getRequiredUnitOfWork();
-                                                   }
 
 
                                                    var queueEntryId    = operation.queueEntryId;
@@ -869,10 +825,7 @@ public final class MongoDurableQueues implements DurableQueues {
                                                interceptors,
                                                (interceptor, interceptorChain) -> interceptor.intercept(operation, interceptorChain),
                                                () -> {
-                                                   log.trace("[{}] Performing GetNextMessageReadyForDelivery using transactionalMode: {}", operation.queueName, transactionalMode);
-                                                   if (transactionalMode == TransactionalMode.FullyTransactional) {
-                                                       unitOfWorkFactory.getRequiredUnitOfWork();
-                                                   }
+                                                   log.trace("[{}] Performing GetNextMessageReadyForDelivery", operation.queueName);
 
                                                    // Use a lock to ensure less WriteConflict if multiple competing threads are busy polling the same queue
                                                    var queueName = operation.queueName;
@@ -941,10 +894,6 @@ public final class MongoDurableQueues implements DurableQueues {
                                                    } catch (Exception e) {
                                                        if (isWriteConflict(e)) {
                                                            log.trace("[{}] WriteConflict finding next message ready for delivery. Will retry", queueName);
-                                                           if (transactionalMode == TransactionalMode.FullyTransactional) {
-                                                               unitOfWorkFactory.getRequiredUnitOfWork().markAsRollbackOnly(e);
-                                                           }
-
                                                            return Optional.<QueuedMessage>empty();
                                                        } else if (e instanceof UncategorizedMongoDbException && e.getCause() instanceof MongoInterruptedException) {
                                                            log.trace("[{}] MongoInterruptedException", queueName);
@@ -964,27 +913,8 @@ public final class MongoDurableQueues implements DurableQueues {
     }
 
     private void markAsDeadLetterMessageInternal(DurableQueueDeserializationException e) {
-        if (transactionalMode == TransactionalMode.FullyTransactional) {
-            // Avoid "state should be: open" error
-            var session = mongoTemplate.getMongoDatabaseFactory().getSession(ClientSessionOptions.builder()
-                                                                                                 .defaultTransactionOptions(TransactionOptions.builder()
-                                                                                                                                              .readConcern(ReadConcern.MAJORITY)
-                                                                                                                                              .writeConcern(WriteConcern.MAJORITY)
-                                                                                                                                              .build())
-                                                                                                 .build());
-            session.startTransaction();
-            try {
-                // Use markAsDeadLetterMessageDirect to avoid deserializing the message again
-                markAsDeadLetterMessageDirect(e.queueEntryId.get(), e);
-                session.commitTransaction();
-            } catch (RuntimeException ex) {
-                session.abortTransaction();
-                Exceptions.sneakyThrow(ex);
-            }
-        } else {
-            // Use markAsDeadLetterMessageDirect to avoid deserializing the message again
-            markAsDeadLetterMessageDirect(e.queueEntryId.get(), e);
-        }
+        // Use markAsDeadLetterMessageDirect to avoid deserializing the message again
+        markAsDeadLetterMessageDirect(e.queueEntryId.get(), e);
     }
 
     private boolean resolveIfMessageShouldBeDelivered(QueueName queueName, DurableQueuedMessage nextMessageToDeliver) {
@@ -1108,13 +1038,12 @@ public final class MongoDurableQueues implements DurableQueues {
      * than {@link #messageHandlingTimeoutMs}<br>
      * All messages found will have {@link QueuedMessage#isBeingDelivered()} and {@link QueuedMessage#getDeliveryTimestamp()}
      * reset<br>
-     * Only relevant for when using {@link TransactionalMode#SingleOperationTransaction}
      *
      * @param queueName the queue for which we're looking for messages stuck being marked as {@link QueuedMessage#isBeingDelivered()}
      */
     protected final void resetMessagesStuckBeingDelivered(QueueName queueName) {
         // Reset stuck messages
-        if (transactionalMode == TransactionalMode.SingleOperationTransaction) {
+        {
             var now                            = Instant.now();
             var lastStuckMessageResetTimestamp = lastResetStuckMessagesCheckTimestamps.get(queueName);
             if (lastStuckMessageResetTimestamp == null || Duration.between(now, lastStuckMessageResetTimestamp).abs().toMillis() > messageHandlingTimeoutMs) {
@@ -1698,9 +1627,7 @@ public final class MongoDurableQueues implements DurableQueues {
         // PostgreSQL side between its constructors and its builder. FullyTransactional is the side documented as
         // broken for retries and dead-lettering, which is why convergence goes this way. Behaviour change for existing
         // builder callers; called out in the migration guide.
-        private TransactionalMode transactionalMode = TransactionalMode.SingleOperationTransaction;
         /**
-         * Only used when {@link #transactionalMode} is {@link TransactionalMode#SingleOperationTransaction}
          */
         private Duration messageHandlingTimeout = DEFAULT_MESSAGE_HANDLING_TIMEOUT;
 
@@ -1749,23 +1676,9 @@ public final class MongoDurableQueues implements DurableQueues {
             return this;
         }
 
-        /**
-         * @param transactionalMode the transactional behaviour mode. Defaults to
-         *                          {@link TransactionalMode#SingleOperationTransaction}, matching
-         *                          {@code PostgresqlDurableQueues.builder()}. In that mode the consumer MUST
-         *                          acknowledge messages explicitly in a new {@code UnitOfWork}.
-         *                          {@link TransactionalMode#FullyTransactional} additionally requires
-         *                          {@link #setUnitOfWorkFactory(SpringMongoTransactionAwareUnitOfWorkFactory)} and a
-         *                          MongoDB replica set
-         * @return this builder
-         */
-        public Builder setTransactionalMode(TransactionalMode transactionalMode) {
-            this.transactionalMode = transactionalMode;
-            return this;
-        }
 
         /**
-         * @param messageHandlingTimeout only used for {@link TransactionalMode#SingleOperationTransaction}: the timeout
+         * @param messageHandlingTimeout the timeout
          *                               for messages that have been delivered but not yet acknowledged. After it
          *                               elapses the delivery is reset and the message becomes a candidate again.
          *                               Defaults to {@link #DEFAULT_MESSAGE_HANDLING_TIMEOUT}
@@ -1781,8 +1694,7 @@ public final class MongoDurableQueues implements DurableQueues {
          */
         @SuppressWarnings("removal")
         public MongoDurableQueues build() {
-            return new MongoDurableQueues(transactionalMode,
-                                          mongoTemplate,
+            return new MongoDurableQueues(                                          mongoTemplate,
                                           unitOfWorkFactory,
                                           messageHandlingTimeout,
                                           jsonSerializer,

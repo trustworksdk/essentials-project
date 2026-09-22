@@ -290,7 +290,6 @@ essentials.reactive.queued-task-cap-factor=1.5
 
 # DurableQueues — backs the command bus, the Inbox and the Outbox
 essentials.durable-queues.shared-queue-collection-name=durable_queues
-essentials.durable-queues.transactional-mode=singleoperationtransaction
 essentials.durable-queues.message-handling-timeout=5s
 essentials.durable-queues.polling-delay-interval-increment-factor=0.5
 essentials.durable-queues.max-polling-interval=2s
@@ -312,9 +311,6 @@ spring.data.mongodb.auto-index-creation=true
 
 Notes on the values this example picks:
 
-- **`transactional-mode=singleoperationtransaction`** is the recommended mode and the starter default.
-  `fullytransactional` makes queue operations join the caller's transaction, which breaks retry counting and
-  dead-lettering, because a failure marks the whole transaction for rollback.
 - **`message-handling-timeout=5s`** is shorter than the starter default (`30s`). It only applies in
   `singleoperationtransaction` mode, where it is how long an unacknowledged in-flight message waits before
   being redelivered — a short value makes the retry behaviour visible in a demo, and is too aggressive for a

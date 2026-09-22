@@ -282,7 +282,6 @@ public class EssentialsComponentsProperties {
 
         private Double            pollingDelayIntervalIncrementFactor      = 0.5d;
         private Duration          maxPollingInterval                       = Duration.ofMillis(2000);
-        private TransactionalMode transactionalMode                        = TransactionalMode.SingleOperationTransaction;
         private Duration          messageHandlingTimeout                   = Duration.ofSeconds(30);
         private boolean           useCentralizedMessageFetcher             = true;
         private Duration          centralizedMessageFetcherPollingInterval = Duration.ofMillis(20);
@@ -311,28 +310,10 @@ public class EssentialsComponentsProperties {
             this.verboseTracing = verboseTracing;
         }
 
-        /**
-         * Get the transactional behaviour mode of the {@link PostgresqlDurableQueues}<br>
-         * Default: {@link TransactionalMode#SingleOperationTransaction}
-         *
-         * @return the transactional behavior mode of the {@link PostgresqlDurableQueues}
-         */
-        public TransactionalMode getTransactionalMode() {
-            return transactionalMode;
-        }
+
 
         /**
-         * Set the transactional behavior mode of the {@link PostgresqlDurableQueues}
-         * Default: {@link TransactionalMode#SingleOperationTransaction}
-         *
-         * @param transactionalMode the transactional behavior mode of the {@link PostgresqlDurableQueues}
-         */
-        public void setTransactionalMode(TransactionalMode transactionalMode) {
-            this.transactionalMode = transactionalMode;
-        }
-
-        /**
-         * Get the Message Handling timeout - Only relevant for {@link TransactionalMode#SingleOperationTransaction}<br>
+         * Get the Message Handling timeout - Only relevant for {@code SingleOperationTransaction}<br>
          * The Message Handling timeout defines the timeout for messages being delivered, but haven't yet been acknowledged.
          * After this timeout the message delivery will be reset, and the message will again be a candidate for delivery<br>
          * Default is 30 seconds
@@ -344,7 +325,7 @@ public class EssentialsComponentsProperties {
         }
 
         /**
-         * Get the Message Handling timeout - Only relevant for {@link TransactionalMode#SingleOperationTransaction}<br>
+         * Get the Message Handling timeout - Only relevant for {@code SingleOperationTransaction}<br>
          * The Message Handling timeout defines the timeout for messages being delivered, but haven't yet been acknowledged.
          * After this timeout the message delivery will be reset, and the message will again be a candidate for delivery<br>
          * Default is 30 seconds

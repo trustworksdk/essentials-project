@@ -77,11 +77,7 @@ public abstract class LocalOrderedMessagesDurableQueueIT<DURABLE_QUEUES extends 
 
     protected Timing usingDurableQueue(String description, Runnable action) {
         var stopWatch = StopWatch.start(description);
-        if (durableQueues.getTransactionalMode() == TransactionalMode.FullyTransactional) {
-            unitOfWorkFactory.usingUnitOfWork(uow -> action.run());
-        } else {
-            action.run();
-        }
+        action.run();
         var timing = stopWatch.stop();
         System.out.println(timing);
         return timing;

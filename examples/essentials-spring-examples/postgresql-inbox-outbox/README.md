@@ -278,7 +278,6 @@ essentials.reactive.queued-task-cap-factor=1.5
 
 # DurableQueues — backs the command bus, the Outbox, and the load harness's Inbox
 essentials.durable-queues.shared-queue-table-name=durable_queues
-essentials.durable-queues.transactional-mode=singleoperationtransaction
 essentials.durable-queues.use-centralized-message-fetcher=true
 essentials.durable-queues.centralized-message-fetcher-polling-interval=20ms
 essentials.durable-queues.polling-delay-interval-increment-factor=0.5
@@ -311,9 +310,6 @@ Notes on the values this example picks:
   uses. `polling-delay-interval-increment-factor` and `max-polling-interval` are listed above but have **no
   effect** in this mode — they configure the legacy per-consumer polling path, which is what
   `use-centralized-message-fetcher=false` selects. They are kept as a worked example of the properties.
-- **`transactional-mode=singleoperationtransaction`** is the recommended mode and the starter default.
-  `fullytransactional` makes queue operations join the caller's transaction, which breaks retry counting and
-  dead-lettering, because a failure marks the whole transaction for rollback.
 - **The fenced-lock and multi-table-change-listener values differ from the starter defaults** (`15s`/`4s` and
   `50ms` respectively). They are set explicitly here so the file doubles as a worked example of the properties;
   neither choice is a recommendation.

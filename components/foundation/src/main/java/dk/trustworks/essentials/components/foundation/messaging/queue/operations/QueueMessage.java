@@ -26,9 +26,7 @@ import java.util.Optional;
 import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 
 /**
- * Queue a message for asynchronous delivery optional delay to a {@link DurableQueueConsumer}<br>
- * Note this method MUST be called within an existing {@link UnitOfWork} IF
- * using {@link TransactionalMode#FullyTransactional}<br>
+ * Queue a message for asynchronous delivery optional delay to a {@link DurableQueueConsumer}<br><br>
  * Operation also matches {@link DurableQueuesInterceptor#intercept(QueueMessage, InterceptorChain)}
  */
 public final class QueueMessage {
@@ -48,8 +46,6 @@ public final class QueueMessage {
 
     /**
      * Queue a message for asynchronous delivery optional delay to a {@link DurableQueueConsumer}<br>
-     * Note this method MUST be called within an existing {@link UnitOfWork} IF
-     * using {@link TransactionalMode#FullyTransactional}
      *
      * @param queueName        the name of the Queue the message is added to
      * @param message          the message being queued ({@link Message}/{@link OrderedMessage})

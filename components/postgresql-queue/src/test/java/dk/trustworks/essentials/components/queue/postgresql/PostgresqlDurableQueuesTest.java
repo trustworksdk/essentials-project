@@ -17,7 +17,6 @@
 package dk.trustworks.essentials.components.queue.postgresql;
 
 import dk.trustworks.essentials.components.foundation.json.JSONSerializer;
-import dk.trustworks.essentials.components.foundation.messaging.queue.TransactionalMode;
 import dk.trustworks.essentials.components.foundation.postgresql.*;
 import dk.trustworks.essentials.components.foundation.transaction.jdbi.HandleAwareUnitOfWorkFactory;
 import org.junit.jupiter.api.Test;
@@ -35,7 +34,6 @@ class PostgresqlDurableQueuesTest {
                                            .setUnitOfWorkFactory(mock(HandleAwareUnitOfWorkFactory.class))
                                            .setJsonSerializer(mock(JSONSerializer.class))
                                            .setSharedQueueTableName(PostgresqlDurableQueues.DEFAULT_DURABLE_QUEUES_TABLE_NAME)
-                                           .setTransactionalMode(TransactionalMode.FullyTransactional)
                                            .setMessageHandlingTimeout(Duration.ofSeconds(30))
                                            .build();
         assertThat(durableQueues.getSharedQueueTableName()).isEqualTo(PostgresqlDurableQueues.DEFAULT_DURABLE_QUEUES_TABLE_NAME);
@@ -48,7 +46,6 @@ class PostgresqlDurableQueuesTest {
                                            .setUnitOfWorkFactory(mock(HandleAwareUnitOfWorkFactory.class))
                                            .setJsonSerializer(mock(JSONSerializer.class))
                                            .setSharedQueueTableName(overriddenTableName)
-                                           .setTransactionalMode(TransactionalMode.FullyTransactional)
                                            .setMessageHandlingTimeout(Duration.ofSeconds(30))
                                            .build();
         assertThat(durableQueues.getSharedQueueTableName()).isEqualTo(overriddenTableName);
@@ -61,7 +58,6 @@ class PostgresqlDurableQueuesTest {
                                            .setUnitOfWorkFactory(mock(HandleAwareUnitOfWorkFactory.class))
                                            .setJsonSerializer(mock(JSONSerializer.class))
                                            .setSharedQueueTableName("where")
-                                           .setTransactionalMode(TransactionalMode.FullyTransactional)
                                            .setMessageHandlingTimeout(Duration.ofSeconds(30))
                                            .build())
                 .isInstanceOf(InvalidTableOrColumnNameException.class);
@@ -71,7 +67,6 @@ class PostgresqlDurableQueuesTest {
                                            .setUnitOfWorkFactory(mock(HandleAwareUnitOfWorkFactory.class))
                                            .setJsonSerializer(mock(JSONSerializer.class))
                                            .setSharedQueueTableName("OR 1=1")
-                                           .setTransactionalMode(TransactionalMode.FullyTransactional)
                                            .setMessageHandlingTimeout(Duration.ofSeconds(30))
                                            .build())
                 .isInstanceOf(InvalidTableOrColumnNameException.class);

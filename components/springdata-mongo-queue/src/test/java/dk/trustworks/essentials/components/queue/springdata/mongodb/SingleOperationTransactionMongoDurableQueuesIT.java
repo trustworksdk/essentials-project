@@ -79,7 +79,7 @@ class SingleOperationTransactionMongoDurableQueuesIT extends DurableQueuesIT<Mon
     }
 
     @Test
-    void test_SingleOperationTransaction_TransactionalMode() {
+    void test_SingleOperationTransaction() {
         // Given
         var queueName = QueueName.of("TestQueue");
 
@@ -108,7 +108,7 @@ class SingleOperationTransactionMongoDurableQueuesIT extends DurableQueuesIT<Mon
     }
 
     @Test
-    void test_SingleOperationTransaction_TransactionalMode_timeout_messages_gets_automatically_retried() throws InterruptedException {
+    void test_SingleOperationTransaction_timeout_messages_gets_automatically_retried() throws InterruptedException {
         // Given
         var queueName = QueueName.of("TestQueue");
 

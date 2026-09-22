@@ -447,7 +447,6 @@ essentials:
     lock-time-out: "15s"
   durable-queues:
     shared-queue-table-name: "durable_queues"
-    transactional-mode: "single-operation-transaction"
 ```
 
 ### Override Pattern

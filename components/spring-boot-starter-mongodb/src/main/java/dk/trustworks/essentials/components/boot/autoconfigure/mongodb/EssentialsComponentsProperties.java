@@ -221,7 +221,6 @@ public class EssentialsComponentsProperties {
     public static class DurableQueues {
         private String sharedQueueCollectionName = MongoDurableQueues.DEFAULT_DURABLE_QUEUES_COLLECTION_NAME;
 
-        private TransactionalMode transactionalMode = TransactionalMode.SingleOperationTransaction;
 
         private Duration messageHandlingTimeout = Duration.ofSeconds(30);
 
@@ -303,28 +302,10 @@ public class EssentialsComponentsProperties {
             this.sharedQueueCollectionName = sharedQueueCollectionName;
         }
 
-        /**
-         * Get the transactional behaviour mode of the {@link MongoDurableQueues}<br>
-         * Default: {@link TransactionalMode#SingleOperationTransaction}
-         *
-         * @return the transactional behaviour mode of the {@link MongoDurableQueues}
-         */
-        public TransactionalMode getTransactionalMode() {
-            return transactionalMode;
-        }
+
 
         /**
-         * Set the transactional behaviour mode of the {@link MongoDurableQueues}
-         * Default: {@link TransactionalMode#SingleOperationTransaction}
-         *
-         * @param transactionalMode the transactional behaviour mode of the {@link MongoDurableQueues}
-         */
-        public void setTransactionalMode(TransactionalMode transactionalMode) {
-            this.transactionalMode = transactionalMode;
-        }
-
-        /**
-         * Get the Message Handling timeout - Only relevant for {@link TransactionalMode#SingleOperationTransaction}<br>
+         * Get the Message Handling timeout - Only relevant for {@code SingleOperationTransaction}<br>
          * The Message Handling timeout defines the timeout for messages being delivered, but haven't yet been acknowledged.
          * After this timeout the message delivery will be reset and the message will again be a candidate for delivery<br>
          * Default is 30 seconds
@@ -336,7 +317,7 @@ public class EssentialsComponentsProperties {
         }
 
         /**
-         * Get the Message Handling timeout - Only relevant for {@link TransactionalMode#SingleOperationTransaction}<br>
+         * Get the Message Handling timeout - Only relevant for {@code SingleOperationTransaction}<br>
          * The Message Handling timeout defines the timeout for messages being delivered, but haven't yet been acknowledged.
          * After this timeout the message delivery will be reset and the message will again be a candidate for delivery<br>
          * Default is 30 seconds

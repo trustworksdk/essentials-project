@@ -423,7 +423,6 @@ essentials.event-store.subscription-manager.event-store-polling-interval=200
 
 # DurableQueues (backs the command bus, every EventProcessor Inbox, and every Outbox)
 essentials.durable-queues.shared-queue-table-name=durable_queues
-essentials.durable-queues.transactional-mode=singleoperationtransaction
 essentials.durable-queues.use-centralized-message-fetcher=true
 essentials.durable-queues.centralized-message-fetcher-polling-interval=20ms
 essentials.durable-queues.polling-delay-interval-increment-factor=0.5
@@ -449,9 +448,6 @@ essentials.metrics.message-handler.enabled=true
 
 Notes on the values this example picks:
 
-- **`transactional-mode=singleoperationtransaction`** is the recommended mode and the starter default.
-  `fullytransactional` makes queue operations join the caller's transaction, which breaks retry counting and
-  dead-lettering, because a failure marks the whole transaction for rollback.
 - **CDC (logical replication) is left at its default**, i.e. enabled with `CdcMode.AUTO`. This example does not
   showcase CDC — [`essentials-performance-lab`](../../essentials-performance-lab/README.md) does — but leaving
   the default in place keeps it honest about what an application gets out of the box: `AUTO` falls back to

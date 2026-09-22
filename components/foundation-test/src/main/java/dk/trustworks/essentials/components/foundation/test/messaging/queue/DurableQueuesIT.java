@@ -90,19 +90,11 @@ public abstract class DurableQueuesIT<DURABLE_QUEUES extends DurableQueues, UOW 
     protected abstract void resetQueueStorage(UOW_FACTORY unitOfWorkFactory);
 
     protected <R> R withDurableQueue(Supplier<R> supplier) {
-        if (durableQueues.getTransactionalMode() == TransactionalMode.FullyTransactional) {
-            return unitOfWorkFactory.withUnitOfWork(uow -> supplier.get());
-        } else {
-            return supplier.get();
-        }
+        return supplier.get();
     }
 
     protected void usingDurableQueue(Runnable action) {
-        if (durableQueues.getTransactionalMode() == TransactionalMode.FullyTransactional) {
-            unitOfWorkFactory.usingUnitOfWork(uow -> action.run());
-        } else {
-            action.run();
-        }
+        action.run();
     }
 
     @Test

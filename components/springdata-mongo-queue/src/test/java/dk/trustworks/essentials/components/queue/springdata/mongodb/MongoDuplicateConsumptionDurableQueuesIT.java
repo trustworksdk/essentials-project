@@ -35,7 +35,7 @@ import java.time.Duration;
  * This test verifies that no duplicate message consumption occurs when
  * multiple MongoDurableQueues instances compete for the same messages.
  * <p>
- * Uses {@link dk.trustworks.essentials.components.foundation.messaging.queue.TransactionalMode#SingleOperationTransaction}
+ * Uses {@code SingleOperationTransaction}
  * mode to avoid MongoDB write conflicts that occur with FullyTransactional mode.<br>
  * In FullyTransactional mode, long-running transactions (due to processing delay) cause
  * write conflicts when multiple consumers try to fetch messages, leading to excessive

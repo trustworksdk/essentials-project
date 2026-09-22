@@ -58,7 +58,6 @@ No tests in this module (pure auto-configuration glue). Integration tests live i
 ## Gotchas
 
 - `MongoFencedLockManager` calls `buildAndStart()` at bean creation → lock manager starts immediately during context refresh, before `LifecycleManager` kicks in.
-- `DurableQueues` `TransactionalMode` default is `SingleOperationTransaction` (not `FullyTransactional`). In `SingleOperationTransaction` mode, message handling timeout (default 30 s) governs redelivery — no UoW participation.
 - `jsonSerializer` bean has `@ConditionalOnMissingClass("...JSONEventSerializer")` — if postgresql event store starter is also on classpath, it wins and this bean is skipped entirely.
 - `EssentialsImmutableJacksonModule` has dual conditions: Objenesis must be on classpath AND `essentials.immutable-jackson-module-enabled=true` (default: property key absent → `havingValue="true"` means it is NOT auto-enabled unless property is explicitly set).
 - Collection names (`fencedLocksCollectionName`, `sharedQueueCollectionName`) are used verbatim in MongoDB queries → `MongoUtil#checkIsValidCollectionName` is first-line defense only; never source these from untrusted input.

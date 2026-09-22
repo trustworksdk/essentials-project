@@ -28,9 +28,7 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 /**
  * Mark an already Queued Message as a Dead Letter Message (or Poison Message).<br>
  * Dead Letter Messages won't be delivered to any {@link DurableQueueConsumer} (called by the {@link DurableQueueConsumer})<br>
- * To deliver a Dead Letter Message you must first resurrect the message using {@link DurableQueues#resurrectDeadLetterMessage(QueueEntryId, Duration)}<br>
- * Note this method MUST be called within an existing {@link UnitOfWork} IF
- * using {@link TransactionalMode#FullyTransactional}<br>
+ * To deliver a Dead Letter Message you must first resurrect the message using {@link DurableQueues#resurrectDeadLetterMessage(QueueEntryId, Duration)}<br><br>
  * Operation also matches {@link DurableQueuesInterceptor#intercept(MarkAsDeadLetterMessage, InterceptorChain)}
  */
 public final class MarkAsDeadLetterMessage {
@@ -49,8 +47,6 @@ public final class MarkAsDeadLetterMessage {
     /**
      * Mark a Message as a Dead Letter Message (or Poison Message).  Dead Letter Messages won't be delivered to any {@link DurableQueueConsumer} (called by the {@link DurableQueueConsumer})<br>
      * To deliver a Dead Letter Message you must first resurrect the message using {@link DurableQueues#resurrectDeadLetterMessage(QueueEntryId, Duration)}<br>
-     * Note this method MUST be called within an existing {@link UnitOfWork} IF
-     * using {@link TransactionalMode#FullyTransactional}
      *
      * @param queueEntryId                    the unique id of the message that must be marked as a Dead Letter Message
      */
@@ -61,8 +57,6 @@ public final class MarkAsDeadLetterMessage {
     /**
      * Mark a Message as a Dead Letter Message (or Poison Message).  Dead Letter Messages won't be delivered to any {@link DurableQueueConsumer} (called by the {@link DurableQueueConsumer})<br>
      * To deliver a Dead Letter Message you must first resurrect the message using {@link DurableQueues#resurrectDeadLetterMessage(QueueEntryId, Duration)}<br>
-     * Note this method MUST be called within an existing {@link UnitOfWork} IF
-     * using {@link TransactionalMode#FullyTransactional}
      *
      * @param queueEntryId                    the unique id of the message that must be marked as a Dead Letter Message
      * @param causeForBeingMarkedAsDeadLetter the optional reason for the message being marked as a Dead Letter Message
@@ -74,8 +68,6 @@ public final class MarkAsDeadLetterMessage {
     /**
      * Mark a Message as a Dead Letter Message (or Poison Message).  Dead Letter Messages won't be delivered to any {@link DurableQueueConsumer} (called by the {@link DurableQueueConsumer})<br>
      * To deliver a Dead Letter Message you must first resurrect the message using {@link DurableQueues#resurrectDeadLetterMessage(QueueEntryId, Duration)}<br>
-     * Note this method MUST be called within an existing {@link UnitOfWork} IF
-     * using {@link TransactionalMode#FullyTransactional}
      *
      * @param queueEntryId                    the unique id of the message that must be marked as a Dead Letter Message
      * @param causeForBeingMarkedAsDeadLetter the optional reason for the message being marked as a Dead Letter Message

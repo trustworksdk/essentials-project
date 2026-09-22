@@ -296,3 +296,42 @@ unordered. They now respect their ordering, which may change the order your hand
 #### `QueueMessagesBuilder.setMessages` accepts `List<? extends Message>`
 
 Widened from `List<Message>`, so a `List<OrderedMessage>` no longer needs a copy or a cast at the call site.
+
+### `TransactionalMode` is retired
+
+`FullyTransactional` was documented as broken for retries and dead-lettering: the queue operations joined the
+caller's transaction, so a rollback reverted the delivery-attempt count and the `RedeliveryPolicy` never
+advanced. It is a mode that cannot do the thing the queue exists for.
+
+Removing it leaves an enum with one constant — a type whose only job was to express a choice that no longer
+exists — so the type goes too.
+
+**Removed:**
+
+| Element | Where |
+|---|---|
+| `TransactionalMode` | `foundation` (`…messaging.queue`) |
+| `DurableQueues.getTransactionalMode()` | `foundation` |
+| the `transactionalMode` constructor parameter of `PostgresqlDurableQueues` and `MongoDurableQueues` | both queue modules |
+| `PostgresqlDurableQueuesBuilder.setTransactionalMode(…)`, `MongoDurableQueues.Builder.setTransactionalMode(…)` | both queue modules |
+| `essentials.durable-queues.transactional-mode` | `spring-boot-starter-postgresql`, `spring-boot-starter-mongodb` |
+
+**What this means at runtime.** Every deployment now behaves as `SingleOperationTransaction` did: queueing and
+dequeueing are separate transactions, acknowledging and retrying are their own, and
+`SingleOperationTransactionDurableQueuesInterceptor` is wired unconditionally rather than only in that mode.
+
+**What to do:**
+
+- Delete the property or the builder call. If you had it set to `single-operation-transaction` — the default
+  since 0.50 in both starters — nothing changes.
+- **If you had it set to `fully-transactional`, your delivery semantics change.** Two consequences worth
+  planning for:
+  - A `UnitOfWork.markAsRollbackOnly()` inside a message handler — directly, or through
+    `UnitOfWorkControllingCommandBusInterceptor` — no longer rolls the message handling back. The
+    `RedeliveryPolicy` now applies as written, which is the behaviour that mode was preventing.
+  - Queueing a message no longer requires an enclosing `UnitOfWork`, and no longer joins one for the
+    queue-storage write. A handler that relied on "the entity change and the enqueue commit or roll back
+    together" loses that guarantee. If you need it, keep the enqueue in the same transaction yourself by
+    calling `queueMessage` inside your own `UnitOfWork` — the operation still joins an in-progress one.
+- `DurableQueues.getUnitOfWorkFactory()` still exists and still returns the factory when the implementation has
+  one; only its "…if the mode is FullyTransactional" contract is gone.

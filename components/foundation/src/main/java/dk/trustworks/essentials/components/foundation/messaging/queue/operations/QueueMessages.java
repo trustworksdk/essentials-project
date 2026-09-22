@@ -27,8 +27,6 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 
 /**
  * Queue multiple messages to the same queue. All the messages will receive the same {@link QueuedMessage#getNextDeliveryTimestamp()}<br>
- * Note this method MUST be called within an existing {@link UnitOfWork} IF
- * using {@link TransactionalMode#FullyTransactional}
  * Operation also matches {@link DurableQueuesInterceptor#intercept(QueueMessages, InterceptorChain)}
  */
 public final class QueueMessages {
@@ -47,8 +45,6 @@ public final class QueueMessages {
 
     /**
      * Queue multiple messages to the same queue. All the messages will receive the same {@link QueuedMessage#getNextDeliveryTimestamp()}<br>
-     * Note this method MUST be called within an existing {@link UnitOfWork} IF
-     * using {@link TransactionalMode#FullyTransactional}
      *
      * @param queueName     the name of the Queue the messages will be added to
      * @param messages      the message payloads  ({@link Message}/{@link OrderedMessage})

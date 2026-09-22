@@ -285,7 +285,6 @@ public class EssentialsComponentsConfiguration {
                                                    .setMessageObserver(DurableQueueMessageObserver.composite(durableQueueMessageObservers))
                                                    .setUnitOfWorkFactory(unitOfWorkFactory)
                                                    .setMessageHandlingTimeout(properties.getDurableQueues().getMessageHandlingTimeout())
-                                                   .setTransactionalMode(properties.getDurableQueues().getTransactionalMode())
                                                    .setJsonSerializer(jsonSerializer)
                                                    .setSharedQueueTableName(properties.getDurableQueues().getSharedQueueTableName())
                                                    .setMultiTableChangeListener(optionalMultiTableChangeListener.orElse(null))

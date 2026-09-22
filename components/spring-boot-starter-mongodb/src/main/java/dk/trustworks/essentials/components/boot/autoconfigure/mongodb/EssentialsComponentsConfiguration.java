@@ -323,24 +323,14 @@ public class EssentialsComponentsConfiguration {
                                                                                                     .getMaxPollingInterval()
                                                                                                     .toMillis()
                 );
-        MongoDurableQueues durableQueues;
-        if (properties.getDurableQueues().getTransactionalMode() == TransactionalMode.FullyTransactional) {
-            durableQueues = MongoDurableQueues.builder()
+        var durableQueues = MongoDurableQueues.builder()
                                               .setMongoTemplate(mongoTemplate)
                                               .setUnitOfWorkFactory(unitOfWorkFactory)
-                                              .setJsonSerializer(jsonSerializer)
-                                              .setSharedQueueCollectionName(properties.getDurableQueues().getSharedQueueCollectionName())
-                                              .setQueuePollingOptimizerFactory(pollingOptimizerFactory)
-                                              .build();
-        } else {
-            durableQueues = MongoDurableQueues.builder()
-                                              .setMongoTemplate(mongoTemplate)
                                               .setMessageHandlingTimeout(properties.getDurableQueues().getMessageHandlingTimeout())
                                               .setJsonSerializer(jsonSerializer)
                                               .setSharedQueueCollectionName(properties.getDurableQueues().getSharedQueueCollectionName())
                                               .setQueuePollingOptimizerFactory(pollingOptimizerFactory)
                                               .build();
-        }
         durableQueues.addInterceptors(durableQueuesInterceptors);
         return durableQueues;
     }

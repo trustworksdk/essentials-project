@@ -163,7 +163,7 @@ protected abstract JSONSerializer createJSONSerializer();
 #### Helpers
 
 ```java
-// Auto-wraps in UnitOfWork if TransactionalMode.FullyTransactional
+// Runs the action directly — each queue operation carries its own transaction
 protected <R> R withDurableQueue(Supplier<R> supplier);
 protected void usingDurableQueue(Runnable action);
 

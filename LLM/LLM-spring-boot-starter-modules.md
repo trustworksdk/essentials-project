@@ -185,7 +185,6 @@ Prefix: `essentials.durable-queues`
 | Property | Default | Notes |
 |----------|---------|-------|
 | `shared-queue-table-name` | `durable_queues` | Table name - see [Security](#security) |
-| `transactional-mode` | `single-operation-transaction` | **Use this**, not `fully-transactional` |
 | `message-handling-timeout` | `30s` | Single-op mode only |
 | `use-centralized-message-fetcher` | `true` | Recommended |
 | `centralized-message-fetcher-polling-interval` | `20ms` | Base interval |
@@ -302,7 +301,6 @@ Prefix: `essentials.durable-queues`
 | Property | Default | Notes |
 |----------|---------|-------|
 | `shared-queue-collection-name` | `durable_queues` | Collection name - see [Security](#security) |
-| `transactional-mode` | `single-operation-transaction` | **Use this**, not `fully-transactional` |
 | `message-handling-timeout` | `30s` | Single-op mode only |
 | `polling-delay-interval-increment-factor` | `0.5` | Backoff factor |
 | `max-polling-interval` | `2s` | Max backoff |

@@ -162,7 +162,6 @@ essentials.fenced-lock-manager.release-acquired-locks-in-case-of-i-o-exceptions-
 
 ```properties
 essentials.durable-queues.shared-queue-collection-name=durable_queues
-essentials.durable-queues.transactional-mode=single-operation-transaction
 essentials.durable-queues.message-handling-timeout=5s
 essentials.durable-queues.polling-delay-interval-increment-factor=0.5
 essentials.durable-queues.max-polling-interval=2s
@@ -172,7 +171,6 @@ essentials.durable-queues.verbose-tracing=false
 | Property | Default | Description                                                                   |
 |----------|---------|-------------------------------------------------------------------------------|
 | `shared-queue-collection-name` | `durable_queues` | MongoDB collection for messages. **See [Security](#security)** |
-| `transactional-mode` | `singleoperationtransaction` | `fully-transactional` or `single-operation-transaction` (recommended)            |
 | `message-handling-timeout` | `30s` | Timeout before unacknowledged message is redelivered (single-op mode only)    |
 | `polling-delay-interval-increment-factor` | `0.5` | Backoff factor when no messages found                                         |
 | `max-polling-interval` | `2s` | Maximum polling delay                                                         |

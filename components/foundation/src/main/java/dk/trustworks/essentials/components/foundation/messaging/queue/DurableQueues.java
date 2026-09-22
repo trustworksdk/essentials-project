@@ -253,16 +253,10 @@ public interface DurableQueues extends Lifecycle {
     Optional<QueuedMessage> getQueuedMessage(GetQueuedMessage operation);
 
     /**
-     * The transactional behaviour mode of this {@link DurableQueues} instance<br>
+     * The {@link UnitOfWorkFactory} this instance performs its operations with, when it has one.
      *
-     * @return The transactional behaviour mode of a {@link DurableQueues} instance<br>
-     */
-    TransactionalMode getTransactionalMode();
-
-    /**
-     * @return If {@link #getTransactionalMode()} is {@link TransactionalMode#FullyTransactional} then
-     * it will return the {@link UnitOfWorkFactory} wrapped in an {@link Optional}, otherwise it will return
-     * an {@link Optional#empty()}
+     * @return the {@link UnitOfWorkFactory} wrapped in an {@link Optional}, or {@link Optional#empty()} when this
+     * implementation has none
      */
     Optional<UnitOfWorkFactory<? extends UnitOfWork>> getUnitOfWorkFactory();
 
@@ -352,8 +346,6 @@ public interface DurableQueues extends Lifecycle {
 
     /**
      * Queue a message for asynchronous delivery without delay to a {@link DurableQueueConsumer}<br>
-     * Note this method MUST be called within an existing {@link UnitOfWork} IF
-     * using {@link TransactionalMode#FullyTransactional}
      *
      * @param queueName the name of the Queue the message is added to
      * @param message   the message
@@ -368,8 +360,6 @@ public interface DurableQueues extends Lifecycle {
 
     /**
      * Queue a message for asynchronous delivery without delay to a {@link DurableQueueConsumer}<br>
-     * Note this method MUST be called within an existing {@link UnitOfWork} IF
-     * using {@link TransactionalMode#FullyTransactional}
      *
      * @param operation the {@link QueueMessage} operation
      * @return the unique entry id for the message queued
@@ -378,8 +368,6 @@ public interface DurableQueues extends Lifecycle {
 
     /**
      * Queue a message for asynchronous delivery optional delay to a {@link DurableQueueConsumer}<br>
-     * Note this method MUST be called within an existing {@link UnitOfWork} IF
-     * using {@link TransactionalMode#FullyTransactional}
      *
      * @param queueName     the name of the Queue the message is added to
      * @param message       the message  ({@link Message}/{@link OrderedMessage})
@@ -396,8 +384,6 @@ public interface DurableQueues extends Lifecycle {
 
     /**
      * Queue a message for asynchronous delivery optional delay to a {@link DurableQueueConsumer}<br>
-     * Note this method MUST be called within an existing {@link UnitOfWork} IF
-     * using {@link TransactionalMode#FullyTransactional}
      *
      * @param queueName     the name of the Queue the message is added to
      * @param message       the message  ({@link Message}/{@link OrderedMessage})
@@ -414,8 +400,6 @@ public interface DurableQueues extends Lifecycle {
 
     /**
      * Queue a message for asynchronous delivery optional delay to a {@link DurableQueueConsumer}<br>
-     * Note this method MUST be called within an existing {@link UnitOfWork} IF
-     * using {@link TransactionalMode#FullyTransactional}
      *
      * @param queueName        the name of the Queue the message is added to
      * @param message          the message  ({@link Message}/{@link OrderedMessage})
@@ -435,8 +419,6 @@ public interface DurableQueues extends Lifecycle {
 
     /**
      * Queue a message for asynchronous delivery optional delay to a {@link DurableQueueConsumer}<br>
-     * Note this method MUST be called within an existing {@link UnitOfWork} IF
-     * using {@link TransactionalMode#FullyTransactional}
      *
      * @param queueName        the name of the Queue the message is added to
      * @param message          the message payload  ({@link Message}/{@link OrderedMessage})
@@ -479,8 +461,6 @@ public interface DurableQueues extends Lifecycle {
 
     /**
      * Queue multiple messages to the same queue. All the messages will receive the same {@link QueuedMessage#getNextDeliveryTimestamp()}<br>
-     * Note this method MUST be called within an existing {@link UnitOfWork} IF
-     * using {@link TransactionalMode#FullyTransactional}
      *
      * @param queueName     the name of the Queue the messages will be added to
      * @param messages      the message to enqueue  ({@link Message}/{@link OrderedMessage})
@@ -497,8 +477,6 @@ public interface DurableQueues extends Lifecycle {
 
     /**
      * Queue multiple messages to the same queue. All the messages will receive the same {@link QueuedMessage#getNextDeliveryTimestamp()}<br>
-     * Note this method MUST be called within an existing {@link UnitOfWork} IF
-     * using {@link TransactionalMode#FullyTransactional}
      *
      * @param queueName     the name of the Queue the messages will be added to
      * @param messages      the messages to enqueue  ({@link Message}/{@link OrderedMessage})
@@ -514,8 +492,6 @@ public interface DurableQueues extends Lifecycle {
 
     /**
      * Queue multiple messages to the same queue. All the messages will receive the same {@link QueuedMessage#getNextDeliveryTimestamp()}<br>
-     * Note this method MUST be called within an existing {@link UnitOfWork} IF
-     * using {@link TransactionalMode#FullyTransactional}
      *
      * @param queueName the name of the Queue the messages will be added to
      * @param messages  the message to enqueue  ({@link Message}/{@link OrderedMessage})
@@ -528,8 +504,6 @@ public interface DurableQueues extends Lifecycle {
 
     /**
      * Queue multiple messages to the same queue. All the messages will receive the same {@link QueuedMessage#getNextDeliveryTimestamp()}<br>
-     * Note this method MUST be called within an existing {@link UnitOfWork} IF
-     * using {@link TransactionalMode#FullyTransactional}
      *
      * @param operation The {@link QueueMessages} operation
      * @return the unique entry id's for the messages queued ordered in the same order as the payloads that were queued
@@ -539,8 +513,6 @@ public interface DurableQueues extends Lifecycle {
 
     /**
      * Schedule the message for redelivery after the specified <code>deliveryDelay</code> (called by the {@link DurableQueueConsumer})<br>
-     * Note this method MUST be called within an existing {@link UnitOfWork} IF
-     * using {@link TransactionalMode#FullyTransactional}
      *
      * @param queueEntryId  the unique id of the message that must we will retry the delivery of
      * @param causeForRetry the reason why the message delivery has to be retried (optional)
@@ -557,8 +529,6 @@ public interface DurableQueues extends Lifecycle {
 
     /**
      * Schedule the message for redelivery after the specified <code>deliveryDelay</code> (called by the {@link DurableQueueConsumer})<br>
-     * Note this method MUST be called within an existing {@link UnitOfWork} IF
-     * using {@link TransactionalMode#FullyTransactional}
      *
      * @param operation the {@link RetryMessage} operation
      * @return the {@link QueuedMessage} message wrapped in an {@link Optional} if the operation was successful, otherwise it returns an {@link Optional#empty()}
@@ -569,8 +539,6 @@ public interface DurableQueues extends Lifecycle {
      * Mark an already Queued Message as a Dead Letter Message (or Poison Message).<br>
      * Dead Letter Messages won't be delivered to any {@link DurableQueueConsumer} (called by the {@link DurableQueueConsumer})<br>
      * To deliver a Dead Letter Message you must first resurrect the message using {@link #resurrectDeadLetterMessage(QueueEntryId, Duration)}<br>
-     * Note this method MUST be called within an existing {@link UnitOfWork} IF
-     * using {@link TransactionalMode#FullyTransactional}
      *
      * @param queueEntryId                    the unique id of the message that must be marked as a Dead Letter Message
      * @param causeForBeingMarkedAsDeadLetter the optional reason for the message being marked as a Dead Letter Message
@@ -586,8 +554,6 @@ public interface DurableQueues extends Lifecycle {
      * Mark an already Queued Message as a Dead Letter Message (or Poison Message).<br>
      * Dead Letter Messages won't be delivered to any {@link DurableQueueConsumer} (called by the {@link DurableQueueConsumer})<br>
      * To deliver a Dead Letter Message you must first resurrect the message using {@link #resurrectDeadLetterMessage(QueueEntryId, Duration)}<br>
-     * Note this method MUST be called within an existing {@link UnitOfWork} IF
-     * using {@link TransactionalMode#FullyTransactional}
      *
      * @param queueEntryId                    the unique id of the message that must be marked as a Dead Letter Message
      * @param causeForBeingMarkedAsDeadLetter the optional reason for the message being marked as a Dead Letter Message
@@ -603,8 +569,6 @@ public interface DurableQueues extends Lifecycle {
      * Mark an already Queued Message as a Dead Letter Message (or Poison Message).<br>
      * Dead Letter Messages won't be delivered to any {@link DurableQueueConsumer} (called by the {@link DurableQueueConsumer})<br>
      * To deliver a Dead Letter Message you must first resurrect the message using {@link #resurrectDeadLetterMessage(QueueEntryId, Duration)}<br>
-     * Note this method MUST be called within an existing {@link UnitOfWork} IF
-     * using {@link TransactionalMode#FullyTransactional}
      *
      * @param queueEntryId the unique id of the message that must be marked as a Dead Letter Message
      * @return the {@link QueuedMessage} message wrapped in an {@link Optional} if the operation was successful, otherwise it returns an {@link Optional#empty()}
@@ -617,8 +581,6 @@ public interface DurableQueues extends Lifecycle {
      * Mark an already Queued Message as a Dead Letter Message (or Poison Message).<br>
      * Dead Letter Messages won't be delivered to any {@link DurableQueueConsumer} (called by the {@link DurableQueueConsumer})<br>
      * To deliver a Dead Letter Message you must first resurrect the message using {@link #resurrectDeadLetterMessage(QueueEntryId, Duration)}<br>
-     * Note this method MUST be called within an existing {@link UnitOfWork} IF
-     * using {@link TransactionalMode#FullyTransactional}
      *
      * @param operation the {@link MarkAsDeadLetterMessage} operation
      * @return the {@link QueuedMessage} message wrapped in an {@link Optional} if the operation was successful, otherwise it returns an {@link Optional#empty()}
@@ -631,8 +593,6 @@ public interface DurableQueues extends Lifecycle {
      * message would trigger another deserialization failure.<br>
      * Dead Letter Messages won't be delivered to any {@link DurableQueueConsumer} (called by the {@link DurableQueueConsumer})<br>
      * To deliver a Dead Letter Message you must first resurrect the message using {@link #resurrectDeadLetterMessage(QueueEntryId, Duration)}<br>
-     * Note this method MUST be called within an existing {@link UnitOfWork} IF
-     * using {@link TransactionalMode#FullyTransactional}
      *
      * @param queueEntryId                    the unique id of the message that must be marked as a Dead Letter Message
      * @param causeForBeingMarkedAsDeadLetter the optional reason for the message being marked as a Dead Letter Message
@@ -651,8 +611,6 @@ public interface DurableQueues extends Lifecycle {
      * message would trigger another deserialization failure.<br>
      * Dead Letter Messages won't be delivered to any {@link DurableQueueConsumer} (called by the {@link DurableQueueConsumer})<br>
      * To deliver a Dead Letter Message you must first resurrect the message using {@link #resurrectDeadLetterMessage(QueueEntryId, Duration)}<br>
-     * Note this method MUST be called within an existing {@link UnitOfWork} IF
-     * using {@link TransactionalMode#FullyTransactional}
      *
      * @param queueEntryId                    the unique id of the message that must be marked as a Dead Letter Message
      * @param causeForBeingMarkedAsDeadLetter the optional reason for the message being marked as a Dead Letter Message
@@ -671,8 +629,6 @@ public interface DurableQueues extends Lifecycle {
      * message would trigger another deserialization failure.<br>
      * Dead Letter Messages won't be delivered to any {@link DurableQueueConsumer} (called by the {@link DurableQueueConsumer})<br>
      * To deliver a Dead Letter Message you must first resurrect the message using {@link #resurrectDeadLetterMessage(QueueEntryId, Duration)}<br>
-     * Note this method MUST be called within an existing {@link UnitOfWork} IF
-     * using {@link TransactionalMode#FullyTransactional}
      *
      * @param operation the {@link MarkAsDeadLetterMessageDirect} operation
      * @return true if the operation was successful (message was marked as dead letter), false otherwise
@@ -682,8 +638,6 @@ public interface DurableQueues extends Lifecycle {
 
     /**
      * Resurrect a Dead Letter Message for redelivery after the specified <code>deliveryDelay</code><br>
-     * Note this method MUST be called within an existing {@link UnitOfWork} IF
-     * using {@link TransactionalMode#FullyTransactional}
      *
      * @param queueEntryId  the unique id of the Dead Letter Message that must we will retry the delivery of
      * @param deliveryDelay how long will the queue wait until it delivers the message to the {@link DurableQueueConsumer}
@@ -697,8 +651,6 @@ public interface DurableQueues extends Lifecycle {
 
     /**
      * Resurrect a Dead Letter Message for redelivery after the specified <code>deliveryDelay</code><br>
-     * Note this method MUST be called within an existing {@link UnitOfWork} IF
-     * using {@link TransactionalMode#FullyTransactional}
      *
      * @param operation the {@link ResurrectDeadLetterMessage} operation
      * @return the {@link QueuedMessage} message wrapped in an {@link Optional} if the operation was successful, otherwise it returns an {@link Optional#empty()}
@@ -707,8 +659,6 @@ public interface DurableQueues extends Lifecycle {
 
     /**
      * Mark the message as acknowledged - this operation deletes the messages from the Queue<br>
-     * Note this method MUST be called within an existing {@link UnitOfWork} IF
-     * using {@link TransactionalMode#FullyTransactional}
      *
      * @param queueEntryId the unique id of the Message to acknowledge
      * @return true if the operation went well, otherwise false
@@ -719,8 +669,6 @@ public interface DurableQueues extends Lifecycle {
 
     /**
      * Mark the message as acknowledged - this operation also deletes the messages from the Queue<br>
-     * Note this method MUST be called within an existing {@link UnitOfWork} IF
-     * using {@link TransactionalMode#FullyTransactional}
      *
      * @param operation the {@link AcknowledgeMessageAsHandled} operation
      * @return true if the operation went well, otherwise false
@@ -729,8 +677,6 @@ public interface DurableQueues extends Lifecycle {
 
     /**
      * Delete a message (Queued or Dead Letter Message)<br>
-     * Note this method MUST be called within an existing {@link UnitOfWork} IF
-     * using {@link TransactionalMode#FullyTransactional}
      *
      * @param queueEntryId the unique id of the Message to delete
      * @return true if the operation went well, otherwise false
@@ -741,8 +687,6 @@ public interface DurableQueues extends Lifecycle {
 
     /**
      * Delete a message (Queued or Dead Letter Message)<br>
-     * Note this method MUST be called within an existing {@link UnitOfWork} IF
-     * using {@link TransactionalMode#FullyTransactional}
      *
      * @param operation the {@link DeleteMessage} operation
      * @return true if the operation went well, otherwise false
@@ -751,8 +695,6 @@ public interface DurableQueues extends Lifecycle {
 
     /**
      * Query the next Queued Message (i.e. not including Dead Letter Messages) that's ready to be delivered to a {@link DurableQueueConsumer}<br>
-     * Note this method MUST be called within an existing {@link UnitOfWork} IF
-     * using {@link TransactionalMode#FullyTransactional}
      *
      * @param queueName the name of the Queue where we will query for the next message ready for delivery
      * @return the next message ready to be delivered (wrapped in an {@link Optional}) or {@link Optional#empty()} if no message is ready for delivery
@@ -763,8 +705,6 @@ public interface DurableQueues extends Lifecycle {
 
     /**
      * Query the next Queued Message (i.e. not including Dead Letter Messages) that's ready to be delivered to a {@link DurableQueueConsumer}<br>
-     * Note this method MUST be called within an existing {@link UnitOfWork} IF
-     * using {@link TransactionalMode#FullyTransactional}
      * <p>
      * The normal message processing flow looks like this:
      * <pre>{@code
@@ -782,10 +722,11 @@ public interface DurableQueues extends Lifecycle {
      * }
      * }</pre>
      * <p>
-     * When using {@link TransactionalMode#SingleOperationTransaction} then depending on
-     * the type of errors that can occur this MAY leave a dequeued message in a state of being marked as "being delivered" forever<br>
-     * This is why {@link DurableQueues} supporting these modes must ensure that they periodically
-     * discover messages that have been under delivery for a long time (aka. stuck messages or timed-out messages) and reset them in order for them to be redelivered.<br>
+     * Each queue operation is performed in its own transaction, so depending on the type of errors that can occur
+     * this MAY leave a dequeued message marked as "being delivered" forever.<br>
+     * This is why a {@link DurableQueues} implementation must periodically discover messages that have been under
+     * delivery for a long time (aka. stuck messages or timed-out messages) and reset them in order for them to be
+     * redelivered.<br>
      *
      * @param operation the {@link GetNextMessageReadyForDelivery} operation
      * @return the next message ready to be delivered (wrapped in an {@link Optional}) or {@link Optional#empty()} if no message is ready for delivery

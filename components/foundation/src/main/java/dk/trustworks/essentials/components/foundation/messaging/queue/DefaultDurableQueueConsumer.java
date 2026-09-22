@@ -94,11 +94,9 @@ public abstract class DefaultDurableQueueConsumer<DURABLE_QUEUES extends Durable
         consumeFromQueue.validate();
 
         this.durableQueues = requireNonNull(durableQueues, "durableQueues is missing");
-        if (durableQueues.getTransactionalMode() == TransactionalMode.FullyTransactional) {
-            this.unitOfWorkFactory = requireNonNull(unitOfWorkFactory, "You must specify a unitOfWorkFactory");
-        } else {
-            this.unitOfWorkFactory = null;
-        }
+        // Retained for subclasses that need it; the consumer itself performs each queue operation in its own
+        // transaction and never wraps a poll in one.
+        this.unitOfWorkFactory = unitOfWorkFactory;
         this.removeDurableQueueConsumer = requireNonNull(removeDurableQueueConsumer, "removeDurableQueueConsumer is missing");
         this.queueName = consumeFromQueue.queueName;
 
@@ -229,31 +227,14 @@ public abstract class DefaultDurableQueueConsumer<DURABLE_QUEUES extends Durable
                 return;
             }
 
-            LOG.trace("[{}] {} - Polling Queue for the next message ready for delivery. Transactional mode: {}",
+            LOG.trace("[{}] {} - Polling Queue for the next message ready for delivery",
                       queueName,
-                      consumeFromQueue.consumerName,
-                      durableQueues.getTransactionalMode());
+                      consumeFromQueue.consumerName);
             Runnable postTransactionalSideEffect = null;
-            if (durableQueues.getTransactionalMode() == TransactionalMode.FullyTransactional) {
-                if (unitOfWorkFactory.getCurrentUnitOfWork().isPresent()) {
-                    throw new DurableQueueException(msg("[{}] {} - Previous UnitOfWork isn't completed/removed: {}",
-                                                        queueName,
-                                                        consumeFromQueue.consumerName,
-                                                        unitOfWorkFactory.getCurrentUnitOfWork().get()),
-                                                    queueName);
-                }
-
-                try {
-                    postTransactionalSideEffect = unitOfWorkFactory.withUnitOfWork(handleAwareUnitOfWork -> processNextMessageReadyForDelivery());
-                } catch (Exception e) {
-                    handleProcessNextMessageReadyForDeliveryException(e);
-                }
-            } else {
-                try {
-                    postTransactionalSideEffect = processNextMessageReadyForDelivery();
-                } catch (Exception e) {
-                    handleProcessNextMessageReadyForDeliveryException(e);
-                }
+            try {
+                postTransactionalSideEffect = processNextMessageReadyForDelivery();
+            } catch (Exception e) {
+                handleProcessNextMessageReadyForDeliveryException(e);
             }
 
             if (postTransactionalSideEffect != null) {
@@ -489,10 +470,6 @@ public abstract class DefaultDurableQueueConsumer<DURABLE_QUEUES extends Durable
                                   decision.describe(),
                                   queuedMessage);
                     MESSAGE_HANDLING_FAILURE_LOG.error(msg, ex);
-                    if (durableQueues.getTransactionalMode() == TransactionalMode.FullyTransactional) {
-                        // throw Exception to rollback unit of work
-                        throw new DurableQueueException(msg, ex, queueName);
-                    }
                     // Note: Don't clean up orderedMessageDeliveryThreads yet
                     return NO_POSTPROCESSING_AFTER_PROCESS_NEXT_MESSAGE;
                 }
@@ -550,10 +527,6 @@ public abstract class DefaultDurableQueueConsumer<DURABLE_QUEUES extends Durable
                               queuedMessage.getId(),
                               consumeFromQueue.consumerName);
                 MESSAGE_HANDLING_FAILURE_LOG.error(msg, ex);
-                if (durableQueues.getTransactionalMode() == TransactionalMode.FullyTransactional) {
-                    // throw Exception to rollback unit of work
-                    throw new DurableQueueException(msg, ex, queueName);
-                }
             }
             // Note: Don't clean up orderedMessageDeliveryThreads yet
             return NO_POSTPROCESSING_AFTER_PROCESS_NEXT_MESSAGE;

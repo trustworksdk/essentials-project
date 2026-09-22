@@ -186,7 +186,6 @@ essentials.fenced-lock-manager.release-acquired-locks-in-case-of-i-o-exceptions-
 
 ```properties
 essentials.durable-queues.shared-queue-table-name=durable_queues
-essentials.durable-queues.transactional-mode=single-operation-transaction
 essentials.durable-queues.message-handling-timeout=30s
 essentials.durable-queues.use-centralized-message-fetcher=true
 essentials.durable-queues.centralized-message-fetcher-polling-interval=20ms
@@ -199,7 +198,6 @@ essentials.durable-queues.verbose-tracing=false
 | Property | Default | Description                                                                 |
 |----------|---------|-----------------------------------------------------------------------------|
 | `shared-queue-table-name` | `durable_queues` | PostgreSQL table for messages. **See [Security](#security)** |
-| `transactional-mode` | `single-operation-transaction` | `single-operation-transaction` or `fully-transactional`                     |
 | `message-handling-timeout` | `30s` | Timeout before unacknowledged message is redelivered (single-op mode only)  |
 | `use-centralized-message-fetcher` | `true` | Use optimized centralized message fetching                                  |
 | `centralized-message-fetcher-polling-interval` | `20ms` | Base polling interval for centralized fetcher                               |

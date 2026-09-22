@@ -25,7 +25,6 @@ essentials:
     shared-queue-table-name: durable_queues
     polling-delay-interval-increment-factor: 0.5
     max-polling-interval: 2s
-    transactional-mode: singleoperationtransaction
     verbose-tracing: false
   fenced-lock-manager:
     fenced-locks-table-name: fenced_locks

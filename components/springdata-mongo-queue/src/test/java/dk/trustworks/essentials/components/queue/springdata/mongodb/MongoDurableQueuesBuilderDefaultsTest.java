@@ -17,7 +17,6 @@
 package dk.trustworks.essentials.components.queue.springdata.mongodb;
 
 import dk.trustworks.essentials.components.foundation.json.JSONSerializer;
-import dk.trustworks.essentials.components.foundation.messaging.queue.TransactionalMode;
 import dk.trustworks.essentials.components.foundation.transaction.spring.mongo.SpringMongoTransactionAwareUnitOfWorkFactory;
 import org.junit.jupiter.api.Test;
 import org.springframework.data.mongodb.core.*;
@@ -31,11 +30,11 @@ import static org.mockito.Mockito.*;
 
 /**
  * Pins {@link MongoDurableQueues.Builder}'s defaults, because they are a behaviour contract and not an implementation
- * detail: until 0.40.x this builder produced {@link TransactionalMode#FullyTransactional} while
- * {@code PostgresqlDurableQueues.builder()} produced {@link TransactionalMode#SingleOperationTransaction}, so the same
- * application code got different delivery semantics depending on which database it ran against. That divergence was
- * closed by moving the MongoDB side, and nothing but a test stops it drifting open again — the integration suites
- * branch on {@code getTransactionalMode()} rather than asserting it, so they pass either way.
+ * detail: an application that swaps database module gets the same delivery semantics only for as long as this builder
+ * and {@code PostgresqlDurableQueues.builder()} agree.
+ * <p>
+ * The transactional-mode assertions this test used to carry are gone with {@code TransactionalMode} itself — every
+ * queue operation now runs in its own transaction, so there is no longer a choice to diverge on.
  * <p>
  * A mocked {@link MongoTemplate} is enough here: construction only reads the collection name and calls
  * {@code collectionExists}/{@code indexOps}, and this test asserts on the resulting instance, not on any queue
@@ -59,14 +58,6 @@ class MongoDurableQueuesBuilderDefaultsTest {
                                  .setSharedQueueCollectionName(MongoDurableQueues.DEFAULT_DURABLE_QUEUES_COLLECTION_NAME);
     }
 
-    @Test
-    void test_the_default_transactional_mode_is_SingleOperationTransaction_matching_the_postgresql_builder() {
-        assertThat(minimalBuilder().build().getTransactionalMode())
-                .as("MongoDurableQueues.builder() must default to the same TransactionalMode as "
-                            + "PostgresqlDurableQueues.builder(); a divergence here means the same application code "
-                            + "gets different delivery semantics per database")
-                .isEqualTo(TransactionalMode.SingleOperationTransaction);
-    }
 
     @Test
     void test_the_default_message_handling_timeout_is_thirty_seconds_matching_the_postgresql_builder() {
@@ -77,19 +68,10 @@ class MongoDurableQueuesBuilderDefaultsTest {
     }
 
     @Test
-    void test_the_default_mode_needs_no_unitOfWorkFactory() {
-        // The point of the default: SingleOperationTransaction is usable with nothing but a MongoTemplate. Under the
-        // previous FullyTransactional default this same call threw, because that mode requires a unitOfWorkFactory.
+    void test_the_builder_needs_no_unitOfWorkFactory() {
+        // Usable with nothing but a MongoTemplate. Under the pre-0.40.x FullyTransactional default this same call
+        // threw, because that mode required a unitOfWorkFactory.
         assertThat(minimalBuilder().build()).isNotNull();
     }
 
-    @Test
-    void test_FullyTransactional_remains_available_and_is_honoured() {
-        var durableQueues = minimalBuilder()
-                .setTransactionalMode(TransactionalMode.FullyTransactional)
-                .setUnitOfWorkFactory(mock(SpringMongoTransactionAwareUnitOfWorkFactory.class))
-                .build();
-
-        assertThat(durableQueues.getTransactionalMode()).isEqualTo(TransactionalMode.FullyTransactional);
-    }
 }

@@ -82,11 +82,7 @@ public abstract class DistributedCompetingConsumersDurableQueuesIT<DURABLE_QUEUE
     protected abstract void resetQueueStorage(UOW_FACTORY unitOfWorkFactory);
 
     protected void usingDurableQueue(Runnable action) {
-        if (durableQueues1.getTransactionalMode() == TransactionalMode.FullyTransactional) {
-            unitOfWorkFactory.usingUnitOfWork(uow -> action.run());
-        } else {
-            action.run();
-        }
+        action.run();
     }
 
     @Test

@@ -140,7 +140,6 @@ public class EventProcessorIT {
         durableQueues = PostgresqlDurableQueues.builder()
                                                .setJsonSerializer(jsonSerializer)
                                                .setMessageHandlingTimeout(Duration.ofSeconds(2))
-                                               .setTransactionalMode(TransactionalMode.SingleOperationTransaction)
                                                .setUnitOfWorkFactory(unitOfWorkFactory)
                                                .build();
         durableQueues.start();
