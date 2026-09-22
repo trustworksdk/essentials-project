@@ -346,8 +346,8 @@ delivery threads, so it must not block.
 
 **Dead-letter metric.** `MicrometerDurableQueueMessageObserver` increments
 `essentials.messaging.durable_queues.dead_lettered` once per dead letter, tagged `queue_name`,
-`message_payload_type` and `reason` (`permanent_error` | `redeliveries_exhausted`). The Spring Boot starter
-registers it whenever a `MeterRegistry` is present — deliberately *not* behind
+`message_payload_type` and `reason` (`permanent_error` | `redeliveries_exhausted`). Both Spring Boot starters
+register it whenever a `MeterRegistry` is present — deliberately *not* behind
 `essentials.metrics.durable-queues.enabled`, which controls execution-time measurement. A timing switch must
 not turn an incident counter off. This is the counter to alert on; the pre-existing
 `essentials.messaging.durable_queues.mark_as_dead_letter_message` timer measures how long the marking took and

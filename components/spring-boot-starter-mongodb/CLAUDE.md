@@ -27,7 +27,7 @@ Beans wired (in order of dependency):
 2. `MongoTransactionManager` — `ReadConcern.SNAPSHOT` + `WriteConcern.ACKNOWLEDGED` (hardcoded, override via `@ConditionalOnMissingBean`)
 3. `SpringMongoTransactionAwareUnitOfWorkFactory`
 4. `MongoFencedLockManager` (as `FencedLockManager`) — calls `buildAndStart()` at construction
-5. `MongoDurableQueues` (as `DurableQueues`) — mode-switched: `FullyTransactional` uses UoW factory; `SingleOperationTransaction` uses timeout
+5. `MongoDurableQueues` (as `DurableQueues`) — mode-switched: `FullyTransactional` uses UoW factory; `SingleOperationTransaction` uses timeout. Collects every `DurableQueueMessageObserver` bean via `composite(...)`
 6. `Inboxes`, `Outboxes` — durable-queue-based impls wrapping `DurableQueues` + `FencedLockManager`
 7. `DurableLocalCommandBus` (bean name `essentialsCommandBus`) — always adds `UnitOfWorkControllingCommandBusInterceptor` unless user provides one
 8. `LocalEventBus` (bean name `essentialsEventBus`)
@@ -37,7 +37,8 @@ Beans wired (in order of dependency):
 12. Measurement interceptors: `RecordExecutionTime*Interceptor` for queues, command bus, message handlers
 13. `ReactiveHandlersBeanPostProcessor` — auto-registers `@EventHandler`/`@CommandHandler` beans; disable via `essentials.reactive-bean-post-processor-enabled=false`
 14. `SpringBootDevToolsClassLoaderChangeContextRefreshedListener` — conditional on DevTools presence; resets Jackson classloader on context refresh
-15. `DurableQueuesHealthIndicator` — dead-letter counts on `/actuator/health` under `durableQueues`; on by default, `UP` until `essentials.durable-queues.health.dead-letter-threshold` is set positive
+15. `MicrometerDurableQueueMessageObserver` — `essentials.messaging.durable_queues.dead_lettered` counter; registered on `MeterRegistry` presence, NOT behind `essentials.metrics.durable-queues.enabled`
+16. `DurableQueuesHealthIndicator` — dead-letter counts on `/actuator/health` under `durableQueues`; on by default, `UP` until `essentials.durable-queues.health.dead-letter-threshold` is set positive
 
 ## Test Structure
 
@@ -64,5 +65,5 @@ No tests in this module (pure auto-configuration glue). Integration tests live i
 - Collection names (`fencedLocksCollectionName`, `sharedQueueCollectionName`) are used verbatim in MongoDB queries → `MongoUtil#checkIsValidCollectionName` is first-line defense only; never source these from untrusted input.
 - `SpringBootDevToolsClassLoaderChangeContextRefreshedListener` resets the Jackson `ObjectMapper` classloader on every `ContextRefreshedEvent` — relevant only in dev; production classloaders are stable.
 - `UnitOfWorkControllingCommandBusInterceptor` is added to command bus automatically unless user's interceptor list already contains an instance of that class — checked by `isAssignableFrom`, so subclassing also suppresses auto-add.
-- **This starter registers `DurableQueuesHealthIndicator` but none of the queue observability wiring the Postgres starter has** — no `QueueStatisticsRegistry`, no `StatisticsCollectingDurableQueueMessageObserver`, no `MicrometerDurableQueueMessageObserver`, and `durableQueues` here does not collect `List<DurableQueueMessageObserver>` beans. The health indicator works anyway because it reads storage counts through the `DurableQueues` SPI and needs no observer. Closing the rest of the gap is outstanding work, not a decision.
+- **The statistics registry is deliberately still absent here, unlike the observer and the counter.** `durableQueues` now collects `List<DurableQueueMessageObserver>` into `composite(...)` and `MicrometerDurableQueueMessageObserver` is registered on `MeterRegistry` presence, matching the Postgres starter. `QueueStatisticsRegistry` and `StatisticsCollectingDurableQueueMessageObserver` are not, because their only consumer is `DefaultDurableQueuesApi.getQueueStatistics` and **this starter registers no `*Api` beans and no `EssentialsSecurityProvider` at all**. Adding the registry alone would accumulate counters nothing here can read. `DefaultDurableQueuesApi` is DB-agnostic, so the blocker is a scope decision about giving this starter an admin surface (including the deny-all security default), not a technical one.
 - `essentials.reactive.event-bus-parallel-threads` defaults to `min(availableProcessors, 4)` — on high-core machines this caps throughput; tune explicitly for high-volume event processing.

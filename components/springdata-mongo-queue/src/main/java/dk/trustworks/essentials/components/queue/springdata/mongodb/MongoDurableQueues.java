@@ -1631,6 +1631,8 @@ public final class MongoDurableQueues implements DurableQueues {
          */
         private Duration messageHandlingTimeout = DEFAULT_MESSAGE_HANDLING_TIMEOUT;
 
+        private DurableQueueMessageObserver messageObserver = DurableQueueMessageObserver.none();
+
         /**
          * @param mongoTemplate required
          * @return this builder
@@ -1690,16 +1692,31 @@ public final class MongoDurableQueues implements DurableQueues {
         }
 
         /**
+         * @param messageObserver the {@link DurableQueueMessageObserver} notified of how each delivery ended.
+         *                        Use {@link DurableQueueMessageObserver#composite(java.util.List)} for several.
+         *                        Defaults to {@link DurableQueueMessageObserver#none()}. The observer is wrapped
+         *                        in {@link DurableQueueMessageObserver#safe(DurableQueueMessageObserver)}, so a
+         *                        failure inside it can never break delivery
+         * @return this builder
+         */
+        public Builder setMessageObserver(DurableQueueMessageObserver messageObserver) {
+            this.messageObserver = messageObserver;
+            return this;
+        }
+
+        /**
          * @return the new {@link MongoDurableQueues}
          */
         @SuppressWarnings("removal")
         public MongoDurableQueues build() {
-            return new MongoDurableQueues(                                          mongoTemplate,
+            var durableQueues = new MongoDurableQueues(                             mongoTemplate,
                                           unitOfWorkFactory,
                                           messageHandlingTimeout,
                                           jsonSerializer,
                                           sharedQueueCollectionName,
                                           queuePollingOptimizerFactory);
+            durableQueues.setMessageObserver(messageObserver);
+            return durableQueues;
         }
     }
 

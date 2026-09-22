@@ -53,6 +53,13 @@
             <scope>test</scope>
             <version>${project.version}</version>
         </dependency>
+        <!-- Test-only: MongoDurableQueueMessageObserverIT asserts the dead-letter counter end-to-end.
+             foundation declares micrometer-core optional, so it is not transitive. -->
+        <dependency>
+            <groupId>io.micrometer</groupId>
+            <artifactId>micrometer-core</artifactId>
+            <scope>test</scope>
+        </dependency>
         <dependency>
             <groupId>dk.trustworks.essentials</groupId>
             <artifactId>types-springdata-mongo</artifactId>

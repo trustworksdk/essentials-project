@@ -316,7 +316,8 @@ public class EssentialsComponentsConfiguration {
                                        SpringMongoTransactionAwareUnitOfWorkFactory unitOfWorkFactory,
                                        JSONSerializer jsonSerializer,
                                        EssentialsComponentsProperties properties,
-                                       List<DurableQueuesInterceptor> durableQueuesInterceptors) {
+                                       List<DurableQueuesInterceptor> durableQueuesInterceptors,
+                                       List<DurableQueueMessageObserver> durableQueueMessageObservers) {
         Function<ConsumeFromQueue, QueuePollingOptimizer> pollingOptimizerFactory =
                 consumeFromQueue -> new SimpleQueuePollingOptimizer(consumeFromQueue,
                                                                     (long) (consumeFromQueue.getPollingInterval().toMillis() *
@@ -327,6 +328,7 @@ public class EssentialsComponentsConfiguration {
                                                                                                     .toMillis()
                 );
         var durableQueues = MongoDurableQueues.builder()
+                                              .setMessageObserver(DurableQueueMessageObserver.composite(durableQueueMessageObservers))
                                               .setMongoTemplate(mongoTemplate)
                                               .setUnitOfWorkFactory(unitOfWorkFactory)
                                               .setMessageHandlingTimeout(properties.getDurableQueues().getMessageHandlingTimeout())
@@ -336,6 +338,22 @@ public class EssentialsComponentsConfiguration {
                                               .build();
         durableQueues.addInterceptors(durableQueuesInterceptors);
         return durableQueues;
+    }
+
+    /**
+     * The dead-letter counter, registered whenever a {@link MeterRegistry} is present and deliberately
+     * <em>not</em> gated behind {@code essentials.metrics.durable-queues.enabled}: that switch controls
+     * execution-time measurement, and a timing switch must not turn an incident counter off.
+     * <p>
+     * Nothing about the counter is database-specific — {@link MongoDurableQueues} delivers through
+     * {@code DefaultDurableQueueConsumer}, which is the class that notifies the observer.
+     */
+    @Bean
+    @ConditionalOnBean(MeterRegistry.class)
+    @ConditionalOnMissingBean(MicrometerDurableQueueMessageObserver.class)
+    public MicrometerDurableQueueMessageObserver micrometerDurableQueueMessageObserver(MeterRegistry meterRegistry,
+                                                                                        EssentialsComponentsProperties properties) {
+        return new MicrometerDurableQueueMessageObserver(meterRegistry, properties.getTracingProperties().getModuleTag());
     }
 
     /**

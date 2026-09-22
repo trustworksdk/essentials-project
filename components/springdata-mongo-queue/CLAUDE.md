@@ -55,6 +55,7 @@ On fetch: if lower-`keyOrder` message with same key exists → reschedule curren
 
 ## Extension Points
 
+- `DurableQueueMessageObserver` — observe how deliveries *end* (handled / retried / dead-lettered / redelivery-requested); set via `builder().setMessageObserver(...)` or `setMessageObserver(...)` after construction. Use `DurableQueueMessageObserver.composite(List)` for more than one; always wrapped in `safe(...)`. Notifications come from `DefaultDurableQueueConsumer` — there is no centralized fetcher on this implementation. Covered by `MongoDurableQueueMessageObserverIT`.
 - `DurableQueuesInterceptor` — intercept any queue operation; add via `addInterceptor()`. Sorted by `@Order` on `start()` and on add.
 - `QueuePollingOptimizer` / `queuePollingOptimizerFactory` — supply custom optimizer per consumer via constructor param.
 - Subclass `MongoDurableQueues` (`protected` constructor) — override collection name, inject custom serializer.
@@ -69,6 +70,7 @@ All tests in `dk.trustworks.essentials.components.queue.springdata.mongodb`.
 - `MongoLocalOrderedMessages*IT` — ordered-message delivery and redelivery.
 - `MongoDuplicateConsumptionDurableQueuesIT` — idempotency edge cases.
 - `MongoDurableQueuesIndexIT` — verifies index creation/upgrade.
+- `MongoDurableQueueMessageObserverIT` — observer callbacks end-to-end, including the dead-letter counter's two `reason` tag values. Needs `micrometer-core`, which this module declares **test-scope only** because `foundation` marks it optional and it is therefore not transitive. Note the Awaitility idiom: assert with `hasValueSatisfying`, never `orElseThrow`, or an absent `Optional` raises `NoSuchElementException`, which `untilAsserted` does not retry — the wait aborts on the first poll instead of waiting.
 - `MongoDurableQueuesTest` — unit test (no container).
 - `DurableLocalCommandBusIT` — command bus wired over `MongoDurableQueues`.
 

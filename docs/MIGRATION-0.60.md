@@ -263,6 +263,13 @@ off.
 
 **What to do:** alert on this counter. Nothing needs configuring to get it.
 
+Both Spring Boot starters register it, MongoDB included. Nothing about the counter is database-specific —
+`MongoDurableQueues` delivers through the same `DefaultDurableQueueConsumer` that notifies the observer. The
+Mongo builder gained `setMessageObserver(...)` for this, matching `PostgresqlDurableQueuesBuilder`, and the
+Mongo starter's `durableQueues` bean now collects every `DurableQueueMessageObserver` bean via
+`composite(...)`. Existing `MongoDurableQueues.builder()` callers are unaffected; the setter defaults to
+`DurableQueueMessageObserver.none()`.
+
 ### A dead-letter health indicator, which cannot fail a probe unless you ask it to
 
 Both Spring Boot starters now register a `DurableQueuesHealthIndicator`, which reports dead-letter
