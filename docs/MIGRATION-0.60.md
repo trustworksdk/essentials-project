@@ -60,8 +60,19 @@ nothing reads.
 On a large queue table, plan the upgrade as you would any other index change: the drops run inside the
 bootstrap transaction while the framework holds its advisory lock, so a concurrently starting instance waits.
 
-The four remaining indexes (`idx_<table>_ordered_msg`, `idx_<table>_ordered_ready`,
-`idx_<table>_unordered_ready`, `idx_<table>_ordered_head`) are unchanged.
+A third, `idx_<table>_ordered_ready`, is dropped too — see below. The three that remain are
+`idx_<table>_ordered_msg`, `idx_<table>_unordered_ready` and `idx_<table>_ordered_head`.
+
+### `idx_<table>_ordered_ready` is dropped as well
+
+Not because the unified query went, but because it was measured taking no scans at all.
+`QueueIndexScanCountIT` drives three workload shapes — mixed ordered/unordered, one distinct key per message
+(the shape most favourable to a key-leading index), and 200 ordered claims against a 20 000-row `ANALYZE`d
+table — and the index records zero scans in every one, while the planner picks each of the other three. The
+ordered claim's `NOT EXISTS` barrier is served by `idx_<table>_ordered_msg`.
+
+It is dropped on startup alongside the other superseded indexes, and no longer created. Nothing to do; the
+same zero-downtime caveat above applies.
 
 ### The queue statistics feature is removed
 

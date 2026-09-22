@@ -455,23 +455,6 @@ public class DurableQueuesSql {
     }
 
     /**
-     * SQL statement for creating the queue name, next delivery timestamp, key and key order where key is not null and is dead letter message and is being delivered is false index.
-     *
-     * @return SQL statement for creating the queue name, next delivery timestamp, key and key order where key is not null and is dead letter message and is being delivered is false index
-     */
-    public String getCreateOrderedMessageReadyIndexSql() {
-        return bind("""
-                    CREATE INDEX IF NOT EXISTS idx_{:tableName}_ordered_ready
-                      ON {:tableName} (key, queue_name, key_order, next_delivery_ts)
-                      INCLUDE (id)
-                      WHERE key IS NOT NULL
-                        AND NOT is_dead_letter_message
-                        AND NOT is_being_delivered
-                    """,
-                    arg("tableName", sharedQueueTableName));
-    }
-
-    /**
      * SQL statement for creating the queue name, next delivery timestamp, where key is null and is dead letter message and is being delivered is false index.
      *
      * @return SQL statement for creating the queue name, next delivery timestamp, where key is null and is dead letter message and is being delivered is false index.

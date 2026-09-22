@@ -381,10 +381,13 @@ public final class PostgresqlDurableQueues implements BatchMessageFetchingCapabl
                       handleAwareUnitOfWork.handle());
             dropIndex("DROP INDEX IF EXISTS idx_{:tableName}_ready",
                       handleAwareUnitOfWork.handle());
+            // Measured at zero scans by QueueIndexScanCountIT across every workload shape tried, including a
+            // 20 000-row ANALYZEd table where the planner chose each of the other three. The ordered claim's
+            // NOT EXISTS barrier is served by idx_<table>_ordered_msg instead.
+            dropIndex("DROP INDEX IF EXISTS idx_{:tableName}_ordered_ready",
+                      handleAwareUnitOfWork.handle());
 
             createIndex(durableQueuesSql.getCreateOrderedMessageIndexSql(),
-                        handleAwareUnitOfWork.handle());
-            createIndex(durableQueuesSql.getCreateOrderedMessageReadyIndexSql(),
                         handleAwareUnitOfWork.handle());
             createIndex(durableQueuesSql.getCreateUnorderedMessageReadyIndexSql(),
                         handleAwareUnitOfWork.handle());

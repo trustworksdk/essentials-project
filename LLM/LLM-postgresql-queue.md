@@ -271,12 +271,6 @@ Auto-created. `*` = table name.
 CREATE INDEX idx_*_ordered_msg
   ON durable_queues (queue_name, key, key_order);
 
--- Ordered messages ready
-CREATE INDEX idx_*_ordered_ready
-  ON durable_queues (key, queue_name, key_order, next_delivery_ts)
-  INCLUDE (id)
-  WHERE key IS NOT NULL AND NOT is_dead_letter_message AND NOT is_being_delivered;
-
 -- Unordered messages ready
 CREATE INDEX idx_*_unordered_ready
   ON durable_queues (queue_name, next_delivery_ts)

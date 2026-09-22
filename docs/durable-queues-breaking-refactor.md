@@ -455,8 +455,10 @@ Steps 1, 2 and 5 are independent of each other.
 
 ### Open
 
-- **Which of the four surviving indexes earn their place** — settled by the scan-count measurement in step 10,
-  not by argument here.
+- ~~**Which of the four surviving indexes earn their place**~~ — **settled**. `QueueIndexScanCountIT` measured
+  `idx_<table>_ordered_ready` at zero scans across every workload shape tried, including 200 ordered claims
+  against a 20 000-row `ANALYZE`d table where the planner chose each of the other three. It is dropped; the
+  `NOT EXISTS` barrier is served by `idx_<table>_ordered_msg`. Three indexes remain.
 - **Whether `PostgresqlDurableQueues` keeps its `useCentralizedMessageFetcher` flag.** Consumer topology, a
   different question from the claim query, and outside this plan's brief. Noted only so its absence is not read as
   a decision.
