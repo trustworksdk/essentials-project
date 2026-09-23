@@ -37,8 +37,11 @@ public final class EssentialsJSONEventSerializers {
      *         Jackson 3 modules are present, otherwise Jackson 2
      */
     public static JSONEventSerializer createForActiveJacksonFlavor() {
-        return EssentialsJacksonModules.isJackson3Flavor()
-               ? new Jackson3JSONEventSerializer(EssentialsObjectMappers.createJackson3ObjectMapper())
-               : new JacksonJSONEventSerializer(EssentialsObjectMappers.createJackson2ObjectMapper());
+        // Two returns rather than a conditional expression: merging the two branch types makes the verifier load
+        // JacksonJSONEventSerializer, which is not needed - and not wanted - on a classpath without Jackson 2.
+        if (EssentialsJacksonModules.isJackson3Flavor()) {
+            return new Jackson3JSONEventSerializer(EssentialsObjectMappers.createJackson3ObjectMapper());
+        }
+        return new JacksonJSONEventSerializer(EssentialsObjectMappers.createJackson2ObjectMapper());
     }
 }

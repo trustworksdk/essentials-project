@@ -17,7 +17,6 @@
 package dk.trustworks.essentials.components.foundation.json;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.databind.type.TypeFactory;
 import dk.trustworks.essentials.shared.reflection.Classes;
 
 import static dk.trustworks.essentials.shared.Exceptions.rethrowIfCriticalError;
@@ -119,7 +118,9 @@ public class JacksonJSONSerializer implements JSONSerializer {
     @Override
     public void setClassLoader(ClassLoader classLoader) {
         requireNonNull(classLoader, "No ClassLoader provided");
-        objectMapper.setTypeFactory(TypeFactory.defaultInstance().withClassLoader(classLoader));
+        // Derive from the mapper's own TypeFactory: a fresh TypeFactory.defaultInstance() would discard the type modifiers
+        // registered modules installed (Jdk8Module's makes Optional a reference type), breaking those types.
+        objectMapper.setTypeFactory(objectMapper.getTypeFactory().withClassLoader(classLoader));
     }
 
     /**

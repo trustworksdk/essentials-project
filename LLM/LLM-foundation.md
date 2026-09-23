@@ -245,6 +245,13 @@ MessageDeliveryErrorHandler.stopRedeliveryOn(
 )
 ```
 
+**Built-in permanent errors.** Independently of the handler, the queue consumers dead-letter a message on its first
+failure when the exception, or its root cause, is a `DurableQueueDeserializationException`, `ClassCastException`,
+`NoClassDefFoundError`, `IllegalArgumentException`, or Jackson's `MismatchedInputException` (JSON that cannot be bound to
+the message type) — Jackson 2 or Jackson 3, including subclasses such as `InvalidFormatException`. Up to and including
+0.50.0 only the Jackson 2 `MismatchedInputException` was recognised, so under the Jackson 3 flavor such messages were
+redelivered until the `RedeliveryPolicy` gave up; fixed in 0.50.1.
+
 ### Dead Letter Queue
 
 ```java

@@ -15,7 +15,6 @@
  */
 package dk.trustworks.essentials.components.foundation.messaging.queue;
 
-import com.fasterxml.jackson.databind.exc.MismatchedInputException;
 import dk.trustworks.essentials.components.foundation.*;
 import dk.trustworks.essentials.components.foundation.messaging.queue.operations.*;
 import dk.trustworks.essentials.shared.Exceptions;
@@ -477,7 +476,7 @@ public class CentralizedMessageFetcher implements Lifecycle {
                 e instanceof DurableQueueDeserializationException ||
                 e instanceof ClassCastException || rootCause instanceof ClassCastException ||
                 e instanceof NoClassDefFoundError || rootCause instanceof NoClassDefFoundError ||
-                rootCause instanceof MismatchedInputException ||
+                MismatchedJsonInput.isMismatchedJsonInput(rootCause) ||
                 e instanceof IllegalArgumentException || rootCause instanceof IllegalArgumentException;
     }
 

@@ -104,6 +104,15 @@ See [spring-boot-starter-mongodb README](../components/spring-boot-starter-mongo
 
 **Other:** Same reactive, serialization, observability as PostgreSQL starter
 
+**Which `jackson-databind`.** The Jackson one that matches your flavor: `tools.jackson.core:jackson-databind` for
+Jackson 3 (the default), `com.fasterxml.jackson.core:jackson-databind` for Jackson 2. From 0.50.1 a Jackson 3-only
+application does not need Jackson 2 on the classpath. Up to 0.50.0 the PostgreSQL, MongoDB and event-store starters
+failed at startup without it (`NoClassDefFoundError: com/fasterxml/jackson/databind/Module`), so Jackson 3 applications
+had to add `com.fasterxml.jackson.core:jackson-databind` as a workaround; it can be removed after upgrading. One thing
+still needs Jackson 2 in 0.50.x: duplicate-notification filtering in `MultiTableChangeListener`, whose
+`NotificationDuplicationFilter` SPI is typed on Jackson 2's `JsonNode`. Without Jackson 2 the listener logs a warning and
+delivers notifications unfiltered, which is correct but may trigger redundant polls. (0.60 moves that SPI to Jackson 3.)
+
 ### Event Store Starter
 
 Package: `dk.trustworks.essentials.components.boot.autoconfigure.postgresql.eventstore`

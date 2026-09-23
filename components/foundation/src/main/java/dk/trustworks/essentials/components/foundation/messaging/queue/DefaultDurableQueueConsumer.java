@@ -16,7 +16,6 @@
 
 package dk.trustworks.essentials.components.foundation.messaging.queue;
 
-import com.fasterxml.jackson.databind.exc.MismatchedInputException;
 import dk.trustworks.essentials.components.foundation.IOExceptionUtil;
 import dk.trustworks.essentials.components.foundation.messaging.RedeliveryPolicy;
 import dk.trustworks.essentials.components.foundation.messaging.queue.QueuedMessage.DeliveryMode;
@@ -589,7 +588,7 @@ public abstract class DefaultDurableQueueConsumer<DURABLE_QUEUES extends Durable
                 e instanceof DurableQueueDeserializationException ||
                 e instanceof ClassCastException || rootCause instanceof ClassCastException ||
                 e instanceof NoClassDefFoundError || rootCause instanceof NoClassDefFoundError ||
-                rootCause instanceof MismatchedInputException ||
+                MismatchedJsonInput.isMismatchedJsonInput(rootCause) ||
                 e instanceof IllegalArgumentException || rootCause instanceof IllegalArgumentException;
     }
 

@@ -18,8 +18,6 @@ package dk.trustworks.essentials.components.foundation.json;
 
 import com.fasterxml.jackson.annotation.JsonAutoDetect.Visibility;
 import com.fasterxml.jackson.databind.*;
-import com.fasterxml.jackson.datatype.jdk8.Jdk8Module;
-import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 
 import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 
@@ -53,39 +51,10 @@ public final class EssentialsObjectMappers {
      * @throws IllegalStateException if the Essentials Jackson modules on the classpath are the Jackson 3 flavor
      */
     public static ObjectMapper createJackson2ObjectMapper(com.fasterxml.jackson.databind.Module... additionalModules) {
-        requireNonNull(additionalModules, "No additionalModules provided");
-        var builder = com.fasterxml.jackson.databind.json.JsonMapper.builder()
-                                                                   .disable(MapperFeature.AUTO_DETECT_GETTERS)
-                                                                   .disable(MapperFeature.AUTO_DETECT_IS_GETTERS)
-                                                                   .disable(MapperFeature.AUTO_DETECT_SETTERS)
-                                                                   .disable(MapperFeature.DEFAULT_VIEW_INCLUSION)
-                                                                   .disable(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS)
-                                                                   .disable(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES)
-                                                                   .disable(SerializationFeature.FAIL_ON_EMPTY_BEANS)
-                                                                   .enable(MapperFeature.AUTO_DETECT_CREATORS)
-                                                                   .enable(MapperFeature.AUTO_DETECT_FIELDS)
-                                                                   .enable(MapperFeature.PROPAGATE_TRANSIENT_MARKER)
-                                                                   // Untyped binding (deserialize to Map/Object, as the
-                                                                   // CDC WAL path does) would otherwise map JSON floats
-                                                                   // to Double, so 1.10 re-serializes as 1.1 and large
-                                                                   // decimals lose precision. On the CDC path the
-                                                                   // re-serialized string IS the persisted event
-                                                                   // payload, so fidelity has to be exact.
-                                                                   .enable(DeserializationFeature.USE_BIG_DECIMAL_FOR_FLOATS)
-                                                                   .addModule(new Jdk8Module())
-                                                                   .addModule(new JavaTimeModule());
-        EssentialsJacksonModules.jackson2Modules().forEach(builder::addModule);
-        for (com.fasterxml.jackson.databind.Module additionalModule : additionalModules) {
-            builder.addModule(additionalModule);
-        }
-
-        var objectMapper = builder.build();
-        objectMapper.setVisibility(objectMapper.getSerializationConfig().getDefaultVisibilityChecker()
-                                               .withGetterVisibility(Visibility.NONE)
-                                               .withSetterVisibility(Visibility.NONE)
-                                               .withFieldVisibility(Visibility.ANY)
-                                               .withCreatorVisibility(Visibility.ANY));
-        return objectMapper;
+        // Delegates rather than building the mapper here: the JVM verifies every method of a class when the class is
+        // linked, so Jackson 2 code in this class would make it unusable - Jackson 3 path included - on a classpath
+        // without Jackson 2. See Jackson2ObjectMappers.
+        return Jackson2ObjectMappers.create(additionalModules);
     }
 
     /**
@@ -156,8 +125,11 @@ public final class EssentialsObjectMappers {
      * @return a {@link JSONSerializer} using the canonical configuration for the active flavor
      */
     public static JSONSerializer createJSONSerializer() {
-        return EssentialsJacksonModules.isJackson3Flavor()
-               ? new Jackson3JSONSerializer(createJackson3ObjectMapper())
-               : new JacksonJSONSerializer(createJackson2ObjectMapper());
+        // Two returns rather than a conditional expression: merging the two branch types makes the verifier load
+        // JacksonJSONSerializer, which is not needed - and not wanted - on a classpath without Jackson 2.
+        if (EssentialsJacksonModules.isJackson3Flavor()) {
+            return new Jackson3JSONSerializer(createJackson3ObjectMapper());
+        }
+        return new JacksonJSONSerializer(createJackson2ObjectMapper());
     }
 }
