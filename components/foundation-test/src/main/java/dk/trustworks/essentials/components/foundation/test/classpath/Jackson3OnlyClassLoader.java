@@ -38,6 +38,22 @@ public final class Jackson3OnlyClassLoader extends URLClassLoader {
     }
 
     /**
+     * A Jackson 3-only application exists only with the Jackson 3 flavor of the Essentials modules: under
+     * {@code -Pjackson2} they are built on Jackson 2, so hiding Jackson 2 makes them unloadable by construction. Tests
+     * using this class loader skip themselves unless this returns {@code true}.
+     *
+     * @return {@code true} if the Essentials types module on the test classpath is the Jackson 3 flavor
+     */
+    public static boolean isJackson3FlavorOnTestClasspath() {
+        try {
+            var typesModule = Class.forName("dk.trustworks.essentials.jackson.types.EssentialTypesJacksonModule");
+            return typesModule.getSuperclass().getName().startsWith("tools.jackson.");
+        } catch (ClassNotFoundException e) {
+            return false;
+        }
+    }
+
+    /**
      * @return a class loader over the current test classpath without the Jackson 2 runtime jars
      */
     public static Jackson3OnlyClassLoader fromTestClasspath() {

@@ -19,6 +19,7 @@ import dk.trustworks.essentials.components.foundation.test.classpath.Jackson3Onl
 import org.junit.jupiter.api.*;
 
 import static org.assertj.core.api.Assertions.*;
+import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 /**
  * An application whose only Jackson is Jackson 3 must be able to use this starter. Up to 0.50.0 introspecting the
@@ -31,12 +32,16 @@ class Jackson3OnlyClasspathTest {
 
     @BeforeAll
     static void createClassLoaderWithoutJackson2() {
+        assumeTrue(Jackson3OnlyClassLoader.isJackson3FlavorOnTestClasspath(),
+                   "A Jackson 3-only application needs the Jackson 3 flavor; this build uses -Pjackson2");
         jackson3Only = Jackson3OnlyClassLoader.fromTestClasspath();
     }
 
     @AfterAll
     static void close() throws Exception {
-        jackson3Only.close();
+        if (jackson3Only != null) {
+            jackson3Only.close();
+        }
     }
 
     @Test
