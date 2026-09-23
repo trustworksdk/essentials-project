@@ -20,6 +20,7 @@ import com.fasterxml.jackson.annotation.*;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.*;
 import com.fasterxml.jackson.databind.json.JsonMapper;
+import tools.jackson.databind.JsonNode;
 import dk.trustworks.essentials.components.foundation.json.JacksonJSONSerializer;
 import dk.trustworks.essentials.reactive.LocalEventBus;
 import org.assertj.core.api.Fail;
@@ -265,7 +266,7 @@ class MultiTableChangeListenerIT {
     private static class QueueNameNotificationDuplicationFilter implements NotificationDuplicationFilter {
         @Override
         public Optional<String> extractDuplicationKey(JsonNode parameterJson) {
-            return Optional.ofNullable(parameterJson.has("queue_name") ? parameterJson.get("queue_name").asText() : null);
+            return Optional.ofNullable(parameterJson.has("queue_name") ? parameterJson.get("queue_name").asString() : null);
         }
     }
 

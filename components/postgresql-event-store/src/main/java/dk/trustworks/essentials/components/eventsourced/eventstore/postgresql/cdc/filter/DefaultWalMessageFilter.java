@@ -16,11 +16,11 @@
 
 package dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.cdc.filter;
 
-import com.fasterxml.jackson.core.*;
+import tools.jackson.core.*;
+import tools.jackson.core.json.JsonFactory;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.AggregateType;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.serializer.json.JSONEventSerializer;
 
-import java.io.IOException;
 import java.util.*;
 import java.util.function.Supplier;
 import java.util.stream.Collectors;
@@ -102,7 +102,7 @@ public class DefaultWalMessageFilter implements WalMessageFilter {
         }
         try (var parser = jsonFactory.createParser(walJson)) {
             return containsRelevantInsert(parser, trackedTables);
-        } catch (IOException e) {
+        } catch (JacksonException e) {
             return false;
         }
     }
@@ -118,7 +118,7 @@ public class DefaultWalMessageFilter implements WalMessageFilter {
         }
         try (var parser = jsonFactory.createParser(walJsonBytes)) {
             return containsRelevantInsert(parser, trackedTables);
-        } catch (IOException e) {
+        } catch (JacksonException e) {
             return false;
         }
     }
@@ -139,9 +139,9 @@ public class DefaultWalMessageFilter implements WalMessageFilter {
                     .collect(Collectors.toUnmodifiableSet());
     }
 
-    private boolean containsRelevantInsert(JsonParser parser, Set<String> trackedTables) throws IOException {
+    private boolean containsRelevantInsert(JsonParser parser, Set<String> trackedTables) {
         while (parser.nextToken() != null) {
-            if (parser.currentToken() != JsonToken.FIELD_NAME || !"change".equals(parser.currentName())) {
+            if (parser.currentToken() != JsonToken.PROPERTY_NAME || !"change".equals(parser.currentName())) {
                 continue;
             }
             if (parser.nextToken() != JsonToken.START_ARRAY) {
@@ -156,7 +156,7 @@ public class DefaultWalMessageFilter implements WalMessageFilter {
                 String kind = null;
                 String table = null;
                 while (parser.nextToken() != JsonToken.END_OBJECT) {
-                    if (parser.currentToken() != JsonToken.FIELD_NAME) {
+                    if (parser.currentToken() != JsonToken.PROPERTY_NAME) {
                         continue;
                     }
                     String field = parser.currentName();

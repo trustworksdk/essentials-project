@@ -16,7 +16,7 @@
 
 package dk.trustworks.essentials.components.foundation.postgresql;
 
-import com.fasterxml.jackson.databind.*;
+import tools.jackson.databind.json.JsonMapper;
 import dk.trustworks.essentials.components.foundation.IOExceptionUtil;
 import dk.trustworks.essentials.components.foundation.json.*;
 import dk.trustworks.essentials.components.foundation.postgresql.ListenNotify.SqlOperation;
@@ -102,11 +102,12 @@ public final class MultiTableChangeListener<T extends TableChangeNotification> i
         this.jsonSerializer = requireNonNull(jsonSerializer, "No jsonSerializer provided");
         this.eventBus = requireNonNull(eventBus, "No localEventBus instance provided");
         this.filterDuplicateNotifications = filterDuplicateNotifications;
-        if (jsonSerializer instanceof JacksonJSONSerializer jacksonJSONSerializer) {
-            this.notificationFilterChain = new NotificationFilterChain(jacksonJSONSerializer.getObjectMapper());
+        if (jsonSerializer instanceof Jackson3JSONSerializer jackson3JSONSerializer) {
+            this.notificationFilterChain = new NotificationFilterChain(jackson3JSONSerializer.getObjectMapper());
         } else {
-            // Fallback
-            this.notificationFilterChain = new NotificationFilterChain(new ObjectMapper());
+            // The notification parameter is a small flat JSON object read as a tree, so it needs no Essentials
+            // mapper configuration: a plain mapper is enough for any other JSONSerializer implementation.
+            this.notificationFilterChain = new NotificationFilterChain(JsonMapper.builder().build());
         }
         listenForNotificationsRelatedToTables = new ConcurrentHashMap<>();
         handleReference = new AtomicReference<>();
