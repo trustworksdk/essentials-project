@@ -728,7 +728,7 @@ public class ImmutableOrder extends ImmutableValueObject {
 
 | Essentials Version                                                       | Java | Spring Boot | Jackson                | Kotlin                    | Notes                    |
 |--------------------------------------------------------------------------|------|-------------|------------------------|---------------------------|--------------------------|
-| [0.60.0+](https://github.com/trustworksdk/essentials-project/tree/release/0.60) | 25+ | 4.0.x | 3 (default) / 2 | 2.3+ | Under active development |
+| [0.60.0+](https://github.com/trustworksdk/essentials-project/tree/release/0.60) | 25+ | 4.1.x | 3 (default) / 2 | 2.3+ | Under active development |
 | [0.50.0+](https://github.com/trustworksdk/essentials-project/tree/main)  | 21+ | 4.0.x | 3 (default) / 2        | 2.2+                      | Maintained               |
 | [0.40.24+](https://github.com/trustworksdk/essentials-project/tree/main) | 17+ | 3.3.x | 2 | 2.1+ | No longer maintained     |
 
@@ -737,7 +737,7 @@ carry major version 69 and a Java 21 runtime rejects them with `UnsupportedClass
 itself requires JDK 25–27 (`maven-enforcer` pins `[25,28)`); CI runs the full build on JDK 25 and the unit tests on
 JDK 26 and 27.
 
-**Spring Boot 4.0.x.** The starters resolve `org.springframework.boot:spring-boot:4.0.7`. Spring Boot 3.x is no longer
+**Spring Boot 4.1.x.** The starters resolve `org.springframework.boot:spring-boot:4.1.1`. Spring Boot 3.x is not
 supported — 4.0 moved to Jackson 3 and Jakarta EE 11, so a 3.x application cannot consume these starters unchanged.
 
 **Jackson.** Jackson 3 (`tools.jackson.core`) is the default because that is what Spring Boot 4 ships. Jackson 2

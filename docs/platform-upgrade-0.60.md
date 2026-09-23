@@ -54,11 +54,13 @@ Each has a recommendation. They go into the release notes, so settle them before
 | ID | Question | Recommendation | Why |
 |----|----------|----------------|-----|
 | D1 | Branch base | **Decided:** `release/0.60`, created at `queue-breaking-refactor`'s tip (`36adb5f2`), with the queue work treated as complete; this work on `upgrade/0.60-platform` | One conflict surface; `main` stays patchable |
-| D2 | Artifact names once Jackson 2 is gone | **Keep** `types-jackson3` / `immutable-jackson3`; **delete** `types-jackson` / `immutable-jackson` | Reusing `types-jackson` for Jackson 3 content means a consumer's unchanged dependency silently changes Jackson major. A missing artifact fails loudly, and that is the failure we want |
-| D3 | J2-named serializer classes (`JacksonJSONSerializer`, `JacksonJSONEventSerializer`) | **Delete** them; keep the `Jackson3*` names | Same reason as D2: the name would compile against a different type. A later minor can add an alias if people ask for one |
+| D2 | Artifact names once Jackson 2 is gone | **Decided:** keep `types-jackson3` / `immutable-jackson3`; delete `types-jackson` / `immutable-jackson` | Reusing `types-jackson` for Jackson 3 content means a consumer's unchanged dependency silently changes Jackson major. A missing artifact fails loudly, and that is the failure we want |
+| D3 | J2-named serializer classes (`JacksonJSONSerializer`, `JacksonJSONEventSerializer`) | **Decided:** delete them; keep the `Jackson3*` names | Same reason as D2: the name would compile against a different type |
 | D4 | `kotlinLanguage.version` / `kotlinApi.version` (the consumer floor) | **Decided:** `2.3` / `2.3` | Measured on 2026-09-23 with the embeddable compilers. (1) The JDK 25 baseline already makes Kotlin 2.3 the consumer minimum: Kotlin 2.2 has no `-jvm-target 25`, and no compiler will inline our version-69 bytecode into a lower target. (2) A compiler reads metadata one minor ahead but not two: 2.3.21 reads language-2.4 classes, 2.2.21 rejects them. Language 2.3 matches Boot 4.1.1's managed Kotlin (2.3.21) exactly, so consumers never rely on the one-ahead rule, and a later 2.5 compiler bump stays safe. (3) Boot 4.1.1 manages `kotlin-stdlib` 2.3.21, so an API level of 2.4 could bind to stdlib functions consumers do not have (`NoSuchMethodError`); 2.3 is the ceiling |
 | D5 | Upper bound of the enforcer JDK range, and the CI matrix | **Decided:** `[25,28)`; CI runs full `verify` on 25 and unit tests on 26 and 27 | Adoptium ships 26 and 27 GA (27 is the newest feature release; 28 is early access). A bounded range allows exactly what CI tests and fails with a clear enforcer message on an untested JDK, instead of an obscure ByteBuddy or Kotlin-compiler error. Raise the ceiling by one in the same change that adds a new JDK to the CI matrix |
 | D6 | Java 25 language adoption (e.g. `ScopedValue` in place of `ThreadLocal` in unit-of-work code) | **Out of scope.** Changing the baseline only; features adopted later, one per change | Keeps this series mechanical and reviewable |
+| D7 | Type of the notification-filter SPI (`NotificationDuplicationFilter.extractDuplicationKey(JsonNode)`, `NotificationFilterChain(ObjectMapper)`), which is Jackson 2 under both flavors today | **Decided:** port to `tools.jackson.databind` types | Implementers change an import. The Jackson-neutral alternative (a `Map` or raw JSON string) guards against a Jackson 4 that does not exist, costs a larger rewrite for implementers, and may re-parse on a hot path |
+| D8 | Flavor-selection helpers (`EssentialsJSONEventSerializers.createForActiveJacksonFlavor()`, `EssentialsJacksonModules.isJackson3Flavor()` / `jackson2Modules()` / `jackson3Modules()`) | **Decided:** remove in 0.60, not deprecate. Replace the event-serializer factory with `EssentialsJSONEventSerializers.create()` and rename `jackson3Modules()` to `modules()` | 0.60 is the major; deprecating would carry meaningless names through 0.60.x and charge consumers the same break again in 0.70. The factory itself stays, because it guarantees the canonical mapper configuration |
 
 ## 3. Steps
 
@@ -133,6 +135,13 @@ exercised: the `release` / `test-release` profiles (javadoc, sources, signing), 
 
 ### Step 3 — Spring Boot 4.1.1
 
+**Done.** `verify` green (1988 tests, same as the baseline); resolved `spring-boot` 4.1.1, `spring-core` 7.0.9,
+`mockito-core` 5.23.0, `snakeyaml` 2.6. Dropped the `netty-bom`, `mockito-bom` and `snakeyaml` pins, which Boot has
+caught up with; kept tomcat, byte-buddy, log4j and kafka-clients, which are still ahead. Release-notes items checked
+against the code with nothing to change: removed 4.0 deprecations, `-DskipTests` no longer skipping test AOT (no module
+uses the AOT goals), `Optional` constructor binding in `@ConfigurationProperties` (none). One full run hung on a
+pre-existing event-store bug, recorded in §5.
+
 1. `spring-boot.version` 4.0.8 → 4.1.1.
 2. Moves in the managed dependencies (4.0.8 → 4.1.1) that land on us:
 
@@ -190,9 +199,8 @@ The largest step, and the only one that changes persisted-data behaviour. Split 
   `com.fasterxml.jackson.databind.*` to `tools.jackson.databind.*`.
 
 **4.3 Event store and queues.**
-- `postgresql-event-store`: delete `JacksonJSONEventSerializer`, simplify `EssentialsJSONEventSerializers.createForActiveJacksonFlavor()`
-  (keep the method, deprecated, delegating to the Jackson 3 factory, so test and consumer code still compiles), and
-  port `cdc/filter/DefaultWalMessageFilter`.
+- `postgresql-event-store`: delete `JacksonJSONEventSerializer`, replace `EssentialsJSONEventSerializers.createForActiveJacksonFlavor()`
+  with `create()` (D8) and update every caller, and port `cdc/filter/DefaultWalMessageFilter`.
 - `postgresql-queue`: `DurableQueuesSerialization.createDefaultObjectMapper()` returns a J2 `ObjectMapper`. Change it
   to return `tools.jackson.databind.ObjectMapper`, which is a breaking signature change for the migration guide.
   Port `QueueNameDuplicationFilter`.
@@ -290,7 +298,28 @@ the one check the golden files cannot fully replace.
 | Other branches (`queue_shard_owned`, `mssql_durable_queues`, `feature/non-transactional-message-handler`, `bigdecimal-numeric-attribute-converters`) target `main` and use Jackson 2 APIs | Decide per branch whether it targets 0.50.x (`main`) or 0.60 (`release/0.60`) before step 4, and rebase the 0.60 ones after it |
 | Stale `target/` from the language server gives phantom failures | Known gotcha in the root `CLAUDE.md`: stop other builds, then `mvn clean install -pl <m> -am` |
 
-## 5. Out of scope
+## 5. Bugs found on the way (fix on `main` for 0.50.x, forward-merge into `release/0.60`)
+
+1. **`PostgresqlEventStore.pollEvents` leaves a unit of work open.** When `resolveBatchSizeForThisQuery` returns 0 (no
+   new events since the last poll, checked with `SELECT MAX(global_order)` on every 100th empty poll), the lambda
+   returns `Flux.empty()` without committing or rolling back the unit of work it opened. Normally the next poll reuses
+   the thread-bound unit of work and commits it; if the subscription is disposed in that window, the transaction
+   stays open for good, holding a lock on the event table. Seen on 2026-09-23 as a hung
+   `SpringTransactionAwareEventStoreUnitOfWorkFactory_OrderAggregateRootRepositoryIT`: the previous test's
+   leaked session sat `idle in transaction` after the `MAX` query, and the next test's `DROP TABLE` in
+   `resetEventStorageFor` waited on it with no timeout. Hit once in four full `verify` runs, zero times in eleven
+   isolated runs. Present since the 2022 mono-repo import. Fix: commit (or roll back) before that `return`, and add a
+   test that disposes right after an empty poll.
+2. **The queue's permanent-error list misses Jackson 3.** `DefaultDurableQueueConsumer:592` checks
+   `instanceof com.fasterxml.jackson.databind.exc.MismatchedInputException`, so under the default flavor a
+   deserialization failure is retried as if transient. Fixed on `release/0.60` by `MessageDeliveryClassifier`.
+3. **Suspected: a Jackson 3-only application cannot start the Postgres starter.** `MultiTableChangeListener` falls back to
+   `new com.fasterxml.jackson.databind.ObjectMapper()` whenever the serializer is not the Jackson 2 one, and the starters'
+   `jsonSerializer(List<com.fasterxml.jackson.databind.Module>)` bean methods name a Jackson 2 type, while Jackson 2 is
+   only `optional`/`provided`. Not yet reproduced; check with an application whose runtime classpath has no
+   `com.fasterxml.jackson.core:jackson-databind`.
+
+## 6. Out of scope
 
 - Adopting Java 25 language or library features (D6).
 - The `forRemoval` constructor removals from `MIGRATION-NEXT_MAJOR.md`. That is separate 0.60 work, but it touches
