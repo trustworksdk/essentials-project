@@ -82,6 +82,7 @@ import org.springframework.boot.jdbc.autoconfigure.DataSourceProperties;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.ApplicationContext;
 import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Primary;
 import org.springframework.transaction.PlatformTransactionManager;
 
@@ -550,43 +551,72 @@ public class EventStoreConfiguration {
     }
 
     /**
-     * The {@link JSONEventSerializer} that handles both {@link EventStore} event/metadata serialization as well as {@link DurableQueues} message payload serialization and deserialization
-     *
-     * @param additionalModules additional {@link Module}'s found in the {@link ApplicationContext}
-     * @return the {@link JSONEventSerializer} responsible for serializing/deserializing the raw Java events to and from JSON
+     * The Jackson 2 {@link JSONEventSerializer}, for applications that have Jackson 2 on the classpath - including those on the
+     * Jackson 3 flavor, where the method picks the Jackson 3 serializer itself.
+     * <p>
+     * In a nested configuration of its own because its bean method names Jackson 2's {@code Module}: on the outer
+     * configuration class, that signature alone made Spring fail to introspect the whole auto-configuration on a
+     * classpath with only Jackson 3. Spring evaluates the class condition below from bytecode metadata, before loading
+     * this class.
      */
-    @Bean
-    @ConditionalOnMissingBean
-    public JSONEventSerializer jsonSerializer(List<Module> additionalModules) {
-        if (EssentialsJacksonModules.isJackson3Flavor()) {
-            // The application is on Jackson 3, so no Jackson 2 Module beans can exist to collect. A Jackson 3
-            // deployment that needs extra modules defines its own JSONEventSerializer bean, which this backs off from.
+    @Configuration(proxyBeanMethods = false)
+    @ConditionalOnClass(name = "com.fasterxml.jackson.databind.Module")
+    static class Jackson2JsonSerializerConfiguration {
+        /**
+         * The {@link JSONEventSerializer} that handles both {@link EventStore} event/metadata serialization as well as {@link DurableQueues} message payload serialization and deserialization
+         *
+         * @param additionalModules additional {@link Module}'s found in the {@link ApplicationContext}
+         * @return the {@link JSONEventSerializer} responsible for serializing/deserializing the raw Java events to and from JSON
+         */
+        @Bean
+        @ConditionalOnMissingBean
+        public JSONEventSerializer jsonSerializer(List<Module> additionalModules) {
+            if (EssentialsJacksonModules.isJackson3Flavor()) {
+                // The application is on Jackson 3, so no Jackson 2 Module beans can exist to collect. A Jackson 3
+                // deployment that needs extra modules defines its own JSONEventSerializer bean, which this backs off from.
+                return EssentialsJSONEventSerializers.createForActiveJacksonFlavor();
+            }
+            var objectMapperBuilder = JsonMapper.builder()
+                                                .disable(MapperFeature.AUTO_DETECT_GETTERS)
+                                                .disable(MapperFeature.AUTO_DETECT_IS_GETTERS)
+                                                .disable(MapperFeature.AUTO_DETECT_SETTERS)
+                                                .disable(MapperFeature.DEFAULT_VIEW_INCLUSION)
+                                                .disable(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS)
+                                                .disable(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES)
+                                                .disable(SerializationFeature.FAIL_ON_EMPTY_BEANS)
+                                                .enable(MapperFeature.AUTO_DETECT_CREATORS)
+                                                .enable(MapperFeature.AUTO_DETECT_FIELDS)
+                                                .enable(MapperFeature.PROPAGATE_TRANSIENT_MARKER)
+                                                .addModule(new Jdk8Module())
+                                                .addModule(new JavaTimeModule());
+
+            additionalModules.forEach(objectMapperBuilder::addModule);
+
+            var objectMapper = objectMapperBuilder.build();
+            objectMapper.setVisibility(objectMapper.getSerializationConfig().getDefaultVisibilityChecker()
+                                                   .withGetterVisibility(JsonAutoDetect.Visibility.NONE)
+                                                   .withSetterVisibility(JsonAutoDetect.Visibility.NONE)
+                                                   .withFieldVisibility(JsonAutoDetect.Visibility.ANY)
+                                                   .withCreatorVisibility(JsonAutoDetect.Visibility.ANY));
+
+            return new JacksonJSONEventSerializer(objectMapper);
+        }
+    }
+
+    /**
+     * The {@link JSONEventSerializer} for applications whose only Jackson is Jackson 3.
+     */
+    @Configuration(proxyBeanMethods = false)
+    @ConditionalOnMissingClass("com.fasterxml.jackson.databind.Module")
+    static class Jackson3OnlyJsonSerializerConfiguration {
+        /**
+         * @return the {@link JSONEventSerializer} with the canonical Essentials Jackson 3 mapper configuration
+         */
+        @Bean
+        @ConditionalOnMissingBean
+        public JSONEventSerializer jsonSerializer() {
             return EssentialsJSONEventSerializers.createForActiveJacksonFlavor();
         }
-        var objectMapperBuilder = JsonMapper.builder()
-                                            .disable(MapperFeature.AUTO_DETECT_GETTERS)
-                                            .disable(MapperFeature.AUTO_DETECT_IS_GETTERS)
-                                            .disable(MapperFeature.AUTO_DETECT_SETTERS)
-                                            .disable(MapperFeature.DEFAULT_VIEW_INCLUSION)
-                                            .disable(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS)
-                                            .disable(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES)
-                                            .disable(SerializationFeature.FAIL_ON_EMPTY_BEANS)
-                                            .enable(MapperFeature.AUTO_DETECT_CREATORS)
-                                            .enable(MapperFeature.AUTO_DETECT_FIELDS)
-                                            .enable(MapperFeature.PROPAGATE_TRANSIENT_MARKER)
-                                            .addModule(new Jdk8Module())
-                                            .addModule(new JavaTimeModule());
-
-        additionalModules.forEach(objectMapperBuilder::addModule);
-
-        var objectMapper = objectMapperBuilder.build();
-        objectMapper.setVisibility(objectMapper.getSerializationConfig().getDefaultVisibilityChecker()
-                                               .withGetterVisibility(JsonAutoDetect.Visibility.NONE)
-                                               .withSetterVisibility(JsonAutoDetect.Visibility.NONE)
-                                               .withFieldVisibility(JsonAutoDetect.Visibility.ANY)
-                                               .withCreatorVisibility(JsonAutoDetect.Visibility.ANY));
-
-        return new JacksonJSONEventSerializer(objectMapper);
     }
 
     /**
