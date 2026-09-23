@@ -56,8 +56,8 @@ Each has a recommendation. They go into the release notes, so settle them before
 | D1 | Branch base | **Decided:** `release/0.60`, created at `queue-breaking-refactor`'s tip (`36adb5f2`), with the queue work treated as complete; this work on `upgrade/0.60-platform` | One conflict surface; `main` stays patchable |
 | D2 | Artifact names once Jackson 2 is gone | **Keep** `types-jackson3` / `immutable-jackson3`; **delete** `types-jackson` / `immutable-jackson` | Reusing `types-jackson` for Jackson 3 content means a consumer's unchanged dependency silently changes Jackson major. A missing artifact fails loudly, and that is the failure we want |
 | D3 | J2-named serializer classes (`JacksonJSONSerializer`, `JacksonJSONEventSerializer`) | **Delete** them; keep the `Jackson3*` names | Same reason as D2: the name would compile against a different type. A later minor can add an alias if people ask for one |
-| D4 | `kotlinLanguage.version` / `kotlinApi.version` (the consumer floor) | `2.3` / `2.2` | Spring Boot 4.1.1 manages Kotlin **2.3.21**. Setting language 2.4 would force every Kotlin consumer on Boot 4.1 defaults to override `kotlin.version` before they could read our metadata. Raising the floor is allowed in a major but has to be stated in the release notes |
-| D5 | Upper bound of the enforcer JDK range, and the CI matrix | `[25,)`, or `[25,28)` if a ceiling is wanted; CI runs `verify` on 25 and unit tests on 26 and 27 | The current `[21,26)` would reject JDK 26/27 builds as soon as the floor moves |
+| D4 | `kotlinLanguage.version` / `kotlinApi.version` (the consumer floor) | **Decided:** `2.3` / `2.3` | Measured on 2026-09-23 with the embeddable compilers. (1) The JDK 25 baseline already makes Kotlin 2.3 the consumer minimum: Kotlin 2.2 has no `-jvm-target 25`, and no compiler will inline our version-69 bytecode into a lower target. (2) A compiler reads metadata one minor ahead but not two: 2.3.21 reads language-2.4 classes, 2.2.21 rejects them. Language 2.3 matches Boot 4.1.1's managed Kotlin (2.3.21) exactly, so consumers never rely on the one-ahead rule, and a later 2.5 compiler bump stays safe. (3) Boot 4.1.1 manages `kotlin-stdlib` 2.3.21, so an API level of 2.4 could bind to stdlib functions consumers do not have (`NoSuchMethodError`); 2.3 is the ceiling |
+| D5 | Upper bound of the enforcer JDK range, and the CI matrix | **Decided:** `[25,28)`; CI runs full `verify` on 25 and unit tests on 26 and 27 | Adoptium ships 26 and 27 GA (27 is the newest feature release; 28 is early access). A bounded range allows exactly what CI tests and fails with a clear enforcer message on an untested JDK, instead of an obscure ByteBuddy or Kotlin-compiler error. Raise the ceiling by one in the same change that adds a new JDK to the CI matrix |
 | D6 | Java 25 language adoption (e.g. `ScopedValue` in place of `ThreadLocal` in unit-of-work code) | **Out of scope.** Changing the baseline only; features adopted later, one per change | Keeps this series mechanical and reviewable |
 
 ## 3. Steps
@@ -78,12 +78,12 @@ override `JAVA_HOME` per invocation).
 1. Root `pom.xml`: `java.release.version` 21 → 25. `java.version`, `maven.compiler.release` and every module's
    `kotlin-maven-plugin` `<jvmTarget>${java.version}</jvmTarget>` follow from that property. Confirm no module
    overrides it (none does today).
-2. Enforcer `requireJavaVersion`: `[${java.release.version},26)` → the range chosen in D5.
+2. Enforcer `requireJavaVersion`: `[${java.release.version},26)` → `[${java.release.version},28)` (D5).
 3. `java.build.version` stays at 25. Check whether anything still needs it as a separate property now that the build
    version equals the release version; drop it if nothing does.
 4. `.github/workflows/maven.yml`:
-   - `verify` matrix `['21','25']` → `['25']`, and add the newest GA JDK if D5 says so.
-   - Interim-JDK unit matrix `['22','23','24']` → the post-25 JDKs from D5, or remove the job.
+   - `verify` matrix `['21','25']` → `['25']` (D5).
+   - Unit-only matrix `['22','23','24']` → `['26','27']` (D5).
    - The `jackson2` job pins JDK 21. Leave it for now; step 4.9 deletes it.
    - Update the header comment, which describes a "Java 21 LTS baseline".
 5. `codeql.yml` and `release-to-maven-central.yml` already use 25. No change.
@@ -105,8 +105,10 @@ override `JAVA_HOME` per invocation).
    so after this bump the compiler would be 2.4.20 while the stdlib resolved to 2.3.21. Import
    `org.jetbrains.kotlin:kotlin-bom:${kotlin.version}` **above** the `spring-boot-dependencies` import (the first import
    wins), and add a comment explaining why, next to the existing ordering rationale.
-3. `kotlinLanguage.version` / `kotlinApi.version` → the D4 values. The comment block at `pom.xml:74-90` already
-   explains the contract. Update the numbers only, and note the new floor in the release notes.
+3. `kotlinLanguage.version` 2.2 → 2.3 and `kotlinApi.version` 2.1 → 2.3 (D4). Rewrite the comment block at
+   `pom.xml:74-90`: its claim that "a Kotlin 2.1 compiler rejects these artifacts" at language 2.2 contradicts the
+   measured one-minor-ahead rule, and its reason for keeping the API level one behind no longer applies. State the
+   real floor: Kotlin 2.3, set by the JDK 25 target and matched by the language level. Note it in the release notes.
 4. `jackson-module-kotlin`: Jackson 3's is `tools.jackson.module:jackson-module-kotlin`. Confirm the 3.1.5 module
    supports Kotlin 2.4 metadata. If it does not, this step must wait for a Jackson release, which is a real blocker to
    check early.
@@ -249,7 +251,7 @@ the one check the golden files cannot fully replace.
 5. Migration guide for 0.60 (the "larger document" the queue plan refers to). Merge it with `MIGRATION-NEXT_MAJOR.md`
    and add:
    - JDK 25 is the minimum.
-   - Kotlin: the new metadata floor (D4).
+   - Kotlin 2.3 is the minimum for Kotlin consumers (D4).
    - Spring Boot 4.1.x is required (4.0.x is not supported).
    - `types-jackson` / `immutable-jackson` → `types-jackson3` / `immutable-jackson3`. `com.fasterxml.jackson.databind`
      types in our signatures → `tools.jackson.databind`: `DurableQueuesSerialization.createDefaultObjectMapper()`,
