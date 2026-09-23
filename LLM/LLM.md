@@ -16,7 +16,7 @@
 
 | Aspect | Details                                                                                |
 |--------|----------------------------------------------------------------------------------------|
-| **What** | Java 21+ building blocks for strongly-typed, framework-independent distributed systems |
+| **What** | Java 25+ building blocks for strongly-typed, framework-independent distributed systems |
 | **GroupId** | `dk.trustworks.essentials` (core), `dk.trustworks.essentials.components` (components)  |
 | **License** | Apache 2.0                                                                             |
 | **Spring Boot** | 4.0.x (Jackson 3 + Jakarta EE 11; Spring Boot 3.x is not supported)                    |

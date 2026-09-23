@@ -73,31 +73,13 @@ override `JAVA_HOME` per invocation).
 2. Capture a baseline: `mvn clean verify` on the default profile, then `scripts/test-timings.sh --csv > before.csv`.
    Record any existing flaky tests so they are not blamed on the upgrade later.
 
-### Step 1 — JDK 25 baseline
+### Step 1 — Kotlin 2.4.20
 
-1. Root `pom.xml`: `java.release.version` 21 → 25. `java.version`, `maven.compiler.release` and every module's
-   `kotlin-maven-plugin` `<jvmTarget>${java.version}</jvmTarget>` follow from that property. Confirm no module
-   overrides it (none does today).
-2. Enforcer `requireJavaVersion`: `[${java.release.version},26)` → `[${java.release.version},28)` (D5).
-3. `java.build.version` stays at 25. Check whether anything still needs it as a separate property now that the build
-   version equals the release version; drop it if nothing does.
-4. `.github/workflows/maven.yml`:
-   - `verify` matrix `['21','25']` → `['25']` (D5).
-   - Unit-only matrix `['22','23','24']` → `['26','27']` (D5).
-   - The `jackson2` job pins JDK 21. Leave it for now; step 4.9 deletes it.
-   - Update the header comment, which describes a "Java 21 LTS baseline".
-5. `codeql.yml` and `release-to-maven-central.yml` already use 25. No change.
-6. Check the tools that parse bytecode or run on the target release: dokka `2.2.0`, `maven-javadoc-plugin`, JaCoCo if
-   present, ArchUnit `1.5.0` (reads class files, so it must understand version-69 classes), and byte-buddy/Mockito.
-   Bump any that reject class-file version 69.
-7. ArchUnit freeze stores: if the rule output changes because of JDK 25 bytecode, regenerate them and review the diff.
-   Do not accept a regenerated store blindly.
-8. Docs: root `CLAUDE.md` line 3 ("Java 21+ … compiled `--release 21`; build on JDK 21-25"), `README.md`, `LLM/LLM.md`,
-   and the Initializr defaults in the `essentials:init` stack contract if they pin a JDK.
+Kotlin goes first because Kotlin 2.2 has no JVM 25 target: with the JDK bump applied first, `types` fails with
+`Unknown JVM target version: 25`. This step still compiles for release 21.
 
-**Verify:** `mvn clean verify`. `javap -v` on one Java class and one Kotlin class shows `major version: 69`.
-
-### Step 2 — Kotlin 2.4.20
+**Done** in `60acd9fd`. `verify` green, same test counts as the baseline; metadata `mv=[2,3,0]`. New compiler
+warnings are lint-level only (redundant `!!`, a redundant cast, Testcontainers deprecations in tests).
 
 1. `kotlin.version` 2.2.21 → 2.4.20.
 2. **Management gotcha.** The root POM does not manage `kotlin-stdlib` / `kotlin-reflect` itself, so today they come
@@ -119,6 +101,35 @@ override `JAVA_HOME` per invocation).
 
 **Verify:** `mvn clean verify`, then `javap -v` on a Kotlin class: the `mv=[…]` tuple must match D4.
 `mvn dependency:tree -Dincludes=org.jetbrains.kotlin` shows 2.4.20 everywhere.
+
+### Step 2 — JDK 25 baseline
+
+**Done.** `verify` green on JDK 25, same test counts as the baseline; Java and Kotlin classes are major version 69,
+Kotlin metadata `mv=[2,3,0]`. ArchUnit, Mockito/byte-buddy and the test tooling ran without complaint. Not yet
+exercised: the `release` / `test-release` profiles (javadoc, sources, signing), and the CI jobs on JDK 26 and 27.
+
+1. Root `pom.xml`: `java.release.version` 21 → 25. `java.version`, `maven.compiler.release` and every module's
+   `kotlin-maven-plugin` `<jvmTarget>${java.version}</jvmTarget>` follow from that property. Confirm no module
+   overrides it (none does today).
+2. Enforcer `requireJavaVersion`: `[${java.release.version},26)` → `[${java.release.version},28)` (D5).
+3. Remove `java.build.version`: it was defined but not referenced anywhere in the build.
+4. `.github/workflows/maven.yml`:
+   - `verify` matrix `['21','25']` → `['25']` (D5).
+   - Unit-only matrix `['22','23','24']` → `['26','27']` (D5).
+   - The `jackson2` job pins JDK 21, which the new enforcer range rejects. Move it to 25; step 4.9 deletes it.
+   - Add `release/**` to the `push` / `pull_request` branch filters of `maven.yml` and `codeql.yml`. Both listed
+     only `main`, so nothing targeting `release/0.60` was being built.
+   - Update the header comment, which describes a "Java 21 LTS baseline".
+5. `codeql.yml` and `release-to-maven-central.yml` already use 25. No change.
+6. Check the tools that parse bytecode or run on the target release: dokka `2.2.0`, `maven-javadoc-plugin`, JaCoCo if
+   present, ArchUnit `1.5.0` (reads class files, so it must understand version-69 classes), and byte-buddy/Mockito.
+   Bump any that reject class-file version 69.
+7. ArchUnit freeze stores: if the rule output changes because of JDK 25 bytecode, regenerate them and review the diff.
+   Do not accept a regenerated store blindly.
+8. Docs: root `CLAUDE.md` line 3 ("Java 21+ … compiled `--release 21`; build on JDK 21-25"), `README.md`, `LLM/LLM.md`,
+   and the Initializr defaults in the `essentials:init` stack contract if they pin a JDK.
+
+**Verify:** `mvn clean verify`. `javap -v` on one Java class and one Kotlin class shows `major version: 69`.
 
 ### Step 3 — Spring Boot 4.1.1
 
@@ -272,9 +283,9 @@ the one check the golden files cannot fully replace.
 |---|---|
 | Data persisted by Jackson 2 in 0.50 no longer reads under 0.60 | Step 4.1 golden files first, plus the 0.50 → 0.60 database replay check in step 4 |
 | Consumer depends on `types-jackson` and an unrelated library pulls Jackson 2 in | Trimmed `EssentialsJacksonModules` check (4.2) fails at startup with a message naming the fix |
-| Kotlin stdlib silently resolves to Boot's 2.3.21 | `kotlin-bom` imported above Spring Boot (step 2.2); verified with `dependency:tree` |
-| `jackson-module-kotlin` 3.1.5 lags Kotlin 2.4 | Checked early in step 2.4; if blocked, sequence Kotlin after the next Jackson 3 patch |
-| A tool rejects class-file version 69 | Step 1.6 audit; the fix is a plugin bump |
+| Kotlin stdlib silently resolves to Boot's 2.3.21 | `kotlin-bom` imported above Spring Boot (step 1.2); verified with `dependency:tree` |
+| `jackson-module-kotlin` 3.1.5 lags Kotlin 2.4 | Checked in step 1.4; if blocked, sequence Kotlin after the next Jackson 3 patch |
+| A tool rejects class-file version 69 | Step 2.6 audit; the fix is a plugin bump |
 | Merge conflicts with the queue branch | The `release/0.60` integration branch (§1); queue PRs merge into it before step 4 starts |
 | Other branches (`queue_shard_owned`, `mssql_durable_queues`, `feature/non-transactional-message-handler`, `bigdecimal-numeric-attribute-converters`) target `main` and use Jackson 2 APIs | Decide per branch whether it targets 0.50.x (`main`) or 0.60 (`release/0.60`) before step 4, and rebase the 0.60 ones after it |
 | Stale `target/` from the language server gives phantom failures | Known gotcha in the root `CLAUDE.md`: stop other builds, then `mvn clean install -pl <m> -am` |

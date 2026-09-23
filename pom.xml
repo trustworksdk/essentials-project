@@ -66,8 +66,7 @@
 
     <properties>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
-        <java.build.version>25</java.build.version>
-        <java.release.version>21</java.release.version>
+        <java.release.version>25</java.release.version>
         <java.version>${java.release.version}</java.version>
         <maven.compiler.release>${java.release.version}</maven.compiler.release>
         <kotlin.version>2.4.20</kotlin.version>
@@ -751,7 +750,7 @@
                                     <version>${minimum-maven-version}</version>
                                 </requireMavenVersion>
                                 <requireJavaVersion>
-                                    <version>[${java.release.version},26)</version>
+                                    <version>[${java.release.version},28)</version>
                                 </requireJavaVersion>
                             </rules>
                         </configuration>

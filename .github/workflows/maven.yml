@@ -3,9 +3,9 @@
 #
 # The matrix is deliberately split in two. Integration tests are ~99% of this build's wall clock, so running the full
 # `verify` on every supported JDK multiplied that cost by five for very little extra signal — the integration suite
-# exercises Testcontainers and JDBC, not JDK-version-specific behaviour. The Java 21 LTS baseline and the newest
-# supported JDK run everything; the interim JDKs compile and run the unit tests, which is what actually catches a
-# JDK-specific regression.
+# exercises Testcontainers and JDBC, not JDK-version-specific behaviour. The Java 25 LTS baseline runs everything; the
+# newer JDKs the enforcer range admits compile and run the unit tests, which is what actually catches a JDK-specific
+# regression. Keep the unit matrix and the enforcer's upper bound in step: a JDK is added to both in the same change.
 
 name: Java CI with Maven
 
@@ -14,9 +14,9 @@ permissions:
 
 on:
   push:
-    branches: [ main ]
+    branches: [ main, 'release/**' ]
   pull_request:
-    branches: [ main ]
+    branches: [ main, 'release/**' ]
 
 jobs:
   # Full build including Testcontainers-backed integration tests.
@@ -25,7 +25,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        java-version: [ '21', '25' ]
+        java-version: [ '25' ]
     runs-on: ubuntu-latest
 
     steps:
@@ -88,15 +88,15 @@ jobs:
   # EssentialsObjectMappersWireFormatTest with it - once the profile is gone, its golden document is the only thing
   # still guaranteeing that data persisted by Jackson 2 remains readable.
   jackson2:
-    name: jackson2 (unit, JDK 21)
+    name: jackson2 (unit, JDK 25)
     runs-on: ubuntu-latest
 
     steps:
       - uses: actions/checkout@v4
-      - name: Set up JDK 21
+      - name: Set up JDK 25
         uses: actions/setup-java@v4
         with:
-          java-version: '21'
+          java-version: '25'
           distribution: 'temurin'
           cache: maven
 
@@ -119,13 +119,13 @@ jobs:
         env:
           NODE_OPTIONS: --max-old-space-size=4096
 
-  # Compile + unit tests only on the interim JDKs. No Docker, so these finish in a couple of minutes.
+  # Compile + unit tests only on the JDKs newer than the baseline. No Docker, so these finish in a couple of minutes.
   unit:
     name: unit (JDK ${{ matrix.java-version }})
     strategy:
       fail-fast: false
       matrix:
-        java-version: [ '22', '23', '24' ]
+        java-version: [ '26', '27' ]
     runs-on: ubuntu-latest
 
     steps:

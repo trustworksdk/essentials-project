@@ -8,12 +8,12 @@
  ║     ███████╗███████║███████║███████╗██║ ╚████║   ██║   ██║██║  ██║███████╗███████║     ║
  ║     ╚══════╝╚══════╝╚══════╝╚══════╝╚═╝  ╚═══╝   ╚═╝   ╚═╝╚═╝  ╚═╝╚══════╝╚══════╝     ║
  ║                                                                                        ║
- ║                     Java 21+ Building Blocks for Strongly-Typed Code                   ║
+ ║                     Java 25+ Building Blocks for Strongly-Typed Code                   ║
  ║                                                                                        ║
  ╚════════════════════════════════════════════════════════════════════════════════════════╝
 ```
 
-> High-level, strongly-typed building blocks for Java 21+ applications—framework-independent core with seamless integrations
+> High-level, strongly-typed building blocks for Java 25+ applications—framework-independent core with seamless integrations
 
 📖 **LLM Context:** [LLM.md](LLM/LLM.md)
 
@@ -43,7 +43,7 @@
 
 ## What is Essentials?
 
-Essentials is a set of Java 21+ building blocks designed to help you write **strongly-typed, self-documenting code** without framework lock-in.
+Essentials is a set of Java 25+ building blocks designed to help you write **strongly-typed, self-documenting code** without framework lock-in.
 
 **Core Modules:** Zero-dependency utilities providing **semantic types**, immutable value objects, functional primitives, and reactive patterns.
 
@@ -728,12 +728,14 @@ public class ImmutableOrder extends ImmutableValueObject {
 
 | Essentials Version                                                       | Java | Spring Boot | Jackson                | Kotlin                    | Notes                    |
 |--------------------------------------------------------------------------|------|-------------|------------------------|---------------------------|--------------------------|
-| [0.50.0+](https://github.com/trustworksdk/essentials-project/tree/main)  | 21+ | 4.0.x | 3 (default) / 2        | 2.2+                      | Under active development |
+| [0.60.0+](https://github.com/trustworksdk/essentials-project/tree/release/0.60) | 25+ | 4.0.x | 3 (default) / 2 | 2.3+ | Under active development |
+| [0.50.0+](https://github.com/trustworksdk/essentials-project/tree/main)  | 21+ | 4.0.x | 3 (default) / 2        | 2.2+                      | Maintained               |
 | [0.40.24+](https://github.com/trustworksdk/essentials-project/tree/main) | 17+ | 3.3.x | 2 | 2.1+ | No longer maintained     |
 
-**Java 21 is a hard floor, not a recommendation.** Artifacts are compiled with `--release 21`, so the class files
-carry major version 65 and a Java 17 runtime rejects them with `UnsupportedClassVersionError`. Building the project
-itself requires JDK 21–25 (`maven-enforcer` pins `[21,26)`); CI builds on JDK 25.
+**Java 25 is a hard floor, not a recommendation.** Artifacts are compiled with `--release 25`, so the class files
+carry major version 69 and a Java 21 runtime rejects them with `UnsupportedClassVersionError`. Building the project
+itself requires JDK 25–27 (`maven-enforcer` pins `[25,28)`); CI runs the full build on JDK 25 and the unit tests on
+JDK 26 and 27.
 
 **Spring Boot 4.0.x.** The starters resolve `org.springframework.boot:spring-boot:4.0.7`. Spring Boot 3.x is no longer
 supported — 4.0 moved to Jackson 3 and Jakarta EE 11, so a 3.x application cannot consume these starters unchanged.

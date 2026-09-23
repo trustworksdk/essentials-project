@@ -60,7 +60,7 @@ command, its handler and its endpoint together, and there is no `controllers/`, 
 
 | | |
 |---|---|
-| Java | 21 (the reactor compiles with `--release 21` and builds on JDK 25) |
+| Java | 25 (the reactor compiles with `--release 25` and builds on JDK 25–27) |
 | Spring Boot | 4.0.x |
 | Jackson | 3 — see [Jackson flavour](#jackson-flavour) below |
 | Docker | required — the integration tests use Testcontainers, and `docker-compose.yml` provides the local runtime stack |
