@@ -78,6 +78,10 @@ jobs:
         with:
           languages: ${{ matrix.language }}
           build-mode: ${{ matrix.build-mode }}
+          # The CodeQL bundle an action release ships with can lag the Kotlin compiler: its Kotlin extractor
+          # hooks into kotlinc and refuses newer versions ("Kotlin version X is too recent"). Always use the newest
+          # bundle; Kotlin 2.4.20 needs CodeQL 2.27.1 or later.
+          tools: latest
           # If you wish to specify custom queries, you can do so here or in a config file.
           # By default, queries listed here will override any specified in a config file.
           # Prefix the list here with "+" to use these queries and those in the config file.
