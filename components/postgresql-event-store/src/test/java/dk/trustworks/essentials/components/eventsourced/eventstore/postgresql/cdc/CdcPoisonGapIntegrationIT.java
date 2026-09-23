@@ -55,7 +55,7 @@ public class CdcPoisonGapIntegrationIT extends AbstractLogicalReplicationPostgre
 
     @BeforeEach
     void setup() {
-        jacksonJSONSerializer = EssentialsJSONEventSerializers.createForActiveJacksonFlavor();
+        jacksonJSONSerializer = EssentialsJSONEventSerializers.create();
         eventMapper = new EventProcessorIT.TestPersistableEventMapper();
 
         var persistenceStrategy =

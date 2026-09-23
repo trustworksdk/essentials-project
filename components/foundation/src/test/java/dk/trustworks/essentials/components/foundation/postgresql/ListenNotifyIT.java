@@ -17,8 +17,8 @@
 package dk.trustworks.essentials.components.foundation.postgresql;
 
 import com.fasterxml.jackson.annotation.JsonProperty;
-import com.fasterxml.jackson.core.JsonProcessingException;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.core.JacksonException;
+import tools.jackson.databind.ObjectMapper;
 import org.jdbi.v3.core.Jdbi;
 import org.junit.jupiter.api.*;
 import org.slf4j.*;
@@ -72,7 +72,7 @@ class ListenNotifyIT {
     }
 
     @Test
-    void single_insert_listen_notify_test() throws InterruptedException, JsonProcessingException {
+    void single_insert_listen_notify_test() throws InterruptedException, JacksonException {
         jdbi.useTransaction(handle -> {
             ListenNotify.addChangeNotificationTriggerToTable(handle, TABLE_NAME, List.of(ListenNotify.SqlOperation.INSERT), "id", "column1", "column2");
         });
@@ -148,7 +148,7 @@ class ListenNotifyIT {
                                    .subscribe(notification -> {
                                        try {
                                            receivedNotifications.add(objectMapper.readValue(notification, TestTableNotification.class));
-                                       } catch (JsonProcessingException e) {
+                                       } catch (JacksonException e) {
                                            throw new RuntimeException(e);
                                        }
                                    });
@@ -195,7 +195,7 @@ class ListenNotifyIT {
                                    .subscribe(notification -> {
                                        try {
                                            receivedNotifications.add(objectMapper.readValue(notification, TestTableNotification.class));
-                                       } catch (JsonProcessingException e) {
+                                       } catch (JacksonException e) {
                                            throw new RuntimeException(e);
                                        }
                                    });
@@ -245,7 +245,7 @@ class ListenNotifyIT {
                                    .subscribe(notification -> {
                                        try {
                                            receivedNotifications.add(objectMapper.readValue(notification, TestTableNotification.class));
-                                       } catch (JsonProcessingException e) {
+                                       } catch (JacksonException e) {
                                            throw new RuntimeException(e);
                                        }
                                    });

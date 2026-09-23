@@ -16,12 +16,13 @@
 
 package dk.trustworks.essentials.components.foundation.postgresql;
 
+import dk.trustworks.essentials.components.foundation.json.EssentialsObjectMappers;
 import com.fasterxml.jackson.annotation.*;
-import com.fasterxml.jackson.core.JsonProcessingException;
-import com.fasterxml.jackson.databind.*;
-import com.fasterxml.jackson.databind.json.JsonMapper;
+import tools.jackson.core.JacksonException;
+import tools.jackson.databind.*;
+import tools.jackson.databind.json.JsonMapper;
 import tools.jackson.databind.JsonNode;
-import dk.trustworks.essentials.components.foundation.json.JacksonJSONSerializer;
+import dk.trustworks.essentials.components.foundation.json.Jackson3JSONSerializer;
 import dk.trustworks.essentials.reactive.LocalEventBus;
 import org.assertj.core.api.Fail;
 import org.jdbi.v3.core.Jdbi;
@@ -88,14 +89,14 @@ class MultiTableChangeListenerIT {
 
 
     @Test
-    void test() throws JsonProcessingException {
+    void test() throws JacksonException {
         jdbi.useTransaction(handle -> {
             ListenNotify.addChangeNotificationTriggerToTable(handle, TABLE_1, List.of(ListenNotify.SqlOperation.INSERT), "id", "column1", "column2");
             ListenNotify.addChangeNotificationTriggerToTable(handle, TABLE_2, List.of(ListenNotify.SqlOperation.INSERT), "id", "column3", "column4");
             ListenNotify.addChangeNotificationTriggerToTable(handle, TABLE_3, List.of(ListenNotify.SqlOperation.INSERT), "id", "column5", "column6");
         });
 
-        listener = new MultiTableChangeListener<>(jdbi, Duration.ofMillis(50), new JacksonJSONSerializer(objectMapper), localEventBus, false);
+        listener = new MultiTableChangeListener<>(jdbi, Duration.ofMillis(50), new Jackson3JSONSerializer(objectMapper), localEventBus, false);
         listener.listenToNotificationsFor(TABLE_1, Table1Notification.class);
         listener.listenToNotificationsFor(TABLE_2, Table2Notification.class);
         listener.listenToNotificationsFor(TABLE_3, Table3Notification.class);
@@ -210,7 +211,7 @@ class MultiTableChangeListenerIT {
 
     @Test
     void test_with_filterDuplicateNotifications_but_without_duplication_filters() {
-        listener = new MultiTableChangeListener<>(jdbi, Duration.ofMillis(50), new JacksonJSONSerializer(objectMapper), localEventBus, true);
+        listener = new MultiTableChangeListener<>(jdbi, Duration.ofMillis(50), new Jackson3JSONSerializer(objectMapper), localEventBus, true);
         var result = testSingleTableNotificationDuplication();
         Awaitility.waitAtMost(Duration.ofMillis(2000))
                   .untilAsserted(() -> {
@@ -221,7 +222,7 @@ class MultiTableChangeListenerIT {
 
     @Test
     void test_with_filterDuplicateNotifications_with_duplication_filters() {
-        listener = new MultiTableChangeListener<>(jdbi, Duration.ofMillis(50), new JacksonJSONSerializer(objectMapper), localEventBus, true);
+        listener = new MultiTableChangeListener<>(jdbi, Duration.ofMillis(50), new Jackson3JSONSerializer(objectMapper), localEventBus, true);
         listener.addDuplicationFilterAsFirst(new QueueNameNotificationDuplicationFilter());
         listener.addDuplicationFilterAsLast(new NotificationDuplicationFilter.TableNameDuplicationFilter()); // Our filter
         var result = testSingleTableNotificationDuplication();
@@ -272,7 +273,7 @@ class MultiTableChangeListenerIT {
 
     @Test
     void test_multiple_tables_with_duplicate_filtering_but_without_duplication_filters() {
-        listener = new MultiTableChangeListener<>(jdbi, Duration.ofMillis(50), new JacksonJSONSerializer(objectMapper), localEventBus, true);
+        listener = new MultiTableChangeListener<>(jdbi, Duration.ofMillis(50), new Jackson3JSONSerializer(objectMapper), localEventBus, true);
         var result = testMultiTableNotificationDuplication();
 
         Awaitility.waitAtMost(Duration.ofMillis(2000))
@@ -291,7 +292,7 @@ class MultiTableChangeListenerIT {
 
     @Test
     void test_multiple_tables_with_duplicate_filtering_with_duplication_filters() {
-        listener = new MultiTableChangeListener<>(jdbi, Duration.ofMillis(50), new JacksonJSONSerializer(objectMapper), localEventBus, true);
+        listener = new MultiTableChangeListener<>(jdbi, Duration.ofMillis(50), new Jackson3JSONSerializer(objectMapper), localEventBus, true);
         listener.addDuplicationFilterAsFirst(new QueueNameNotificationDuplicationFilter());
         listener.addDuplicationFilterAsLast(new NotificationDuplicationFilter.TableNameDuplicationFilter()); // Our filter
         var result = testMultiTableNotificationDuplication();
@@ -363,25 +364,7 @@ class MultiTableChangeListenerIT {
     }
 
     private ObjectMapper createObjectMapper() {
-        var objectMapper = JsonMapper.builder()
-                                     .disable(MapperFeature.AUTO_DETECT_GETTERS)
-                                     .disable(MapperFeature.AUTO_DETECT_IS_GETTERS)
-                                     .disable(MapperFeature.AUTO_DETECT_SETTERS)
-                                     .disable(MapperFeature.DEFAULT_VIEW_INCLUSION)
-                                     .disable(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS)
-                                     .disable(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES)
-                                     .disable(SerializationFeature.FAIL_ON_EMPTY_BEANS)
-                                     .enable(MapperFeature.AUTO_DETECT_CREATORS)
-                                     .enable(MapperFeature.AUTO_DETECT_FIELDS)
-                                     .enable(MapperFeature.PROPAGATE_TRANSIENT_MARKER)
-                                     .build();
-
-        objectMapper.setVisibility(objectMapper.getSerializationConfig().getDefaultVisibilityChecker()
-                                               .withGetterVisibility(JsonAutoDetect.Visibility.NONE)
-                                               .withSetterVisibility(JsonAutoDetect.Visibility.NONE)
-                                               .withFieldVisibility(JsonAutoDetect.Visibility.ANY)
-                                               .withCreatorVisibility(JsonAutoDetect.Visibility.ANY));
-        return objectMapper;
+        return EssentialsObjectMappers.createJackson3ObjectMapper();
     }
 
     static abstract class TestTableNotification extends TableChangeNotification {

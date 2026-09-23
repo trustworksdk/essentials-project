@@ -96,7 +96,7 @@ public class ViewEventProcessorIT {
 
         unitOfWorkFactory = new EventStoreManagedUnitOfWorkFactory(jdbi);
         eventMapper = new EventProcessorIT.TestPersistableEventMapper();
-        var jsonSerializer = EssentialsJSONEventSerializers.createForActiveJacksonFlavor();
+        var jsonSerializer = EssentialsJSONEventSerializers.create();
         var persistenceStrategy = new SeparateTablePerAggregateTypePersistenceStrategy(jdbi,
                                                                                        unitOfWorkFactory,
                                                                                        eventMapper,

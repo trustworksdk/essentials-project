@@ -98,12 +98,6 @@
         <skipDependencyCheck>false</skipDependencyCheck>
 
         <spring-boot.version>4.1.1</spring-boot.version>
-        <!-- The default Jackson flavour. Jackson 3 is the default because that is what Spring Boot 4 ships with; build
-             or depend with -Pjackson2 to stay on Jackson 2. Both flavours publish the same class names, so exactly one
-             is ever on the classpath, and both write byte-identical JSON — see EssentialsObjectMappers. -->
-        <essentials.jackson.flavor>jackson3</essentials.jackson.flavor>
-        <essentials.types-jackson.artifactId>types-jackson3</essentials.types-jackson.artifactId>
-        <essentials.immutable-jackson.artifactId>immutable-jackson3</essentials.immutable-jackson.artifactId>
         <objenesis.version>3.6</objenesis.version>
         <postgresql.version>42.7.13</postgresql.version>
         <slf4j.version>2.0.18</slf4j.version>
@@ -115,14 +109,6 @@
         <testcontainers-bom.version>2.0.5</testcontainers-bom.version>
         <jdbi3-bom.version>3.54.0</jdbi3-bom.version>
         <jackson3-bom.version>3.1.5</jackson3-bom.version>
-        <!-- Jackson 2. Both properties are consumed by the *direct* dependencyManagement entries below, not by
-             the jackson-bom import: an imported BOM cannot outrank spring-boot-dependencies, which is imported
-             first and manages its own Jackson 2 line. See the comment on those entries.
-             jackson-annotations tracks a separate, patch-less version: since 2.20 Jackson releases it only on
-             minor boundaries, so it does not move with jackson-bom.version. Read both off the jackson-bom of
-             the same release rather than assuming they match. -->
-        <jackson-bom.version>2.21.5</jackson-bom.version>
-        <jackson-annotations.version>2.21</jackson-annotations.version>
         <!-- Newest release; the floor is assertj-core's own 1.18.3, which is what Spring Boot's management
              was pulling back down. Take the plain version, never the `-jdk5` line Central reports as
              <latest> — that is the legacy Java 5 build, not a newer release. -->
@@ -180,7 +166,6 @@
     <modules>
         <module>shared</module>
         <module>types</module>
-        <module>types-jackson</module>
         <module>types-jackson3</module>
         <module>types-springdata-mongo</module>
         <module>types-springdata-jpa</module>
@@ -188,7 +173,6 @@
         <module>types-avro</module>
         <module>types-spring-web</module>
         <module>immutable</module>
-        <module>immutable-jackson</module>
         <module>immutable-jackson3</module>
         <module>reactive</module>
         <module>components/foundation</module>
@@ -275,49 +259,6 @@
                 <version>${spring-boot.version}</version>
                 <type>pom</type>
                 <scope>import</scope>
-            </dependency>
-            <!-- Jackson 2, held a patch ahead of the Spring Boot BOM for CVE-2026-54515 (fixed in 2.21.5).
-                 Direct entries rather than importing com.fasterxml.jackson:jackson-bom, because that import
-                 would have to move above spring-boot-dependencies to have any effect at all, and doing so
-                 replaces Spring Boot's whole Jackson 2 line instead of just the artifacts in play.
-                 The cost of listing them: this is the set Spring Boot actually puts on our classpath today,
-                 so a Jackson 2 artifact arriving transitively in future would stay on Spring Boot's version
-                 and silently split the set. Check the resolved tree, not this list, after adding a Jackson
-                 dependency. jackson-annotations is deliberately on its own property — see the properties. -->
-            <dependency>
-                <groupId>com.fasterxml.jackson.core</groupId>
-                <artifactId>jackson-databind</artifactId>
-                <version>${jackson-bom.version}</version>
-            </dependency>
-            <dependency>
-                <groupId>com.fasterxml.jackson.core</groupId>
-                <artifactId>jackson-core</artifactId>
-                <version>${jackson-bom.version}</version>
-            </dependency>
-            <dependency>
-                <groupId>com.fasterxml.jackson.core</groupId>
-                <artifactId>jackson-annotations</artifactId>
-                <version>${jackson-annotations.version}</version>
-            </dependency>
-            <dependency>
-                <groupId>com.fasterxml.jackson.datatype</groupId>
-                <artifactId>jackson-datatype-jsr310</artifactId>
-                <version>${jackson-bom.version}</version>
-            </dependency>
-            <dependency>
-                <groupId>com.fasterxml.jackson.datatype</groupId>
-                <artifactId>jackson-datatype-jdk8</artifactId>
-                <version>${jackson-bom.version}</version>
-            </dependency>
-            <dependency>
-                <groupId>com.fasterxml.jackson.dataformat</groupId>
-                <artifactId>jackson-dataformat-yaml</artifactId>
-                <version>${jackson-bom.version}</version>
-            </dependency>
-            <dependency>
-                <groupId>com.fasterxml.jackson.module</groupId>
-                <artifactId>jackson-module-kotlin</artifactId>
-                <version>${jackson-bom.version}</version>
             </dependency>
             <!-- Tomcat, held ahead of the Spring Boot BOM for CVE-2026-53434 / -55276 / -59083 / -59084 and
                  five others. Only ever reaches a consumer through their own Spring Boot; here it is provided
@@ -768,8 +709,8 @@
                                       jackson-annotations-version=2.21, but jackson-version=2.22.0 for these
                                       two. Jackson requires one version across the set, so *no* resolution can
                                       honour that upper bound without splitting Jackson — including swagger's
-                                      own. Our 2.21.5-for-everything is the coherent reading of it, and it is
-                                      already above the databind swagger asks for.
+                                      own. Spring Boot's 2.21.5-for-everything is the coherent reading of it, and
+                                      it is already above the databind swagger asks for.
                                       Re-check when swagger-core.version moves: if a release lines those three
                                       properties up, drop these and let the rule speak.
                                     -->
@@ -787,6 +728,35 @@
                                 <banDynamicVersions>
                                     <allowSnapshots>true</allowSnapshots>
                                 </banDynamicVersions>
+                            </rules>
+                        </configuration>
+                    </execution>
+                    <!--
+                      Essentials is Jackson 3 only from 0.60. This keeps Jackson 2 databind from creeping back into
+                      the code of a published module: it is banned in every scope except test, directly or
+                      transitively. Test scope stays open because test infrastructure (Testcontainers' docker-java)
+                      brings Jackson 2 along without our code touching it.
+
+                      Three modules skip this execution because they need Jackson 2 for reasons of their own, not
+                      for Essentials' persisted JSON: types-avro (Avro is built on it), admin-api-spec (swagger-core's
+                      ModelConverter API is Jackson 2) and admin-api-client-java (the generated OpenAPI client).
+                    -->
+                    <execution>
+                        <id>ban-jackson-2</id>
+                        <goals>
+                            <goal>enforce</goal>
+                        </goals>
+                        <configuration>
+                            <rules>
+                                <bannedDependencies>
+                                    <searchTransitive>true</searchTransitive>
+                                    <excludes>
+                                        <exclude>com.fasterxml.jackson.core:jackson-databind:*:*:compile</exclude>
+                                        <exclude>com.fasterxml.jackson.core:jackson-databind:*:*:provided</exclude>
+                                        <exclude>com.fasterxml.jackson.core:jackson-databind:*:*:runtime</exclude>
+                                    </excludes>
+                                    <message>Jackson 2 databind is not allowed outside test scope: Essentials is Jackson 3 only (tools.jackson). See the ban-jackson-2 execution in the root pom.xml.</message>
+                                </bannedDependencies>
                             </rules>
                         </configuration>
                     </execution>
@@ -853,25 +823,6 @@
     </build>
 
     <profiles>
-        <!-- Builds and tests against Jackson 2 instead of the default Jackson 3. -->
-        <profile>
-            <id>jackson2</id>
-            <properties>
-                <essentials.jackson.flavor>jackson2</essentials.jackson.flavor>
-                <essentials.types-jackson.artifactId>types-jackson</essentials.types-jackson.artifactId>
-                <essentials.immutable-jackson.artifactId>immutable-jackson</essentials.immutable-jackson.artifactId>
-            </properties>
-        </profile>
-        <!-- Retained as a no-op alias now that Jackson 3 is the default, so existing commands and CI jobs that pass
-             -Pjackson3 keep working and keep meaning the same thing. -->
-        <profile>
-            <id>jackson3</id>
-            <properties>
-                <essentials.jackson.flavor>jackson3</essentials.jackson.flavor>
-                <essentials.types-jackson.artifactId>types-jackson3</essentials.types-jackson.artifactId>
-                <essentials.immutable-jackson.artifactId>immutable-jackson3</essentials.immutable-jackson.artifactId>
-            </properties>
-        </profile>
         <profile>
             <id>release</id>
             <build>

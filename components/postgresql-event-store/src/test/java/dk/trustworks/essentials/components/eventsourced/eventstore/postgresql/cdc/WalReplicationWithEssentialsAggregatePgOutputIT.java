@@ -78,7 +78,7 @@ class WalReplicationWithEssentialsAggregatePgOutputIT extends AbstractLogicalRep
 
     @BeforeEach
     void setup() {
-        jacksonJSONSerializer = EssentialsJSONEventSerializers.createForActiveJacksonFlavor();
+        jacksonJSONSerializer = EssentialsJSONEventSerializers.create();
         var eventMapper = new EventProcessorIT.TestPersistableEventMapper();
 
         var persistenceStrategy =

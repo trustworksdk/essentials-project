@@ -50,7 +50,7 @@ class CdcEventStoreSubscriptionParity_IT extends AbstractLogicalReplicationPostg
 
     @BeforeEach
     void setup() {
-        var serializer = EssentialsJSONEventSerializers.createForActiveJacksonFlavor();
+        var serializer = EssentialsJSONEventSerializers.create();
         var eventMapper = new EventProcessorIT.TestPersistableEventMapper();
 
         var persistenceStrategy = new SeparateTablePerAggregateTypePersistenceStrategy(

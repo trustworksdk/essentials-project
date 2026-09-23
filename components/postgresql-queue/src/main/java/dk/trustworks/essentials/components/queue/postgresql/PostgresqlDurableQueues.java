@@ -144,7 +144,7 @@ public final class PostgresqlDurableQueues implements BatchMessageFetchingCapabl
     }
 
     /**
-     * Create {@link DurableQueues} with sharedQueueTableName: {@value DEFAULT_DURABLE_QUEUES_TABLE_NAME} and the default {@link JacksonJSONSerializer} using {@link DurableQueuesSerialization#createDefaultObjectMapper()}
+     * Create {@link DurableQueues} with sharedQueueTableName: {@value DEFAULT_DURABLE_QUEUES_TABLE_NAME} and the default {@link Jackson3JSONSerializer} using {@link DurableQueuesSerialization#createDefaultObjectMapper()}
      * configuration<br>
      * Uses the centralized message fetcher with a 20ms polling interval
      *
@@ -159,7 +159,7 @@ public final class PostgresqlDurableQueues implements BatchMessageFetchingCapabl
     }
 
     /**
-     * Create {@link DurableQueues} with sharedQueueTableName: {@value DEFAULT_DURABLE_QUEUES_TABLE_NAME} and the default {@link JacksonJSONSerializer} using {@link DurableQueuesSerialization#createDefaultObjectMapper()}
+     * Create {@link DurableQueues} with sharedQueueTableName: {@value DEFAULT_DURABLE_QUEUES_TABLE_NAME} and the default {@link Jackson3JSONSerializer} using {@link DurableQueuesSerialization#createDefaultObjectMapper()}
      * configuration<br>
      * Uses the centralized message fetcher with a 20ms polling interval
      *

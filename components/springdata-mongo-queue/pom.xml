@@ -72,12 +72,12 @@
         </dependency>
         <dependency>
             <groupId>dk.trustworks.essentials</groupId>
-            <artifactId>${essentials.types-jackson.artifactId}</artifactId>
+            <artifactId>types-jackson3</artifactId>
             <version>${project.version}</version>
         </dependency>
         <dependency>
             <groupId>dk.trustworks.essentials</groupId>
-            <artifactId>${essentials.immutable-jackson.artifactId}</artifactId>
+            <artifactId>immutable-jackson3</artifactId>
             <version>${project.version}</version>
             <optional>true</optional>
         </dependency>
@@ -106,28 +106,12 @@
             <artifactId>reactor-core</artifactId>
             <scope>provided</scope>
         </dependency>
-        <dependency>
-            <groupId>com.fasterxml.jackson.core</groupId>
-            <artifactId>jackson-databind</artifactId>
-            <scope>provided</scope>
-        </dependency>
-        <!-- Jackson 3: MongoDurableQueues builds its default payload mapper through EssentialsObjectMappers, which
-             takes the Jackson 3 branch when that flavour is active. foundation declares Jackson 3 as optional, so it
-             is not transitive and has to be named here too. -->
+        <!-- Jackson 3: MongoDurableQueues builds its default payload mapper through EssentialsObjectMappers.
+             foundation declares Jackson 3 as optional, so it is not transitive and has to be named here too. -->
         <dependency>
             <groupId>tools.jackson.core</groupId>
             <artifactId>jackson-databind</artifactId>
             <version>${jackson3-bom.version}</version>
-            <scope>provided</scope>
-        </dependency>
-        <dependency>
-            <groupId>com.fasterxml.jackson.datatype</groupId>
-            <artifactId>jackson-datatype-jdk8</artifactId>
-            <scope>provided</scope>
-        </dependency>
-        <dependency>
-            <groupId>com.fasterxml.jackson.datatype</groupId>
-            <artifactId>jackson-datatype-jsr310</artifactId>
             <scope>provided</scope>
         </dependency>
 

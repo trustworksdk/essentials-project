@@ -72,14 +72,11 @@ public final class MessageDeliveryClassifier {
     private static final Logger log = LoggerFactory.getLogger(MessageDeliveryClassifier.class);
 
     /**
-     * Jackson's {@code MismatchedInputException}, named rather than referenced. Jackson 2 and Jackson 3 ship
-     * the same type under different packages and only one is on a given runtime's classpath, so an
-     * {@code instanceof} against either would match nothing under the other major — and would fail to link at
-     * all on a runtime carrying only the other one.
+     * Jackson's {@code MismatchedInputException}, named rather than referenced: Jackson databind is an optional
+     * dependency of this module, so an {@code instanceof} would fail to link on a runtime without it.
      */
     private static final Set<String> MISMATCHED_INPUT_CLASS_NAMES =
-            Set.of("com.fasterxml.jackson.databind.exc.MismatchedInputException",
-                   "tools.jackson.databind.exc.MismatchedInputException");
+            Set.of("tools.jackson.databind.exc.MismatchedInputException");
 
     /**
      * Guards against a self-referencing cause chain, which {@link Throwable#initCause} does not prevent.

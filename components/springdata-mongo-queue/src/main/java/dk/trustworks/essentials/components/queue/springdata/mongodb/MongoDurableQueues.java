@@ -16,15 +16,11 @@
 
 package dk.trustworks.essentials.components.queue.springdata.mongodb;
 
-import com.fasterxml.jackson.annotation.JsonAutoDetect;
-import com.fasterxml.jackson.databind.*;
-import com.fasterxml.jackson.databind.json.JsonMapper;
-import com.fasterxml.jackson.datatype.jdk8.Jdk8Module;
-import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 import com.mongodb.*;
 import com.mongodb.client.model.changestream.ChangeStreamDocument;
 import dk.trustworks.essentials.components.foundation.IOExceptionUtil;
 import dk.trustworks.essentials.components.foundation.json.EssentialsObjectMappers;
+import tools.jackson.databind.ObjectMapper;
 import dk.trustworks.essentials.components.foundation.json.*;
 import dk.trustworks.essentials.components.foundation.messaging.queue.*;
 import dk.trustworks.essentials.components.foundation.messaging.queue.Message;
@@ -1325,15 +1321,14 @@ public final class MongoDurableQueues implements DurableQueues {
     }
 
     /**
-     * Create default {@link JSONSerializer}. Uses Jackson 3 when the Jackson 3 Essentials modules are present,
-     * otherwise falls back to Jackson 2.
+     * Create the default {@link JSONSerializer}, with the canonical Essentials mapper configuration.
      */
     public static JSONSerializer createDefaultJSONSerializer() {
         return EssentialsObjectMappers.createJSONSerializer();
     }
 
     public static ObjectMapper createDefaultObjectMapper() {
-        return EssentialsObjectMappers.createJackson2ObjectMapper();
+        return EssentialsObjectMappers.createJackson3ObjectMapper();
     }
 
 

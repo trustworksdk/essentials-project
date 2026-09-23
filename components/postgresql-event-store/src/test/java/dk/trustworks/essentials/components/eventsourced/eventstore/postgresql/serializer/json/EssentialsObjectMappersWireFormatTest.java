@@ -34,18 +34,15 @@ import static org.assertj.core.api.Assertions.assertThat;
 /**
  * Pins the JSON that {@link EssentialsObjectMappers} writes for persisted payloads.
  * <p>
- * The same golden document is asserted under both Jackson flavors — the build selects one via
- * {@code essentials.types-jackson.artifactId}, so running the suite under the default profile and under
- * {@code -Pjackson3} exercises both halves against a single expected format. That is what proves an application can
- * move to Jackson 3 and still read durable-queue payloads, event payloads and metadata that Jackson 2 wrote.
+ * The golden documents were written by the Jackson 2 mapper of Essentials 0.50, the format already in production
+ * databases. Each is asserted byte for byte and read back, which is what proves that durable-queue payloads, event
+ * payloads and metadata persisted before 0.60 stay readable now that only Jackson 3 remains.
  * <p>
- * The two mapper factories cannot be compared directly in one JVM: only one flavor's modules are ever on the classpath,
- * and asking for the other throws by design. The golden document is the shared reference that makes them comparable.
- * <p>
- * Regenerate deliberately, and only under the default (Jackson 2) profile, since that is the format already in
- * production databases:
+ * Never regenerate the existing documents: the Jackson 2 writer is gone, so a regenerated file would only record what
+ * Jackson 3 writes today and would stop proving anything about data already persisted. The switch below exists for
+ * adding a document for a new shape, and its output needs review as the format commitment it is:
  * <pre>{@code
- * mvn -pl components/postgresql-event-store test -Dtest=EssentialsObjectMappersWireFormatTest -Dwireformat.regenerate=true
+ * mvn -pl components/postgresql-event-store -am test -Dtest=EssentialsObjectMappersWireFormatTest -Dwireformat.regenerate=true
  * }</pre>
  */
 class EssentialsObjectMappersWireFormatTest {

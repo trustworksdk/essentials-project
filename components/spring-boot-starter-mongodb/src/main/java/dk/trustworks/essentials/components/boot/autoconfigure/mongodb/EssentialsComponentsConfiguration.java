@@ -18,17 +18,11 @@ package dk.trustworks.essentials.components.boot.autoconfigure.mongodb;
 
 
 import com.fasterxml.jackson.annotation.*;
-import com.fasterxml.jackson.databind.*;
-import com.fasterxml.jackson.databind.Module;
-import com.fasterxml.jackson.databind.json.JsonMapper;
-import com.fasterxml.jackson.datatype.jdk8.Jdk8Module;
-import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 import com.mongodb.*;
 import dk.trustworks.essentials.shared.measurement.*;
 import dk.trustworks.essentials.components.distributed.fencedlock.springdata.mongo.MongoFencedLockManager;
 import dk.trustworks.essentials.components.foundation.fencedlock.*;
 import dk.trustworks.essentials.components.foundation.interceptor.micrometer.*;
-import dk.trustworks.essentials.components.foundation.json.EssentialsJacksonModules;
 import dk.trustworks.essentials.components.foundation.json.EssentialsObjectMappers;
 import dk.trustworks.essentials.components.foundation.json.*;
 import dk.trustworks.essentials.components.foundation.lifecycle.*;
@@ -449,44 +443,21 @@ public class EssentialsComponentsConfiguration {
 
     /**
      * {@link JSONSerializer} responsible for serializing/deserializing the raw Java events to and from JSON
-     * (including handling {@link DurableQueues} message payload serialization and deserialization)
+     * (including handling {@link DurableQueues} message payload serialization and deserialization), with the canonical
+     * Essentials mapper configuration from {@link EssentialsObjectMappers}.
+     * <p>
+     * {@code JacksonModule} beans in the {@link ApplicationContext} are deliberately <em>not</em> collected: those are
+     * usually registered for the web layer, and adding them here would silently change the persisted JSON format. An
+     * application that needs extra modules for persistence defines its own {@link JSONSerializer} bean, which this
+     * backs off from.
      *
-     * @param additionalModules additional {@link Module}'s found in the {@link ApplicationContext}
      * @return the {@link JSONSerializer} responsible for serializing/deserializing the raw Java events to and from JSON
      */
     @Bean
     @ConditionalOnMissingClass("dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.serializer.json.JSONEventSerializer")
     @ConditionalOnMissingBean
-    public JSONSerializer jsonSerializer(List<Module> additionalModules) {
-        if (EssentialsJacksonModules.isJackson3Flavor()) {
-            // The application is on Jackson 3, so no Jackson 2 Module beans can exist to collect. A Jackson 3
-            // deployment that needs extra modules defines its own JSONSerializer bean, which this backs off from.
-            return EssentialsObjectMappers.createJSONSerializer();
-        }
-        var objectMapperBuilder = JsonMapper.builder()
-                                            .disable(MapperFeature.AUTO_DETECT_GETTERS)
-                                            .disable(MapperFeature.AUTO_DETECT_IS_GETTERS)
-                                            .disable(MapperFeature.AUTO_DETECT_SETTERS)
-                                            .disable(MapperFeature.DEFAULT_VIEW_INCLUSION)
-                                            .disable(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS)
-                                            .disable(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES)
-                                            .disable(SerializationFeature.FAIL_ON_EMPTY_BEANS)
-                                            .enable(MapperFeature.AUTO_DETECT_CREATORS)
-                                            .enable(MapperFeature.AUTO_DETECT_FIELDS)
-                                            .enable(MapperFeature.PROPAGATE_TRANSIENT_MARKER)
-                                            .addModule(new Jdk8Module())
-                                            .addModule(new JavaTimeModule());
-
-        additionalModules.forEach(objectMapperBuilder::addModule);
-
-        var objectMapper = objectMapperBuilder.build();
-        objectMapper.setVisibility(objectMapper.getSerializationConfig().getDefaultVisibilityChecker()
-                                               .withGetterVisibility(JsonAutoDetect.Visibility.NONE)
-                                               .withSetterVisibility(JsonAutoDetect.Visibility.NONE)
-                                               .withFieldVisibility(JsonAutoDetect.Visibility.ANY)
-                                               .withCreatorVisibility(JsonAutoDetect.Visibility.ANY));
-
-        return new JacksonJSONSerializer(objectMapper);
+    public JSONSerializer jsonSerializer() {
+        return EssentialsObjectMappers.createJSONSerializer();
     }
 
     @Bean
@@ -541,24 +512,20 @@ public class EssentialsComponentsConfiguration {
     }
 
     private static class SpringBootDevToolsClassLoaderChangeContextRefreshedListener {
-        private static final Logger                log = LoggerFactory.getLogger(SpringBootDevToolsClassLoaderChangeContextRefreshedListener.class);
-        private final        JacksonJSONSerializer jacksonJSONSerializer;
+        private static final Logger         log = LoggerFactory.getLogger(SpringBootDevToolsClassLoaderChangeContextRefreshedListener.class);
+        private final        JSONSerializer jsonSerializer;
 
         public SpringBootDevToolsClassLoaderChangeContextRefreshedListener(JSONSerializer jsonSerializer) {
-            requireNonNull(jsonSerializer, "No jsonSerializer provided");
-            this.jacksonJSONSerializer = jsonSerializer instanceof JacksonJSONSerializer ? (JacksonJSONSerializer) jsonSerializer : null;
+            this.jsonSerializer = requireNonNull(jsonSerializer, "No jsonSerializer provided");
         }
 
         @EventListener
         public void handleContextRefresh(ContextRefreshedEvent event) {
-            if (jacksonJSONSerializer != null) {
-                log.info("Updating the '{}'s internal ObjectMapper's ClassLoader to {} from {}",
-                         jacksonJSONSerializer.getClass().getSimpleName(),
-                         event.getApplicationContext().getClassLoader(),
-                         jacksonJSONSerializer.getObjectMapper().getTypeFactory().getClassLoader()
-                        );
-                jacksonJSONSerializer.setClassLoader(event.getApplicationContext().getClassLoader());
-            }
+            log.info("Updating the '{}'s ClassLoader to {} from {}",
+                     jsonSerializer.getClass().getSimpleName(),
+                     event.getApplicationContext().getClassLoader(),
+                     jsonSerializer.getClassLoader());
+            jsonSerializer.setClassLoader(event.getApplicationContext().getClassLoader());
         }
     }
 

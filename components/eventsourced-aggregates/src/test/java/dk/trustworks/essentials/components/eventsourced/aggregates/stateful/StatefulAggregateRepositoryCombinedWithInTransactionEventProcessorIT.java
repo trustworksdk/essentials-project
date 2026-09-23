@@ -88,7 +88,7 @@ public class StatefulAggregateRepositoryCombinedWithInTransactionEventProcessorI
 
         aggregateType = ORDERS;
         unitOfWorkFactory = new EventStoreManagedUnitOfWorkFactory(jdbi);
-        var aggregateEventStreamConfigurationFactory = SeparateTablePerAggregateTypeEventStreamConfigurationFactory.standardSingleTenantConfiguration(EssentialsJSONEventSerializers.createForActiveJacksonFlavor(),
+        var aggregateEventStreamConfigurationFactory = SeparateTablePerAggregateTypeEventStreamConfigurationFactory.standardSingleTenantConfiguration(EssentialsJSONEventSerializers.create(),
                                                                                                                                                       IdentifierColumnType.UUID,
                                                                                                                                                       JSONColumnType.JSONB);
         eventStore = new PostgresqlEventStore<>(unitOfWorkFactory,

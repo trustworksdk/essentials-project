@@ -78,7 +78,7 @@ public final class PostgresqlDurableQueuesBuilder {
 
     /**
      * @param jsonSerializer Set the {@link JSONSerializer} that is used to serialize/deserialize message payloads.<br>
-     *                       If not set, then {@link JacksonJSONSerializer} with the {@link DurableQueuesSerialization#createDefaultObjectMapper()} will be used
+     *                       If not set, then {@link Jackson3JSONSerializer} with the {@link DurableQueuesSerialization#createDefaultObjectMapper()} will be used
      * @return this builder instance
      */
     public PostgresqlDurableQueuesBuilder setJsonSerializer(JSONSerializer jsonSerializer) {

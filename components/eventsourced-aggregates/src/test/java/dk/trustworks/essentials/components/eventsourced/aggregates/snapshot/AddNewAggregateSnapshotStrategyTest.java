@@ -17,7 +17,6 @@
 package dk.trustworks.essentials.components.eventsourced.aggregates.snapshot;
 
 import dk.trustworks.essentials.components.eventsourced.aggregates.OrderId;
-import dk.trustworks.essentials.components.eventsourced.aggregates.TestFasterxmlObjectMapperFactory;
 import dk.trustworks.essentials.components.eventsourced.aggregates.modern.Order;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.persistence.AggregateEventStreamConfiguration;
@@ -40,7 +39,7 @@ class AddNewAggregateSnapshotStrategyTest {
     private static OrderId ORDER_ID;
     private static Order   AGGREGATE;
     private static final JSONEventSerializer JSON_SERIALIZER =
-            EssentialsJSONEventSerializers.createForActiveJacksonFlavor();
+            EssentialsJSONEventSerializers.create();
 
 
     @BeforeAll

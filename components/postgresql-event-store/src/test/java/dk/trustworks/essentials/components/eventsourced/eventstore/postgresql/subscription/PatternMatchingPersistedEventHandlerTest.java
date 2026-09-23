@@ -16,12 +16,11 @@
 
 package dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.subscription;
 
+import dk.trustworks.essentials.components.foundation.json.EssentialsObjectMappers;
 import com.fasterxml.jackson.annotation.JsonAutoDetect;
-import com.fasterxml.jackson.core.JsonProcessingException;
-import com.fasterxml.jackson.databind.*;
-import com.fasterxml.jackson.databind.json.JsonMapper;
-import com.fasterxml.jackson.datatype.jdk8.Jdk8Module;
-import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
+import tools.jackson.core.JacksonException;
+import tools.jackson.databind.*;
+import tools.jackson.databind.json.JsonMapper;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.EventStoreSubscription;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.persistence.EventMetaData;
@@ -38,7 +37,7 @@ import static org.assertj.core.api.Assertions.*;
 
 class PatternMatchingPersistedEventHandlerTest {
     @Test
-    void test_eventhandler_method_matching() throws JsonProcessingException {
+    void test_eventhandler_method_matching() throws JacksonException {
         var eventHandler = new TestPatternMatchingPersistedEventHandler();
         var orderId      = OrderId.random();
 
@@ -154,7 +153,7 @@ class PatternMatchingPersistedEventHandlerTest {
     // -------------------------- Supporting methods -------------------------------------
 
     private static ObjectMapper        objectMapper   = createObjectMapper();
-    private static JSONEventSerializer jsonSerializer = new JacksonJSONEventSerializer(objectMapper);
+    private static JSONEventSerializer jsonSerializer = new Jackson3JSONEventSerializer(objectMapper);
 
     private static PersistedEvent typedEvent(Object aggregateId, Object event, long eventOrder) {
         return PersistedEvent.from(EventId.random(),
@@ -171,7 +170,7 @@ class PatternMatchingPersistedEventHandlerTest {
                                    Optional.empty());
     }
 
-    private static PersistedEvent namedEvent(Object aggregateId, Object event, long eventOrder) throws JsonProcessingException {
+    private static PersistedEvent namedEvent(Object aggregateId, Object event, long eventOrder) throws JacksonException {
         return PersistedEvent.from(EventId.random(),
                                    AggregateType.of("Orders"),
                                    aggregateId,
@@ -189,27 +188,6 @@ class PatternMatchingPersistedEventHandlerTest {
     }
 
     private static ObjectMapper createObjectMapper() {
-        var objectMapper = JsonMapper.builder()
-                                     .disable(MapperFeature.AUTO_DETECT_GETTERS)
-                                     .disable(MapperFeature.AUTO_DETECT_IS_GETTERS)
-                                     .disable(MapperFeature.AUTO_DETECT_SETTERS)
-                                     .disable(MapperFeature.DEFAULT_VIEW_INCLUSION)
-                                     .disable(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS)
-                                     .disable(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES)
-                                     .disable(SerializationFeature.FAIL_ON_EMPTY_BEANS)
-                                     .enable(MapperFeature.AUTO_DETECT_CREATORS)
-                                     .enable(MapperFeature.AUTO_DETECT_FIELDS)
-                                     .enable(MapperFeature.PROPAGATE_TRANSIENT_MARKER)
-                                     .addModule(new Jdk8Module())
-                                     .addModule(new JavaTimeModule())
-                                     .addModules(dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.TestFasterxmlModules.optionalEssentialsModules())
-                                     .build();
-
-        objectMapper.setVisibility(objectMapper.getSerializationConfig().getDefaultVisibilityChecker()
-                                               .withGetterVisibility(JsonAutoDetect.Visibility.NONE)
-                                               .withSetterVisibility(JsonAutoDetect.Visibility.NONE)
-                                               .withFieldVisibility(JsonAutoDetect.Visibility.ANY)
-                                               .withCreatorVisibility(JsonAutoDetect.Visibility.ANY));
-        return objectMapper;
+        return EssentialsObjectMappers.createJackson3ObjectMapper();
     }
 }

@@ -16,7 +16,7 @@
 
 package dk.trustworks.essentials.components.foundation.messaging.queue;
 
-import com.fasterxml.jackson.databind.exc.MismatchedInputException;
+import tools.jackson.databind.exc.MismatchedInputException;
 import dk.trustworks.essentials.components.foundation.messaging.*;
 import dk.trustworks.essentials.components.foundation.messaging.queue.MessageDeliveryDecision.MessageDeliveryRule;
 import org.junit.jupiter.api.Test;
@@ -136,8 +136,8 @@ class MessageDeliveryClassifierTest {
     }
 
     @Test
-    void jackson_2_mismatched_input_is_matched_by_name() {
-        var mismatchedInput = MismatchedInputException.from((com.fasterxml.jackson.core.JsonParser) null,
+    void jackson_mismatched_input_is_matched_by_name() {
+        var mismatchedInput = MismatchedInputException.from((tools.jackson.core.JsonParser) null,
                                                             String.class,
                                                             "boom");
 

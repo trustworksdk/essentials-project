@@ -16,37 +16,42 @@
 
 package dk.trustworks.essentials.types.spring.web.kotlin
 
-import com.fasterxml.jackson.databind.ObjectMapper
-import com.fasterxml.jackson.module.kotlin.KotlinModule
 import dk.trustworks.essentials.jackson.types.EssentialTypesJacksonModule
 import org.assertj.core.api.Assertions.assertThat
 import org.assertj.core.api.Assertions.assertThatThrownBy
 import org.junit.jupiter.api.Test
-import org.junit.jupiter.api.condition.EnabledIfSystemProperty
+import tools.jackson.databind.json.JsonMapper
+import tools.jackson.module.kotlin.KotlinModule
 
 /**
- * The Jackson 2 twin of [KotlinJacksonBodyJackson3Test]: `EssentialTypesJacksonModule` covers the *Java*
- * `SingleValueType` hierarchy, and Kotlin semantic types need `jackson-module-kotlin` on both flavours.
+ * What `EssentialTypesJacksonModule` does and does not cover for **Kotlin** types, on the Jackson 3 flavour.
  *
- * Running the same assertions on both majors is what makes the boundary a property of Essentials rather than an
- * accident of one Jackson version.
+ * This boundary was undocumented, and an agent working from the docs concluded the module covered
+ * `dk.trustworks.essentials.kotlin.types.StringValueType` because nothing said otherwise. It does not: the module
+ * registers serializers for the *Java* hierarchy - `CharSequenceType`, `NumberType`, `Money`,
+ * `JSR310SingleValueType` - and Kotlin semantic types are not part of it. `jackson-module-kotlin` is what handles
+ * them, and it is the consumer's job to register it.
+ *
+ * @see KotlinJacksonBodyJackson2Test the same assertions on the Jackson 2 flavour
  */
-@EnabledIfSystemProperty(named = "essentials.jackson.flavor", matches = "jackson2")
-class KotlinJacksonBodyJackson2Test {
+class KotlinJacksonBodyJackson3Test {
 
-    private fun essentialsOnlyMapper(): ObjectMapper =
-        ObjectMapper().registerModule(EssentialTypesJacksonModule())
+    private fun essentialsOnlyMapper(): JsonMapper =
+        JsonMapper.builder().addModule(EssentialTypesJacksonModule()).build()
 
-    private fun essentialsPlusKotlinMapper(): ObjectMapper =
-        ObjectMapper()
-            .registerModule(EssentialTypesJacksonModule())
-            .registerModule(KotlinModule.Builder().build())
+    private fun essentialsPlusKotlinMapper(): JsonMapper =
+        JsonMapper.builder()
+            .addModule(EssentialTypesJacksonModule())
+            .addModule(KotlinModule.Builder().build())
+            .build()
 
     @Test
     fun `without jackson-module-kotlin a value class writes the WRONG wire shape`() {
         val mapper = essentialsOnlyMapper()
 
-        // Silent, as on Jackson 3: an object instead of the bare scalar the semantic type's wire contract calls for.
+        // This is the damaging half, and it fails silently: Jackson sees an ordinary bean with a `value` property
+        // and writes an object, where the semantic type's wire contract is the bare scalar. Nothing throws. A
+        // service that persists or publishes this has changed its wire format without any error to notice.
         assertThat(mapper.writeValueAsString(KtOrderId("order-4711")))
             .isEqualTo("""{"value":"order-4711"}""")
     }

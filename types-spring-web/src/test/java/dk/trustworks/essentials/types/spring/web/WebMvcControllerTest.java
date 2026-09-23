@@ -16,12 +16,10 @@
 
 package dk.trustworks.essentials.types.spring.web;
 
-import com.fasterxml.jackson.core.JsonProcessingException;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.databind.json.JsonMapper;
 import dk.trustworks.essentials.types.*;
 import dk.trustworks.essentials.types.spring.web.model.*;
 import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.condition.EnabledIfSystemProperty;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
@@ -39,16 +37,15 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 
 @SpringBootTest(classes = WebMvcSpringWebApplication.class)
 @AutoConfigureMockMvc
-@EnabledIfSystemProperty(named = "essentials.jackson.flavor", matches = "jackson2")
 public class WebMvcControllerTest {
     @Autowired
-    private ObjectMapper objectMapper;
+    private JsonMapper objectMapper;
 
     @Autowired
     private MockMvc mockMvc;
 
     @Test
-    void test() throws JsonProcessingException {
+    void test() {
         System.out.println(objectMapper.writeValueAsString(new Order(OrderId.random(),
                                                                      CustomerId.random(),
                                                                      AccountId.random(),
