@@ -506,25 +506,26 @@ public class EssentialsComponentsConfiguration {
         return new SpringBootDevToolsClassLoaderChangeContextRefreshedListener(jsonSerializer);
     }
 
-    private static class SpringBootDevToolsClassLoaderChangeContextRefreshedListener {
-        private static final Logger                log = LoggerFactory.getLogger(SpringBootDevToolsClassLoaderChangeContextRefreshedListener.class);
-        private final        JacksonJSONSerializer jacksonJSONSerializer;
+    /**
+     * Points the {@link JSONSerializer} at the class loader of a context restarted by Spring Boot DevTools, so payload
+     * types resolve to the new generation of application classes. Works for any {@link JSONSerializer}: the class
+     * loader is part of that interface.
+     */
+    static class SpringBootDevToolsClassLoaderChangeContextRefreshedListener {
+        private static final Logger         log = LoggerFactory.getLogger(SpringBootDevToolsClassLoaderChangeContextRefreshedListener.class);
+        private final        JSONSerializer jsonSerializer;
 
         public SpringBootDevToolsClassLoaderChangeContextRefreshedListener(JSONSerializer jsonSerializer) {
-            requireNonNull(jsonSerializer, "No jsonSerializer provided");
-            this.jacksonJSONSerializer = jsonSerializer instanceof JacksonJSONSerializer ? (JacksonJSONSerializer) jsonSerializer : null;
+            this.jsonSerializer = requireNonNull(jsonSerializer, "No jsonSerializer provided");
         }
 
         @EventListener
         public void handleContextRefresh(ContextRefreshedEvent event) {
-            if (jacksonJSONSerializer != null) {
-                log.info("Updating the '{}'s internal ObjectMapper's ClassLoader to {} from {}",
-                         jacksonJSONSerializer.getClass().getSimpleName(),
-                         event.getApplicationContext().getClassLoader(),
-                         jacksonJSONSerializer.getObjectMapper().getTypeFactory().getClassLoader()
-                        );
-                jacksonJSONSerializer.setClassLoader(event.getApplicationContext().getClassLoader());
-            }
+            log.info("Updating the '{}'s ClassLoader to {} from {}",
+                     jsonSerializer.getClass().getSimpleName(),
+                     event.getApplicationContext().getClassLoader(),
+                     jsonSerializer.getClassLoader());
+            jsonSerializer.setClassLoader(event.getApplicationContext().getClassLoader());
         }
     }
 
