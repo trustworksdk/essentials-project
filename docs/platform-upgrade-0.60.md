@@ -174,7 +174,11 @@ changed nothing serialization-related), and the `enforce-dependency-hygiene` exe
 
 The largest step, and the only one that changes persisted-data behaviour. Split it into these commits, in this order.
 
-**4.1 Freeze the wire format first.** Before deleting anything:
+**4.1 Freeze the wire format first.** Done: `persisted-shapes.json` (immutable class, record, enums, collections,
+nulls, plain `BigDecimal`/`Instant`/`UUID`/`LocalDate`, nested value types, `MessageMetaData`) generated under
+`-Pjackson2` from the full reactor, and asserted byte-for-byte and on read-back under Jackson 3. Regenerate only from
+the full reactor: with `-pl … -am` a stale `types-jackson` jar from `~/.m2` can end up on the classpath instead of the
+reactor's. Before deleting anything:
 - `EssentialsObjectMappersWireFormatTest` (postgresql-event-store): make sure its golden document captures what
   Jackson 2 *wrote*, and that it holds representative cases: value types, `Map` keys typed by value types,
   `BigDecimal`, `java.time`, immutable payloads, event metadata and queue `MessageMetaData`. Once the Jackson 2 writer
@@ -211,7 +215,9 @@ The largest step, and the only one that changes persisted-data behaviour. Split 
 `@ConditionalOnMissingBean` types so that a consumer's Boot-provided `JsonMapper` still backs off correctly. Update
 `@ConfigurationProperties` docs where they mention a flavor.
 
-**4.5 Delete the modules.** Remove `types-jackson` and `immutable-jackson` from the reactor (D2). Delete the
+**4.5 Delete the modules.** First move `types-jackson/src/test/resources/wire-format/serialization-test-subject.json` into
+`types-jackson3`: the Jackson 3 `WireFormatCompatibilityTest` reads it as a shared test resource from the Jackson 2
+module, so deleting that module would silently delete the golden document. Remove `types-jackson` and `immutable-jackson` from the reactor (D2). Delete the
 `essentials.jackson.flavor`, `essentials.types-jackson.artifactId` and `essentials.immutable-jackson.artifactId`
 properties, and replace every `${essentials.types-jackson.artifactId}` dependency with the literal `types-jackson3`
 (`immutable-jackson3` likewise). This also retires the "flavor profile does not survive transitivity" gotcha.
@@ -321,6 +327,17 @@ the one check the golden files cannot fully replace.
    not transitive. The examples work around it with an explicit `jackson-databind` dependency and a POM comment, but
    no consumer-facing doc says so. For 0.50.x: document the requirement in the README and the starter LLM doc. For
    0.60: removed by step 4.
+
+4. **Jackson 2 cannot serialize `Optional` fields through the Essentials serializer.** `JacksonJSONSerializer`'s
+   constructor calls `setClassLoader`, which replaces the mapper's `TypeFactory` with
+   `TypeFactory.defaultInstance().withClassLoader(...)` and so discards the type modifiers modules register, including
+   `Jdk8Module`'s. Any payload with an `Optional` field fails with `InvalidDefinitionException`. Loud rather than
+   corrupting, and gone in 0.60 with the class. For 0.50.x: keep the registered type modifiers
+   (`objectMapper.getTypeFactory().withClassLoader(...)`).
+5. **Jackson 2 reads `Money` back with its scale stripped.** `MoneyDeserializer` (types-jackson) reads through a
+   `JsonNode`, and Jackson 2's node factory strips trailing `BigDecimal` zeros, so `12.50` persisted comes back as
+   `12.5`: numerically equal, but `Money`/`Amount` equality is scale-sensitive. No precision loss. Jackson 3 keeps the
+   scale, so after upgrading, such values compare equal to what was originally written again.
 
 ## 6. Out of scope
 
