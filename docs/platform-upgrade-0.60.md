@@ -315,6 +315,9 @@ because 0.60 still has unfinished work (the `forRemoval` constructor removals, t
 
 ## 4. Risks
 
+Still open: deciding for each of the four `main`-targeting branches in the last-but-one row whether it ships in
+0.50.x or moves to 0.60.
+
 | Risk | Mitigation |
 |---|---|
 | Data persisted by Jackson 2 in 0.50 no longer reads under 0.60 | Step 4.1 golden files first, plus the 0.50 → 0.60 database replay check in step 4 |
@@ -327,6 +330,19 @@ because 0.60 still has unfinished work (the `forRemoval` constructor removals, t
 | Stale `target/` from the language server gives phantom failures | Known gotcha in the root `CLAUDE.md`: stop other builds, then `mvn clean install -pl <m> -am` |
 
 ## 5. Bugs found on the way (fix on `main` for 0.50.x, forward-merge into `release/0.60`)
+
+**Status:** 1, 2, 3, 4 and 6 shipped in 0.50.1 (`docs/RELEASE-NOTES-0.50.1.md`, PR #48). `main` was merged into
+`upgrade/0.60-platform` in `079ee345`, and that commit's message records the conflict resolution. Where each fix
+stands in 0.60:
+
+| Bug | In 0.60 |
+|---|---|
+| 1. Poll leaks its unit of work | Merged: the fix and `PollingUnitOfWorkLifecycleIT` came in unchanged |
+| 2. Jackson 3 `MismatchedInputException` retried | Already fixed by `MessageDeliveryClassifier`; the 0.50.1 version was dropped |
+| 3. Jackson 3-only app cannot load the starters | Gone with Jackson 2 (step 4). The three `Jackson3OnlyClasspathTest`s were kept as a guard against Jackson 2 creeping back in |
+| 4. Jackson 2 `Optional` fields | Gone with `JacksonJSONSerializer`; the 0.50.1 fix was dropped |
+| 5. Jackson 2 strips `Money` scale | Not fixed in 0.50.x (loses no precision). Jackson 3 keeps the scale |
+| 6. DevTools listener ignores Jackson 3 | Already fixed in 0.60; the 0.50.1 version was dropped |
 
 1. **`PostgresqlEventStore.pollEvents` leaves a unit of work open.** When `resolveBatchSizeForThisQuery` returns 0 (no
    new events since the last poll, checked with `SELECT MAX(global_order)` on every 100th empty poll), the lambda
