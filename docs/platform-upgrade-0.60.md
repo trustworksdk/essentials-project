@@ -313,11 +313,14 @@ the one check the golden files cannot fully replace.
 2. **The queue's permanent-error list misses Jackson 3.** `DefaultDurableQueueConsumer:592` checks
    `instanceof com.fasterxml.jackson.databind.exc.MismatchedInputException`, so under the default flavor a
    deserialization failure is retried as if transient. Fixed on `release/0.60` by `MessageDeliveryClassifier`.
-3. **Suspected: a Jackson 3-only application cannot start the Postgres starter.** `MultiTableChangeListener` falls back to
-   `new com.fasterxml.jackson.databind.ObjectMapper()` whenever the serializer is not the Jackson 2 one, and the starters'
-   `jsonSerializer(List<com.fasterxml.jackson.databind.Module>)` bean methods name a Jackson 2 type, while Jackson 2 is
-   only `optional`/`provided`. Not yet reproduced; check with an application whose runtime classpath has no
-   `com.fasterxml.jackson.core:jackson-databind`.
+3. **Confirmed: a Jackson 3-only application cannot load the Postgres starter.** Probed on 2026-09-23 with the
+   starter's classpath minus Jackson 2 databind/core/datatype: `EssentialsComponentsConfiguration` fails with
+   `NoClassDefFoundError: com/fasterxml/jackson/databind/Module` (its `jsonSerializer(List<Module>)` bean method names a
+   Jackson 2 type), and so does `EssentialsObjectMappers.createJSONSerializer()` / `MultiTableChangeListener`
+   (`new com.fasterxml.jackson.databind.ObjectMapper()` fallback). Jackson 2 is only `optional`/`provided`, so it is
+   not transitive. The examples work around it with an explicit `jackson-databind` dependency and a POM comment, but
+   no consumer-facing doc says so. For 0.50.x: document the requirement in the README and the starter LLM doc. For
+   0.60: removed by step 4.
 
 ## 6. Out of scope
 
