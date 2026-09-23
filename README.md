@@ -742,8 +742,9 @@ supported — 4.0 moved to Jackson 3 and Jakarta EE 11, so a 3.x application can
 (`com.fasterxml.jackson.core`) is still supported — see [Choosing the Jackson Major](#-choosing-the-jackson-major),
 including the two payload-class changes that bite silently on the way in.
 
-**Kotlin.** Kotlin artifacts are compiled at language level 2.2, which sets the emitted `@Metadata` binary version —
-a Kotlin 2.1 compiler rejects them as an incompatible binary version. The stdlib API level is held one behind, at 2.1.
+**Kotlin.** Kotlin artifacts are compiled with Kotlin 2.4 at language and API level 2.3, matching the Kotlin that
+Spring Boot manages. The language level sets the emitted `@Metadata` binary version; the API level caps which stdlib
+functions the bytecode calls, so the artifacts run on the `kotlin-stdlib` Spring Boot puts on the classpath.
 
 ### Migration Note
 

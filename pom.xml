@@ -70,24 +70,31 @@
         <java.release.version>21</java.release.version>
         <java.version>${java.release.version}</java.version>
         <maven.compiler.release>${java.release.version}</maven.compiler.release>
-        <kotlin.version>2.2.21</kotlin.version>
+        <kotlin.version>2.4.20</kotlin.version>
         <!-- The language/API level artifacts are compiled against, kept independent of the compiler
              (kotlin.version) so a newer compiler still emits binaries/metadata an older consumer can read.
              These two properties are the single source for that level — the kotlin-maven-plugin blocks in
              types, types-jdbi, types-spring-web, postgresql-event-store, kotlin-eventsourcing and
              postgresql-document-db reference them and deliberately do not restate the numbers.
 
-             kotlinLanguage.version sets the emitted @Metadata binary version, so it *is* the consumer floor:
-             at 2.2 a Kotlin 2.1 compiler rejects these artifacts as an incompatible binary version. Verify
-             after changing it with `javap -v` on any compiled Kotlin class and read the mv=[...] tuple.
-             Raising it is consumer-visible, belongs in the release notes, and per the stable-API rule may
-             not happen outside a new major.
+             kotlinLanguage.version sets the emitted @Metadata binary version. A Kotlin compiler reads metadata
+             up to one minor version newer than itself and rejects anything beyond that (measured: 2.3.21 reads
+             language-2.4 classes, 2.2.21 rejects them), so the consumer floor is kotlinLanguage.version minus
+             one minor. It is set to match the Kotlin that Spring Boot manages, so consumers on Boot's defaults
+             never depend on that one-ahead allowance. Verify after changing it with `javap -v` on any compiled
+             Kotlin class and read the mv=[...] tuple. Raising it is consumer-visible, belongs in the release
+             notes, and per the stable-API rule may not happen outside a new major.
 
-             kotlinApi.version is deliberately left one level behind: it caps which stdlib APIs the bytecode
-             may bind to — which lowering kotlinLanguage.version would not do — and does not affect the
-             metadata version, so it is not part of the floor. -->
-        <kotlinLanguage.version>2.2</kotlinLanguage.version>
-        <kotlinApi.version>2.1</kotlinApi.version>
+             kotlinApi.version caps which stdlib APIs the bytecode may bind to — which lowering
+             kotlinLanguage.version would not do. It must not exceed the kotlin-stdlib Spring Boot manages,
+             because that is the stdlib consumers on Boot's dependency management actually run with; binding
+             to a newer API fails there with NoSuchMethodError.
+
+             The JVM target sets a floor of its own: a Kotlin compiler cannot target a JVM newer than it knows,
+             and refuses to inline bytecode built for a newer target than its own output. So a consumer calling
+             our inline functions needs a Kotlin compiler that supports java.release.version as a jvmTarget. -->
+        <kotlinLanguage.version>2.3</kotlinLanguage.version>
+        <kotlinApi.version>2.3</kotlinApi.version>
         <revision>DEV-SNAPSHOT</revision>
         <skipDependencyCheck>false</skipDependencyCheck>
 
@@ -266,6 +273,17 @@
                 <groupId>org.jdbi</groupId>
                 <artifactId>jdbi3-bom</artifactId>
                 <version>${jdbi3-bom.version}</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+            <!-- The compiler (kotlin.version) and the stdlib/reflect it compiles against must be the same
+                 release. Without this import Spring Boot's own Kotlin management decides the stdlib version, and
+                 that only lined up while the two happened to match. It must sit above spring-boot-dependencies
+                 to have any effect. -->
+            <dependency>
+                <groupId>org.jetbrains.kotlin</groupId>
+                <artifactId>kotlin-bom</artifactId>
+                <version>${kotlin.version}</version>
                 <type>pom</type>
                 <scope>import</scope>
             </dependency>
