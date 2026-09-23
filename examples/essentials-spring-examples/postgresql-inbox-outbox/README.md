@@ -145,8 +145,8 @@ Step by step:
 
 > **The Kafka DTOs must keep their plain `String` ids.** `OrderEvent.id()` and
 > `ExternalOrderShippingEvent.orderId()` are deliberately not typed with `OrderId`. Typing them with the domain
-> type means the boundary stops translating — and it broke the `-Pjackson2` build, because the Kafka mapper and
-> the Essentials types module can end up on different Jackson majors. See the module's `CLAUDE.md`.
+> type means the boundary stops translating, coupling the Kafka contract to the domain's id format. See the
+> module's `CLAUDE.md`.
 
 ### One thing the diagram does not show
 
@@ -175,12 +175,8 @@ All commands are run from the `examples/essentials-spring-examples` folder.
 
 ```bash
 mvn verify -pl :postgresql-inbox-outbox                 # unit + integration tests (needs Docker)
-mvn -Pjackson2 verify -pl :postgresql-inbox-outbox -am  # the other Jackson flavour; -am is required
 docker compose up -d && mvn spring-boot:run -pl :postgresql-inbox-outbox
 ```
-
-The `-am` is not optional on the non-default Jackson flavour — see
-[the aggregator README](../README.md#jackson-flavour).
 
 ### Tests
 
@@ -259,7 +255,7 @@ In short, the starter provides: `Jdbi` wrapped in a `TransactionAwareDataSourceP
 `SpringTransactionAwareJdbiUnitOfWorkFactory`, `PostgresqlDurableQueues`, `Inboxes`/`Outboxes`,
 `DurableLocalCommandBus`, `LocalEventBus`, `PostgresqlFencedLockManager`, `MultiTableChangeListener`,
 `ReactiveHandlersBeanPostProcessor` (which is what auto-registers every `@CmdHandler` and `@Handler` bean in
-this module), `JacksonJSONSerializer`, the Micrometer interceptors, the optional `EssentialsScheduler` /
+this module), `JSONSerializer` (Jackson 3, from `EssentialsObjectMappers.createJSONSerializer()`), the Micrometer interceptors, the optional `EssentialsScheduler` /
 `PostgresqlTTLManager`, and the admin API beans.
 
 > ⚠️ **Security.** `essentials.durable-queues.shared-queue-table-name` and

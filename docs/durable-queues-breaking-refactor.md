@@ -429,10 +429,10 @@ the one behaviour change a reader is most likely to feel without having configur
 `components/postgresql-queue/CLAUDE.md` (its `useOrderedUnorderedQuery` bullet says "Off by default", wrong since
 0.50.0), and `components/spring-boot-starter-postgresql/{README.md,CLAUDE.md}`. Then `graphify update .`.
 
-**Both Jackson flavors.** Payloads and `MessageMetaData` are persisted JSON, so anything touching serialization
-runs under `mvn test` and `mvn -Pjackson2 test`. The new snapshot records are not persisted and are exempt; the
-statistics table removal touches a `meta_data JSONB` column, so that path is worth one check rather than an
-assumption.
+**Jackson.** From 0.60 only Jackson 3 exists, so the former obligation to run serialization changes under both
+`mvn test` and `mvn -Pjackson2 test` is gone (see [platform-upgrade-0.60.md](./platform-upgrade-0.60.md)).
+Payloads and `MessageMetaData` are still persisted JSON whose format must not change; the statistics table removal
+touches a `meta_data JSONB` column, so that path is worth one check rather than an assumption.
 
 **Other branches touch these files.** `queue_shard_owned`, `mssql_durable_queues` and
 `feature/non-transactional-message-handler` all modify queue code, and the last one edits

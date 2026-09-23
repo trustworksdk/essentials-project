@@ -113,7 +113,7 @@ All beans use `@ConditionalOnMissingBean` for easy overriding.
 |------|-----------|-------------|
 | `EssentialTypesJacksonModule` | Always | Jackson support for Essentials semantic types |
 | `EssentialsImmutableJacksonModule` | Objenesis on classpath + `essentials.immutable-jackson-module-enabled=true` | Jackson support for immutable objects without default constructor |
-| `JacksonJSONSerializer` | Always | Pre-configured ObjectMapper with sensible defaults |
+| `JSONSerializer` (`Jackson3JSONSerializer`) | Always | `EssentialsObjectMappers.createJSONSerializer()` — the canonical persistence mapper. Define your own `JSONSerializer` bean to add modules; the starter does not pick up `JacksonModule` beans for persistence |
 
 ### MongoDB Integration
 
@@ -362,16 +362,8 @@ See [types-springdata-mongo](../../types-springdata-mongo/README.md) for complet
         <artifactId>spring-boot-starter-data-mongodb</artifactId>
     </dependency>
     <dependency>
-        <groupId>com.fasterxml.jackson.core</groupId>
+        <groupId>tools.jackson.core</groupId>
         <artifactId>jackson-databind</artifactId>
-    </dependency>
-    <dependency>
-        <groupId>com.fasterxml.jackson.datatype</groupId>
-        <artifactId>jackson-datatype-jdk8</artifactId>
-    </dependency>
-    <dependency>
-        <groupId>com.fasterxml.jackson.datatype</groupId>
-        <artifactId>jackson-datatype-jsr310</artifactId>
     </dependency>
     <dependency>
         <groupId>io.projectreactor</groupId>

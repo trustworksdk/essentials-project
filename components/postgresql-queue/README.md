@@ -75,8 +75,8 @@ The `sharedQueueTableName` parameter is used directly in SQL statements via stri
 var unitOfWorkFactory = new JdbiUnitOfWorkFactory(jdbi);
 var durableQueues = PostgresqlDurableQueues.builder()
     .setUnitOfWorkFactory(unitOfWorkFactory)
-    .setJsonSerializer(new JacksonJSONSerializer(
-        PostgresqlDurableQueues.createDefaultObjectMapper()))
+    .setJsonSerializer(new Jackson3JSONSerializer(
+        DurableQueuesSerialization.createDefaultObjectMapper()))
     .setSharedQueueTableName("message_queue")
     .build();
 

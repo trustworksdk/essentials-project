@@ -19,7 +19,7 @@
 **Dependencies from other modules**:
 - `InterceptorChain`, `PatternMatchingMethodInvoker` from [shared](./LLM-shared.md)
 - `CommandBus`, `LocalCommandBus` from [reactive](./LLM-reactive.md)
-- `JSONSerializer` from [immutable-jackson](./LLM-immutable-jackson.md)
+- `EssentialTypesJacksonModule` from [types-jackson3](./LLM-types-jackson.md) and `EssentialsImmutableJacksonModule` from [immutable-jackson3](./LLM-immutable-jackson.md), registered by `EssentialsObjectMappers`
 - `CorrelationId`, `MessageId`, `SubscriberId` from [foundation-types](./LLM-foundation-types.md)
 
 ## TOC
@@ -805,15 +805,36 @@ OrderId result = commandBus.send(new CreateOrderCommand(...));
 
 **Package**: `dk.trustworks.essentials.components.foundation.json`
 
+Jackson 3 (`tools.jackson`) only. Build persistence serializers through `EssentialsObjectMappers`, which carries the
+canonical configuration the persisted wire format depends on (field access, ISO-8601 dates, final-field mutation
+re-enabled, Essentials value-type modules registered). That format is byte-identical to what the Jackson 2 mapper of
+0.50 wrote, so data persisted before 0.60 stays readable.
+
 ```java
-// dk.trustworks.essentials.components.foundation.json.JacksonJSONSerializer
-JSONSerializer serializer = new JacksonJSONSerializer(objectMapper);
+// Canonical serializer (Jackson3JSONSerializer over the canonical mapper)
+JSONSerializer serializer = EssentialsObjectMappers.createJSONSerializer();
+
+// Canonical mapper + extra application modules (tools.jackson.databind.JacksonModule)
+tools.jackson.databind.ObjectMapper mapper = EssentialsObjectMappers.createJackson3ObjectMapper(new MyModule());
+JSONSerializer custom = new Jackson3JSONSerializer(mapper);
 
 String json = serializer.serialize(order);
 byte[] bytes = serializer.serializeAsBytes(order);
 Order order = serializer.deserialize(json, Order.class);
 Object event = serializer.deserialize(json, "com.example.OrderCreatedEvent");
 ```
+
+⚠️ `EssentialsJacksonModules.modules()` (used by `EssentialsObjectMappers`) throws `IllegalStateException` when a
+0.50-era Jackson 2 `types-jackson` / `immutable-jackson` jar is on the classpath (same FQCNs, wrong Jackson major) —
+depend on `types-jackson3` / `immutable-jackson3`.
+
+⚠️ Under Jackson 3 a constructor parameter **name** is part of the JSON contract: Jackson 3 binds a class's constructor
+by parameter names read from the bytecode, so a parameter named differently from the JSON property receives `null`.
+Rename the parameter or annotate it with `@JsonProperty("…")` (`com.fasterxml.jackson.annotation`, shared by both
+Jackson majors).
+
+⚠️ Upgrading from 0.50: `JacksonJSONSerializer` (Jackson 2) was removed — use `Jackson3JSONSerializer` or
+`EssentialsObjectMappers.createJSONSerializer()`.
 
 ### LifecycleManager
 

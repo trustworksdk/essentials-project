@@ -55,7 +55,7 @@ No tests in this module (pure auto-configuration glue). Integration tests live i
 | Extra `CommandBusInterceptor`s | Register as beans; auto-collected via `List<CommandBusInterceptor>` |
 | Custom command queue | Register `QueueName` bean and/or `RedeliveryPolicy` bean |
 | Custom error handling | Register `SendAndDontWaitErrorHandler` bean or `OnErrorHandler` bean |
-| Extra Jackson modules | Register `com.fasterxml.jackson.databind.Module` beans; auto-collected and added to `ObjectMapper` |
+| Extra persistence Jackson modules | Define own `JSONSerializer` bean (e.g. `new Jackson3JSONSerializer(EssentialsObjectMappers.createJackson3ObjectMapper(extraModules))`); starter backs off. `JacksonModule` beans are NOT collected into persistence mapper (they go to Boot's web `JsonMapper`) |
 
 ## Gotchas
 

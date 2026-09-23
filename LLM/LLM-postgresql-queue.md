@@ -512,7 +512,7 @@ essentials.postgresql:
 | [foundation](./LLM-foundation.md#durablequeues-messaging) | `DurableQueues` interface and core patterns |
 | [springdata-mongo-queue](./LLM-springdata-mongo-queue.md) | MongoDB implementation |
 | [types-jdbi](./LLM-types-jdbi.md) | JDBI argument factories |
-| [types-jackson](./LLM-types-jackson.md) | JSON serialization |
+| [types-jackson3](./LLM-types-jackson.md) | JSON serialization |
 
 ### PostgreSQL vs MongoDB
 

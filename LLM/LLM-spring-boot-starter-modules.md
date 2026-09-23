@@ -65,9 +65,9 @@ See [spring-boot-starter-postgresql README](../components/spring-boot-starter-po
 - `ReactiveHandlersBeanPostProcessor` - Auto-register handlers
 
 **Serialization:**
-- `EssentialTypesJacksonModule` - Jackson support for types
-- `EssentialsImmutableJacksonModule` - Immutable support (when enabled)
-- `JacksonJSONSerializer` - JSON serializer (when JSONEventSerializer not on classpath)
+- `EssentialTypesJacksonModule` - Jackson 3 support for types (bean, so Spring Boot also registers it on its **web** `JsonMapper`)
+- `EssentialsImmutableJacksonModule` - Immutable support (when enabled; also a bean for the web mapper)
+- `JSONSerializer` - `EssentialsObjectMappers.createJSONSerializer()` (Jackson 3; when JSONEventSerializer not on classpath). Deliberately does **not** collect `JacksonModule` beans from the context — those are usually web-layer modules and would silently change the persisted format. Need extra persistence modules? Define your own `JSONSerializer` bean; the starter backs off
 
 **Scheduler:**
 - `EssentialsScheduler` - Distributed scheduler (when enabled)
@@ -116,7 +116,7 @@ See [spring-boot-starter-postgresql-event-store README](../components/spring-boo
 - `PostgresqlEventStore` - Event persistence and loading
 - `SeparateTablePerAggregateTypePersistenceStrategy` - One table per AggregateType
 - `SpringTransactionAwareEventStoreUnitOfWorkFactory` - Spring transaction integration
-- `JacksonJSONEventSerializer` - Event JSON serialization
+- `JSONEventSerializer` - `EssentialsJSONEventSerializers.create()` (Jackson 3 `Jackson3JSONEventSerializer`); define your own bean to add persistence modules
 
 **Subscriptions & Processing:**
 - `EventStoreSubscriptionManager` - Coordinate subscriptions

@@ -122,7 +122,7 @@ All beans use `@ConditionalOnMissingBean` for easy overriding.
 |------|-----------|-------------|
 | `EssentialTypesJacksonModule` | Always | Jackson support for Essentials semantic types |
 | `EssentialsImmutableJacksonModule` | Objenesis on classpath + `essentials.immutable-jackson-module-enabled=true` | Jackson support for immutable objects without default constructor |
-| `JacksonJSONSerializer` | `JSONEventSerializer` NOT on classpath | Pre-configured ObjectMapper with sensible defaults |
+| `JSONSerializer` (`Jackson3JSONSerializer`) | `JSONEventSerializer` NOT on classpath | `EssentialsObjectMappers.createJSONSerializer()` — the canonical persistence mapper. Define your own `JSONSerializer` bean to add modules; the starter does not pick up `JacksonModule` beans for persistence |
 
 > **Note:** The `JSONSerializer` bean is only auto-registered if `JSONEventSerializer` is NOT on the classpath.  
 > If you're using `spring-boot-starter-postgresql-event-store`, it provides its own serializer.
@@ -410,16 +410,8 @@ public class MyJdbiCustomizer implements JdbiConfigurationCallback {
         <artifactId>postgresql</artifactId>
     </dependency>
     <dependency>
-        <groupId>com.fasterxml.jackson.core</groupId>
+        <groupId>tools.jackson.core</groupId>
         <artifactId>jackson-databind</artifactId>
-    </dependency>
-    <dependency>
-        <groupId>com.fasterxml.jackson.datatype</groupId>
-        <artifactId>jackson-datatype-jdk8</artifactId>
-    </dependency>
-    <dependency>
-        <groupId>com.fasterxml.jackson.datatype</groupId>
-        <artifactId>jackson-datatype-jsr310</artifactId>
     </dependency>
     <dependency>
         <groupId>io.projectreactor</groupId>

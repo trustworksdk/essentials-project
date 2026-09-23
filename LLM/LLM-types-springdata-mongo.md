@@ -226,5 +226,5 @@ public class Created extends LocalDateTimeType<Created> {
 
 - [README.md](../types-springdata-mongo/README.md) - Full documentation
 - [LLM-types.md](LLM-types.md) - Core types module
-- [LLM-types-jackson.md](LLM-types-jackson.md) - Jackson serialization
+- [LLM-types-jackson.md](LLM-types-jackson.md) - Jackson 3 serialization (`types-jackson3`)
 - [OrderRepositoryIT.java](../types-springdata-mongo/src/test/java/dk/trustworks/essentials/types/springdata/mongo/OrderRepositoryIT.java) - Integration test examples

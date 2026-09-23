@@ -172,6 +172,11 @@ changed nothing serialization-related), and the `enforce-dependency-hygiene` exe
 
 ### Step 4 — Drop Jackson 2
 
+**Done** in `0a2767da` (notification SPI and WAL pre-filter moved to Jackson 3, green under both profiles) and
+`ef3de1b3` (the removal). `verify` green: 1948 tests, 16 skipped. The baseline's 1988/34 differ by the deleted Jackson
+2 module and flavor tests, and by the 18 ported web tests that used to be skipped and now run. No
+`com.fasterxml.jackson.databind`/`core` import remains outside `admin-api-spec`.
+
 The largest step, and the only one that changes persisted-data behaviour. Split it into these commits, in this order.
 
 **4.1 Freeze the wire format first.** Done: `persisted-shapes.json` (immutable class, record, enums, collections,
@@ -252,6 +257,19 @@ These are not released, but they must build.
 **4.9 CI.** Delete the `jackson2` job in `maven.yml` (the comment there already authorizes it), but keep
 `EssentialsObjectMappersWireFormatTest` (see 4.1).
 
+**What step 4 decided on the way** (beyond D2, D3, D7, D8):
+- `DefaultWalMessageFilter` keeps its name and becomes the only CDC pre-filter (its API takes a `Supplier`, no Jackson
+  type), so `Jackson3WalMessageFilter` and `WalMessageFilters.createForActiveJacksonFlavor` are deleted under D8.
+- The starters' `jsonSerializer` beans take **no** module list. Collecting every `JacksonModule` bean into the
+  persistence mapper would pull web-layer modules into the persisted format; an application that needs extra
+  persistence modules defines its own serializer bean, as under 0.50's Jackson 3 flavor.
+- `types-spring-web`'s broad Jackson 2-only tests (`WebMvcControllerTest`, `WebFluxControllerIT`) were ported to a
+  Jackson 3 application wired as the docs tell consumers to, not deleted; they had been skipped in every default build.
+- Test mapper helpers now use the canonical `EssentialsObjectMappers` configuration. Under the 0.50 Jackson 3 default
+  they had built Jackson 2 mappers without the Essentials modules, so they never exercised the persisted format.
+- Enforcer execution `ban-jackson-2` bans Jackson 2 databind outside test scope; `types-avro`, `admin-api-spec` and
+  `admin-api-client-java` skip it (Avro, swagger-core and the generated OpenAPI client need Jackson 2 themselves).
+
 **Verify:** `mvn clean verify`, the enforcer ban passes, and
 `grep -rn 'com\.fasterxml\.jackson\.\(databind\|core\|datatype\|module\)' --include=*.java --include=*.kt` over released
 modules returns only the allow-listed files. Also read a database written by 0.50.x: start the 0.50.0 trading demo,
@@ -259,6 +277,10 @@ write events, queue messages and snapshots, then boot the 0.60 build against the
 the one check the golden files cannot fully replace.
 
 ### Step 5 — Documentation and release material
+
+**Done except the release notes:** root and module `CLAUDE.md` / `README.md`, `LLM/*.md`, the examples, and
+`docs/MIGRATION-0.60.md` (platform and Jackson sections). `RELEASE-NOTES-0.60.0.md` is written at release time,
+because 0.60 still has unfinished work (the `forRemoval` constructor removals, the schema harness).
 
 1. Root `CLAUDE.md`: rewrite line 3 (JDK), the command table (drop `mvn -Pjackson2 test`), and delete or collapse the
    gotchas that exist only because of dual flavor: "flavor profile does not survive transitivity",
@@ -338,6 +360,13 @@ the one check the golden files cannot fully replace.
    `JsonNode`, and Jackson 2's node factory strips trailing `BigDecimal` zeros, so `12.50` persisted comes back as
    `12.5`: numerically equal, but `Money`/`Amount` equality is scale-sensitive. No precision loss. Jackson 3 keeps the
    scale, so after upgrading, such values compare equal to what was originally written again.
+
+6. **The DevTools restart listener ignores the Jackson 3 serializer.** Both Postgres and Mongo starters register
+   `SpringBootDevToolsClassLoaderChangeContextRefreshedListener`, which only updated the class loader when the
+   serializer was the Jackson 2 `JacksonJSONSerializer`. Under the default Jackson 3 flavor, after a DevTools restart
+   the serializer keeps resolving payload types through the previous class loader, the classic source of
+   `ClassCastException` between two copies of the same class. Fixed on 0.60 by calling
+   `JSONSerializer.setClassLoader` on any serializer; for 0.50.x the same change applies.
 
 ## 6. Out of scope
 

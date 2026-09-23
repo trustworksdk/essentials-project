@@ -10,9 +10,8 @@
 
 ⚠️ **Read before answering questions about this module:**
 - The configurers are **shipped production classes**, but there is **no auto-configuration**. Consumers must `@Import` one.
-- `WebMvcConfig` / `WebFluxConfig` are **test-scope** classes. They are not on a consumer's classpath, are not API, and are not templates. `WebFluxConfig` in particular overrides `configureHttpMessageCodecs` with Jackson 2 codecs — correct for this module's own `-Pjackson2` runs, wrong for anyone else on Boot 4.
 - Neither shipped configurer touches HTTP message converters or codecs, so adding this module **cannot** change which Jackson major serialises bodies.
-- This module covers `@PathVariable`/`@RequestParam` only. Bodies are `types-jackson3` (Jackson 3 / Boot 4) or `types-jackson` (Jackson 2), registered on the **web** mapper.
+- This module covers `@PathVariable`/`@RequestParam` only. Bodies are `types-jackson3` (Jackson 3 / Boot 4 — the only Jackson major Essentials supports from 0.60), registered on the **web** mapper.
 
 ```xml
 <dependency>
@@ -93,11 +92,19 @@ serialisation from Jackson 3. Register the Jackson module on the `ObjectMapper`/
 let Boot build the codecs from it.
 
 **JSON request/response bodies:** a separate mechanism. Requires `EssentialTypesJacksonModule` on the
-**web** mapper, from the artifact matching your application's Jackson major:
-`types-jackson3` for Spring Boot 4 / Jackson 3, `types-jackson` for Jackson 2. Both publish the class
-under the same FQCN `dk.trustworks.essentials.jackson.types.EssentialTypesJacksonModule`, extending
-different Jackson majors — only one may be on the classpath. No Essentials starter registers it on the
-web mapper; the starters configure the persistence mapper.
+**web** mapper, from `types-jackson3` (`dk.trustworks.essentials.jackson.types.EssentialTypesJacksonModule`,
+Jackson 3). Expose it as a `@Bean` and Spring Boot registers it on its auto-configured web `JsonMapper`.
+The Essentials Postgres/Mongo starters already define that bean (`@ConditionalOnMissingBean`); without a
+starter, declare it yourself:
+
+```java
+@Bean
+public EssentialTypesJacksonModule essentialTypesJacksonModule() {
+    return new EssentialTypesJacksonModule();
+}
+```
+
+The Jackson 2 artifact `types-jackson` was removed in 0.60; upgrading apps swap the artifact id (same FQCN).
 
 ### Kotlin semantic types
 
@@ -221,7 +228,7 @@ public class TransactionTime extends ZonedDateTimeType<TransactionTime> {
     }
 }
 ```
-Required for JSON request/response bodies when using `types-jackson`.
+Required for JSON request/response bodies when using `types-jackson3`.
 
 ---
 
@@ -248,9 +255,7 @@ Required for JSON request/response bodies when using `types-jackson`.
 
 ⚠️ **Nothing is registered until a configurer is imported** - there is no `AutoConfiguration.imports` in this module. Declaring the dependency alone does nothing, which is a common source of "why is my typed `@PathVariable` a 500".
 
-⚠️ **`WebMvcConfig` / `WebFluxConfig` are test-scope** - not shipped, not on a consumer's classpath, not templates. Use `EssentialsWebMvcConfigurer` / `EssentialsWebFluxConfigurer`. Never recommend copying `WebFluxConfig`: its Jackson 2 codec override is correct only for this module's own `-Pjackson2` runs.
-
-⚠️ **Scope limitation** - Converters handle ONLY `@PathVariable` and `@RequestParam`, NOT `@RequestBody`/`@ResponseBody` (use `types-jackson3`/`types-jackson` on the web mapper)
+⚠️ **Scope limitation** - Converters handle ONLY `@PathVariable` and `@RequestParam`, NOT `@RequestBody`/`@ResponseBody` (use `types-jackson3` on the web mapper)
 
 ⚠️ **Java hierarchy only, for `SingleValueTypeConverter`** - its four `ConvertiblePair`s are `String`→`CharSequenceType`, `Number`→`NumberType`, `String`→`NumberType`, `String`→`JSR310SingleValueType`. Kotlin types are `KotlinValueTypeConverter`'s job.
 

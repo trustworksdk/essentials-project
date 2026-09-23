@@ -105,22 +105,19 @@ public class OrderService {
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.persistence.table_per_aggregate_type.*;
-import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.serializer.json.JacksonJSONEventSerializer;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.serializer.json.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.transaction.EventStoreManagedUnitOfWorkFactory;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.gap.PostgresqlEventStreamGapHandler;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.observability.EventStoreSubscriptionObserver;
 
-// 1. JDBI + Jackson
+// 1. JDBI
 var jdbi = Jdbi.create(url, user, pass);
 jdbi.installPlugin(new PostgresPlugin());
 
-ObjectMapper mapper = JsonMapper.builder()
-    .addModule(new EssentialTypesJacksonModule())
-    .addModule(new EssentialsImmutableJacksonModule())
-    .build();
-
 // 2. EventStore components
-var jsonSerializer = new JacksonJSONEventSerializer(mapper);
+// Canonical Jackson 3 event serializer (EssentialsObjectMappers configuration: the frozen persisted wire format).
+// Need extra modules? new Jackson3JSONEventSerializer(EssentialsObjectMappers.createJackson3ObjectMapper(myModule))
+var jsonSerializer = EssentialsJSONEventSerializers.create();
 var unitOfWorkFactory = new EventStoreManagedUnitOfWorkFactory(jdbi);
 
 var persistenceStrategy = new SeparateTablePerAggregateTypePersistenceStrategy(

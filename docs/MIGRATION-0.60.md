@@ -8,6 +8,80 @@ For the 0.50 deprecations whose removal this release carries out, see
 
 ---
 
+## Platform: Java 25, Spring Boot 4.1, Kotlin 2.3
+
+- **Java 25 is the minimum.** Artifacts are compiled with `--release 25` (class-file major version 69); a Java 21
+  runtime rejects them with `UnsupportedClassVersionError`.
+- **Spring Boot 4.1.x is required.** The starters are built and tested against Spring Boot 4.1.1; 4.0.x is no longer
+  supported. Spring Boot 4.1 itself removed the APIs it deprecated in 4.0 — see its release notes.
+- **Kotlin consumers need Kotlin 2.3 or later.** The Kotlin artifacts are compiled with Kotlin 2.4 at language and API
+  level 2.3, which matches the Kotlin Spring Boot 4.1 manages. Independently of that, a Kotlin compiler older than 2.3
+  cannot target JVM 25, and no compiler inlines JVM 25 bytecode (the Essentials `inline` / `reified` functions) into
+  code compiled for a lower target, so the application's own `jvmTarget` has to be 25 as well.
+
+---
+
+## Jackson 3 only
+
+0.60 drops Jackson 2 support. Jackson 3 (`tools.jackson`) is the only supported major, matching Spring Boot 4.
+The persisted JSON format does **not** change: Jackson 3 writes byte-identical JSON to what the 0.50 Jackson 2
+mapper wrote, so existing events, queue payloads and documents stay readable without migration.
+
+### Swap the Jackson modules
+
+The Jackson 2 modules `types-jackson` and `immutable-jackson` are deleted. Depend on `types-jackson3` and
+`immutable-jackson3` instead. The class names are unchanged (e.g.
+`dk.trustworks.essentials.jackson.types.EssentialTypesJacksonModule`), so only the artifact ids move.
+
+Remove any leftover 0.50 `types-jackson` / `immutable-jackson` jar: the classes share fully qualified names with
+the Jackson 3 modules, and `EssentialsJacksonModules.modules()` throws `IllegalStateException` when it finds the
+Jackson 2 variant on the classpath.
+
+The Maven profiles `-Pjackson2` / `-Pjackson3` and the properties `essentials.jackson.flavor`,
+`essentials.types-jackson.artifactId` and `essentials.immutable-jackson.artifactId` are gone. A Jackson 3-only
+application no longer needs an explicit `com.fasterxml.jackson.core:jackson-databind` dependency to load the
+PostgreSQL or MongoDB starters — drop that workaround if you added it.
+
+### Removed and renamed API
+
+| 0.50 | 0.60 |
+|---|---|
+| `JacksonJSONSerializer` | `Jackson3JSONSerializer`, or `EssentialsObjectMappers.createJSONSerializer()` |
+| `JacksonJSONEventSerializer` | `Jackson3JSONEventSerializer`, or `EssentialsJSONEventSerializers.create()` |
+| `EssentialsJSONEventSerializers.createForActiveJacksonFlavor()` | `EssentialsJSONEventSerializers.create()` |
+| `EssentialsObjectMappers.createJackson2ObjectMapper()` | `EssentialsObjectMappers.createJackson3ObjectMapper(...)` |
+| `EssentialsJacksonModules.jackson3Modules()` | `EssentialsJacksonModules.modules()` |
+| `EssentialsJacksonModules.jackson2Modules()`, `isJackson3Flavor()` | removed |
+| `Jackson3WalMessageFilter`, `WalMessageFilters` | `DefaultWalMessageFilter` (now the Jackson 3 CDC pre-filter) |
+
+`DurableQueuesSerialization.createDefaultObjectMapper()` and `MongoDurableQueues.createDefaultObjectMapper()` now
+return `tools.jackson.databind.ObjectMapper`.
+
+Custom `NotificationDuplicationFilter` implementations: `extractDuplicationKey(...)` now takes
+`tools.jackson.databind.JsonNode`, and `NotificationFilterChain` takes the Jackson 3 `ObjectMapper`. Change the
+import and replace `asText()` with `asString()`.
+
+### Your own types under Jackson 3
+
+- Annotations from `com.fasterxml.jackson.annotation` (`@JsonProperty`, `@JsonCreator`, …) keep working — Jackson
+  3 shares that package. Annotations from Jackson 2's `com.fasterxml.jackson.databind.annotation` package (e.g.
+  `@JsonDeserialize(keyUsing=…)`) are **silently ignored** by Jackson 3. Map keys typed with Essentials value
+  types need no annotation any more.
+- A constructor parameter *name* is part of the JSON contract under Jackson 3: a parameter whose name does not
+  match the JSON property it receives gets `null`. Rename the parameter or annotate it with `@JsonProperty`.
+- Replace `com.fasterxml.jackson.databind` imports in your own code with `tools.jackson.databind`.
+
+### Spring Boot starters
+
+The starters' `jsonSerializer` bean methods take no parameters any more, and they deliberately do **not** add
+`JacksonModule` beans from the application context to the persistence mapper — those are usually web-layer
+modules, and picking them up would silently change the persisted format. If you need extra modules on the
+persistence mapper, define your own `JSONSerializer` / `JSONEventSerializer` bean; the starter backs off. The
+starters still define `EssentialTypesJacksonModule` / `EssentialsImmutableJacksonModule` beans so Spring Boot
+registers them on its web `JsonMapper`.
+
+---
+
 ## Durable queues
 
 ### `useOrderedUnorderedQuery` is removed
@@ -179,8 +253,8 @@ PERMANENT_ERROR (built-in permanent list matched IllegalArgumentException at cau
 ```
 
 Jackson's `MismatchedInputException` is now matched by class name rather than `instanceof`, so it is
-recognised under both Jackson 2 and Jackson 3. Under Jackson 3 it previously matched nothing, because the
-class moved to `tools.jackson.databind.exc`.
+recognised under Jackson 3, where it previously matched nothing because the class moved to
+`tools.jackson.databind.exc`.
 
 
 ### Queue statistics are replaced, not restored

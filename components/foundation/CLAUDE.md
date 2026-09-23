@@ -18,7 +18,7 @@ Cross-cutting infrastructure abstractions: transactions, distributed locking, du
 | `ttl` | `TTLManager` SPI, `TTLJob`, `TTLJobDefinition`, `TTLJobBeanPostProcessor` |
 | `scheduler` | `EssentialsScheduler` SPI, `DefaultEssentialsScheduler`; `pgcron` and `executor` sub-packages |
 | `lifecycle` | `DefaultLifecycleManager` (Spring `SmartLifecycle` adapter) |
-| `json` | `JSONSerializer` SPI, `JacksonJSONSerializer` (Jackson 2), `Jackson3JSONSerializer` (Jackson 3), `EssentialsObjectMappers`, `EssentialsJacksonModules` |
+| `json` | `JSONSerializer` SPI, `Jackson3JSONSerializer`, `EssentialsObjectMappers`, `EssentialsJacksonModules` |
 | `reactive.command` | `DurableLocalCommandBus` (reactive command bus backed by `DurableQueues`) |
 | `interceptor.micrometer` | Micrometer timing interceptors for queue + command bus |
 | `events` | `InfrastructureLocalEventBus` (internal event bus for infrastructure events) |
@@ -52,10 +52,10 @@ Cross-cutting infrastructure abstractions: transactions, distributed locking, du
 | `TTLManager` | SPI for registering TTL delete jobs; backed by `EssentialsScheduler` |
 | `EssentialsScheduler` | Thin scheduler abstraction over `pg_cron` or `ScheduledExecutorService` |
 | `DefaultLifecycleManager` | Spring `SmartLifecycle` — discovers and starts/stops all `Lifecycle` beans |
-| `JSONSerializer` | Serialization SPI; `JacksonJSONSerializer` (Jackson 2) and `Jackson3JSONSerializer` (Jackson 3) |
-| `EssentialsObjectMappers` | **The** canonical persisted-JSON mapper config, for both Jackson majors. Every mapper used for persistence must come from here |
-| `EssentialsJacksonModules` | Reflectively resolves the Essentials Jackson modules for the active flavor; throws on a flavor mismatch |
-| `Jackson3CollectionWrapperModule` | Jackson 3 only. Pins any `Map`/`Collection` implementation that wraps one behind a final field to a delegating creator, so it keeps reading as its contents. Matched by shape, so new wrapper types are covered on arrival |
+| `JSONSerializer` | Serialization SPI; impl `Jackson3JSONSerializer` |
+| `EssentialsObjectMappers` | **The** canonical persisted-JSON mapper config (Jackson 3; byte-identical to 0.50's Jackson 2 output). Every mapper used for persistence must come from here |
+| `EssentialsJacksonModules` | `modules()` reflectively resolves `types-jackson3`/`immutable-jackson3` modules when present; throws `IllegalStateException` if a 0.50-era Jackson 2 `types-jackson`/`immutable-jackson` jar (same FQCN) is on classpath |
+| `Jackson3CollectionWrapperModule` | Pins any `Map`/`Collection` implementation that wraps one behind a final field to a delegating creator, so it keeps reading as its contents. Matched by shape, so new wrapper types are covered on arrival |
 | `PostgresqlUtil` | `checkIsValidTableOrColumnName` (SQL injection guard), extension checks, version detection |
 | `DurableLocalCommandBus` | Command bus backed by `DurableQueues`; durable delivery of commands |
 
@@ -106,7 +106,7 @@ Cross-cutting infrastructure abstractions: transactions, distributed locking, du
 - **`alwaysRetry()` is not `alwaysRetryOn(everything)`.** It maps to `NO_OPINION`, so the built-in list still applies. Only the explicit `alwaysRetryOn(...)` list yields `RETRY`. Promoting the builder default would make deserialization failures retry forever in every existing application.
 - **`MessageDeliveryErrorHandler.verdict(...)` is a `default` method**, mapping `isPermanentError`'s `true`/`false` onto `PERMANENT_ERROR`/`NO_OPINION`. Every pre-0.60 implementation keeps working unchanged, and that mapping is correct for a handler that has not considered `RETRY` — `false` from such a handler means "no opinion", not "retry".
 - **The whole cause chain is classified, outermost match first.** Before 0.60 only the thrown exception and `Exceptions.getRootCause` were tested, so classification silently depended on whether a handler attached a cause. The walk is guarded against cyclic chains (`Throwable.initCause` rejects self-causation but not longer cycles) and capped at 100 links.
-- **Jackson's `MismatchedInputException` is matched by class name, not `instanceof`.** Jackson 2 and Jackson 3 ship it under different packages and only one is on a given runtime's classpath — an `instanceof` against either matches nothing under the other major, and fails to link at all on a runtime carrying only the other one. The check walks the candidate's own superclass chain, which loads nothing new.
+- **Jackson's `MismatchedInputException` is matched by class name, not `instanceof`.** Jackson databind is optional here, so an `instanceof` would fail to link on a runtime without it. The check walks the candidate's own superclass chain, which loads nothing new.
 - `PostgresqlUtil.checkIsValidTableOrColumnName` is first-line defense only — callers must never pass user-supplied table names directly
 - `UnitOfWorkLifecycleCallback.beforeCommit` returns `BeforeCommitProcessingStatus`; returning `REQUIRED` triggers re-call — if impl always returns `REQUIRED`, infinite loop
 - `MultiTableChangeListener` uses a single dedicated JDBC connection (not the pool); losing it → listener stops silently unless `Lifecycle` restart is wired
@@ -116,6 +116,6 @@ Cross-cutting infrastructure abstractions: transactions, distributed locking, du
 - **Jackson 3 changed temporal defaults** — `WRITE_DURATIONS_AS_TIMESTAMPS` (J2 numeric `30.000000000` vs J3 `"PT30S"`) and `WRITE_DATES_AS_TIMESTAMPS` moved to `DateTimeFeature`. `EssentialsObjectMappers` pins both back to Jackson 2 behaviour so existing data stays readable, and enables `USE_BIG_DECIMAL_FOR_FLOATS` so untyped binding (used by the CDC WAL path) round-trips numbers exactly
 - **Jackson 3 stopped populating final fields** — `ALLOW_FINAL_FIELDS_AS_MUTATORS` is on by default in J2, off in J3, and it is how the Objenesis immutable module fills immutable payloads. `createJackson3ObjectMapper` re-enables it. Symptom without it: a payload whose only property is a final field (J3 reads a lone single-arg constructor as a *delegating* creator, so nothing binds) deserializes to **null with no error**. Multi-arg constructors escape it only because this build passes `-parameters` — a consumer's build need not. Pinned by `ImmutablePayloadSerializationTest` in `postgresql-queue`
 - **A type whose JSON form is its contents must be pinned to a delegating creator** — the flag above makes its final field a mutator, so Jackson stops seeing a map/scalar wrapper and starts seeing a bean, then calls the constructor with `null`. `Jackson3CollectionWrapperModule` covers `Map`/`Collection` implementations (`MessageMetaData`, `EventMetaData`) by shape; value types are pinned in `types-jackson3`. The break is read-only and asymmetric — serialization keeps writing the old shape — so it surfaces far from its cause: 87 `postgresql-queue` ITs on the first, an event-fetch failure on the second
-- **Never annotate an Essentials type with a serialization framework annotation** — no `@JsonCreator`/`@JsonProperty` on core types. One type has to work across both Jackson majors and the non-Jackson serializers, so framework knowledge lives in the mapper layer (`MapWrapperMixIns`) or the flavor's types-jackson module
-- **`types-jackson`/`types-jackson3` share FQCNs** — only one flavor is ever on the classpath, selected by `essentials.types-jackson.artifactId`. Never name those module classes from code that must compile under both; go through `EssentialsJacksonModules`
-- An enforcer rule bans `foundation` from depending on the Jackson flavor modules (even test-scope) — that's why resolution is reflective, and why flavor wire-format tests live in `postgresql-event-store`
+- **Never annotate an Essentials type with a serialization framework annotation** — no `@JsonCreator`/`@JsonProperty` on core types. One type has to work with Jackson and the non-Jackson serializers, so framework knowledge lives in the mapper layer (`EssentialsObjectMappers`, `Jackson3CollectionWrapperModule`) or `types-jackson3`
+- **`types-jackson3`/`immutable-jackson3` reuse 0.50's Jackson 2 FQCNs** — a stale 0.50 jar on classpath looks identical by name; `EssentialsJacksonModules` checks the module's Jackson major and fails loudly. Go through it, never name the module classes from foundation
+- `enforce-module-dependency-direction` bans `foundation` from depending on `types-jackson3`/`immutable-jackson3` (even test-scope) — that's why resolution is reflective, and why wire-format tests live in `postgresql-event-store`

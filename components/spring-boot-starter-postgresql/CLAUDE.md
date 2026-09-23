@@ -18,7 +18,7 @@ Single package: `dk.trustworks.essentials.components.boot.autoconfigure.postgres
 
 **Beans wired by `EssentialsComponentsConfiguration` (in dependency order):**
 1. `EssentialTypesJacksonModule` / `EssentialsImmutableJacksonModule` — Jackson modules
-2. `JSONSerializer` (`JacksonJSONSerializer`) — field-visibility ObjectMapper, no getters/setters
+2. `JSONSerializer` (`Jackson3JSONSerializer` via `EssentialsObjectMappers.createJSONSerializer()`) — field-visibility mapper, no getters/setters; does not collect context `JacksonModule` beans
 3. `Jdbi` — wraps datasource in `TransactionAwareDataSourceProxy` + installs `PostgresPlugin`; optionally attaches `RecordSqlExecutionTimeLogger`
 4. `HandleAwareUnitOfWorkFactory` (`SpringTransactionAwareJdbiUnitOfWorkFactory`) — skipped if EventStore variant on classpath
 5. `FencedLockManager` (`PostgresqlFencedLockManager`) — distributed lock coordination
@@ -52,7 +52,7 @@ Single package: `dk.trustworks.essentials.components.boot.autoconfigure.postgres
 | Any bean in `EssentialsComponentsConfiguration` | Declare own `@Bean` of same type → auto-config backs off via `@ConditionalOnMissingBean` |
 | `CommandBusInterceptor` | Collected as `List<CommandBusInterceptor>` → injected into command bus |
 | `DurableQueuesInterceptor` | Collected as `List<DurableQueuesInterceptor>` → added to queue |
-| `Jackson Module` | Any `Module` bean collected → added to shared `ObjectMapper` |
+| Extra persistence Jackson modules | Own `JSONSerializer` bean (starter backs off). `JacksonModule` beans NOT collected into persistence mapper — they reach Boot's web `JsonMapper` only |
 | `EssentialsSecurityProvider` | Replace `NoAccessSecurityProvider` default to enable API access |
 
 ## Gotchas

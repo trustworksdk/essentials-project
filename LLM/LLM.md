@@ -47,13 +47,13 @@
 
 | Module | Framework | Purpose | Docs |
 |--------|-----------|---------|------|
-| **types-jackson** | Jackson | JSON serialization | [LLM-types-jackson.md](LLM-types-jackson.md) |
+| **types-jackson3** | Jackson 3 | JSON serialization | [LLM-types-jackson.md](LLM-types-jackson.md) |
 | **types-jdbi** | JDBI v3 | SQL argument/column mapping | [LLM-types-jdbi.md](LLM-types-jdbi.md) |
 | **types-avro** | Avro | Binary serialization, schema evolution | [LLM-types-avro.md](LLM-types-avro.md) |
 | **types-spring-web** | Spring WebMVC/WebFlux | `@PathVariable`/`@RequestParam` conversion | [LLM-types-spring-web.md](LLM-types-spring-web.md) |
 | **types-springdata-mongo** | Spring Data MongoDB | MongoDB persistence | [LLM-types-springdata-mongo.md](LLM-types-springdata-mongo.md) |
 | **types-springdata-jpa** | Spring Data JPA | JPA persistence (experimental) | [LLM-types-springdata-jpa.md](LLM-types-springdata-jpa.md) |
-| **immutable-jackson** | Jackson | Immutable object deserialization | [LLM-immutable-jackson.md](LLM-immutable-jackson.md) |
+| **immutable-jackson3** | Jackson 3 | Immutable object deserialization | [LLM-immutable-jackson.md](LLM-immutable-jackson.md) |
 
 ### Components (Advanced Features)
 
