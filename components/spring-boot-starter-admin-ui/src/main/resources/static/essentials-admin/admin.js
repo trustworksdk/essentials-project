@@ -277,7 +277,8 @@ views.queues = async () => {
     <div class="kpi-row">
       ${tile('Queued', queuedCount ? num(queuedCount.total) : nil(), 'cluster-wide')}
       ${tile('Dead letters', deadCount ? num(deadCount.total) : nil(), 'cluster-wide', deadCount ? deadCount.total > 0 : false)}
-      ${tile('In flight', stats ? num(stats.depth.messagesBeingDelivered) : nil(), 'cluster-wide')}
+      ${tile('In flight', stats ? (stats.depth.messagesBeingDelivered == null ? 'unknown' : num(stats.depth.messagesBeingDelivered)) : nil(),
+             stats && stats.depth.messagesBeingDelivered == null ? 'not counted by this queue implementation' : 'cluster-wide')}
       ${tile('Oldest ready', stats ? millis(stats.depth.oldestReadyMessageAgeMillis) : nil(),
              'cluster-wide', !!(stats && stats.depth.oldestReadyMessageAgeMillis && stats.depth.messagesBeingDelivered === 0))}
     </div>
