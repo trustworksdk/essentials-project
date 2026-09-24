@@ -16,7 +16,8 @@
 
 package dk.trustworks.essentials.components.eventsourced.aggregates.snapshot;
 
-import dk.trustworks.essentials.components.foundation.postgresql.PostgresqlUtil;
+import dk.trustworks.essentials.components.foundation.postgresql.*;
+import dk.trustworks.essentials.components.foundation.schema.*;
 import dk.trustworks.essentials.components.foundation.transaction.jdbi.*;
 import io.micrometer.core.instrument.MeterRegistry;
 import org.jdbi.v3.core.mapper.RowMapper;
@@ -35,9 +36,13 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
  * aggregate snapshot jobs using a PostgreSQL database as the storage backend.
  * It also supports optional integration with a metrics system for monitoring purposes.
  */
-public class PostgresqlAggregateSnapshotJobRepository implements AggregateSnapshotJobRepository {
+public class PostgresqlAggregateSnapshotJobRepository implements AggregateSnapshotJobRepository, EssentialsSchemaContributor {
     private static final Logger log = LoggerFactory.getLogger(PostgresqlAggregateSnapshotJobRepository.class);
     public static final String DEFAULT_TABLE_NAME = "aggregate_snapshot_jobs";
+    /**
+     * The {@link #moduleId()} the snapshot job table is recorded under
+     */
+    public static final String MODULE_ID          = "eventsourced-aggregates-snapshot-jobs";
 
     private final HandleAwareUnitOfWorkFactory<? extends HandleAwareUnitOfWork> unitOfWorkFactory;
     private final String                                                        tableName;
@@ -66,53 +71,79 @@ public class PostgresqlAggregateSnapshotJobRepository implements AggregateSnapsh
     PostgresqlAggregateSnapshotJobRepository(HandleAwareUnitOfWorkFactory<? extends HandleAwareUnitOfWork> unitOfWorkFactory,
                                                     Optional<String> tableName,
                                                     Optional<MeterRegistry> meterRegistryOptional) {
+        this(unitOfWorkFactory, tableName, meterRegistryOptional, SchemaOwnership.COMPONENT);
+    }
+
+    /**
+     * @param schemaOwnership {@link SchemaOwnership#COMPONENT} creates the job table and its indexes now;
+     *                        {@link SchemaOwnership#HARNESS} leaves them to an {@link EssentialsSchemaHarness}
+     */
+    @SuppressWarnings("OptionalUsedAsFieldOrParameterType")
+    PostgresqlAggregateSnapshotJobRepository(HandleAwareUnitOfWorkFactory<? extends HandleAwareUnitOfWork> unitOfWorkFactory,
+                                             Optional<String> tableName,
+                                             Optional<MeterRegistry> meterRegistryOptional,
+                                             SchemaOwnership schemaOwnership) {
         this.unitOfWorkFactory = requireNonNull(unitOfWorkFactory, "No unitOfWorkFactory provided");
         this.tableName = requireNonNull(tableName, "No tableName provided").orElse(DEFAULT_TABLE_NAME).toLowerCase();
         this.measurementSupport = new AggregateSnapshotDurableQueueMeasurementSupport(meterRegistryOptional);
         this.pendingIndexName = this.tableName + "_pending_idx";
         this.processingIndexName = this.tableName + "_processing_idx";
-        initializeStorage();
-        registerQueueDepthGauges();
-    }
-
-    private void initializeStorage() {
-        PostgresqlUtil.checkIsValidTableOrColumnName(tableName);
+        PostgresqlUtil.checkIsValidTableOrColumnName(this.tableName);
         // Derived, so they can exceed PostgresqlUtil.MAX_IDENTIFIER_LENGTH even when the table name does not. Postgres
         // would silently truncate them to 63 characters, and two long table names could then derive the same index name.
         PostgresqlUtil.checkIsValidTableOrColumnName(pendingIndexName);
         PostgresqlUtil.checkIsValidTableOrColumnName(processingIndexName);
-        // One transaction, holding the framework's bootstrap lock: CREATE ... IF NOT EXISTS is not atomic against
-        // concurrent sessions, so two JVMs starting together can both see "doesn't exist" and one fails on a duplicate
-        // catalog entry. See PostgresqlUtil#acquireBootstrapLock.
-        unitOfWorkFactory.usingUnitOfWork(uow -> {
-            PostgresqlUtil.acquireBootstrapLock(uow.handle());
-            uow.handle().execute("CREATE TABLE IF NOT EXISTS " + tableName + " (\n" +
-                                                                             "job_id UUID PRIMARY KEY,\n" +
-                                                                             "aggregate_type TEXT NOT NULL,\n" +
-                                                                             "aggregate_id TEXT NOT NULL,\n" +
-                                                                             "aggregate_impl_type TEXT NOT NULL,\n" +
-                                                                             "last_included_event_order BIGINT NOT NULL,\n" +
-                                                                             "snapshot JSONB NOT NULL,\n" +
-                                                                             "delete_all_existing_snapshots BOOLEAN NOT NULL,\n" +
-                                                                             "snapshot_event_orders_to_delete BIGINT[],\n" +
-                                                                             "created_ts TIMESTAMP WITH TIME ZONE NOT NULL,\n" +
-                                                                             "next_attempt_ts TIMESTAMP WITH TIME ZONE NOT NULL,\n" +
-                                                                             "processing_started_ts TIMESTAMP WITH TIME ZONE,\n" +
-                                                                             "attempts INT NOT NULL,\n" +
-                                                                             "status TEXT NOT NULL,\n" +
-                                                                             "last_error TEXT,\n" +
-                                                                             "UNIQUE (aggregate_type, aggregate_impl_type, aggregate_id, last_included_event_order)\n" +
-                                                                             ")");
-            // Hot-path index for the PENDING/FAILED branch of `lockNextBatch`. The third column
-            // (`created_ts`) covers the ORDER BY so Postgres can yield rows in queue order
-            // without an external sort step.
-            uow.handle().execute("CREATE INDEX IF NOT EXISTS " + pendingIndexName + " ON " + tableName + " (status, next_attempt_ts, created_ts)");
-            // Recovery-path partial index for the PROCESSING reclaim branch. Small in steady
-            // state (PROCESSING rows are short-lived) and supports `processing_started_ts <= ...`
-            // ordered by `created_ts`.
-            uow.handle().execute("CREATE INDEX IF NOT EXISTS " + processingIndexName + " ON " + tableName + " (processing_started_ts, created_ts) WHERE status = 'PROCESSING'");
-        });
-        log.info("Ensured that aggregate snapshot job table '{}' exists", tableName);
+        if (requireNonNull(schemaOwnership, "No schemaOwnership provided") == SchemaOwnership.COMPONENT) {
+            PostgresqlCreateSchemaApplier.applyOwnSchema(unitOfWorkFactory, this);
+            log.info("Ensured that aggregate snapshot job table '{}' exists", this.tableName);
+        }
+        registerQueueDepthGauges();
+    }
+
+    @Override
+    public String moduleId() {
+        return MODULE_ID;
+    }
+
+    @Override
+    public int order() {
+        return SchemaOrder.ORDER_AGGREGATES;
+    }
+
+    /**
+     * The job table and its two indexes.
+     */
+    @Override
+    public List<SchemaChange> contribute(SchemaContext context) {
+        return List.of(SchemaChange.repeatable("snapshot-job-table",
+                                               tableName,
+                                               "CREATE TABLE IF NOT EXISTS " + tableName + " (\n" +
+                                                       "job_id UUID PRIMARY KEY,\n" +
+                                                       "aggregate_type TEXT NOT NULL,\n" +
+                                                       "aggregate_id TEXT NOT NULL,\n" +
+                                                       "aggregate_impl_type TEXT NOT NULL,\n" +
+                                                       "last_included_event_order BIGINT NOT NULL,\n" +
+                                                       "snapshot JSONB NOT NULL,\n" +
+                                                       "delete_all_existing_snapshots BOOLEAN NOT NULL,\n" +
+                                                       "snapshot_event_orders_to_delete BIGINT[],\n" +
+                                                       "created_ts TIMESTAMP WITH TIME ZONE NOT NULL,\n" +
+                                                       "next_attempt_ts TIMESTAMP WITH TIME ZONE NOT NULL,\n" +
+                                                       "processing_started_ts TIMESTAMP WITH TIME ZONE,\n" +
+                                                       "attempts INT NOT NULL,\n" +
+                                                       "status TEXT NOT NULL,\n" +
+                                                       "last_error TEXT,\n" +
+                                                       "UNIQUE (aggregate_type, aggregate_impl_type, aggregate_id, last_included_event_order)\n" +
+                                                       ")"),
+                       SchemaChange.repeatable("snapshot-job-indexes",
+                                               tableName,
+                                               // Hot-path index for the PENDING/FAILED branch of `lockNextBatch`. The third column
+                                               // (`created_ts`) covers the ORDER BY so Postgres can yield rows in queue order
+                                               // without an external sort step.
+                                               "CREATE INDEX IF NOT EXISTS " + pendingIndexName + " ON " + tableName + " (status, next_attempt_ts, created_ts)",
+                                               // Recovery-path partial index for the PROCESSING reclaim branch. Small in steady
+                                               // state (PROCESSING rows are short-lived) and supports `processing_started_ts <= ...`
+                                               // ordered by `created_ts`.
+                                               "CREATE INDEX IF NOT EXISTS " + processingIndexName + " ON " + tableName + " (processing_started_ts, created_ts) WHERE status = 'PROCESSING'"));
     }
 
     @Override
@@ -284,6 +315,7 @@ public class PostgresqlAggregateSnapshotJobRepository implements AggregateSnapsh
         private HandleAwareUnitOfWorkFactory<? extends HandleAwareUnitOfWork> unitOfWorkFactory;
         private String tableName;
         private MeterRegistry meterRegistryOptional;
+        private SchemaOwnership schemaOwnership = SchemaOwnership.COMPONENT;
 
         /**
          * @param unitOfWorkFactory required
@@ -337,12 +369,24 @@ public class PostgresqlAggregateSnapshotJobRepository implements AggregateSnapsh
         }
 
         /**
+         * @param schemaOwnership {@link SchemaOwnership#COMPONENT} (the default) creates the job table and its indexes
+         *                        when the repository is built; {@link SchemaOwnership#HARNESS} leaves them to the
+         *                        {@link EssentialsSchemaHarness} the repository is registered with
+         * @return this builder
+         */
+        public Builder setSchemaOwnership(SchemaOwnership schemaOwnership) {
+            this.schemaOwnership = requireNonNull(schemaOwnership, "No schemaOwnership provided");
+            return this;
+        }
+
+        /**
          * @return the new {@link PostgresqlAggregateSnapshotJobRepository}
          */
         public PostgresqlAggregateSnapshotJobRepository build() {
             return new PostgresqlAggregateSnapshotJobRepository(unitOfWorkFactory,
                                                                 Optional.ofNullable(tableName),
-                                                                Optional.ofNullable(meterRegistryOptional));
+                                                                Optional.ofNullable(meterRegistryOptional),
+                                                                schemaOwnership);
         }
     }
 

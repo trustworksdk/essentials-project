@@ -17,7 +17,8 @@
 package dk.trustworks.essentials.components.eventsourced.aggregates.archive;
 
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.AggregateType;
-import dk.trustworks.essentials.components.foundation.postgresql.PostgresqlUtil;
+import dk.trustworks.essentials.components.foundation.postgresql.*;
+import dk.trustworks.essentials.components.foundation.schema.*;
 import dk.trustworks.essentials.components.foundation.transaction.jdbi.HandleAwareUnitOfWork;
 import dk.trustworks.essentials.components.foundation.transaction.jdbi.HandleAwareUnitOfWorkFactory;
 import org.slf4j.Logger;
@@ -39,9 +40,13 @@ import static dk.trustworks.essentials.shared.MessageFormatter.bind;
  * aggregate generations in an event-sourcing system. It handles operations such as saving archive
  * entries, claiming the archival process for specific generations, and retrieving archival metadata.
  */
-public class PostgresqlAggregateArchiveRegistry implements AggregateArchiveRegistry {
+public class PostgresqlAggregateArchiveRegistry implements AggregateArchiveRegistry, EssentialsSchemaContributor {
     private static final Logger log = LoggerFactory.getLogger(PostgresqlAggregateArchiveRegistry.class);
     public static final String DEFAULT_TABLE_NAME = "aggregate_archives";
+    /**
+     * The {@link #moduleId()} the archive table is recorded under
+     */
+    public static final String MODULE_ID          = "eventsourced-aggregates-archives";
 
     private final HandleAwareUnitOfWorkFactory<? extends HandleAwareUnitOfWork> unitOfWorkFactory;
     private final String tableName;
@@ -53,48 +58,72 @@ public class PostgresqlAggregateArchiveRegistry implements AggregateArchiveRegis
 
     PostgresqlAggregateArchiveRegistry(HandleAwareUnitOfWorkFactory<? extends HandleAwareUnitOfWork> unitOfWorkFactory,
                                        Optional<String> tableName) {
+        this(unitOfWorkFactory, tableName, SchemaOwnership.COMPONENT);
+    }
+
+    /**
+     * @param schemaOwnership {@link SchemaOwnership#COMPONENT} creates the archive table and its index now;
+     *                        {@link SchemaOwnership#HARNESS} leaves them to an {@link EssentialsSchemaHarness}
+     */
+    @SuppressWarnings("OptionalUsedAsFieldOrParameterType")
+    PostgresqlAggregateArchiveRegistry(HandleAwareUnitOfWorkFactory<? extends HandleAwareUnitOfWork> unitOfWorkFactory,
+                                       Optional<String> tableName,
+                                       SchemaOwnership schemaOwnership) {
         this.unitOfWorkFactory = requireNonNull(unitOfWorkFactory, "No unitOfWorkFactory provided");
         this.tableName = requireNonNull(tableName, "No tableName provided").orElse(DEFAULT_TABLE_NAME).toLowerCase();
         this.archivedTsIndexName = this.tableName + "_aggregate_type_archived_ts_idx";
-        initializeStorage();
-    }
-
-    private void initializeStorage() {
-        PostgresqlUtil.checkIsValidTableOrColumnName(tableName);
+        PostgresqlUtil.checkIsValidTableOrColumnName(this.tableName);
         // Derived, so it can exceed PostgresqlUtil.MAX_IDENTIFIER_LENGTH even when the table name does not. Postgres
         // would silently truncate it to 63 characters, and two long table names could then derive the same index name.
         PostgresqlUtil.checkIsValidTableOrColumnName(archivedTsIndexName);
-        // One transaction, holding the framework's bootstrap lock: CREATE ... IF NOT EXISTS is not atomic against
-        // concurrent sessions, so two JVMs starting together can both see "doesn't exist" and one fails on a duplicate
-        // catalog entry. See PostgresqlUtil#acquireBootstrapLock. Keeping the table and its index in the same
-        // transaction also means a table without its index is never left behind.
-        unitOfWorkFactory.usingUnitOfWork(uow -> {
-            PostgresqlUtil.acquireBootstrapLock(uow.handle());
-            uow.handle().execute(bind("""
-                                      CREATE TABLE IF NOT EXISTS {:tableName} (
-                                          aggregate_type TEXT NOT NULL,
-                                          logical_aggregate_id TEXT NOT NULL,
-                                          generation BIGINT NOT NULL,
-                                          stream_aggregate_id TEXT NOT NULL,
-                                          archive_status TEXT NOT NULL,
-                                          archive_format TEXT,
-                                          archive_location TEXT,
-                                          event_count BIGINT,
-                                          checksum TEXT,
-                                          closed_ts TIMESTAMP WITH TIME ZONE,
-                                          archived_ts TIMESTAMP WITH TIME ZONE,
-                                          archive_error TEXT,
-                                          PRIMARY KEY (aggregate_type, logical_aggregate_id, generation)
-                                      )
-                                      """, arg("tableName", tableName)));
-            uow.handle().execute(bind("""
-                                      CREATE INDEX IF NOT EXISTS {:indexName}
-                                      ON {:tableName} (aggregate_type, archived_ts DESC)
-                                      """,
-                                      arg("indexName", archivedTsIndexName),
-                                      arg("tableName", tableName)));
-        });
-        log.info("Ensured that aggregate archive table '{}' exists", tableName);
+        if (requireNonNull(schemaOwnership, "No schemaOwnership provided") == SchemaOwnership.COMPONENT) {
+            PostgresqlCreateSchemaApplier.applyOwnSchema(unitOfWorkFactory, this);
+            log.info("Ensured that aggregate archive table '{}' exists", this.tableName);
+        }
+    }
+
+    @Override
+    public String moduleId() {
+        return MODULE_ID;
+    }
+
+    @Override
+    public int order() {
+        return SchemaOrder.ORDER_AGGREGATES;
+    }
+
+    /**
+     * The archive table and its archived-timestamp index.
+     */
+    @Override
+    public List<SchemaChange> contribute(SchemaContext context) {
+        return List.of(SchemaChange.repeatable("archive-table",
+                                               tableName,
+                                               bind("""
+                                                    CREATE TABLE IF NOT EXISTS {:tableName} (
+                                                        aggregate_type TEXT NOT NULL,
+                                                        logical_aggregate_id TEXT NOT NULL,
+                                                        generation BIGINT NOT NULL,
+                                                        stream_aggregate_id TEXT NOT NULL,
+                                                        archive_status TEXT NOT NULL,
+                                                        archive_format TEXT,
+                                                        archive_location TEXT,
+                                                        event_count BIGINT,
+                                                        checksum TEXT,
+                                                        closed_ts TIMESTAMP WITH TIME ZONE,
+                                                        archived_ts TIMESTAMP WITH TIME ZONE,
+                                                        archive_error TEXT,
+                                                        PRIMARY KEY (aggregate_type, logical_aggregate_id, generation)
+                                                    )
+                                                    """, arg("tableName", tableName))),
+                       SchemaChange.repeatable("archive-archived-ts-index",
+                                               tableName,
+                                               bind("""
+                                                    CREATE INDEX IF NOT EXISTS {:indexName}
+                                                    ON {:tableName} (aggregate_type, archived_ts DESC)
+                                                    """,
+                                                    arg("indexName", archivedTsIndexName),
+                                                    arg("tableName", tableName))));
     }
 
     @Override
@@ -284,6 +313,7 @@ public class PostgresqlAggregateArchiveRegistry implements AggregateArchiveRegis
     public static final class Builder {
         private HandleAwareUnitOfWorkFactory<? extends HandleAwareUnitOfWork> unitOfWorkFactory;
         private String tableName;
+        private SchemaOwnership schemaOwnership = SchemaOwnership.COMPONENT;
 
         /**
          * @param unitOfWorkFactory required
@@ -316,11 +346,23 @@ public class PostgresqlAggregateArchiveRegistry implements AggregateArchiveRegis
         }
 
         /**
+         * @param schemaOwnership {@link SchemaOwnership#COMPONENT} (the default) creates the archive table and its index
+         *                        when the registry is built; {@link SchemaOwnership#HARNESS} leaves them to the
+         *                        {@link EssentialsSchemaHarness} the registry is registered with
+         * @return this builder
+         */
+        public Builder setSchemaOwnership(SchemaOwnership schemaOwnership) {
+            this.schemaOwnership = requireNonNull(schemaOwnership, "No schemaOwnership provided");
+            return this;
+        }
+
+        /**
          * @return the new {@link PostgresqlAggregateArchiveRegistry}
          */
         public PostgresqlAggregateArchiveRegistry build() {
             return new PostgresqlAggregateArchiveRegistry(unitOfWorkFactory,
-                                                          Optional.ofNullable(tableName));
+                                                          Optional.ofNullable(tableName),
+                                                          schemaOwnership);
         }
     }
 
