@@ -49,7 +49,7 @@ Base package: `dk.trustworks.essentials.types.springdata.jpa.converters`
 |-----------------|----------------|---------|-----------------|
 | `CharSequenceType` | `BaseCharSequenceTypeAttributeConverter<T>` | `String` | `getConcreteCharSequenceType()` |
 | `BigDecimalType` | `BaseBigDecimalTypeAttributeConverter<T>` | `Double` → `double precision` (**lossy**, see below) | `getConcreteBigDecimalType()` |
-| `BigDecimalType` | `BaseBigDecimalTypeNumericAttributeConverter<T>` | `BigDecimal` → `numeric` (lossless, **prefer for money**) | `getConcreteBigDecimalType()` |
+| `BigDecimalType` | `BaseBigDecimalTypeNumericAttributeConverter<T>` | `BigDecimal` → `numeric` (exact, **prefer for money**) | `getConcreteBigDecimalType()` |
 | `IntegerType` | `BaseIntegerTypeAttributeConverter<T>` | `Integer` | `getConcreteIntegerType()` |
 | `LongType` | `BaseLongTypeAttributeConverter<T>` | `Long` | `getConcreteLongType()` |
 | `ShortType` | `BaseShortTypeAttributeConverter<T>` | `Short` | `getConcreteShortType()` |
@@ -74,12 +74,17 @@ All `SingleValueType` classes from package: `dk.trustworks.essentials.types`
 2. **SQL arithmetic is floating point.** `sum`, `avg` and every comparison on the column are IEEE-754 operations. Sums
    over many rows drift, and a value beyond roughly 15-17 significant digits cannot be represented at all.
 
-`BaseBigDecimalTypeNumericAttributeConverter` maps to `BigDecimal` → an exact `numeric` column and round-trips losslessly.
-Use it for money, and for any rate that is compounded rather than merely displayed.
+`BaseBigDecimalTypeNumericAttributeConverter` maps to `BigDecimal` → an exact `numeric` column. Use it for money, and
+for any rate that is compounded rather than merely displayed.
 
-It deliberately imposes no precision or scale — a framework converter cannot know the domain's scale — so declare the
-column yourself, exactly as you would for a plain `BigDecimal` property. Without an explicit `@Column`, Hibernate applies
-its own default precision and scale, which is rarely what a monetary column wants.
+Exact is not the same as unchanged: a `numeric(p,s)` column stores every value at scale `s`, **rounding** one with more
+decimals and **padding** one with fewer. With `scale = 2`, `123.456` reads back as `123.46` and `100.5` as `100.50`, which
+is not `equals` to what was written. Only a value whose scale matches the column's, or PostgreSQL's unconstrained
+`numeric` (a column declared without a scale), round-trips unchanged.
+
+The converter imposes no precision or scale — a framework converter cannot know the domain's scale — so declare the
+column yourself, as for a plain `BigDecimal` property. Without an explicit `@Column`, a Hibernate-generated schema gets
+`numeric(38,2)` and rounds to two decimals.
 
 ## API Signatures
 
@@ -260,17 +265,17 @@ Package: `dk.trustworks.essentials.types.springdata.jpa.converters`
 | Type | Converter | Column | Auto-applied |
 |------|-----------|--------|--------------|
 | `Amount` | `AmountAttributeConverter` | `double precision` (lossy) | yes |
-| `Amount` | `AmountNumericAttributeConverter` | `numeric` (lossless) | no — opt in with `@Convert` |
+| `Amount` | `AmountNumericAttributeConverter` | `numeric` (exact, at the column's scale) | no — opt in with `@Convert` |
 | `Percentage` | `PercentageAttributeConverter` | `double precision` (lossy) | yes |
-| `Percentage` | `PercentageNumericAttributeConverter` | `numeric` (lossless) | no — opt in with `@Convert` |
+| `Percentage` | `PercentageNumericAttributeConverter` | `numeric` (exact, at the column's scale) | no — opt in with `@Convert` |
 | `CurrencyCode` | `CurrencyCodeAttributeConverter` | `varchar` | yes |
 | `CountryCode` | `CountryCodeAttributeConverter` | `varchar` | yes |
 | `EmailAddress` | `EmailAddressAttributeConverter` | `varchar` | yes |
 
 All types from: `dk.trustworks.essentials.types`
 
-The `Double`-backed `Amount`/`Percentage` converters remain the auto-applied default so existing schemas keep working.
-The default changes to `numeric` at the next major — see [MIGRATION-NEXT_MAJOR.md](../docs/MIGRATION-NEXT_MAJOR.md).
+The `Double`-backed `Amount`/`Percentage` converters remain the auto-applied default so existing schemas keep working,
+and because a generated `numeric(38,2)` would round silently. See [MIGRATION-0.60.md](../docs/MIGRATION-0.60.md).
 
 ## Integration Points
 

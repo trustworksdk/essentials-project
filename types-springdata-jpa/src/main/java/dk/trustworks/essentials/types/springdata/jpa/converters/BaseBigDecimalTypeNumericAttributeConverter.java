@@ -30,8 +30,12 @@ import java.math.BigDecimal;
  * value written (<code>1999.50</code> returns as <code>1999.5</code>, and {@link BigDecimal#equals(Object)} is scale-sensitive)
  * and performs every SQL <code>sum</code>, <code>avg</code> and comparison in binary floating point.<br>
  * <br>
- * This converter is lossless in both directions: the {@link BigDecimalType}'s {@link NumberType#value()} is handed to JDBC as-is,
- * and read back unchanged.<br>
+ * The {@link BigDecimalType}'s {@link NumberType#value()} is handed to JDBC as-is, and the column's value is read back as-is. What
+ * comes back is exact, but it carries the <b>column's</b> scale: a <code>numeric(p,s)</code> column stores every value at scale
+ * <code>s</code>, rounding one with more decimals and padding one with fewer. With <code>scale = 2</code>, <code>123.456</code>
+ * reads back as <code>123.46</code> and <code>100.5</code> as <code>100.50</code> - numerically equal, but not
+ * {@link BigDecimal#equals(Object)}-equal. Only a value whose scale matches the column's, or a column declared without a scale
+ * (PostgreSQL's unconstrained <code>numeric</code>), round-trips unchanged.<br>
  * <br>
  * Example:
  * <pre>{@code
@@ -52,12 +56,12 @@ import java.math.BigDecimal;
  *     @Column(precision = 19, scale = 2)
  *     public Amount totalPrice;
  * }}</pre>
- * Without an explicit {@link jakarta.persistence.Column} Hibernate applies its own default precision and scale, which is rarely
- * what a monetary column wants.<br>
+ * Without an explicit {@link jakarta.persistence.Column} a Hibernate-generated schema gets <code>numeric(38,2)</code>, which
+ * rounds every value to two decimals - rarely what a percentage or a three-decimal currency wants.<br>
  * <br>
  * <b>Migrating an existing column</b>: a column created by {@link BaseBigDecimalTypeAttributeConverter} is a
  * <code>double precision</code> column, so switching to this converter requires a schema migration - see
- * <code>docs/MIGRATION-NEXT_MAJOR.md</code>. Note that the migration preserves whatever is in the column; it does not repair a
+ * <code>docs/MIGRATION-0.60.md</code>. Note that the migration preserves whatever is in the column; it does not repair a
  * value that floating-point accumulation has already corrupted.
  *
  * @param <T> the concrete type of {@link BigDecimalType} supported by this converter

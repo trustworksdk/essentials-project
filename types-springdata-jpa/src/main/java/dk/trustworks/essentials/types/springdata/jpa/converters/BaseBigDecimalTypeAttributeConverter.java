@@ -44,8 +44,9 @@ import java.math.BigDecimal;
  *         cannot be represented at all.</li>
  * </ul>
  * For monetary and other exact decimal values, prefer {@link BaseBigDecimalTypeNumericAttributeConverter}, which maps to an exact
- * <code>numeric</code> column and round-trips losslessly. This class is kept as the auto-applied default so that existing schemas
- * keep working; the default changes at the next major version - see <code>docs/MIGRATION-NEXT_MAJOR.md</code>.
+ * <code>numeric</code> column. This class stays the auto-applied default so that existing schemas keep working - switching
+ * the default would change the generated column type, and a generated <code>numeric(38,2)</code> rounds, which is worse than
+ * what it replaces. See <code>docs/MIGRATION-0.60.md</code>.
  *
  * @param <T> the concrete type of {@link BigDecimalType} supported by this converter
  * @see BaseBigDecimalTypeNumericAttributeConverter

@@ -17,7 +17,7 @@ Test-only model under `...jpa.model` and `...jpa.converters` (not shipped).
 | `BaseCharSequenceTypeAttributeConverter<T>` | `CharSequenceType` → `String`; delegates to `SingleValueType.from(dbData, class)` |
 | `BaseLongTypeAttributeConverter<T>` | `LongType` → `Long` |
 | `BaseBigDecimalTypeAttributeConverter<T>` | `BigDecimalType` → `Double` / `double precision` (lossy — see Gotchas) |
-| `BaseBigDecimalTypeNumericAttributeConverter<T>` | `BigDecimalType` → `BigDecimal` / `numeric` (lossless; prefer for money) |
+| `BaseBigDecimalTypeNumericAttributeConverter<T>` | `BigDecimalType` → `BigDecimal` / `numeric` (exact at column's scale; prefer for money) |
 | `BaseIntegerTypeAttributeConverter<T>` | `IntegerType` → `Integer` |
 | `BaseShortTypeAttributeConverter<T>` | `ShortType` → `Short` |
 | `BaseByteTypeAttributeConverter<T>` | `ByteType` → `Byte` |
@@ -62,7 +62,8 @@ One converter class per `SingleValueType` subclass — JPA does not support gene
 ## Gotchas
 
 - `BigDecimalType` → `Double` is lossy: drops written scale (`1999.50` → `1999.5`; `BigDecimal.equals` is scale-sensitive) and makes SQL `sum`/`avg` floating point. Money uses `AmountNumericAttributeConverter` / `PercentageNumericAttributeConverter` via `@Convert` + `@Column(precision, scale)`.
-- Numeric variants deliberately **not** `autoApply` — two auto-applied converters per type are ambiguous, and flipping the default changes the generated column type for existing deployments. Flip scheduled for next major (`docs/MIGRATION-NEXT_MAJOR.md`).
+- Numeric variants deliberately **not** `autoApply` — two auto-applied converters per type are ambiguous, and flipping the default changes the generated column type. Flip considered for 0.60 and rejected: a generated schema without `@Column(scale)` is `numeric(38,2)`, which rounds (`123.456` → `123.46`, seen in `OrderRepositoryIT`) and pads (`100.5` → `100.50`, not `equals`, seen in `ProductRepositoryIT`) — silent loss, worse than `double`. Revisit only with a way to make the unspecified case exact
+- `numeric(p,s)` returns values at scale `s` — exact but not `equals` to a value written at another scale. Only unconstrained `numeric` round-trips any scale
 - `@Id` not supported on `SingleValueType` fields directly. Must use `@EmbeddedId` + `@Embeddable`. `@Embeddable` IDs need a duplicate persistent field (e.g. `private Long orderId`) because Hibernate requires a persistent id property it can introspect — the `SingleValueType` value field is not visible to it.
 - `@Embeddable` id type cannot be reused as both `@EmbeddedId` and a regular column on the same entity.
 - No JPA id autogeneration (`@GeneratedValue`) — IDs must be generated manually (e.g. `OrderId.random()`).

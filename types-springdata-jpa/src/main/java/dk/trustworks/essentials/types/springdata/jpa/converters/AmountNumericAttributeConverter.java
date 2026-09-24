@@ -20,7 +20,7 @@ import dk.trustworks.essentials.types.Amount;
 import jakarta.persistence.Converter;
 
 /**
- * Lossless {@link Amount} converter that maps to an exact <code>numeric</code> column, as opposed to the
+ * Exact {@link Amount} converter that maps to a <code>numeric</code> column, as opposed to the
  * <code>double precision</code> column that the auto-applied {@link AmountAttributeConverter} maps to.<br>
  * <br>
  * This converter is <b>not</b> auto-applied - {@link AmountAttributeConverter} is, and two auto-applied converters for the same

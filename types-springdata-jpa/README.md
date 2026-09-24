@@ -102,7 +102,7 @@ Extend these base classes to create converters for your types:
 |-----------------|----------------|---------------|-----------------|
 | `CharSequenceType` | `BaseCharSequenceTypeAttributeConverter` | `String` | `getConcreteCharSequenceType()` |
 | `BigDecimalType` | `BaseBigDecimalTypeAttributeConverter` | `Double` → `double precision` (lossy) | `getConcreteBigDecimalType()` |
-| `BigDecimalType` | `BaseBigDecimalTypeNumericAttributeConverter` | `BigDecimal` → `numeric` (lossless) | `getConcreteBigDecimalType()` |
+| `BigDecimalType` | `BaseBigDecimalTypeNumericAttributeConverter` | `BigDecimal` → `numeric` (exact) | `getConcreteBigDecimalType()` |
 | `IntegerType` | `BaseIntegerTypeAttributeConverter` | `Integer` | `getConcreteIntegerType()` |
 | `LongType` | `BaseLongTypeAttributeConverter` | `Long` | `getConcreteLongType()` |
 | `ShortType` | `BaseShortTypeAttributeConverter` | `Short` | `getConcreteShortType()` |
@@ -218,9 +218,9 @@ Ready-to-use converters for common Essentials types:
 | Type | Converter | Column | Auto-applied |
 |------|-----------|--------|--------------|
 | `Amount` | `AmountAttributeConverter` | `double precision` (lossy) | yes |
-| `Amount` | `AmountNumericAttributeConverter` | `numeric` (lossless) | no |
+| `Amount` | `AmountNumericAttributeConverter` | `numeric` (exact) | no |
 | `Percentage` | `PercentageAttributeConverter` | `double precision` (lossy) | yes |
-| `Percentage` | `PercentageNumericAttributeConverter` | `numeric` (lossless) | no |
+| `Percentage` | `PercentageNumericAttributeConverter` | `numeric` (exact) | no |
 | `CurrencyCode` | `CurrencyCodeAttributeConverter` | `varchar` | yes |
 | `CountryCode` | `CountryCodeAttributeConverter` | `varchar` | yes |
 | `EmailAddress` | `EmailAddressAttributeConverter` | `varchar` | yes |
@@ -252,10 +252,15 @@ explicit `@Convert` takes precedence over an auto-applied converter, so the fiel
 
 The converter imposes no precision or scale of its own — a framework converter cannot know your domain's scale — so
 declare `@Column(precision = …, scale = …)` yourself, exactly as you would for a plain `BigDecimal` property. Without it,
-Hibernate applies its own default, which is rarely what a monetary column wants.
+a Hibernate-generated schema gets `numeric(38,2)`, which rounds every value to two decimals.
 
-The default flips to `numeric` at the next major version; see
-[MIGRATION-NEXT_MAJOR.md](../docs/MIGRATION-NEXT_MAJOR.md) for what that means for an existing schema.
+Exact does not mean unchanged: a `numeric(p,s)` column stores every value at scale `s`. It **rounds** a value with more
+decimals and **pads** one with fewer — with `scale = 2`, `123.456` reads back as `123.46` and `100.5` as `100.50`, which is
+not `equals` to what was written. Give the column the scale your domain writes, or use PostgreSQL's unconstrained
+`numeric` (`@Column(columnDefinition = "numeric")`) when values of different scales must round-trip unchanged.
+
+`double precision` stays the auto-applied default in 0.60, so existing schemas are untouched. Opting in changes a
+column's type; see [MIGRATION-0.60.md](../docs/MIGRATION-0.60.md) for migrating an existing column.
 
 ## Gotchas
 

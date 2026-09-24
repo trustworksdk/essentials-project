@@ -480,3 +480,68 @@ dequeueing are separate transactions, acknowledging and retrying are their own, 
     calling `queueMessage` inside your own `UnitOfWork` — the operation still joins an in-progress one.
 - `DurableQueues.getUnitOfWorkFactory()` still exists and still returns the factory when the implementation has
   one; only its "…if the mode is FullyTransactional" contract is gone.
+
+---
+
+## `types-springdata-jpa`: exact `numeric` converters for `Amount` and `Percentage` (opt-in)
+
+Nothing changes unless you opt in. It is listed here because opting in is a **database schema** change.
+
+`AmountAttributeConverter` and `PercentageAttributeConverter` map to a `double precision` column, because their shared
+base class, `BaseBigDecimalTypeAttributeConverter`, implements `AttributeConverter<T, Double>`. That is lossy twice
+over, and silently so:
+
+- **The scale of the value written is lost.** `Amount.of("1999.50")` reads back as `1999.5`. Numerically equal, but
+  `BigDecimal.equals` is scale-sensitive, so an assertion, a cache key or a `Map` lookup against the value that was
+  written fails.
+- **SQL arithmetic is floating point.** `sum`, `avg` and every comparison on the column are IEEE-754 operations. Sums
+  over many rows drift, and a value beyond roughly 15–17 significant digits cannot be represented at all.
+
+### Opting in
+
+`BaseBigDecimalTypeNumericAttributeConverter<T>` implements `AttributeConverter<T, BigDecimal>`, which Hibernate maps to
+an exact `numeric` column. Two concrete converters ship with it — `AmountNumericAttributeConverter` and
+`PercentageNumericAttributeConverter`. **Neither is `autoApply`**, so upgrading changes nothing: your columns
+keep their current type until you opt in per field.
+
+```java
+@Convert(converter = AmountNumericAttributeConverter.class)
+@Column(precision = 19, scale = 2)
+public Amount totalPrice;
+```
+
+An explicit `@Convert` takes precedence over an auto-applied converter, so this field is `numeric` even though
+`AmountAttributeConverter` is on the classpath. The converter imposes no precision or scale of its own — a framework
+converter cannot know your domain's scale — so declare `@Column` yourself; without it a Hibernate-generated schema gets
+`numeric(38,2)`, which rounds to two decimals.
+
+### What opting in does to an existing schema
+
+It changes the generated column type. An application on `hibernate.ddl-auto=validate` fails at startup until the column
+is migrated:
+
+```sql
+alter table <table> alter column <col> type numeric(19,2) using <col>::numeric(19,2);
+```
+
+**The cast is exact for values that fit, but it does not repair history.** A figure that floating-point accumulation has
+already corrupted, or precision a `double` never had room to hold, is gone — the migration preserves what is in the
+column, nothing more. If that matters for your data, reconcile against the source of truth before migrating, not after.
+
+### `numeric` returns values at the column's scale
+
+Exact is not the same as unchanged. A `numeric(p,s)` column stores every value at scale `s`: it **rounds** a value with
+more decimals and **pads** one with fewer. With `scale = 2`, `123.456` reads back as `123.46` and `100.5` as `100.50`.
+Both are exact, but neither is `equals` to what was written, because `Amount`/`Percentage` equality is scale-sensitive.
+Give the column the scale your domain writes, or use PostgreSQL's unconstrained `numeric`
+(`@Column(columnDefinition = "numeric")`) when values of different scales must round-trip unchanged.
+
+### Why `double precision` stays the default
+
+Making `numeric` the auto-applied default was considered for 0.60 and rejected. Every `Amount`/`Percentage` field
+without an explicit `@Column(scale = …)` would get a Hibernate-generated `numeric(38,2)` column, which silently rounds
+percentages and three-decimal currencies — a quieter and worse loss than the one it replaces. A later major may revisit
+this if the unspecified case can be made exact.
+
+Note that `types-springdata-jpa` is **EXPERIMENTAL** and may be discontinued; `types-jdbi` remains the recommended
+module for SQL persistence.

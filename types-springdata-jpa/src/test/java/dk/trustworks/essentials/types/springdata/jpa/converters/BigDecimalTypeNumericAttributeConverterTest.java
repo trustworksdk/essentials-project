@@ -62,7 +62,7 @@ class BigDecimalTypeNumericAttributeConverterTest {
 
     @Test
     void the_double_backed_converter_loses_scale_and_precision() {
-        // Documents the defect that the numeric converters exist to avoid - see docs/MIGRATION-NEXT_MAJOR.md
+        // Documents the defect that the numeric converters exist to avoid - see docs/MIGRATION-0.60.md
         var amount = Amount.of("1999.50");
         assertThat(doubleBackedConverter.convertToEntityAttribute(doubleBackedConverter.convertToDatabaseColumn(amount)))
                 .isNotEqualTo(amount)
