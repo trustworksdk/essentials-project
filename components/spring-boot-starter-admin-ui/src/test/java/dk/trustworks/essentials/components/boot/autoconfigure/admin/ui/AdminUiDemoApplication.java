@@ -109,9 +109,6 @@ public class AdminUiDemoApplication {
                 QueueName.of("OrderEvents"), QueueName.of("ShipmentCommands"), QueueName.of("EmailOutbox"))));
         when(api.getTotalMessagesQueuedFor(any(), any())).thenReturn(128L);
         when(api.getTotalDeadLetterMessagesQueuedFor(any(), any())).thenReturn(3L);
-        when(api.getQueuedStatistics(any(), any())).thenReturn(Optional.of(new ApiQueuedStatistics(
-                QueueName.of("OrderEvents"), OffsetDateTime.parse("2026-07-24T00:00:00Z"),
-                184203L, 34, OffsetDateTime.parse("2026-07-24T00:00:11Z"), OffsetDateTime.parse("2026-07-31T12:04:28Z"))));
         when(api.getQueuedMessages(any(), any(), any(), anyLong(), anyLong())).thenReturn(List.of(
                 queued("018f2c11-9a1e-7c3d-b0f1-2a5c9e11aa01", "{\"orderId\":\"ORD-99213\",\"total\":149.95}", 0, 0, false, null),
                 queued("018f2c11-9a1e-7c3d-b0f1-2a5c9e11aa02", "{\"orderId\":\"ORD-99214\",\"total\":32.00}", 1, 0, true, null),

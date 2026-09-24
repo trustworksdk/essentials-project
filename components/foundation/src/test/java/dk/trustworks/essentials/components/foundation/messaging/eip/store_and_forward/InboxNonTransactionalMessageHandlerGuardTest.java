@@ -30,43 +30,29 @@ import static org.mockito.Mockito.*;
 
 /**
  * A {@link UnitOfWorkMode#NONE} handler needs a window where no {@link dk.trustworks.essentials.components.foundation.transaction.UnitOfWork}
- * is active. Under {@link TransactionalMode#FullyTransactional} the {@link DurableQueues} consumer wraps fetching,
- * handling and acknowledgement in one shared UnitOfWork, so no such window exists and the {@link Inbox} must reject
- * the consumer at wiring time instead of silently running the blocking call inside a database transaction.
+ * is active. The {@link Inbox} wraps every delivery in a UnitOfWork of its own unless the consumer owns that boundary,
+ * so it must reject a consumer that cannot give the handler its window at wiring time, instead of silently running the
+ * blocking call inside a database transaction.
  */
 class InboxNonTransactionalMessageHandlerGuardTest {
 
     @Test
-    void a_consumer_with_NONE_handlers_is_rejected_under_FullyTransactional() {
-        var inboxes = inboxes(TransactionalMode.FullyTransactional);
-        var inbox   = inboxes.getOrCreateInbox(inboxConfig());
-
-        assertThatThrownBy(() -> inbox.setMessageConsumer(new BoundaryOwningConsumer(true)))
-                .isInstanceOf(IllegalStateException.class)
-                .hasMessageContaining("UnitOfWorkMode.NONE")
-                .hasMessageContaining(TransactionalMode.SingleOperationTransaction.name());
-    }
-
-    @Test
-    void a_consumer_without_NONE_handlers_is_accepted_under_FullyTransactional() {
-        var inboxes = inboxes(TransactionalMode.FullyTransactional);
-        var inbox   = inboxes.getOrCreateInbox(inboxConfig());
-
-        assertThatNoException().isThrownBy(() -> inbox.setMessageConsumer(new BoundaryOwningConsumer(false)));
-    }
-
-    @Test
-    void a_consumer_with_NONE_handlers_is_accepted_under_SingleOperationTransaction() {
-        var inboxes = inboxes(TransactionalMode.SingleOperationTransaction);
-        var inbox   = inboxes.getOrCreateInbox(inboxConfig());
+    void a_boundary_owning_consumer_with_NONE_handlers_is_accepted() {
+        var inbox = inboxes(true).getOrCreateInbox(inboxConfig());
 
         assertThatNoException().isThrownBy(() -> inbox.setMessageConsumer(new BoundaryOwningConsumer(true)));
     }
 
     @Test
+    void a_boundary_owning_consumer_without_NONE_handlers_is_accepted() {
+        var inbox = inboxes(true).getOrCreateInbox(inboxConfig());
+
+        assertThatNoException().isThrownBy(() -> inbox.setMessageConsumer(new BoundaryOwningConsumer(false)));
+    }
+
+    @Test
     void a_plain_Consumer_is_unaffected_by_the_guard() {
-        var inboxes = inboxes(TransactionalMode.FullyTransactional);
-        var inbox   = inboxes.getOrCreateInbox(inboxConfig());
+        var inbox = inboxes(true).getOrCreateInbox(inboxConfig());
 
         assertThatNoException().isThrownBy(() -> inbox.setMessageConsumer(message -> {
         }));
@@ -74,12 +60,7 @@ class InboxNonTransactionalMessageHandlerGuardTest {
 
     @Test
     void a_consumer_carrying_its_own_NONE_handlers_is_detected_without_reporting_it_by_hand() {
-        var inboxes = inboxes(TransactionalMode.FullyTransactional);
-        var inbox   = inboxes.getOrCreateInbox(inboxConfig());
-
-        assertThatThrownBy(() -> inbox.setMessageConsumer(new SelfHostingBoundaryOwningConsumer()))
-                .isInstanceOf(IllegalStateException.class)
-                .hasMessageContaining("UnitOfWorkMode.NONE");
+        assertThat(new SelfHostingBoundaryOwningConsumer().hasNonTransactionalMessageHandlers()).isTrue();
     }
 
     /**
@@ -89,8 +70,7 @@ class InboxNonTransactionalMessageHandlerGuardTest {
      */
     @Test
     void a_consumer_that_does_not_own_the_boundary_is_rejected_when_the_Inbox_would_open_a_UnitOfWork() {
-        var inboxes = inboxes(TransactionalMode.SingleOperationTransaction, true);
-        var inbox   = inboxes.getOrCreateInbox(inboxConfig());
+        var inbox = inboxes(true).getOrCreateInbox(inboxConfig());
 
         assertThatThrownBy(() -> inbox.setMessageConsumer(new PatternMatchingMessageHandler(new NonTransactionalHandlers())))
                 .isInstanceOf(IllegalStateException.class)
@@ -102,23 +82,17 @@ class InboxNonTransactionalMessageHandlerGuardTest {
     void a_consumer_that_does_not_own_the_boundary_is_accepted_when_there_is_no_UnitOfWorkFactory() {
         // Without a UnitOfWorkFactory the Inbox doesn't open a UnitOfWork around the delivery either, so the handler
         // does get the UnitOfWork-free window it asked for
-        var inboxes = inboxes(TransactionalMode.SingleOperationTransaction, false);
-        var inbox   = inboxes.getOrCreateInbox(inboxConfig());
+        var inbox = inboxes(false).getOrCreateInbox(inboxConfig());
 
         assertThatNoException().isThrownBy(() -> inbox.setMessageConsumer(new PatternMatchingMessageHandler(new NonTransactionalHandlers())));
     }
 
-    private static Inboxes inboxes(TransactionalMode transactionalMode) {
-        return inboxes(transactionalMode, false);
-    }
-
     @SuppressWarnings("unchecked")
-    private static Inboxes inboxes(TransactionalMode transactionalMode, boolean withUnitOfWorkFactory) {
+    private static Inboxes inboxes(boolean withUnitOfWorkFactory) {
         var durableQueues = mock(DurableQueues.class);
-        when(durableQueues.getTransactionalMode()).thenReturn(transactionalMode);
-        if (withUnitOfWorkFactory) {
-            when(durableQueues.getUnitOfWorkFactory()).thenReturn(Optional.of(mock(UnitOfWorkFactory.class)));
-        }
+        when(durableQueues.getUnitOfWorkFactory()).thenReturn(withUnitOfWorkFactory
+                                                              ? Optional.of(mock(UnitOfWorkFactory.class))
+                                                              : Optional.empty());
         return Inboxes.durableQueueBasedInboxes(durableQueues,
                                                 mock(FencedLockManager.class));
     }

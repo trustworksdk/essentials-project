@@ -15,12 +15,11 @@
  */
 package dk.trustworks.essentials.components.foundation.messaging.queue;
 
-import com.fasterxml.jackson.databind.exc.MismatchedInputException;
 import dk.trustworks.essentials.components.foundation.*;
 import dk.trustworks.essentials.components.foundation.messaging.queue.operations.*;
-import dk.trustworks.essentials.shared.Exceptions;
 import org.slf4j.*;
 
+import java.time.Duration;
 import java.util.*;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.*;
@@ -314,10 +313,16 @@ public class CentralizedMessageFetcher implements Lifecycle {
 
         var registration = consumerRegistrations.get(queueName);
         if (registration == null) {
-            log.warn("[{}] Received message for unregistered consumer - will retry the message", queueName);
+            // The consumer was cancelled between the poll that claimed this message and now. There is no
+            // RedeliveryPolicy left to take a delay from, so retry after one polling interval — by which time
+            // either a consumer has registered again or the message is simply claimed and released once more.
+            log.warn("[{}] Received message {} for unregistered consumer - will retry the message in {} ms",
+                     queueName,
+                     message.getId(),
+                     pollingIntervalMs);
             durableQueues.retryMessage(message.getId(),
                                        null,
-                                       registration.consumer.getRedeliveryPolicy().initialRedeliveryDelay);
+                                       Duration.ofMillis(pollingIntervalMs));
             return;
         }
 
@@ -328,6 +333,7 @@ public class CentralizedMessageFetcher implements Lifecycle {
 
         // Submit message for processing
         registration.workerPool.submit(() -> {
+            var handlerStartedAtNanos = System.nanoTime();
             try {
                 var operation = new HandleQueuedMessage(message, registration.messageHandler);
                 newInterceptorChainForOperation(operation,
@@ -348,6 +354,7 @@ public class CentralizedMessageFetcher implements Lifecycle {
                         durableQueues.retryMessage(message.getId(),
                                                    null,
                                                    message.getRedeliveryDelay());
+                        durableQueues.getMessageObserver().messageRedeliveryRequested(message);
                     } catch (Exception ex) {
                         // If retry fails due to connectivity issues, then it will be picked up by resetMessagesStuckBeingDelivered
                         log.warn("[{}:{}] Could not manually mark message for redelivery: {}",
@@ -367,6 +374,10 @@ public class CentralizedMessageFetcher implements Lifecycle {
                             log.debug("[{}:{}] Message acknowledgment reported message already handled or deleted",
                                       queueName,
                                       message.getId());
+                        } else {
+                            // After the acknowledgement, so the count means "delivered and removed"
+                            durableQueues.getMessageObserver()
+                                         .messageHandled(message, Duration.ofNanos(System.nanoTime() - handlerStartedAtNanos));
                         }
                     } catch (Exception ex) {
                         // If acknowledgment fails due to connectivity issues, the message will be
@@ -381,15 +392,17 @@ public class CentralizedMessageFetcher implements Lifecycle {
                 rethrowIfCriticalError(e);
 
                 try {
-                    boolean isPermanentError = isPermanentError(message, e);
-                    if (isPermanentError || message.getTotalDeliveryAttempts() >= registration.consumer.getRedeliveryPolicy().getMaximumNumberOfRedeliveries() + 1) {
-                        log.error("[{}:{}] Marking message as dead letter due to error: {}",
+                    var decision = classify(message, e);
+                    if (decision.isDeadLetter()) {
+                        log.error("[{}:{}] Marking message as dead letter. {}. Error: {}",
                                   queueName,
                                   message.getId(),
+                                  decision.describe(),
                                   e.getMessage(),
                                   e);
 
                         durableQueues.markAsDeadLetterMessage(message.getId(), e);
+                        durableQueues.getMessageObserver().messageDeadLettered(message, e, decision.outcome());
                     } else {
                         // Redelivery
                         var redeliveryDelay = registration.consumer.getRedeliveryPolicy()
@@ -402,6 +415,7 @@ public class CentralizedMessageFetcher implements Lifecycle {
                                   e.getMessage());
 
                         durableQueues.retryMessage(message.getId(), e, redeliveryDelay);
+                        durableQueues.getMessageObserver().messageRetried(message, e, redeliveryDelay);
                     }
                 } catch (Exception retryEx) {
                     log.error("[{}:{}] Error handling message failure: {}",
@@ -463,22 +477,24 @@ public class CentralizedMessageFetcher implements Lifecycle {
     }
 
     /**
-     * Determine if an error is permanent and should mark the message as a dead letter
+     * Decide what to do with a message whose handler threw, delegating to {@link MessageDeliveryClassifier} so
+     * this fetcher and {@link DefaultDurableQueueConsumer} cannot drift apart.
+     * <p>
+     * The one thing that is decided here rather than there: if the consumer registration has gone, there is no
+     * {@link dk.trustworks.essentials.components.foundation.messaging.RedeliveryPolicy} to classify against, and
+     * the message is dead-lettered rather than left stuck.
      */
-    private boolean isPermanentError(QueuedMessage queuedMessage, Throwable e) {
+    private MessageDeliveryDecision classify(QueuedMessage queuedMessage, Throwable e) {
         DurableQueueConsumerRegistration registration = consumerRegistrations.get(queuedMessage.getQueueName());
         if (registration == null) {
-            // If registration is gone, treat as permanent to avoid message being stuck
-            return true;
+            return new MessageDeliveryDecision(MessageDeliveryOutcome.PERMANENT_ERROR,
+                                               MessageDeliveryDecision.MessageDeliveryRule.POLICY_VERDICT,
+                                               "",
+                                               -1,
+                                               queuedMessage.getTotalDeliveryAttempts(),
+                                               0);
         }
-
-        var rootCause = Exceptions.getRootCause(e);
-        return registration.consumer.getRedeliveryPolicy().isPermanentError(queuedMessage, e) ||
-                e instanceof DurableQueueDeserializationException ||
-                e instanceof ClassCastException || rootCause instanceof ClassCastException ||
-                e instanceof NoClassDefFoundError || rootCause instanceof NoClassDefFoundError ||
-                rootCause instanceof MismatchedInputException ||
-                e instanceof IllegalArgumentException || rootCause instanceof IllegalArgumentException;
+        return MessageDeliveryClassifier.classify(queuedMessage, e, registration.consumer.getRedeliveryPolicy());
     }
 
     public boolean containsConsumerFor(QueueName queueName) {

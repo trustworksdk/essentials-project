@@ -23,7 +23,7 @@ import dk.trustworks.essentials.components.foundation.transaction.UnitOfWork;
  * Marker for a {@link QueuedMessageHandler} that opens and commits its own {@link UnitOfWork}(s) per message, so that
  * a {@link DurableQueues} implementation must NOT wrap the handler invocation in a {@link UnitOfWork} of its own.
  * <p>
- * Under {@link TransactionalMode#SingleOperationTransaction} a {@link DurableQueues} implementation typically runs every
+ * A {@link DurableQueues} implementation typically runs every
  * operation - including handing a message to its {@link QueuedMessageHandler} - inside its own single-operation
  * {@link UnitOfWork}. That is the right default, but it leaves no {@link UnitOfWork}-free window for a handler that
  * needs to perform blocking I/O. A handler implementing this interface takes that responsibility over.

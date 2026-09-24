@@ -29,7 +29,6 @@ import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.su
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.transaction.*;
 import dk.trustworks.essentials.components.foundation.messaging.*;
 import dk.trustworks.essentials.components.foundation.messaging.eip.store_and_forward.Inboxes;
-import dk.trustworks.essentials.components.foundation.messaging.queue.TransactionalMode;
 import dk.trustworks.essentials.components.foundation.postgresql.SqlExecutionTimeLogger;
 import dk.trustworks.essentials.components.foundation.reactive.command.*;
 import dk.trustworks.essentials.components.queue.postgresql.PostgresqlDurableQueues;
@@ -83,7 +82,7 @@ class NonTransactionalMessageHandlerIT {
         jdbi.setSqlLogger(new SqlExecutionTimeLogger());
 
         unitOfWorkFactory = new EventStoreManagedUnitOfWorkFactory(jdbi);
-        var jsonSerializer = EssentialsJSONEventSerializers.createForActiveJacksonFlavor();
+        var jsonSerializer = EssentialsJSONEventSerializers.create();
         var persistenceStrategy = new SeparateTablePerAggregateTypePersistenceStrategy(jdbi,
                                                                                        unitOfWorkFactory,
                                                                                        new EventProcessorIT.TestPersistableEventMapper(),
@@ -120,7 +119,6 @@ class NonTransactionalMessageHandlerIT {
                                                // Must comfortably exceed the simulated blocking call, otherwise the
                                                // message is reset as stuck and redelivered while the first attempt runs
                                                .setMessageHandlingTimeout(Duration.ofSeconds(30))
-                                               .setTransactionalMode(TransactionalMode.SingleOperationTransaction)
                                                .setUnitOfWorkFactory(unitOfWorkFactory)
                                                .build();
         durableQueues.start();
@@ -195,29 +193,6 @@ class NonTransactionalMessageHandlerIT {
                   .until(() -> processor.transactionalHandlerCompleted.get());
 
         assertThat(processor.unitOfWorkActiveDuringTransactionalHandler).isTrue();
-    }
-
-    @Test
-    void a_processor_with_a_blocking_handler_is_rejected_under_FullyTransactional() {
-        var fullyTransactionalQueues = PostgresqlDurableQueues.builder()
-                                                              .setJsonSerializer(EssentialsJSONEventSerializers.createForActiveJacksonFlavor())
-                                                              .setTransactionalMode(TransactionalMode.FullyTransactional)
-                                                              .setUnitOfWorkFactory(unitOfWorkFactory)
-                                                              .build();
-        fullyTransactionalQueues.start();
-        try {
-            var rejectedProcessor = new RiskCheckProcessor(new EventProcessorDependencies(eventStoreSubscriptionManager,
-                                                                                          new Inboxes.DurableQueueBasedInboxes(fullyTransactionalQueues, fencedLockManager),
-                                                                                          commandBus,
-                                                                                          List.of()),
-                                                            eventStore);
-
-            assertThatThrownBy(rejectedProcessor::start)
-                    .isInstanceOf(IllegalStateException.class)
-                    .hasMessageContaining("UnitOfWorkMode.NONE");
-        } finally {
-            fullyTransactionalQueues.stop();
-        }
     }
 
     // -------------------------------------------------------------------------------------------------------------------

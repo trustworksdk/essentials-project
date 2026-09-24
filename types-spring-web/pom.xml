@@ -40,7 +40,7 @@
         </dependency>
         <dependency>
             <groupId>dk.trustworks.essentials</groupId>
-            <artifactId>${essentials.types-jackson.artifactId}</artifactId>
+            <artifactId>types-jackson3</artifactId>
             <version>${project.version}</version>
         </dependency>
         <dependency>
@@ -135,31 +135,9 @@
             <scope>test</scope>
         </dependency>
 
-        <dependency>
-            <groupId>com.fasterxml.jackson.core</groupId>
-            <artifactId>jackson-databind</artifactId>
-            <scope>test</scope>
-        </dependency>
-        <dependency>
-            <groupId>com.fasterxml.jackson.datatype</groupId>
-            <artifactId>jackson-datatype-jdk8</artifactId>
-            <scope>test</scope>
-        </dependency>
-        <dependency>
-            <groupId>com.fasterxml.jackson.datatype</groupId>
-            <artifactId>jackson-datatype-jsr310</artifactId>
-            <scope>test</scope>
-        </dependency>
-        <!-- Both flavours of jackson-module-kotlin, for KotlinJacksonBodyJackson2Test/KotlinJacksonBodyJackson3Test.
-             Those tests pin down what EssentialTypesJacksonModule does NOT cover - Kotlin value classes in a request
-             or response body - so that the boundary is asserted rather than inferred. Jackson 3 moved the module to
-             the tools.jackson.module group, so the two can sit side by side; each test is guarded by the active
-             flavour. -->
-        <dependency>
-            <groupId>com.fasterxml.jackson.module</groupId>
-            <artifactId>jackson-module-kotlin</artifactId>
-            <scope>test</scope>
-        </dependency>
+        <!-- jackson-module-kotlin, for KotlinJacksonBodyJackson3Test. That test pins down what EssentialTypesJacksonModule
+             does NOT cover - Kotlin value classes in a request or response body - so that the boundary is asserted
+             rather than inferred. -->
         <dependency>
             <groupId>tools.jackson.module</groupId>
             <artifactId>jackson-module-kotlin</artifactId>
@@ -190,27 +168,6 @@
     <build>
         <plugins>
             <plugin>
-                <groupId>org.apache.maven.plugins</groupId>
-                <artifactId>maven-surefire-plugin</artifactId>
-                <configuration>
-                    <systemPropertyVariables>
-                        <essentials.jackson.flavor>${essentials.jackson.flavor}</essentials.jackson.flavor>
-                    </systemPropertyVariables>
-                </configuration>
-            </plugin>
-            <!-- Failsafe needs the same property as surefire. Without it WebFluxControllerIT's
-                 @EnabledIfSystemProperty guard can never match and the IT is silently skipped in *both* profiles -
-                 which is what it did until now. -->
-            <plugin>
-                <groupId>org.apache.maven.plugins</groupId>
-                <artifactId>maven-failsafe-plugin</artifactId>
-                <configuration>
-                    <systemPropertyVariables>
-                        <essentials.jackson.flavor>${essentials.jackson.flavor}</essentials.jackson.flavor>
-                    </systemPropertyVariables>
-                </configuration>
-            </plugin>
-            <plugin>
                 <groupId>org.jetbrains.kotlin</groupId>
                 <artifactId>kotlin-maven-plugin</artifactId>
                 <version>${kotlin.version}</version>
@@ -236,12 +193,6 @@
                         <configuration>
                             <sourceDirs>
                                 <sourceDir>${project.basedir}/src/test/kotlin</sourceDir>
-                                <!-- Exactly one of src/test/kotlin-jackson2 / -jackson3, chosen by the active
-                                     flavour profile. Both directories hold a test that names
-                                     dk.trustworks.essentials.jackson.types.EssentialTypesJacksonModule, and the two
-                                     flavours share that fully qualified name while extending different Jackson
-                                     majors - so the two tests cannot be compiled against the same classpath. -->
-                                <sourceDir>${project.basedir}/src/test/kotlin-${essentials.jackson.flavor}</sourceDir>
                             </sourceDirs>
                         </configuration>
                     </execution>

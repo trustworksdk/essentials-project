@@ -27,7 +27,7 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 
 /**
  * Interceptor that wraps each operation in a transaction.
- * This is used when the TransactionalMode is set to SingleOperationTransaction.
+ * Wired unconditionally: since 0.60 every queue operation runs in its own transaction.
  */
 public class SingleOperationTransactionDurableQueuesInterceptor implements DurableQueuesInterceptor {
     private final HandleAwareUnitOfWorkFactory<? extends HandleAwareUnitOfWork> unitOfWorkFactory;

@@ -30,41 +30,37 @@ class MongoDurableQueuesTest {
     @Test
     void initializeWithInvalidOverriddenCollectionName() {
         assertThatThrownBy(() ->
-                                   new MongoDurableQueues(
-                                           mock(MongoTemplate.class),
-                                           Duration.ofSeconds(30),
-                                           mock(JSONSerializer.class),
-                                           "system.collection",
-                                           null
-                                   ))
+                                   MongoDurableQueues.builder()
+                                                      .setMongoTemplate(mock(MongoTemplate.class))
+                                                      .setMessageHandlingTimeout(Duration.ofSeconds(30))
+                                                      .setJsonSerializer(mock(JSONSerializer.class))
+                                                      .setSharedQueueCollectionName("system.collection")
+                                                      .build())
                 .isInstanceOf(InvalidCollectionNameException.class);
 
         assertThatThrownBy(() ->
-                                   new MongoDurableQueues(
-                                           mock(MongoTemplate.class),
-                                           Duration.ofSeconds(30),
-                                           mock(JSONSerializer.class),
-                                           "my$_collection",
-                                           null
-                                   ))
+                                   MongoDurableQueues.builder()
+                                                      .setMongoTemplate(mock(MongoTemplate.class))
+                                                      .setMessageHandlingTimeout(Duration.ofSeconds(30))
+                                                      .setJsonSerializer(mock(JSONSerializer.class))
+                                                      .setSharedQueueCollectionName("my$_collection")
+                                                      .build())
                 .isInstanceOf(InvalidCollectionNameException.class);
         assertThatThrownBy(() ->
-                                   new MongoDurableQueues(
-                                           mock(MongoTemplate.class),
-                                           Duration.ofSeconds(30),
-                                           mock(JSONSerializer.class),
-                                           "collection\0name",
-                                           null
-                                   ))
+                                   MongoDurableQueues.builder()
+                                                      .setMongoTemplate(mock(MongoTemplate.class))
+                                                      .setMessageHandlingTimeout(Duration.ofSeconds(30))
+                                                      .setJsonSerializer(mock(JSONSerializer.class))
+                                                      .setSharedQueueCollectionName("collection\0name")
+                                                      .build())
                 .isInstanceOf(InvalidCollectionNameException.class);
         assertThatThrownBy(() ->
-                                   new MongoDurableQueues(
-                                           mock(MongoTemplate.class),
-                                           Duration.ofSeconds(30),
-                                           mock(JSONSerializer.class),
-                                           "Invalid Name With Spaces",
-                                           null
-                                   ))
+                                   MongoDurableQueues.builder()
+                                                      .setMongoTemplate(mock(MongoTemplate.class))
+                                                      .setMessageHandlingTimeout(Duration.ofSeconds(30))
+                                                      .setJsonSerializer(mock(JSONSerializer.class))
+                                                      .setSharedQueueCollectionName("Invalid Name With Spaces")
+                                                      .build())
                 .isInstanceOf(InvalidCollectionNameException.class);
     }
 }

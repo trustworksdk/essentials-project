@@ -82,11 +82,7 @@ public abstract class DistributedCompetingConsumersDurableQueuesIT<DURABLE_QUEUE
     protected abstract void resetQueueStorage(UOW_FACTORY unitOfWorkFactory);
 
     protected void usingDurableQueue(Runnable action) {
-        if (durableQueues1.getTransactionalMode() == TransactionalMode.FullyTransactional) {
-            unitOfWorkFactory.usingUnitOfWork(uow -> action.run());
-        } else {
-            action.run();
-        }
+        action.run();
     }
 
     @Test
@@ -129,9 +125,13 @@ public abstract class DistributedCompetingConsumersDurableQueuesIT<DURABLE_QUEUE
         usingDurableQueue(() -> durableQueues1.queueMessages(queueName, messages));
 
         assertThat(durableQueues1.getTotalMessagesQueuedFor(queueName)).isEqualTo(numberOfMessages);
-        assertThat(durableQueues1.getQueuedMessageCountsFor(queueName)).isEqualTo(new QueuedMessageCounts(queueName, numberOfMessages, 0));
+        var counts = durableQueues1.getQueuedMessageCountsFor(queueName);
+        assertThat(counts.numberOfQueuedMessages()).isEqualTo(numberOfMessages);
+        assertThat(counts.numberOfQueuedDeadLetterMessages()).isZero();
         assertThat(durableQueues2.getTotalMessagesQueuedFor(queueName)).isEqualTo(numberOfMessages);
-        assertThat(durableQueues2.getQueuedMessageCountsFor(queueName)).isEqualTo(new QueuedMessageCounts(queueName, numberOfMessages, 0));
+        var counts2 = durableQueues2.getQueuedMessageCountsFor(queueName);
+        assertThat(counts2.numberOfQueuedMessages()).isEqualTo(numberOfMessages);
+        assertThat(counts2.numberOfQueuedDeadLetterMessages()).isZero();
         var recordingQueueMessageHandler1 = new RecordingQueuedMessageHandler();
         var recordingQueueMessageHandler2 = new RecordingQueuedMessageHandler();
 

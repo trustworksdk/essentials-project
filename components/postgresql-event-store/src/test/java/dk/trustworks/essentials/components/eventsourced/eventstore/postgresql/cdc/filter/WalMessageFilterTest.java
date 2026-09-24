@@ -16,8 +16,9 @@
 
 package dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.cdc.filter;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
-import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.serializer.json.JacksonJSONEventSerializer;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.serializer.json.EssentialsJSONEventSerializers;
+import tools.jackson.databind.ObjectMapper;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.serializer.json.Jackson3JSONEventSerializer;
 import org.junit.jupiter.api.Test;
 
 import java.nio.charset.StandardCharsets;
@@ -28,7 +29,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 class WalMessageFilterTest {
     private final DefaultWalMessageFilter filter = new DefaultWalMessageFilter(
-            new JacksonJSONEventSerializer(new ObjectMapper()),
+            EssentialsJSONEventSerializers.create(),
             java.util.Set.of("orders_events"));
 
     @Test
@@ -136,7 +137,7 @@ class WalMessageFilterTest {
         liveTables.add("orders_events");
 
         var liveFilter = new DefaultWalMessageFilter(
-                new JacksonJSONEventSerializer(new ObjectMapper()),
+                EssentialsJSONEventSerializers.create(),
                 () -> liveTables);
 
         String ordersInsert = """
@@ -166,7 +167,7 @@ class WalMessageFilterTest {
     void supplier_is_invoked_on_every_shouldPersist_call() {
         var invocations = new AtomicInteger();
         var liveFilter = new DefaultWalMessageFilter(
-                new JacksonJSONEventSerializer(new ObjectMapper()),
+                EssentialsJSONEventSerializers.create(),
                 () -> {
                     invocations.incrementAndGet();
                     return java.util.Set.of("orders_events");
@@ -190,7 +191,7 @@ class WalMessageFilterTest {
     @Test
     void empty_supplier_rejects_everything() {
         var liveFilter = new DefaultWalMessageFilter(
-                new JacksonJSONEventSerializer(new ObjectMapper()),
+                EssentialsJSONEventSerializers.create(),
                 java.util.Set.<String>of());
 
         String wal = """

@@ -18,7 +18,6 @@ package dk.trustworks.essentials.components.eventsourced.aggregates.snapshot;
 
 import dk.trustworks.essentials.components.eventsourced.aggregates.stateful.modern.AggregateRoot;
 import dk.trustworks.essentials.components.foundation.json.Jackson3JSONSerializer;
-import dk.trustworks.essentials.components.foundation.json.JacksonJSONSerializer;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.serializer.json.JSONEventSerializer;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.types.EventOrder;
 import org.objenesis.ObjenesisStd;
@@ -166,8 +165,7 @@ public class DefaultAggregateSnapshotStateAdapter implements AggregateSnapshotSt
 
     /**
      * Converts a raw JSON value (as produced by binding the snapshot to a {@link Map}) into the target field's type,
-     * using the Jackson mapper of whichever flavour the {@link JSONEventSerializer} wraps. Both Jackson majors are
-     * supported because a build picks one of them and the snapshot has to be readable under either.
+     * using the Jackson mapper the {@link JSONEventSerializer} wraps.
      */
     @FunctionalInterface
     private interface SnapshotValueConverter {
@@ -175,10 +173,6 @@ public class DefaultAggregateSnapshotStateAdapter implements AggregateSnapshotSt
     }
 
     private SnapshotValueConverter valueConverter() {
-        if (jsonSerializer instanceof JacksonJSONSerializer jacksonJSONSerializer) {
-            var objectMapper = jacksonJSONSerializer.getObjectMapper();
-            return (rawValue, targetType) -> objectMapper.convertValue(rawValue, objectMapper.constructType(targetType));
-        }
         if (jsonSerializer instanceof Jackson3JSONSerializer jackson3JSONSerializer) {
             var objectMapper = jackson3JSONSerializer.getObjectMapper();
             return (rawValue, targetType) -> objectMapper.convertValue(rawValue, objectMapper.constructType(targetType));

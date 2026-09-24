@@ -24,7 +24,7 @@ The `immutable` module provides `ImmutableValueObject` - a base class for creati
 
 **Zero dependencies:** This module has no runtime dependencies (not even SLF4J).
 
-For advanced Jackson deserialization support, see [immutable-jackson](../immutable-jackson).
+For advanced Jackson deserialization support, see [immutable-jackson3](../immutable-jackson3).
 
 ## Installation
 
@@ -159,6 +159,6 @@ public class Order extends ImmutableValueObject {
 ## See Also
 
 - [LLM-immutable.md](../LLM/LLM-immutable.md) - Quick reference for LLMs
-- [immutable-jackson](../immutable-jackson) - Jackson deserialization support
+- [immutable-jackson3](../immutable-jackson3) - Jackson deserialization support
 - [types](../types) - Single-value type wrappers (`SingleValueType`)
 - [ImmutableValueObjectTest.java](src/test/java/dk/trustworks/essentials/immutable/ImmutableValueObjectTest.java) - Comprehensive test examples

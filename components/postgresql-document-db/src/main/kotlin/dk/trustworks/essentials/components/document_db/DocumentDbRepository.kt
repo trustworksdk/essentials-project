@@ -522,11 +522,8 @@ private val stringValueTypeIdSerializer: IdSerializer<StringValueType<*>> = { it
  * val repositoryFactory = DocumentDbRepositoryFactory(
  *             jdbi,
  *             JdbiUnitOfWorkFactory(jdbi),
- *             JacksonJSONSerializer(
- *                 EssentialsImmutableJacksonModule.createObjectMapper(
- *                     Jdk8Module(),
- *                     JavaTimeModule()
- *                 ).registerKotlinModule()
+ *             Jackson3JSONSerializer(
+ *                 EssentialsObjectMappers.createJackson3ObjectMapper(KotlinModule.Builder().build())
  *             )
  *         )
  * ```
@@ -726,11 +723,8 @@ data class Index<T>(
  * val repositoryFactory = DocumentDbRepositoryFactory(
  *     jdbi,
  *     JdbiUnitOfWorkFactory(jdbi),
- *     JacksonJSONSerializer(
- *         EssentialsImmutableJacksonModule.createObjectMapper(
- *             Jdk8Module(),
- *             JavaTimeModule()
- *         ).registerKotlinModule()
+ *     Jackson3JSONSerializer(
+ *         EssentialsObjectMappers.createJackson3ObjectMapper(KotlinModule.Builder().build())
  *     )
  * )
  *

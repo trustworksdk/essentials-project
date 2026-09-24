@@ -60,7 +60,7 @@ Full-featured Event Store for PostgreSQL with durable subscriptions, gap handlin
 
 <!-- Jackson -->
 <dependency>
-    <groupId>com.fasterxml.jackson.core</groupId>
+    <groupId>tools.jackson.core</groupId>
     <artifactId>jackson-databind</artifactId>
     <version>${jackson.version}</version>
 </dependency>
@@ -478,26 +478,23 @@ jdbi.installPlugin(new PostgresPlugin());
 jdbi.setSqlLogger(new SqlExecutionTimeLogger());
 ```
 
-### 2. ObjectMapper Configuration
+### 2. JSON Serializer Configuration
 
-Events are serialized to JSON using the configured `JSONEventSerializer`.  
-For use with `JacksonJSONEventSerializer` configure the Jackson `ObjectMapper` with Essential Types serialization support:
+Events are serialized to JSON using the configured `JSONEventSerializer`. Essentials uses Jackson 3 (`tools.jackson`)
+only. Create the serializer from the canonical Essentials mapper configuration — it is the persisted-format contract
+(field-based access, ISO dates, and the Essentials Types/Immutable modules when `types-jackson3`/`immutable-jackson3`
+are on the classpath):
 
 ```java
-ObjectMapper objectMapper = JsonMapper.builder()
-    .disable(MapperFeature.AUTO_DETECT_GETTERS)
-    .disable(MapperFeature.AUTO_DETECT_IS_GETTERS)
-    .disable(MapperFeature.AUTO_DETECT_SETTERS)
-    .disable(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS)
-    .disable(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES)
-    .enable(MapperFeature.AUTO_DETECT_CREATORS)
-    .enable(MapperFeature.AUTO_DETECT_FIELDS)
-    .addModule(new Jdk8Module())
-    .addModule(new JavaTimeModule())
-    .addModule(new EssentialTypesJacksonModule())
-    .addModule(new EssentialsImmutableJacksonModule())
-    .build();
+JSONEventSerializer jsonSerializer = EssentialsJSONEventSerializers.create();
+
+// Or, when you need additional Jackson 3 modules on top of the canonical configuration:
+JSONEventSerializer jsonSerializer = new Jackson3JSONEventSerializer(
+    EssentialsObjectMappers.createJackson3ObjectMapper(myAdditionalModule));
 ```
+
+Avoid hand-building an `ObjectMapper` for persistence: a configuration that drifts from `EssentialsObjectMappers`
+silently changes the persisted JSON format.
 
 ### 3. PersistableEventMapper
 
@@ -548,7 +545,7 @@ public class MyPersistableEventMapper implements PersistableEventMapper {
 
 ```java
 var unitOfWorkFactory = new EventStoreManagedUnitOfWorkFactory(jdbi);
-var jsonSerializer = new JacksonJSONEventSerializer(objectMapper);
+var jsonSerializer = EssentialsJSONEventSerializers.create();
 
 // Persistence strategy: separate table per aggregate type (recommended)
 var persistenceStrategy = new SeparateTablePerAggregateTypePersistenceStrategy(
@@ -2350,7 +2347,7 @@ Rather than manually creating a `SeparateTablePerAggregateEventStreamConfigurati
 │  │  SeparateTablePerAggregateTypeEventStreamConfigurationFactory       │    │
 │  │  ─────────────────────────────────────────────────────────────────  │    │
 │  │  • resolveEventStreamTableName: "Orders" → "orders_events"          │    │
-│  │  • jsonSerializer: JacksonJSONEventSerializer                       │    │
+│  │  • jsonSerializer: Jackson3JSONEventSerializer                      │    │
 │  │  • aggregateIdColumnType: UUID                                      │    │
 │  │  • eventJsonColumnType: JSONB                                       │    │
 │  │  • tenantSerializer: TenantIdSerializer                             │    │

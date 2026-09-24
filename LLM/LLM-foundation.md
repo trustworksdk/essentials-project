@@ -19,7 +19,7 @@
 **Dependencies from other modules**:
 - `InterceptorChain`, `PatternMatchingMethodInvoker` from [shared](./LLM-shared.md)
 - `CommandBus`, `LocalCommandBus` from [reactive](./LLM-reactive.md)
-- `JSONSerializer` from [immutable-jackson](./LLM-immutable-jackson.md)
+- `EssentialTypesJacksonModule` from [types-jackson3](./LLM-types-jackson.md) and `EssentialsImmutableJacksonModule` from [immutable-jackson3](./LLM-immutable-jackson.md), registered by `EssentialsObjectMappers`
 - `CorrelationId`, `MessageId`, `SubscriberId` from [foundation-types](./LLM-foundation-types.md)
 
 ## TOC
@@ -244,6 +244,141 @@ MessageDeliveryErrorHandler.stopRedeliveryOn(
     IllegalArgumentException.class
 )
 ```
+
+#### The built-in permanent-error list
+
+The consumer applies its own list of permanent error types **after** consulting your
+`MessageDeliveryErrorHandler`. A message failing with one of these is dead-lettered on the first delivery
+attempt, whatever the `RedeliveryPolicy`'s backoff says — unless the handler explicitly asks to retry that
+type and the type allows it:
+
+| Type | Overridable by `alwaysRetryOn` | Why |
+|---|---|---|
+| `DurableQueueDeserializationException` | No | The stored bytes will not parse on the hundredth attempt either |
+| `MismatchedInputException` | No | Same |
+| `NoClassDefFoundError` | No | A missing class is a deployment fault, not a transient one |
+| `IllegalArgumentException` (incl. `NumberFormatException`) | **Yes** | The house guard idiom, frequently thrown about data that may be valid later |
+| `ClassCastException` | **Yes** | Usually a genuine bug, but a cast against a projection that has not caught up is legitimately transient |
+
+`IllegalArgumentException` on that list is the one that surprises people. `FailFast.requireNonNull(...)` and
+`requireTrue(...)` — the validation idiom used across this codebase — throw it, and so does Kotlin's
+`require(...)`. A `@MessageHandler` that guards its arguments dead-letters its message on the first delivery
+attempt unless you opt out:
+
+```java
+RedeliveryPolicy.exponentialBackoff()
+    // ...
+    .setDeliveryErrorHandler(MessageDeliveryErrorHandler.builder()
+                                                        .alwaysRetryOn(IllegalArgumentException.class)
+                                                        .build())
+    .build();
+```
+
+Two limits on that opt-out. It cannot override the three types marked "No" above, and it does not lift
+`maximumNumberOfRedeliveries` — the message is still dead-lettered once its attempts are used up. Note also
+that `MessageDeliveryErrorHandler.alwaysRetry()` is *not* the same thing: it means "I have no opinion", so the
+built-in list still applies. Only the explicit `alwaysRetryOn(...)` list overrides it.
+
+The whole cause chain is examined, not just its ends. A handler throw arrives wrapped
+(`UnitOfWorkException → ReflectionException → InvocationTargetException → yours`), and a match anywhere in that
+chain counts — so classification no longer depends on whether your exception happens to carry a cause of its
+own.
+
+The dead-letter log line names which rule fired, the matched type, its depth in the cause chain, and the
+attempt count, e.g.
+`PERMANENT_ERROR (built-in permanent list matched IllegalArgumentException at cause-chain depth 3; attempt 1 of 6)`.
+
+#### Validating inside a message handler
+
+Pick the exception type by whether the condition can ever become true:
+
+```java
+@MessageHandler
+void handle(OrderShipped event) {
+    // The message can never be processed: the payload itself is wrong.
+    // IllegalArgumentException -> dead-lettered immediately, unless you opted out above.
+    requireNonNull(event.orderId, "orderId is required");
+
+    var order = orderRepository.find(event.orderId);
+    if (order == null) {
+        // The projection may simply not have caught up yet. Throw something retryable,
+        // NOT IllegalArgumentException, or the message is dead-lettered on first delivery.
+        throw new IllegalStateException("Order " + event.orderId + " not projected yet");
+    }
+}
+```
+
+### Delivery observability
+
+**Interface**: `dk.trustworks.essentials.components.foundation.messaging.queue.DurableQueueMessageObserver`
+
+Notified of how each delivery *ended*. Not an interceptor: an interceptor sees the operation, not the outcome.
+
+```java
+var registry = new QueueStatisticsRegistry();
+
+PostgresqlDurableQueues.builder()
+    .setUnitOfWorkFactory(unitOfWorkFactory)
+    .setMessageObserver(new StatisticsCollectingDurableQueueMessageObserver(registry))
+    .build();
+
+// Per-queue, this JVM only
+registry.findStatistics(queueName).ifPresent(stats -> {
+    stats.delivery().messagesHandled();
+    stats.delivery().averageHandlerDuration();
+    stats.outcomes().messagesDeadLettered();
+    stats.outcomes().lastFailureReason();
+});
+```
+
+| Callback | When |
+|---|---|
+| `messageHandled(message, handlerDuration)` | after the acknowledgement — "delivered and removed", not "the handler returned" |
+| `messageRetried(message, cause, redeliveryDelay)` | a failed delivery that will be redelivered |
+| `messageDeadLettered(message, cause)` | a delivery that ended as a dead letter |
+| `messageRedeliveryRequested(message)` | the handler asked for redelivery; not a failure |
+
+Use `DurableQueueMessageObserver.composite(List)` for more than one observer — it is not a single-slot SPI. The
+queue wraps whatever it is given in `safe(...)`, so an observer that throws cannot break delivery; it runs on
+delivery threads, so it must not block.
+
+`deleteMessage` and `purgeQueue` deliberately do **not** notify. They are administrative, not deliveries.
+
+**Dead-letter metric.** `MicrometerDurableQueueMessageObserver` increments
+`essentials.messaging.durable_queues.dead_lettered` once per dead letter, tagged `queue_name`,
+`message_payload_type` and `reason` (`permanent_error` | `redeliveries_exhausted`). Both Spring Boot starters
+register it whenever a `MeterRegistry` is present — deliberately *not* behind
+`essentials.metrics.durable-queues.enabled`, which controls execution-time measurement. A timing switch must
+not turn an incident counter off. This is the counter to alert on; the pre-existing
+`essentials.messaging.durable_queues.mark_as_dead_letter_message` timer measures how long the marking took and
+carries no reason.
+
+**Dead-letter health indicator.** `DurableQueuesHealthIndicator` reports per-queue dead-letter counts under
+`durableQueues` on `/actuator/health`. Both Spring Boot starters register it by default.
+
+```properties
+# Reports UP regardless of the counts unless this is set to a positive number
+essentials.durable-queues.health.dead-letter-threshold=100
+# How long a computed result is reused before the counts are read again (default 10s)
+essentials.durable-queues.health.cache-time-to-live=10s
+# Do not register the indicator at all
+management.health.durable-queues.enabled=false
+```
+
+⚠️ **The default never reports `DOWN`, and that is the point.** A `HealthIndicator` contributes to the
+composite `/actuator/health` status, which readiness and liveness probes are routinely pointed at — so an
+indicator that went `DOWN` on the first dead letter would take working pods out of service, or restart them,
+leaving fewer consumers to drain the queue behind the poison message. Set a threshold only if a queue reaching
+that count really does mean the instance should stop taking traffic. This is the same rule `CdcHealthIndicator`
+follows with `CdcMode.REQUIRE`. To alert without touching a probe, use the Micrometer counter above.
+
+The threshold applies **per queue**, not to the total, so the number does not silently mean something else in
+an application with more queues. A failure reading the counts reports `UNKNOWN`, not `DOWN` — that is the
+`DataSource` indicator's job, and `UNKNOWN` does not drag the aggregated status down on its own.
+
+⚠️ **`QueueStatisticsRegistry` is per-JVM and resets on restart.** The queued and dead-letter counts from
+`getQueuedMessageCountsFor` are cluster-wide. Do not present them as one set of numbers — see
+`ApiQueueStatistics`, which keeps the two halves apart for exactly this reason.
 
 ### Dead Letter Queue
 
@@ -558,7 +693,6 @@ There is no ambient `UnitOfWork` between the two statements, so touching a trans
 | Dispatcher | Rejects `NONE` when | Why |
 |---|---|---|
 | `Inbox` | The consumer is not a `UnitOfWorkBoundaryOwningMessageConsumer` and the `DurableQueues` has a `UnitOfWorkFactory` | The `Inbox` itself wraps every delivery in a `UnitOfWork` |
-| `Inbox` | The consumer owns the boundary, but `TransactionalMode.FullyTransactional` | Fetching, handling and acknowledgement share one `UnitOfWork` that cannot be suspended — use `SingleOperationTransaction`, the starters' default |
 | `Outbox` | Always, when the `DurableQueues` has a `UnitOfWorkFactory` | An `Outbox` has no boundary-owning consumer variant |
 | `PatternMatchingQueuedMessageHandler` | Always, at construction time | It invokes handlers as-is and never owns the boundary |
 
@@ -720,15 +854,36 @@ OrderId result = commandBus.send(new CreateOrderCommand(...));
 
 **Package**: `dk.trustworks.essentials.components.foundation.json`
 
+Jackson 3 (`tools.jackson`) only. Build persistence serializers through `EssentialsObjectMappers`, which carries the
+canonical configuration the persisted wire format depends on (field access, ISO-8601 dates, final-field mutation
+re-enabled, Essentials value-type modules registered). That format is byte-identical to what the Jackson 2 mapper of
+0.50 wrote, so data persisted before 0.60 stays readable.
+
 ```java
-// dk.trustworks.essentials.components.foundation.json.JacksonJSONSerializer
-JSONSerializer serializer = new JacksonJSONSerializer(objectMapper);
+// Canonical serializer (Jackson3JSONSerializer over the canonical mapper)
+JSONSerializer serializer = EssentialsObjectMappers.createJSONSerializer();
+
+// Canonical mapper + extra application modules (tools.jackson.databind.JacksonModule)
+tools.jackson.databind.ObjectMapper mapper = EssentialsObjectMappers.createJackson3ObjectMapper(new MyModule());
+JSONSerializer custom = new Jackson3JSONSerializer(mapper);
 
 String json = serializer.serialize(order);
 byte[] bytes = serializer.serializeAsBytes(order);
 Order order = serializer.deserialize(json, Order.class);
 Object event = serializer.deserialize(json, "com.example.OrderCreatedEvent");
 ```
+
+⚠️ `EssentialsJacksonModules.modules()` (used by `EssentialsObjectMappers`) throws `IllegalStateException` when a
+0.50-era Jackson 2 `types-jackson` / `immutable-jackson` jar is on the classpath (same FQCNs, wrong Jackson major) —
+depend on `types-jackson3` / `immutable-jackson3`.
+
+⚠️ Under Jackson 3 a constructor parameter **name** is part of the JSON contract: Jackson 3 binds a class's constructor
+by parameter names read from the bytecode, so a parameter named differently from the JSON property receives `null`.
+Rename the parameter or annotate it with `@JsonProperty("…")` (`com.fasterxml.jackson.annotation`, shared by both
+Jackson majors).
+
+⚠️ Upgrading from 0.50: `JacksonJSONSerializer` (Jackson 2) was removed — use `Jackson3JSONSerializer` or
+`EssentialsObjectMappers.createJSONSerializer()`.
 
 ### LifecycleManager
 

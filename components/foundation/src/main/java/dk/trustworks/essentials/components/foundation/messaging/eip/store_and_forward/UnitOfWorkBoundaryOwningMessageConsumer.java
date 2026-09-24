@@ -42,8 +42,7 @@ public interface UnitOfWorkBoundaryOwningMessageConsumer extends Consumer<Messag
      * {@link UnitOfWorkMode#NONE}, i.e. one that must run without an ambient {@link UnitOfWork}?
      * <p>
      * Used by dispatchers to fail fast during start-up in setups where no {@link UnitOfWork}-free window can be
-     * provided - e.g. {@link TransactionalMode#FullyTransactional}, where the queue consumer wraps message fetching,
-     * handling and acknowledgement in one shared {@link UnitOfWork}.
+     * provided.
      * <p>
      * The default implementation introspects this consumer's own {@link MessageHandler} annotated methods, which is
      * the right answer for a consumer that carries its handler methods itself. <b>Override it only when the handler

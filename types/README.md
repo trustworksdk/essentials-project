@@ -89,10 +89,6 @@ A minimal semantic type requires just **4 lines of code**:
 ```java
 public class OrderId extends CharSequenceType<OrderId> {
     public OrderId(CharSequence value) { super(value); }
-    // Required for Jackson 2.18+: String constructor
-    public OrderId(String value) {
-        super(value);
-    }
     public static OrderId of(CharSequence value) { return new OrderId(value); }
 }
 ```
@@ -280,7 +276,6 @@ Base package: `dk.trustworks.essentials.types`
 ```java
 public class OrderId extends CharSequenceType<OrderId> implements Identifier {
     public OrderId(CharSequence value) { super(value); }
-    public OrderId(String value) { super(value); }  // Required for Jackson 2.18+
 
     public static OrderId of(CharSequence value) { return new OrderId(value); }
     public static OrderId random() { return new OrderId(RandomIdGenerator.generate()); }
@@ -449,7 +444,7 @@ value class Quantity(override val value: Int) : IntValueType<Quantity> {
 
 | Framework                      | Module |
 |--------------------------------|--------|
-| Jackson JSON                   | `types-jackson` |
+| Jackson JSON                   | `types-jackson3` |
 | Spring Data MongoDB            | `types-springdata-mongo` |
 | Spring Data JPA (experimental) | `types-springdata-jpa` |
 | JDBI v3                        | `types-jdbi` |
@@ -537,5 +532,5 @@ assertThat(CustomerId.of("Test").toString()).isEqualTo("Test");
 ## See Also
 
 - [LLM-types.md](../LLM/LLM-types.md) - Detailed API reference
-- [types-jackson](../types-jackson/README.md) - Jackson serialization
+- [types-jackson3](../types-jackson3/README.md) - Jackson serialization
 - Tests: [src/test/java/dk/trustworks/essentials/types/](src/test/java/dk/trustworks/essentials/types/)

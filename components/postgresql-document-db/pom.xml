@@ -65,12 +65,12 @@
         </dependency>
         <dependency>
             <groupId>dk.trustworks.essentials</groupId>
-            <artifactId>${essentials.types-jackson.artifactId}</artifactId>
+            <artifactId>types-jackson3</artifactId>
             <version>${project.version}</version>
         </dependency>
         <dependency>
             <groupId>dk.trustworks.essentials</groupId>
-            <artifactId>${essentials.immutable-jackson.artifactId}</artifactId>
+            <artifactId>immutable-jackson3</artifactId>
             <version>${project.version}</version>
             <scope>provided</scope>
         </dependency>
@@ -96,19 +96,8 @@
             <version>${postgresql.version}</version>
             <optional>true</optional>
         </dependency>
-        <dependency>
-            <groupId>com.fasterxml.jackson.core</groupId>
-            <artifactId>jackson-databind</artifactId>
-            <optional>true</optional>
-        </dependency>
-        <dependency>
-            <groupId>com.fasterxml.jackson.module</groupId>
-            <artifactId>jackson-module-kotlin</artifactId>
-            <optional>true</optional>
-        </dependency>
-        <!-- Jackson 3 counterparts of the two above, for when essentials.types-jackson.artifactId selects that flavour.
-             Documents here are Kotlin data classes, so the flavour's Kotlin module is what binds their constructors.
-             Jackson 3 moved the Kotlin module to the tools.jackson.module group, so both can coexist on the classpath. -->
+        <!-- Jackson 3 databind and its Kotlin module. Documents here are Kotlin data classes, so the Kotlin module is what
+             binds their constructors. -->
         <dependency>
             <groupId>tools.jackson.core</groupId>
             <artifactId>jackson-databind</artifactId>
@@ -119,16 +108,6 @@
             <groupId>tools.jackson.module</groupId>
             <artifactId>jackson-module-kotlin</artifactId>
             <version>${jackson3-bom.version}</version>
-            <optional>true</optional>
-        </dependency>
-        <dependency>
-            <groupId>com.fasterxml.jackson.datatype</groupId>
-            <artifactId>jackson-datatype-jsr310</artifactId>
-            <optional>true</optional>
-        </dependency>
-        <dependency>
-            <groupId>com.fasterxml.jackson.datatype</groupId>
-            <artifactId>jackson-datatype-jdk8</artifactId>
             <optional>true</optional>
         </dependency>
         <dependency>

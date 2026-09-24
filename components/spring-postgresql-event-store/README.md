@@ -362,18 +362,9 @@ public class EventStoreConfig {
     }
 
     @Bean
-    public ObjectMapper objectMapper() {
-        return JsonMapper.builder()
-            .disable(MapperFeature.AUTO_DETECT_GETTERS)
-            .disable(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS)
-            .disable(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES)
-            .enable(MapperFeature.AUTO_DETECT_CREATORS)
-            .enable(MapperFeature.AUTO_DETECT_FIELDS)
-            .addModule(new Jdk8Module())
-            .addModule(new JavaTimeModule())
-            .addModule(new EssentialTypesJacksonModule())
-            .addModule(new EssentialsImmutableJacksonModule())
-            .build();
+    public JSONEventSerializer jsonEventSerializer() {
+        // Canonical Essentials (Jackson 3) persistence mapper - don't hand-build one, or the persisted format drifts
+        return EssentialsJSONEventSerializers.create();
     }
 
     @Bean
@@ -387,9 +378,7 @@ public class EventStoreConfig {
     public PostgresqlEventStore<?> eventStore(
             EventStoreUnitOfWorkFactory<?> unitOfWorkFactory,
             Jdbi jdbi,
-            ObjectMapper objectMapper) {
-
-        var jsonSerializer = new JacksonJSONEventSerializer(objectMapper);
+            JSONEventSerializer jsonSerializer) {
 
         var persistenceStrategy = new SeparateTablePerAggregateTypePersistenceStrategy(
             jdbi,

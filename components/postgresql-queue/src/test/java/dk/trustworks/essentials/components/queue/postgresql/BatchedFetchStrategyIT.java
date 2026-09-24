@@ -344,8 +344,8 @@ class BatchedFetchStrategyIT {
     // ------------------------------------------------------------------------------------------------
 
     /**
-     * Per-queue fetch ({@code useOrderedUnorderedQuery=true}) is ordered-priority: it runs the ordered query
-     * first and only falls back to the unordered query when the ordered query returned nothing. Batched fetch
+     * Per-queue fetch is ordered-priority: it runs the ordered query first and only falls back to the
+     * unordered query when the ordered query returned nothing. Batched fetch
      * numbers ordered and unordered candidates in a single oldest-first window, so it also returns unordered
      * messages while ordered messages are available.
      * <p>
@@ -600,7 +600,6 @@ class BatchedFetchStrategyIT {
         var durableQueues = PostgresqlDurableQueues.builder()
                                                    .setUnitOfWorkFactory(unitOfWorkFactory)
                                                    .setUseCentralizedMessageFetcher(true)
-                                                   .setUseOrderedUnorderedQuery(true)
                                                    // Batched fetching is opt-in in production; every test here is about that path
                                                    .setUseBatchedFetch(true)
                                                    .setBatchedFetchSwitchThreshold(batchedFetchSwitchThreshold)

@@ -19,7 +19,6 @@ package dk.trustworks.essentials.types.spring.web;
 import dk.trustworks.essentials.types.spring.web.model.CustomerId;
 import dk.trustworks.essentials.types.spring.web.model.DueDate;
 import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.condition.EnabledIfSystemProperty;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.SpringBootConfiguration;
 import org.springframework.boot.autoconfigure.EnableAutoConfiguration;
@@ -52,7 +51,6 @@ import static org.assertj.core.api.Assertions.assertThat;
 @SpringBootTest(classes = EssentialsWebFluxConfigurerJackson3Test.ReactiveApplication.class,
                 webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT,
                 properties = "spring.main.web-application-type=reactive")
-@EnabledIfSystemProperty(named = "essentials.jackson.flavor", matches = "jackson3")
 class EssentialsWebFluxConfigurerJackson3Test {
 
     @SpringBootConfiguration

@@ -29,25 +29,16 @@ import java.util.*;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * Jackson 3 half of the wire-format gate: proves this module reads and reproduces, byte for byte, the JSON that
- * Jackson 2 wrote — the exact situation of an application upgrading to Spring Boot 4.
- * <p>
  * Pins the persisted JSON wire format of the Essentials types.
  * <p>
  * Essentials persists JSON — event payloads, event metadata, durable-queue message payloads, documents — and that data
- * outlives the library version that wrote it. An application upgrading to Spring Boot 4 and Jackson 3 must still be
- * able to read everything Jackson 2 wrote, so the format is not an implementation detail: it is a compatibility
+ * outlives the library version that wrote it, so the format is not an implementation detail: it is a compatibility
  * contract, and this test is its gate.
  * <p>
- * The golden document is checked in under {@code types-jackson} because that module defines the legacy format. The
- * {@code types-jackson3} module runs the mirrored test against the very same file (wired in as a shared test resource
- * by its POM), which is what makes "Jackson 3 reads Jackson 2 payloads" an assertion rather than a hope.
- * <p>
- * If a change to the value types intentionally alters the format, regenerate with:
- * <pre>{@code
- * mvn -pl types-jackson test -Dtest=WireFormatCompatibilityTest -Dwireformat.regenerate=true
- * }</pre>
- * and treat the resulting diff as the breaking change it is — existing persisted data will no longer deserialize.
+ * The golden document was written by the Jackson 2 {@code types-jackson} module of Essentials 0.50 and earlier, which
+ * defined the format that is in production databases. This test proves the Jackson 3 module reproduces it byte for byte
+ * and reads it back. There is no regeneration switch: the Jackson 2 writer no longer exists, so the file can only be
+ * changed by hand, and such a change is a breaking change to persisted data.
  */
 class WireFormatCompatibilityTest {
 
@@ -63,7 +54,7 @@ class WireFormatCompatibilityTest {
         assertThat(objectMapper.readTree(serialized))
                 .as("""
                     The persisted JSON wire format changed. Data written by earlier versions will no longer \
-                    deserialize. Regenerate with -Dwireformat.regenerate=true only if that is intended.""")
+                    deserialize.""")
                 .isEqualTo(objectMapper.readTree(golden()));
     }
 

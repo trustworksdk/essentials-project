@@ -163,7 +163,7 @@ protected abstract JSONSerializer createJSONSerializer();
 #### Helpers
 
 ```java
-// Auto-wraps in UnitOfWork if TransactionalMode.FullyTransactional
+// Runs the action directly — each queue operation carries its own transaction
 protected <R> R withDurableQueue(Supplier<R> supplier);
 protected void usingDurableQueue(Runnable action);
 
@@ -510,9 +510,7 @@ package dk.trustworks.essentials.components.postgresql.queue;
 import dk.trustworks.essentials.components.foundation.json.JSONSerializer;
 import dk.trustworks.essentials.components.foundation.test.messaging.queue.DurableQueuesIT;
 import dk.trustworks.essentials.components.foundation.transaction.jdbi.*;
-import dk.trustworks.essentials.jackson.immutable.JacksonJSONSerializer;
-import dk.trustworks.essentials.jackson.types.EssentialTypesJacksonModule;
-import com.fasterxml.jackson.databind.json.JsonMapper;
+import dk.trustworks.essentials.components.foundation.json.EssentialsObjectMappers;
 import org.jdbi.v3.core.Jdbi;
 import org.junit.jupiter.api.*;
 import org.testcontainers.containers.PostgreSQLContainer;
@@ -554,10 +552,8 @@ public class PostgresqlDurableQueuesIT
 
     @Override
     protected JSONSerializer createJSONSerializer() {
-        return new JacksonJSONSerializer(
-            JsonMapper.builder()
-                .addModule(new EssentialTypesJacksonModule())
-                .build());
+        // Never hand-build a mapper here: it drifts from the persisted format
+        return EssentialsObjectMappers.createJSONSerializer();
     }
 }
 ```

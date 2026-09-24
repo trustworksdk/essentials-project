@@ -52,7 +52,6 @@ abstract class SingleOperationTransactionPostgresqlDurableQueuesIT extends Durab
                                                           JSONSerializer jsonSerializer) {
         return PostgresqlDurableQueues.builder()
                                       .setUnitOfWorkFactory(unitOfWorkFactory)
-                                      .setTransactionalMode(TransactionalMode.SingleOperationTransaction)
                                       .setMessageHandlingTimeout(Duration.ofSeconds(5))
                                       .setJsonSerializer(jsonSerializer)
                                       .setUseCentralizedMessageFetcher(useCentralizedMessageFetcher())
@@ -77,7 +76,7 @@ abstract class SingleOperationTransactionPostgresqlDurableQueuesIT extends Durab
     }
 
     @Test
-    void test_SingleOperationTransaction_TransactionalMode() {
+    void test_SingleOperationTransaction() {
         // Given
         var queueName = QueueName.of("TestQueue");
 
@@ -106,7 +105,7 @@ abstract class SingleOperationTransactionPostgresqlDurableQueuesIT extends Durab
     }
 
     @Test
-    void test_SingleOperationTransaction_TransactionalMode_timeout_messages_gets_automatically_retried() throws InterruptedException {
+    void test_SingleOperationTransaction_timeout_messages_gets_automatically_retried() throws InterruptedException {
         // Given
         var queueName = QueueName.of("TestQueue");
 

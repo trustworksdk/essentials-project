@@ -42,9 +42,6 @@ import org.springframework.context.annotation.Import;
  *     Without it a {@code CharSequenceType} has no serializer ({@code CharSequenceType} carries no
  *     {@code @JsonValue}) and a command body carrying one cannot round-trip.</li>
  * </ul>
- * The module bean is flavour-neutral on purpose: {@code types-jackson} and {@code types-jackson3} ship the
- * same FQCN and both extend {@code SimpleModule}, so this compiles and binds under the Jackson 3 default
- * and under {@code -Pjackson2}. Only one of the two is ever on the classpath.
  */
 @Configuration
 @Import(EssentialsWebMvcConfigurer.class)

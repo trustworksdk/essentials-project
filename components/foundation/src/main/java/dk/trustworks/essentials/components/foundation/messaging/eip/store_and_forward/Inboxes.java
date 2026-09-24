@@ -235,17 +235,11 @@ public interface Inboxes {
 
             /**
              * Handlers declared with {@link UnitOfWorkMode#NONE} need a window where no {@link UnitOfWork} is active.
-             * This {@link Inbox} can only offer one when both of the following hold, so reject the consumer at wiring
-             * time rather than silently performing its blocking call inside a database transaction:
-             * <ul>
-             *   <li>The consumer owns the {@link UnitOfWork} boundary, i.e. it is a
-             *       {@link UnitOfWorkBoundaryOwningMessageConsumer}. Otherwise {@link #handleMessage(QueuedMessage)}
-             *       wraps every delivery in a {@link UnitOfWork} of its own and {@link UnitOfWorkMode#NONE} can never
-             *       take effect</li>
-             *   <li>The {@link DurableQueues} does not use {@link TransactionalMode#FullyTransactional}, where the
-             *       queue consumer wraps message fetching, handling and acknowledgement in one shared
-             *       {@link UnitOfWork} that this {@link Inbox} has no way of suspending</li>
-             * </ul>
+             * This {@link Inbox} can only offer one when the consumer owns the {@link UnitOfWork} boundary, i.e. it is a
+             * {@link UnitOfWorkBoundaryOwningMessageConsumer}. Otherwise {@link #handleMessage(QueuedMessage)} wraps every
+             * delivery in a {@link UnitOfWork} of its own and {@link UnitOfWorkMode#NONE} can never take effect, so the
+             * consumer is rejected at wiring time rather than silently performing its blocking call inside a database
+             * transaction.
              */
             private void verifyNonTransactionalMessageHandlersAreSupported() {
                 // Resolved first, so that a consumer without UnitOfWorkMode.NONE handlers - the common case - causes no
@@ -263,15 +257,6 @@ public interface Inboxes {
                                                             config.inboxName,
                                                             UnitOfWorkBoundaryOwningMessageConsumer.class.getSimpleName()));
                     }
-                    return;
-                }
-                if (durableQueues.getTransactionalMode() == TransactionalMode.FullyTransactional) {
-                    throw new IllegalStateException(msg("Inbox '{}' has a message consumer with one or more @MessageHandler methods declared with UnitOfWorkMode.NONE, " +
-                                                        "which requires the DurableQueues to use TransactionalMode.{} - but it is configured with TransactionalMode.{}, " +
-                                                        "where message fetching, handling and acknowledgement all share a single UnitOfWork",
-                                                        config.inboxName,
-                                                        TransactionalMode.SingleOperationTransaction,
-                                                        TransactionalMode.FullyTransactional));
                 }
             }
 

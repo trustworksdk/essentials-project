@@ -208,11 +208,7 @@ public abstract class DuplicateConsumptionDurableQueuesIT<DURABLE_QUEUES extends
      * Helper method to execute actions within a UnitOfWork if required by the transactional mode.
      */
     protected void usingDurableQueue(Runnable action) {
-        if (durableQueues1.getTransactionalMode() == TransactionalMode.FullyTransactional) {
-            unitOfWorkFactory1.usingUnitOfWork(uow -> action.run());
-        } else {
-            action.run();
-        }
+        action.run();
     }
 
     @Test

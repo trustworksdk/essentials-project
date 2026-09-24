@@ -20,6 +20,7 @@ import dk.trustworks.essentials.components.distributed.fencedlock.postgresql.*;
 import dk.trustworks.essentials.components.foundation.IOExceptionUtil;
 import dk.trustworks.essentials.components.foundation.fencedlock.*;
 import dk.trustworks.essentials.components.foundation.messaging.queue.*;
+import dk.trustworks.essentials.components.foundation.messaging.queue.health.DurableQueuesHealthIndicator;
 import dk.trustworks.essentials.components.foundation.messaging.queue.operations.ConsumeFromQueue;
 import dk.trustworks.essentials.components.foundation.postgresql.*;
 import dk.trustworks.essentials.components.foundation.transaction.UnitOfWork;
@@ -279,11 +280,9 @@ public class EssentialsComponentsProperties {
 
     public static class DurableQueuesProperties {
         private String sharedQueueTableName           = PostgresqlDurableQueues.DEFAULT_DURABLE_QUEUES_TABLE_NAME;
-        private String sharedQueueStatisticsTableName = PostgresqlDurableQueuesStatistics.DEFAULT_DURABLE_QUEUES_TABLE_NAME;
 
         private Double            pollingDelayIntervalIncrementFactor      = 0.5d;
         private Duration          maxPollingInterval                       = Duration.ofMillis(2000);
-        private TransactionalMode transactionalMode                        = TransactionalMode.SingleOperationTransaction;
         private Duration          messageHandlingTimeout                   = Duration.ofSeconds(30);
         private boolean           useCentralizedMessageFetcher             = true;
         private Duration          centralizedMessageFetcherPollingInterval = Duration.ofMillis(20);
@@ -292,12 +291,19 @@ public class EssentialsComponentsProperties {
         private int               batchedFetchSwitchThreshold              = 4;
         private int               batchedFetchWarnRowsThreshold            = 5000;
 
+        private final DurableQueuesHealthProperties health = new DurableQueuesHealthProperties();
+
         private boolean verboseTracing = false;
 
-        private boolean enableQueueStatistics      = false;
-        private boolean enableQueueStatisticsTtl   = false;
-        private int     queueStatisticsTtlDuration = 90;
-        private boolean useOrderedUnorderedQuery   = true;
+        /**
+         * Settings for the {@link DurableQueuesHealthIndicator}, which reports dead-letter counts on
+         * {@code /actuator/health}.
+         *
+         * @return the durable-queues health-indicator settings
+         */
+        public DurableQueuesHealthProperties getHealth() {
+            return health;
+        }
 
         /**
          * Should the Tracing produces only include all operations or only top level operations (default false)
@@ -317,85 +323,10 @@ public class EssentialsComponentsProperties {
             this.verboseTracing = verboseTracing;
         }
 
-        /**
-         * Should the DurableQueuesStatistics bean be enabled (default false), creates a durable queues stats table that can queried through DurableQueuesStatistics.
-         *
-         * @return Should the DurableQueuesStatistics bean be enabled?
-         */
-        public boolean isEnableQueueStatistics() {
-            return enableQueueStatistics;
-        }
+
 
         /**
-         * Should the DurableQueuesStatistics bean be enabled (default false), creates a durable queues stats table that can queried through DurableQueuesStatistics.
-         *
-         * @param enableQueueStatistics Should the DurableQueuesStatistics bean be enabled?
-         */
-        public void setEnableQueueStatistics(boolean enableQueueStatistics) {
-            this.enableQueueStatistics = enableQueueStatistics;
-        }
-
-        /**
-         * Indicates whether queue statistics TTL (Time-To-Live) is enabled.
-         * Default: false
-         *
-         * @return true if queue statistics TTL is enabled, false otherwise.
-         */
-        public boolean isEnableQueueStatisticsTtl() {
-            return enableQueueStatisticsTtl;
-        }
-
-        /**
-         * Enables or disables TTL (Time-To-Live) for the queue statistics.
-         *
-         * @param enableQueueStatisticsTtl a boolean value where {@code true} enables TTL for the queue statistics,
-         *                                 and {@code false} disables it.
-         */
-        public void setEnableQueueStatisticsTtl(boolean enableQueueStatisticsTtl) {
-            this.enableQueueStatisticsTtl = enableQueueStatisticsTtl;
-        }
-
-        /**
-         * Retrieves the time-to-live (TTL) duration for queue statistics.
-         * Default: 90 days
-         *
-         * @return the TTL duration for queue statistics in days
-         */
-        public int getQueueStatisticsTtlDuration() {
-            return queueStatisticsTtlDuration;
-        }
-
-        /**
-         * Sets the time-to-live (TTL) duration for the queue statistics.
-         *
-         * @param queueStatisticsTtlDuration the duration in days for which the queue statistics will be retained
-         */
-        public void setQueueStatisticsTtlDuration(int queueStatisticsTtlDuration) {
-            this.queueStatisticsTtlDuration = queueStatisticsTtlDuration;
-        }
-
-        /**
-         * Get the transactional behaviour mode of the {@link PostgresqlDurableQueues}<br>
-         * Default: {@link TransactionalMode#SingleOperationTransaction}
-         *
-         * @return the transactional behavior mode of the {@link PostgresqlDurableQueues}
-         */
-        public TransactionalMode getTransactionalMode() {
-            return transactionalMode;
-        }
-
-        /**
-         * Set the transactional behavior mode of the {@link PostgresqlDurableQueues}
-         * Default: {@link TransactionalMode#SingleOperationTransaction}
-         *
-         * @param transactionalMode the transactional behavior mode of the {@link PostgresqlDurableQueues}
-         */
-        public void setTransactionalMode(TransactionalMode transactionalMode) {
-            this.transactionalMode = transactionalMode;
-        }
-
-        /**
-         * Get the Message Handling timeout - Only relevant for {@link TransactionalMode#SingleOperationTransaction}<br>
+         * Get the Message Handling timeout - Only relevant for {@code SingleOperationTransaction}<br>
          * The Message Handling timeout defines the timeout for messages being delivered, but haven't yet been acknowledged.
          * After this timeout the message delivery will be reset, and the message will again be a candidate for delivery<br>
          * Default is 30 seconds
@@ -407,7 +338,7 @@ public class EssentialsComponentsProperties {
         }
 
         /**
-         * Get the Message Handling timeout - Only relevant for {@link TransactionalMode#SingleOperationTransaction}<br>
+         * Get the Message Handling timeout - Only relevant for {@code SingleOperationTransaction}<br>
          * The Message Handling timeout defines the timeout for messages being delivered, but haven't yet been acknowledged.
          * After this timeout the message delivery will be reset, and the message will again be a candidate for delivery<br>
          * Default is 30 seconds
@@ -474,64 +405,6 @@ public class EssentialsComponentsProperties {
          */
         public void setSharedQueueTableName(String sharedQueueTableName) {
             this.sharedQueueTableName = sharedQueueTableName;
-        }
-
-        /**
-         * Get the name of the table that will contain statistics for messages (across all {@link QueueName}'s)<br>
-         * Default is {@value PostgresqlDurableQueuesStatistics#DEFAULT_DURABLE_QUEUES_TABLE_NAME}<br>
-         * <br>
-         * <strong>Note:</strong><br>
-         * To support customization of storage table name, the {@link #getSharedQueueStatisticsTableName()} will be directly used in constructing SQL statements
-         * through string concatenation, which exposes the component to SQL injection attacks.<br>
-         * <br>
-         * <strong>Security Note:</strong><br>
-         * It is the responsibility of the user of this component to sanitize the {@code sharedQueueStatisticsTableName}
-         * to ensure the security of all the SQL statements generated by this component. The {@link PostgresqlDurableQueuesStatistics} component will
-         * call the {@link PostgresqlUtil#checkIsValidTableOrColumnName(String)} method to validate the table name as a first line of defense.<br>
-         * The {@link PostgresqlUtil#checkIsValidTableOrColumnName(String)} provides an initial layer of defense against SQL injection by applying naming conventions intended to reduce the risk of malicious input.<br>
-         * However, Essentials components as well as {@link PostgresqlUtil#checkIsValidTableOrColumnName(String)} does not offer exhaustive protection, nor does it assure the complete security of the resulting SQL against SQL injection threats.<br>
-         * <b>The responsibility for implementing protective measures against SQL Injection lies exclusively with the users/developers using the Essentials components and its supporting classes.</b><br>
-         * Users must ensure thorough sanitization and validation of API input parameters, values, column names, function names, table names, and index names.<br>
-         * Insufficient attention to these practices may leave the application vulnerable to SQL injection, potentially endangering the security and integrity of the database.<br>
-         * <br>
-         * It is highly recommended that the {@code sharedQueueStatisticsTableName} value is only derived from a controlled and trusted source.<br>
-         * To mitigate the risk of SQL injection attacks, external or untrusted inputs should never directly provide the {@code sharedQueueStatisticsTableName} value.<br>
-         * <b>Failure to adequately sanitize and validate this value could expose the application to SQL injection
-         * vulnerabilities, compromising the security and integrity of the database.</b>
-         *
-         * @return the name of the table that will contain all messages (across all {@link QueueName}'s)
-         */
-        public String getSharedQueueStatisticsTableName() {
-            return sharedQueueStatisticsTableName;
-        }
-
-        /**
-         * Set the name of the table that will contain statistics for messages (across all {@link QueueName}'s)<br>
-         * Default is {@value PostgresqlDurableQueuesStatistics#DEFAULT_DURABLE_QUEUES_TABLE_NAME}<br>
-         * <br>
-         * <strong>Note:</strong><br>
-         * To support customization of storage table name, the {@code sharedQueueStatisticsTableName} will be directly used in constructing SQL statements
-         * through string concatenation, which exposes the component to SQL injection attacks.<br>
-         * <br>
-         * <strong>Security Note:</strong><br>
-         * It is the responsibility of the user of this component to sanitize the {@code sharedQueueStatisticsTableName}
-         * to ensure the security of all the SQL statements generated by this component. The {@link PostgresqlDurableQueues} component will
-         * call the {@link PostgresqlUtil#checkIsValidTableOrColumnName(String)} method to validate the table name as a first line of defense.<br>
-         * The {@link PostgresqlUtil#checkIsValidTableOrColumnName(String)} provides an initial layer of defense against SQL injection by applying naming conventions intended to reduce the risk of malicious input.<br>
-         * However, Essentials components as well as {@link PostgresqlUtil#checkIsValidTableOrColumnName(String)} does not offer exhaustive protection, nor does it assure the complete security of the resulting SQL against SQL injection threats.<br>
-         * <b>The responsibility for implementing protective measures against SQL Injection lies exclusively with the users/developers using the Essentials components and its supporting classes.</b><br>
-         * Users must ensure thorough sanitization and validation of API input parameters, values, column names, function names, table names, and index names.<br>
-         * Insufficient attention to these practices may leave the application vulnerable to SQL injection, potentially endangering the security and integrity of the database.<br>
-         * <br>
-         * It is highly recommended that the {@code sharedQueueStatisticsTableName} value is only derived from a controlled and trusted source.<br>
-         * To mitigate the risk of SQL injection attacks, external or untrusted inputs should never directly provide the {@code sharedQueueTableName} value.<br>
-         * <b>Failure to adequately sanitize and validate this value could expose the application to SQL injection
-         * vulnerabilities, compromising the security and integrity of the database.</b>
-         *
-         * @param sharedQueueStatisticsTableName the name of the table that will contain all messages (across all {@link QueueName}'s)
-         */
-        public void setSharedQueueStatisticsTableName(String sharedQueueStatisticsTableName) {
-            this.sharedQueueStatisticsTableName = sharedQueueStatisticsTableName;
         }
 
         /**
@@ -702,22 +575,71 @@ public class EssentialsComponentsProperties {
             this.batchedFetchWarnRowsThreshold = batchedFetchWarnRowsThreshold;
         }
 
+    }
+
+    /**
+     * Settings for {@link DurableQueuesHealthIndicator}, bound from
+     * {@code essentials.durable-queues.health.*}.
+     * <p>
+     * The indicator is registered by default and can be turned off with
+     * {@code management.health.durable-queues.enabled=false}, like any other Spring Boot health indicator.
+     */
+    public static class DurableQueuesHealthProperties {
+        private long     deadLetterThreshold = 0;
+        private Duration cacheTimeToLive     = Duration.ofSeconds(10);
+
         /**
-         * Is the ordered-unordered query mode is enabled?<br>
-         * When {@code true}, enables a specialized query strategy that can improve performance for mixed, ordered and unordered message processing scenarios
+         * The number of dead-letter messages on a <em>single</em> queue at which
+         * {@link DurableQueuesHealthIndicator} reports {@code DOWN}. Defaults to {@code 0}, meaning it
+         * never does.
+         * <p>
+         * The default is deliberate. A health indicator contributes to the composite {@code /actuator/health}
+         * status, which readiness and liveness probes are routinely pointed at, so reporting {@code DOWN} on a
+         * dead letter would take working instances out of service — or restart them — because one message could
+         * not be handled. Set this only if a queue reaching a given dead-letter count really does mean this
+         * instance should stop receiving traffic.
+         * <p>
+         * To alert on dead letters without affecting any probe, use the
+         * {@code essentials.messaging.durable_queues.dead_lettered} Micrometer counter instead, which is
+         * published whenever a {@code MeterRegistry} is present.
+         *
+         * @return the per-queue dead-letter count at which the health indicator reports {@code DOWN}, or
+         * {@code 0} to never report {@code DOWN}
          */
-        public boolean isUseOrderedUnorderedQuery() {
-            return useOrderedUnorderedQuery;
+        public long getDeadLetterThreshold() {
+            return deadLetterThreshold;
         }
 
         /**
-         * Sets whether to use the ordered/unordered query optimization for message fetching. When {@code true}, enables a specialized query strategy that can improve
-         * performance for mixed, ordered and unordered message processing scenarios
-         *
-         * @param useOrderedUnorderedQuery flag to enable/disable the query optimization
+         * @param deadLetterThreshold the per-queue dead-letter count at which the health indicator reports
+         *                            {@code DOWN}; {@code 0} or negative to never report {@code DOWN}
+         * @see #getDeadLetterThreshold()
          */
-        public void setUseOrderedUnorderedQuery(boolean useOrderedUnorderedQuery) {
-            this.useOrderedUnorderedQuery = useOrderedUnorderedQuery;
+        public void setDeadLetterThreshold(long deadLetterThreshold) {
+            this.deadLetterThreshold = deadLetterThreshold;
+        }
+
+        /**
+         * How long {@link DurableQueuesHealthIndicator} reuses a computed result before reading the
+         * dead-letter counts again - default 10 seconds.
+         * <p>
+         * Computing the result costs one query for the queue names plus one count per queue. Probes poll
+         * {@code /actuator/health} on a timer from every instance, so without this the added database load would
+         * scale with probe frequency for a number that barely changes between probes.
+         *
+         * @return how long a computed health result is reused
+         */
+        public Duration getCacheTimeToLive() {
+            return cacheTimeToLive;
+        }
+
+        /**
+         * @param cacheTimeToLive how long a computed health result is reused; {@link Duration#ZERO} reads the
+         *                        counts on every call
+         * @see #getCacheTimeToLive()
+         */
+        public void setCacheTimeToLive(Duration cacheTimeToLive) {
+            this.cacheTimeToLive = cacheTimeToLive;
         }
     }
 

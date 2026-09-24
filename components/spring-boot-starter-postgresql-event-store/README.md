@@ -107,7 +107,7 @@ All beans use `@ConditionalOnMissingBean` - define your own bean of the same typ
 | `PostgresqlEventStore` | The main event store. Use it to append events and load event history. See [Event Store documentation](../postgresql-event-store/README.md)                                                                         |
 | `SeparateTablePerAggregateTypePersistenceStrategy` | Creates one database table per `AggregateType` <br/>(e.g., `AggregateType("Orders")` -> `orders_events`, `AggregateType("Customers")` -> `customers_events`). <br/>This keeps related events together for efficient querying |
 | `SpringTransactionAwareEventStoreUnitOfWorkFactory` | Ensures event store operations participate in Spring's `@Transactional` transactions. See [UnitOfWork documentation](../foundation/README.md#unitofwork-transactions)                                              |
-| `JacksonJSONEventSerializer` | Converts your event objects to/from JSON for database storage                                                                                                                                                      |
+| `Jackson3JSONEventSerializer` | Converts your event objects to/from JSON for database storage                                                                                                                                                      |
 
 ### Subscriptions & Event Processing
 
@@ -401,16 +401,8 @@ public PersistableEventMapper persistableEventMapper() {
         <artifactId>postgresql</artifactId>
     </dependency>
     <dependency>
-        <groupId>com.fasterxml.jackson.core</groupId>
+        <groupId>tools.jackson.core</groupId>
         <artifactId>jackson-databind</artifactId>
-    </dependency>
-    <dependency>
-        <groupId>com.fasterxml.jackson.datatype</groupId>
-        <artifactId>jackson-datatype-jdk8</artifactId>
-    </dependency>
-    <dependency>
-        <groupId>com.fasterxml.jackson.datatype</groupId>
-        <artifactId>jackson-datatype-jsr310</artifactId>
     </dependency>
     <dependency>
         <groupId>io.projectreactor</groupId>

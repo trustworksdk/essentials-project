@@ -16,8 +16,8 @@
 
 package dk.trustworks.essentials.examples.perflab.scenario;
 
-import com.fasterxml.jackson.core.type.TypeReference;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.core.type.TypeReference;
+import tools.jackson.databind.ObjectMapper;
 import dk.trustworks.essentials.examples.perflab.EssentialsPerformanceLabApplication;
 import dk.trustworks.essentials.examples.perflab.EssentialsPerformanceLabProperties;
 import org.slf4j.Logger;

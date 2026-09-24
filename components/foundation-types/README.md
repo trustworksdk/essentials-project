@@ -939,7 +939,7 @@ EventRevision extends IntegerType<EventRevision>
 ```
 
 **Benefit**: Inherits all `SingleValueType` features:
-- Jackson serialization (with [types-jackson](../../types-jackson/README.md))
+- Jackson serialization (with [types-jackson3](../../types-jackson3/README.md))
 - Spring Data MongoDB persistence (with [types-springdata-mongo](../../types-springdata-mongo/README.md))
 - JDBI argument support (with [types-jdbi](../../types-jdbi/README.md))
 - Spring Web converters (with [types-spring-web](../../types-spring-web/README.md))

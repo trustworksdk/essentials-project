@@ -27,8 +27,6 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 
 /**
  * Queue multiple messages to the same queue. All the messages will receive the same {@link QueuedMessage#getNextDeliveryTimestamp()}<br>
- * Note this method MUST be called within an existing {@link UnitOfWork} IF
- * using {@link TransactionalMode#FullyTransactional}
  * Operation also matches {@link DurableQueuesInterceptor#intercept(QueueMessages, InterceptorChain)}
  */
 public final class QueueMessages {
@@ -47,38 +45,15 @@ public final class QueueMessages {
 
     /**
      * Queue multiple messages to the same queue. All the messages will receive the same {@link QueuedMessage#getNextDeliveryTimestamp()}<br>
-     * Note this method MUST be called within an existing {@link UnitOfWork} IF
-     * using {@link TransactionalMode#FullyTransactional}
      *
      * @param queueName     the name of the Queue the messages will be added to
      * @param messages      the message payloads  ({@link Message}/{@link OrderedMessage})
      * @param deliveryDelay optional: how long will the queue wait until it delivers the messages to the {@link DurableQueueConsumer}
-     * @deprecated Use {@link #builder()}, whose {@code setDeliveryDelay} setter accepts both a plain {@code Duration} and an
-     *         {@code Optional}. Behaviour is unchanged.
      */
-    @Deprecated(forRemoval = true, since = "0.40.x")
-    public QueueMessages(QueueName queueName, List<? extends Message> messages, Optional<Duration> deliveryDelay) {
+    QueueMessages(QueueName queueName, List<? extends Message> messages, Optional<Duration> deliveryDelay) {
         this.queueName = requireNonNull(queueName, "No queueName provided");
         this.messages = requireNonNull(messages, "No payloads provided");
         this.deliveryDelay = requireNonNull(deliveryDelay, "No deliveryDelay provided");
-    }
-
-    /**
-     * Queue multiple messages to the same queue. All the messages will receive the same {@link QueuedMessage#getNextDeliveryTimestamp()}<br>
-     * Note this method MUST be called within an existing {@link UnitOfWork} IF
-     * using {@link TransactionalMode#FullyTransactional}
-     *
-     * @param queueName     the name of the Queue the messages will be added to
-     * @param messages      the message payloads  ({@link Message}/{@link OrderedMessage})
-     * @param deliveryDelay optional: how long will the queue wait until it delivers the messages to the {@link DurableQueueConsumer}
-     * @deprecated Use {@link #builder()}, whose {@code setDeliveryDelay} setter accepts both a plain {@code Duration} and an
-     *         {@code Optional}. Behaviour is unchanged.
-     */
-    @Deprecated(forRemoval = true, since = "0.40.x")
-    public QueueMessages(QueueName queueName, List<? extends Message> messages, Duration deliveryDelay) {
-        this(queueName,
-             messages,
-             Optional.ofNullable(deliveryDelay));
     }
 
     /**
