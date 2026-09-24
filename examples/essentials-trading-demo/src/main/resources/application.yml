@@ -38,6 +38,18 @@ trading-demo:
     # here: a hardcoded period id ages into the past and makes every later evaluation report skipped periods.
     # ACC-DEMO-001 is rolled by the policy, ACC-DEMO-002 by an explicit command, ACC-DEMO-003 not at all.
     max-policy-driven-events: 500
+  risk-approval:
+    # How long the stubbed risk service blocks the message handler that calls it. The handler is declared
+    # @MessageHandler(unitOfWork = UnitOfWorkMode.NONE), so it holds no database connection while it waits — raise this
+    # to watch a consumer thread sit on an external call for that long without costing the pool anything.
+    #
+    # It must stay well below essentials.durable-queues.message-handling-timeout (30s by default): past that
+    # the in-flight message is reset as stuck and redelivered while the first attempt is still blocked.
+    latency: 500ms
+    # Symbols the stub refuses, so the rejection path is demonstrable without a random outcome. MSFT is the second
+    # instrument the bootstrap seeds, so a freshly started demo shows one approved and one rejected instrument.
+    rejected-symbols:
+      - MSFT
   load:
     enabled: false
     trade-interval: 2s

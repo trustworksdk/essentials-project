@@ -201,6 +201,7 @@ Store-and-forward pattern:
 - **Inbox**: External → internal (e.g., Kafka → app)
 - **Outbox**: Internal → external (e.g., app → Kafka)
 - Deduplication, guaranteed delivery
+- `@MessageHandler(unitOfWork = UnitOfWorkMode.NONE)` for handlers doing blocking I/O — no `UnitOfWork`, hence no pooled connection, held during the call
 
 ### Event-Sourced Aggregates
 
