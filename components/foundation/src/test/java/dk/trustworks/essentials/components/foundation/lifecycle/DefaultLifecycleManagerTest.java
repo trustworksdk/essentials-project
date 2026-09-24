@@ -20,9 +20,10 @@ import dk.trustworks.essentials.shared.Lifecycle;
 import org.junit.jupiter.api.Test;
 import org.springframework.context.ApplicationContext;
 
-import java.util.Map;
+import java.util.*;
 import java.util.function.Consumer;
 
+import static org.assertj.core.api.Assertions.assertThatNoException;
 import static org.mockito.Mockito.*;
 
 class DefaultLifecycleManagerTest {
@@ -70,6 +71,42 @@ class DefaultLifecycleManagerTest {
 
         manager.start();
         verify(consumer).accept(applicationContext);
+    }
+
+    /**
+     * The beans are stopped serially in one pass, so an exception from one used to abandon every bean
+     * after it — and the case that reaches it is the one where stopping matters most: a database that
+     * has gone away, where several beans try to release leases, locks or replication slots and the
+     * first to fail takes the rest of the shutdown with it. The symptom is a process that logs its
+     * way through part of a shutdown and then keeps running.
+     * <p>
+     * A {@link java.util.LinkedHashMap} rather than {@code Map.of}: the order is the whole hazard, and
+     * an unordered map would make this pass roughly half the time against the broken implementation.
+     */
+    @Test
+    void a_bean_that_throws_while_stopping_does_not_stop_the_beans_after_it() {
+        var applicationContext = mock(ApplicationContext.class);
+        var throwingBean       = mock(Lifecycle.class);
+        var laterBean          = mock(Lifecycle.class);
+        when(throwingBean.isStarted()).thenReturn(true);
+        when(laterBean.isStarted()).thenReturn(true);
+        doThrow(new IllegalStateException("the database is gone")).when(throwingBean).stop();
+
+        var beans = new LinkedHashMap<String, Lifecycle>();
+        beans.put("throwing", throwingBean);
+        beans.put("later", laterBean);
+        when(applicationContext.getBeansOfType(Lifecycle.class)).thenReturn(beans);
+
+        var manager = new DefaultLifecycleManager(true);
+        manager.setApplicationContext(applicationContext);
+        manager.start();
+
+        assertThatNoException()
+                .describedAs("a failed stop is reported, not propagated — there is nothing above this "
+                             + "that could act on it, and propagating abandons the rest")
+                .isThrownBy(manager::stop);
+
+        verify(laterBean).stop();
     }
 
     @Test

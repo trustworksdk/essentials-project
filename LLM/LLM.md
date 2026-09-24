@@ -71,6 +71,7 @@ Consolidated view of all component modules [LLM-components.md](LLM-components.md
 | **spring-postgresql-event-store** | Spring transaction integration for `EventStore` | [LLM-spring-postgresql-event-store.md](LLM-spring-postgresql-event-store.md) |
 | **postgresql-distributed-fenced-lock** | Distributed locking via PostgreSQL | [LLM-postgresql-distributed-fenced-lock.md](LLM-postgresql-distributed-fenced-lock.md) |
 | **postgresql-queue** | Durable queues with PostgreSQL | [LLM-postgresql-queue.md](LLM-postgresql-queue.md) |
+| **postgresql-queue-shard-owned** | Experimental shard-owned queue engine — no claim write, cross-process ordering. Not published | [LLM-postgresql-queue-shard-owned.md](LLM-postgresql-queue-shard-owned.md) |
 | **postgresql-document-db** | Document database using PostgreSQL | [LLM-postgresql-document-db.md](LLM-postgresql-document-db.md) |
 | **springdata-mongo-distributed-fenced-lock** | Distributed locking via Spring Data MongoDB | [LLM-springdata-mongo-distributed-fenced-lock.md](LLM-springdata-mongo-distributed-fenced-lock.md) |
 | **springdata-mongo-queue** | Durable queues with Spring Data MongoDB | [LLM-springdata-mongo-queue.md](LLM-springdata-mongo-queue.md) |

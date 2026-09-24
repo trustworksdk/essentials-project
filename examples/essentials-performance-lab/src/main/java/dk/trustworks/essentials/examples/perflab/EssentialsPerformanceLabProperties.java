@@ -19,6 +19,7 @@ package dk.trustworks.essentials.examples.perflab;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 
 import java.time.Duration;
+import java.util.List;
 
 @ConfigurationProperties(prefix = "essentials.lab")
 public class EssentialsPerformanceLabProperties {
@@ -222,8 +223,282 @@ public class EssentialsPerformanceLabProperties {
         this.poisonFloodCount = poisonFloodCount;
     }
 
+    public SeqGap getSeqGap() {
+        return seqGap;
+    }
+
+    public QueueBenchmark getQueueBenchmark() {
+        return queueBenchmark;
+    }
+
     public enum Mode {
         SHOWCASE,
         BENCHMARK
+    }
+
+    private final SeqGap         seqGap         = new SeqGap();
+    private final QueueBenchmark queueBenchmark = new QueueBenchmark();
+
+    /**
+     * Settings for the {@code queue-benchmark} scenario, which captures the baseline the
+     * next-generation queue design has to beat.
+     * <p>
+     * One scenario covers several workload profiles rather than one class per profile, because they
+     * differ only in configuration: saturating throughput is {@code producerRateHz=0}, the latency
+     * profile is a low rate, the ordered profile sets a key cardinality, the failure profile sets a
+     * failure percentage, the idle-cost profile creates many queues and produces to few, and the
+     * soak profile is simply a long duration.
+     */
+    public static class QueueBenchmark {
+        /**
+         * One arm per named configuration of the existing implementation. {@code centralized} is the
+         * default single-fetcher topology; {@code traditional} is the per-consumer polling one.
+         * Comparing them is worth doing on its own — the plan assumes centralized is the faster
+         * baseline, and that assumption has never been measured here.
+         */
+        private List<String> arms              = List.of("centralized", "traditional");
+        private Workload     workload          = Workload.UNORDERED;
+        private int          keyCardinality    = 1_000;
+        /**
+         * How many of {@code essentials.lab.queue-count} queues actually receive messages. Leaving
+         * the rest idle is what exposes the cost of polling queues that have nothing in them —
+         * the case that dominates real deployments.
+         */
+        private int      busyQueues        = 1;
+        private int      parallelConsumers = 5;
+        /**
+         * Percentage of handled messages whose handler throws, exercising redelivery and the dead
+         * letter path. The design claims failure handling can be moved off the hot path; that claim
+         * needs a baseline showing what it costs today.
+         */
+        private int      failurePercent    = 0;
+        private Duration pollingInterval   = Duration.ofMillis(20);
+        private Duration redeliveryDelay   = Duration.ofMillis(100);
+        private int      maxRedeliveries   = 3;
+        private int      repetitions       = 3;
+        private int      payloadBytes      = 200;
+        private Duration drainTimeout      = Duration.ofSeconds(60);
+        /**
+         * Maximum number of enqueued-but-unhandled messages before producers pause.
+         * <p>
+         * Without this the run is not a throughput measurement at all. Unthrottled producers
+         * outrun the consumers within seconds, and from then on every latency sample is the time a
+         * message spent waiting in a backlog rather than the time the system took to deliver it —
+         * the first run of this scenario reported a p50 of 16 seconds for exactly that reason.
+         * Bounding in-flight work keeps the system in the steady state the numbers are supposed to
+         * describe.
+         */
+        private int maxInFlight = 5_000;
+
+        public List<String> getArms() {
+            return arms;
+        }
+
+        public void setArms(List<String> arms) {
+            this.arms = arms;
+        }
+
+        public Workload getWorkload() {
+            return workload;
+        }
+
+        public void setWorkload(Workload workload) {
+            this.workload = workload;
+        }
+
+        public int getKeyCardinality() {
+            return keyCardinality;
+        }
+
+        public void setKeyCardinality(int keyCardinality) {
+            this.keyCardinality = keyCardinality;
+        }
+
+        public int getBusyQueues() {
+            return busyQueues;
+        }
+
+        public void setBusyQueues(int busyQueues) {
+            this.busyQueues = busyQueues;
+        }
+
+        public int getParallelConsumers() {
+            return parallelConsumers;
+        }
+
+        public void setParallelConsumers(int parallelConsumers) {
+            this.parallelConsumers = parallelConsumers;
+        }
+
+        public int getFailurePercent() {
+            return failurePercent;
+        }
+
+        public void setFailurePercent(int failurePercent) {
+            this.failurePercent = failurePercent;
+        }
+
+        public Duration getPollingInterval() {
+            return pollingInterval;
+        }
+
+        public void setPollingInterval(Duration pollingInterval) {
+            this.pollingInterval = pollingInterval;
+        }
+
+        public Duration getRedeliveryDelay() {
+            return redeliveryDelay;
+        }
+
+        public void setRedeliveryDelay(Duration redeliveryDelay) {
+            this.redeliveryDelay = redeliveryDelay;
+        }
+
+        public int getMaxRedeliveries() {
+            return maxRedeliveries;
+        }
+
+        public void setMaxRedeliveries(int maxRedeliveries) {
+            this.maxRedeliveries = maxRedeliveries;
+        }
+
+        public int getRepetitions() {
+            return repetitions;
+        }
+
+        public void setRepetitions(int repetitions) {
+            this.repetitions = repetitions;
+        }
+
+        public int getPayloadBytes() {
+            return payloadBytes;
+        }
+
+        public void setPayloadBytes(int payloadBytes) {
+            this.payloadBytes = payloadBytes;
+        }
+
+        public Duration getDrainTimeout() {
+            return drainTimeout;
+        }
+
+        public void setDrainTimeout(Duration drainTimeout) {
+            this.drainTimeout = drainTimeout;
+        }
+
+        public int getMaxInFlight() {
+            return maxInFlight;
+        }
+
+        public void setMaxInFlight(int maxInFlight) {
+            this.maxInFlight = maxInFlight;
+        }
+
+        public enum Workload {
+            UNORDERED,
+            ORDERED
+        }
+    }
+
+    /**
+     * Settings for the {@code seq-gap} scenario, which measures how often a cursor-based reader
+     * observes a hole in a per-shard sequence, and how long those holes take to resolve.
+     * <p>
+     * A hole appears when one producer allocates sequence value <em>n</em> and a second allocates
+     * <em>n+1</em> and commits first: a reader following the sequence sees <em>n+1</em> before
+     * <em>n</em> exists. The proposed queue design deliberately does not stall its cursor on such a
+     * hole — it keeps delivering and chases the missing value separately — so the questions this
+     * scenario has to answer are how frequently holes occur, how quickly they resolve, and whether
+     * anything is ever lost.
+     */
+    public static class SeqGap {
+        private int shards = 8;
+        /**
+         * One arm per value. Each is how long a producer holds its transaction open after inserting
+         * and before committing, simulating an enqueue that has joined a longer business
+         * transaction — the outbox case, and the one that widens the window in which holes form.
+         * {@code 0} is the plain autocommit enqueue.
+         */
+        private List<Long> txHoldMillis = List.of(0L, 10L);
+        private int        batchSize    = 100;
+        /**
+         * How long the reader waits before re-querying for a missing sequence value. Too eager and
+         * it spends the run on point lookups that were always going to miss; too slow and it adds
+         * latency to exactly the messages that were already unlucky.
+         */
+        private Duration chaseDelay = Duration.ofMillis(5);
+        /**
+         * How long a missing sequence value is chased before being declared permanently absent —
+         * an aborted transaction, or a value the sequence cache burned. Must exceed the longest
+         * expected enqueue transaction or live messages will be abandoned.
+         */
+        private Duration gapExpiry    = Duration.ofSeconds(30);
+        private Duration drainTimeout = Duration.ofSeconds(30);
+        private int      repetitions  = 3;
+        private int      payloadBytes = 200;
+
+        public int getShards() {
+            return shards;
+        }
+
+        public void setShards(int shards) {
+            this.shards = shards;
+        }
+
+        public List<Long> getTxHoldMillis() {
+            return txHoldMillis;
+        }
+
+        public void setTxHoldMillis(List<Long> txHoldMillis) {
+            this.txHoldMillis = txHoldMillis;
+        }
+
+        public int getBatchSize() {
+            return batchSize;
+        }
+
+        public void setBatchSize(int batchSize) {
+            this.batchSize = batchSize;
+        }
+
+        public Duration getChaseDelay() {
+            return chaseDelay;
+        }
+
+        public void setChaseDelay(Duration chaseDelay) {
+            this.chaseDelay = chaseDelay;
+        }
+
+        public Duration getGapExpiry() {
+            return gapExpiry;
+        }
+
+        public void setGapExpiry(Duration gapExpiry) {
+            this.gapExpiry = gapExpiry;
+        }
+
+        public Duration getDrainTimeout() {
+            return drainTimeout;
+        }
+
+        public void setDrainTimeout(Duration drainTimeout) {
+            this.drainTimeout = drainTimeout;
+        }
+
+        public int getRepetitions() {
+            return repetitions;
+        }
+
+        public void setRepetitions(int repetitions) {
+            this.repetitions = repetitions;
+        }
+
+        public int getPayloadBytes() {
+            return payloadBytes;
+        }
+
+        public void setPayloadBytes(int payloadBytes) {
+            this.payloadBytes = payloadBytes;
+        }
     }
 }

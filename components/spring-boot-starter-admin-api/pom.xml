@@ -114,6 +114,16 @@
         <!-- Test: the committed contract, read from the classpath by the conformance test -->
         <!-- The aggregate lifecycle / archive *Api interfaces the aggregate controllers delegate to. Available
              transitively via admin-api-spec, declared here because this module compiles against it directly. -->
+        <!--
+            The shard-owned queue engine, for ShardOwnedQueuesController. Same shape as the event
+            store and aggregates above: the controller ships here and is @ConditionalOnBean on the
+            engine's Api, so an application that does not wire that bean never registers it.
+        -->
+        <dependency>
+            <groupId>dk.trustworks.essentials.components</groupId>
+            <artifactId>postgresql-queue-shard-owned</artifactId>
+            <version>${project.version}</version>
+        </dependency>
         <dependency>
             <groupId>dk.trustworks.essentials.components</groupId>
             <artifactId>eventsourced-aggregates</artifactId>

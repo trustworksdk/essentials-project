@@ -22,6 +22,19 @@ management:
       show-details: always
 
 trading-demo:
+  # Drives the shard-owned queue engine on BOTH lanes at once: unordered price ticks and
+  # per-account ordered activity. Off by default so the demo still starts on a small machine;
+  # POST /api/admin/queue-load/start turns it on, and /spike sends a burst.
+  queue-load:
+    enabled: true
+    queue-name: trading-events
+    shard-count: 4
+    sustained-interval: 250ms
+    sustained-batch: 10
+    spike-size: 5000
+    key-count: 200
+    handler-delay: 1ms
+    parallel-consumers: 8
   accounts:
     closing-books:
       mode: event-count-or-time-boundary

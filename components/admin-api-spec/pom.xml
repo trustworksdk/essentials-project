@@ -70,6 +70,16 @@
             <version>${project.version}</version>
         </dependency>
         <!-- The aggregate lifecycle / archive *Api interfaces and their DTOs. -->
+        <!--
+            The shard-owned queue engine's administrative contract and DTOs. Published as of the
+            release that adds this, which is what makes the dependency legal: the spec is published,
+            so everything it reflects over has to be.
+        -->
+        <dependency>
+            <groupId>dk.trustworks.essentials.components</groupId>
+            <artifactId>postgresql-queue-shard-owned</artifactId>
+            <version>${project.version}</version>
+        </dependency>
         <dependency>
             <groupId>dk.trustworks.essentials.components</groupId>
             <artifactId>eventsourced-aggregates</artifactId>

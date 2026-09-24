@@ -239,10 +239,21 @@ public abstract class ViewEventProcessor extends AbstractEventProcessor {
     }
 
     private void handleQueuedMessage(QueuedMessage queuedMessage) {
-        if (queuedMessage instanceof EventReferenceOrderedMessage orderedMessage) {
-            logger.debug("[{}] Handling queued message '{}' for Aggregate '{}' with key '{}' and event-order '{}'", durableQueueName, queuedMessage.getId(), orderedMessage.getPayload(), orderedMessage.key, orderedMessage.order);
-        } else {
-            logger.debug("[{}] Handling queued message '{}'", durableQueueName, queuedMessage.getId());
+        // Per-message, so TRACE; and guarded, for a reason beyond the usual cost one.
+        //
+        // Log arguments are evaluated eagerly, so an unguarded getId() runs on EVERY delivery no
+        // matter the configured level. A DurableQueues implementation is entitled to not have a
+        // QueueEntryId available on its push delivery path — the shard-owned engine's handler
+        // receives (key, payload, payloadType), and its adapter throws rather than stub an id that
+        // by-id operations would then address the wrong message with. Calling it here therefore
+        // failed every message on that engine and dead-lettered it, from a log statement nobody
+        // had enabled.
+        if (logger.isTraceEnabled()) {
+            if (queuedMessage instanceof EventReferenceOrderedMessage orderedMessage) {
+                logger.trace("[{}] Handling queued message '{}' for Aggregate '{}' with key '{}' and event-order '{}'", durableQueueName, queuedMessage.getId(), orderedMessage.getPayload(), orderedMessage.key, orderedMessage.order);
+            } else {
+                logger.trace("[{}] Handling queued message '{}'", durableQueueName, queuedMessage.getId());
+            }
         }
         var msg = queuedMessage.getMessage();
         queuedMessageConsumer.accept(msg);
