@@ -57,14 +57,17 @@ public record ApiQueueStatistics(QueueName queueName,
      *
      * @param queuedMessages          non-dead-letter messages queued
      * @param deadLetterMessages      dead-letter messages queued
-     * @param messagesBeingDelivered  how many of {@code queuedMessages} are currently out with a consumer
+     * @param messagesBeingDelivered  how many of {@code queuedMessages} are currently out with a consumer, or
+     *                                {@code null} when the {@code DurableQueues} implementation cannot count them
+     *                                cluster-wide. {@code null} means unknown, never zero
      * @param oldestReadyMessageAgeMillis how long the oldest ready-for-delivery message has been waiting, or
      *                                {@code null} when nothing is ready. A large value with
-     *                                {@code messagesBeingDelivered == 0} is the signature of a stalled queue
+     *                                {@code messagesBeingDelivered == 0} is the signature of a stalled queue; with
+     *                                {@code messagesBeingDelivered == null} it only says how long work has waited
      */
     public record Depth(long queuedMessages,
                         long deadLetterMessages,
-                        long messagesBeingDelivered,
+                        Long messagesBeingDelivered,
                         Long oldestReadyMessageAgeMillis) {
     }
 

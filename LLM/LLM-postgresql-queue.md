@@ -368,7 +368,9 @@ GET /durable-queues/queues/{queueName}/statistics   ->  ApiQueueStatistics
 | `instance` | `QueueStatisticsRegistry` | **this JVM only** — handled, retried, dead-lettered, handler durations, last failure. `null` when this instance has delivered nothing |
 
 `depth.messagesBeingDelivered` and `depth.oldestReadyMessageAgeMillis` are what separate "nothing to do" from
-"stalled": zero handled on this instance means nothing on its own.
+"stalled": zero handled on this instance means nothing on its own. `PostgresqlDurableQueues` always reports
+`messagesBeingDelivered`; the field is a nullable `Long` because an implementation that cannot count it cluster-wide
+reports `null` — unknown, not zero.
 
 See [LLM-foundation.md](./LLM-foundation.md) for the observer contract.
 

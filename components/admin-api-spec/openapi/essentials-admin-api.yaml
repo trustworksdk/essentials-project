@@ -3661,7 +3661,6 @@ components:
     Depth:
       required:
       - deadLetterMessages
-      - messagesBeingDelivered
       - queuedMessages
       type: object
       properties:

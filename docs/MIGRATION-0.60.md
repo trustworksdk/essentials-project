@@ -310,6 +310,11 @@ oldestReadyMessageTimestamp)`.
 
 The two additions are what make a depth reading actionable. Both PostgreSQL and MongoDB populate them.
 
+`numberOfMessagesBeingDelivered` is a nullable `Long`. `null` means the implementation **cannot count in-flight
+messages cluster-wide** — an engine whose consumers track deliveries in memory rather than in the queue storage — and
+never means zero. With it unknown, `oldestReadyMessageTimestamp` still says how long work has waited, but not whether
+anyone is working on it, so the "large age and nothing in flight means stalled" reading does not apply.
+
 **What to do:** a caller that only reads the record is unaffected. A caller that constructs one, or compares one
 by equality, must be updated — `oldestReadyMessageTimestamp` is data from the queue, so an equality comparison
 against a hand-built expected value is no longer a good way to assert on counts. Assert on the components you

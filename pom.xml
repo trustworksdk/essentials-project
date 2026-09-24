@@ -627,7 +627,7 @@
                                 `essentials.*` property. Nothing fails; the file is simply absent,
                                 and an already-installed jar keeps the copy an older toolchain made,
                                 so the loss is invisible until someone builds clean and looks.
-                                Valid since JDK 21, which is this build's floor.
+                                Valid on every JDK this build supports (25+).
                             -->
                             <arg>-proc:full</arg>
                         </compilerArgs>
