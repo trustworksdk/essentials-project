@@ -112,7 +112,7 @@ public interface StatefulAggregateRepository<ID, EVENT_TYPE, AGGREGATE_IMPL_TYPE
      * @param aggregateRootInstanceFactory the factory responsible for instantiating your {@link StatefulAggregate}'s when loading them from the {@link EventStore}
      * @param aggregateImplementationType  the concrete aggregate implementation type (MUST be a subtype of {@link StatefulAggregate}).<br>
      *                                     It will try to resolve the Aggregate Id type from the aggregateImplementationType type parameters
-     * @param aggregateSnapshotRepository  optional (may be null) {@link AggregateSnapshotRepository}
+     * @param aggregateSnapshotRepositoryProvider resolves the {@link AggregateSnapshotRepository} for the aggregate type, which may be none
      * @return a repository instance that can be used load, add and query aggregates of type <code>aggregateType</code>
      */
     @SuppressWarnings("unchecked")
@@ -202,7 +202,7 @@ public interface StatefulAggregateRepository<ID, EVENT_TYPE, AGGREGATE_IMPL_TYPE
      * @param aggregateRootInstanceFactory the factory responsible for instantiating your {@link StatefulAggregate}'s when loading them from the {@link EventStore}
      * @param aggregateImplementationType  the concrete aggregate implementation type (MUST be a subtype of {@link StatefulAggregate}).<br>
      *                                     It will try to resolve the Aggregate Id type from the aggregateImplementationType type parameters
-     * @param aggregateSnapshotRepository  optional (may be null) {@link AggregateSnapshotRepository}
+     * @param aggregateSnapshotRepositoryProvider resolves the {@link AggregateSnapshotRepository} for the aggregate type, which may be none
      * @return a repository instance that can be used load, add and query aggregates of type <code>aggregateType</code>
      */
     @SuppressWarnings("unchecked")
@@ -345,7 +345,7 @@ public interface StatefulAggregateRepository<ID, EVENT_TYPE, AGGREGATE_IMPL_TYPE
      * @param aggregateRootInstanceFactory the factory responsible for instantiating your {@link StatefulAggregate}'s when loading them from the {@link EventStore}
      * @param aggregateIdType              the concrete aggregate ID type
      * @param aggregateImplementationType  the concrete aggregate type (MUST be a subtype of {@link StatefulAggregate})
-     * @param aggregateSnapshotRepository  optional (may be null) {@link AggregateSnapshotRepository}
+     * @param aggregateSnapshotRepositoryProvider resolves the {@link AggregateSnapshotRepository} for the aggregate type, which may be none
      * @return a repository instance that can be used load, add and query aggregates of type <code>aggregateType</code>
      */
     static <CONFIG extends AggregateEventStreamConfiguration,
@@ -431,7 +431,7 @@ public interface StatefulAggregateRepository<ID, EVENT_TYPE, AGGREGATE_IMPL_TYPE
      * @param aggregateRootInstanceFactory the factory responsible for instantiating your {@link StatefulAggregate}'s when loading them from the {@link EventStore}
      * @param aggregateIdType              the concrete aggregate ID type
      * @param aggregateImplementationType  the concrete aggregate type (MUST be a subtype of {@link StatefulAggregate})
-     * @param aggregateSnapshotRepository  optional (may be null) {@link AggregateSnapshotRepository}
+     * @param aggregateSnapshotRepositoryProvider resolves the {@link AggregateSnapshotRepository} for the aggregate type, which may be none
      * @return a repository instance that can be used load, add and query aggregates of type <code>aggregateType</code>
      */
     static <CONFIG extends AggregateEventStreamConfiguration,

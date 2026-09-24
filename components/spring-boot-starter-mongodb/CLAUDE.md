@@ -27,7 +27,7 @@ Beans wired (in order of dependency):
 2. `MongoTransactionManager` — `ReadConcern.SNAPSHOT` + `WriteConcern.ACKNOWLEDGED` (hardcoded, override via `@ConditionalOnMissingBean`)
 3. `SpringMongoTransactionAwareUnitOfWorkFactory`
 4. `MongoFencedLockManager` (as `FencedLockManager`) — calls `buildAndStart()` at construction
-5. `MongoDurableQueues` (as `DurableQueues`) — mode-switched: `FullyTransactional` uses UoW factory; `SingleOperationTransaction` uses timeout. Collects every `DurableQueueMessageObserver` bean via `composite(...)`
+5. `MongoDurableQueues` (as `DurableQueues`) — built with the UoW factory and the message-handling timeout; every queue op is its own transaction (no `TransactionalMode` since 0.60). Collects every `DurableQueueMessageObserver` bean via `composite(...)`
 6. `Inboxes`, `Outboxes` — durable-queue-based impls wrapping `DurableQueues` + `FencedLockManager`
 7. `DurableLocalCommandBus` (bean name `essentialsCommandBus`) — always adds `UnitOfWorkControllingCommandBusInterceptor` unless user provides one
 8. `LocalEventBus` (bean name `essentialsEventBus`)

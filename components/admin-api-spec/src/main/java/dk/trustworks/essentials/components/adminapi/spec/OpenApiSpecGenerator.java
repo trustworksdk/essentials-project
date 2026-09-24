@@ -46,7 +46,8 @@ import java.util.stream.*;
  * mapping makes {@link #buildOpenApi()} throw, which fails the drift test and forces the contract to be
  * regenerated when the SPIs change.
  *
- * @see OpenApiSpecGenerationTest
+ * <p>
+ * The drift guard that keeps the committed file in step with the SPIs is {@code OpenApiSpecGenerationTest}.
  */
 public final class OpenApiSpecGenerator {
 
@@ -63,7 +64,7 @@ public final class OpenApiSpecGenerator {
 
     /**
      * Regenerates the committed spec file. Intended to be invoked by the build (or manually) when the
-     * SPIs change. See {@link OpenApiSpecGenerationTest} for the drift guard run in CI.
+     * SPIs change. See {@code OpenApiSpecGenerationTest} for the drift guard run in CI.
      */
     public static void main(String[] args) throws IOException {
         Path target = SPEC_FILE;

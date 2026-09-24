@@ -21,7 +21,7 @@
 ## TOC
 - [Core API](#core-api)
 - [Configuration](#configuration)
-- [Transaction Modes](#transaction-modes)
+- [Transactions](#transactions)
 - [Polling Mechanisms](#polling-mechanisms)
 - [Polling Optimization](#polling-optimization)
 - [Database Schema](#database-schema)
@@ -86,7 +86,6 @@ public SpringTransactionAwareJdbiUnitOfWorkFactory unitOfWorkFactory(
 public DurableQueues durableQueues(HandleAwareUnitOfWorkFactory unitOfWorkFactory) {
     return PostgresqlDurableQueues.builder()
         .setUnitOfWorkFactory(unitOfWorkFactory)
-        .setTransactionMode(TransactionMode.SingleOperationTransaction)
         .build();
 }
 ```
@@ -100,21 +99,19 @@ Created via `PostgresqlDurableQueues.builder()`.
 | `unitOfWorkFactory` | `HandleAwareUnitOfWorkFactory` | **Required** | JDBI transaction factory |
 | `jsonSerializer` | `JSONSerializer` | Jackson | Message serialization |
 | `sharedQueueTableName` | `String` | `durable_queues` | ⚠️ SQL injection risk - validate! |
-| `transactionMode` | `TransactionMode` | `SingleOperationTransaction` | See [Transaction Modes](#transaction-modes) |
+| `messageHandlingTimeout` | `Duration` | 30s | Stuck message timeout |
 | `useCentralizedMessageFetcher` | `boolean` | `true` | Centralized vs per-consumer |
 | `centralizedMessageFetcherPollingInterval` | `Duration` | 20ms | Polling interval |
 | `queuePollingOptimizerFactory` | `Function<ConsumeFromQueue,QueuePollingOptimizer>` | null | For `DefaultDurableQueueConsumer` |
 | `centralizedQueuePollingOptimizerFactory` | `Function<QueueName,QueuePollingOptimizer>` | null | For `CentralizedMessageFetcher` |
 | `multiTableChangeListener` | `MultiTableChangeListener` | null | LISTEN/NOTIFY support |
 
-## Transaction Modes
+## Transactions
 
-| Mode | Behavior | Retries | DLQ | Recommended |
-|------|----------|---------|-----|-------------|
-| `SingleOperationTransaction` | Each op in own tx | ✅ Works | ✅ Works | ✅ **Use this** |
-| `FullyTransactional` | Join parent tx | ❌ Broken | ❌ Broken | ❌ Avoid |
-
-⚠️ **FullyTransactional breaks retry handling**: Transaction rollback prevents retry count updates and DLQ persistence.
+Every queue operation runs in its own transaction: queueing, fetching, acknowledging, retrying and dead-lettering are
+separate, so a failing handler can never roll back its own retry count. (0.60 removed `TransactionalMode`; its
+`FullyTransactional` mode broke exactly that.) A `queueMessage` called inside a caller's `UnitOfWork` joins it, so the
+enqueue commits or rolls back with the caller's writes - which is what an Outbox relies on.
 
 ## Polling Mechanisms
 
@@ -489,7 +486,7 @@ See [README Security](../components/postgresql-queue/README.md#security) for ful
 
 | Issue | Wrong | Right |
 |-------|-------|-------|
-| FullyTransactional breaks retries | `.setTransactionMode(TransactionMode.FullyTransactional)` | `.setTransactionMode(TransactionMode.SingleOperationTransaction)` |
+| Expecting the handler's writes and the acknowledgement to commit together | Relying on a handler rollback to un-acknowledge | Idempotent handler - a retried delivery repeats it |
 | SQL injection via table name | `.setSharedQueueTableName(request.getParameter("table"))` | `.setSharedQueueTableName("message_queue")` |
 | Optimizer without listener | `.setQueuePollingOptimizerFactory(...)` alone | `.setMultiTableChangeListener(...).setQueuePollingOptimizerFactory(...)` |
 | Aggressive polling without optimization | `.setCentralizedMessageFetcherPollingInterval(Duration.ofMillis(1))` | Add optimizer + reasonable interval |

@@ -12,13 +12,13 @@ PostgreSQL-backed durable queue — `FOR UPDATE SKIP LOCKED` polling, ordered/un
 | Class | Internal role |
 |-------|---------------|
 | `PostgresqlDurableQueues` | Main impl of `BatchMessageFetchingCapableDurableQueues`; owns table init, consumer registries, interceptor chain, LISTEN/NOTIFY wiring |
-| `PostgresqlDurableQueuesBuilder` | Builder (prefer over constructors); default: `SingleOperationTransaction`, centralized fetcher, 20ms poll interval |
+| `PostgresqlDurableQueuesBuilder` | Builder (prefer over constructors); default: centralized fetcher, 20ms poll interval |
 | `DurableQueuesSql` | All SQL strings; parameterized via `{:tableName}` binding → avoids injection after `PostgresqlUtil.checkIsValidTableOrColumnName` guard |
 | `DurableQueuesSerialization` | Wraps `JSONSerializer`; deserializes payload + metadata; throws `DurableQueueDeserializationException` on failure (not runtime crash) |
 | `QueuedMessageRowMapper` | JDBI `RowMapper<QueuedMessage>`; shared by single + batch fetch paths; injected with payload/metadata deserializer lambdas |
 | `MessageMappingResult` | Record holding successful + failed mappings per batch poll; failed entries don't abort successful ones |
 | `PostgresqlDurableQueueConsumer` | Traditional per-queue polling consumer; extends `DefaultDurableQueueConsumer` from foundation |
-| `SingleOperationTransactionDurableQueuesInterceptor` | Wraps each `DurableQueues` operation in its own UoW when mode = `SingleOperationTransaction` |
+| `SingleOperationTransactionDurableQueuesInterceptor` | Wraps each `DurableQueues` operation in its own UoW; wired unconditionally since 0.60 |
 | `QueueTableNotification` | Deserialization target for PG LISTEN/NOTIFY payloads from the `durable_queues` trigger |
 | `QueueNameDuplicationFilter` | Collapses N notifications for same `queue_name` in a single poll batch into 1 → reduces redundant wakeups |
 

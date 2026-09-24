@@ -577,10 +577,10 @@ durableQueues.start();
 ### ⚠️ Missing Transaction Wrapper
 
 ```java
-// ❌ Wrong - FullyTransactional mode needs wrapping
+// ❌ Wrong - bypasses the subclass's hook, e.g. one that wraps queue calls in a UnitOfWork
 durableQueues.queueMessage(queueName, message);
 
-// ✅ Correct
+// ✅ Correct - withDurableQueue/usingDurableQueue are pass-throughs a subclass can override
 withDurableQueue(() -> durableQueues.queueMessage(queueName, message));
 ```
 

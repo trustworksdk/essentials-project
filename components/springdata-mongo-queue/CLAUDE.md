@@ -32,9 +32,8 @@ Every queue operation runs in its own transaction — queue/dequeue and acknowle
 single-document transactions. The `TransactionalMode` enum that used to make this a choice was removed in
 0.60; `FullyTransactional` was documented as broken for retries and dead-lettering.
 
-**`SingleOperationTransaction`** (recommended, and `builder()`'s default) — each queue op is its own atomic Mongo operation. Requires `messageHandlingTimeout`, which `builder()` defaults to `DEFAULT_MESSAGE_HANDLING_TIMEOUT` (30s). Stuck-message reset runs lazily per poll cycle when timeout elapsed.
-
-**`FullyTransactional`** — requires `SpringMongoTransactionAwareUnitOfWorkFactory`; queue writes participate in the ambient UoW/transaction. Needs MongoDB replica set.
+- `messageHandlingTimeout` drives stuck-message reset; `builder()` defaults it to `DEFAULT_MESSAGE_HANDLING_TIMEOUT` (30s). Reset runs lazily per poll cycle when the timeout elapsed.
+- Optional `SpringMongoTransactionAwareUnitOfWorkFactory` (needs a replica set): each message is handled in its own UoW, and `queueMessage` inside a caller's UoW joins it (Outbox). Ack/retry/dead-letter stay separate transactions.
 
 ## Polling & Notification
 
@@ -51,7 +50,7 @@ On fetch: if lower-`keyOrder` message with same key exists → reschedule curren
 
 ## Deserialization Error Handling
 
-`DurableQueueDeserializationException` during fetch → message immediately marked dead-letter via `markAsDeadLetterMessageInternal()`. In `FullyTransactional` mode this opens a new session (current UoW is rolled back) to write the dead-letter status.
+`DurableQueueDeserializationException` during fetch → message immediately marked dead-letter via `markAsDeadLetterMessageInternal()`.
 
 ## Extension Points
 
@@ -82,6 +81,5 @@ All ITs need Docker (Testcontainers spins up MongoDB).
 - Collection name is lower-cased on construction; `MongoUtil.checkIsValidCollectionName()` is first-line defense but not exhaustive — never derive name from untrusted input.
 - `DurableQueuedMessage.getMessage()` requires `deserializeMessagePayloadFunction` to be injected before call; omitting `setDeserializeMessagePayloadFunction()` → NPE. Injection happens in `getNextMessageReadyForDelivery`, `getQueuedMessage`, and `queryQueuedMessages`.
 - `acknowledgeMessageAsHandled` matches on `isDeadLetterMessage=false`; if handler calls `markAsDeadLetterMessage` mid-flight then ack returns `true` via secondary DLQ check — this is intentional.
-- `FullyTransactional` + deserialization error opens fresh Mongo session with explicit `MAJORITY` write concern — bypasses the in-flight UoW on purpose.
 - `QueuePollingOptimizer` default factory is `this::createQueuePollingOptimizerFor`; passing `null` for factory in constructors falls back to this default — not null-safe if overridden improperly in subclasses.
 - `sharedQueueCollectionName` lowercased in constructor → collection names always lowercase regardless of input case.
