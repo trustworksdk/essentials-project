@@ -158,22 +158,6 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
     }
 
     /**
-     * Join a runtime shared with the other queues in this process. The form to use when there is more
-     * than one queue: connections and threads then belong to the process rather than to each queue.
-     *
-     * @deprecated since 0.51.0 — use {@link #builder()} and
-     * {@link ShardOwnedQueueBuilder#setRuntime(ShardRuntime)}, which names its arguments
-     * rather than relying on the order of a {@code short}, an {@code int} and a
-     * {@code String}.
-     */
-    @Deprecated(forRemoval = true, since = "0.51.0")
-    public ShardOwnedQueue(DataSource dataSource, short queueId, int shardCount, String instanceId,
-                           ShardRuntime runtime) {
-        this(dataSource, queueId, shardCount, instanceId, new ShardOwnerMetrics());
-        useRuntime(runtime);
-    }
-
-    /**
      * @param metrics the engine's observability wiring — its own counters, and the consumer-supplied
      *                {@link dk.trustworks.essentials.components.queue.shardowned.spi.QueueObserver}
      */

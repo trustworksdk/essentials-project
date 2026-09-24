@@ -75,7 +75,7 @@ public class SubscriptionResetOnPoisonNotifierIT extends AbstractLogicalReplicat
         persistenceStrategy.addAggregateEventStreamConfiguration(ORDERS, OrderId.class);
 
         eventStore = new PostgresqlEventStore<>(unitOfWorkFactory, persistenceStrategy);
-        gapHandler = new PostgresqlEventStreamGapHandler<>(eventStore, unitOfWorkFactory);
+        gapHandler = new PostgresqlEventStreamGapHandler<>(unitOfWorkFactory);
 
         availability = new CdcAvailability();
         cdcEventStore = new CdcEventStore<>(eventStore, unitOfWorkFactory, gapHandler, new CdcEventBus(), new CdcProperties(), availability);
@@ -84,15 +84,20 @@ public class SubscriptionResetOnPoisonNotifierIT extends AbstractLogicalReplicat
 
         inboxRepository = new CdcInboxRepository(unitOfWorkFactory);
 
-        fencedLockManager = new PostgresqlFencedLockManager(jdbi, unitOfWorkFactory, Optional.empty(), Duration.ofSeconds(3), Duration.ofMillis(500), false);
+        fencedLockManager = PostgresqlFencedLockManager.builder()
+                                                       .setJdbi(jdbi)
+                                                       .setUnitOfWorkFactory(unitOfWorkFactory)
+                                                       .setLockTimeOut(Duration.ofSeconds(3))
+                                                       .setLockConfirmationInterval(Duration.ofMillis(500))
+                                                       .build();
 
-        eventStoreSubscriptionManager = new DefaultEventStoreSubscriptionManager(cdcEventStore,
-                                                                                 100,
-                                                                                 Duration.ofMillis(25),
-                                                                                 fencedLockManager,
-                                                                                 Duration.ofMillis(75),
-                                                                                 durableSubscriptionRepository,
-                                                                                 true);
+        eventStoreSubscriptionManager = DefaultEventStoreSubscriptionManager.builder()
+                                                                            .setEventStore(cdcEventStore)
+                                                                            .setEventStorePollingInterval(Duration.ofMillis(25))
+                                                                            .setFencedLockManager(fencedLockManager)
+                                                                            .setSnapshotResumePointsEvery(Duration.ofMillis(75))
+                                                                            .setDurableSubscriptionRepository(durableSubscriptionRepository)
+                                                                            .build();
     }
 
     @AfterEach
@@ -108,8 +113,7 @@ public class SubscriptionResetOnPoisonNotifierIT extends AbstractLogicalReplicat
 
         String slotName = "slot_" + UUID.randomUUID().toString().replace("-", "");
 
-        var gapHandler = new PostgresqlEventStreamGapHandler<>(eventStore,
-                                                               unitOfWorkFactory);
+        var gapHandler = new PostgresqlEventStreamGapHandler<>(unitOfWorkFactory);
 
         AggregateTypeResolver resolver = table -> {
             if ("orders_events".equalsIgnoreCase(table)) return ORDERS;
@@ -133,19 +137,17 @@ public class SubscriptionResetOnPoisonNotifierIT extends AbstractLogicalReplicat
         var plugin = new Wal2JsonLogicalDecodingPlugin(
                 CdcProperties.WalReplicationTailerProperties.defaults(Duration.ofMillis(25), Duration.ofMillis(50), Duration.ofSeconds(2), Duration.ofMillis(100)),
                 converter, walGlobalOrdersExtractor, CdcProperties.WalParserMode.STRING);
-        var dispatcher = new CdcDispatcher(
-                inboxRepository,
-                unitOfWorkFactory,
-                gapHandler,
-                plugin,
-                Optional.of(poisonNotifier),
-                cdcEventStore.getCdcBus()::publish, // publish converted events
-                slotName,
-                CdcDispatcherProperties.defaults(),
-                CdcProperties.CdcDeliveryMode.INBOX,
-                availability,
-                Optional.empty()
-        );
+        var dispatcher = new CdcDispatcher(CdcDispatcherDependencies.builder()
+                                                                    .setInbox(inboxRepository)
+                                                                    .setUnitOfWorkFactory(unitOfWorkFactory)
+                                                                    .setEventStreamGapHandler(gapHandler)
+                                                                    .setLogicalDecodingPlugin(plugin)
+                                                                    .setCdcPoisonNotifier(poisonNotifier)
+                                                                    .setOnEvents((cdcEventStore.getCdcBus()::publish))
+                                                                    .setAvailability(availability)
+                                                                    .setMeterRegistry(Optional.empty())
+                                                                    .build(),
+                                           new CdcDispatcherSettings(slotName, CdcDispatcherProperties.defaults(), CdcProperties.CdcDeliveryMode.INBOX));
 
         var received   = new CopyOnWriteArrayList<Long>();
         var resets     = new CopyOnWriteArrayList<Long>();
@@ -386,15 +388,14 @@ public class SubscriptionResetOnPoisonNotifierIT extends AbstractLogicalReplicat
         var snapshotResumePointsEvery = Duration.ofHours(1); // effectively "off" for this test
 
         var subscriptionManager =
-                new DefaultEventStoreSubscriptionManager(
-                        cdcEventStore,
-                        eventStorePollingBatchSize,
-                        eventStorePollingInterval,
-                        fencedLockManager,
-                        snapshotResumePointsEvery,
-                        durableSubscriptionRepository,
-                        true
-                );
+                DefaultEventStoreSubscriptionManager.builder()
+                                                    .setEventStore(cdcEventStore)
+                                                    .setEventStorePollingBatchSize(eventStorePollingBatchSize)
+                                                    .setEventStorePollingInterval(eventStorePollingInterval)
+                                                    .setFencedLockManager(fencedLockManager)
+                                                    .setSnapshotResumePointsEvery(snapshotResumePointsEvery)
+                                                    .setDurableSubscriptionRepository(durableSubscriptionRepository)
+                                                    .build();
 
         subscriptionManager.start();
 

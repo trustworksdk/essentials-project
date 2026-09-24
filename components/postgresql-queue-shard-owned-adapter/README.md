@@ -273,7 +273,10 @@ sequence, so its `QueueEntryId` changes and the old one no longer addresses it.
 engine behaves the same way on both, and Spring's `DurableQueuesInterceptor` beans are applied.
 
 ```java
-durableQueues.addInterceptor(new RecordExecutionTimeDurableQueueInterceptor(meterRegistry));
+durableQueues.addInterceptor(new RecordExecutionTimeDurableQueueInterceptor(MeasurementTaker.builder()
+                                                                                    .setMeterRegistry(meterRegistry)
+                                                                                    .build(),
+                                                                    "OrderService"));
 ```
 
 This does **not** bridge onto the engine's own `MessageQueueInterceptor` chain, and bridging would

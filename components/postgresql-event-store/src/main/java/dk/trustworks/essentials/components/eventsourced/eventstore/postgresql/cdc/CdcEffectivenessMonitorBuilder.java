@@ -95,7 +95,6 @@ public final class CdcEffectivenessMonitorBuilder {
      *
      * @return the monitor
      */
-    @SuppressWarnings("removal")
     public CdcEffectivenessMonitor build() {
         return new CdcEffectivenessMonitor(requireNonNull(tailer, "tailer cannot be null"),
                                            requireNonNull(dispatcher, "dispatcher cannot be null"),

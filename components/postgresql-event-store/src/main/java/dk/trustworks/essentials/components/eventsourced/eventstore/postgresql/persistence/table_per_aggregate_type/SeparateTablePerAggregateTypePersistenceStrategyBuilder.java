@@ -118,7 +118,6 @@ public final class SeparateTablePerAggregateTypePersistenceStrategyBuilder {
      *
      * @return the strategy
      */
-    @SuppressWarnings("removal")
     public SeparateTablePerAggregateTypePersistenceStrategy build() {
         return new SeparateTablePerAggregateTypePersistenceStrategy(requireNonNull(jdbi, "jdbi cannot be null"),
                                                                     requireNonNull(unitOfWorkFactory, "unitOfWorkFactory cannot be null"),

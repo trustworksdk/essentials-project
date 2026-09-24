@@ -17,9 +17,8 @@
 package dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.subscription;
 
 import dk.trustworks.essentials.components.foundation.json.EssentialsObjectMappers;
-import com.fasterxml.jackson.annotation.JsonAutoDetect;
+import dk.trustworks.essentials.shared.measurement.MeasurementTaker;
 import tools.jackson.databind.*;
-import tools.jackson.databind.json.JsonMapper;
 import dk.trustworks.essentials.components.distributed.fencedlock.postgresql.PostgresqlFencedLockManager;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.*;
@@ -93,7 +92,11 @@ class EventStoreSubscriptionManager_exclusivelySubscribeToAggregateEventsAsynchr
 
         eventStore = new PostgresqlEventStore<>(unitOfWorkFactory,
                                                 persistenceStrategy,
-                                                new MeasurementEventStoreSubscriptionObserver(Optional.empty(), true, LogThresholds.defaultThresholds(), null));
+                                                new MeasurementEventStoreSubscriptionObserver(MeasurementTaker.builder()
+                                                                                                              .setLoggingRecorder(MeasurementEventStoreSubscriptionObserver.class,
+                                                                                                                                  LogThresholds.defaultThresholds())
+                                                                                                              .build(),
+                                                                                              null));
         eventStore.addAggregateEventStreamConfiguration(aggregateType,
                                                         OrderId.class);
         eventStore.addAggregateEventStreamConfiguration(standardSingleTenantConfiguration(PRODUCTS,
@@ -119,12 +122,13 @@ class EventStoreSubscriptionManager_exclusivelySubscribeToAggregateEventsAsynchr
         eventStoreSubscriptionManagerNode1 = EventStoreSubscriptionManager.createFor(eventStore,
                                                                                      50,
                                                                                      Duration.ofMillis(100),
-                                                                                     new PostgresqlFencedLockManager(jdbi,
-                                                                                                                     unitOfWorkFactory,
-                                                                                                                     Optional.of("Node1"),
-                                                                                                                     Duration.ofSeconds(3),
-                                                                                                                     Duration.ofSeconds(1),
-                                                                                                                     false),
+                                                                                     PostgresqlFencedLockManager.builder()
+                                                                                                                .setJdbi(jdbi)
+                                                                                                                .setUnitOfWorkFactory(unitOfWorkFactory)
+                                                                                                                .setLockManagerInstanceId("Node1")
+                                                                                                                .setLockTimeOut(Duration.ofSeconds(3))
+                                                                                                                .setLockConfirmationInterval(Duration.ofSeconds(1))
+                                                                                                                .build(),
                                                                                      Duration.ofSeconds(1),
                                                                                      durableSubscriptionRepository);
         eventStoreSubscriptionManagerNode1.start();
@@ -281,12 +285,13 @@ class EventStoreSubscriptionManager_exclusivelySubscribeToAggregateEventsAsynchr
         eventStoreSubscriptionManagerNode1 = EventStoreSubscriptionManager.createFor(eventStore,
                                                                                      50,
                                                                                      Duration.ofMillis(100),
-                                                                                     new PostgresqlFencedLockManager(jdbi,
-                                                                                                                     unitOfWorkFactory,
-                                                                                                                     Optional.of("Node1"),
-                                                                                                                     Duration.ofSeconds(2),
-                                                                                                                     Duration.ofMillis(500),
-                                                                                                                     false),
+                                                                                     PostgresqlFencedLockManager.builder()
+                                                                                                                .setJdbi(jdbi)
+                                                                                                                .setUnitOfWorkFactory(unitOfWorkFactory)
+                                                                                                                .setLockManagerInstanceId("Node1")
+                                                                                                                .setLockTimeOut(Duration.ofSeconds(2))
+                                                                                                                .setLockConfirmationInterval(Duration.ofMillis(500))
+                                                                                                                .build(),
                                                                                      Duration.ofSeconds(1),
                                                                                      durableSubscriptionRepository);
         eventStoreSubscriptionManagerNode1.start();
@@ -383,12 +388,13 @@ class EventStoreSubscriptionManager_exclusivelySubscribeToAggregateEventsAsynchr
         eventStoreSubscriptionManagerNode1 = EventStoreSubscriptionManager.createFor(eventStore,
                                                                                      50,
                                                                                      Duration.ofMillis(100),
-                                                                                     new PostgresqlFencedLockManager(jdbi,
-                                                                                                                     unitOfWorkFactory,
-                                                                                                                     Optional.of("Node1"),
-                                                                                                                     Duration.ofSeconds(3),
-                                                                                                                     Duration.ofSeconds(1),
-                                                                                                                     false),
+                                                                                     PostgresqlFencedLockManager.builder()
+                                                                                                                .setJdbi(jdbi)
+                                                                                                                .setUnitOfWorkFactory(unitOfWorkFactory)
+                                                                                                                .setLockManagerInstanceId("Node1")
+                                                                                                                .setLockTimeOut(Duration.ofSeconds(3))
+                                                                                                                .setLockConfirmationInterval(Duration.ofSeconds(1))
+                                                                                                                .build(),
                                                                                      Duration.ofSeconds(1),
                                                                                      durableSubscriptionRepository);
         eventStoreSubscriptionManagerNode1.start();

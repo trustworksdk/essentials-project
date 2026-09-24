@@ -21,7 +21,6 @@ import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.cd
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.cdc.CdcProperties.CdcDispatcherProperties;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.cdc.CdcProperties.PgOutputProperties;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.cdc.CdcProperties.WalReplicationTailerProperties;
-import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.cdc.CdcProperties.WalParserMode;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.cdc.converter.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.AggregateType;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.EventStreamTableColumnNames;
@@ -101,7 +100,7 @@ class WalReplicationWithEssentialsAggregatePgOutputIT extends AbstractLogicalRep
 
         eventStore = new PostgresqlEventStore<>(unitOfWorkFactory, persistenceStrategy);
         inboxRepository = new CdcInboxRepository(unitOfWorkFactory);
-        gapHandler = new PostgresqlEventStreamGapHandler<>(eventStore, unitOfWorkFactory);
+        gapHandler = new PostgresqlEventStreamGapHandler<>(unitOfWorkFactory);
     }
 
     @AfterEach
@@ -121,25 +120,17 @@ class WalReplicationWithEssentialsAggregatePgOutputIT extends AbstractLogicalRep
         List<PersistedEvent> cdcPersistedEvents = new CopyOnWriteArrayList<>();
 
         var availability = new CdcAvailability();
-        var tailer = new WalReplicationTailer(
-                replicationDataSource,
-                jdbi,
-                unitOfWorkFactory,
-                slotName,
-                inboxRepository,
-                tailerProperties(),
-                PgSlotMode.CREATE_IF_MISSING,
-                CdcMode.AUTO,
-                CdcDeliveryMode.DIRECT,
-                pgOutputPlugin(publicationName, pgOutputConverter),
-                Optional.of(cdcPersistedEvents::addAll),
-                Optional.empty(),
-                availability,
-                Optional.empty(),
-                Optional.empty(),
-                Optional.of(eventStreamTablesSupplier()),
-                false
-        );
+        var tailer = new WalReplicationTailer(CdcTailerDependencies.builder()
+                                                                   .setReplicationDataSource(replicationDataSource)
+                                                                   .setJdbi(jdbi)
+                                                                   .setUnitOfWorkFactory(unitOfWorkFactory)
+                                                                   .setLogicalDecodingPlugin(pgOutputPlugin(publicationName, pgOutputConverter))
+                                                                   .setAvailability(availability)
+                                                                   .setMeterRegistry(Optional.empty())
+                                                                   .setEventStreamTableNamesSupplier((Optional.of(eventStreamTablesSupplier())))
+                                                                   .build(),
+                                              new CdcTailerSettings(slotName, tailerProperties(), PgSlotMode.CREATE_IF_MISSING, CdcMode.AUTO, false),
+                                              CdcDelivery.direct(cdcPersistedEvents::addAll));
 
         tailer.startAndAwaitReady(Duration.ofSeconds(10));
         appendOrderEvents();
@@ -169,39 +160,28 @@ class WalReplicationWithEssentialsAggregatePgOutputIT extends AbstractLogicalRep
 
         var availability = new CdcAvailability();
         var logicalDecodingPlugin = pgOutputPlugin(publicationName, pgOutputConverter);
-        var tailer = new WalReplicationTailer(
-                replicationDataSource,
-                jdbi,
-                unitOfWorkFactory,
-                slotName,
-                inboxRepository,
-                tailerProperties(),
-                PgSlotMode.CREATE_IF_MISSING,
-                CdcMode.AUTO,
-                CdcDeliveryMode.INBOX,
-                logicalDecodingPlugin,
-                Optional.of(cdcPersistedEvents::addAll),
-                Optional.empty(),
-                availability,
-                Optional.empty(),
-                Optional.empty(),
-                Optional.of(eventStreamTablesSupplier()),
-                false
-        );
+        var tailer = new WalReplicationTailer(CdcTailerDependencies.builder()
+                                                                   .setReplicationDataSource(replicationDataSource)
+                                                                   .setJdbi(jdbi)
+                                                                   .setUnitOfWorkFactory(unitOfWorkFactory)
+                                                                   .setLogicalDecodingPlugin(logicalDecodingPlugin)
+                                                                   .setAvailability(availability)
+                                                                   .setMeterRegistry(Optional.empty())
+                                                                   .setEventStreamTableNamesSupplier((Optional.of(eventStreamTablesSupplier())))
+                                                                   .build(),
+                                              new CdcTailerSettings(slotName, tailerProperties(), PgSlotMode.CREATE_IF_MISSING, CdcMode.AUTO, false),
+                                              CdcDelivery.inbox(inboxRepository));
 
-        var dispatcher = new CdcDispatcher(
-                inboxRepository,
-                unitOfWorkFactory,
-                gapHandler,
-                logicalDecodingPlugin,
-                Optional.empty(),
-                cdcPersistedEvents::addAll,
-                slotName,
-                CdcDispatcherProperties.defaults(),
-                CdcDeliveryMode.INBOX,
-                availability,
-                Optional.empty()
-        );
+        var dispatcher = new CdcDispatcher(CdcDispatcherDependencies.builder()
+                                                                    .setInbox(inboxRepository)
+                                                                    .setUnitOfWorkFactory(unitOfWorkFactory)
+                                                                    .setEventStreamGapHandler(gapHandler)
+                                                                    .setLogicalDecodingPlugin(logicalDecodingPlugin)
+                                                                    .setOnEvents((cdcPersistedEvents::addAll))
+                                                                    .setAvailability(availability)
+                                                                    .setMeterRegistry(Optional.empty())
+                                                                    .build(),
+                                           new CdcDispatcherSettings(slotName, CdcDispatcherProperties.defaults(), CdcDeliveryMode.INBOX));
 
         tailer.startAndAwaitReady(Duration.ofSeconds(10));
         dispatcher.start();
@@ -291,25 +271,17 @@ class WalReplicationWithEssentialsAggregatePgOutputIT extends AbstractLogicalRep
         var pgOutputConverter = new PgOutputToPersistedEventConverter(jacksonJSONSerializer, resolver, AggregateIdSerializerResolver.forEventStore(eventStore));
 
         var availability = new CdcAvailability();
-        var tailer = new WalReplicationTailer(
-                replicationDataSource,
-                jdbi,
-                unitOfWorkFactory,
-                slotName,
-                inboxRepository,
-                tailerProperties(),
-                PgSlotMode.CREATE_IF_MISSING,
-                CdcMode.AUTO,
-                CdcDeliveryMode.INBOX,
-                pgOutputPlugin(publicationName, pgOutputConverter),
-                Optional.empty(), // INBOX mode → no direct consumer
-                Optional.empty(),
-                availability,
-                Optional.empty(),
-                Optional.empty(),
-                Optional.of(eventStreamTablesSupplier()),
-                false
-        );
+        var tailer = new WalReplicationTailer(CdcTailerDependencies.builder()
+                                                                   .setReplicationDataSource(replicationDataSource)
+                                                                   .setJdbi(jdbi)
+                                                                   .setUnitOfWorkFactory(unitOfWorkFactory)
+                                                                   .setLogicalDecodingPlugin(pgOutputPlugin(publicationName, pgOutputConverter))
+                                                                   .setAvailability(availability)
+                                                                   .setMeterRegistry(Optional.empty())
+                                                                   .setEventStreamTableNamesSupplier((Optional.of(eventStreamTablesSupplier())))
+                                                                   .build(),
+                                              new CdcTailerSettings(slotName, tailerProperties(), PgSlotMode.CREATE_IF_MISSING, CdcMode.AUTO, false),
+                                              CdcDelivery.inbox(inboxRepository));
 
         tailer.startAndAwaitReady(Duration.ofSeconds(10));
         appendOrderEvents();       // 4 INSERTs in ONE transaction (first append → RELATION boundary)
@@ -605,44 +577,33 @@ class WalReplicationWithEssentialsAggregatePgOutputIT extends AbstractLogicalRep
                                                      PgOutputLogicalDecodingPlugin plugin,
                                                      Supplier<Set<String>> eventStreamTables,
                                                      CdcAvailability availability) {
-        return new WalReplicationTailer(
-                replicationDataSource,
-                jdbi,
-                unitOfWorkFactory,
-                slotName,
-                inboxRepository,
-                tailerProperties(),
-                PgSlotMode.CREATE_IF_MISSING,
-                CdcMode.AUTO,
-                CdcDeliveryMode.INBOX,
-                plugin,
-                Optional.empty(),
-                Optional.empty(),
-                availability,
-                Optional.empty(),
-                Optional.empty(),
-                Optional.of(eventStreamTables),
-                false
-        );
+        return new WalReplicationTailer(CdcTailerDependencies.builder()
+                                                             .setReplicationDataSource(replicationDataSource)
+                                                             .setJdbi(jdbi)
+                                                             .setUnitOfWorkFactory(unitOfWorkFactory)
+                                                             .setLogicalDecodingPlugin(plugin)
+                                                             .setAvailability(availability)
+                                                             .setMeterRegistry(Optional.empty())
+                                                             .setEventStreamTableNamesSupplier(eventStreamTables)
+                                                             .build(),
+                                        new CdcTailerSettings(slotName, tailerProperties(), PgSlotMode.CREATE_IF_MISSING, CdcMode.AUTO, false),
+                                        CdcDelivery.inbox(inboxRepository));
     }
 
     private CdcDispatcher inboxDispatcher(String slotName,
                                           LogicalDecodingPlugin plugin,
                                           CdcAvailability availability,
                                           List<PersistedEvent> sink) {
-        return new CdcDispatcher(
-                inboxRepository,
-                unitOfWorkFactory,
-                gapHandler,
-                plugin,
-                Optional.empty(),
-                sink::addAll,
-                slotName,
-                CdcDispatcherProperties.defaults(),
-                CdcDeliveryMode.INBOX,
-                availability,
-                Optional.empty()
-        );
+        return new CdcDispatcher(CdcDispatcherDependencies.builder()
+                                                          .setInbox(inboxRepository)
+                                                          .setUnitOfWorkFactory(unitOfWorkFactory)
+                                                          .setEventStreamGapHandler(gapHandler)
+                                                          .setLogicalDecodingPlugin(plugin)
+                                                          .setOnEvents((sink::addAll))
+                                                          .setAvailability(availability)
+                                                          .setMeterRegistry(Optional.empty())
+                                                          .build(),
+                                 new CdcDispatcherSettings(slotName, CdcDispatcherProperties.defaults(), CdcDeliveryMode.INBOX));
     }
 
     private WalReplicationTailer directPgOutputTailer(String slotName,
@@ -650,25 +611,17 @@ class WalReplicationWithEssentialsAggregatePgOutputIT extends AbstractLogicalRep
                                                        PgOutputToPersistedEventConverter pgOutputConverter,
                                                        List<PersistedEvent> persistedEvents) {
         var availability = new CdcAvailability();
-        return new WalReplicationTailer(
-                replicationDataSource,
-                jdbi,
-                unitOfWorkFactory,
-                slotName,
-                inboxRepository,
-                tailerProperties(),
-                PgSlotMode.CREATE_IF_MISSING,
-                CdcMode.AUTO,
-                CdcDeliveryMode.DIRECT,
-                pgOutputPlugin(publicationName, pgOutputConverter),
-                Optional.of(persistedEvents::addAll),
-                Optional.empty(),
-                availability,
-                Optional.empty(),
-                Optional.empty(),
-                Optional.of(eventStreamTablesSupplier()),
-                false
-        );
+        return new WalReplicationTailer(CdcTailerDependencies.builder()
+                                                             .setReplicationDataSource(replicationDataSource)
+                                                             .setJdbi(jdbi)
+                                                             .setUnitOfWorkFactory(unitOfWorkFactory)
+                                                             .setLogicalDecodingPlugin(pgOutputPlugin(publicationName, pgOutputConverter))
+                                                             .setAvailability(availability)
+                                                             .setMeterRegistry(Optional.empty())
+                                                             .setEventStreamTableNamesSupplier((Optional.of(eventStreamTablesSupplier())))
+                                                             .build(),
+                                        new CdcTailerSettings(slotName, tailerProperties(), PgSlotMode.CREATE_IF_MISSING, CdcMode.AUTO, false),
+                                        CdcDelivery.direct(persistedEvents::addAll));
     }
 
     /**

@@ -769,13 +769,19 @@ public class Order extends AggregateRoot<OrderId, OrderEvent, Order> { }
 `AggregateSnapshotJobStatus`: `PENDING` → `PROCESSING` (reclaimed after `processingTimeout`, default 5m) → `FAILED` (retried up to `maxRetries`) → `PARKED` (retries exhausted; a re-enqueue **replaces** only `PARKED` rows).
 
 ```java
-var store = new PostgresqlAggregateSnapshotStore(eventStore, unitOfWorkFactory, Optional.empty(), jsonSerializer);
-var repo  = new AsyncAggregateSnapshotRepository(store,
-                                                 jsonSerializer,
-                                                 AddNewAggregateSnapshotStrategy.updateWhenBehindByNumberOfEvents(100),
-                                                 AggregateSnapshotDeletionStrategy.keepALimitedNumberOfHistoricSnapshots(3),
-                                                 AsyncAggregateSnapshotSettings.asynchronous(),
-                                                 unitOfWorkFactory);
+var store = PostgresqlAggregateSnapshotStore.builder()
+                                            .setEventStore(eventStore)
+                                            .setUnitOfWorkFactory(unitOfWorkFactory)
+                                            .setJsonSerializer(jsonSerializer)   // snapshot table name: the default
+                                            .build();
+var repo  = AsyncAggregateSnapshotRepository.builder()
+                                            .setSnapshotStore(store)
+                                            .setJsonSerializer(jsonSerializer)
+                                            .setAddNewSnapshotStrategy(AddNewAggregateSnapshotStrategy.updateWhenBehindByNumberOfEvents(100))
+                                            .setSnapshotDeletionStrategy(AggregateSnapshotDeletionStrategy.keepALimitedNumberOfHistoricSnapshots(3))
+                                            .setSettings(AsyncAggregateSnapshotSettings.asynchronous())
+                                            .setUnitOfWorkFactory(unitOfWorkFactory)
+                                            .build();
 repo.start();   // Lifecycle
 ```
 

@@ -51,8 +51,6 @@ public final class PostgresqlDurableQueuesBuilder {
     private String                                                        sharedQueueTableName         = DEFAULT_DURABLE_QUEUES_TABLE_NAME;
     private MultiTableChangeListener<TableChangeNotification>             multiTableChangeListener     = null;
     private Function<ConsumeFromQueue, QueuePollingOptimizer>             queuePollingOptimizerFactory = null;
-    /**
-     */
     private Duration                                                      messageHandlingTimeout       = Duration.ofSeconds(30);
 
     /**
@@ -229,8 +227,6 @@ public final class PostgresqlDurableQueuesBuilder {
         this.batchedFetchWarnRowsThreshold = batchedFetchWarnRowsThreshold;
         return this;
     }
-
-    @SuppressWarnings("removal")
 
     /**
      * Set the {@link DurableQueueMessageObserver} notified of how each delivery ended — handled, retried,

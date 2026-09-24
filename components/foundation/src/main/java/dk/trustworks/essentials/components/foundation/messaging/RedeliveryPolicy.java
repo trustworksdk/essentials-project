@@ -81,8 +81,6 @@ public final class RedeliveryPolicy {
         return new FixedBackoffBuilder();
     }
 
-    /**
-     */
     RedeliveryPolicy(Duration initialRedeliveryDelay,
                             Duration followupRedeliveryDelay,
                             double followupRedeliveryDelayMultiplier,

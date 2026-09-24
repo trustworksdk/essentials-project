@@ -129,21 +129,6 @@ class MeasurementTakerTest {
         measurementTaker.recordTime(MeasurementContext.builder("essentials.test").build(), Duration.ofMillis(1));
     }
 
-    @Test
-    void the_deprecated_micrometer_setter_still_agrees_with_its_replacement() {
-        MeterRegistry meterRegistry = new SimpleMeterRegistry();
-
-        @SuppressWarnings("removal")
-        var measurementTaker = MeasurementTaker.builder()
-                                               .withOptionalMicrometerMeasurementRecorder(Optional.of(meterRegistry))
-                                               .build();
-
-        measurementTaker.recordTime(MeasurementContext.builder("essentials.test.bridge").build(),
-                                    Duration.ofMillis(3));
-
-        assertThat(meterRegistry.find("essentials.test.bridge").timer()).isNotNull();
-    }
-
     private static final class RecordingMeasurementRecorder implements MeasurementRecorder {
         private final List<MeasurementContext> recorded = new ArrayList<>();
 

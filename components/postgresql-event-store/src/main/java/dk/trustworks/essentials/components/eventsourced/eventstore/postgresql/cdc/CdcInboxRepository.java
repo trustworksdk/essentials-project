@@ -77,11 +77,9 @@ public class CdcInboxRepository {
     /**
      * @param unitOfWorkFactory the {@link HandleAwareUnitOfWorkFactory} needed to access the database
      * @param meterRegistry     optional {@link MeterRegistry} — when empty, no metrics are recorded
-     * @deprecated Use {@link #builder()}. This constructor declares an {@code Optional} parameter and/or more than five parameters; the builder names every argument and accepts both plain values and {@code Optional}s. It is unchanged and remains the implementation the builder delegates to.
      */
-    @Deprecated(forRemoval = true, since = "0.40.x")
-    public CdcInboxRepository(HandleAwareUnitOfWorkFactory<? extends HandleAwareUnitOfWork> unitOfWorkFactory,
-                              Optional<MeterRegistry> meterRegistry) {
+    CdcInboxRepository(HandleAwareUnitOfWorkFactory<? extends HandleAwareUnitOfWork> unitOfWorkFactory,
+                Optional<MeterRegistry> meterRegistry) {
         this(unitOfWorkFactory, meterRegistry, CdcSql.DEFAULT_CDC_TABLE_NAME);
     }
 
@@ -94,10 +92,8 @@ public class CdcInboxRepository {
      * @param unitOfWorkFactory  the {@link HandleAwareUnitOfWorkFactory} needed to access the database
      * @param meterRegistry      optional {@link MeterRegistry} — when empty, no metrics are recorded
      * @param cdcInboxTableName  the name of the CDC inbox table
-     * @deprecated Use {@link #builder()}. This constructor declares an {@code Optional} parameter and/or more than five parameters; the builder names every argument and accepts both plain values and {@code Optional}s. It is unchanged and remains the implementation the builder delegates to.
      */
-    @Deprecated(forRemoval = true, since = "0.40.x")
-    public CdcInboxRepository(HandleAwareUnitOfWorkFactory<? extends HandleAwareUnitOfWork> unitOfWorkFactory,
+    CdcInboxRepository(HandleAwareUnitOfWorkFactory<? extends HandleAwareUnitOfWork> unitOfWorkFactory,
                               Optional<MeterRegistry> meterRegistry,
                               String cdcInboxTableName) {
         this.unitOfWorkFactory = unitOfWorkFactory;

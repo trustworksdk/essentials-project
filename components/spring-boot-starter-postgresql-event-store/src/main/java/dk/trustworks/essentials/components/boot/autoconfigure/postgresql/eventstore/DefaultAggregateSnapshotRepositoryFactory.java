@@ -57,18 +57,16 @@ public class DefaultAggregateSnapshotRepositoryFactory implements AggregateSnaps
      * @param jobRepository the optional repository for managing aggregate snapshot jobs
      * @param meterRegistry the optional meter registry for monitoring and metrics
      * @throws IllegalArgumentException if any of the provided parameters is null
-     * @deprecated Use {@link #builder()}. This constructor declares an {@code Optional} parameter and/or more than five parameters; the builder names every argument and accepts both plain values and {@code Optional}s. It is unchanged and remains the implementation the builder delegates to.
      */
-    @Deprecated(forRemoval = true, since = "0.40.x")
-    public DefaultAggregateSnapshotRepositoryFactory(ConfigurableEventStore<SeparateTablePerAggregateEventStreamConfiguration> eventStore,
-                                                     EventStoreUnitOfWorkFactory<? extends EventStoreUnitOfWork> unitOfWorkFactory,
-                                                     JSONEventSerializer jsonSerializer,
-                                                     AggregateSnapshotStore snapshotStore,
-                                                     AggregateSnapshotConfigurationResolver resolver,
-                                                     DurableAsyncSnapshotSettings durableSettings,
-                                                     EssentialsEventStoreProperties properties,
-                                                     Optional<AggregateSnapshotJobRepository> jobRepository,
-                                                     Optional<MeterRegistry> meterRegistry) {
+    DefaultAggregateSnapshotRepositoryFactory(ConfigurableEventStore<SeparateTablePerAggregateEventStreamConfiguration> eventStore,
+                                              EventStoreUnitOfWorkFactory<? extends EventStoreUnitOfWork> unitOfWorkFactory,
+                                              JSONEventSerializer jsonSerializer,
+                                              AggregateSnapshotStore snapshotStore,
+                                              AggregateSnapshotConfigurationResolver resolver,
+                                              DurableAsyncSnapshotSettings durableSettings,
+                                              EssentialsEventStoreProperties properties,
+                                              Optional<AggregateSnapshotJobRepository> jobRepository,
+                                              Optional<MeterRegistry> meterRegistry) {
         this.eventStore = requireNonNull(eventStore, "No eventStore provided");
         this.unitOfWorkFactory = requireNonNull(unitOfWorkFactory, "No unitOfWorkFactory provided");
         this.jsonSerializer = requireNonNull(jsonSerializer, "No jsonSerializer provided");
@@ -95,27 +93,33 @@ public class DefaultAggregateSnapshotRepositoryFactory implements AggregateSnaps
         var deletionStrategy = resolvedConfiguration.deletionMode().toDeletionStrategy(resolvedConfiguration.keepLastSnapshots());
 
         AggregateSnapshotRepository repository = switch (resolvedConfiguration.mode()) {
-            case SYNC -> new PostgresqlAggregateSnapshotRepository(eventStore,
-                                                                  unitOfWorkFactory,
-                                                                  Optional.ofNullable(properties.getSnapshots().getSnapshotTableName()),
-                                                                  jsonSerializer,
-                                                                  triggerStrategy,
-                                                                  deletionStrategy,
-                                                                  meterRegistry);
-            case ASYNC_IN_MEMORY -> new AsyncAggregateSnapshotRepository(snapshotStore,
-                                                                         jsonSerializer,
-                                                                         triggerStrategy,
-                                                                         deletionStrategy,
-                                                                         new AsyncAggregateSnapshotSettings(SnapshotExecutionMode.ASYNC_IN_MEMORY,
-                                                                                                            properties.getSnapshots().getWorkerThreads()),
-                                                                         unitOfWorkFactory);
-            case ASYNC_DURABLE -> new DurableAsyncAggregateSnapshotRepository(eventStore,
-                                                                             snapshotStore,
-                                                                             jobRepository.orElseThrow(() -> new IllegalStateException("AggregateSnapshotJobRepository bean is required for ASYNC_DURABLE snapshot mode")),
-                                                                             jsonSerializer,
-                                                                             triggerStrategy,
-                                                                             deletionStrategy,
-                                                                             meterRegistry);
+            case SYNC -> PostgresqlAggregateSnapshotRepository.builder()
+                                                              .setEventStore(eventStore)
+                                                              .setUnitOfWorkFactory(unitOfWorkFactory)
+                                                              .setSnapshotTableName(Optional.ofNullable(properties.getSnapshots().getSnapshotTableName()))
+                                                              .setJsonSerializer(jsonSerializer)
+                                                              .setAddNewSnapshotStrategy(triggerStrategy)
+                                                              .setSnapshotDeletionStrategy(deletionStrategy)
+                                                              .setMeterRegistry(meterRegistry)
+                                                              .build();
+            case ASYNC_IN_MEMORY -> AsyncAggregateSnapshotRepository.builder()
+                                                                    .setSnapshotStore(snapshotStore)
+                                                                    .setJsonSerializer(jsonSerializer)
+                                                                    .setAddNewSnapshotStrategy(triggerStrategy)
+                                                                    .setSnapshotDeletionStrategy(deletionStrategy)
+                                                                    .setSettings(new AsyncAggregateSnapshotSettings(SnapshotExecutionMode.ASYNC_IN_MEMORY,
+                                                                                                                    properties.getSnapshots().getWorkerThreads()))
+                                                                    .setUnitOfWorkFactory(unitOfWorkFactory)
+                                                                    .build();
+            case ASYNC_DURABLE -> DurableAsyncAggregateSnapshotRepository.builder()
+                                                                         .setEventStore(eventStore)
+                                                                         .setSnapshotStore(snapshotStore)
+                                                                         .setJobRepository(jobRepository.orElseThrow(() -> new IllegalStateException("AggregateSnapshotJobRepository bean is required for ASYNC_DURABLE snapshot mode")))
+                                                                         .setJsonSerializer(jsonSerializer)
+                                                                         .setAddNewSnapshotStrategy(triggerStrategy)
+                                                                         .setSnapshotDeletionStrategy(deletionStrategy)
+                                                                         .setMeterRegistry(meterRegistry)
+                                                                         .build();
         };
         return Optional.of(repository);
     }
@@ -254,7 +258,6 @@ public class DefaultAggregateSnapshotRepositoryFactory implements AggregateSnaps
         /**
          * @return the new {@link DefaultAggregateSnapshotRepositoryFactory}
          */
-        @SuppressWarnings("removal")
         public DefaultAggregateSnapshotRepositoryFactory build() {
             return new DefaultAggregateSnapshotRepositoryFactory(eventStore,
                                                                  unitOfWorkFactory,

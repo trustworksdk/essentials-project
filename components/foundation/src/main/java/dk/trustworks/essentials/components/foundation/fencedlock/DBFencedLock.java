@@ -59,16 +59,12 @@ public class DBFencedLock implements FencedLock {
     private transient DBFencedLockManager<? extends UnitOfWork, DBFencedLock> fencedLockManager;
     private transient List<LockCallback>  lockCallbacks;
 
-    /**
-     * @deprecated Use {@link #builder()}. This constructor declares an {@code Optional} parameter and/or more than five parameters; the builder names every argument and accepts both plain values and {@code Optional}s. It is unchanged and remains the implementation the builder delegates to.
-     */
-    @Deprecated(forRemoval = true, since = "0.40.x")
-    public DBFencedLock(DBFencedLockManager<? extends UnitOfWork, DBFencedLock> fencedLockManager,
-                        LockName lockName,
-                        Long currentToken,
-                        String lockedByBusInstanceId,
-                        OffsetDateTime lockAcquiredTimestamp,
-                        OffsetDateTime lockLastConfirmedTimestamp) {
+    DBFencedLock(DBFencedLockManager<? extends UnitOfWork, DBFencedLock> fencedLockManager,
+                 LockName lockName,
+                 Long currentToken,
+                 String lockedByBusInstanceId,
+                 OffsetDateTime lockAcquiredTimestamp,
+                 OffsetDateTime lockLastConfirmedTimestamp) {
         this.fencedLockManager = fencedLockManager;
         this.lockName = lockName;
         this.currentToken = currentToken;
@@ -251,7 +247,6 @@ public class DBFencedLock implements FencedLock {
         /**
          * @return the new {@link DBFencedLock}
          */
-        @SuppressWarnings("removal")
         public DBFencedLock build() {
             return new DBFencedLock(fencedLockManager,
                                     lockName,

@@ -102,7 +102,6 @@ public final class PostgresqlMessageQueueBuilder {
         }
     }
 
-    @SuppressWarnings("removal")
     public PostgresqlMessageQueue build() {
         resolveQueueName();
         return new PostgresqlMessageQueue(dataSource, queueId, shardCount, instanceId, settings);

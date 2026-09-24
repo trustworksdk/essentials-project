@@ -224,22 +224,16 @@ public final class SeparateTablePerAggregateTypeEventStreamConfigurationFactory 
         return new SeparateTablePerAggregateTypeEventStreamConfigurationFactoryBuilder();
     }
 
-    /**
-     * @deprecated Use {@link #builder()}. Ten positional arguments — five of them consecutive column-type enums of
-     *         only two distinct types — cannot be checked by the compiler and cannot be read at the call site. This
-     *         constructor is unchanged and remains the implementation the builder delegates to.
-     */
-    @Deprecated(forRemoval = true, since = "0.40.x")
-    public SeparateTablePerAggregateTypeEventStreamConfigurationFactory(Function<AggregateType, String> resolveEventStreamTableName,
-                                                                        EventStreamTableColumnNames eventStreamTableColumnNames,
-                                                                        int queryFetchSize,
-                                                                        JSONEventSerializer jsonSerializer,
-                                                                        IdentifierColumnType aggregateIdColumnType,
-                                                                        IdentifierColumnType eventIdColumnType,
-                                                                        IdentifierColumnType correlationIdColumnType,
-                                                                        JSONColumnType eventJsonColumnType,
-                                                                        JSONColumnType eventMetadataJsonColumnType,
-                                                                        TenantSerializer<?> tenantSerializer) {
+    SeparateTablePerAggregateTypeEventStreamConfigurationFactory(Function<AggregateType, String> resolveEventStreamTableName,
+                                                                 EventStreamTableColumnNames eventStreamTableColumnNames,
+                                                                 int queryFetchSize,
+                                                                 JSONEventSerializer jsonSerializer,
+                                                                 IdentifierColumnType aggregateIdColumnType,
+                                                                 IdentifierColumnType eventIdColumnType,
+                                                                 IdentifierColumnType correlationIdColumnType,
+                                                                 JSONColumnType eventJsonColumnType,
+                                                                 JSONColumnType eventMetadataJsonColumnType,
+                                                                 TenantSerializer<?> tenantSerializer) {
         this.resolveEventStreamTableName = requireNonNull(resolveEventStreamTableName, "No resolveEventStreamTableName provided");
         this.eventStreamTableColumnNames = requireNonNull(eventStreamTableColumnNames, "No eventStreamTableColumnNames provided");
         this.queryFetchSize = queryFetchSize;

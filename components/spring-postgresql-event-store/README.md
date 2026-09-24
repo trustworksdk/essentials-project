@@ -391,12 +391,11 @@ public class EventStoreConfig {
             )
         );
 
-        var eventStore = new PostgresqlEventStore<>(
-            unitOfWorkFactory,
-            persistenceStrategy,
-            Optional.empty(),
-            es -> new PostgresqlEventStreamGapHandler<>(es, unitOfWorkFactory)
-        );
+        var eventStore = PostgresqlEventStore.<SeparateTablePerAggregateEventStreamConfiguration>builder()
+                                             .setUnitOfWorkFactory(unitOfWorkFactory)
+                                             .setPersistenceStrategy(persistenceStrategy)
+                                             .setEventStreamGapHandlerFactory(es -> new PostgresqlEventStreamGapHandler<>(unitOfWorkFactory))
+                                             .build();
 
         // Register aggregate types
         eventStore.addAggregateEventStreamConfiguration(

@@ -165,15 +165,13 @@ public final class SeparateTablePerAggregateTypePersistenceStrategy implements A
      * @param persistableEventEnrichers                {@link PersistableEventEnricher}'s - which are called in sequence by the {@link SeparateTablePerAggregateTypePersistenceStrategy#persist(EventStoreUnitOfWork, AggregateType, Object, Optional, List)} after
      *                                                 {@link PersistableEventMapper#map(Object, AggregateEventStreamConfiguration, Object, EventOrder)}
      *                                                 has been called
-     * @deprecated Use {@link #builder()}. This constructor declares an {@code Optional} parameter and/or more than five parameters; the builder names every argument and accepts both plain values and {@code Optional}s. It is unchanged and remains the implementation the builder delegates to.
      */
-    @Deprecated(forRemoval = true, since = "0.40.x")
-    public SeparateTablePerAggregateTypePersistenceStrategy(Jdbi jdbi,
-                                                            EventStoreUnitOfWorkFactory unitOfWorkFactory,
-                                                            PersistableEventMapper eventMapper,
-                                                            AggregateEventStreamConfigurationFactory<SeparateTablePerAggregateEventStreamConfiguration> aggregateEventStreamConfigurationFactory,
-                                                            List<SeparateTablePerAggregateEventStreamConfiguration> aggregateTypeConfigurations,
-                                                            List<PersistableEventEnricher> persistableEventEnrichers) {
+    SeparateTablePerAggregateTypePersistenceStrategy(Jdbi jdbi,
+                                              EventStoreUnitOfWorkFactory unitOfWorkFactory,
+                                              PersistableEventMapper eventMapper,
+                                              AggregateEventStreamConfigurationFactory<SeparateTablePerAggregateEventStreamConfiguration> aggregateEventStreamConfigurationFactory,
+                                              List<SeparateTablePerAggregateEventStreamConfiguration> aggregateTypeConfigurations,
+                                              List<PersistableEventEnricher> persistableEventEnrichers) {
         this(jdbi,
              unitOfWorkFactory,
              eventMapper,
@@ -223,10 +221,8 @@ public final class SeparateTablePerAggregateTypePersistenceStrategy implements A
      *                                                 {@link PersistableEventMapper#map(Object, AggregateEventStreamConfiguration, Object, EventOrder)}
      *                                                 has been called
      * @param aggregateTypeConfigurations              {@link AggregateEventStreamConfiguration}'s that should be added immediately
-     * @deprecated Use {@link #builder()}. This constructor declares an {@code Optional} parameter and/or more than five parameters; the builder names every argument and accepts both plain values and {@code Optional}s. It is unchanged and remains the implementation the builder delegates to.
      */
-    @Deprecated(forRemoval = true, since = "0.40.x")
-    public SeparateTablePerAggregateTypePersistenceStrategy(Jdbi jdbi,
+    SeparateTablePerAggregateTypePersistenceStrategy(Jdbi jdbi,
                                                             EventStoreUnitOfWorkFactory unitOfWorkFactory,
                                                             PersistableEventMapper eventMapper,
                                                             AggregateEventStreamConfigurationFactory<SeparateTablePerAggregateEventStreamConfiguration> aggregateEventStreamConfigurationFactory,

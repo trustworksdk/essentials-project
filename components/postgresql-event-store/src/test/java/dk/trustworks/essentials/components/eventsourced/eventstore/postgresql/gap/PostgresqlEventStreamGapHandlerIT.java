@@ -17,9 +17,7 @@
 package dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.gap;
 
 import dk.trustworks.essentials.components.foundation.json.EssentialsObjectMappers;
-import com.fasterxml.jackson.annotation.JsonAutoDetect;
 import tools.jackson.databind.*;
-import tools.jackson.databind.json.JsonMapper;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.PostgresqlEventStore;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.gap.PostgresqlEventStreamGapHandler.ResolveTransientGapsToPermanentGapsPromotionStrategy;
@@ -89,22 +87,22 @@ class PostgresqlEventStreamGapHandlerIT {
                                                                                                                                                                                       JSONColumnType.JSONB));
         persistenceStrategy.addAggregateEventStreamConfiguration(aggregateType,
                                                                  OrderId.class);
-        eventStore = new PostgresqlEventStore<>(unitOfWorkFactory,
-                                                persistenceStrategy,
-                                                Optional.empty(),
-                                                eventStore -> new PostgresqlEventStreamGapHandler<>(eventStore,
-                                                                                                    unitOfWorkFactory,
-                                                                                                    Duration.ofMillis(1000),
-                                                                                                    (forAggregateType, globalOrderQueryRange, allTransientGaps) -> {
-                                                                                                        var numberOfGaps          = allTransientGaps.size();
-                                                                                                        var numberOfGapsToInclude = Math.min(numberOfGaps, 2);
-                                                                                                        return numberOfGapsToInclude > 0 ? allTransientGaps.subList(0, numberOfGapsToInclude)
-                                                                                                                                                           .stream()
-                                                                                                                                                           .map(Pair::_1)
-                                                                                                                                                           .collect(Collectors.toList()) : NO_TRANSIENT_GAPS;
-                                                                                                    },
-                                                                                                    ResolveTransientGapsToPermanentGapsPromotionStrategy.thresholdBased(1)),
-                                                new EventStoreSubscriptionObserver.NoOpEventStoreSubscriptionObserver());
+        eventStore = PostgresqlEventStore.<SeparateTablePerAggregateEventStreamConfiguration>builder()
+                                         .setUnitOfWorkFactory(unitOfWorkFactory)
+                                         .setPersistenceStrategy(persistenceStrategy)
+                                         .setEventStreamGapHandlerFactory(eventStore -> new PostgresqlEventStreamGapHandler<>(unitOfWorkFactory,
+                                                                                                                              Duration.ofMillis(1000),
+                                                                                                                              (forAggregateType, globalOrderQueryRange, allTransientGaps) -> {
+                                                                                                                                  var numberOfGaps          = allTransientGaps.size();
+                                                                                                                                  var numberOfGapsToInclude = Math.min(numberOfGaps, 2);
+                                                                                                                                  return numberOfGapsToInclude > 0 ? allTransientGaps.subList(0, numberOfGapsToInclude)
+                                                                                                                                                                                     .stream()
+                                                                                                                                                                                     .map(Pair::_1)
+                                                                                                                                                                                     .collect(Collectors.toList()) : NO_TRANSIENT_GAPS;
+                                                                                                                              },
+                                                                                                                              ResolveTransientGapsToPermanentGapsPromotionStrategy.thresholdBased(1)))
+                                         .setEventStoreSubscriptionObserver(new EventStoreSubscriptionObserver.NoOpEventStoreSubscriptionObserver())
+                                         .build();
     }
 
     @AfterEach

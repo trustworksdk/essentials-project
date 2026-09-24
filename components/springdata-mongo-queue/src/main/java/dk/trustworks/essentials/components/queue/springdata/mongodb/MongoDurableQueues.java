@@ -1622,8 +1622,6 @@ public final class MongoDurableQueues implements DurableQueues {
         // PostgreSQL side between its constructors and its builder. FullyTransactional is the side documented as
         // broken for retries and dead-lettering, which is why convergence goes this way. Behaviour change for existing
         // builder callers; called out in the migration guide.
-        /**
-         */
         private Duration messageHandlingTimeout = DEFAULT_MESSAGE_HANDLING_TIMEOUT;
 
         private DurableQueueMessageObserver messageObserver = DurableQueueMessageObserver.none();
@@ -1702,7 +1700,6 @@ public final class MongoDurableQueues implements DurableQueues {
         /**
          * @return the new {@link MongoDurableQueues}
          */
-        @SuppressWarnings("removal")
         public MongoDurableQueues build() {
             var durableQueues = new MongoDurableQueues(                             mongoTemplate,
                                           unitOfWorkFactory,

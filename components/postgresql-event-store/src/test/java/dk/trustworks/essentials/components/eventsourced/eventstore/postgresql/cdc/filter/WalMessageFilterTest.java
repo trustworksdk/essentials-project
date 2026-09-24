@@ -17,8 +17,6 @@
 package dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.cdc.filter;
 
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.serializer.json.EssentialsJSONEventSerializers;
-import tools.jackson.databind.ObjectMapper;
-import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.serializer.json.Jackson3JSONEventSerializer;
 import org.junit.jupiter.api.Test;
 
 import java.nio.charset.StandardCharsets;
@@ -136,9 +134,7 @@ class WalMessageFilterTest {
         var liveTables = new HashSet<String>();
         liveTables.add("orders_events");
 
-        var liveFilter = new DefaultWalMessageFilter(
-                EssentialsJSONEventSerializers.create(),
-                () -> liveTables);
+        var liveFilter = new DefaultWalMessageFilter((() -> liveTables));
 
         String ordersInsert = """
                               {"change":[{"kind":"insert","table":"orders_events"}]}
@@ -166,12 +162,7 @@ class WalMessageFilterTest {
     @Test
     void supplier_is_invoked_on_every_shouldPersist_call() {
         var invocations = new AtomicInteger();
-        var liveFilter = new DefaultWalMessageFilter(
-                EssentialsJSONEventSerializers.create(),
-                () -> {
-                    invocations.incrementAndGet();
-                    return java.util.Set.of("orders_events");
-                });
+        var liveFilter = new DefaultWalMessageFilter((() -> { invocations.incrementAndGet(); return java.util.Set.of("orders_events"); }));
 
         String wal = """
                      {"change":[{"kind":"insert","table":"orders_events"}]}

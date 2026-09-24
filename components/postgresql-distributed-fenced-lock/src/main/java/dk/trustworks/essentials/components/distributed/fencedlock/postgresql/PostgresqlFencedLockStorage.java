@@ -220,24 +220,25 @@ public final class PostgresqlFencedLockStorage implements FencedLockStorage<Hand
         return unitOfWork.handle()
                          .createQuery("SELECT * FROM " + this.fencedLocksTableName + " WHERE lock_name=:lock_name")
                          .bind("lock_name", lockName)
-                         .map(row -> new DBFencedLock(lockManager,
-                                                      lockName,
-                                                      row.getColumn("last_issued_fence_token", Long.class),
-                                                      row.getColumn("locked_by_lockmanager_instance_id", String.class),
-                                                      row.getColumn("lock_acquired_ts", OffsetDateTime.class),
-                                                      row.getColumn("lock_last_confirmed_ts", OffsetDateTime.class)))
+                         .map(row -> DBFencedLock.builder()
+                                                 .setFencedLockManager(lockManager)
+                                                 .setLockName(lockName)
+                                                 .setCurrentToken(row.getColumn("last_issued_fence_token", Long.class))
+                                                 .setLockedByBusInstanceId(row.getColumn("locked_by_lockmanager_instance_id", String.class))
+                                                 .setLockAcquiredTimestamp(row.getColumn("lock_acquired_ts", OffsetDateTime.class))
+                                                 .setLockLastConfirmedTimestamp(row.getColumn("lock_last_confirmed_ts", OffsetDateTime.class))
+                                                 .build())
                          .findOne();
     }
 
     @Override
     public final DBFencedLock createUninitializedLock(DBFencedLockManager<HandleAwareUnitOfWork, DBFencedLock> lockManager,
                                                 LockName lockName) {
-        return new DBFencedLock(lockManager,
-                                lockName,
-                                getUninitializedTokenValue(),
-                                null,
-                                null,
-                                null);
+        return DBFencedLock.builder()
+                           .setFencedLockManager(lockManager)
+                           .setLockName(lockName)
+                           .setCurrentToken(getUninitializedTokenValue())
+                           .build();
     }
 
     @Override
@@ -247,12 +248,14 @@ public final class PostgresqlFencedLockStorage implements FencedLockStorage<Hand
                                               String lockedByLockManagerInstanceId,
                                               OffsetDateTime lockAcquiredTimestamp,
                                               OffsetDateTime lockLastConfirmedTimestamp) {
-        return new DBFencedLock(requireNonNull(lockManager, "lockManager is null"),
-                                requireNonNull(name, "name is null"),
-                                currentToken,
-                                requireNonNull(lockedByLockManagerInstanceId, "lockedByLockManagerInstanceId is null"),
-                                requireNonNull(lockAcquiredTimestamp, "lockAcquiredTimestamp is null"),
-                                requireNonNull(lockLastConfirmedTimestamp, "lockLastConfirmedTimestamp is null"));
+        return DBFencedLock.builder()
+                           .setFencedLockManager(requireNonNull(lockManager, "lockManager is null"))
+                           .setLockName(requireNonNull(name, "name is null"))
+                           .setCurrentToken(currentToken)
+                           .setLockedByBusInstanceId(requireNonNull(lockedByLockManagerInstanceId, "lockedByLockManagerInstanceId is null"))
+                           .setLockAcquiredTimestamp(requireNonNull(lockAcquiredTimestamp, "lockAcquiredTimestamp is null"))
+                           .setLockLastConfirmedTimestamp(requireNonNull(lockLastConfirmedTimestamp, "lockLastConfirmedTimestamp is null"))
+                           .build();
     }
 
     @Override
@@ -308,11 +311,13 @@ public final class PostgresqlFencedLockStorage implements FencedLockStorage<Hand
     }
 
     private static RowViewMapper<DBFencedLock> mapRowToDBFencedLock(DBFencedLockManager<HandleAwareUnitOfWork, DBFencedLock> lockManager) {
-        return row -> new DBFencedLock(lockManager,
-                row.getColumn("lock_name", LockName.class),
-                row.getColumn("last_issued_fence_token", Long.class),
-                row.getColumn("locked_by_lockmanager_instance_id", String.class),
-                row.getColumn("lock_acquired_ts", OffsetDateTime.class),
-                row.getColumn("lock_last_confirmed_ts", OffsetDateTime.class));
+        return row -> DBFencedLock.builder()
+                                  .setFencedLockManager(lockManager)
+                                  .setLockName(row.getColumn("lock_name", LockName.class))
+                                  .setCurrentToken(row.getColumn("last_issued_fence_token", Long.class))
+                                  .setLockedByBusInstanceId(row.getColumn("locked_by_lockmanager_instance_id", String.class))
+                                  .setLockAcquiredTimestamp(row.getColumn("lock_acquired_ts", OffsetDateTime.class))
+                                  .setLockLastConfirmedTimestamp(row.getColumn("lock_last_confirmed_ts", OffsetDateTime.class))
+                                  .build();
     }
 }
