@@ -614,6 +614,21 @@ public class ShardOwnedDurableQueues implements DurableQueues {
                 .proceed();
     }
 
+    /**
+     * {@inheritDoc}
+     * <p>
+     * <b>{@code numberOfMessagesBeingDelivered} is always {@code null} - unknown, not zero.</b> A shard's
+     * owner hands messages to handlers from memory and writes nothing per delivery, so the queue storage
+     * cannot tell a message being handled from one waiting. Reporting 0 would make every healthy, busy
+     * queue look stalled.
+     * <p>
+     * {@code oldestReadyMessageTimestamp} is real, and cluster-wide: the oldest {@code visible_at} of any
+     * message that has become ready and is not held by a live pull session. Because deliveries are not
+     * recorded it covers <em>unacknowledged</em> messages - one an owner is handling right now counts, as
+     * does, in the ordered lane, a message waiting behind its key's head. A key stopped behind a dead
+     * letter does not: the engine dead-letters the messages behind it as well, so it shows in
+     * {@code numberOfQueuedDeadLetterMessages}. See {@link QueueDepth#oldestReadyAt()}.
+     */
     @Override
     public QueuedMessageCounts getQueuedMessageCountsFor(GetQueuedMessageCountsFor operation) {
         requireNonNull(operation, "No operation provided");
@@ -622,13 +637,11 @@ public class ShardOwnedDurableQueues implements DurableQueues {
                                                (interceptor, interceptorChain) -> interceptor.intercept(operation, interceptorChain),
                                                () -> {
                                                    var depth = depth(operation.getQueueName());
-                                                   // TODO(0.60 merge): placeholder - the engine does not report messages being delivered or
-                                                   // the oldest ready message yet, so the queue health check cannot tell stalled from idle
                                                    return new QueuedMessageCounts(operation.getQueueName(),
                                                                                   depth.unordered() + depth.ordered(),
                                                                                   depth.deadLettered(),
-                                                                                  0,
-                                                                                  null);
+                                                                                  null,
+                                                                                  depth.oldestReadyAt());
                                                })
                 .proceed();
     }

@@ -294,7 +294,7 @@ public final class MicrometerQueueObserver implements QueueObserver {
     private static final class CachedDepth {
         private final    MessageQueue                queue;
         private final    long                        maxAgeNanos;
-        private final    AtomicReference<QueueDepth> value      = new AtomicReference<>(new QueueDepth(0, 0, 0));
+        private final    AtomicReference<QueueDepth> value      = new AtomicReference<>(new QueueDepth(0, 0, 0, null));
         private final    AtomicLong                  readAt     = new AtomicLong();
         private final    AtomicBoolean               refreshing = new AtomicBoolean();
         /**

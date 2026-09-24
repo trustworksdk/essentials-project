@@ -341,6 +341,7 @@ one, `delivered = 0`. **Reading that as a stalled projection is the obvious mist
 | Aspect | [`PostgresqlDurableQueues`](../postgresql-queue/README.md) | `ShardOwnedDurableQueues` |
 |---|---|---|
 | **Transactional enqueue** | yes | yes |
+| **`QueuedMessageCounts.numberOfMessagesBeingDelivered`** | counted | `null` — unknown, not zero ([below](#queue-statistics-in-flight-is-unknown)) |
 | **`QueueEntryId`** | UUID | `<queueName>:<lane>-<shard>-<seq>` |
 | **Delivery-path `QueuedMessage`** | full | partial — id, queue name and payload only |
 | **Redelivery clock** | `DefaultDurableQueueConsumer` | the engine |
@@ -367,6 +368,19 @@ memory and widening the read on the delivery path; the reasoning and what would 
 **What to do:** keep an ordering key's messages either all delayed or all not, with the same delay. If
 you need one message held back and the rest to wait for it, enqueue it undelayed and let the handler
 decide when to act — or stay on `postgresql-queue` for that queue.
+
+### Queue statistics: in flight is unknown
+
+`getQueuedMessageCountsFor` — the cluster-wide half of the admin queue statistics — reports
+`numberOfMessagesBeingDelivered` as **`null`, meaning unknown, never zero**. A shard's owner hands messages to
+handlers from memory and writes nothing per delivery, so the queue storage cannot tell a message being handled from
+one waiting. Reporting 0 would make every healthy, busy queue look stalled; the admin UI shows "unknown" instead.
+
+`oldestReadyMessageTimestamp` is real and cluster-wide: the oldest `visible_at` of any message that has become ready
+and is not held by a live pull session, computed in the same per-shard statements as the depth count. Because
+deliveries are not recorded, it covers unacknowledged messages — including one an owner is handling right now, and in
+the ordered lane one waiting behind its key's head. A key stopped behind a dead letter does not show here: the
+messages behind it are dead-lettered too, so it appears in the dead-letter count.
 
 ## Gotchas
 

@@ -24,7 +24,7 @@ import org.slf4j.*;
 
 import javax.sql.DataSource;
 import java.sql.*;
-import java.time.Duration;
+import java.time.*;
 import java.util.*;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.*;
@@ -733,16 +733,27 @@ public final class PostgresqlMessageQueue implements MessageQueue {
 
     @Override
     public QueueDepth depth() throws SQLException {
-        var unordered = 0L;
+        var     unordered   = 0L;
+        Instant oldestReady = null;
         for (var shard = 0; shard < shardCount; shard++) {
-            unordered += storage.countRemaining(shard);
+            var depth = storage.depthOf(shard);
+            unordered += depth.count();
+            oldestReady = earliest(oldestReady, depth.oldestReadyAt());
         }
         // Counted against the ordered lane's own, fixed space rather than the unordered shard count.
         var ordered = 0L;
         for (var unit = 0; unit < orderedUnits(); unit++) {
-            ordered += storage.countOrderedRemaining(unit);
+            var depth = storage.orderedDepthOf(unit);
+            ordered += depth.count();
+            oldestReady = earliest(oldestReady, depth.oldestReadyAt());
         }
-        return new QueueDepth(unordered, ordered, storage.countDeadLetters());
+        return new QueueDepth(unordered, ordered, storage.countDeadLetters(), oldestReady);
+    }
+
+    private static Instant earliest(Instant a, Instant b) {
+        if (a == null) return b;
+        if (b == null) return a;
+        return a.isBefore(b) ? a : b;
     }
 
     @Override
