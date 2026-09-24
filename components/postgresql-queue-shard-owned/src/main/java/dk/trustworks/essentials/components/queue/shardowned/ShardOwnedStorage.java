@@ -1598,7 +1598,7 @@ public final class ShardOwnedStorage {
     }
 
     /**
-     * A row from {@link #listMessages(int, int)} — its identity, and the message itself.
+     * A row from {@link #listMessages(int, int, boolean)} — its identity, and the message itself.
      */
     public record ListedMessage(String lane, int shard, long seq, StoredMessage message) {
     }

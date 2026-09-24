@@ -29,10 +29,10 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
  * The message list is mutable through {@link #setMessages(List)} so an interceptor can enrich, filter
  * or replace it — adding a correlation id, stamping a tenant, dropping what a feature flag disables.
  * That is the difference from an observer, which is told what happened and cannot change it.
- *
- * @param connection the caller's connection when the enqueue is joining their transaction, otherwise
- *                   empty. An interceptor writing its own rows should use it, or its writes will not
- *                   share the caller's commit
+ * <p>
+ * {@link #getConnection()} is the caller's connection when the enqueue is joining their transaction, and
+ * empty otherwise. An interceptor writing its own rows should use it, or its writes will not share the
+ * caller's commit.
  */
 public final class EnqueueMessages {
     private       List<Message>        messages;
