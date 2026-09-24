@@ -69,7 +69,7 @@
         <java.release.version>25</java.release.version>
         <java.version>${java.release.version}</java.version>
         <maven.compiler.release>${java.release.version}</maven.compiler.release>
-        <kotlin.version>2.4.20</kotlin.version>
+        <kotlin.version>2.4.10</kotlin.version>
         <!-- The language/API level artifacts are compiled against, kept independent of the compiler
              (kotlin.version) so a newer compiler still emits binaries/metadata an older consumer can read.
              These two properties are the single source for that level — the kotlin-maven-plugin blocks in

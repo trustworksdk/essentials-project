@@ -7,7 +7,7 @@
 | # | Workstream                      | From                                  | To                                   |
 |---|---------------------------------|---------------------------------------|--------------------------------------|
 | 1 | JDK baseline (`--release`)      | 21 (build on 21–25)                   | **25** (build on 25+)                |
-| 2 | Kotlin compiler                 | 2.2.21                                | **2.4.20** (newest 2.4.x on Central) |
+| 2 | Kotlin compiler                 | 2.2.21                                | **2.4.10** (see step 1)              |
 | 3 | Spring Boot BOM                 | 4.0.8                                 | **4.1.1**                            |
 | 4 | Jackson flavors                 | Jackson 3 (default) + Jackson 2 (`-Pjackson2`) | **Jackson 3 only**          |
 
@@ -75,7 +75,7 @@ override `JAVA_HOME` per invocation).
 2. Capture a baseline: `mvn clean verify` on the default profile, then `scripts/test-timings.sh --csv > before.csv`.
    Record any existing flaky tests so they are not blamed on the upgrade later.
 
-### Step 1 — Kotlin 2.4.20
+### Step 1 — Kotlin 2.4
 
 Kotlin goes first because Kotlin 2.2 has no JVM 25 target: with the JDK bump applied first, `types` fails with
 `Unknown JVM target version: 25`. This step still compiles for release 21.
@@ -83,7 +83,15 @@ Kotlin goes first because Kotlin 2.2 has no JVM 25 target: with the JDK bump app
 **Done** in `60acd9fd`. `verify` green, same test counts as the baseline; metadata `mv=[2,3,0]`. New compiler
 warnings are lint-level only (redundant `!!`, a redundant cast, Testcontainers deprecations in tests).
 
-1. `kotlin.version` 2.2.21 → 2.4.20.
+**Compiler held at 2.4.10, not 2.4.20.** The step originally went to 2.4.20, the newest 2.4.x on Central. CodeQL's
+Kotlin extractor, which runs inside kotlinc during the CodeQL workflow's autobuild, rejects it with
+`KotlinVersionTooRecentError: Kotlin version 2.4.20 is too recent. CodeQL currently supports versions below 2.4.20`,
+which fails the build. CodeQL CLI 2.27.1 (2026-09-22) adds 2.4.20 support, but `codeql-action` v3.38.1 still
+ships an older bundle, and `tools: latest` resolves to that same bundle. 2.4.10 is the newest release the extractor
+accepts. Only the compiler changes: `kotlinLanguage.version` / `kotlinApi.version` stay at 2.3, so consumers see no
+difference. Move to 2.4.20 once `codeql-action`'s default bundle is 2.27.1 or later.
+
+1. `kotlin.version` 2.2.21 → 2.4.20, later 2.4.10 (see above).
 2. **Management gotcha.** The root POM does not manage `kotlin-stdlib` / `kotlin-reflect` itself, so today they come
    from `spring-boot-dependencies`. That only worked because 4.0.8 manages the same 2.2.21. Boot 4.1.1 manages 2.3.21,
    so after this bump the compiler would be 2.4.20 while the stdlib resolved to 2.3.21. Import
@@ -102,7 +110,7 @@ warnings are lint-level only (redundant `!!`, a redundant cast, Testcontainers d
 6. Dokka `2.2.0`: confirm it runs with Kotlin 2.4, and bump it if not.
 
 **Verify:** `mvn clean verify`, then `javap -v` on a Kotlin class: the `mv=[…]` tuple must match D4.
-`mvn dependency:tree -Dincludes=org.jetbrains.kotlin` shows 2.4.20 everywhere.
+`mvn dependency:tree -Dincludes=org.jetbrains.kotlin` shows the `kotlin.version` everywhere.
 
 ### Step 2 — JDK 25 baseline
 
