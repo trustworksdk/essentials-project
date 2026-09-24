@@ -153,209 +153,225 @@ public final class ShardOwnedSchema {
      */
     public static void initialize(DataSource dataSource) throws SQLException {
         requireNonNull(dataSource, "No dataSource provided");
+        var statements = schemaStatements();
         withBootstrapLock(dataSource, statement -> {
-
-            statement.execute("""
-                              CREATE TABLE IF NOT EXISTS %s (
-                                  queue_id      smallint    NOT NULL,
-                                  shard         smallint    NOT NULL,
-                                  seq           bigint      NOT NULL,
-                                  payload       bytea       NOT NULL,
-                                  payload_type  int         NOT NULL,
-                                  meta_data     bytea,
-                                  enqueued_at   timestamptz NOT NULL DEFAULT now(),
-                                  visible_at    timestamptz NOT NULL DEFAULT now(),
-                                  attempts      smallint    NOT NULL DEFAULT 0,
-                                  lease         bigint,
-                                  -- NULL for a pre-claim, which is consumed immediately and never
-                                  -- expires; set for a pull session's row lease, which does. That is
-                                  -- the whole distinction: the shard's owner must ignore a live
-                                  -- session's rows and must pick up a dead owner's pre-claims, and
-                                  -- without an expiry the two are indistinguishable in the row.
-                                  lease_until   timestamptz,
-                                  PRIMARY KEY (queue_id, shard, seq)
-                              ) WITH (fillfactor = 80)
-                              """.formatted(UNORDERED_TABLE));
-
-            // Supports the head sweep and delayed messages. The fast path does not use it.
-            statement.execute("CREATE INDEX IF NOT EXISTS %s_visible ON %s (queue_id, shard, visible_at)"
-                                      .formatted(UNORDERED_TABLE, UNORDERED_TABLE));
-
-            // The ordered lane. Its primary key is (queue_id, shard, msg_key, key_order), NOT
-            // (queue_id, shard, seq) — which is the whole reason §4.1 splits the lanes into separate
-            // tables. Finding the head of a key becomes a primary-key prefix scan, and asking whether
-            // a key has anything queued becomes a prefix existence check, neither of which needs a
-            // secondary index. In one shared table only one of the two access patterns could own the
-            // primary key and the other would pay for an index on every insert, including the
-            // unordered inserts that never use it.
-            statement.execute("""
-                              CREATE TABLE IF NOT EXISTS %s (
-                                  queue_id      smallint    NOT NULL,
-                                  shard         smallint    NOT NULL,
-                                  msg_key       text        NOT NULL,
-                                  key_order     bigint      NOT NULL,
-                                  seq           bigint      NOT NULL,
-                                  payload       bytea       NOT NULL,
-                                  payload_type  int         NOT NULL,
-                                  meta_data     bytea,
-                                  enqueued_at   timestamptz NOT NULL DEFAULT now(),
-                                  visible_at    timestamptz NOT NULL DEFAULT now(),
-                                  attempts      smallint    NOT NULL DEFAULT 0,
-                                  lease         bigint,
-                                  PRIMARY KEY (queue_id, shard, msg_key, key_order)
-                              ) WITH (fillfactor = 80)
-                              """.formatted(ORDERED_TABLE));
-            // Discovery: the owner still needs to find newly arrived work in commit order. This is
-            // the index the ordered lane pays for and the unordered lane does not.
-            statement.execute("CREATE INDEX IF NOT EXISTS %s_seq ON %s (queue_id, shard, seq)"
-                                      .formatted(ORDERED_TABLE, ORDERED_TABLE));
-            statement.execute("CREATE INDEX IF NOT EXISTS %s_visible ON %s (queue_id, shard, visible_at)"
-                                      .formatted(ORDERED_TABLE, ORDERED_TABLE));
-
-            // The cold lane. Dead letters are rare, read by humans, and allowed to be expensive —
-            // which is why they live outside the live lanes rather than as a flag on them. Keeping
-            // them out is what lets the live tables stay narrow and lets an acked row simply vanish.
-            //
-            // Deviation from §4.1, which specifies a jsonb payload here: this engine's payloads are
-            // opaque bytes end to end, so jsonb would mean inventing a decode the rest of the engine
-            // does not have. Revisit when there is an admin surface that needs to query into them.
-            statement.execute("""
-                              CREATE TABLE IF NOT EXISTS %s (
-                                  id               bigserial PRIMARY KEY,
-                                  queue_id         smallint    NOT NULL,
-                                  shard            smallint    NOT NULL,
-                                  source_lane      text        NOT NULL,
-                                  msg_key          text,
-                                  key_order        bigint,
-                                  seq              bigint      NOT NULL,
-                                  payload          bytea       NOT NULL,
-                                  payload_type     int         NOT NULL,
-                                  attempts         smallint    NOT NULL,
-                                  last_error       text,
-                                  dead_lettered_at timestamptz NOT NULL DEFAULT now(),
-                                  blocked_by_key_order bigint
-                              )
-                              """.formatted(DLQ_TABLE));
-            statement.execute("CREATE INDEX IF NOT EXISTS %s_queue ON %s (queue_id, shard)".formatted(DLQ_TABLE, DLQ_TABLE));
-            // Added after the table shipped, so an existing installation needs it too. IF NOT EXISTS
-            // rather than a version check: this runs on every boot, behind the bootstrap lock, and a
-            // column that is already there is not an error.
-            statement.execute("ALTER TABLE %s ADD COLUMN IF NOT EXISTS blocked_by_key_order bigint".formatted(DLQ_TABLE));
-
-            statement.execute("""
-                              CREATE TABLE IF NOT EXISTS %s (
-                                  queue_id    smallint    NOT NULL,
-                                  lane        text        NOT NULL,
-                                  shard       smallint    NOT NULL,
-                                  owner       text,
-                                  fence       bigint      NOT NULL DEFAULT 0,
-                                  -- NULL for an instance-owned unit, set for a pull session's.
-                                  --
-                                  -- An instance's units carry no expiry: their liveness is the
-                                  -- owner's row in shard_queue_instance, which the heartbeat
-                                  -- refreshes once per queue. Storing an expiry per unit meant
-                                  -- WRITING one row per unit held on every heartbeat, which at a
-                                  -- sixty-four-unit ordered space became the engine's dominant idle
-                                  -- cost — 17 lease writes a second against 6.8 reads, idle.
-                                  -- Correctness never rested on the expiry; it rests on the fence.
-                                  --
-                                  -- A SHARD-scope pull session is not an instance and heartbeats
-                                  -- nothing, so it keeps a real expiry and renews it. Both kinds
-                                  -- live in this column, and which one applies is decided by whether
-                                  -- it is NULL.
-                                  lease_until timestamptz,
-                                  -- Lane is part of the key because the two lanes are separate tables
-                                  -- with separate owners. Sharing a lease row made them compete: an
-                                  -- unordered message could land in a shard leased by the ordered
-                                  -- consumer, which never reads that lane, and simply sit there.
-                                  PRIMARY KEY (queue_id, lane, shard)
-                              )
-                              """.formatted(LEASE_TABLE));
-
-            // Membership. The lease table cannot answer "how many instances are there" on its own:
-            // an instance holding no shards — the one that most needs to be counted, because it is
-            // waiting for a fair share — leaves no trace in it.
-            statement.execute("""
-                              CREATE TABLE IF NOT EXISTS %s (
-                                  queue_id    smallint    NOT NULL,
-                                  instance_id text        NOT NULL,
-                                  last_seen   timestamptz NOT NULL DEFAULT now(),
-                                  PRIMARY KEY (queue_id, instance_id)
-                              )
-                              """.formatted(INSTANCE_TABLE));
-
-            // The name-to-id registry. The engine addresses a queue by an interned smallint because
-            // a two-byte column in every row's primary key is what keeps the hot index dense; the
-            // mapping from a name to that id has to live SOMEWHERE, and every process holding its
-            // own copy is a shared contract stored in several places at once.
-            //
-            // shard_count lives here rather than in each caller's constructor because it is a
-            // property of the queue, not of the process reading it. A key's shard is
-            // hash(key) mod shard_count, so two processes that disagree route the same key to
-            // different shards and leave whole shards unowned. Recording it once makes the
-            // disagreement impossible to express.
-            // smallint, so the ceiling is 32 767 queues. Gaps are harmless: an id is an interning
-            // token, and a burned value from a losing INSERT ... ON CONFLICT means nothing.
-            statement.execute("CREATE SEQUENCE IF NOT EXISTS " + QUEUE_ID_SEQUENCE
-                                      + " START WITH 1 INCREMENT BY 1 MAXVALUE 32767");
-            statement.execute("""
-                              CREATE TABLE IF NOT EXISTS %s (
-                                  queue_id    smallint    NOT NULL PRIMARY KEY,
-                                  queue_name  text        NOT NULL UNIQUE,
-                                  shard_count int         NOT NULL,
-                                  -- The ordered lane's routing space AS IT WAS WHEN THIS QUEUE WAS
-                                  -- CREATED. Recorded, not assumed: it is baked into where every
-                                  -- ordered key lives, so a build whose ORDERED_UNITS differs must be
-                                  -- refused rather than allowed to re-route a live queue silently.
-                                  ordered_units int        NOT NULL DEFAULT 64,
-                                  created_at  timestamptz NOT NULL DEFAULT now()
-                              )
-                              """.formatted(REGISTRY_TABLE));
-
-            // Session fences are allocated negative, so they can never collide with an owner fence
-            // in the shared `lease` column. The two mean opposite things and are read by the same
-            // predicates; keeping their ranges disjoint removes a whole class of confusion.
-            statement.execute("CREATE SEQUENCE IF NOT EXISTS " + SESSION_FENCE_SEQUENCE
-                                      + " START WITH 1 INCREMENT BY 1");
-
-            // Payloads are bytea because the database never looks inside them, and that is what
-            // makes the write path cheap. The cost is that `SELECT payload FROM ...` in psql returns
-            // \x7b226f... and an operator holding a support ticket cannot read their own message.
-            //
-            // A view fixes the ergonomics without touching the storage: the bytes stay bytes, the
-            // hot path is unchanged, and nothing here is queried by the engine. Payloads that are
-            // valid UTF-8 — which JSON, XML and text all are — render as text; anything else falls
-            // back to hex rather than raising, because a view that throws on one binary row is worse
-            // than one that shows it as hex.
-            statement.execute("CREATE OR REPLACE FUNCTION shard_queue_readable(payload bytea)"
-                                      + " RETURNS text AS $$"
-                                      + " BEGIN RETURN convert_from(payload, 'UTF8');"
-                                      + " EXCEPTION WHEN others THEN RETURN encode(payload, 'hex');"
-                                      + " END $$ LANGUAGE plpgsql IMMUTABLE");
-            statement.execute("CREATE OR REPLACE VIEW " + UNORDERED_VIEW + " AS"
-                                      + " SELECT r.queue_name, u.queue_id, u.shard, u.seq, u.payload_type,"
-                                      + "        shard_queue_readable(u.payload) AS payload,"
-                                      + "        u.attempts, u.enqueued_at, u.visible_at,"
-                                      + "        u.visible_at <= now() AS deliverable"
-                                      + "   FROM " + UNORDERED_TABLE + " u"
-                                      + "   LEFT JOIN " + REGISTRY_TABLE + " r ON r.queue_id = u.queue_id");
-            statement.execute("CREATE OR REPLACE VIEW " + ORDERED_VIEW + " AS"
-                                      + " SELECT r.queue_name, o.queue_id, o.shard, o.msg_key, o.key_order, o.seq,"
-                                      + "        o.payload_type, shard_queue_readable(o.payload) AS payload,"
-                                      + "        o.attempts, o.enqueued_at, o.visible_at,"
-                                      + "        o.visible_at <= now() AS deliverable"
-                                      + "   FROM " + ORDERED_TABLE + " o"
-                                      + "   LEFT JOIN " + REGISTRY_TABLE + " r ON r.queue_id = o.queue_id");
-            statement.execute("CREATE OR REPLACE VIEW " + DLQ_VIEW + " AS"
-                                      + " SELECT r.queue_name, d.queue_id, d.shard, d.source_lane, d.msg_key,"
-                                      + "        d.key_order, d.seq, d.payload_type,"
-                                      + "        shard_queue_readable(d.payload) AS payload,"
-                                      + "        d.attempts, d.last_error, d.dead_lettered_at,"
-                                      + "        d.blocked_by_key_order,"
-                                      + "        d.blocked_by_key_order IS NOT NULL AS never_delivered"
-                                      + "   FROM " + DLQ_TABLE + " d"
-                                      + "   LEFT JOIN " + REGISTRY_TABLE + " r ON r.queue_id = d.queue_id");
+            for (var sql : statements) {
+                statement.execute(sql);
+            }
         });
+    }
+
+    /**
+     * The statements {@link #initialize(DataSource)} executes, in order, without executing them - for a caller that
+     * applies the engine's schema itself, such as a schema harness or a migration tool. Every statement is safe
+     * against objects that already exist.
+     *
+     * @return the engine's fixed schema: tables, indexes, sequences, the readable-payload function and views
+     */
+    public static List<String> schemaStatements() {
+        var statements = new ArrayList<String>();
+
+        statements.add("""
+                          CREATE TABLE IF NOT EXISTS %s (
+                              queue_id      smallint    NOT NULL,
+                              shard         smallint    NOT NULL,
+                              seq           bigint      NOT NULL,
+                              payload       bytea       NOT NULL,
+                              payload_type  int         NOT NULL,
+                              meta_data     bytea,
+                              enqueued_at   timestamptz NOT NULL DEFAULT now(),
+                              visible_at    timestamptz NOT NULL DEFAULT now(),
+                              attempts      smallint    NOT NULL DEFAULT 0,
+                              lease         bigint,
+                              -- NULL for a pre-claim, which is consumed immediately and never
+                              -- expires; set for a pull session's row lease, which does. That is
+                              -- the whole distinction: the shard's owner must ignore a live
+                              -- session's rows and must pick up a dead owner's pre-claims, and
+                              -- without an expiry the two are indistinguishable in the row.
+                              lease_until   timestamptz,
+                              PRIMARY KEY (queue_id, shard, seq)
+                          ) WITH (fillfactor = 80)
+                          """.formatted(UNORDERED_TABLE));
+
+        // Supports the head sweep and delayed messages. The fast path does not use it.
+        statements.add("CREATE INDEX IF NOT EXISTS %s_visible ON %s (queue_id, shard, visible_at)"
+                                  .formatted(UNORDERED_TABLE, UNORDERED_TABLE));
+
+        // The ordered lane. Its primary key is (queue_id, shard, msg_key, key_order), NOT
+        // (queue_id, shard, seq) — which is the whole reason §4.1 splits the lanes into separate
+        // tables. Finding the head of a key becomes a primary-key prefix scan, and asking whether
+        // a key has anything queued becomes a prefix existence check, neither of which needs a
+        // secondary index. In one shared table only one of the two access patterns could own the
+        // primary key and the other would pay for an index on every insert, including the
+        // unordered inserts that never use it.
+        statements.add("""
+                          CREATE TABLE IF NOT EXISTS %s (
+                              queue_id      smallint    NOT NULL,
+                              shard         smallint    NOT NULL,
+                              msg_key       text        NOT NULL,
+                              key_order     bigint      NOT NULL,
+                              seq           bigint      NOT NULL,
+                              payload       bytea       NOT NULL,
+                              payload_type  int         NOT NULL,
+                              meta_data     bytea,
+                              enqueued_at   timestamptz NOT NULL DEFAULT now(),
+                              visible_at    timestamptz NOT NULL DEFAULT now(),
+                              attempts      smallint    NOT NULL DEFAULT 0,
+                              lease         bigint,
+                              PRIMARY KEY (queue_id, shard, msg_key, key_order)
+                          ) WITH (fillfactor = 80)
+                          """.formatted(ORDERED_TABLE));
+        // Discovery: the owner still needs to find newly arrived work in commit order. This is
+        // the index the ordered lane pays for and the unordered lane does not.
+        statements.add("CREATE INDEX IF NOT EXISTS %s_seq ON %s (queue_id, shard, seq)"
+                                  .formatted(ORDERED_TABLE, ORDERED_TABLE));
+        statements.add("CREATE INDEX IF NOT EXISTS %s_visible ON %s (queue_id, shard, visible_at)"
+                                  .formatted(ORDERED_TABLE, ORDERED_TABLE));
+
+        // The cold lane. Dead letters are rare, read by humans, and allowed to be expensive —
+        // which is why they live outside the live lanes rather than as a flag on them. Keeping
+        // them out is what lets the live tables stay narrow and lets an acked row simply vanish.
+        //
+        // Deviation from §4.1, which specifies a jsonb payload here: this engine's payloads are
+        // opaque bytes end to end, so jsonb would mean inventing a decode the rest of the engine
+        // does not have. Revisit when there is an admin surface that needs to query into them.
+        statements.add("""
+                          CREATE TABLE IF NOT EXISTS %s (
+                              id               bigserial PRIMARY KEY,
+                              queue_id         smallint    NOT NULL,
+                              shard            smallint    NOT NULL,
+                              source_lane      text        NOT NULL,
+                              msg_key          text,
+                              key_order        bigint,
+                              seq              bigint      NOT NULL,
+                              payload          bytea       NOT NULL,
+                              payload_type     int         NOT NULL,
+                              attempts         smallint    NOT NULL,
+                              last_error       text,
+                              dead_lettered_at timestamptz NOT NULL DEFAULT now(),
+                              blocked_by_key_order bigint
+                          )
+                          """.formatted(DLQ_TABLE));
+        statements.add("CREATE INDEX IF NOT EXISTS %s_queue ON %s (queue_id, shard)".formatted(DLQ_TABLE, DLQ_TABLE));
+        // Added after the table shipped, so an existing installation needs it too. IF NOT EXISTS
+        // rather than a version check: this runs on every boot, behind the bootstrap lock, and a
+        // column that is already there is not an error.
+        statements.add("ALTER TABLE %s ADD COLUMN IF NOT EXISTS blocked_by_key_order bigint".formatted(DLQ_TABLE));
+
+        statements.add("""
+                          CREATE TABLE IF NOT EXISTS %s (
+                              queue_id    smallint    NOT NULL,
+                              lane        text        NOT NULL,
+                              shard       smallint    NOT NULL,
+                              owner       text,
+                              fence       bigint      NOT NULL DEFAULT 0,
+                              -- NULL for an instance-owned unit, set for a pull session's.
+                              --
+                              -- An instance's units carry no expiry: their liveness is the
+                              -- owner's row in shard_queue_instance, which the heartbeat
+                              -- refreshes once per queue. Storing an expiry per unit meant
+                              -- WRITING one row per unit held on every heartbeat, which at a
+                              -- sixty-four-unit ordered space became the engine's dominant idle
+                              -- cost — 17 lease writes a second against 6.8 reads, idle.
+                              -- Correctness never rested on the expiry; it rests on the fence.
+                              --
+                              -- A SHARD-scope pull session is not an instance and heartbeats
+                              -- nothing, so it keeps a real expiry and renews it. Both kinds
+                              -- live in this column, and which one applies is decided by whether
+                              -- it is NULL.
+                              lease_until timestamptz,
+                              -- Lane is part of the key because the two lanes are separate tables
+                              -- with separate owners. Sharing a lease row made them compete: an
+                              -- unordered message could land in a shard leased by the ordered
+                              -- consumer, which never reads that lane, and simply sit there.
+                              PRIMARY KEY (queue_id, lane, shard)
+                          )
+                          """.formatted(LEASE_TABLE));
+
+        // Membership. The lease table cannot answer "how many instances are there" on its own:
+        // an instance holding no shards — the one that most needs to be counted, because it is
+        // waiting for a fair share — leaves no trace in it.
+        statements.add("""
+                          CREATE TABLE IF NOT EXISTS %s (
+                              queue_id    smallint    NOT NULL,
+                              instance_id text        NOT NULL,
+                              last_seen   timestamptz NOT NULL DEFAULT now(),
+                              PRIMARY KEY (queue_id, instance_id)
+                          )
+                          """.formatted(INSTANCE_TABLE));
+
+        // The name-to-id registry. The engine addresses a queue by an interned smallint because
+        // a two-byte column in every row's primary key is what keeps the hot index dense; the
+        // mapping from a name to that id has to live SOMEWHERE, and every process holding its
+        // own copy is a shared contract stored in several places at once.
+        //
+        // shard_count lives here rather than in each caller's constructor because it is a
+        // property of the queue, not of the process reading it. A key's shard is
+        // hash(key) mod shard_count, so two processes that disagree route the same key to
+        // different shards and leave whole shards unowned. Recording it once makes the
+        // disagreement impossible to express.
+        // smallint, so the ceiling is 32 767 queues. Gaps are harmless: an id is an interning
+        // token, and a burned value from a losing INSERT ... ON CONFLICT means nothing.
+        statements.add("CREATE SEQUENCE IF NOT EXISTS " + QUEUE_ID_SEQUENCE
+                                  + " START WITH 1 INCREMENT BY 1 MAXVALUE 32767");
+        statements.add("""
+                          CREATE TABLE IF NOT EXISTS %s (
+                              queue_id    smallint    NOT NULL PRIMARY KEY,
+                              queue_name  text        NOT NULL UNIQUE,
+                              shard_count int         NOT NULL,
+                              -- The ordered lane's routing space AS IT WAS WHEN THIS QUEUE WAS
+                              -- CREATED. Recorded, not assumed: it is baked into where every
+                              -- ordered key lives, so a build whose ORDERED_UNITS differs must be
+                              -- refused rather than allowed to re-route a live queue silently.
+                              ordered_units int        NOT NULL DEFAULT 64,
+                              created_at  timestamptz NOT NULL DEFAULT now()
+                          )
+                          """.formatted(REGISTRY_TABLE));
+
+        // Session fences are allocated negative, so they can never collide with an owner fence
+        // in the shared `lease` column. The two mean opposite things and are read by the same
+        // predicates; keeping their ranges disjoint removes a whole class of confusion.
+        statements.add("CREATE SEQUENCE IF NOT EXISTS " + SESSION_FENCE_SEQUENCE
+                                  + " START WITH 1 INCREMENT BY 1");
+
+        // Payloads are bytea because the database never looks inside them, and that is what
+        // makes the write path cheap. The cost is that `SELECT payload FROM ...` in psql returns
+        // \x7b226f... and an operator holding a support ticket cannot read their own message.
+        //
+        // A view fixes the ergonomics without touching the storage: the bytes stay bytes, the
+        // hot path is unchanged, and nothing here is queried by the engine. Payloads that are
+        // valid UTF-8 — which JSON, XML and text all are — render as text; anything else falls
+        // back to hex rather than raising, because a view that throws on one binary row is worse
+        // than one that shows it as hex.
+        statements.add("CREATE OR REPLACE FUNCTION shard_queue_readable(payload bytea)"
+                                  + " RETURNS text AS $$"
+                                  + " BEGIN RETURN convert_from(payload, 'UTF8');"
+                                  + " EXCEPTION WHEN others THEN RETURN encode(payload, 'hex');"
+                                  + " END $$ LANGUAGE plpgsql IMMUTABLE");
+        statements.add("CREATE OR REPLACE VIEW " + UNORDERED_VIEW + " AS"
+                                  + " SELECT r.queue_name, u.queue_id, u.shard, u.seq, u.payload_type,"
+                                  + "        shard_queue_readable(u.payload) AS payload,"
+                                  + "        u.attempts, u.enqueued_at, u.visible_at,"
+                                  + "        u.visible_at <= now() AS deliverable"
+                                  + "   FROM " + UNORDERED_TABLE + " u"
+                                  + "   LEFT JOIN " + REGISTRY_TABLE + " r ON r.queue_id = u.queue_id");
+        statements.add("CREATE OR REPLACE VIEW " + ORDERED_VIEW + " AS"
+                                  + " SELECT r.queue_name, o.queue_id, o.shard, o.msg_key, o.key_order, o.seq,"
+                                  + "        o.payload_type, shard_queue_readable(o.payload) AS payload,"
+                                  + "        o.attempts, o.enqueued_at, o.visible_at,"
+                                  + "        o.visible_at <= now() AS deliverable"
+                                  + "   FROM " + ORDERED_TABLE + " o"
+                                  + "   LEFT JOIN " + REGISTRY_TABLE + " r ON r.queue_id = o.queue_id");
+        statements.add("CREATE OR REPLACE VIEW " + DLQ_VIEW + " AS"
+                                  + " SELECT r.queue_name, d.queue_id, d.shard, d.source_lane, d.msg_key,"
+                                  + "        d.key_order, d.seq, d.payload_type,"
+                                  + "        shard_queue_readable(d.payload) AS payload,"
+                                  + "        d.attempts, d.last_error, d.dead_lettered_at,"
+                                  + "        d.blocked_by_key_order,"
+                                  + "        d.blocked_by_key_order IS NOT NULL AS never_delivered"
+                                  + "   FROM " + DLQ_TABLE + " d"
+                                  + "   LEFT JOIN " + REGISTRY_TABLE + " r ON r.queue_id = d.queue_id");
+        return List.copyOf(statements);
     }
 
     /**
@@ -454,7 +470,20 @@ public final class ShardOwnedSchema {
      */
     public static RegisteredQueue registerQueue(DataSource dataSource, QueueName name, int shardCount,
                                                 int orderedUnits) throws SQLException {
+        return registerQueue(dataSource, name, shardCount, orderedUnits, lockedExecutor(dataSource));
+    }
+
+    /**
+     * Same as {@link #registerQueue(DataSource, QueueName, int, int)}, with the queue's sequences created by
+     * {@code queueDdl} instead of by this class - so a schema harness can own them, as it owns the tables. The
+     * registry row and the lease rows are data, and are still written here.
+     *
+     * @param queueDdl executes the statements that create the queue's sequences
+     */
+    public static RegisteredQueue registerQueue(DataSource dataSource, QueueName name, int shardCount,
+                                                int orderedUnits, QueueDdlExecutor queueDdl) throws SQLException {
         requireNonNull(dataSource, "No dataSource provided");
+        requireNonNull(queueDdl, "No queueDdl provided");
         requireNonNull(name, "No queue name provided");
         requireTrue(shardCount > 0, "shardCount must be positive");
         requireTrue(orderedUnits > 0, "orderedUnits must be positive");
@@ -492,7 +521,7 @@ public final class ShardOwnedSchema {
         // shardCount. Routing reads the queue's own recorded space instead, so a build with a
         // different default simply uses it for queues it creates and leaves existing ones alone.
         // Seeded against the space this queue actually has, which may not be this build's default.
-        registerQueue(dataSource, registered.queueId(), shardCount, registered.orderedUnits());
+        registerQueue(dataSource, registered.queueId(), shardCount, registered.orderedUnits(), queueDdl);
         return registered;
     }
 
@@ -528,7 +557,17 @@ public final class ShardOwnedSchema {
      * @throws IllegalStateException if the count is not an increase
      */
     public static RegisteredQueue growShardCount(DataSource dataSource, QueueName name, int newShardCount) throws SQLException {
+        return growShardCount(dataSource, name, newShardCount, lockedExecutor(dataSource));
+    }
+
+    /**
+     * Same as {@link #growShardCount(DataSource, QueueName, int)}, with the new shards' sequences created by
+     * {@code queueDdl} - see {@link #registerQueue(DataSource, QueueName, int, int, QueueDdlExecutor)}.
+     */
+    public static RegisteredQueue growShardCount(DataSource dataSource, QueueName name, int newShardCount,
+                                                 QueueDdlExecutor queueDdl) throws SQLException {
         requireNonNull(dataSource, "No dataSource provided");
+        requireNonNull(queueDdl, "No queueDdl provided");
         requireNonNull(name, "No queue name provided");
         var current = resolve(dataSource, name)
                 .orElseThrow(() -> new IllegalStateException("Queue '" + name + "' is not registered"));
@@ -547,7 +586,7 @@ public final class ShardOwnedSchema {
         // was effectively frozen for the life of the queue. The ordered lane now routes on a fixed
         // space of its own (ORDERED_UNITS) and does not consult this number at all, so growing it
         // moves nothing and can happen with ordered traffic in flight.
-        registerQueue(dataSource, current.queueId(), newShardCount);
+        registerQueue(dataSource, current.queueId(), newShardCount, ORDERED_UNITS, queueDdl);
         try (var connection = dataSource.getConnection();
              var statement = connection.prepareStatement(
                      "UPDATE " + REGISTRY_TABLE + " SET shard_count = ? WHERE queue_id = ?")) {
@@ -708,33 +747,74 @@ public final class ShardOwnedSchema {
 
     public static void registerQueue(DataSource dataSource, short queueId, int shardCount,
                                      int orderedUnits) throws SQLException {
+        registerQueue(dataSource, queueId, shardCount, orderedUnits, lockedExecutor(dataSource));
+    }
+
+    /**
+     * Same as {@link #registerQueue(DataSource, short, int, int)}, with the sequences created by {@code queueDdl}.
+     */
+    public static void registerQueue(DataSource dataSource, short queueId, int shardCount,
+                                     int orderedUnits, QueueDdlExecutor queueDdl) throws SQLException {
         requireNonNull(dataSource, "No dataSource provided");
-        // Under the bootstrap lock like every other DDL path here: every instance calls this at
-        // start-up, so CREATE SEQUENCE IF NOT EXISTS races exactly the way CREATE TABLE does.
-        withBootstrapLock(dataSource, statement -> {
-            // ONE sequence for the whole ordered lane, not one per shard.
-            //
-            // Per-shard sequences existed to keep values dense within a shard, because that density
-            // was how the ordered lane told an uncommitted value from someone else's. It no longer
-            // decides that by density — see OrderedShardOwner.advanceWatermark — so the only thing
-            // per-shard ordered sequences still cost is relations: one per shard per queue, which is
-            // what makes a large routing space unaffordable across many queues. Collapsing them also
-            // makes an ordered `seq` unique within the queue, which retires the trap that seq 1 exists
-            // in every shard.
-            //
-            // The unordered lane is NOT collapsed. It still detects holes by density, and its
-            // range-delete acknowledgement is bounded by a floor that depends on it.
-            //
-            // CACHE 1 so an allocated value is one that will be committed, and because the watermark's
-            // safety argument rests on values being handed out in wall-clock order. Never raise it.
-            statement.execute("CREATE SEQUENCE IF NOT EXISTS " + orderedSequenceName(queueId)
-                                      + " START WITH 1 INCREMENT BY 1 CACHE 1");
-            for (var shard = 0; shard < shardCount; shard++) {
-                statement.execute("CREATE SEQUENCE IF NOT EXISTS " + sequenceName(queueId, shard)
-                                          + " START WITH 1 INCREMENT BY 1 CACHE 1");
+        requireNonNull(queueDdl, "No queueDdl provided");
+        queueDdl.execute(queueId, queueSequenceStatements(queueId, shardCount));
+        seedLeases(dataSource, queueId, shardCount, orderedUnits);
+    }
+
+    /**
+     * The statements that create a queue's sequences, without executing them. Safe against sequences that already
+     * exist, so they may be re-run - with a larger {@code shardCount} after a {@link #growShardCount}, too.
+     *
+     * @return the ordered lane's sequence, then one per unordered shard
+     */
+    public static List<String> queueSequenceStatements(short queueId, int shardCount) {
+        requireTrue(shardCount > 0, "shardCount must be positive");
+        var statements = new ArrayList<String>(shardCount + 1);
+        // ONE sequence for the whole ordered lane, not one per shard.
+        //
+        // Per-shard sequences existed to keep values dense within a shard, because that density
+        // was how the ordered lane told an uncommitted value from someone else's. It no longer
+        // decides that by density — see OrderedShardOwner.advanceWatermark — so the only thing
+        // per-shard ordered sequences still cost is relations: one per shard per queue, which is
+        // what makes a large routing space unaffordable across many queues. Collapsing them also
+        // makes an ordered `seq` unique within the queue, which retires the trap that seq 1 exists
+        // in every shard.
+        //
+        // The unordered lane is NOT collapsed. It still detects holes by density, and its
+        // range-delete acknowledgement is bounded by a floor that depends on it.
+        //
+        // CACHE 1 so an allocated value is one that will be committed, and because the watermark's
+        // safety argument rests on values being handed out in wall-clock order. Never raise it.
+        statements.add("CREATE SEQUENCE IF NOT EXISTS " + orderedSequenceName(queueId)
+                               + " START WITH 1 INCREMENT BY 1 CACHE 1");
+        for (var shard = 0; shard < shardCount; shard++) {
+            statements.add("CREATE SEQUENCE IF NOT EXISTS " + sequenceName(queueId, shard)
+                                   + " START WITH 1 INCREMENT BY 1 CACHE 1");
+        }
+        return List.copyOf(statements);
+    }
+
+    /**
+     * Executes a queue's sequence statements. The default one, used by the overloads that take none, runs them
+     * under the framework's bootstrap advisory lock in one transaction - every instance registers its queues at
+     * start-up, so {@code CREATE SEQUENCE IF NOT EXISTS} races exactly the way {@code CREATE TABLE} does.
+     */
+    @FunctionalInterface
+    public interface QueueDdlExecutor {
+        /**
+         * @param queueId    the queue the statements belong to
+         * @param statements {@link #queueSequenceStatements(short, int)} for it
+         */
+        void execute(short queueId, List<String> statements) throws SQLException;
+    }
+
+    private static QueueDdlExecutor lockedExecutor(DataSource dataSource) {
+        requireNonNull(dataSource, "No dataSource provided");
+        return (queueId, statements) -> withBootstrapLock(dataSource, statement -> {
+            for (var sql : statements) {
+                statement.execute(sql);
             }
         });
-        seedLeases(dataSource, queueId, shardCount, orderedUnits);
     }
 
     private static void seedLeases(DataSource dataSource, short queueId, int shardCount, int orderedUnits)
@@ -756,7 +836,7 @@ public final class ShardOwnedSchema {
     }
 
     /**
-     * One per queue, not one per shard — see the reasoning in {@link #registerQueue}.
+     * One per queue, not one per shard — see the reasoning in {@link #queueSequenceStatements}.
      */
     public static String orderedSequenceName(short queueId) {
         return "shard_queue_ordered_seq_q" + queueId;

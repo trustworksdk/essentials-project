@@ -166,9 +166,22 @@ favour of `enableNotifyTriggers(Consumer<String>)`: the `pg_notify` trigger beco
 with the change listener (`LISTEN` does not need the trigger to exist). The two methods exclude each other.
 The Spring starter's `EventStoreNotifyPollingBootstrap` uses the new one.
 
-`ShardOwnedSchema` (row 15) is the second dynamic contributor, keyed by queue: its fixed tables are an
-ordinary change set, and each `registerQueue(…)` contributes that queue's sequences. It also carries its own
-copy of the bootstrap-lock key, which goes away once the harness owns the lock.
+`ShardOwnedSchema` (row 15) is the second dynamic contributor, keyed by queue id. Decided 2026-09-24: the
+engine stays dependent on `shared` only, so it does not implement the SPI itself. It exposes its DDL as plain
+statements - `schemaStatements()` (exactly what `initialize` executes) and
+`queueSequenceStatements(queueId, shardCount)` - and every registration method has an overload taking a
+`QueueDdlExecutor`, whose default runs the statements under the engine's copy of the bootstrap lock, as
+before. `ShardOwnedSchemaContributor` in `postgresql-queue-shard-owned-adapter` (which already depends on
+`foundation`) carries them into the harness: the fixed schema is one `engine-schema` change, and each queue's
+sequences are a `queue-sequences` change on object `shard_queue_q<id>`, applied as the queue registers.
+The registry row and lease rows stay data written by the engine. Two consequences:
+
+- A queue's sequence names embed the id the registry allocates at registration, so they can never be part of
+  a script written before the queue exists (`emit`). They are created or checked as queues register.
+- Registration writes to the registry table, which is part of the fixed schema, so queues register after the
+  harness ran. `growShardCount` re-records the same change with the larger statement set.
+
+The engine keeps its own copy of the bootstrap-lock key, for use without a harness.
 
 ---
 
