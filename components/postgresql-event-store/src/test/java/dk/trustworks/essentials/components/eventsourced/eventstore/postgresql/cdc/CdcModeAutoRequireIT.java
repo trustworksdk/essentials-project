@@ -239,7 +239,7 @@ public class CdcModeAutoRequireIT {
                                                       CdcMode mode) {
         var props = tailerProps();
         var pgConverter = new PgOutputToPersistedEventConverter(
-                EssentialsJSONEventSerializers.createForActiveJacksonFlavor(),
+                EssentialsJSONEventSerializers.create(),
                 table -> null,
                 aggregateType -> Optional.empty());
         return new WalReplicationTailer(

@@ -245,7 +245,7 @@ All converters annotated with `@Converter(autoApply = true)`
 |--------|---------|
 | [types](LLM-types.md) | Base `SingleValueType` classes |
 | [types-jdbi](LLM-types-jdbi.md) | JDBI persistence (recommended alternative) |
-| [types-jackson](LLM-types-jackson.md) | JSON serialization |
+| [types-jackson3](LLM-types-jackson.md) | JSON serialization |
 
 ## Gotchas
 

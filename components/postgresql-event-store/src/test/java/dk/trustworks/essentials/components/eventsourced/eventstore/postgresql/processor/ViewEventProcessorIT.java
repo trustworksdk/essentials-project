@@ -96,7 +96,7 @@ public class ViewEventProcessorIT {
 
         unitOfWorkFactory = new EventStoreManagedUnitOfWorkFactory(jdbi);
         eventMapper = new EventProcessorIT.TestPersistableEventMapper();
-        var jsonSerializer = EssentialsJSONEventSerializers.createForActiveJacksonFlavor();
+        var jsonSerializer = EssentialsJSONEventSerializers.create();
         var persistenceStrategy = new SeparateTablePerAggregateTypePersistenceStrategy(jdbi,
                                                                                        unitOfWorkFactory,
                                                                                        eventMapper,
@@ -133,7 +133,6 @@ public class ViewEventProcessorIT {
         durableQueues = PostgresqlDurableQueues.builder()
                                                .setJsonSerializer(jsonSerializer)
                                                .setMessageHandlingTimeout(Duration.ofSeconds(2))
-                                               .setTransactionalMode(TransactionalMode.SingleOperationTransaction)
                                                .setUnitOfWorkFactory(unitOfWorkFactory)
                                                .build();
         durableQueues.start();

@@ -33,9 +33,9 @@ import static org.assertj.core.api.Assertions.*;
 /**
  * The outbox property: a business write and its enqueue commit together, or neither does.
  * <p>
- * This is the requirement the current implementation cannot meet — its {@code FullyTransactional}
- * mode gives the caller a transaction but breaks redelivery, because a rollback also reverts the
- * attempt count. Here the two are separate concerns by construction: the enqueue joins the caller's
+ * This is the requirement {@code PostgresqlDurableQueues} could not meet before 0.60 — its
+ * {@code FullyTransactional} mode gave the caller a transaction but broke redelivery, because a
+ * rollback also reverted the attempt count. Here the two are separate concerns by construction: the enqueue joins the caller's
  * transaction, while attempt counting and dead-lettering happen later, in the owner, outside any
  * caller's rollback scope.
  */

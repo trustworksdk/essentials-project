@@ -25,9 +25,7 @@ import java.time.Duration;
 import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 
 /**
- * Schedule the message for redelivery after the specified <code>deliveryDelay</code> (called by the {@link DurableQueueConsumer})<br>
- * Note this method MUST be called within an existing {@link UnitOfWork} IF
- * using {@link TransactionalMode#FullyTransactional}<br>
+ * Schedule the message for redelivery after the specified <code>deliveryDelay</code> (called by the {@link DurableQueueConsumer})<br><br>
  * Operation also matches {@link DurableQueuesInterceptor#intercept(RetryMessage, InterceptorChain)}
  */
 public final class RetryMessage {
@@ -47,8 +45,6 @@ public final class RetryMessage {
 
     /**
      * Schedule the message for redelivery after the specified <code>deliveryDelay</code> (called by the {@link DurableQueueConsumer})<br>
-     * Note this method MUST be called within an existing {@link UnitOfWork} IF
-     * using {@link TransactionalMode#FullyTransactional}
      *
      * @param queueEntryId  the unique id of the message that must we will retry the delivery of
      * @param causeForRetry the reason why the message delivery has to be retried (optional) - if left out {@link QueuedMessage#getLastDeliveryError()} will use value {@value #MANUALLY_REQUESTED_REDELIVERY}

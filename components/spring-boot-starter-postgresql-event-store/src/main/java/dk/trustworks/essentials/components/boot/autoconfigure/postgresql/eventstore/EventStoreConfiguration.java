@@ -16,12 +16,6 @@
 
 package dk.trustworks.essentials.components.boot.autoconfigure.postgresql.eventstore;
 
-import com.fasterxml.jackson.annotation.JsonAutoDetect;
-import com.fasterxml.jackson.databind.*;
-import com.fasterxml.jackson.databind.Module;
-import com.fasterxml.jackson.databind.json.JsonMapper;
-import com.fasterxml.jackson.datatype.jdk8.Jdk8Module;
-import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 import dk.trustworks.essentials.shared.measurement.*;
 import dk.trustworks.essentials.components.boot.autoconfigure.postgresql.*;
 import dk.trustworks.essentials.components.eventsourced.aggregates.EventHandler;
@@ -43,7 +37,6 @@ import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.ob
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.persistence.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.persistence.table_per_aggregate_type.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.processor.*;
-import dk.trustworks.essentials.components.foundation.json.EssentialsJacksonModules;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.serializer.json.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.spring.SpringTransactionAwareEventStoreUnitOfWorkFactory;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.AggregateType;
@@ -550,43 +543,21 @@ public class EventStoreConfiguration {
     }
 
     /**
-     * The {@link JSONEventSerializer} that handles both {@link EventStore} event/metadata serialization as well as {@link DurableQueues} message payload serialization and deserialization
+     * The {@link JSONEventSerializer} that handles both {@link EventStore} event/metadata serialization as well as
+     * {@link DurableQueues} message payload serialization and deserialization, with the canonical Essentials mapper
+     * configuration.
+     * <p>
+     * {@code JacksonModule} beans in the {@link ApplicationContext} are deliberately <em>not</em> collected: those are
+     * usually registered for the web layer, and adding them here would silently change the persisted JSON format. An
+     * application that needs extra modules for persistence defines its own {@link JSONEventSerializer} bean, which
+     * this backs off from.
      *
-     * @param additionalModules additional {@link Module}'s found in the {@link ApplicationContext}
      * @return the {@link JSONEventSerializer} responsible for serializing/deserializing the raw Java events to and from JSON
      */
     @Bean
     @ConditionalOnMissingBean
-    public JSONEventSerializer jsonSerializer(List<Module> additionalModules) {
-        if (EssentialsJacksonModules.isJackson3Flavor()) {
-            // The application is on Jackson 3, so no Jackson 2 Module beans can exist to collect. A Jackson 3
-            // deployment that needs extra modules defines its own JSONEventSerializer bean, which this backs off from.
-            return EssentialsJSONEventSerializers.createForActiveJacksonFlavor();
-        }
-        var objectMapperBuilder = JsonMapper.builder()
-                                            .disable(MapperFeature.AUTO_DETECT_GETTERS)
-                                            .disable(MapperFeature.AUTO_DETECT_IS_GETTERS)
-                                            .disable(MapperFeature.AUTO_DETECT_SETTERS)
-                                            .disable(MapperFeature.DEFAULT_VIEW_INCLUSION)
-                                            .disable(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS)
-                                            .disable(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES)
-                                            .disable(SerializationFeature.FAIL_ON_EMPTY_BEANS)
-                                            .enable(MapperFeature.AUTO_DETECT_CREATORS)
-                                            .enable(MapperFeature.AUTO_DETECT_FIELDS)
-                                            .enable(MapperFeature.PROPAGATE_TRANSIENT_MARKER)
-                                            .addModule(new Jdk8Module())
-                                            .addModule(new JavaTimeModule());
-
-        additionalModules.forEach(objectMapperBuilder::addModule);
-
-        var objectMapper = objectMapperBuilder.build();
-        objectMapper.setVisibility(objectMapper.getSerializationConfig().getDefaultVisibilityChecker()
-                                               .withGetterVisibility(JsonAutoDetect.Visibility.NONE)
-                                               .withSetterVisibility(JsonAutoDetect.Visibility.NONE)
-                                               .withFieldVisibility(JsonAutoDetect.Visibility.ANY)
-                                               .withCreatorVisibility(JsonAutoDetect.Visibility.ANY));
-
-        return new JacksonJSONEventSerializer(objectMapper);
+    public JSONEventSerializer jsonSerializer() {
+        return EssentialsJSONEventSerializers.create();
     }
 
     /**
@@ -870,7 +841,7 @@ public class EventStoreConfiguration {
             return new dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.cdc.filter.PgOutputRawPayloadFilter(
                     tablesSupplier);
         }
-        return WalMessageFilters.createForActiveJacksonFlavor(tablesSupplier);
+        return new DefaultWalMessageFilter(tablesSupplier);
     }
 
     @Bean

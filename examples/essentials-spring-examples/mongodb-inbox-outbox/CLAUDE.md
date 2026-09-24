@@ -10,29 +10,21 @@ its layout is not the model for this one.
 
 ```bash
 mvn verify -pl :mongodb-inbox-outbox                 # unit + ITs (needs Docker)
-mvn -Pjackson2 verify -pl :mongodb-inbox-outbox -am  # the other Jackson flavour; -am is required
 mvn spring-boot:run -pl :mongodb-inbox-outbox        # after `docker compose up -d` in the parent dir
 ```
 
-The `-am` is not optional on the non-default flavour: without it a sibling resolves from the local repo
-with the property unresolved and **both** Jackson flavours land on the classpath. See the root
-`CLAUDE.md`.
+### Why the Kafka DTOs must not carry `OrderId`
 
-### Why the Kafka DTOs must not carry `OrderId` (it broke `-Pjackson2`)
+The Kafka DTOs are typed with plain `String` ids, as `postgresql-cqrs` always has, and the two adapters
+convert at the boundary. `config/KafkaConfiguration` binds Spring Boot 4's Jackson 3 `JsonMapper` — the
+application's wire mapper, not the Essentials persistence mapper — so nothing internal should cross it.
+Typing the DTOs with the domain's `OrderId` makes the anti-corruption boundary stop translating.
 
-Both profiles are green. They were not: `ShippingFlowIT` — anything crossing Kafka — failed under
-`-Pjackson2` in this module and in `postgresql-inbox-outbox`, with zero records arriving on the
-`shipping-events` topic. The failure predated the slice refactor.
+History: under 0.50's since-removed `-Pjackson2` profile, `OrderId`-typed DTOs broke `ShippingFlowIT` in
+this module and `postgresql-inbox-outbox` (zero records on `shipping-events`), because the Jackson 2 types
+module never reached Kafka's Jackson 3 mapper. 0.60 is Jackson 3 only, but the boundary rule stands.
 
-The cause was the anti-corruption boundary not actually translating. `config/KafkaConfiguration` binds
-Spring Boot 4's Jackson **3** `JsonMapper`, while `-Pjackson2` puts the Jackson **2** flavour of the
-Essentials types module on the classpath — so the single-value-type (de)serializer lands on a mapper
-Kafka never uses. That only mattered because the DTOs were typed with the domain's `OrderId`. They now
-carry a plain `String`, as `postgresql-cqrs` always has, and the two adapters convert at the boundary.
-Nothing internal crosses the wire, so the mapper flavour is no longer load-bearing.
-
-Re-typing those DTOs with `OrderId` reintroduces both the coupling and the `-Pjackson2` failure. See
-the translation slice's `CLAUDE.md`.
+Re-typing those DTOs with `OrderId` reintroduces the coupling. See the translation slice's `CLAUDE.md`.
 
 ## Layout
 

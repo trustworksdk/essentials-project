@@ -16,7 +16,6 @@
 
 package dk.trustworks.essentials.components.queue.postgresql;
 
-import dk.trustworks.essentials.components.foundation.messaging.queue.TransactionalMode;
 import dk.trustworks.essentials.components.foundation.transaction.jdbi.HandleAwareUnitOfWorkFactory;
 import org.junit.jupiter.api.Test;
 
@@ -26,13 +25,12 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.mock;
 
 /**
- * The PostgreSQL half of the pair pinned by {@code MongoDurableQueuesBuilderDefaultsTest}. Neither default is an
- * implementation detail: an application that swaps database module gets the same delivery semantics only for as long as
- * the two builders agree, and the integration suites branch on {@code getTransactionalMode()} rather than asserting it,
- * so they pass whichever way it drifts.
+ * The PostgreSQL half of the pair pinned by {@code MongoDurableQueuesBuilderDefaultsTest}. These defaults are not an
+ * implementation detail: an application that swaps database module gets the same delivery semantics only for as long
+ * as the two builders agree.
  * <p>
- * {@link TransactionalMode#SingleOperationTransaction} is the converged value because
- * {@link TransactionalMode#FullyTransactional} is the side documented as broken for retries and dead-lettering.
+ * The transactional-mode assertions these tests used to carry are gone with {@code TransactionalMode} itself — every
+ * queue operation now runs in its own transaction, so there is no longer a choice to diverge on.
  */
 class PostgresqlDurableQueuesBuilderDefaultsTest {
 
@@ -43,14 +41,6 @@ class PostgresqlDurableQueuesBuilderDefaultsTest {
                                       .build();
     }
 
-    @Test
-    void test_the_default_transactional_mode_is_SingleOperationTransaction() {
-        assertThat(minimalBuild().getTransactionalMode())
-                .as("PostgresqlDurableQueues.builder() and MongoDurableQueues.builder() must agree on the default "
-                            + "TransactionalMode; a divergence means the same application code gets different delivery "
-                            + "semantics per database")
-                .isEqualTo(TransactionalMode.SingleOperationTransaction);
-    }
 
     @Test
     void test_the_default_message_handling_timeout_is_thirty_seconds() {
@@ -58,18 +48,8 @@ class PostgresqlDurableQueuesBuilderDefaultsTest {
     }
 
     @Test
-    void test_the_default_mode_needs_nothing_but_a_unitOfWorkFactory() {
+    void test_the_builder_needs_nothing_but_a_unitOfWorkFactory() {
         assertThat(minimalBuild()).isNotNull();
     }
 
-    @Test
-    @SuppressWarnings("unchecked")
-    void test_FullyTransactional_remains_available_and_is_honoured() {
-        var durableQueues = PostgresqlDurableQueues.builder()
-                                                   .setUnitOfWorkFactory(mock(HandleAwareUnitOfWorkFactory.class))
-                                                   .setTransactionalMode(TransactionalMode.FullyTransactional)
-                                                   .build();
-
-        assertThat(durableQueues.getTransactionalMode()).isEqualTo(TransactionalMode.FullyTransactional);
-    }
 }

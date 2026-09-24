@@ -87,7 +87,7 @@ class PgOutputInboxDedupKeyTest {
         properties.setBinary(false);
         properties.setMessages(false);
         var converter = new PgOutputToPersistedEventConverter(
-                EssentialsJSONEventSerializers.createForActiveJacksonFlavor(),
+                EssentialsJSONEventSerializers.create(),
                 table -> null,
                 aggregateType -> Optional.empty());
         return new PgOutputLogicalDecodingPlugin(properties, converter);

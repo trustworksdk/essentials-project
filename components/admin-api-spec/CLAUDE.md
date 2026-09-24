@@ -14,7 +14,7 @@ Consumer-facing docs: `docs/openapi/README.md`.
 | `OpenApiSpecGenerator` | Builds + serializes the `OpenAPI` model; owns `SpecBuilder` (paths/schemas/parity) and `OperationSpec` (one operation) |
 | `EssentialsValueTypeModelConverter` | swagger `ModelConverter` collapsing `SingleValueType` wrappers to JSON primitives |
 | `OpenApiSpecGenerationTest` | Drift gate + contract-convention assertions |
-| `OpenApiContractCompatibilityTest` | openapi-diff gate vs `openapi/baseline/essentials-admin-api-v1.yaml` |
+| `OpenApiContractCompatibilityTest` | openapi-diff gate vs `openapi/baseline/essentials-admin-api-v2.yaml` — the major under development. `-v1.yaml` is kept unchanged as the last released contract |
 | `OpenApiSpecValidationTest` | swagger-parser validation + dangling-`$ref` check. JVM-only replacement for the old redocly lint — project carries no Node dependencies |
 
 ## Build Invariants
@@ -38,6 +38,7 @@ Consumer-facing docs: `docs/openapi/README.md`.
   - Green tests do not prove alignment: the 2.2.52/2.2.53 skew passed all three OpenAPI tests. Read the tree.
 - **Drift gate compares semantically, not textually.** YAML key order is Jackson accessor-discovery order on swagger model classes — not stable across build hosts (same sources emitted `default` before `enum` in the devcontainer, after it on macOS/JDK 25). Test parses both docs and sorts mapping keys; sequence order stays strict. Regenerate writes only on real difference, so no key-order-only churn. Failure reports differing JSON pointers, not the whole 180KB contract.
 - Regenerate with `-Dopenapi.regenerate=true`, then **rebaseline only at release** — and regenerate the Java client in the same change; no gate catches a stale client.
+- **The compatibility baseline is `v2` during 0.60.** 0.60 removes admin operations, so diffing against the released `v1` would fail for the whole release and the gate would stop catching anything. It was re-seeded to `v2` when the first breaking change landed. A further deliberate break means re-seeding `v2` in the same commit as the change — never to silence an unintended failure. `BASE_PATH` and `CONTRACT_VERSION` still say `v1` / `1.0.0`; bumping those changes every consumer's URL and is a release decision.
 - **Regenerate needs `-am`.** Spec reflects off `foundation` / `postgresql-event-store` / `eventsourced-aggregates`. `-pl components/admin-api-spec` alone resolves those from `~/.m2`, so an uninstalled SPI edit regenerates the *old* contract — drift gate then fails again on the next full reactor build. Loops until `-am` (or a prior `install`) is used:
   ```
   mvn -pl components/admin-api-spec -am test -Dtest=OpenApiSpecGenerationTest \

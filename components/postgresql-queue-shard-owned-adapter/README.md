@@ -32,12 +32,12 @@ Presents the [shard-owned queue engine](../postgresql-queue-shard-owned/README.m
 ### Why this is a small adapter and not a rewrite
 
 `Inbox`, `Outbox` and `DurableLocalCommandBus` are written against `DurableQueues`. Between them they
-touch **eight** of its ~30 methods — `queueMessage`, `queueMessages`, `consumeFromQueue`,
-`purgeQueue`, `getTotalMessagesQueuedFor`, `getUnitOfWorkFactory`, `getTransactionalMode` — and never
+touch a handful of its ~30 methods — `queueMessage`, `queueMessages`, `consumeFromQueue`,
+`purgeQueue`, `getTotalMessagesQueuedFor`, `getUnitOfWorkFactory` — and never
 touch a `QueueEntryId`. Swapping the engine underneath them is therefore a small, well-defined
 adapter.
 
-The adapter serves considerably more than that eight: 19 of the 21 interceptable operations, including
+The adapter serves considerably more than that handful: 19 of the 21 interceptable operations, including
 everything the admin console's message browser and dead-letter pages need. **Two operations throw**,
 each for a structural reason — see [What It Does Not Serve](#what-it-does-not-serve).
 
@@ -163,18 +163,12 @@ the name the framework derives.
 
 ## Transactional Behaviour
 
-### `SingleOperationTransaction` only
+### Handling and acknowledgement are separate transactions
 
-The adapter reports `TransactionalMode.SingleOperationTransaction` — already the default and the
-recommended mode — because it is what the engine actually does: handler work and acknowledgement are
-separate transactions. `Inboxes.handleMessage` already opens its own `UnitOfWork` inside the handler,
-so nothing changes for it.
-
-**`FullyTransactional` is refused, not approximated.** It requires the dequeue to commit with the
-handler's own work; shard-owned acknowledgements are batched and flushed on the owning consumer's
-connection under a fence, and cannot enlist in a caller's transaction. Reporting the mode without
-honouring it would turn "the handler's writes and the dequeue commit together" into visible duplicates
-after a crash — a data-shaped failure produced by a configuration flag.
+Handler work and acknowledgement commit separately — the only model `DurableQueues` has had since
+0.60 retired `TransactionalMode`. Shard-owned acknowledgements are batched and flushed on the owning
+consumer's connection under a fence, and never enlist in a caller's transaction.
+`Inboxes.handleMessage` opens its own `UnitOfWork` inside the handler, so nothing changes for it.
 
 ### Enqueue *is* transactional
 
@@ -311,8 +305,6 @@ work; each is a structural difference between the two engines.
 | `queryForMessagesSoonReadyForDelivery` | Orders a queue by next-delivery timestamp across every shard of both lanes. No index produces it and there is no single sequence to merge on. A different question from paging by id, which `getQueuedMessages` answers |
 | `getNextMessageReadyForDelivery` | Pulling one message needs a row-lease session that outlives the call. The engine has one (`MessageQueue.openSession`), but a session opened and abandoned per call would leave a lease on every message it returned |
 
-`FullyTransactional` is refused for its own reason, [above](#singleoperationtransaction-only).
-
 Everything else is served, including the three that used to throw and should not have:
 `getQueuedMessages` (the admin console's message browser is built on it),
 `hasOrderedMessageQueuedForKey`, and `addInterceptor`/`removeInterceptor`.
@@ -348,7 +340,6 @@ one, `delivered = 0`. **Reading that as a stalled projection is the obvious mist
 
 | Aspect | [`PostgresqlDurableQueues`](../postgresql-queue/README.md) | `ShardOwnedDurableQueues` |
 |---|---|---|
-| **Transactional modes** | `SingleOperationTransaction`, `FullyTransactional` | `SingleOperationTransaction` only |
 | **Transactional enqueue** | yes | yes |
 | **`QueueEntryId`** | UUID | `<queueName>:<lane>-<shard>-<seq>` |
 | **Delivery-path `QueuedMessage`** | full | partial — id, queue name and payload only |
@@ -381,7 +372,6 @@ decide when to act — or stay on `postgresql-queue` for that queue.
 
 - **A delay on an `OrderedMessage` does not hold its key.** See above — the only ordering behaviour
   that still differs from `PostgresqlDurableQueues`.
-- **`FullyTransactional` is refused, not approximated.** Applications that set it must change.
 - **The delivery-path `QueuedMessage` is partial** and three groups of accessors throw. Grep for
   `getTotalDeliveryAttempts`, `getAddedTimestamp` and `getLastDeliveryError` in your delivery paths
   before switching — including inside log statements, whose arguments are eager.

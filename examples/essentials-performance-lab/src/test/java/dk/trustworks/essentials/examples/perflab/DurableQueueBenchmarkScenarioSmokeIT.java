@@ -16,7 +16,7 @@
 
 package dk.trustworks.essentials.examples.perflab;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.databind.ObjectMapper;
 import com.zaxxer.hikari.*;
 import dk.trustworks.essentials.examples.perflab.scenario.DurableQueueBenchmarkScenario;
 import org.junit.jupiter.api.*;
@@ -93,8 +93,8 @@ class DurableQueueBenchmarkScenarioSmokeIT {
         assertThat(output).exists();
 
         var json = new ObjectMapper().readTree(Files.readString(output));
-        assertThat(json.get("scenario").asText()).isEqualTo("durable-queues");
-        assertThat(json.get("workload").asText()).isEqualTo("UNORDERED");
+        assertThat(json.get("scenario").asString()).isEqualTo("durable-queues");
+        assertThat(json.get("workload").asString()).isEqualTo("UNORDERED");
 
         var runs = json.get("runs");
         assertThat(runs).hasSize(6); // 2 arms x 3 repetitions

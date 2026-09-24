@@ -115,7 +115,7 @@ class NotifyPollingIT {
                 standardSingleTenantConfiguration(
                         aggregateType -> aggregateType + "_events",
                         EventStreamTableColumnNames.defaultColumnNames(),
-                        EssentialsJSONEventSerializers.createForActiveJacksonFlavor(),
+                        EssentialsJSONEventSerializers.create(),
                         IdentifierColumnType.UUID,
                         JSONColumnType.JSONB));
 

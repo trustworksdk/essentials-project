@@ -16,6 +16,7 @@
 
 package dk.trustworks.essentials.jackson;
 
+import tools.jackson.databind.ObjectMapper;
 import dk.trustworks.essentials.jackson.model.*;
 import dk.trustworks.essentials.jackson.types.EssentialTypesJacksonModule;
 import org.junit.jupiter.api.Test;

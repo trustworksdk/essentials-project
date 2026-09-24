@@ -16,7 +16,7 @@
 
 package dk.trustworks.essentials.examples.perflab;
 
-import com.fasterxml.jackson.databind.*;
+import tools.jackson.databind.*;
 import com.zaxxer.hikari.*;
 import dk.trustworks.essentials.examples.perflab.EssentialsPerformanceLabProperties.QueueBenchmark.Workload;
 import dk.trustworks.essentials.examples.perflab.scenario.DurableQueueBenchmarkScenario;

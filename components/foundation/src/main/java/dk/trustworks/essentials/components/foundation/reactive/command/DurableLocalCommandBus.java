@@ -440,35 +440,23 @@ public final class DurableLocalCommandBus extends AbstractCommandBus implements 
 
 
         if (messageDeliveryDelay.isPresent()) {
-            log.debug("[{}] Queuing Durable delayed {} sendAndDontWait for command of type '{}' to {} '{}'. TransactionalMode: {}",
+            log.debug("[{}] Queuing Durable delayed {} sendAndDontWait for command of type '{}' to {} '{}'",
                       commandQueueName,
                       messageDeliveryDelay,
                       command.getClass().getName(),
                       CommandHandler.class.getSimpleName(),
-                      commandHandler.toString(),
-                      durableQueues.getTransactionalMode());
+                      commandHandler.toString());
         } else {
-            log.debug("[{}] Queuing Durable sendAndDontWait command of type '{}' to {} '{}'. TransactionalMode: {}",
+            log.debug("[{}] Queuing Durable sendAndDontWait command of type '{}' to {} '{}'",
                       commandQueueName,
                       command.getClass().getName(),
                       CommandHandler.class.getSimpleName(),
-                      commandHandler.toString(),
-                      durableQueues.getTransactionalMode());
+                      commandHandler.toString());
         }
 
-        if (durableQueues.getTransactionalMode() == TransactionalMode.FullyTransactional) {
-
-            // Allow sendAndDontWait to automatically start a new or join in an existing UnitOfWork
-            durableQueues.getUnitOfWorkFactory().get().usingUnitOfWork(() -> {
-                durableQueues.queueMessage(commandQueueName,
-                                           Message.of(command),
-                                           messageDeliveryDelay);
-            });
-        } else {
-            durableQueues.queueMessage(commandQueueName,
-                                       Message.of(command),
-                                       messageDeliveryDelay);
-        }
+        durableQueues.queueMessage(commandQueueName,
+                                   Message.of(command),
+                                   messageDeliveryDelay);
     }
 
     private void processSendAndDontWaitMessage(QueuedMessage queuedMessage) {

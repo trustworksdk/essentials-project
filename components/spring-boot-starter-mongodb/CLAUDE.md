@@ -27,7 +27,7 @@ Beans wired (in order of dependency):
 2. `MongoTransactionManager` — `ReadConcern.SNAPSHOT` + `WriteConcern.ACKNOWLEDGED` (hardcoded, override via `@ConditionalOnMissingBean`)
 3. `SpringMongoTransactionAwareUnitOfWorkFactory`
 4. `MongoFencedLockManager` (as `FencedLockManager`) — calls `buildAndStart()` at construction
-5. `MongoDurableQueues` (as `DurableQueues`) — mode-switched: `FullyTransactional` uses UoW factory; `SingleOperationTransaction` uses timeout
+5. `MongoDurableQueues` (as `DurableQueues`) — mode-switched: `FullyTransactional` uses UoW factory; `SingleOperationTransaction` uses timeout. Collects every `DurableQueueMessageObserver` bean via `composite(...)`
 6. `Inboxes`, `Outboxes` — durable-queue-based impls wrapping `DurableQueues` + `FencedLockManager`
 7. `DurableLocalCommandBus` (bean name `essentialsCommandBus`) — always adds `UnitOfWorkControllingCommandBusInterceptor` unless user provides one
 8. `LocalEventBus` (bean name `essentialsEventBus`)
@@ -37,6 +37,8 @@ Beans wired (in order of dependency):
 12. Measurement interceptors: `RecordExecutionTime*Interceptor` for queues, command bus, message handlers
 13. `ReactiveHandlersBeanPostProcessor` — auto-registers `@EventHandler`/`@CommandHandler` beans; disable via `essentials.reactive-bean-post-processor-enabled=false`
 14. `SpringBootDevToolsClassLoaderChangeContextRefreshedListener` — conditional on DevTools presence; resets Jackson classloader on context refresh
+15. `MicrometerDurableQueueMessageObserver` — `essentials.messaging.durable_queues.dead_lettered` counter; registered on `MeterRegistry` presence, NOT behind `essentials.metrics.durable-queues.enabled`
+16. `DurableQueuesHealthIndicator` — dead-letter counts on `/actuator/health` under `durableQueues`; on by default, `UP` until `essentials.durable-queues.health.dead-letter-threshold` is set positive
 
 ## Test Structure
 
@@ -53,15 +55,15 @@ No tests in this module (pure auto-configuration glue). Integration tests live i
 | Extra `CommandBusInterceptor`s | Register as beans; auto-collected via `List<CommandBusInterceptor>` |
 | Custom command queue | Register `QueueName` bean and/or `RedeliveryPolicy` bean |
 | Custom error handling | Register `SendAndDontWaitErrorHandler` bean or `OnErrorHandler` bean |
-| Extra Jackson modules | Register `com.fasterxml.jackson.databind.Module` beans; auto-collected and added to `ObjectMapper` |
+| Extra persistence Jackson modules | Define own `JSONSerializer` bean (e.g. `new Jackson3JSONSerializer(EssentialsObjectMappers.createJackson3ObjectMapper(extraModules))`); starter backs off. `JacksonModule` beans are NOT collected into persistence mapper (they go to Boot's web `JsonMapper`) |
 
 ## Gotchas
 
 - `MongoFencedLockManager` calls `buildAndStart()` at bean creation → lock manager starts immediately during context refresh, before `LifecycleManager` kicks in.
-- `DurableQueues` `TransactionalMode` default is `SingleOperationTransaction` (not `FullyTransactional`). In `SingleOperationTransaction` mode, message handling timeout (default 30 s) governs redelivery — no UoW participation.
 - `jsonSerializer` bean has `@ConditionalOnMissingClass("...JSONEventSerializer")` — if postgresql event store starter is also on classpath, it wins and this bean is skipped entirely.
 - `EssentialsImmutableJacksonModule` has dual conditions: Objenesis must be on classpath AND `essentials.immutable-jackson-module-enabled=true` (default: property key absent → `havingValue="true"` means it is NOT auto-enabled unless property is explicitly set).
 - Collection names (`fencedLocksCollectionName`, `sharedQueueCollectionName`) are used verbatim in MongoDB queries → `MongoUtil#checkIsValidCollectionName` is first-line defense only; never source these from untrusted input.
 - `SpringBootDevToolsClassLoaderChangeContextRefreshedListener` resets the Jackson `ObjectMapper` classloader on every `ContextRefreshedEvent` — relevant only in dev; production classloaders are stable.
 - `UnitOfWorkControllingCommandBusInterceptor` is added to command bus automatically unless user's interceptor list already contains an instance of that class — checked by `isAssignableFrom`, so subclassing also suppresses auto-add.
+- **The statistics registry is deliberately still absent here, unlike the observer and the counter.** `durableQueues` now collects `List<DurableQueueMessageObserver>` into `composite(...)` and `MicrometerDurableQueueMessageObserver` is registered on `MeterRegistry` presence, matching the Postgres starter. `QueueStatisticsRegistry` and `StatisticsCollectingDurableQueueMessageObserver` are not, because their only consumer is `DefaultDurableQueuesApi.getQueueStatistics` and **this starter registers no `*Api` beans and no `EssentialsSecurityProvider` at all**. Adding the registry alone would accumulate counters nothing here can read. `DefaultDurableQueuesApi` is DB-agnostic, so the blocker is a scope decision about giving this starter an admin surface (including the deny-all security default), not a technical one.
 - `essentials.reactive.event-bus-parallel-threads` defaults to `min(availableProcessors, 4)` — on high-core machines this caps throughput; tune explicitly for high-volume event processing.

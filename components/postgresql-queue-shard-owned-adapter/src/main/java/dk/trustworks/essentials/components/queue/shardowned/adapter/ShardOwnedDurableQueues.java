@@ -46,24 +46,18 @@ import static dk.trustworks.essentials.shared.interceptor.InterceptorChain.newIn
  *
  * <h2>What this is for</h2>
  * {@code Inbox}, {@code Outbox} and {@code DurableLocalCommandBus} are written against
- * {@link DurableQueues}. Between them they touch eight of its methods —
+ * {@link DurableQueues}. Between them they touch a handful of its methods —
  * {@code queueMessage}, {@code queueMessages}, {@code consumeFromQueue}, {@code purgeQueue},
- * {@code getTotalMessagesQueuedFor}, {@code getUnitOfWorkFactory}, {@code getTransactionalMode} — and
+ * {@code getTotalMessagesQueuedFor}, {@code getUnitOfWorkFactory} — and
  * never touch a {@link QueueEntryId}. Swapping the engine underneath them is therefore a small,
  * well-defined adapter rather than a rewrite, and that is what this class is.
  *
- * <h2>Transactional mode: SingleOperationTransaction, and nothing else</h2>
- * This reports {@link TransactionalMode#SingleOperationTransaction} — already the default and the
- * recommended mode — because it is what the engine actually does: handler work and acknowledgement
- * are separate transactions. {@code Inboxes.handleMessage} already opens its own {@code UnitOfWork}
- * inside the handler, so nothing changes for it.
- * <p>
- * {@link TransactionalMode#FullyTransactional} is <b>refused</b>, not approximated. It requires the
- * dequeue to commit with the handler's own work; shard-owned acknowledgements are batched and flushed
- * on the owning consumer's connection under a fence, and cannot enlist in a caller's transaction.
- * Silently reporting the mode and not honouring it would turn "the handler's writes and the dequeue
- * commit together" into visible duplicates after a crash — a data-shaped failure produced by a
- * configuration flag.
+ * <h2>Transactions</h2>
+ * Handler work and acknowledgement are separate transactions — the only model {@link DurableQueues}
+ * has had since 0.60 retired {@code TransactionalMode}. Shard-owned acknowledgements are batched and
+ * flushed on the owning consumer's connection under a fence, and never enlist in a caller's
+ * transaction. {@code Inboxes.handleMessage} opens its own {@code UnitOfWork} inside the handler, so
+ * nothing changes for it.
  * <p>
  * Enqueueing <em>is</em> transactional. With a {@link HandleAwareUnitOfWork} in progress the messages
  * are written on that unit of work's own connection, so they commit or roll back with the caller's
@@ -196,17 +190,6 @@ public class ShardOwnedDurableQueues implements DurableQueues {
     }
 
     // ------------------------------------------------------------ properties
-
-    /**
-     * {@inheritDoc}
-     * <p>
-     * Always {@link TransactionalMode#SingleOperationTransaction} — see this class's javadoc for why
-     * {@link TransactionalMode#FullyTransactional} is not offered rather than approximated.
-     */
-    @Override
-    public TransactionalMode getTransactionalMode() {
-        return TransactionalMode.SingleOperationTransaction;
-    }
 
     @Override
     public Optional<UnitOfWorkFactory<? extends UnitOfWork>> getUnitOfWorkFactory() {
@@ -639,9 +622,13 @@ public class ShardOwnedDurableQueues implements DurableQueues {
                                                (interceptor, interceptorChain) -> interceptor.intercept(operation, interceptorChain),
                                                () -> {
                                                    var depth = depth(operation.getQueueName());
+                                                   // TODO(0.60 merge): placeholder - the engine does not report messages being delivered or
+                                                   // the oldest ready message yet, so the queue health check cannot tell stalled from idle
                                                    return new QueuedMessageCounts(operation.getQueueName(),
                                                                                   depth.unordered() + depth.ordered(),
-                                                                                  depth.deadLettered());
+                                                                                  depth.deadLettered(),
+                                                                                  0,
+                                                                                  null);
                                                })
                 .proceed();
     }

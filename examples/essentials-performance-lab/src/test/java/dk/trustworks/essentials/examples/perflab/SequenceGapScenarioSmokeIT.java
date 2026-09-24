@@ -91,8 +91,8 @@ class SequenceGapScenarioSmokeIT {
         var output = java.nio.file.Path.of("target/perf-lab-smoke/seq-gap.json");
         assertThat(output).exists();
 
-        var json = new com.fasterxml.jackson.databind.ObjectMapper().readTree(java.nio.file.Files.readString(output));
-        assertThat(json.get("scenario").asText()).isEqualTo("seq-gap");
+        var json = new tools.jackson.databind.ObjectMapper().readTree(java.nio.file.Files.readString(output));
+        assertThat(json.get("scenario").asString()).isEqualTo("seq-gap");
         assertThat(json.get("environment").get("pg.synchronous_commit")).isNotNull();
 
         var runs = json.get("runs");

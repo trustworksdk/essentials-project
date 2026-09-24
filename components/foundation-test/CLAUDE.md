@@ -38,7 +38,7 @@ All classes live in `src/main/java` — shipped as a test-support library consum
 - Subclass provides: factory methods (`createDurableQueues`, `createUnitOfWorkFactory`, `resetQueueStorage`, `createLockManagerNode1/2`, etc.).
 - `@BeforeEach` calls factory methods then starts the SUT; `@AfterEach` stops and nulls.
 - Awaitility used for async assertions; typical timeouts 2–10 s.
-- `withDurableQueue(Supplier)` / `usingDurableQueue(Runnable)` helpers in `DurableQueuesIT` branch on `TransactionalMode` — `FullyTransactional` wraps in UoW, `SingleOperationTransaction` runs bare.
+- `withDurableQueue(Supplier)` / `usingDurableQueue(Runnable)` helpers in `DurableQueuesIT` run the action directly — since 0.60 every queue operation carries its own transaction, so the suites no longer branch on a transactional mode
 - `DBFencedLockManagerIT.deleteAllLocksInDBWithRetry` retries up to 5x with backoff on `WriteConflict` — needed for multi-node setups sharing one DB schema.
 
 ## Extension Points

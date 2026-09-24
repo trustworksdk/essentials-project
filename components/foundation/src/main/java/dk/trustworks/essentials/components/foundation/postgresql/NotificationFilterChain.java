@@ -16,7 +16,7 @@
 
 package dk.trustworks.essentials.components.foundation.postgresql;
 
-import com.fasterxml.jackson.databind.*;
+import tools.jackson.databind.*;
 import org.postgresql.core.Notification;
 
 import java.util.*;

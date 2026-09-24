@@ -67,12 +67,8 @@ public final class DefaultQueuedMessage implements QueuedMessage {
      * @param redeliveryAttempts    number of redelivery attempts so far
      * @param isDeadLetterMessage   whether the message has been marked as a dead-letter message
      * @param isBeingDelivered      whether the message is currently being delivered
-     * @deprecated Use {@link #builder()}. Eleven positional arguments — six of them nullable or primitive — cannot be
-     *         read at a call site, and two adjacent {@code OffsetDateTime}s or two adjacent {@code int}s swap silently.
-     *         This constructor delegates to the same implementation and behaves identically.
      */
-    @Deprecated(forRemoval = true, since = "0.40.x")
-    public DefaultQueuedMessage(QueueEntryId id,
+    DefaultQueuedMessage(QueueEntryId id,
                                 QueueName queueName,
                                 Message message,
                                 OffsetDateTime addedTimestamp,

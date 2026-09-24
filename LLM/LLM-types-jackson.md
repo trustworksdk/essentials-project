@@ -1,32 +1,31 @@
-# Types-Jackson - LLM Reference
+# Types-Jackson3 - LLM Reference
 
-> Token-efficient reference for Jackson serialization of Essentials types. For explanations see [README.md](../types-jackson/README.md).
+> Token-efficient reference for Jackson serialization of Essentials types. For explanations see [README.md](../types-jackson3/README.md).
 
 ## Quick Facts
 - Package: `dk.trustworks.essentials.jackson.types`
 - Purpose: Jackson serialization/deserialization for **Java** `SingleValueType` implementations
-- Dependencies: `jackson-databind` (provided), `types` module
-- Key class: `EssentialTypesJacksonModule`
+- Artifact: `types-jackson3`
+- Dependencies: `tools.jackson.core:jackson-databind` (Jackson 3, provided), `types` module
+- Key class: `EssentialTypesJacksonModule` (extends `tools.jackson.databind.module.SimpleModule`)
 
-**Two artifacts, one FQCN.** `types-jackson3` is the Jackson 3 flavour and the repository default;
-`types-jackson` is Jackson 2. Both publish
-`dk.trustworks.essentials.jackson.types.EssentialTypesJacksonModule`, extending
-`tools.jackson.databind` and `com.fasterxml.jackson.databind` respectively, so only one may ever be on
-the classpath. Pick the one matching your application's Jackson major — Spring Boot 4 is Jackson 3.
+**Jackson 3 only.** From 0.60 Essentials supports Jackson 3 (`tools.jackson`, the Spring Boot 4 default) exclusively.
+The Jackson 2 artifact `types-jackson` no longer exists.
 
 ```xml
-<!-- Spring Boot 4 / Jackson 3 -->
 <dependency>
     <groupId>dk.trustworks.essentials</groupId>
     <artifactId>types-jackson3</artifactId>
 </dependency>
-
-<!-- Jackson 2 -->
-<dependency>
-    <groupId>dk.trustworks.essentials</groupId>
-    <artifactId>types-jackson</artifactId>
-</dependency>
 ```
+
+**Upgrading from 0.50 (Jackson 2):** replace the `types-jackson` dependency with `types-jackson3` (the class FQCNs are
+unchanged), change `com.fasterxml.jackson.databind` imports to `tools.jackson.databind`, and remove any Jackson 2
+databind annotations (`com.fasterxml.jackson.databind.annotation.*`, e.g. `@JsonDeserialize(keyUsing = …)`) — Jackson 3
+does not read that package, so they silently stop applying. `com.fasterxml.jackson.annotation.*` (`@JsonProperty`,
+`@JsonCreator`, …) is shared by both majors and keeps working. A leftover 0.50 `types-jackson` jar on the classpath
+(same FQCNs, wrong Jackson major) makes `EssentialsJacksonModules.modules()` — and so every Essentials persistence
+mapper — fail with an `IllegalStateException`.
 
 ⚠️ **Java hierarchy only.** `EssentialTypesJacksonModule` registers serializers for `CharSequenceType`,
 `NumberType`, `Money` and `JSR310SingleValueType`. It has **no** knowledge of
@@ -65,23 +64,28 @@ package dk.trustworks.essentials.jackson.types;
 public final class EssentialTypesJacksonModule extends SimpleModule {
     public EssentialTypesJacksonModule();
 
-    // Factory with opinionated defaults
-    public static ObjectMapper createObjectMapper(Module... additionalModules);
+    // Factory with opinionated defaults (tools.jackson.databind.ObjectMapper / JacksonModule)
+    public static ObjectMapper createObjectMapper(JacksonModule... additionalModules);
 }
 ```
 
 **Registration:**
 ```java
-// Manual
-ObjectMapper mapper = new ObjectMapper();
-mapper.registerModule(new EssentialTypesJacksonModule());
+// Manual (Jackson 3 mappers are immutable - register on the builder)
+ObjectMapper mapper = JsonMapper.builder()
+                                .addModule(new EssentialTypesJacksonModule())
+                                .build();
 
 // Factory (includes EssentialTypesJacksonModule + defaults)
-ObjectMapper mapper = EssentialTypesJacksonModule.createObjectMapper(
-    new Jdk8Module(),
-    new JavaTimeModule()
-);
+ObjectMapper mapper = EssentialTypesJacksonModule.createObjectMapper();
 ```
+
+Jackson 3 has `java.time` and `Optional` support built in; no `Jdk8Module`/`JavaTimeModule` is needed.
+
+⚠️ For **persistence** (events, queues, documents) do not use this factory — use
+`EssentialsObjectMappers.createJackson3ObjectMapper(...)` / `EssentialsObjectMappers.createJSONSerializer()` from
+`foundation`, which carries the exact configuration the persisted wire format depends on. See
+[LLM-foundation.md](LLM-foundation.md).
 
 **Factory defaults:**
 
@@ -89,14 +93,11 @@ ObjectMapper mapper = EssentialTypesJacksonModule.createObjectMapper(
 |---------|---------|--------|
 | Field visibility | `ANY` | Serialize all fields |
 | Getter/setter visibility | `NONE` | Ignore getters/setters |
-| `AUTO_DETECT_GETTERS` | disabled | No getter detection |
-| `AUTO_DETECT_SETTERS` | disabled | No setter detection |
-| `AUTO_DETECT_FIELDS` | enabled | Detect fields |
-| `AUTO_DETECT_CREATORS` | enabled | Detect constructors |
+| Creator visibility | `ANY` | Any constructor may be used as creator |
 | `FAIL_ON_UNKNOWN_PROPERTIES` | disabled | Ignore extra JSON |
 | `FAIL_ON_EMPTY_BEANS` | disabled | Allow empty objects |
 | `PROPAGATE_TRANSIENT_MARKER` | enabled | Respect `transient` |
-| `WRITE_DATES_AS_TIMESTAMPS` | disabled | ISO-8601 strings |
+| `DEFAULT_VIEW_INCLUSION` | disabled | Unannotated properties excluded from views |
 
 ### CharSequenceTypeJsonSerializer
 
@@ -116,9 +117,9 @@ Registered for: All `dk.trustworks.essentials.types.CharSequenceType` subclasses
 ```java
 package dk.trustworks.essentials.jackson.types;
 
-public final class NumberTypeJsonSerializer extends NumberSerializer {
+public final class NumberTypeJsonSerializer extends ValueSerializer<NumberType<?, ?>> {
     public NumberTypeJsonSerializer();
-    public void serialize(Number value, JsonGenerator g, SerializerProvider provider);
+    public void serialize(NumberType<?, ?> value, JsonGenerator g, SerializationContext ctxt);
 }
 ```
 
@@ -152,22 +153,21 @@ Expects: `{"amount":"...", "currency":"..."}`
 
 ## Type Requirements
 
-### CharSequenceType (Jackson 2.18+)
-
-**Two constructors required:**
+### CharSequenceType
 
 ```java
 import dk.trustworks.essentials.types.CharSequenceType;
 
 public class OrderId extends CharSequenceType<OrderId> {
     public OrderId(CharSequence value) { super(value); }
-    public OrderId(String value) { super(value); }  // Required for Jackson 2.18+
 
     public static OrderId of(CharSequence value) { return new OrderId(value); }
 }
 ```
 
-⚠️ Missing `String` constructor → deserialization fails in Jackson 2.18+
+`SingleValueTypeCreatorIntrospector` (registered by the module) pins the single-argument constructor of every
+`SingleValueType` as a **delegating** creator, so the value type is always read from the bare JSON scalar. The extra
+`String` constructor that Jackson 2.18+ needed is no longer required; existing ones can stay.
 
 ### NumberType deserialization
 
@@ -222,7 +222,7 @@ floating-point token through it, narrowing to a `double` before the `BigDecimal`
 `1234.5678901234567890123` came back as `1234.567890123457`. `Amount` carries such a constructor and did lose
 precision this way. Both problems are gone: the deserializer never consults those overloads.
 
-Pinned by `NumberTypeCreatorRequirementTest` (both flavors) and `NumberTypeCreatorPrecisionTest` (`types-jackson3`).
+Pinned by `NumberTypeCreatorRequirementTest` and `NumberTypeCreatorPrecisionTest` (`types-jackson3`).
 
 ### JSR310SingleValueType
 
@@ -256,26 +256,18 @@ public class TransactionTime extends ZonedDateTimeType<TransactionTime> {
 
 **Serialization:** Automatic for all `SingleValueType` keys
 
-**Deserialization:** Requires `KeyDeserializer`
+**Deserialization:** Automatic — the module registers `SingleValueTypeKeyDeserializers`, so no annotation is needed:
 
 ```java
-import com.fasterxml.jackson.databind.KeyDeserializer;
-import com.fasterxml.jackson.databind.DeserializationContext;
-import com.fasterxml.jackson.annotation.JsonDeserialize;
-
-public class ProductIdKeyDeserializer extends KeyDeserializer {
-    @Override
-    public Object deserializeKey(String key, DeserializationContext ctxt) {
-        return ProductId.of(key);
-    }
-}
-
-// Usage
 public class Order {
-    @JsonDeserialize(keyUsing = ProductIdKeyDeserializer.class)
     public Map<ProductId, Quantity> items;
 }
 ```
+
+⚠️ **Upgrading from 0.50:** a Jackson 2 `@JsonDeserialize(keyUsing = …)` from
+`com.fasterxml.jackson.databind.annotation` is **silently ignored** by Jackson 3. Remove it (the module handles the key)
+or, if you really need a custom key deserializer, use Jackson 3's `tools.jackson.databind.annotation.JsonDeserialize`.
+Regression-tested by `SingleValueTypeMapKeyTest`.
 
 **JSON:**
 ```json
@@ -291,25 +283,26 @@ public class Order {
 
 ## Common Patterns
 
-### Spring Configuration
+### Spring Boot 4 (web mapper)
+
+Expose the module as a bean; Spring Boot registers every `JacksonModule` bean on its auto-configured **web**
+`JsonMapper` (`@RequestBody`/`@ResponseBody`). Do not replace Boot's mapper.
 
 ```java
 import dk.trustworks.essentials.jackson.types.EssentialTypesJacksonModule;
-import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.datatype.jdk8.Jdk8Module;
-import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 
 @Configuration
 public class JacksonConfig {
     @Bean
-    public ObjectMapper objectMapper() {
-        return EssentialTypesJacksonModule.createObjectMapper(
-            new Jdk8Module(),
-            new JavaTimeModule()
-        );
+    public EssentialTypesJacksonModule essentialTypesJacksonModule() {
+        return new EssentialTypesJacksonModule();
     }
 }
 ```
+
+The Essentials Spring Boot starters already define this bean. They deliberately do **not** feed `JacksonModule` beans
+from the context into the persistence mapper; an application needing extra persistence modules defines its own
+`JSONSerializer` / `JSONEventSerializer` bean, which the starter backs off from.
 
 ### Complete Type Definition
 
@@ -357,40 +350,34 @@ Order restored = mapper.readValue(json, Order.class);
 
 ## Kotlin semantic types
 
-`EssentialTypesJacksonModule` does **not** cover `dk.trustworks.essentials.kotlin.types` — neither
-flavour references that package at all. Kotlin semantic types are handled by `jackson-module-kotlin`,
+`EssentialTypesJacksonModule` does **not** cover `dk.trustworks.essentials.kotlin.types` — it does not
+reference that package at all. Kotlin semantic types are handled by `jackson-module-kotlin`,
 which the consumer registers:
 
 ```kotlin
-// Jackson 3
 JsonMapper.builder()
     .addModule(EssentialTypesJacksonModule())
     .addModule(tools.jackson.module.kotlin.KotlinModule.Builder().build())
     .build()
-
-// Jackson 2
-ObjectMapper()
-    .registerModule(EssentialTypesJacksonModule())
-    .registerModule(com.fasterxml.jackson.module.kotlin.KotlinModule.Builder().build())
 ```
 
 ⚠️ **Omitting `KotlinModule` fails silently, not loudly.** Jackson treats a `@JvmInline value class` as
 an ordinary bean and writes `{"value":"order-4711"}` where the wire contract is the bare scalar
 `"order-4711"`. Nothing throws on the way out; the mismatch surfaces later as unreadable persisted
-JSON. Asserted on both majors by `KotlinJacksonBodyJackson2Test` / `KotlinJacksonBodyJackson3Test` in
-`types-spring-web`.
+JSON. Asserted by `KotlinJacksonBodyJackson3Test` in `types-spring-web`.
 
 For an application that persists Kotlin documents, `components/postgresql-document-db`'s
-`TestObjectMappers.kt` is the worked example of assembling the flavour's mapper with `KotlinModule`.
+`TestObjectMappers.kt` is the worked example of assembling the mapper with `KotlinModule`.
 
 ---
 
 ## Gotchas
 
-- ⚠️ `CharSequenceType` needs **both** `CharSequence` and `String` constructors for Jackson 2.18+
+- ⚠️ Jackson 3 only — `types-jackson` (Jackson 2) was removed in 0.60; depend on `types-jackson3`
+- ⚠️ Every single-argument constructor of a `SingleValueType` is pinned as a delegating creator; a `CharSequence` constructor is enough
 - ⚠️ `NumberType` subclasses need only the value-typed constructor — `NumberTypeJsonDeserializers` handles the family. A fraction is **refused** by the integral bases rather than truncated, and quoted numbers still read
 - ⚠️ `JSR310SingleValueType` needs `@JsonCreator` on constructor
-- ⚠️ Map key deserialization requires explicit `@JsonDeserialize(keyUsing = ...)`
+- ⚠️ Map keys typed by a value type need no annotation; a Jackson 2 `@JsonDeserialize(keyUsing = ...)` is silently ignored
 - ⚠️ `Money` serializes as `{"amount":"...","currency":"..."}` object, not single value
 - ⚠️ Factory `createObjectMapper()` disables getter/setter detection - uses fields only
 - ⚠️ All registered types are from `dk.trustworks.essentials.types` — the **Java** hierarchy. Kotlin value types need `jackson-module-kotlin`
@@ -400,7 +387,7 @@ For an application that persists Kotlin documents, `components/postgresql-docume
 
 ## See Also
 
-- [README.md](../types-jackson/README.md) - Full documentation
+- [README.md](../types-jackson3/README.md) - Full documentation
 - [LLM-types.md](LLM-types.md) - Core types module
 - [LLM-immutable-jackson.md](LLM-immutable-jackson.md) - Immutable object Jackson support
-- [EssentialTypesJacksonModuleTest.java](../types-jackson/src/test/java/dk/trustworks/essentials/jackson/EssentialTypesJacksonModuleTest.java) - Usage examples
+- [EssentialTypesJacksonModuleTest.java](../types-jackson3/src/test/java/dk/trustworks/essentials/jackson/EssentialTypesJacksonModuleTest.java) - Usage examples

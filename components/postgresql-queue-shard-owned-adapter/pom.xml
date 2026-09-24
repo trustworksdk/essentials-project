@@ -96,30 +96,13 @@
         </dependency>
 
         <!--
-          Both Jackson majors, test scope. foundation declares them optional/provided, so neither is
-          transitive, and EssentialsObjectMappers takes whichever branch the active flavor selects -
-          naming only one makes the tests fail under the other profile rather than exercise it.
-          Same pattern as postgresql-queue.
+          Jackson 3, test scope. foundation declares it optional, so it is not transitive and has to be
+          named here. Its jackson-databind covers java.time and Optional itself - no datatype modules.
         -->
-        <dependency>
-            <groupId>com.fasterxml.jackson.core</groupId>
-            <artifactId>jackson-databind</artifactId>
-            <scope>test</scope>
-        </dependency>
         <dependency>
             <groupId>tools.jackson.core</groupId>
             <artifactId>jackson-databind</artifactId>
             <version>${jackson3-bom.version}</version>
-            <scope>test</scope>
-        </dependency>
-        <dependency>
-            <groupId>com.fasterxml.jackson.datatype</groupId>
-            <artifactId>jackson-datatype-jdk8</artifactId>
-            <scope>test</scope>
-        </dependency>
-        <dependency>
-            <groupId>com.fasterxml.jackson.datatype</groupId>
-            <artifactId>jackson-datatype-jsr310</artifactId>
             <scope>test</scope>
         </dependency>
         <!-- immutable-jackson instantiates payloads through it; not transitive from there. -->
@@ -130,21 +113,15 @@
             <scope>test</scope>
         </dependency>
 
-        <!--
-          The flavor-neutral coordinates. EssentialsObjectMappers picks the mapper for whichever
-          Jackson major the build selected, and this property is how a module gets that one and not
-          the other - both artifacts publish the same FQCNs, so naming either directly would put the
-          wrong flavor on the classpath under -Pjackson2.
-        -->
         <dependency>
             <groupId>dk.trustworks.essentials</groupId>
-            <artifactId>${essentials.types-jackson.artifactId}</artifactId>
+            <artifactId>types-jackson3</artifactId>
             <version>${project.version}</version>
             <scope>test</scope>
         </dependency>
         <dependency>
             <groupId>dk.trustworks.essentials</groupId>
-            <artifactId>${essentials.immutable-jackson.artifactId}</artifactId>
+            <artifactId>immutable-jackson3</artifactId>
             <version>${project.version}</version>
             <scope>test</scope>
         </dependency>

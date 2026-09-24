@@ -17,7 +17,6 @@
 package dk.trustworks.essentials.components.eventsourced.aggregates.projection;
 
 import dk.trustworks.essentials.components.eventsourced.aggregates.EventHandler;
-import dk.trustworks.essentials.components.eventsourced.aggregates.TestFasterxmlObjectMapperFactory;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.EventStore;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.serializer.json.*;
@@ -35,7 +34,7 @@ class AnnotationBasedInMemoryProjectorTest {
 
     private static final AggregateType ORDERS = AggregateType.of("Orders");
     private static final JSONEventSerializer JSON_SERIALIZER =
-            EssentialsJSONEventSerializers.createForActiveJacksonFlavor();
+            EssentialsJSONEventSerializers.create();
 
     private final AnnotationBasedInMemoryProjector projector = new AnnotationBasedInMemoryProjector();
 

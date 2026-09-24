@@ -105,22 +105,19 @@ public class OrderService {
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.persistence.table_per_aggregate_type.*;
-import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.serializer.json.JacksonJSONEventSerializer;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.serializer.json.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.transaction.EventStoreManagedUnitOfWorkFactory;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.gap.PostgresqlEventStreamGapHandler;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.observability.EventStoreSubscriptionObserver;
 
-// 1. JDBI + Jackson
+// 1. JDBI
 var jdbi = Jdbi.create(url, user, pass);
 jdbi.installPlugin(new PostgresPlugin());
 
-ObjectMapper mapper = JsonMapper.builder()
-    .addModule(new EssentialTypesJacksonModule())
-    .addModule(new EssentialsImmutableJacksonModule())
-    .build();
-
 // 2. EventStore components
-var jsonSerializer = new JacksonJSONEventSerializer(mapper);
+// Canonical Jackson 3 event serializer (EssentialsObjectMappers configuration: the frozen persisted wire format).
+// Need extra modules? new Jackson3JSONEventSerializer(EssentialsObjectMappers.createJackson3ObjectMapper(myModule))
+var jsonSerializer = EssentialsJSONEventSerializers.create();
 var unitOfWorkFactory = new EventStoreManagedUnitOfWorkFactory(jdbi);
 
 var persistenceStrategy = new SeparateTablePerAggregateTypePersistenceStrategy(
@@ -1013,6 +1010,15 @@ Flux<PersistedEvent> unbounded = eventStore.unboundedPollForEvents(...);
 Stream<PersistedEvent> events = eventStore.loadEventsByGlobalOrder(
     orders, LongRange.from(1, 1000));
 ```
+
+**Transactions.** Each poll runs in a `UnitOfWork` of its own, which it commits (or rolls back on error) before the
+events reach your subscriber — your handling of an event is not part of the poll's transaction. `pollEvents` always
+polls on a dedicated thread. The first poll of `unboundedPollForEvents` runs on the thread that subscribes; if that
+thread is already inside a `UnitOfWork`, the poll joins it and leaves ending it to you (on a polling error it only marks
+it rollback-only). Up to and including 0.50.0 both methods could leave a poll's transaction open when the subscription
+was disposed right after an idle poll — the connection stayed `idle in transaction` and held a lock that blocks
+`DROP`/`TRUNCATE`/`ALTER TABLE` on the event table — and the unbounded variant committed a joined `UnitOfWork`. Fixed in
+0.50.1.
 
 ## Gotchas
 

@@ -1649,7 +1649,7 @@ Dpendending on the `DurableQueues` implementation there is either one or multipl
 
 ### Why
 
-`JSONSerializer` provides a technology-agnostic interface for JSON serialization/deserialization, abstracting away the underlying implementation (e.g., Jackson using `JacksonJSONSerializer`).
+`JSONSerializer` provides a technology-agnostic interface for JSON serialization/deserialization, abstracting away the underlying implementation (Jackson 3 via `Jackson3JSONSerializer`).
 
 ### Key Methods
 
@@ -1665,7 +1665,12 @@ Dpendending on the `DurableQueues` implementation there is either one or multipl
 ### Usage
 
 ```java
-JSONSerializer serializer = new JacksonJSONSerializer(objectMapper);
+// Preferred: the canonical Essentials persistence configuration (Jackson 3)
+JSONSerializer serializer = EssentialsObjectMappers.createJSONSerializer();
+
+// Or with additional Jackson 3 modules on top of the canonical configuration
+JSONSerializer serializer = new Jackson3JSONSerializer(
+    EssentialsObjectMappers.createJackson3ObjectMapper(myAdditionalModule));
 
 // Serialize
 String json = serializer.serialize(order);

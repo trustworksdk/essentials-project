@@ -1053,8 +1053,9 @@ paths:
     get:
       tags:
       - durable-queues
-      summary: Get delivery statistics for a queue.
-      operationId: getQueuedStatistics
+      summary: Get cluster-wide depth and this instance's delivery statistics for
+        a queue.
+      operationId: getQueueStatistics
       parameters:
       - name: queueName
         in: path
@@ -1068,7 +1069,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/ApiQueuedStatistics"
+                $ref: "#/components/schemas/ApiQueueStatistics"
         "400":
           description: "Malformed or out-of-range parameter, or invalid request body."
           content:
@@ -1083,12 +1084,6 @@ paths:
                 $ref: "#/components/schemas/Error"
         "403":
           description: Caller lacks one of the required roles.
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/Error"
-        "404":
-          description: No value exists for the given identifier.
           content:
             application/json:
               schema:
@@ -3177,6 +3172,18 @@ components:
         meanTime:
           type: number
           format: double
+    ApiQueueStatistics:
+      required:
+      - depth
+      - queueName
+      type: object
+      properties:
+        queueName:
+          type: string
+        depth:
+          $ref: "#/components/schemas/Depth"
+        instance:
+          $ref: "#/components/schemas/InstanceDelivery"
     ApiQueuedMessage:
       required:
       - id
@@ -3217,30 +3224,6 @@ components:
           type: boolean
         isBeingDelivered:
           type: boolean
-    ApiQueuedStatistics:
-      required:
-      - avgDeliveryLatencyMs
-      - queueName
-      - totalMessagesDelivered
-      type: object
-      properties:
-        queueName:
-          type: string
-        fromTimestamp:
-          type: string
-          format: date-time
-        totalMessagesDelivered:
-          type: integer
-          format: int64
-        avgDeliveryLatencyMs:
-          type: integer
-          format: int32
-        firstDelivery:
-          type: string
-          format: date-time
-        lastDelivery:
-          type: string
-          format: date-time
     ApiShardOwnedMessage:
       required:
       - attempts
@@ -3675,6 +3658,25 @@ components:
         deleted:
           type: boolean
       description: Outcome of a message deletion.
+    Depth:
+      required:
+      - deadLetterMessages
+      - messagesBeingDelivered
+      - queuedMessages
+      type: object
+      properties:
+        queuedMessages:
+          type: integer
+          format: int64
+        deadLetterMessages:
+          type: integer
+          format: int64
+        messagesBeingDelivered:
+          type: integer
+          format: int64
+        oldestReadyMessageAgeMillis:
+          type: integer
+          format: int64
     Error:
       required:
       - error
@@ -3703,6 +3705,43 @@ components:
           type: integer
           format: int64
       description: A persisted global event order value.
+    InstanceDelivery:
+      required:
+      - messagesDeadLettered
+      - messagesHandled
+      - messagesRetried
+      - redeliveryRequests
+      type: object
+      properties:
+        statisticsSince:
+          type: string
+          format: date-time
+        messagesHandled:
+          type: integer
+          format: int64
+        messagesRetried:
+          type: integer
+          format: int64
+        messagesDeadLettered:
+          type: integer
+          format: int64
+        redeliveryRequests:
+          type: integer
+          format: int64
+        averageHandlerDurationMillis:
+          type: integer
+          format: int64
+        maxHandlerDurationMillis:
+          type: integer
+          format: int64
+        lastHandledAt:
+          type: string
+          format: date-time
+        lastFailureAt:
+          type: string
+          format: date-time
+        lastFailureReason:
+          type: string
     MessageOperationResult:
       required:
       - applied

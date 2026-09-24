@@ -35,15 +35,7 @@ essentials:
     shared-queue-table-name: durable_queues
     polling-delay-interval-increment-factor: 0.5
     max-polling-interval: 2s
-    transactional-mode: singleoperationtransaction
     verbose-tracing: false
-    # Off (which is also the default): it triggers on the `durable_queues` table, and this demo runs
-    # durable queues on the shard-owned engine. Turn it back on alongside
-    # essentials.shard-owned-queue.durable-queues-enabled=false.
-    enable-queue-statistics: false
-    shared-queue-statistics-table-name: durable_queues_statistics
-    enable-queue-statistics-ttl: true
-    queue-statistics-ttl-duration: 90
   # The shard-owned queue engine. The queue is declared here as data — name to unordered shard
   # count — because a name in a YAML file cannot become a bean name without inventing a mapping
   # that would then be part of the contract. The ordered lane takes no count: it routes on its own

@@ -17,7 +17,9 @@
 package dk.trustworks.essentials.examples.perflab.harness;
 
 import com.fasterxml.jackson.annotation.JsonProperty;
-import com.fasterxml.jackson.databind.*;
+import tools.jackson.core.JacksonException;
+import tools.jackson.databind.SerializationFeature;
+import tools.jackson.databind.json.JsonMapper;
 import org.slf4j.*;
 
 import java.io.IOException;
@@ -57,9 +59,11 @@ public record RunResult(String scenario,
                         Map<String, Object> extra) {
 
     private static final Logger       log          = LoggerFactory.getLogger(RunResult.class);
-    private static final ObjectMapper objectMapper = new ObjectMapper().findAndRegisterModules()
-                                                                       .enable(SerializationFeature.INDENT_OUTPUT)
-                                                                       .disable(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS);
+    // Jackson 3 writes java.time values as ISO-8601 strings by default, so no date feature needs disabling
+    private static final JsonMapper objectMapper = JsonMapper.builder()
+                                                             .findAndAddModules()
+                                                             .enable(SerializationFeature.INDENT_OUTPUT)
+                                                             .build();
 
     public RunResult {
         requireNonNull(scenario, "No scenario provided");
@@ -107,7 +111,7 @@ public record RunResult(String scenario,
             }
             Files.writeString(target, objectMapper.writeValueAsString(results));
             log.info("Wrote run results to {}", target.toAbsolutePath());
-        } catch (IOException e) {
+        } catch (IOException | JacksonException e) {
             log.error("Failed to write run results to {}", path, e);
         }
     }

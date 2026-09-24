@@ -99,8 +99,8 @@ All beans use `@ConditionalOnMissingBean` for easy overriding.
 
 | Bean | Description |
 |------|-------------|
+| `QueueStatisticsRegistry` | Per-JVM queue delivery statistics, fed by `StatisticsCollectingDurableQueueMessageObserver` |
 | `PostgresqlDurableQueues` | Durable message queuing via PostgreSQL. See [DurableQueues documentation](../foundation/README.md#durablequeues-messaging) |
-| `PostgresqlDurableQueuesStatistics` | Queue statistics (when `enable-queue-statistics=true`) |
 | `Inboxes` | Store-and-forward for incoming messages. See [Inbox Pattern](../foundation/README.md#inbox-pattern) |
 | `Outboxes` | Store-and-forward for outgoing messages. See [Outbox Pattern](../foundation/README.md#outbox-pattern) |
 | `DurableLocalCommandBus` | Command bus with durable message delivery. See [DurableLocalCommandBus](../foundation/README.md#durablelocalcommandbus) |
@@ -122,7 +122,7 @@ All beans use `@ConditionalOnMissingBean` for easy overriding.
 |------|-----------|-------------|
 | `EssentialTypesJacksonModule` | Always | Jackson support for Essentials semantic types |
 | `EssentialsImmutableJacksonModule` | Objenesis on classpath + `essentials.immutable-jackson-module-enabled=true` | Jackson support for immutable objects without default constructor |
-| `JacksonJSONSerializer` | `JSONEventSerializer` NOT on classpath | Pre-configured ObjectMapper with sensible defaults |
+| `JSONSerializer` (`Jackson3JSONSerializer`) | `JSONEventSerializer` NOT on classpath | `EssentialsObjectMappers.createJSONSerializer()` — the canonical persistence mapper. Define your own `JSONSerializer` bean to add modules; the starter does not pick up `JacksonModule` beans for persistence |
 
 > **Note:** The `JSONSerializer` bean is only auto-registered if `JSONEventSerializer` is NOT on the classpath.  
 > If you're using `spring-boot-starter-postgresql-event-store`, it provides its own serializer.
@@ -186,30 +186,22 @@ essentials.fenced-lock-manager.release-acquired-locks-in-case-of-i-o-exceptions-
 
 ```properties
 essentials.durable-queues.shared-queue-table-name=durable_queues
-essentials.durable-queues.transactional-mode=single-operation-transaction
 essentials.durable-queues.message-handling-timeout=30s
 essentials.durable-queues.use-centralized-message-fetcher=true
 essentials.durable-queues.centralized-message-fetcher-polling-interval=20ms
 essentials.durable-queues.centralized-polling-delay-back-off-factor=1.5
-essentials.durable-queues.use-ordered-unordered-query=true
 essentials.durable-queues.polling-delay-interval-increment-factor=0.5
 essentials.durable-queues.max-polling-interval=2s
 essentials.durable-queues.verbose-tracing=false
-essentials.durable-queues.enable-queue-statistics=false
-essentials.durable-queues.shared-queue-statistics-table-name=durable_queues_statistics
-essentials.durable-queues.enable-queue-statistics-ttl=false
-essentials.durable-queues.queue-statistics-ttl-duration=90
 ```
 
 | Property | Default | Description                                                                 |
 |----------|---------|-----------------------------------------------------------------------------|
 | `shared-queue-table-name` | `durable_queues` | PostgreSQL table for messages. **See [Security](#security)** |
-| `transactional-mode` | `single-operation-transaction` | `single-operation-transaction` or `fully-transactional`                     |
 | `message-handling-timeout` | `30s` | Timeout before unacknowledged message is redelivered (single-op mode only)  |
 | `use-centralized-message-fetcher` | `true` | Use optimized centralized message fetching                                  |
 | `centralized-message-fetcher-polling-interval` | `20ms` | Base polling interval for centralized fetcher                               |
 | `centralized-polling-delay-back-off-factor` | `1.5` | Backoff factor when no messages found                                       |
-| `use-ordered-unordered-query` | `true` | Enable specialized query for mixed message ordering                         |
 | `polling-delay-interval-increment-factor` | `0.5` | Legacy backoff factor (when not using centralized fetcher)                  |
 | `max-polling-interval` | `2s` | Maximum polling delay                                                       |
 | `verbose-tracing` | `false` | Include all operations in traces (not just top-level)                       |
@@ -418,16 +410,8 @@ public class MyJdbiCustomizer implements JdbiConfigurationCallback {
         <artifactId>postgresql</artifactId>
     </dependency>
     <dependency>
-        <groupId>com.fasterxml.jackson.core</groupId>
+        <groupId>tools.jackson.core</groupId>
         <artifactId>jackson-databind</artifactId>
-    </dependency>
-    <dependency>
-        <groupId>com.fasterxml.jackson.datatype</groupId>
-        <artifactId>jackson-datatype-jdk8</artifactId>
-    </dependency>
-    <dependency>
-        <groupId>com.fasterxml.jackson.datatype</groupId>
-        <artifactId>jackson-datatype-jsr310</artifactId>
     </dependency>
     <dependency>
         <groupId>io.projectreactor</groupId>
