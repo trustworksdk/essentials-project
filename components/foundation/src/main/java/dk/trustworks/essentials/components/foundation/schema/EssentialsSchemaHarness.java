@@ -80,11 +80,18 @@ public final class EssentialsSchemaHarness {
     }
 
     /**
-     * Collect every contribution and hand the result to the applier.
+     * Collect every contribution and hand the result to the applier. Every {@link DynamicSchemaContributor} is first
+     * attached to a sink of the applier, so the objects it registers later are applied the same way.
      *
      * @throws RuntimeException whatever the applier or a contributor throws - a startup failure
      */
     public void apply() {
+        // Before collecting, so an object registered while the sweep runs is not missed: it reaches the applier
+        // through the sink, and possibly through the sweep as well, which a dynamic contributor's changes tolerate
+        contributors.stream()
+                    .filter(DynamicSchemaContributor.class::isInstance)
+                    .map(DynamicSchemaContributor.class::cast)
+                    .forEach(contributor -> contributor.attach(applier.sinkFor(contributor)));
         var changeSets = collect();
         log.info("Applying the schema of {} contributor(s) with {}: {}",
                  changeSets.size(),

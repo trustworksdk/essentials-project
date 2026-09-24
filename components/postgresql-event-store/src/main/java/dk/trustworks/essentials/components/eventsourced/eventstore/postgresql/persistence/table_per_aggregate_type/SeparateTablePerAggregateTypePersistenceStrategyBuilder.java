@@ -18,6 +18,7 @@ package dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.p
 
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.persistence.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.transaction.EventStoreUnitOfWorkFactory;
+import dk.trustworks.essentials.components.foundation.schema.*;
 import org.jdbi.v3.core.Jdbi;
 
 import java.util.List;
@@ -40,6 +41,7 @@ public final class SeparateTablePerAggregateTypePersistenceStrategyBuilder {
     private AggregateEventStreamConfigurationFactory<SeparateTablePerAggregateEventStreamConfiguration> aggregateEventStreamConfigurationFactory;
     private List<SeparateTablePerAggregateEventStreamConfiguration>                                    aggregateTypeConfigurations = List.of();
     private List<PersistableEventEnricher>                                                             persistableEventEnrichers  = List.of();
+    private SchemaOwnership                                                                            schemaOwnership            = SchemaOwnership.COMPONENT;
 
     /**
      * @param jdbi the Jdbi instance. Required
@@ -114,6 +116,18 @@ public final class SeparateTablePerAggregateTypePersistenceStrategyBuilder {
     }
 
     /**
+     * @param schemaOwnership {@link SchemaOwnership#COMPONENT} (the default) creates each event-stream table as its
+     *                        {@code AggregateType} is registered; {@link SchemaOwnership#HARNESS} leaves them to the
+     *                        {@link EssentialsSchemaHarness} the strategy is registered with, which also receives the
+     *                        tables registered after it ran
+     * @return this builder instance for fluent chaining
+     */
+    public SeparateTablePerAggregateTypePersistenceStrategyBuilder setSchemaOwnership(SchemaOwnership schemaOwnership) {
+        this.schemaOwnership = requireNonNull(schemaOwnership, "schemaOwnership cannot be null");
+        return this;
+    }
+
+    /**
      * Builds the persistence strategy.
      *
      * @return the strategy
@@ -124,6 +138,7 @@ public final class SeparateTablePerAggregateTypePersistenceStrategyBuilder {
                                                                     requireNonNull(eventMapper, "eventMapper cannot be null"),
                                                                     requireNonNull(aggregateEventStreamConfigurationFactory, "aggregateEventStreamConfigurationFactory cannot be null"),
                                                                     requireNonNull(aggregateTypeConfigurations, "aggregateTypeConfigurations cannot be null"),
-                                                                    requireNonNull(persistableEventEnrichers, "persistableEventEnrichers cannot be null"));
+                                                                    requireNonNull(persistableEventEnrichers, "persistableEventEnrichers cannot be null"),
+                                                                    schemaOwnership);
     }
 }

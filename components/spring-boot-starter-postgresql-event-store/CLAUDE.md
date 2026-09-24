@@ -17,7 +17,7 @@ Depends on `spring-boot-starter-postgresql` (common Essentials Spring wiring). S
 |---|---|
 | `EventStoreConfiguration` | Single `@AutoConfiguration` — wires every event-store and CDC bean via `@ConditionalOnMissingBean`; all CDC beans are additionally gated on `essentials.eventstore.cdc.enabled=true` |
 | `EssentialsEventStoreProperties` | `@ConfigurationProperties(prefix="essentials.eventstore")` — identifierColumnType, jsonColumnType, gap handler, metrics, subscriptionManager, cdc (delegates to `CdcProperties`) |
-| `EventStoreNotifyPollingBootstrap` | S1 NOTIFY wake-up: on construction calls `strategy.enableNotifyTriggerInstallation(...)` which installs `pg_notify` AFTER INSERT trigger + registers table with `MultiTableChangeListener`. Uses advisory lock to serialise DDL across JVMs |
+| `EventStoreNotifyPollingBootstrap` | S1 NOTIFY wake-up: on construction calls `strategy.enableNotifyTriggers(...)`, which adds the `pg_notify` AFTER INSERT trigger to each event-stream table's schema contribution (created by whichever applier owns the event store's schema, under the bootstrap lock) and registers the table with `MultiTableChangeListener`. The 3-arg constructor taking `Jdbi` is deprecated - the `Jdbi` is unused |
 | `CdcHealthIndicator` | Actuator health: ACTIVE→UP, FAILED→DOWN (REQUIRE mode) or UP (PREFER/OPTIONAL), INACTIVE→UP. Includes tailer LSN + dispatcher started details, plus `fallbackCount` / `warmupPollCount` / `everActive` |
 | `SubscriptionStatisticsProperties` | Nested under `subscription-manager.statistics`: `enabled` (default true), `max-tracked-subscriptions` |
 

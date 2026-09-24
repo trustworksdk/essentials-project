@@ -336,19 +336,18 @@ public class EventStoreConfiguration {
     }
 
     /**
-     * S1: bootstrap bean that wires the persistence strategy's {@code NotifyTriggerInstaller}
-     * so that every event-stream table (existing and future) gets a {@code pg_notify}
-     * trigger and is registered with the shared {@link MultiTableChangeListener}.
+     * S1: bootstrap bean that enables notify triggers on the persistence strategy, so that
+     * every event-stream table (existing and future) gets a {@code pg_notify} trigger as part
+     * of its schema and is registered with the shared {@link MultiTableChangeListener}.
      * See {@link EventStoreNotifyPollingBootstrap} for the full lifecycle and rationale.
      */
     @Bean
     @ConditionalOnProperty(prefix = "essentials.eventstore.subscription-manager.notify-polling", name = "enabled", havingValue = "true")
     @ConditionalOnMissingBean
     public EventStoreNotifyPollingBootstrap eventStoreNotifyPollingBootstrap(
-            Jdbi jdbi,
             AggregateEventStreamPersistenceStrategy<SeparateTablePerAggregateEventStreamConfiguration> persistenceStrategy,
             MultiTableChangeListener<TableChangeNotification> multiTableChangeListener) {
-        return new EventStoreNotifyPollingBootstrap(jdbi, persistenceStrategy, multiTableChangeListener);
+        return new EventStoreNotifyPollingBootstrap(persistenceStrategy, multiTableChangeListener);
     }
 
     @Bean
