@@ -112,6 +112,20 @@ public final class PostgresqlCreateSchemaApplier implements SchemaApplier {
         applyOwnSchema(new PostgresqlCreateSchemaApplier(unitOfWorkFactory), contributor);
     }
 
+    /**
+     * Apply one contributor's own schema inside a unit of work that is already active - for a component whose schema
+     * has always been created within a caller's transaction. Everything runs in that transaction.
+     *
+     * @param unitOfWork  the active unit of work
+     * @param contributor the component
+     */
+    public static void applyOwnSchema(HandleAwareUnitOfWork unitOfWork, EssentialsSchemaContributor contributor) {
+        applyOwnSchema(new PostgresqlCreateSchemaApplier(Transactions.of(requireNonNull(unitOfWork, "No unitOfWork provided")),
+                                                         DEFAULT_SCHEMA_HISTORY_TABLE_NAME,
+                                                         Network.hostName()),
+                       contributor);
+    }
+
     private static void applyOwnSchema(PostgresqlCreateSchemaApplier applier, EssentialsSchemaContributor contributor) {
         new EssentialsSchemaHarness(applier, SchemaContext.empty(), List.of(requireNonNull(contributor, "No contributor provided"))).apply();
     }
@@ -266,6 +280,20 @@ public final class PostgresqlCreateSchemaApplier implements SchemaApplier {
                 @Override
                 public <R> R withHandle(Function<Handle, R> work) {
                     return jdbi.withHandle(work::apply);
+                }
+            };
+        }
+
+        static Transactions of(HandleAwareUnitOfWork unitOfWork) {
+            return new Transactions() {
+                @Override
+                public void inTransaction(Consumer<Handle> work) {
+                    work.accept(unitOfWork.handle());
+                }
+
+                @Override
+                public <R> R withHandle(Function<Handle, R> work) {
+                    return work.apply(unitOfWork.handle());
                 }
             };
         }

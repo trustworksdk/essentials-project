@@ -18,7 +18,8 @@ package dk.trustworks.essentials.components.distributed.fencedlock.postgresql;
 
 import dk.trustworks.essentials.components.distributed.fencedlock.postgresql.jdbi.*;
 import dk.trustworks.essentials.components.foundation.fencedlock.*;
-import dk.trustworks.essentials.components.foundation.postgresql.PostgresqlUtil;
+import dk.trustworks.essentials.components.foundation.postgresql.*;
+import dk.trustworks.essentials.components.foundation.schema.*;
 import dk.trustworks.essentials.components.foundation.transaction.jdbi.HandleAwareUnitOfWork;
 import org.jdbi.v3.core.Jdbi;
 import org.jdbi.v3.core.mapper.RowViewMapper;
@@ -51,14 +52,18 @@ import static dk.trustworks.essentials.shared.MessageFormatter.msg;
  * <b>Failure to adequately sanitize and validate this value could expose the application to SQL injection
  * vulnerabilities, compromising the security and integrity of the database.</b>
  */
-public final class PostgresqlFencedLockStorage implements FencedLockStorage<HandleAwareUnitOfWork, DBFencedLock> {
+public final class PostgresqlFencedLockStorage implements FencedLockStorage<HandleAwareUnitOfWork, DBFencedLock>, EssentialsSchemaContributor {
     private static final Logger log                             = LoggerFactory.getLogger(PostgresqlFencedLockStorage.class);
     public static final  long   FIRST_TOKEN                     = 1L;
     public static final  long   UNINITIALIZED_LOCK_TOKEN        = -1L;
     public static final  String DEFAULT_FENCED_LOCKS_TABLE_NAME = "fenced_locks";
 
-    private final Jdbi   jdbi;
-    private final String fencedLocksTableName;
+    /** This storage's {@link EssentialsSchemaContributor#moduleId()} */
+    public static final  String MODULE_ID                       = "postgresql-fenced-lock";
+
+    private final Jdbi            jdbi;
+    private final String          fencedLocksTableName;
+    private final SchemaOwnership schemaOwnership;
 
     /**
      * Create an instance of the {@link PostgresqlFencedLockStorage}.<br>
@@ -95,7 +100,19 @@ public final class PostgresqlFencedLockStorage implements FencedLockStorage<Hand
      *                             vulnerabilities, compromising the security and integrity of the database.</b>
      */
     public PostgresqlFencedLockStorage(Jdbi jdbi, String fencedLocksTableName) {
+        this(jdbi, fencedLocksTableName, SchemaOwnership.COMPONENT);
+    }
+
+    /**
+     * @param jdbi                 the jdbi instance
+     * @param fencedLocksTableName the table name - see {@link #PostgresqlFencedLockStorage(Jdbi, String)} for the SQL injection caveat
+     * @param schemaOwnership      {@link SchemaOwnership#COMPONENT} creates the table when the lock manager initialises this
+     *                             storage, as the other constructors do; {@link SchemaOwnership#HARNESS} leaves it to an
+     *                             {@link EssentialsSchemaHarness} this storage is registered with
+     */
+    public PostgresqlFencedLockStorage(Jdbi jdbi, String fencedLocksTableName, SchemaOwnership schemaOwnership) {
         this.jdbi = requireNonNull(jdbi, "You must supply a jdbi instance");
+        this.schemaOwnership = requireNonNull(schemaOwnership, "You must supply a schemaOwnership value");
         this.fencedLocksTableName = requireNonNull(fencedLocksTableName, "You must supply a fencedLocksTableName value");
         PostgresqlUtil.checkIsValidTableOrColumnName(this.fencedLocksTableName);
 
@@ -105,23 +122,41 @@ public final class PostgresqlFencedLockStorage implements FencedLockStorage<Hand
 
     @Override
     public final void initializeLockStorage(DBFencedLockManager<HandleAwareUnitOfWork, DBFencedLock> lockManager, HandleAwareUnitOfWork unitOfWork) {
-        PostgresqlUtil.checkIsValidTableOrColumnName(fencedLocksTableName);
-        PostgresqlUtil.acquireBootstrapLock(unitOfWork.handle());
-        unitOfWork.handle().execute("CREATE TABLE IF NOT EXISTS " + this.fencedLocksTableName + " (\n" +
-                                            "lock_name TEXT NOT NULL,\n" +      // The name of the lock
-                                            "last_issued_fence_token BIGINT,\n" +    // The token issued at lock_last_confirmed_ts. Every time a lock is acquired or confirmed a new token is issued (ever growing value)
-                                            "locked_by_lockmanager_instance_id TEXT,\n" + // which JVM/Bus instance acquired the lock
-                                            "lock_acquired_ts TIMESTAMP WITH TIME ZONE,\n" + // at what time did the JVM/Bus instance acquire the lock (at first acquiring the lock_last_confirmed_ts is set to lock_acquired_ts)
-                                            "lock_last_confirmed_ts TIMESTAMP WITH TIME ZONE,\n" + // when did the JVM/Bus instance that acquired the lock last confirm that it still has access to the lock
-                                            "PRIMARY KEY (lock_name)\n" +
-                                            ")");
-        log.info("[{}] Ensured that the '{}' fenced locks table exists", lockManager.getLockManagerInstanceId(), fencedLocksTableName);
+        if (schemaOwnership == SchemaOwnership.COMPONENT) {
+            PostgresqlCreateSchemaApplier.applyOwnSchema(unitOfWork, this);
+            log.info("[{}] Ensured that the '{}' fenced locks table exists", lockManager.getLockManagerInstanceId(), fencedLocksTableName);
+        }
+    }
 
-        // -------------------------------------------------------------------------------
+    @Override
+    public String moduleId() {
+        return MODULE_ID;
+    }
+
+    @Override
+    public int order() {
+        return SchemaOrder.ORDER_INFRASTRUCTURE;
+    }
+
+    /**
+     * The fenced locks table and its {@code (lock_name, last_issued_fence_token)} index.
+     */
+    @Override
+    public List<SchemaChange> contribute(SchemaContext context) {
         var indexName = fencedLocksTableName + "_current_token_index";
-        PostgresqlUtil.checkIsValidTableOrColumnName(indexName);
-        unitOfWork.handle().execute("CREATE INDEX IF NOT EXISTS " + indexName + " ON " + this.fencedLocksTableName + " (lock_name, last_issued_fence_token)");
-        log.debug("[{}] Ensured that the '{}' index on fenced locks table '{}' exists", lockManager.getLockManagerInstanceId(), indexName, fencedLocksTableName);
+        return List.of(SchemaChange.repeatable("fenced-locks-table",
+                                               fencedLocksTableName,
+                                               "CREATE TABLE IF NOT EXISTS " + this.fencedLocksTableName + " (\n" +
+                                                       "lock_name TEXT NOT NULL,\n" +      // The name of the lock
+                                                       "last_issued_fence_token BIGINT,\n" +    // The token issued at lock_last_confirmed_ts. Every time a lock is acquired or confirmed a new token is issued (ever growing value)
+                                                       "locked_by_lockmanager_instance_id TEXT,\n" + // which JVM/Bus instance acquired the lock
+                                                       "lock_acquired_ts TIMESTAMP WITH TIME ZONE,\n" + // at what time did the JVM/Bus instance acquire the lock (at first acquiring the lock_last_confirmed_ts is set to lock_acquired_ts)
+                                                       "lock_last_confirmed_ts TIMESTAMP WITH TIME ZONE,\n" + // when did the JVM/Bus instance that acquired the lock last confirm that it still has access to the lock
+                                                       "PRIMARY KEY (lock_name)\n" +
+                                                       ")"),
+                       SchemaChange.repeatable("fenced-locks-token-index",
+                                               indexName,
+                                               "CREATE INDEX IF NOT EXISTS " + indexName + " ON " + this.fencedLocksTableName + " (lock_name, last_issued_fence_token)"));
     }
 
     /**
