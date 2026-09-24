@@ -23,7 +23,8 @@ separate optional modules that can follow at any time.
 
 ## 1. What the framework does today
 
-Fourteen production classes issue DDL. Nothing tracks what they have done.
+Sixteen production classes issue DDL. Nothing tracks what they have done. (Inventory re-checked against
+`release/0.60` on 2026-09-24, after the queue refactor and the shard-owned engine landed.)
 
 | # | Class | Module | Creates | Invoked from |
 |---|---|---|---|---|
@@ -31,7 +32,7 @@ Fourteen production classes issue DDL. Nothing tracks what they have done.
 | 2 | `ListenNotify` | `foundation` | `notify_<table>_change()` function + trigger, per table | helper, called by 8 and by the starters |
 | 3 | `PostgresqlFencedLockStorage` | `postgresql-distributed-fenced-lock` | `fenced_locks` table + 1 index | `initializeLockStorage(…)`, at lock-manager start |
 | 4 | `DurableQueuesSql` (via `PostgresqlDurableQueues`) | `postgresql-queue` | queue table + 6 indexes + legacy index drops | constructor, `PostgresqlDurableQueues:511` |
-| 5 | `PostgresqlDurableQueuesStatistics` | `postgresql-queue` | statistics table + 2 indexes + function + trigger on the *queue* table | bean construction — **deleted by Q2** of the queue refactor |
+| 5 | ~~`PostgresqlDurableQueuesStatistics`~~ | `postgresql-queue` | — | **deleted** by Q2 of the queue refactor, which has shipped |
 | 6 | `CdcSql` / `CdcInboxRepository` | `postgresql-event-store` | CDC inbox table + 1 index | repository construction |
 | 7 | `PostgresqlDurableSubscriptionRepository` | `postgresql-event-store` | subscriptions table | constructor |
 | 8 | `PostgresqlEventStreamGapHandler` | `postgresql-event-store` | transient-gaps table + index, permanent-gaps table | construction |
@@ -41,6 +42,9 @@ Fourteen production classes issue DDL. Nothing tracks what they have done.
 | 12 | `PostgresqlAggregateArchiveRegistry` | `eventsourced-aggregates` | archive table + index | construction |
 | 13 | `PostgresqlClosingBooksGenerationRepository` | `eventsourced-aggregates` | table + `ALTER TABLE … ADD COLUMN` + unique index | construction |
 | 14 | `MongoDurableQueues` | `springdata-mongo-queue` | collection + indexes | construction |
+| 15 | `ShardOwnedSchema` | `postgresql-queue-shard-owned` | 7 tables, 3 views, 2 sequences, **plus one sequence per registered queue** | static `initialize(…)`, and `registerQueue(…)` at any time |
+| 16 | `PostgresqlTTLManager` | `foundation` | TTL function | TTL job registration |
+| 17 | `MongoFencedLockStorage` | `springdata-mongo-distributed-fenced-lock` | collection + indexes | `initializeLockStorage(…)` |
 
 ### Already solved: concurrent bootstrap
 
@@ -135,7 +139,10 @@ public interface DynamicSchemaContributor extends EssentialsSchemaContributor {
 }
 ```
 
-`SeparateTablePerAggregateTypePersistenceStrategy` implements it, keyed by `AggregateType`. At bootstrap the
+`SeparateTablePerAggregateTypePersistenceStrategy` implements it, keyed by `AggregateType`. `ShardOwnedSchema`
+(row 15) is the second dynamic contributor, keyed by queue name: its fixed tables are an ordinary change set, and
+each `registerQueue(…)` contributes that queue's sequence. It also carries its own copy of the bootstrap-lock key,
+which goes away once the harness owns the lock. At bootstrap the
 harness sweeps the already-registered configurations; afterwards, `addAggregateEventStreamConfiguration(…)`
 routes through the harness instead of executing directly. This is exactly the two-phase shape
 `enableNotifyTriggerInstallation` already uses, so that method folds into the harness rather than sitting
@@ -255,9 +262,16 @@ Scope for 0.60: the seam and `create`/`validate`. No Flyway equivalent.
 First boot on 0.60 against a database populated by 0.5x finds an empty ledger and every object already
 present. It must not fail, and must not re-run one-shot changes that already happened.
 
-The harness therefore **adopts on first sight**: for every change whose `objectName` already exists, it writes
-a ledger row without executing the statements. This is `create` mode's normal path for `IF NOT EXISTS`
-statements anyway; the ledger row is what is new. One consequence worth stating in the migration guide: a
+The harness therefore **adopts on first sight** — without a special path. Every change's statements must be safe
+to run against a database where 0.5x already created the object in its current shape (`CREATE … IF NOT EXISTS`,
+`DROP … IF EXISTS`, `ADD COLUMN IF NOT EXISTS`), and on first boot the harness simply runs them: they are no-ops,
+and the ledger rows they leave are what is new.
+
+This deliberately differs from recording a row *without* executing when `objectName` already exists. That rule
+would silently skip any later one-shot change to an existing object — an `ALTER TABLE … ADD COLUMN` on a table
+0.5x created would be marked applied and never run. The price of the safer rule is a contributor obligation,
+checked in review and by the `create`-mode ITs: a statement that is not safe to repeat against an existing object
+does not belong in a change. One consequence worth stating in the migration guide: a
 deployment upgrading from 0.5x is adopted as-is, so an object that is *present but wrong* — hand-edited, or
 half-created by a failed 0.5x boot — is recorded as correct. `validate` mode is the tool for checking that; it
 is not run implicitly during adoption because it would fail upgrades for pre-existing drift the upgrade did
@@ -291,10 +305,8 @@ consequence.
 `LLM/LLM-spring-boot-starter-modules.md`, the affected modules' `README.md` and `CLAUDE.md`, and one line in
 the root `CLAUDE.md` Critical Gotchas because it crosses every module. Then `graphify update .`.
 
-**Interaction with the durable-queues refactor.** Both plans touch `PostgresqlDurableQueues`' DDL block.
-Q1 there drops two indexes and adds two `DROP INDEX IF EXISTS`; Q2 deletes the statistics trigger, function and
-table. Doing this harness first would let all of those be one-shot changes; doing it second means they ship as
-repeatable statements and get converted later. Either order works — see §9.
+**Interaction with the durable-queues refactor.** Settled: the refactor shipped first, so its `DROP INDEX IF EXISTS`
+statements are repeatable today and become one-shot changes in step 10.
 
 ---
 
@@ -305,13 +317,13 @@ repeatable statements and get converted later. Either order works — see §9.
 | 1 | The SPI, `SchemaContext`, `SchemaChange`, ordering constants — `foundation`, no callers yet | Depends on nothing |
 | 2 | The ledger table and its `ORDER_LEDGER` contributor; adoption-on-first-sight | After 1 |
 | 3 | `create` applier; harness bean; move `acquireBootstrapLock` into it | After 2 |
-| 4 | Convert the fixed-shape contributors — rows 1, 3, 4, 6, 7, 8, 10, 11, 12, 13 | After 3; one module at a time, each independently shippable |
-| 5 | `DynamicSchemaContributor`; convert row 9; fold in `enableNotifyTriggerInstallation` | After 4. The riskiest step — the event store's table-per-`AggregateType` path |
+| 4 | Convert the fixed-shape contributors — rows 1, 3, 4, 6, 7, 8, 10, 11, 12, 13, 16 | After 3; one module at a time, each independently shippable |
+| 5 | `DynamicSchemaContributor`; convert rows 9 and 15; fold in `enableNotifyTriggerInstallation` | After 4. The riskiest step — the event store's table-per-`AggregateType` path, and the shard-owned engine's per-queue sequence |
 | 6 | `validate` and `emit` appliers | After 4; independent of 5 |
 | 7 | Spring starter wiring, `essentials.schema.*` properties, ordering ITs | After 3, finalised after 6 |
-| 8 | Mongo contributors + `MongoSchemaApplier` | After 3; independent of 4–7 |
+| 8 | Mongo contributors (rows 14, 17) + `MongoSchemaApplier` | After 3; independent of 4–7 |
 | 9 | ArchUnit rule, frozen | After 4, 5 and 8 — it can only pass once the sweep is done |
-| 10 | Convert existing repeatable one-shots to `repeatable = false`: the legacy index drops, the closing-books `ALTER TABLE`, the queue refactor's index drops | After 4, and after the queue refactor's Q1 if that ships first |
+| 10 | Convert existing repeatable one-shots to `repeatable = false`: the legacy index drops, the closing-books `ALTER TABLE`, the queue refactor's index drops | After 4 |
 | 11 | `essentials-schema-flyway` | After 6. Optional module, can slip past 0.60 |
 | 12 | `essentials-schema-liquibase` | After 11. Optional module, can slip past 0.60 |
 | 13 | Migration guide, docs, `graphify update .` | Release |
@@ -334,18 +346,12 @@ practical value is.
 | 7 | Flyway/Liquibase dependency scope | **`provided`**, in their own optional modules, per the repo-wide rule |
 | 8 | Admin endpoint for schema status | **Out of scope**, noted in §8 so its absence is not read as an oversight |
 | 9 | Target release | **0.60** for steps 1–10 and 13; 11–12 additive whenever ready |
+| 10 | Adoption on first sight | **No special path** — statements must be safe against an existing object, and first boot runs them (§7). Recording without executing would skip later one-shots on existing objects |
+| 11 | `validate`: startup path or separate command? | **Startup, failing it.** A deployment that cannot find its schema should refuse to run, not fail at first query. A dry-run entry point can follow |
+| 12 | `emit`: one file or per module? | **One combined, ordered script**, with a header per module — what a DBA runs, still diffable |
+| 13 | A contributor removed from the classpath | **Nothing happens in 0.60**: its ledger rows and objects stay, documented. A reporting `--prune` is later work |
+| 14 | The shard-owned engine | **In scope**, as the second dynamic contributor (step 5) |
 
 ## 11. Open questions
 
-- **Does `validate` belong on the startup path at all, or as a separate command?** Failing startup is the
-  honest default for a deployment that cannot create what it needs, but an operator may prefer a dry-run
-  entry point that reports without taking the application down. Both are cheap; the question is which is the
-  default.
-- **Should `emit` write one file per module or one combined script?** A DBA reviewing a single ordered file is
-  the likelier workflow, but per-module output is easier to diff across releases.
-- **What happens when a contributor is removed from the classpath?** Its ledger rows stay, its objects stay,
-  and nothing notices. A `--prune` story exists (report orphaned rows, never drop objects) but is not designed
-  here.
-- **Ordering versus the durable-queues refactor.** Doing this first makes that plan's index drops one-shot from
-  the start; doing it second is simpler to review. Neither blocks the other — it only changes how much of
-  step 10 there is.
+None left: the four listed here when the plan was written are decisions 11–14 above, taken on 2026-09-24.
