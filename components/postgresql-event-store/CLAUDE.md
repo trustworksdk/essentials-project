@@ -13,7 +13,7 @@ All under `dk.trustworks.essentials.components.eventsourced.eventstore.postgresq
 | `persistence` | `AggregateEventStreamPersistenceStrategy` SPI, `AggregateEventStreamConfiguration` |
 | `persistence.table_per_aggregate_type` | `SeparateTablePerAggregateTypePersistenceStrategy` — one table per aggregate type |
 | `persistence.jdbi` | JDBI row mappers and SQL helpers |
-| `serializer.json` | `JSONEventSerializer` SPI, `JacksonJSONEventSerializer` (Jackson 2), `Jackson3JSONEventSerializer` (Jackson 3), `EssentialsJSONEventSerializers` factory, `EventJSON` value type |
+| `serializer.json` | `JSONEventSerializer` SPI, `Jackson3JSONEventSerializer`, `EssentialsJSONEventSerializers` factory, `EventJSON` value type |
 | `serializer` | `AggregateIdSerializer` SPI |
 | `transaction` | `EventStoreUnitOfWork`, `EventStoreUnitOfWorkFactory`, `EventStoreManagedUnitOfWorkFactory` |
 | `subscription` | `EventStoreSubscriptionManager`, `DefaultEventStoreSubscriptionManager`, subscription impls, `DurableSubscriptionRepository` |
@@ -85,20 +85,19 @@ All under `dk.trustworks.essentials.components.eventsourced.eventstore.postgresq
 | `NotifyTriggerInstaller` | Invoked per new event-stream table when NOTIFY polling enabled |
 | `DurableSubscriptionRepository` | Custom storage for subscriber resume points |
 
-## Jackson Flavors
+## Jackson
 
-Both Jackson majors are supported; a build selects one via `essentials.types-jackson.artifactId` (default Jackson 3, `-Pjackson2` for Jackson 2).
+Jackson 3 (`tools.jackson`) only — Jackson 2 support dropped in 0.60.
 
-- Get a serializer from `EssentialsJSONEventSerializers.createForActiveJacksonFlavor()` — never `new JacksonJSONEventSerializer(...)`/`new Jackson3JSONEventSerializer(...)` with a hand-built mapper. The two write identical JSON only when their mappers come from `EssentialsObjectMappers`.
-- `EssentialsObjectMappersWireFormatTest` is the compatibility gate: it asserts the persisted format against a committed golden document, and runs under **both** profiles. That is what proves a Jackson 3 deployment reads payloads Jackson 2 wrote.
-- Run the suite both ways when touching serialization: `mvn test` (Jackson 3) and `mvn -Pjackson2 test`.
-- `ActiveJacksonFlavorTest` guards the credibility of that: a test hard-coding `new JacksonJSONEventSerializer(new ObjectMapper())` passes under the Jackson 3 flavor while exercising only Jackson 2 — green and meaningless. It derives the expected flavor from the classpath independently. Build CDC/serializer test fixtures with `EssentialsJSONEventSerializers.createForActiveJacksonFlavor()`.
-- **CDC runs on both majors.** The WAL converters/extractor parse via `JSONEventSerializer.deserialize(..., Object.class)` into plain maps and lists, so one implementation serves both — the injected serializer decides. They take the interface, never the concrete `JacksonJSONEventSerializer`.
-- **The WAL pre-filter is the one deliberate duplication**: `DefaultWalMessageFilter` (Jackson 2) and `Jackson3WalMessageFilter` (Jackson 3) scan tokens without materializing the payload, and the streaming APIs differ. Get one via `WalMessageFilters.createForActiveJacksonFlavor(...)`. `WalMessageFilterFlavorParityTest` asserts the pair agree on every payload, so they cannot drift.
-- **`canonicalJson` fidelity**: `PgOutputToPersistedEventConverter` re-serializes the payload it persists, through untyped binding. `EssentialsObjectMappers` enables `USE_BIG_DECIMAL_FOR_FLOATS` on both majors for exactly this reason — without it `1.10` would be rewritten as `1.1` in persisted events.
+- Get serializer from `EssentialsJSONEventSerializers.create()` — never `new Jackson3JSONEventSerializer(...)` with hand-built mapper. Mapper config from `EssentialsObjectMappers` *is* persisted-JSON contract.
+- `EssentialsObjectMappersWireFormatTest` = compatibility gate: asserts persisted format against golden docs (`wire-format/queue-payload.json`, `wire-format/persisted-shapes.json`) written by 0.50's Jackson 2 mapper. Proves 0.60 reads what 0.50 wrote. Never regenerate them — Jackson 2 writer gone; a diff there is a format break, fix the mapper.
+- **CDC**: WAL converters/extractor parse via `JSONEventSerializer.deserialize(..., Object.class)` into plain maps/lists. Take the interface, never concrete serializer class.
+- **WAL pre-filter**: `DefaultWalMessageFilter` scans tokens via Jackson 3 streaming API without materializing payload.
+- **`canonicalJson` fidelity**: `PgOutputToPersistedEventConverter` re-serializes the payload it persists, through untyped binding. `EssentialsObjectMappers` enables `USE_BIG_DECIMAL_FOR_FLOATS` for exactly this reason — without it `1.10` would be rewritten as `1.1` in persisted events.
 
 ## Gotchas
 
+- **Every exit of a poll must end its `UnitOfWork`** — `PollEventStoreTask.pollForEvents` and the `unboundedPollForEvents` lambda each open one per poll; the "no new events persisted" skip used to `return` without ending it, which leaked the transaction whenever the subscription was disposed before the next poll reused it (unsubscribe, stop, fenced-lock loss). Commit/rollback go through `commitIfStartedByThisPoll` / `rollbackIfStartedByThisPoll`, and a `finally` rolls back whatever is still open. A poll only ends a UoW it started — `unboundedPollForEvents`' first poll can join the subscriber's. Regression: `PollingUnitOfWorkLifecycleIT`, which disposes from inside the skip branch via the observer. It needs a **pooled** `DataSource`: with unpooled connections the leaked connection becomes unreachable when the poll thread ends and pgjdbc closes it on GC, so the test passes on broken code
 - **Global event order is per-table sequence**, not cross-table. Subscribers to different `AggregateType`s have independent `GlobalEventOrder` spaces.
 - **Table names go straight into SQL** via string concat. `PostgresqlUtil.checkIsValidTableOrColumnName` is first-line defense only — sanitize all external inputs before they reach `SeparateTablePerAggregateEventStreamConfiguration`.
 - **CDC delivery modes**: `INBOX` (tailer writes to staging table, dispatcher polls) vs `DIRECT` (tailer calls consumer inline). `INBOX` survives tailer restarts; `DIRECT` logs a warning about re-delivery risk.
@@ -116,7 +115,7 @@ Both Jackson majors are supported; a build selects one via `essentials.types-jac
 - **Exclusive subscriptions use `PostgresqlFencedLockManager`**. If lock TTL is shorter than subscription resume time, ownership flaps. Size lock TTL accordingly.
 - **`EventStoreUnitOfWork` accumulates events in-memory** then fires callbacks at commit. Interceptors touching accumulated events (e.g. `FlushAndPublishPersistedEventsToEventBusRightAfterAppendToStream`) must handle re-entrant appends carefully.
 - **Warm-up subscribers** (backfill phase) must not stay pinned to polling mode after catching up — `CdcEventStore` tracks per-subscriber phase transitions explicitly.
-- **Test code is flavor-sensitive too** — a test that builds a Jackson 2 mapper and registers `EssentialTypesJacksonModule` will not compile under the Jackson 3 flavor (same FQCN, different Jackson major). Use the flavor-neutral factories.
+- **Tests build serializers via factories** (`EssentialsJSONEventSerializers.create()`, `EssentialsObjectMappers.createJSONSerializer()`) — hand-built mapper drifts from persisted format.
 - **Multi-tenancy**: tenant filtering happens at query time via optional `Tenant` param on all load/poll ops. No row-level security — tenant isolation is application-layer only.
 - **`EventStoreSubscriptionObserver` is a single-slot SPI** — one instance is handed to `PostgresqlEventStore` and the subscription manager. Anything new that needs the callbacks decorates, never replaces: `StatisticsCollectingEventStoreSubscriptionObserver` delegates first and records after, and swallows its own recording failures (logged once) so observability can never break a subscription.
 - **Subscription statistics are per-JVM, resume points are cluster-wide** — mixing them silently is the trap. `DefaultEventStoreApi` marks the join explicitly (`runningInThisInstance`, nullable live-state fields), because an exclusive subscription legitimately reports zero throughput on every instance that does not hold the lock. A zero counter is not a stall.

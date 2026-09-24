@@ -73,7 +73,7 @@ final class EssentialsAdminApiSpec {
             ApiTableActivityStatistics.class,
             ApiTableCacheHitRatio.class,
             ApiQueuedMessage.class,
-            ApiQueuedStatistics.class,
+            ApiQueueStatistics.class,
             ApiSubscription.class,
             ApiSubscriptionStatistics.class,
             ApiCdcStatus.class,
@@ -98,7 +98,7 @@ final class EssentialsAdminApiSpec {
     static final Map<String, Set<String>> ALWAYS_PRESENT_PROPERTIES = Map.of(
             "ApiDBFencedLock", Set.of("lockName"),
             "ApiQueuedMessage", Set.of("id", "queueName"),
-            "ApiQueuedStatistics", Set.of("queueName"),
+            "ApiQueueStatistics", Set.of("queueName", "depth"),
             "ApiSubscription", Set.of("subscriberId", "aggregateType"),
             "ApiSubscriptionStatistics", Set.of("subscriberId", "aggregateType", "statisticsSince",
                                                 "lifecycle", "eventHandling", "polling", "lock", "reset"),
@@ -293,19 +293,19 @@ final class EssentialsAdminApiSpec {
          .pagination()
          .responseArray("ApiQueuedMessage");
 
+        b.operation(DurableQueuesApi.class, "getQueueStatistics")
+         .tag("durable-queues").get("/durable-queues/queues/{queueName}/statistics")
+         .summary("Get cluster-wide depth and this instance's delivery statistics for a queue.")
+         .roles(QUEUE_R, ADMIN)
+         .pathParam("queueName", new StringSchema(), "The queue name.")
+         .responseRef("ApiQueueStatistics", "The queue statistics.");
+
         b.operation(DurableQueuesApi.class, "purgeQueue")
          .tag("durable-queues").delete("/durable-queues/queues/{queueName}/messages")
          .summary("Purge all messages (including dead-letters) from a queue.")
          .roles(QUEUE_W, ADMIN)
          .pathParam("queueName", new StringSchema(), "The queue name.")
          .responsePurged();
-
-        b.operation(DurableQueuesApi.class, "getQueuedStatistics")
-         .tag("durable-queues").get("/durable-queues/queues/{queueName}/statistics")
-         .summary("Get delivery statistics for a queue.")
-         .roles(QUEUE_R, ADMIN)
-         .pathParam("queueName", new StringSchema(), "The queue name.")
-         .responseOptionalRef("ApiQueuedStatistics", "The queue statistics.");
 
         // ---- event-store ----
         b.operation(EventStoreApi.class, "findHighestGlobalEventOrderPersisted")

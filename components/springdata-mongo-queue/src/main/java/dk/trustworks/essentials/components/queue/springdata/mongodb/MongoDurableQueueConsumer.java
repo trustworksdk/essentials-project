@@ -34,20 +34,4 @@ public final class MongoDurableQueueConsumer extends DefaultDurableQueueConsumer
         super(consumeFromQueue, dependencies);
     }
 
-    /**
-     * @deprecated Use {@link #MongoDurableQueueConsumer(ConsumeFromQueue, DurableQueueConsumerDependencies)}. The five collaborator
-     *         arguments are identical for every {@code DurableQueues} implementation, so they belong in one
-     *         {@link DurableQueueConsumerDependencies} bundle rather than being repeated positionally here and in
-     *         every sibling implementation. This constructor delegates and behaves identically.
-     */
-    @Deprecated(forRemoval = true, since = "0.40.x")
-    public MongoDurableQueueConsumer(ConsumeFromQueue consumeFromQueue,
-                                     SpringMongoTransactionAwareUnitOfWorkFactory unitOfWorkFactory,
-                                     MongoDurableQueues durableQueues,
-                                     Consumer<DurableQueueConsumer> removeDurableQueueConsumer,
-                                     long pollingIntervalMs,
-                                     QueuePollingOptimizer queuePollingOptimizer,
-                                     List<DurableQueuesInterceptor> interceptors) {
-        super(consumeFromQueue, unitOfWorkFactory, durableQueues, removeDurableQueueConsumer, pollingIntervalMs, queuePollingOptimizer, interceptors);
-    }
 }

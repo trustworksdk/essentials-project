@@ -285,7 +285,7 @@ The default changes to `numeric` at the next major — see [MIGRATION-NEXT_MAJOR
 |--------|---------|
 | [types](LLM-types.md) | Base `SingleValueType` classes |
 | [types-jdbi](LLM-types-jdbi.md) | JDBI persistence (recommended alternative) |
-| [types-jackson](LLM-types-jackson.md) | JSON serialization |
+| [types-jackson3](LLM-types-jackson.md) | JSON serialization |
 
 ## Gotchas
 

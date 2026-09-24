@@ -17,7 +17,6 @@
 package dk.trustworks.essentials.components.queue.postgresql;
 
 import com.zaxxer.hikari.HikariDataSource;
-import dk.trustworks.essentials.components.foundation.messaging.queue.TransactionalMode;
 import dk.trustworks.essentials.components.foundation.test.messaging.queue.DistributedCompetingConsumersDurableQueuesIT;
 import dk.trustworks.essentials.components.foundation.transaction.jdbi.*;
 import dk.trustworks.essentials.components.foundation.test.EssentialsTestContainers;
@@ -60,7 +59,6 @@ abstract class SingleOperationTransactionPostgresqlDistributedCompetingConsumers
         return PostgresqlDurableQueues.builder()
                                       .setUnitOfWorkFactory(unitOfWorkFactory)
                                       .setMessageHandlingTimeout(Duration.ofSeconds(5))
-                                      .setTransactionalMode(TransactionalMode.SingleOperationTransaction)
                                       .setUseCentralizedMessageFetcher(useCentralizedMessageFetcher())
                                       .build();
     }

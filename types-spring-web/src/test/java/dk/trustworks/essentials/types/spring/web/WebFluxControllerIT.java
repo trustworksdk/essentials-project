@@ -16,17 +16,16 @@
 
 package dk.trustworks.essentials.types.spring.web;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.databind.json.JsonMapper;
 import dk.trustworks.essentials.types.*;
 import dk.trustworks.essentials.types.spring.web.model.*;
 import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.condition.EnabledIfSystemProperty;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.http.MediaType;
-import org.springframework.http.codec.json.Jackson2JsonDecoder;
-import org.springframework.http.codec.json.Jackson2JsonEncoder;
+import org.springframework.http.codec.json.JacksonJsonDecoder;
+import org.springframework.http.codec.json.JacksonJsonEncoder;
 import org.springframework.web.reactive.function.client.ExchangeStrategies;
 import org.springframework.test.web.reactive.server.WebTestClient;
 
@@ -36,33 +35,30 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 @SpringBootTest(classes = WebMvcSpringWebApplication.class,
                 webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
-@EnabledIfSystemProperty(named = "essentials.jackson.flavor", matches = "jackson2")
 public class WebFluxControllerIT {
     // WebTestClient is not contributed automatically here: spring-webmvc is on this module's test classpath too, so
     // Boot's test support sees a servlet application and supplies a TestRestTemplate instead. Binding to the running
-    // port by hand is what makes this IT run at all - until the failsafe plugin was given
-    // essentials.jackson.flavor it was silently skipped in both profiles and this never surfaced.
+    // port by hand is what makes this IT run at all.
     @Value("${local.server.port}")
     private int port;
 
     @Autowired
-    private ObjectMapper objectMapper;
+    private JsonMapper objectMapper;
 
     /**
-     * The client has to decode responses with the <em>application's</em> {@link ObjectMapper}, not a default one: the
+     * The client has to decode responses with the <em>application's</em> {@link JsonMapper}, not a default one: the
      * response bodies are Essentials semantic types, and only that mapper carries {@code EssentialTypesJacksonModule}.
      * A default {@code WebTestClient} fails these with "no String-argument constructor/factory method".
      */
-    @SuppressWarnings("removal") // Jackson 2 codecs; this IT only runs under -Pjackson2
     private WebTestClient testClient() {
         return WebTestClient.bindToServer()
                             .baseUrl("http://localhost:" + port)
                             .exchangeStrategies(ExchangeStrategies.builder()
                                                                   .codecs(configurer -> {
                                                                       configurer.defaultCodecs()
-                                                                                .jackson2JsonEncoder(new Jackson2JsonEncoder(objectMapper));
+                                                                                .jacksonJsonEncoder(new JacksonJsonEncoder(objectMapper));
                                                                       configurer.defaultCodecs()
-                                                                                .jackson2JsonDecoder(new Jackson2JsonDecoder(objectMapper));
+                                                                                .jacksonJsonDecoder(new JacksonJsonDecoder(objectMapper));
                                                                   })
                                                                   .build())
                             .build();

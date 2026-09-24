@@ -77,11 +77,7 @@ public abstract class LocalOrderedMessagesDurableQueueIT<DURABLE_QUEUES extends 
 
     protected Timing usingDurableQueue(String description, Runnable action) {
         var stopWatch = StopWatch.start(description);
-        if (durableQueues.getTransactionalMode() == TransactionalMode.FullyTransactional) {
-            unitOfWorkFactory.usingUnitOfWork(uow -> action.run());
-        } else {
-            action.run();
-        }
+        action.run();
         var timing = stopWatch.stop();
         System.out.println(timing);
         return timing;
@@ -141,7 +137,9 @@ public abstract class LocalOrderedMessagesDurableQueueIT<DURABLE_QUEUES extends 
                                       () -> durableQueues.queueMessages(queueName, messages)));
 
         assertThat(durableQueues.getTotalMessagesQueuedFor(queueName)).isEqualTo(numberOfMessages);
-        assertThat(durableQueues.getQueuedMessageCountsFor(queueName)).isEqualTo(new QueuedMessageCounts(queueName, numberOfMessages, 0));
+        var counts = durableQueues.getQueuedMessageCountsFor(queueName);
+        assertThat(counts.numberOfQueuedMessages()).isEqualTo(numberOfMessages);
+        assertThat(counts.numberOfQueuedDeadLetterMessages()).isZero();
 
         var recordingQueueMessageHandler = new RecordingQueuedMessageHandler();
 

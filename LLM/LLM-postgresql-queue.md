@@ -25,6 +25,7 @@
 - [Polling Mechanisms](#polling-mechanisms)
 - [Polling Optimization](#polling-optimization)
 - [Database Schema](#database-schema)
+- [Dead-Letter Classification](#dead-letter-classification)
 - [Monitoring](#monitoring)
 - [Performance Tuning](#performance-tuning)
 - ⚠️ [Security](#security)
@@ -42,7 +43,6 @@ Base package: `dk.trustworks.essentials.components.queue.postgresql`
 |-------|---------|
 | `PostgresqlDurableQueues` | Main implementation |
 | `PostgresqlDurableQueuesBuilder` | Builder via `PostgresqlDurableQueues.builder()` |
-| `PostgresqlDurableQueuesStatistics` | Extended statistics API |
 | `PostgresqlDurableQueueConsumer` | Traditional per-consumer polling |
 
 Foundation classes (package: `dk.trustworks.essentials.components.foundation.messaging.queue`):
@@ -103,7 +103,6 @@ Created via `PostgresqlDurableQueues.builder()`.
 | `transactionMode` | `TransactionMode` | `SingleOperationTransaction` | See [Transaction Modes](#transaction-modes) |
 | `useCentralizedMessageFetcher` | `boolean` | `true` | Centralized vs per-consumer |
 | `centralizedMessageFetcherPollingInterval` | `Duration` | 20ms | Polling interval |
-| `useOrderedUnorderedQuery` | `boolean` | `false` | Query optimization |
 | `queuePollingOptimizerFactory` | `Function<ConsumeFromQueue,QueuePollingOptimizer>` | null | For `DefaultDurableQueueConsumer` |
 | `centralizedQueuePollingOptimizerFactory` | `Function<QueueName,QueuePollingOptimizer>` | null | For `CentralizedMessageFetcher` |
 | `multiTableChangeListener` | `MultiTableChangeListener` | null | LISTEN/NOTIFY support |
@@ -272,22 +271,7 @@ Auto-created. `*` = table name.
 CREATE INDEX idx_*_ordered_msg
   ON durable_queues (queue_name, key, key_order);
 
--- Next message to deliver
-CREATE INDEX idx_*_next_msg
-  ON durable_queues (queue_name, is_dead_letter_message, is_being_delivered, next_delivery_ts);
-
--- Ready messages (general)
-CREATE INDEX idx_*_ready
-  ON durable_queues (queue_name, next_delivery_ts, key, key_order)
-  WHERE is_dead_letter_message = FALSE AND is_being_delivered = FALSE;
-
--- Ordered messages ready (when useOrderedUnorderedQuery=true)
-CREATE INDEX idx_*_ordered_ready
-  ON durable_queues (key, queue_name, key_order, next_delivery_ts)
-  INCLUDE (id)
-  WHERE key IS NOT NULL AND NOT is_dead_letter_message AND NOT is_being_delivered;
-
--- Unordered messages ready (when useOrderedUnorderedQuery=true)
+-- Unordered messages ready
 CREATE INDEX idx_*_unordered_ready
   ON durable_queues (queue_name, next_delivery_ts)
   INCLUDE (id)
@@ -301,6 +285,30 @@ CREATE INDEX idx_*_ordered_head
 ```
 
 **Query pattern**: `FOR UPDATE SKIP LOCKED` for lock-free concurrent access.
+
+## Dead-Letter Classification
+
+A failed delivery is either retried according to the `RedeliveryPolicy` or dead-lettered immediately. The
+consumer asks the policy's `MessageDeliveryErrorHandler` first, then applies its own built-in list of permanent
+error types. Two of the five can be overridden by an explicit `alwaysRetryOn(...)`; three cannot:
+
+| Type | Overridable by `alwaysRetryOn` |
+|---|---|
+| `DurableQueueDeserializationException` | No |
+| `MismatchedInputException` | No |
+| `NoClassDefFoundError` | No |
+| `IllegalArgumentException` (incl. `NumberFormatException`) | **Yes** |
+| `ClassCastException` | **Yes** |
+
+`IllegalArgumentException` on that list is the common surprise: `FailFast.requireNonNull(...)` /
+`requireTrue(...)` and Kotlin's `require(...)` all throw it, so a `@MessageHandler` that guards its arguments
+dead-letters its message on the first delivery attempt unless the policy opts out.
+
+The whole cause chain is examined, not just the thrown exception and the deepest root cause. Overriding does
+not lift `maximumNumberOfRedeliveries`.
+
+See [LLM-foundation.md](./LLM-foundation.md) for `MessageDeliveryErrorHandler`, the opt-out, the
+`RedeliveryPolicy` strategies and the recipe for validating inside a handler.
 
 ## Monitoring
 
@@ -344,27 +352,25 @@ var durableQueues = PostgresqlDurableQueues.builder()
 | `DurableQueuesMicrometerTracingInterceptor` | Distributed tracing via Micrometer Observation |
 | `RecordExecutionTimeDurableQueueInterceptor` | Operation execution time |
 
-### PostgreSQL-Specific Statistics
+### Queue statistics
 
-Package: `dk.trustworks.essentials.components.foundation.messaging.queue.stats`
+The trigger-based statistics table was removed in 0.60. Delivery figures now come from an in-memory
+`QueueStatisticsRegistry` fed by a `DurableQueueMessageObserver`, joined with the cluster-wide queue depth at
+the API layer:
 
-```java
-import dk.trustworks.essentials.components.queue.postgresql.PostgresqlDurableQueues;
-import dk.trustworks.essentials.components.foundation.messaging.queue.stats.*;
-
-PostgresqlDurableQueues queues = (PostgresqlDurableQueues) durableQueues;
-DurableQueuesStatistics stats = queues.getStatistics();
-
-// Queue statistics
-Optional<QueueStatistics> queueStats = stats.getQueueStatistics(queueName);
-queueStats.ifPresent(s -> {
-    log.info("Total: {}, DLQ: {}, Earliest: {}",
-        s.getTotalMessages(), s.getDeadLetterMessages(), s.getEarliestMessageTimestamp());
-});
-
-// Individual message statistics
-Optional<QueuedStatisticsMessage> msgStats = stats.getQueueStatisticsMessage(queueEntryId);
 ```
+GET /durable-queues/queues/{queueName}/statistics   ->  ApiQueueStatistics
+```
+
+| Half | Source | Scope |
+|---|---|---|
+| `depth` | the queue table, one statement | **cluster-wide** — queued, dead letters, in flight, oldest ready age |
+| `instance` | `QueueStatisticsRegistry` | **this JVM only** — handled, retried, dead-lettered, handler durations, last failure. `null` when this instance has delivered nothing |
+
+`depth.messagesBeingDelivered` and `depth.oldestReadyMessageAgeMillis` are what separate "nothing to do" from
+"stalled": zero handled on this instance means nothing on its own.
+
+See [LLM-foundation.md](./LLM-foundation.md) for the observer contract.
 
 ### Logging
 
@@ -421,7 +427,6 @@ PostgresqlDurableQueues.builder()
     .setUnitOfWorkFactory(unitOfWorkFactory)
     .setUseCentralizedMessageFetcher(true)
     .setCentralizedMessageFetcherPollingInterval(Duration.ofMillis(5))
-    .setUseOrderedUnorderedQuery(true)
     .setMultiTableChangeListener(multiTableChangeListener)
     .setCentralizedQueuePollingOptimizerFactory(queueName ->
         new CentralizedQueuePollingOptimizer(queueName, 5, 10000, 1.5, 0.1))
@@ -507,7 +512,7 @@ essentials.postgresql:
 | [foundation](./LLM-foundation.md#durablequeues-messaging) | `DurableQueues` interface and core patterns |
 | [springdata-mongo-queue](./LLM-springdata-mongo-queue.md) | MongoDB implementation |
 | [types-jdbi](./LLM-types-jdbi.md) | JDBI argument factories |
-| [types-jackson](./LLM-types-jackson.md) | JSON serialization |
+| [types-jackson3](./LLM-types-jackson.md) | JSON serialization |
 
 ### PostgreSQL vs MongoDB
 

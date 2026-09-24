@@ -5,7 +5,7 @@
 ## Quick Facts
 - **Base package**: `dk.trustworks.essentials.components.eventsourced.aggregates`
 - **Purpose**: Event-sourced aggregate patterns for DDD
-- **Deps**: postgresql-event-store (EventStore), foundation (UnitOfWork), foundation-types (AggregateType, EventOrder, GlobalEventOrder, ...), immutable-jackson
+- **Deps**: postgresql-event-store (EventStore), foundation (UnitOfWork), foundation-types (AggregateType, EventOrder, GlobalEventOrder, ...), immutable-jackson3
 - **Status**: WORK-IN-PROGRESS
 
 ```xml
@@ -702,7 +702,7 @@ registers the descriptors before configuration validation runs. The aggregate ty
 
 **Dependencies from other modules**:
 - `UnitOfWorkFactory` from [foundation](./LLM-foundation.md)
-- `JSONSerializer` from [immutable-jackson](./LLM-immutable-jackson.md)
+- `JSONSerializer` / `EssentialsObjectMappers` from [foundation](./LLM-foundation.md) (Jackson 3; value types via [types-jackson3](./LLM-types-jackson.md), immutables via [immutable-jackson3](./LLM-immutable-jackson.md))
 
 Optimize loading for aggregates with many events. Snapshots save state at EventOrder N, then only load events after N.
 

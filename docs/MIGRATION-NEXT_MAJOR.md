@@ -113,6 +113,11 @@ longer be constructed.
 
 ### `PostgresqlDurableQueues.builder()` now defaults `useOrderedUnorderedQuery` to `true`
 
+> **Superseded in 0.60.** The flag, the unified query it selected, and the
+> `essentials.durable-queues.use-ordered-unordered-query` property have since been removed — the
+> ordered/unordered pair is the only claim path. See [MIGRATION-0.60.md](./MIGRATION-0.60.md). The rest of this
+> section is the 0.50 history.
+
 The same shape of divergence as the transactional-mode one below, in a different setting.
 `EssentialsComponentsProperties` defaulted the flag to `true` and the deprecated wide constructors passed
 `true`, but `PostgresqlDurableQueuesBuilder`'s uninitialised `boolean` field left it `false` — so Spring

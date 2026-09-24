@@ -20,6 +20,7 @@ import dk.trustworks.essentials.components.distributed.fencedlock.springdata.mon
 import dk.trustworks.essentials.components.foundation.IOExceptionUtil;
 import dk.trustworks.essentials.components.foundation.fencedlock.*;
 import dk.trustworks.essentials.components.foundation.messaging.queue.*;
+import dk.trustworks.essentials.components.foundation.messaging.queue.health.DurableQueuesHealthIndicator;
 import dk.trustworks.essentials.components.foundation.messaging.queue.operations.ConsumeFromQueue;
 import dk.trustworks.essentials.components.foundation.mongo.MongoUtil;
 import dk.trustworks.essentials.components.foundation.transaction.UnitOfWork;
@@ -221,7 +222,6 @@ public class EssentialsComponentsProperties {
     public static class DurableQueues {
         private String sharedQueueCollectionName = MongoDurableQueues.DEFAULT_DURABLE_QUEUES_COLLECTION_NAME;
 
-        private TransactionalMode transactionalMode = TransactionalMode.SingleOperationTransaction;
 
         private Duration messageHandlingTimeout = Duration.ofSeconds(30);
 
@@ -229,7 +229,19 @@ public class EssentialsComponentsProperties {
 
         private Duration maxPollingInterval = Duration.ofMillis(2000);
 
+        private final DurableQueuesHealthProperties health = new DurableQueuesHealthProperties();
+
         private boolean verboseTracing = false;
+
+        /**
+         * Settings for the {@link DurableQueuesHealthIndicator}, which reports dead-letter counts on
+         * {@code /actuator/health}.
+         *
+         * @return the durable-queues health-indicator settings
+         */
+        public DurableQueuesHealthProperties getHealth() {
+            return health;
+        }
 
         /**
          * Should the Tracing produces only include all operations or only top level operations (default false)
@@ -303,28 +315,10 @@ public class EssentialsComponentsProperties {
             this.sharedQueueCollectionName = sharedQueueCollectionName;
         }
 
-        /**
-         * Get the transactional behaviour mode of the {@link MongoDurableQueues}<br>
-         * Default: {@link TransactionalMode#SingleOperationTransaction}
-         *
-         * @return the transactional behaviour mode of the {@link MongoDurableQueues}
-         */
-        public TransactionalMode getTransactionalMode() {
-            return transactionalMode;
-        }
+
 
         /**
-         * Set the transactional behaviour mode of the {@link MongoDurableQueues}
-         * Default: {@link TransactionalMode#SingleOperationTransaction}
-         *
-         * @param transactionalMode the transactional behaviour mode of the {@link MongoDurableQueues}
-         */
-        public void setTransactionalMode(TransactionalMode transactionalMode) {
-            this.transactionalMode = transactionalMode;
-        }
-
-        /**
-         * Get the Message Handling timeout - Only relevant for {@link TransactionalMode#SingleOperationTransaction}<br>
+         * Get the Message Handling timeout - Only relevant for {@code SingleOperationTransaction}<br>
          * The Message Handling timeout defines the timeout for messages being delivered, but haven't yet been acknowledged.
          * After this timeout the message delivery will be reset and the message will again be a candidate for delivery<br>
          * Default is 30 seconds
@@ -336,7 +330,7 @@ public class EssentialsComponentsProperties {
         }
 
         /**
-         * Get the Message Handling timeout - Only relevant for {@link TransactionalMode#SingleOperationTransaction}<br>
+         * Get the Message Handling timeout - Only relevant for {@code SingleOperationTransaction}<br>
          * The Message Handling timeout defines the timeout for messages being delivered, but haven't yet been acknowledged.
          * After this timeout the message delivery will be reset and the message will again be a candidate for delivery<br>
          * Default is 30 seconds
@@ -389,6 +383,72 @@ public class EssentialsComponentsProperties {
          */
         public void setMaxPollingInterval(Duration maxPollingInterval) {
             this.maxPollingInterval = maxPollingInterval;
+        }
+    }
+
+    /**
+     * Settings for {@link DurableQueuesHealthIndicator}, bound from
+     * {@code essentials.durable-queues.health.*}.
+     * <p>
+     * The indicator is registered by default and can be turned off with
+     * {@code management.health.durable-queues.enabled=false}, like any other Spring Boot health indicator.
+     */
+    public static class DurableQueuesHealthProperties {
+        private long     deadLetterThreshold = 0;
+        private Duration cacheTimeToLive     = Duration.ofSeconds(10);
+
+        /**
+         * The number of dead-letter messages on a <em>single</em> queue at which
+         * {@link DurableQueuesHealthIndicator} reports {@code DOWN}. Defaults to {@code 0}, meaning it
+         * never does.
+         * <p>
+         * The default is deliberate. A health indicator contributes to the composite {@code /actuator/health}
+         * status, which readiness and liveness probes are routinely pointed at, so reporting {@code DOWN} on a
+         * dead letter would take working instances out of service — or restart them — because one message could
+         * not be handled. Set this only if a queue reaching a given dead-letter count really does mean this
+         * instance should stop receiving traffic.
+         * <p>
+         * To alert on dead letters without affecting any probe, use the
+         * {@code essentials.messaging.durable_queues.dead_lettered} Micrometer counter instead, which is
+         * published whenever a {@code MeterRegistry} is present.
+         *
+         * @return the per-queue dead-letter count at which the health indicator reports {@code DOWN}, or
+         * {@code 0} to never report {@code DOWN}
+         */
+        public long getDeadLetterThreshold() {
+            return deadLetterThreshold;
+        }
+
+        /**
+         * @param deadLetterThreshold the per-queue dead-letter count at which the health indicator reports
+         *                            {@code DOWN}; {@code 0} or negative to never report {@code DOWN}
+         * @see #getDeadLetterThreshold()
+         */
+        public void setDeadLetterThreshold(long deadLetterThreshold) {
+            this.deadLetterThreshold = deadLetterThreshold;
+        }
+
+        /**
+         * How long {@link DurableQueuesHealthIndicator} reuses a computed result before reading the
+         * dead-letter counts again - default 10 seconds.
+         * <p>
+         * Computing the result costs one query for the queue names plus one count per queue. Probes poll
+         * {@code /actuator/health} on a timer from every instance, so without this the added database load would
+         * scale with probe frequency for a number that barely changes between probes.
+         *
+         * @return how long a computed health result is reused
+         */
+        public Duration getCacheTimeToLive() {
+            return cacheTimeToLive;
+        }
+
+        /**
+         * @param cacheTimeToLive how long a computed health result is reused; {@link Duration#ZERO} reads the
+         *                        counts on every call
+         * @see #getCacheTimeToLive()
+         */
+        public void setCacheTimeToLive(Duration cacheTimeToLive) {
+            this.cacheTimeToLive = cacheTimeToLive;
         }
     }
 

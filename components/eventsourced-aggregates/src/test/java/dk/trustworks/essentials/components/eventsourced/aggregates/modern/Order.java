@@ -16,7 +16,6 @@
 
 package dk.trustworks.essentials.components.eventsourced.aggregates.modern;
 
-import com.fasterxml.jackson.databind.annotation.JsonDeserialize;
 import dk.trustworks.essentials.components.eventsourced.aggregates.*;
 import dk.trustworks.essentials.components.eventsourced.aggregates.stateful.modern.AggregateRoot;
 
@@ -27,8 +26,6 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 public class Order extends AggregateRoot<OrderId, OrderEvent, Order> {
     // NOTE: Fields are public for framework tests performed - this isn't a pattern to replicate in a business application
 
-    // Annotated with @JsonDeserialize to support AggregateSnapshot JSON serialization
-    @JsonDeserialize(keyUsing = ProductIdKeyDeserializer.class)
     public Map<ProductId, Integer> productAndQuantity;
     public boolean                 accepted;
 

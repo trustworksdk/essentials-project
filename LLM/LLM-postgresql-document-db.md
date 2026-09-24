@@ -36,7 +36,7 @@ Base package: `dk.trustworks.essentials.components.document_db`
 
 **Dependencies from other modules**:
 - `HandleAwareUnitOfWorkFactory`, `UnitOfWork` from [foundation](./LLM-foundation.md)
-- `JSONSerializer` from [immutable-jackson](./LLM-immutable-jackson.md)
+- `JSONSerializer` / `EssentialsObjectMappers` from [foundation](./LLM-foundation.md) (Jackson 3)
 - `CharSequenceType` (for ID types) from [types](./LLM-types.md)
 
 ## Core Concepts
@@ -147,22 +147,27 @@ value class Version(override val value: Long) : LongValueType<Version> {
 ```kotlin
 import dk.trustworks.essentials.components.document_db.DocumentDbRepositoryFactory
 import dk.trustworks.essentials.components.foundation.transaction.jdbi.JdbiUnitOfWorkFactory
-import dk.trustworks.essentials.components.foundation.json.JacksonJSONSerializer
-import dk.trustworks.essentials.jackson.immutable.EssentialsImmutableJacksonModule
+import dk.trustworks.essentials.components.foundation.json.EssentialsObjectMappers
+import dk.trustworks.essentials.components.foundation.json.Jackson3JSONSerializer
+import tools.jackson.module.kotlin.KotlinModule
 
 val factory = DocumentDbRepositoryFactory(
     jdbi,
     JdbiUnitOfWorkFactory(jdbi),  // Or Spring-managed UnitOfWorkFactory
-    JacksonJSONSerializer(
-        EssentialsImmutableJacksonModule.createObjectMapper(
-            Jdk8Module(),
-            JavaTimeModule()
-        ).registerKotlinModule()
+    // Canonical Essentials mapper (Jackson 3) + KotlinModule for Kotlin documents
+    Jackson3JSONSerializer(
+        EssentialsObjectMappers.createJackson3ObjectMapper(KotlinModule.Builder().build())
     )
 )
 ```
 
-**Recommended KotlinModule config:**
+`KotlinModule` is required for Kotlin documents: without it a `@JvmInline value class` is written as
+`{"value":"…"}` instead of the bare scalar. Upgrading from 0.50: `JacksonJSONSerializer` (Jackson 2) was removed —
+use `Jackson3JSONSerializer`, and `com.fasterxml.jackson.module.kotlin` becomes `tools.jackson.module.kotlin`.
+
+**Recommended KotlinModule config** (pass it to `createJackson3ObjectMapper(...)`; a `KotlinModule` *bean* reaches
+only Spring Boot's web mapper — the Essentials starters deliberately do not add context `JacksonModule` beans to the
+persistence serializer, so define your own `JSONSerializer` bean for that):
 ```kotlin
 @Bean
 fun kotlinModule() = KotlinModule.Builder()

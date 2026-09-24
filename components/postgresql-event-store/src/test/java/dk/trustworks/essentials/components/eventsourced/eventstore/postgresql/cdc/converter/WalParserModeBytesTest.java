@@ -31,7 +31,7 @@ class WalParserModeBytesTest {
 
     @Test
     void converter_parses_string_and_bytes_equivalently() {
-        var serializer = EssentialsJSONEventSerializers.createForActiveJacksonFlavor();
+        var serializer = EssentialsJSONEventSerializers.create();
         AggregateTypeResolver resolver = table -> "orders_events".equalsIgnoreCase(table) ? ORDERS : null;
         var converter = new JacksonWal2JsonToPersistedEventConverter(serializer, resolver, aggregateType -> Optional.empty());
 
@@ -47,7 +47,7 @@ class WalParserModeBytesTest {
 
     @Test
     void extractor_parses_string_and_bytes_equivalently() {
-        var serializer = EssentialsJSONEventSerializers.createForActiveJacksonFlavor();
+        var serializer = EssentialsJSONEventSerializers.create();
         AggregateTypeResolver resolver = table -> "orders_events".equalsIgnoreCase(table) ? ORDERS : null;
         var extractor = new JacksonWalGlobalOrdersExtractor(serializer, resolver);
 

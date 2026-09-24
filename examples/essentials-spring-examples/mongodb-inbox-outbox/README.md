@@ -163,8 +163,8 @@ Step by step:
 
 > **The Kafka DTOs must keep their plain `String` ids.** `OrderEvent.id()` and
 > `ExternalOrderShippingEvent.orderId()` are deliberately not typed with `OrderId`. Typing them with the domain
-> type means the boundary stops translating — and it broke the `-Pjackson2` build, because the Kafka mapper and
-> the Essentials types module can end up on different Jackson majors. See the module's `CLAUDE.md`.
+> type means the boundary stops translating, coupling the Kafka contract to the domain's id format. See the
+> module's `CLAUDE.md`.
 
 ### One thing the diagram does not show
 
@@ -190,12 +190,8 @@ All commands are run from the `examples/essentials-spring-examples` folder.
 
 ```bash
 mvn verify -pl :mongodb-inbox-outbox                 # unit + integration tests (needs Docker)
-mvn -Pjackson2 verify -pl :mongodb-inbox-outbox -am  # the other Jackson flavour; -am is required
 docker compose up -d && mvn spring-boot:run -pl :mongodb-inbox-outbox
 ```
-
-The `-am` is not optional on the non-default Jackson flavour — see
-[the aggregator README](../README.md#jackson-flavour).
 
 ### Tests
 
@@ -270,7 +266,7 @@ only record what *this example* configures on top of the defaults, and are not a
 In short, the starter provides: `MongoTransactionManager` +
 `SpringMongoTransactionAwareUnitOfWorkFactory`, `MongoDurableQueues`, `Inboxes`/`Outboxes`,
 `DurableLocalCommandBus`, `LocalEventBus`, `MongoFencedLockManager`, `ReactiveHandlersBeanPostProcessor` (which
-is what auto-registers every `@CmdHandler` and `@Handler` bean in this module), `JacksonJSONSerializer`,
+is what auto-registers every `@CmdHandler` and `@Handler` bean in this module), `JSONSerializer` (Jackson 3, from `EssentialsObjectMappers.createJSONSerializer()`),
 `SingleValueTypeRandomIdGenerator`, a `MongoCustomConversions` carrying `SingleValueTypeConverter`, and the
 Micrometer interceptors.
 
@@ -290,7 +286,6 @@ essentials.reactive.queued-task-cap-factor=1.5
 
 # DurableQueues — backs the command bus, the Inbox and the Outbox
 essentials.durable-queues.shared-queue-collection-name=durable_queues
-essentials.durable-queues.transactional-mode=singleoperationtransaction
 essentials.durable-queues.message-handling-timeout=5s
 essentials.durable-queues.polling-delay-interval-increment-factor=0.5
 essentials.durable-queues.max-polling-interval=2s
@@ -312,9 +307,6 @@ spring.data.mongodb.auto-index-creation=true
 
 Notes on the values this example picks:
 
-- **`transactional-mode=singleoperationtransaction`** is the recommended mode and the starter default.
-  `fullytransactional` makes queue operations join the caller's transaction, which breaks retry counting and
-  dead-lettering, because a failure marks the whole transaction for rollback.
 - **`message-handling-timeout=5s`** is shorter than the starter default (`30s`). It only applies in
   `singleoperationtransaction` mode, where it is how long an unacknowledged in-flight message waits before
   being redelivered — a short value makes the retry behaviour visible in a demo, and is too aggressive for a

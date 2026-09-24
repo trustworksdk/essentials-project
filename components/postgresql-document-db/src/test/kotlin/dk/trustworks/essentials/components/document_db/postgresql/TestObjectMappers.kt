@@ -16,39 +16,20 @@
 
 package dk.trustworks.essentials.components.document_db.postgresql
 
-import dk.trustworks.essentials.components.foundation.json.EssentialsJacksonModules
 import dk.trustworks.essentials.components.foundation.json.EssentialsObjectMappers
 import dk.trustworks.essentials.components.foundation.json.JSONSerializer
 import dk.trustworks.essentials.components.foundation.json.Jackson3JSONSerializer
-import dk.trustworks.essentials.components.foundation.json.JacksonJSONSerializer
+import tools.jackson.module.kotlin.KotlinModule
 
 /**
- * Builds the [JSONSerializer] the repository ITs persist documents with, for whichever Jackson flavour the build
- * selected.
+ * Builds the [JSONSerializer] the repository ITs persist documents with.
  *
- * Two things have to line up. The mapper configuration comes from [EssentialsObjectMappers] because that configuration
- * *is* the persisted-JSON contract — a locally assembled mapper drifts and silently changes the stored format. On top
- * of that, documents here are Kotlin data classes, so the flavour's Kotlin module has to be registered or their
- * immutable constructors cannot be bound.
- *
- * Both Kotlin modules can be named side by side: Jackson 3 moved to the `tools.jackson.module` group, so the two have
- * different fully-qualified names. That is unlike the Essentials `types-jackson`/`types-jackson3` pair, which share
- * class names and therefore have to be resolved reflectively through [EssentialsJacksonModules].
+ * The mapper configuration comes from [EssentialsObjectMappers] because that configuration *is* the persisted-JSON
+ * contract — a locally assembled mapper drifts and silently changes the stored format. Documents here are Kotlin data
+ * classes, so the Kotlin module is registered on top, or their immutable constructors cannot be bound.
  */
 object TestObjectMappers {
 
     fun createJSONSerializer(): JSONSerializer =
-        if (EssentialsJacksonModules.isJackson3Flavor()) {
-            Jackson3JSONSerializer(
-                EssentialsObjectMappers.createJackson3ObjectMapper(
-                    tools.jackson.module.kotlin.KotlinModule.Builder().build()
-                )
-            )
-        } else {
-            JacksonJSONSerializer(
-                EssentialsObjectMappers.createJackson2ObjectMapper(
-                    com.fasterxml.jackson.module.kotlin.KotlinModule.Builder().build()
-                )
-            )
-        }
+        Jackson3JSONSerializer(EssentialsObjectMappers.createJackson3ObjectMapper(KotlinModule.Builder().build()))
 }

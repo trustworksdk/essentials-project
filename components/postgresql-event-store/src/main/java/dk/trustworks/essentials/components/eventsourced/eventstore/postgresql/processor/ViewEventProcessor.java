@@ -22,6 +22,7 @@ import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.su
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.types.GlobalEventOrder;
 import dk.trustworks.essentials.components.foundation.Lifecycle;
 import dk.trustworks.essentials.components.foundation.fencedlock.*;
+import dk.trustworks.essentials.components.foundation.messaging.*;
 import dk.trustworks.essentials.components.foundation.messaging.eip.store_and_forward.*;
 import dk.trustworks.essentials.components.foundation.messaging.queue.*;
 import dk.trustworks.essentials.components.foundation.reactive.command.DurableLocalCommandBus;
@@ -45,6 +46,24 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
  *  <li>The event's {@link PersistedEvent#eventOrder()} becomes the {@link OrderedMessage#getOrder()}</li>
  * </ul>
  * <p>
+ * <h3>Validation failures inside a {@code @MessageHandler} dead-letter the message immediately</h3>
+ * Once an event has been queued, the {@link DurableQueueConsumer} classifies a set of exception types as permanent
+ * errors and marks the message as a Poison-Message/Dead-Letter-Message on the <em>first</em> delivery attempt,
+ * bypassing the {@link RedeliveryPolicy}'s backoff entirely: {@code DurableQueueDeserializationException},
+ * {@code MismatchedInputException}, {@link NoClassDefFoundError}, {@link ClassCastException} and
+ * {@link IllegalArgumentException}. A match anywhere in the failure's cause chain counts.
+ * <p>
+ * {@link IllegalArgumentException} is the one that catches handler authors out.
+ * {@code FailFast.requireNonNull(...)} and {@code requireTrue(...)} — the validation idiom used throughout
+ * Essentials — both throw it, and so does Kotlin's {@code require(...)}. Opt out for a specific type with
+ * {@code MessageDeliveryErrorHandler.builder().alwaysRetryOn(IllegalArgumentException.class)}, which overrides the
+ * built-in list for {@link IllegalArgumentException} and {@link ClassCastException} but not for the three that can
+ * never succeed on a later attempt.
+ * <p>
+ * This matters more for a view projector than for most handlers: a projection routinely reads state that another
+ * subscription has not written yet. Throw a retryable exception for "not there yet" and reserve
+ * {@link IllegalArgumentException} for a message that can never be processed. See {@code LLM/LLM-foundation.md}
+ * for the full description.
  */
 public abstract class ViewEventProcessor extends AbstractEventProcessor {
     private final Logger                        logger = LoggerFactory.getLogger(this.getClass());

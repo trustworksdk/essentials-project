@@ -30,9 +30,7 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
  * This is useful when the message payload cannot be deserialized (e.g., due to a missing class) and returning the
  * message would trigger another deserialization failure.<br>
  * Dead Letter Messages won't be delivered to any {@link DurableQueueConsumer} (called by the {@link DurableQueueConsumer})<br>
- * To deliver a Dead Letter Message you must first resurrect the message using {@link DurableQueues#resurrectDeadLetterMessage(QueueEntryId, Duration)}<br>
- * Note this method MUST be called within an existing {@link UnitOfWork} IF
- * using {@link TransactionalMode#FullyTransactional}<br>
+ * To deliver a Dead Letter Message you must first resurrect the message using {@link DurableQueues#resurrectDeadLetterMessage(QueueEntryId, Duration)}<br><br>
  * Operation also matches {@link DurableQueuesInterceptor#intercept(MarkAsDeadLetterMessageDirect, InterceptorChain)}
  *
  * @see MarkAsDeadLetterMessage
@@ -54,8 +52,6 @@ public final class MarkAsDeadLetterMessageDirect {
      * Mark a Message as a Dead Letter Message (or Poison Message) without returning the updated message.<br>
      * Dead Letter Messages won't be delivered to any {@link DurableQueueConsumer} (called by the {@link DurableQueueConsumer})<br>
      * To deliver a Dead Letter Message you must first resurrect the message using {@link DurableQueues#resurrectDeadLetterMessage(QueueEntryId, Duration)}<br>
-     * Note this method MUST be called within an existing {@link UnitOfWork} IF
-     * using {@link TransactionalMode#FullyTransactional}
      *
      * @param queueEntryId the unique id of the message that must be marked as a Dead Letter Message
      */
@@ -67,8 +63,6 @@ public final class MarkAsDeadLetterMessageDirect {
      * Mark a Message as a Dead Letter Message (or Poison Message) without returning the updated message.<br>
      * Dead Letter Messages won't be delivered to any {@link DurableQueueConsumer} (called by the {@link DurableQueueConsumer})<br>
      * To deliver a Dead Letter Message you must first resurrect the message using {@link DurableQueues#resurrectDeadLetterMessage(QueueEntryId, Duration)}<br>
-     * Note this method MUST be called within an existing {@link UnitOfWork} IF
-     * using {@link TransactionalMode#FullyTransactional}
      *
      * @param queueEntryId                    the unique id of the message that must be marked as a Dead Letter Message
      * @param causeForBeingMarkedAsDeadLetter the optional reason for the message being marked as a Dead Letter Message
@@ -81,8 +75,6 @@ public final class MarkAsDeadLetterMessageDirect {
      * Mark a Message as a Dead Letter Message (or Poison Message) without returning the updated message.<br>
      * Dead Letter Messages won't be delivered to any {@link DurableQueueConsumer} (called by the {@link DurableQueueConsumer})<br>
      * To deliver a Dead Letter Message you must first resurrect the message using {@link DurableQueues#resurrectDeadLetterMessage(QueueEntryId, Duration)}<br>
-     * Note this method MUST be called within an existing {@link UnitOfWork} IF
-     * using {@link TransactionalMode#FullyTransactional}
      *
      * @param queueEntryId                    the unique id of the message that must be marked as a Dead Letter Message
      * @param causeForBeingMarkedAsDeadLetter the optional reason for the message being marked as a Dead Letter Message

@@ -9,7 +9,6 @@ decisions taken when this module was converted from layered packages, and the op
 
 ```bash
 mvn verify -pl :essentials-trading-demo                 # unit + ITs (needs Docker)
-mvn -Pjackson2 verify -pl :essentials-trading-demo -am  # other Jackson flavour; -am is required
 mvn spring-boot:run -pl :essentials-trading-demo        # after `docker compose up -d`
 ```
 

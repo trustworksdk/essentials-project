@@ -29,6 +29,7 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 public final class QueueMessageBuilder {
     private QueueName                 queueName;
     private Object                    payload;
+    private Message                   message;
     private Optional<Exception>       causeOfEnqueuing = Optional.empty();
     private Optional<Duration>        deliveryDelay = Optional.empty();
     private MessageMetaData metaData = new MessageMetaData();
@@ -51,10 +52,18 @@ public final class QueueMessageBuilder {
         return this;
     }
 
+    /**
+     * Supply the {@link Message} to queue as-is.
+     * <p>
+     * The message is kept whole rather than being split into payload and metadata and rebuilt: an
+     * {@link OrderedMessage} carries a key and an order that a plain {@link Message} does not, and rebuilding
+     * one would silently drop them — turning an ordered message into an unordered one, with no error anywhere.
+     *
+     * @param message the message being enqueued
+     * @return this builder instance
+     */
     public QueueMessageBuilder setMessage(Message message) {
-        requireNonNull(message, "No message supplied");
-        this.payload = message.getPayload();
-        this.metaData = message.getMetaData();
+        this.message = requireNonNull(message, "No message supplied");
         return this;
     }
 
@@ -111,7 +120,7 @@ public final class QueueMessageBuilder {
     @SuppressWarnings("removal")
     public QueueMessage build() {
         return new QueueMessage(queueName,
-                                new Message(payload, metaData),
+                                message != null ? message : new Message(payload, metaData),
                                 causeOfEnqueuing,
                                 deliveryDelay);
     }

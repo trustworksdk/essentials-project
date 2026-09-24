@@ -234,7 +234,7 @@ public final class SeparateTablePerAggregateEventStreamConfiguration extends Agg
      * {@link SeparateTablePerAggregateEventStreamConfiguration#eventStreamTableColumnNames} = {@link EventStreamTableColumnNames#defaultColumnNames()}<br>
      * {@link SeparateTablePerAggregateEventStreamConfiguration#queryFetchSize} = 100<br>
      * {@link SeparateTablePerAggregateEventStreamConfiguration#tenantSerializer} = {@link NoSupportForMultiTenancySerializer}<br>
-     * {@link SeparateTablePerAggregateEventStreamConfiguration#jsonSerializer} = {@link JacksonJSONEventSerializer}<br>
+     * {@link SeparateTablePerAggregateEventStreamConfiguration#jsonSerializer} = {@link Jackson3JSONEventSerializer}<br>
      *
      * @param aggregateType                             The type of Aggregate this event stream configuration relates to<br>
      *                                                  <strong>Note:</strong><br>
@@ -279,7 +279,7 @@ public final class SeparateTablePerAggregateEventStreamConfiguration extends Agg
      * {@link SeparateTablePerAggregateEventStreamConfiguration#eventStreamTableName} = {@link AggregateType#toString()} + "_events<br>
      * {@link SeparateTablePerAggregateEventStreamConfiguration#eventStreamTableColumnNames} = {@link EventStreamTableColumnNames#defaultColumnNames()}<br>
      * {@link SeparateTablePerAggregateEventStreamConfiguration#queryFetchSize} = 100<br>
-     * {@link SeparateTablePerAggregateEventStreamConfiguration#jsonSerializer} = {@link JacksonJSONEventSerializer}<br>
+     * {@link SeparateTablePerAggregateEventStreamConfiguration#jsonSerializer} = {@link Jackson3JSONEventSerializer}<br>
      *
      * @param aggregateType                             The type of Aggregate this event stream configuration relates to
      *                                                  <br>
