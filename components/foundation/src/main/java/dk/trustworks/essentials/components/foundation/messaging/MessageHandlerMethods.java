@@ -29,7 +29,7 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
  * Introspection of {@link MessageHandler} annotated methods - the single place where the {@link UnitOfWorkMode} a
  * handler method was declared with is resolved.
  * <p>
- * Dispatchers use {@link #hasNonTransactionalMessageHandlers(Object)} to determine whether a message handler needs a
+ * Dispatchers use {@link #hasNonTransactionalMessageHandlers(Consumer)} to determine whether a message handler needs a
  * {@link dk.trustworks.essentials.components.foundation.transaction.UnitOfWork}-free window, so that a dispatcher that
  * cannot provide one can reject the handler at start-up instead of silently running its blocking call inside a
  * database transaction.
