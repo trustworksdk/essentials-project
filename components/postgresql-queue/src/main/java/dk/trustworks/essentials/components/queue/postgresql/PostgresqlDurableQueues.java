@@ -21,6 +21,7 @@ import dk.trustworks.essentials.components.foundation.json.*;
 import dk.trustworks.essentials.components.foundation.messaging.queue.*;
 import dk.trustworks.essentials.components.foundation.messaging.queue.operations.*;
 import dk.trustworks.essentials.components.foundation.postgresql.*;
+import dk.trustworks.essentials.components.foundation.schema.*;
 import dk.trustworks.essentials.components.foundation.transaction.*;
 import dk.trustworks.essentials.components.foundation.transaction.jdbi.*;
 import dk.trustworks.essentials.components.queue.postgresql.jdbi.*;
@@ -75,7 +76,7 @@ import static dk.trustworks.essentials.shared.interceptor.InterceptorChain.newIn
  * It is highly recommended that the {@code sharedQueueTableName} value is only derived from a controlled and trusted source.<br>
  * To mitigate the risk of SQL injection attacks, external or untrusted inputs should never directly provide the {@code sharedQueueTableName} value.<br>
  */
-public final class PostgresqlDurableQueues implements BatchMessageFetchingCapableDurableQueues {
+public final class PostgresqlDurableQueues implements BatchMessageFetchingCapableDurableQueues, EssentialsSchemaContributor {
     private static final Logger  log                                       = LoggerFactory.getLogger(PostgresqlDurableQueues.class);
     public static final  String  DEFAULT_DURABLE_QUEUES_TABLE_NAME         = "durable_queues";
     /**
@@ -102,12 +103,15 @@ public final class PostgresqlDurableQueues implements BatchMessageFetchingCapabl
     private final       QueuedMessageRowMapper                                                  queuedMessageMapper;
     private final       List<DurableQueuesInterceptor>                                          interceptors                     = new CopyOnWriteArrayList<>();
     private final       Optional<MultiTableChangeListener<TableChangeNotification>>             multiTableChangeListener;
+    private final       SchemaOwnership                                                         schemaOwnership;
     private final       Function<ConsumeFromQueue, QueuePollingOptimizer>                       queuePollingOptimizerFactory;
     /**
      * The {@code messageHandlingTimeout} applied by the constructors that do not take one, matching
      * {@code PostgresqlDurableQueuesBuilder}'s default.
      */
     public static final Duration                                                                DEFAULT_MESSAGE_HANDLING_TIMEOUT = Duration.ofSeconds(30);
+    /** This component's {@link EssentialsSchemaContributor#moduleId()} */
+    public static final String                                                                  MODULE_ID                        = "postgresql-queue";
 
     private       CentralizedMessageFetcher centralizedMessageFetcher;
     /**
@@ -278,7 +282,8 @@ public final class PostgresqlDurableQueues implements BatchMessageFetchingCapabl
              null,
              DEFAULT_USE_BATCHED_FETCH,
              DEFAULT_BATCHED_FETCH_SWITCH_THRESHOLD,
-             DEFAULT_BATCHED_FETCH_WARN_ROWS_THRESHOLD);
+             DEFAULT_BATCHED_FETCH_WARN_ROWS_THRESHOLD,
+             SchemaOwnership.COMPONENT);
     }
 
     /**
@@ -311,8 +316,10 @@ public final class PostgresqlDurableQueues implements BatchMessageFetchingCapabl
                                    Function<QueueName, QueuePollingOptimizer> centralizedQueuePollingOptimizerFactory,
                                    boolean useBatchedFetch,
                                    int batchedFetchSwitchThreshold,
-                                   int batchedFetchWarnRowsThreshold) {
+                                   int batchedFetchWarnRowsThreshold,
+                                   SchemaOwnership schemaOwnership) {
         this.unitOfWorkFactory = requireNonNull(unitOfWorkFactory, "No unitOfWorkFactory instance provided");
+        this.schemaOwnership = requireNonNull(schemaOwnership, "No schemaOwnership provided");
         this.jsonSerializer = requireNonNull(jsonSerializer, "No jsonSerializer");
         this.sharedQueueTableName = requireNonNull(sharedQueueTableName, "No sharedQueueTableName provided").toLowerCase(Locale.ROOT);
         PostgresqlUtil.checkIsValidTableOrColumnName(sharedQueueTableName);
@@ -354,169 +361,121 @@ public final class PostgresqlDurableQueues implements BatchMessageFetchingCapabl
     }
 
     private void initializeQueueTables() {
-        PostgresqlUtil.checkIsValidTableOrColumnName(sharedQueueTableName);
         unitOfWorkFactory.usingUnitOfWork(handleAwareUnitOfWork -> {
-            PostgresqlUtil.acquireBootstrapLock(handleAwareUnitOfWork.handle());
             handleAwareUnitOfWork.handle().getJdbi().registerArgument(new QueueNameArgumentFactory());
             handleAwareUnitOfWork.handle().getJdbi().registerColumnMapper(new QueueNameColumnMapper());
             handleAwareUnitOfWork.handle().getJdbi().registerArgument(new QueueEntryIdArgumentFactory());
             handleAwareUnitOfWork.handle().getJdbi().registerColumnMapper(new QueueEntryIdColumnMapper());
-            handleAwareUnitOfWork.handle().execute(durableQueuesSql.getCreateQueueTableSql()
-                                                  );
-            log.info("Ensured Durable Queues table '{}' exists", sharedQueueTableName);
-
-            dropIndex("DROP INDEX IF EXISTS idx_{:tableName}_queue_name",
-                      handleAwareUnitOfWork.handle());
-            dropIndex("DROP INDEX IF EXISTS idx_{:tableName}_next_delivery_ts",
-                      handleAwareUnitOfWork.handle());
-            dropIndex("DROP INDEX IF EXISTS idx_{:tableName}_is_dead_letter_message",
-                      handleAwareUnitOfWork.handle());
-            dropIndex("DROP INDEX IF EXISTS idx_{:tableName}_is_being_delivered",
-                      handleAwareUnitOfWork.handle());
-            // Served the unified claim query, removed in 0.60. Reclaims the write amplification of maintaining
-            // two indexes for a statement that no longer exists.
-            dropIndex("DROP INDEX IF EXISTS idx_{:tableName}_next_msg",
-                      handleAwareUnitOfWork.handle());
-            dropIndex("DROP INDEX IF EXISTS idx_{:tableName}_ready",
-                      handleAwareUnitOfWork.handle());
-            // Measured at zero scans by QueueIndexScanCountIT across every workload shape tried, including a
-            // 20 000-row ANALYZEd table where the planner chose each of the other three. The ordered claim's
-            // NOT EXISTS barrier is served by idx_<table>_ordered_msg instead.
-            dropIndex("DROP INDEX IF EXISTS idx_{:tableName}_ordered_ready",
-                      handleAwareUnitOfWork.handle());
-
-            createIndex(durableQueuesSql.getCreateOrderedMessageIndexSql(),
-                        handleAwareUnitOfWork.handle());
-            createIndex(durableQueuesSql.getCreateUnorderedMessageReadyIndexSql(),
-                        handleAwareUnitOfWork.handle());
-            createIndex(durableQueuesSql.getCreateOrderedMessageHeadIndexSql(),
-                        handleAwareUnitOfWork.handle());
-
-            dropLegacyQueueStatistics(handleAwareUnitOfWork.handle());
-
-            multiTableChangeListener.ifPresent(listener -> {
-                ListenNotify.addChangeNotificationTriggerToTable(handleAwareUnitOfWork.handle(),
-                                                                 sharedQueueTableName,
-                                                                 List.of(ListenNotify.SqlOperation.INSERT, ListenNotify.SqlOperation.UPDATE),
-                                                                 "id", "queue_name", "added_ts", "next_delivery_ts", "delivery_ts", "is_dead_letter_message", "is_being_delivered");
-            });
         });
+        if (schemaOwnership == SchemaOwnership.COMPONENT) {
+            PostgresqlCreateSchemaApplier.applyOwnSchema(unitOfWorkFactory, this);
+            log.info("Ensured Durable Queues table '{}' exists", sharedQueueTableName);
+        }
+    }
+
+    @Override
+    public String moduleId() {
+        return MODULE_ID;
+    }
+
+    @Override
+    public int order() {
+        return SchemaOrder.ORDER_QUEUES;
     }
 
     /**
-     * Column names unique enough to identify a table as the queue-statistics table created by the removed
-     * {@code PostgresqlDurableQueuesStatistics}, so a table that merely shares its name is never dropped.
+     * The queue table, its indexes, the removal of indexes earlier releases created, the removal of the queue
+     * statistics feature 0.60 deleted, and - with a {@link MultiTableChangeListener} - the change-notification trigger.
      */
-    private static final List<String> LEGACY_QUEUE_STATISTICS_COLUMNS = List.of("delivery_latency",
-                                                                                "deletion_ts",
-                                                                                "redelivery_attempts",
-                                                                                "delivery_mode");
+    @Override
+    public List<SchemaChange> contribute(SchemaContext context) {
+        var changes = new ArrayList<SchemaChange>();
+        changes.add(SchemaChange.repeatable("queue-table", sharedQueueTableName, durableQueuesSql.getCreateQueueTableSql()));
+        changes.add(SchemaChange.repeatable("legacy-index-removal",
+                                            sharedQueueTableName,
+                                            bindTable("DROP INDEX IF EXISTS idx_{:tableName}_queue_name"),
+                                            bindTable("DROP INDEX IF EXISTS idx_{:tableName}_next_delivery_ts"),
+                                            bindTable("DROP INDEX IF EXISTS idx_{:tableName}_is_dead_letter_message"),
+                                            bindTable("DROP INDEX IF EXISTS idx_{:tableName}_is_being_delivered"),
+                                            // Served the unified claim query, removed in 0.60. Reclaims the write amplification of maintaining
+                                            // two indexes for a statement that no longer exists.
+                                            bindTable("DROP INDEX IF EXISTS idx_{:tableName}_next_msg"),
+                                            bindTable("DROP INDEX IF EXISTS idx_{:tableName}_ready"),
+                                            // Measured at zero scans by QueueIndexScanCountIT across every workload shape tried, including a
+                                            // 20 000-row ANALYZEd table where the planner chose each of the other three. The ordered claim's
+                                            // NOT EXISTS barrier is served by idx_<table>_ordered_msg instead.
+                                            bindTable("DROP INDEX IF EXISTS idx_{:tableName}_ordered_ready")));
+        changes.add(SchemaChange.repeatable("queue-indexes",
+                                            sharedQueueTableName,
+                                            bindTable(durableQueuesSql.getCreateOrderedMessageIndexSql()),
+                                            bindTable(durableQueuesSql.getCreateUnorderedMessageReadyIndexSql()),
+                                            bindTable(durableQueuesSql.getCreateOrderedMessageHeadIndexSql())));
+        changes.add(SchemaChange.repeatable("legacy-queue-statistics-removal", sharedQueueTableName, legacyQueueStatisticsRemovalSql()));
+        multiTableChangeListener.ifPresent(listener -> changes.add(new SchemaChange("change-notification-trigger",
+                                                                                   sharedQueueTableName,
+                                                                                   ListenNotify.changeNotificationTriggerStatements(sharedQueueTableName,
+                                                                                                                                    List.of(ListenNotify.SqlOperation.INSERT, ListenNotify.SqlOperation.UPDATE),
+                                                                                                                                    "id", "queue_name", "added_ts", "next_delivery_ts", "delivery_ts", "is_dead_letter_message", "is_being_delivered"),
+                                                                                   true)));
+        return changes;
+    }
+
+    private String bindTable(String statement) {
+        return bind(statement, arg("tableName", sharedQueueTableName));
+    }
 
     /**
-     * Remove the queue statistics feature that was deleted in 0.60: the {@code AFTER DELETE} trigger it installed
-     * on <em>this</em> queue table, the function that trigger called, and the statistics table that function wrote
-     * to.
-     * <p>
+     * Remove the queue statistics feature that was deleted in 0.60: the {@code AFTER DELETE} trigger it installed on
+     * <em>this</em> queue table, the function that trigger called, and the statistics table that function wrote to.
      * Left in place, the trigger keeps executing on every acknowledged message for a table nothing reads.
      * <p>
-     * <b>This runs once.</b> It is gated on the trigger still existing, and the trigger is the first thing it
-     * drops, so every subsequent startup skips the whole block without issuing a statement. That matters because
-     * the statistics table name was configurable: a {@code DROP TABLE} re-issued on every boot would destroy a
-     * table that a later deployment happened to create under the same name. The configured name is recovered from
-     * the trigger function's own body rather than assumed to be the default, and the table is only dropped when
-     * its columns match the shape the statistics feature created.
-     *
-     * @param handle the handle to use, already holding the framework's bootstrap lock
+     * One {@code DO} block, so it is a plain statement a schema applier can run or write out. The statistics table's
+     * name was configurable, so it is recovered from the function's source; and the table is only dropped when it has
+     * the statistics table's columns, so a table that merely reuses the name is never touched. When the name cannot be
+     * recovered, or the shape does not match, the trigger and function still go and a {@code WARNING} names the table
+     * to drop by hand.
      */
-    private void dropLegacyQueueStatistics(Handle handle) {
-        var triggerExists = handle.createQuery("""
-                                               SELECT EXISTS (SELECT 1 FROM pg_trigger t
-                                                              JOIN pg_class c ON c.oid = t.tgrelid
-                                                              WHERE t.tgname = 'trg_log_message_delivery_stats'
-                                                                AND c.relname = :queueTableName)
-                                               """)
-                                 .bind("queueTableName", sharedQueueTableName)
-                                 .mapTo(Boolean.class)
-                                 .one();
-        if (!triggerExists) {
-            return;
-        }
-
-        log.info("Removing the queue statistics trigger, function and table removed in 0.60");
-
-        var statisticsTableName = handle.createQuery("SELECT prosrc FROM pg_proc WHERE proname = 'log_message_delivery_stats'")
-                                        .mapTo(String.class)
-                                        .findFirst()
-                                        .flatMap(PostgresqlDurableQueues::extractStatisticsTableNameFrom);
-
-        handle.execute(bind("DROP TRIGGER IF EXISTS trg_log_message_delivery_stats ON {:tableName}",
-                            arg("tableName", sharedQueueTableName)));
-        handle.execute("DROP FUNCTION IF EXISTS log_message_delivery_stats()");
-
-        if (statisticsTableName.isEmpty()) {
-            log.warn("Could not determine the queue statistics table name from the trigger function. " +
-                             "The trigger and function are removed; drop the statistics table by hand");
-            return;
-        }
-        dropLegacyQueueStatisticsTable(handle, statisticsTableName.get());
+    private String legacyQueueStatisticsRemovalSql() {
+        return bindTable("""
+                         DO $$
+                         DECLARE
+                             statistics_function_source TEXT;
+                             statistics_table_name      TEXT;
+                             statistics_columns_found   INT;
+                         BEGIN
+                             IF NOT EXISTS (SELECT 1 FROM pg_trigger t
+                                            JOIN pg_class c ON c.oid = t.tgrelid
+                                            WHERE t.tgname = 'trg_log_message_delivery_stats'
+                                              AND c.relname = '{:tableName}') THEN
+                                 RETURN;
+                             END IF;
+                             RAISE NOTICE 'Removing the queue statistics trigger, function and table removed in 0.60';
+                             SELECT prosrc INTO statistics_function_source FROM pg_proc WHERE proname = 'log_message_delivery_stats' LIMIT 1;
+                             statistics_table_name := substring(statistics_function_source FROM '(?i)insert\\s+into\\s+([a-z0-9_]+)\\s*\\(');
+                             DROP TRIGGER IF EXISTS trg_log_message_delivery_stats ON {:tableName};
+                             DROP FUNCTION IF EXISTS log_message_delivery_stats();
+                             IF statistics_table_name IS NULL THEN
+                                 RAISE WARNING 'Could not determine the queue statistics table name from the trigger function. The trigger and function are removed; drop the statistics table by hand';
+                                 RETURN;
+                             END IF;
+                             SELECT count(DISTINCT column_name) INTO statistics_columns_found
+                             FROM information_schema.columns
+                             WHERE table_name = lower(statistics_table_name)
+                               AND column_name IN ('delivery_latency', 'deletion_ts', 'redelivery_attempts', 'delivery_mode');
+                             IF statistics_columns_found < 4 THEN
+                                 RAISE WARNING 'Table % does not have the shape of a queue statistics table, so it was left alone. The statistics trigger and function are removed; drop the table by hand if it is the old one', statistics_table_name;
+                                 RETURN;
+                             END IF;
+                             EXECUTE format('DROP TABLE IF EXISTS %I', lower(statistics_table_name));
+                             RAISE NOTICE 'Dropped the queue statistics table %', statistics_table_name;
+                         END $$""");
     }
-
-    private void dropLegacyQueueStatisticsTable(Handle handle, String statisticsTableName) {
-        var columns = handle.createQuery("SELECT column_name FROM information_schema.columns WHERE table_name = :tableName")
-                            .bind("tableName", statisticsTableName)
-                            .mapTo(String.class)
-                            .list();
-        if (!columns.containsAll(LEGACY_QUEUE_STATISTICS_COLUMNS)) {
-            log.warn("Table '{}' does not have the shape of a queue statistics table, so it was left alone. " +
-                             "The statistics trigger and function are removed; drop the table by hand if it is the old one",
-                     statisticsTableName);
-            return;
-        }
-        handle.execute(bind("DROP TABLE IF EXISTS {:tableName}", arg("tableName", statisticsTableName)));
-        log.info("Dropped the queue statistics table '{}'", statisticsTableName);
-    }
-
-    /**
-     * Recover the statistics table name from the trigger function's body, which inserts into it.
-     */
-    private static Optional<String> extractStatisticsTableNameFrom(String triggerFunctionSource) {
-        var matcher = LEGACY_STATISTICS_INSERT_TARGET.matcher(triggerFunctionSource);
-        if (!matcher.find()) {
-            return Optional.empty();
-        }
-        var tableName = matcher.group(1);
-        try {
-            PostgresqlUtil.checkIsValidTableOrColumnName(tableName);
-        } catch (RuntimeException e) {
-            log.warn("Ignoring '{}' recovered from the queue statistics trigger function: not a valid table name",
-                     tableName, e);
-            return Optional.empty();
-        }
-        return Optional.of(tableName);
-    }
-
-    private static final Pattern LEGACY_STATISTICS_INSERT_TARGET = Pattern.compile("INSERT\\s+INTO\\s+([A-Za-z0-9_]+)\\s*\\(",
-                                                                                   Pattern.CASE_INSENSITIVE);
 
     /**
      * {@code MIN(...) FILTER (...)} yields SQL NULL when nothing matches, which JDBC reports as a null Timestamp.
      */
     private static Instant toInstant(java.sql.Timestamp timestamp) {
         return timestamp != null ? timestamp.toInstant() : null;
-    }
-
-    private void createIndex(String indexStatement, Handle handle) {
-        PostgresqlUtil.checkIsValidTableOrColumnName(sharedQueueTableName);
-        handle.execute(bind(indexStatement,
-                            arg("tableName", sharedQueueTableName))
-                      );
-    }
-
-    private void dropIndex(String indexStatement, Handle handle) {
-        PostgresqlUtil.checkIsValidTableOrColumnName(sharedQueueTableName);
-        handle.execute(bind(indexStatement,
-                            arg("tableName", sharedQueueTableName))
-                      );
     }
 
     @Override

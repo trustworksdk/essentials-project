@@ -71,6 +71,33 @@ class ListenNotifyIT {
         }
     }
 
+    /**
+     * The statement form a schema contributor uses must produce the same notifications as the installer method - on
+     * every server version, since it cannot branch on one ({@link ListenNotifyPostgresql12IT} runs this on 12). Applied
+     * twice, as a repeatable schema change is on every boot.
+     */
+    @Test
+    void the_trigger_statements_notify_like_the_installer_and_can_be_reapplied() throws JacksonException {
+        var statements = ListenNotify.changeNotificationTriggerStatements(TABLE_NAME, List.of(ListenNotify.SqlOperation.INSERT), "id", "column1", "column2");
+        jdbi.useTransaction(handle -> statements.forEach(handle::execute));
+        jdbi.useTransaction(handle -> statements.forEach(handle::execute));
+
+        var receivedNotification = new AtomicReference<String>();
+        subscription = ListenNotify.listen(jdbi, TABLE_NAME, Duration.ofMillis(200))
+                                   .subscribe(receivedNotification::set);
+        Awaitility.await().pollDelay(Duration.ofMillis(200)).until(() -> true);
+
+        jdbi.useTransaction(handle -> handle.execute("INSERT INTO " + TABLE_NAME + " (column1, column2) VALUES ('Column1Value', 'Column2Value')"));
+
+        Awaitility.waitAtMost(Duration.ofMillis(2000))
+                  .untilAsserted(() -> assertThat(receivedNotification.get()).isNotNull());
+        var notification = objectMapper.readValue(receivedNotification.get(), TestTableNotification.class);
+        assertThat(notification.getTableName()).isEqualTo(TABLE_NAME);
+        assertThat(notification.getOperation()).isEqualTo(ListenNotify.SqlOperation.INSERT);
+        assertThat(notification.column1).isEqualTo("Column1Value");
+        assertThat(notification.column2).isEqualTo("Column2Value");
+    }
+
     @Test
     void single_insert_listen_notify_test() throws InterruptedException, JacksonException {
         jdbi.useTransaction(handle -> {
