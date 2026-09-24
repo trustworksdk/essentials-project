@@ -27,9 +27,10 @@ import static dk.trustworks.essentials.shared.MessageFormatter.msg;
  * {@link SchemaApplier}.
  * <p>
  * Ordering is by {@link EssentialsSchemaContributor#order()}, then {@link EssentialsSchemaContributor#moduleId()}, so it
- * never depends on registration or bean-construction order. Before the applier sees anything the harness rejects
- * two contributors claiming one module id, and two changes with the same {@code (module, changeId, objectName)} -
- * either would make the ledger ambiguous.
+ * never depends on bean-construction order; contributors that tie keep their registration order. Several contributors
+ * may share a module id - two durable-queue tables in one database are two instances of one module - but before the
+ * applier sees anything the harness rejects two changes with the same {@code (module, changeId, objectName)}, which
+ * would make the ledger ambiguous.
  */
 public final class EssentialsSchemaHarness {
     private static final Logger log = LoggerFactory.getLogger(EssentialsSchemaHarness.class);
@@ -61,19 +62,16 @@ public final class EssentialsSchemaHarness {
     public List<SchemaChangeSet> collect() {
         var ordered = new ArrayList<EssentialsSchemaContributor>(contributors);
         ordered.sort(ORDERING);
-        var modules    = new HashSet<String>();
         var identities = new HashSet<String>();
         var changeSets = new ArrayList<SchemaChangeSet>(ordered.size());
         for (var contributor : ordered) {
             var moduleId = requireNonNull(contributor.moduleId(), "Contributor {} has no moduleId", contributor.getClass().getName());
-            if (!modules.add(moduleId)) {
-                throw new IllegalStateException(msg("Two schema contributors claim module id '{}' - the second is {}", moduleId, contributor.getClass().getName()));
-            }
             var changes = requireNonNull(contributor.contribute(context), "Contributor '{}' returned no change list", moduleId);
             for (var change : changes) {
                 requireNonNull(change, "Contributor '{}' returned a null change", moduleId);
                 if (!identities.add(moduleId + '\u0000' + change.changeId() + '\u0000' + change.objectName())) {
-                    throw new IllegalStateException(msg("Contributor '{}' contributes change '{}' for object '{}' twice", moduleId, change.changeId(), change.objectName()));
+                    throw new IllegalStateException(msg("Module '{}' change '{}' is contributed twice for object '{}' - by {}", moduleId, change.changeId(), change.objectName(),
+                                                        contributor.getClass().getName()));
                 }
             }
             changeSets.add(new SchemaChangeSet(moduleId, contributor.order(), changes));

@@ -39,13 +39,20 @@ class EssentialsSchemaHarnessTest {
     }
 
     @Test
-    void two_contributors_may_not_claim_one_module_id() {
-        var harness = new EssentialsSchemaHarness(new RecordingApplier(),
-                                                  SchemaContext.empty(),
-                                                  List.of(contributor("queues", SchemaOrder.ORDER_QUEUES, change("a")),
-                                                          contributor("queues", SchemaOrder.ORDER_QUEUES, change("b"))));
+    void two_instances_of_one_module_may_contribute_for_different_objects_but_not_for_the_same() {
+        var applier = new RecordingApplier();
+        new EssentialsSchemaHarness(applier,
+                                    SchemaContext.empty(),
+                                    List.of(contributor("queues", SchemaOrder.ORDER_QUEUES, SchemaChange.repeatable("queue-table", "orders_queue", "SELECT 1")),
+                                            contributor("queues", SchemaOrder.ORDER_QUEUES, SchemaChange.repeatable("queue-table", "billing_queue", "SELECT 1"))))
+                .apply();
+        assertThat(applier.applied).hasSize(2);
 
-        assertThatThrownBy(harness::apply).isInstanceOf(IllegalStateException.class).hasMessageContaining("'queues'");
+        var clash = new EssentialsSchemaHarness(new RecordingApplier(),
+                                                SchemaContext.empty(),
+                                                List.of(contributor("queues", SchemaOrder.ORDER_QUEUES, SchemaChange.repeatable("queue-table", "orders_queue", "SELECT 1")),
+                                                        contributor("queues", SchemaOrder.ORDER_QUEUES, SchemaChange.repeatable("queue-table", "orders_queue", "SELECT 1"))));
+        assertThatThrownBy(clash::apply).isInstanceOf(IllegalStateException.class).hasMessageContaining("'orders_queue'");
     }
 
     @Test

@@ -16,7 +16,8 @@
 
 package dk.trustworks.essentials.components.foundation.scheduler.executor;
 
-import dk.trustworks.essentials.components.foundation.postgresql.PostgresqlUtil;
+import dk.trustworks.essentials.components.foundation.postgresql.*;
+import dk.trustworks.essentials.components.foundation.schema.*;
 import dk.trustworks.essentials.components.foundation.scheduler.JobNameResolver;
 import dk.trustworks.essentials.components.foundation.transaction.jdbi.*;
 import org.slf4j.*;
@@ -47,7 +48,7 @@ import static dk.trustworks.essentials.shared.MessageFormatter.bind;
  * <br>
  * It is highly recommended that the {@code sharedTableName} value is only derived from a controlled and trusted source.
  */
-public class ExecutorScheduledJobRepository {
+public class ExecutorScheduledJobRepository implements EssentialsSchemaContributor {
 
     private static final Logger log = LoggerFactory.getLogger(ExecutorScheduledJobRepository.class);
 
@@ -55,6 +56,8 @@ public class ExecutorScheduledJobRepository {
     private final String                                                        sharedTableName;
 
     public static final String DEFAULT_SCHEDULED_JOBS_TABLE_NAME = "essentials_scheduled_executor_jobs";
+    /** This repository's {@link EssentialsSchemaContributor#moduleId()} */
+    public static final String MODULE_ID                         = "foundation-scheduler";
 
     /**
      * Constructs an instance of {@link ExecutorScheduledJobRepository} using the provided {@link HandleAwareUnitOfWorkFactory}
@@ -93,40 +96,55 @@ public class ExecutorScheduledJobRepository {
      */
     public ExecutorScheduledJobRepository(HandleAwareUnitOfWorkFactory<? extends HandleAwareUnitOfWork> unitOfWorkFactory,
                                           String sharedTableName) {
-        this.unitOfWorkFactory = requireNonNull(unitOfWorkFactory, "unitOfWorkFactory cannot be null");
-        this.sharedTableName = requireNonNull(sharedTableName, "sharedTableName cannot be null");
-        PostgresqlUtil.checkIsValidTableOrColumnName(sharedTableName);
-        initializeTable();
+        this(unitOfWorkFactory, sharedTableName, SchemaOwnership.COMPONENT);
     }
 
     /**
-     * Initializes a database table to store scheduled job information if it does not already exist.
-     * This method creates the table with predefined columns and ensures the presence of a unique index
-     * on the `name` column for optimized lookup.
-     * <p>
-     * The table includes the following columns:
-     * <ul>
-     * <li>{@code name}: the primary key (TEXT).</li>
-     * <li>{@code initial_delay}: the delay before the first execution (BIGINT, not null).</li>
-     * <li>{@code period}: interval between executions (BIGINT, not null).</li>
-     * <li>{@code time_unit}: the time unit of the delay and period (TEXT, not null).</li>
-     * <li>{@code scheduled_at}: when the job was initially added to the repository (TIMESTAMPTZ, not null).</li>
-     * </ul>
+     * @param unitOfWorkFactory a {@link HandleAwareUnitOfWorkFactory}; must not be {@code null}
+     * @param sharedTableName   the name of the shared database table - see {@link #ExecutorScheduledJobRepository(HandleAwareUnitOfWorkFactory, String)}
+     *                          for the SQL injection caveat
+     * @param schemaOwnership   {@link SchemaOwnership#COMPONENT} creates the table now, as the other constructors do;
+     *                          {@link SchemaOwnership#HARNESS} leaves it to an {@link EssentialsSchemaHarness} this repository
+     *                          is registered with
      */
-    private void initializeTable() {
-        var sql = bind("""
-                       CREATE TABLE IF NOT EXISTS {:tableName} (
-                       name          TEXT PRIMARY KEY,
-                       initial_delay BIGINT NOT NULL,
-                       period        BIGINT NOT NULL,
-                       time_unit     TEXT NOT NULL,
-                       scheduled_at  TIMESTAMPTZ NOT NULL
-                       )
-                       """, arg("tableName", sharedTableName));
-        unitOfWorkFactory.usingUnitOfWork(uow -> {
-            PostgresqlUtil.acquireBootstrapLock(uow.handle());
-            uow.handle().execute(sql);
-        });
+    public ExecutorScheduledJobRepository(HandleAwareUnitOfWorkFactory<? extends HandleAwareUnitOfWork> unitOfWorkFactory,
+                                          String sharedTableName,
+                                          SchemaOwnership schemaOwnership) {
+        this.unitOfWorkFactory = requireNonNull(unitOfWorkFactory, "unitOfWorkFactory cannot be null");
+        this.sharedTableName = requireNonNull(sharedTableName, "sharedTableName cannot be null");
+        PostgresqlUtil.checkIsValidTableOrColumnName(sharedTableName);
+        if (requireNonNull(schemaOwnership, "schemaOwnership cannot be null") == SchemaOwnership.COMPONENT) {
+            PostgresqlCreateSchemaApplier.applyOwnSchema(unitOfWorkFactory, this);
+        }
+    }
+
+    @Override
+    public String moduleId() {
+        return MODULE_ID;
+    }
+
+    @Override
+    public int order() {
+        return SchemaOrder.ORDER_INFRASTRUCTURE;
+    }
+
+    /**
+     * The table that stores scheduled job information: {@code name} (primary key), {@code initial_delay},
+     * {@code period}, {@code time_unit} and {@code scheduled_at}.
+     */
+    @Override
+    public List<SchemaChange> contribute(SchemaContext context) {
+        return List.of(SchemaChange.repeatable("scheduled-jobs-table",
+                                               sharedTableName,
+                                               bind("""
+                                                    CREATE TABLE IF NOT EXISTS {:tableName} (
+                                                    name          TEXT PRIMARY KEY,
+                                                    initial_delay BIGINT NOT NULL,
+                                                    period        BIGINT NOT NULL,
+                                                    time_unit     TEXT NOT NULL,
+                                                    scheduled_at  TIMESTAMPTZ NOT NULL
+                                                    )
+                                                    """, arg("tableName", sharedTableName))));
     }
 
     /**

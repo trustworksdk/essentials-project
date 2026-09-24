@@ -16,12 +16,14 @@
 package dk.trustworks.essentials.components.foundation.postgresql;
 
 import dk.trustworks.essentials.components.foundation.schema.*;
+import dk.trustworks.essentials.components.foundation.transaction.jdbi.*;
 import dk.trustworks.essentials.shared.network.Network;
 import org.jdbi.v3.core.*;
 import org.slf4j.*;
 
 import java.time.OffsetDateTime;
 import java.util.*;
+import java.util.function.*;
 
 import static dk.trustworks.essentials.shared.FailFast.*;
 import static dk.trustworks.essentials.shared.MessageFormatter.msg;
@@ -53,9 +55,9 @@ public final class PostgresqlCreateSchemaApplier implements SchemaApplier {
     /** The ledger table's name unless configured otherwise */
     public static final String DEFAULT_SCHEMA_HISTORY_TABLE_NAME = "essentials_schema_history";
 
-    private final Jdbi   jdbi;
-    private final String schemaHistoryTableName;
-    private final String appliedBy;
+    private final Transactions transactions;
+    private final String       schemaHistoryTableName;
+    private final String       appliedBy;
 
     /**
      * Records into {@link #DEFAULT_SCHEMA_HISTORY_TABLE_NAME}, as this machine's host name.
@@ -74,7 +76,48 @@ public final class PostgresqlCreateSchemaApplier implements SchemaApplier {
      * @param appliedBy              recorded with every ledger row, for forensics only - typically the host or instance
      */
     public PostgresqlCreateSchemaApplier(Jdbi jdbi, String schemaHistoryTableName, String appliedBy) {
-        this.jdbi = requireNonNull(jdbi, "No jdbi provided");
+        this(Transactions.of(requireNonNull(jdbi, "No jdbi provided")), schemaHistoryTableName, appliedBy);
+    }
+
+    /**
+     * Records into {@link #DEFAULT_SCHEMA_HISTORY_TABLE_NAME}, as this machine's host name. Each transaction is a
+     * {@link HandleAwareUnitOfWork} - which joins one already active on the calling thread, as every Essentials
+     * component's DDL always has.
+     *
+     * @param unitOfWorkFactory where the schema is created
+     */
+    public PostgresqlCreateSchemaApplier(HandleAwareUnitOfWorkFactory<? extends HandleAwareUnitOfWork> unitOfWorkFactory) {
+        this(Transactions.of(requireNonNull(unitOfWorkFactory, "No unitOfWorkFactory provided")), DEFAULT_SCHEMA_HISTORY_TABLE_NAME, Network.hostName());
+    }
+
+    /**
+     * Apply one contributor's own schema, with this applier - what a component does in
+     * {@link SchemaOwnership#COMPONENT} mode.
+     *
+     * @param jdbi        where the schema is created
+     * @param contributor the component
+     */
+    public static void applyOwnSchema(Jdbi jdbi, EssentialsSchemaContributor contributor) {
+        applyOwnSchema(new PostgresqlCreateSchemaApplier(jdbi), contributor);
+    }
+
+    /**
+     * Apply one contributor's own schema, with this applier - what a component does in
+     * {@link SchemaOwnership#COMPONENT} mode.
+     *
+     * @param unitOfWorkFactory where the schema is created
+     * @param contributor       the component
+     */
+    public static void applyOwnSchema(HandleAwareUnitOfWorkFactory<? extends HandleAwareUnitOfWork> unitOfWorkFactory, EssentialsSchemaContributor contributor) {
+        applyOwnSchema(new PostgresqlCreateSchemaApplier(unitOfWorkFactory), contributor);
+    }
+
+    private static void applyOwnSchema(PostgresqlCreateSchemaApplier applier, EssentialsSchemaContributor contributor) {
+        new EssentialsSchemaHarness(applier, SchemaContext.empty(), List.of(requireNonNull(contributor, "No contributor provided"))).apply();
+    }
+
+    private PostgresqlCreateSchemaApplier(Transactions transactions, String schemaHistoryTableName, String appliedBy) {
+        this.transactions = transactions;
         this.schemaHistoryTableName = requireNonBlank(schemaHistoryTableName, "No schemaHistoryTableName provided").toLowerCase(Locale.ROOT);
         PostgresqlUtil.checkIsValidTableOrColumnName(this.schemaHistoryTableName);
         this.appliedBy = requireNonBlank(appliedBy, "No appliedBy provided");
@@ -89,7 +132,7 @@ public final class PostgresqlCreateSchemaApplier implements SchemaApplier {
         requireNonNull(changeSets, "No changeSets provided");
         changeSets.forEach(changeSet -> changeSet.changes().forEach(change -> PostgresqlUtil.checkIsValidTableOrColumnName(change.objectName())));
 
-        jdbi.useTransaction(handle -> {
+        transactions.inTransaction(handle -> {
             PostgresqlUtil.acquireBootstrapLock(handle);
             handle.execute("CREATE TABLE IF NOT EXISTS " + schemaHistoryTableName + " (\n" +
                                    "    module_id   TEXT        NOT NULL,\n" +
@@ -106,7 +149,7 @@ public final class PostgresqlCreateSchemaApplier implements SchemaApplier {
         rejectEditedOneShotChanges(changeSets, recorded);
 
         for (var changeSet : changeSets) {
-            jdbi.useTransaction(handle -> {
+            transactions.inTransaction(handle -> {
                 PostgresqlUtil.acquireBootstrapLock(handle);
                 // Re-read under the lock: another JVM may have applied this set while we waited for it
                 var current = readLedger(handle, changeSet.moduleId());
@@ -141,7 +184,7 @@ public final class PostgresqlCreateSchemaApplier implements SchemaApplier {
     }
 
     private Map<ChangeKey, String> readLedger() {
-        return jdbi.withHandle(handle -> readLedger(handle, null));
+        return transactions.withHandle(handle -> readLedger(handle, null));
     }
 
     private Map<ChangeKey, String> readLedger(Handle handle, String onlyModuleId) {
@@ -203,5 +246,42 @@ public final class PostgresqlCreateSchemaApplier implements SchemaApplier {
     }
 
     private record ChangeKey(String moduleId, String changeId, String objectName) {
+    }
+
+    /**
+     * The two ways Essentials components reach the database: a plain {@link Jdbi}, or a unit-of-work factory.
+     */
+    private interface Transactions {
+        void inTransaction(Consumer<Handle> work);
+
+        <R> R withHandle(Function<Handle, R> work);
+
+        static Transactions of(Jdbi jdbi) {
+            return new Transactions() {
+                @Override
+                public void inTransaction(Consumer<Handle> work) {
+                    jdbi.useTransaction(work::accept);
+                }
+
+                @Override
+                public <R> R withHandle(Function<Handle, R> work) {
+                    return jdbi.withHandle(work::apply);
+                }
+            };
+        }
+
+        static Transactions of(HandleAwareUnitOfWorkFactory<? extends HandleAwareUnitOfWork> unitOfWorkFactory) {
+            return new Transactions() {
+                @Override
+                public void inTransaction(Consumer<Handle> work) {
+                    unitOfWorkFactory.usingUnitOfWork(unitOfWork -> work.accept(unitOfWork.handle()));
+                }
+
+                @Override
+                public <R> R withHandle(Function<Handle, R> work) {
+                    return unitOfWorkFactory.withUnitOfWork(unitOfWork -> work.apply(unitOfWork.handle()));
+                }
+            };
+        }
     }
 }
