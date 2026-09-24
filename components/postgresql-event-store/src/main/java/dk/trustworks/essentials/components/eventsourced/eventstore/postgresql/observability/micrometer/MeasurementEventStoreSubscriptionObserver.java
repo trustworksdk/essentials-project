@@ -26,7 +26,6 @@ import dk.trustworks.essentials.components.foundation.types.*;
 import dk.trustworks.essentials.shared.measurement.*;
 import dk.trustworks.essentials.shared.reflection.FunctionalInterfaceLoggingNameResolver;
 import dk.trustworks.essentials.types.LongRange;
-import io.micrometer.core.instrument.MeterRegistry;
 import org.slf4j.*;
 
 import java.time.Duration;
@@ -65,32 +64,6 @@ public class MeasurementEventStoreSubscriptionObserver implements EventStoreSubs
         this.measurementTaker = requireNonNull(measurementTaker, "No measurementTaker provided - use MeasurementTaker.none() to disable recording");
         this.recordExecutionTimeEnabled = measurementTaker.isRecording();
         this.moduleTag = moduleTag;
-    }
-
-    /**
-     * @param meterRegistryOptional      an Optional MeterRegistry to enable Micrometer metrics
-     * @param recordExecutionTimeEnabled whether to record execution times or not
-     * @param thresholds                 the logging thresholds configuration
-     * @param moduleTag                  Optional {@value #MODULE_TAG_NAME} Tag value
-     * @deprecated Use {@link #MeasurementEventStoreSubscriptionObserver(MeasurementTaker, String)}. Assemble the
-     *         {@link MeasurementTaker} once — typically one per metrics subsystem in the Spring Boot starter — rather
-     *         than re-deriving one from an {@code Optional<MeterRegistry>}. Pass {@link MeasurementTaker#none()} where
-     *         {@code recordExecutionTimeEnabled} was {@code false}. This constructor delegates and behaves
-     *         identically.
-     */
-    @Deprecated(forRemoval = true, since = "0.40.x")
-    @SuppressWarnings("OptionalUsedAsFieldOrParameterType")
-    public MeasurementEventStoreSubscriptionObserver(Optional<MeterRegistry> meterRegistryOptional,
-                                                     boolean recordExecutionTimeEnabled,
-                                                     LogThresholds thresholds,
-                                                     String moduleTag) {
-        this(recordExecutionTimeEnabled
-             ? MeasurementTaker.builder()
-                               .setLoggingRecorder(log, thresholds)
-                               .setMeterRegistry(meterRegistryOptional)
-                               .build()
-             : MeasurementTaker.none(),
-             moduleTag);
     }
 
 

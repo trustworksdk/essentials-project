@@ -125,14 +125,9 @@ public final class PostgresqlMessageQueue implements MessageQueue {
      * @param settings engine tuning for this queue's consumers. The no-settings constructor uses
      *                 {@link ShardOwnerSettings#defaults()}; {@link #consume} used to hardcode that
      *                 call, which left the contract with no way to configure the engine at all.
-     * @deprecated since 0.51.0 — use {@link #builder()} and
-     * {@link PostgresqlMessageQueueBuilder#setSettings(ShardOwnerSettings)}, which names
-     * its arguments instead of relying on the order of a {@code short}, an {@code int}
-     * and a {@code String}.
      */
-    @Deprecated(forRemoval = true, since = "0.51.0")
-    public PostgresqlMessageQueue(DataSource dataSource, short queueId, int shardCount, String instanceId,
-                                  ShardOwnerSettings settings) {
+    PostgresqlMessageQueue(DataSource dataSource, short queueId, int shardCount, String instanceId,
+                           ShardOwnerSettings settings) {
         this.dataSource = requireNonNull(dataSource, "No dataSource provided");
         this.queueId = queueId;
         this.shardCount = shardCount;

@@ -395,6 +395,7 @@ stands in 0.60:
 ## 6. Out of scope
 
 - Adopting Java 25 language or library features (D6).
-- The `forRemoval` constructor removals from `MIGRATION-NEXT_MAJOR.md`. That is separate 0.60 work, but it touches
-  the same constructors in the starters, so schedule it after step 4.4 to avoid conflicts.
+- The `forRemoval` constructor removals from `MIGRATION-NEXT_MAJOR.md`. Separate 0.60 work, done on
+  `removal/0.60-forremoval` after the platform upgrade: see "The 0.50 `forRemoval` members are removed everywhere else"
+  in `docs/MIGRATION-0.60.md`.
 - The database schema harness (`docs/database-schema-harness.md`).

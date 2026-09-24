@@ -353,19 +353,17 @@ public class CdcEventStoreSubscriptionManager_2_node_exclusive_vs_nonexclusive_I
             var plugin = new Wal2JsonLogicalDecodingPlugin(
                     CdcProperties.WalReplicationTailerProperties.defaults(java.time.Duration.ofMillis(25), java.time.Duration.ofMillis(50), java.time.Duration.ofSeconds(2), java.time.Duration.ofMillis(100)),
                     converter, extractor, CdcProperties.WalParserMode.STRING);
-            var dispatcher = new CdcDispatcher(
-                    node1.inboxRepository,
-                    node1.unitOfWorkFactory,
-                    node1.gapHandler,
-                    plugin,
-                    Optional.of(notifier),
-                    cdcBus::publish,
-                    slotName,
-                    CdcDispatcherProperties.defaults(),
-                    CdcProperties.CdcDeliveryMode.INBOX,
-                    availability,
-                    Optional.empty()
-            );
+            var dispatcher = new CdcDispatcher(CdcDispatcherDependencies.builder()
+                                                                        .setInbox(node1.inboxRepository)
+                                                                        .setUnitOfWorkFactory(node1.unitOfWorkFactory)
+                                                                        .setEventStreamGapHandler(node1.gapHandler)
+                                                                        .setLogicalDecodingPlugin(plugin)
+                                                                        .setCdcPoisonNotifier(notifier)
+                                                                        .setOnEvents((cdcBus::publish))
+                                                                        .setAvailability(availability)
+                                                                        .setMeterRegistry(Optional.empty())
+                                                                        .build(),
+                                               new CdcDispatcherSettings(slotName, CdcDispatcherProperties.defaults(), CdcProperties.CdcDeliveryMode.INBOX));
 
             dispatcher.start();
 
@@ -1179,7 +1177,13 @@ public class CdcEventStoreSubscriptionManager_2_node_exclusive_vs_nonexclusive_I
                 cdcEventStore,
                 20,
                 Duration.ofMillis(100),
-                new PostgresqlFencedLockManager(jdbi, unitOfWorkFactory, Optional.of(nodeName), Duration.ofSeconds(3), Duration.ofMillis(500), false),
+                PostgresqlFencedLockManager.builder()
+                                           .setJdbi(jdbi)
+                                           .setUnitOfWorkFactory(unitOfWorkFactory)
+                                           .setLockManagerInstanceId(nodeName)
+                                           .setLockTimeOut(Duration.ofSeconds(3))
+                                           .setLockConfirmationInterval(Duration.ofMillis(500))
+                                           .build(),
                 Duration.ofSeconds(2),
                 durableRepo
         );

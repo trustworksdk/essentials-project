@@ -747,19 +747,16 @@ functions the bytecode calls, so the artifacts run on the `kotlin-stdlib` Spring
 >
 > **Compatibility:** Trustworks' Essentials release version **0.40.24** remains API and functionally compatible with Cloud Create's version **0.40.24** (released May 5th 2025). Migration requires only updating module names and package references from `dk.cloudcreate` to `dk.trustworks`.
 
-### Construction ergonomics — deprecations ahead of the next major
+### Construction ergonomics — the 0.50 deprecations are removed in 0.60
 
-Wide constructors and `Optional` constructor parameters are being replaced by builders, cohesive parameter objects and
-neutral defaults. **Nothing has been removed**: every affected constructor still exists and still behaves identically,
-now marked `@Deprecated(forRemoval = true)` with a better path alongside it. Upgrading and changing nothing gives you
-deprecation warnings and no errors; the removals happen at the next major.
+0.50 replaced wide constructors and `Optional` constructor parameters with builders, cohesive parameter objects and
+neutral defaults, and marked the old constructors `@Deprecated(forRemoval = true)`. **0.60 removes them.** Where an old
+constructor was what its builder delegated to, it survives as package-private, so the builder is the only public way
+in. Code that still calls one no longer compiles; the replacement for each is listed in
+[docs/MIGRATION-NEXT_MAJOR.md](docs/MIGRATION-NEXT_MAJOR.md), and [docs/MIGRATION-0.60.md](docs/MIGRATION-0.60.md)
+covers what else 0.60 changes.
 
-There is one behaviour change in this release — `PostgresqlDurableQueues` constructors that do not name a
-`TransactionalMode` now default to `SingleOperationTransaction` rather than `FullyTransactional`, closing a
-long-standing divergence with its builder.
-
-See **[docs/MIGRATION-NEXT_MAJOR.md](docs/MIGRATION-NEXT_MAJOR.md)** for the per-class before-and-after tables, and
-`docs/constructor-ergonomics-and-optional-policy.md` for the rationale.
+The design rationale is in `docs/constructor-ergonomics-and-optional-policy.md`.
 
 ---
 

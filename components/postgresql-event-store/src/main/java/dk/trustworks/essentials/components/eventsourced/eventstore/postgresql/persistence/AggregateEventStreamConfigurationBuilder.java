@@ -102,7 +102,6 @@ public class AggregateEventStreamConfigurationBuilder {
     }
 
     /** @return the new {@link AggregateEventStreamConfiguration} */
-    @SuppressWarnings("removal")
     public AggregateEventStreamConfiguration build() {
         return new AggregateEventStreamConfiguration(aggregateType,
                                                      queryFetchSize,

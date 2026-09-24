@@ -61,41 +61,17 @@ public final class PostgresqlEventStreamGapHandler<CONFIG extends AggregateEvent
      * @param unitOfWorkFactory the unit of work factory that coordinates the event store {@link UnitOfWork}
      */
     public PostgresqlEventStreamGapHandler(EventStoreUnitOfWorkFactory<?> unitOfWorkFactory) {
-        this(   null,
-                unitOfWorkFactory,
-                Duration.ofSeconds(60),
-                (forAggregateType, globalOrderQueryRange, allTransientGaps) -> {
-                    var numberOfGaps          = allTransientGaps.size();
-                    var numberOfGapsToInclude = Math.min(numberOfGaps, 2);
-                    return numberOfGapsToInclude > 0 ? allTransientGaps.subList(0, numberOfGapsToInclude)
-                                                                       .stream()
-                                                                       .map(Pair::_1)
-                                                                       .collect(Collectors.toList()) : NO_GAPS;
-                },
-                ResolveTransientGapsToPermanentGapsPromotionStrategy.thresholdBased(120));
-    }
-
-    /**
-     * Default configuration that includes the earliest 10 transient gaps and which will promote transient gaps to permanent gaps after 120 seconds.
-     *
-     * @param postgresqlEventStore the postgresql event store
-     * @param unitOfWorkFactory    the unit of work factory that coordinates the event store {@link UnitOfWork}
-     */
-    @Deprecated(forRemoval = true)
-    public PostgresqlEventStreamGapHandler(PostgresqlEventStore<CONFIG> postgresqlEventStore,
-                                           EventStoreUnitOfWorkFactory<?> unitOfWorkFactory) {
-        this(   null,
-                unitOfWorkFactory,
-                Duration.ofSeconds(60),
-                (forAggregateType, globalOrderQueryRange, allTransientGaps) -> {
-                    var numberOfGaps          = allTransientGaps.size();
-                    var numberOfGapsToInclude = Math.min(numberOfGaps, 2);
-                    return numberOfGapsToInclude > 0 ? allTransientGaps.subList(0, numberOfGapsToInclude)
-                                                                       .stream()
-                                                                       .map(Pair::_1)
-                                                                       .collect(Collectors.toList()) : NO_GAPS;
-                },
-                ResolveTransientGapsToPermanentGapsPromotionStrategy.thresholdBased(120));
+        this(unitOfWorkFactory,
+             Duration.ofSeconds(60),
+             (forAggregateType, globalOrderQueryRange, allTransientGaps) -> {
+                 var numberOfGaps          = allTransientGaps.size();
+                 var numberOfGapsToInclude = Math.min(numberOfGaps, 2);
+                 return numberOfGapsToInclude > 0 ? allTransientGaps.subList(0, numberOfGapsToInclude)
+                                                                    .stream()
+                                                                    .map(Pair::_1)
+                                                                    .collect(Collectors.toList()) : NO_GAPS;
+             },
+             ResolveTransientGapsToPermanentGapsPromotionStrategy.thresholdBased(120));
     }
 
     /**
@@ -111,12 +87,10 @@ public final class PostgresqlEventStreamGapHandler<CONFIG extends AggregateEvent
      *                                                             (which is called from {@link PostgresqlEventStore#pollEvents(AggregateType, long, Optional, Optional, Optional, Optional, Optional)})
      * @param resolveTransientGapsToPermanentGapsPromotionStrategy strategy for when the {@link PostgresqlEventStreamGapHandler} will promote a transient gap to a permanent gap
      */
-    @Deprecated(forRemoval = true)
-    public PostgresqlEventStreamGapHandler(PostgresqlEventStore<CONFIG> postgresqlEventStore,
-            EventStoreUnitOfWorkFactory<?> unitOfWorkFactory,
-            Duration refreshTransientGapsFromStorageInterval,
-            ResolveTransientGapsToIncludeInQueryStrategy resolveTransientGapsToIncludeInQueryStrategy,
-            ResolveTransientGapsToPermanentGapsPromotionStrategy resolveTransientGapsToPermanentGapsPromotionStrategy) {
+    public PostgresqlEventStreamGapHandler(EventStoreUnitOfWorkFactory<?> unitOfWorkFactory,
+                                           Duration refreshTransientGapsFromStorageInterval,
+                                           ResolveTransientGapsToIncludeInQueryStrategy resolveTransientGapsToIncludeInQueryStrategy,
+                                           ResolveTransientGapsToPermanentGapsPromotionStrategy resolveTransientGapsToPermanentGapsPromotionStrategy) {
         this.unitOfWorkFactory = requireNonNull(unitOfWorkFactory, "No unitOfWorkFactory provided");
         this.refreshTransientGapsFromStorageEverySeconds = requireNonNull(refreshTransientGapsFromStorageInterval, "No refreshTransientGapsFromStorageInterval provided").toSeconds();
         this.resolveTransientGapsToIncludeInQueryStrategy = requireNonNull(resolveTransientGapsToIncludeInQueryStrategy, "No resolveTransientGapsToIncludeInQuery provided");

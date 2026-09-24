@@ -17,9 +17,7 @@
 package dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.interceptor;
 
 import dk.trustworks.essentials.components.foundation.json.EssentialsObjectMappers;
-import com.fasterxml.jackson.annotation.JsonAutoDetect;
 import tools.jackson.databind.*;
-import tools.jackson.databind.json.JsonMapper;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.PostgresqlEventStore;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.bus.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.*;
@@ -89,12 +87,12 @@ class FlushAndPublishPersistedEventsToEventBusRightAfterAppendToStreamIT {
                                                                                                                          EssentialsJSONEventSerializers.create(),
                                                                                                                          IdentifierColumnType.UUID,
                                                                                                                          JSONColumnType.JSONB));
-        eventStore = new PostgresqlEventStore<>(unitOfWorkFactory,
-                                                persistenceStrategy,
-                                                Optional.empty(),
-                                                eventStore -> new PostgresqlEventStreamGapHandler<>(eventStore,
-                                                                                                    unitOfWorkFactory),
-                                                new EventStoreSubscriptionObserver.NoOpEventStoreSubscriptionObserver());
+        eventStore = PostgresqlEventStore.<SeparateTablePerAggregateEventStreamConfiguration>builder()
+                                         .setUnitOfWorkFactory(unitOfWorkFactory)
+                                         .setPersistenceStrategy(persistenceStrategy)
+                                         .setEventStreamGapHandlerFactory(eventStore -> new PostgresqlEventStreamGapHandler<>(unitOfWorkFactory))
+                                         .setEventStoreSubscriptionObserver(new EventStoreSubscriptionObserver.NoOpEventStoreSubscriptionObserver())
+                                         .build();
         eventStore.addAggregateEventStreamConfiguration(aggregateType,
                                                         AggregateIdSerializer.serializerFor(OrderId.class));
         eventStore.addEventStoreInterceptor(new FlushAndPublishPersistedEventsToEventBusRightAfterAppendToStream());

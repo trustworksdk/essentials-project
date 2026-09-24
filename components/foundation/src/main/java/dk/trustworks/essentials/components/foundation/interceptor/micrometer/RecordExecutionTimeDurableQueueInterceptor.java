@@ -21,7 +21,6 @@ import dk.trustworks.essentials.components.foundation.messaging.queue.operations
 import dk.trustworks.essentials.shared.interceptor.InterceptorChain;
 import dk.trustworks.essentials.shared.measurement.*;
 import dk.trustworks.essentials.shared.reflection.FunctionalInterfaceLoggingNameResolver;
-import io.micrometer.core.instrument.MeterRegistry;
 
 import java.util.*;
 
@@ -81,35 +80,6 @@ public class RecordExecutionTimeDurableQueueInterceptor implements DurableQueues
         this.measurementTaker = requireNonNull(measurementTaker, "No measurementTaker provided - use MeasurementTaker.none() to disable recording");
         this.recordExecutionTimeEnabled = measurementTaker.isRecording();
         this.moduleTag = moduleTag;
-    }
-
-    /**
-     * Constructs a new interceptor.
-     *
-     * @param meterRegistryOptional      an Optional MeterRegistry to enable Micrometer metrics
-     * @param recordExecutionTimeEnabled whether to record execution times or not
-     * @param thresholds                 the logging thresholds configuration
-     * @param moduleTag                  Optional {@value #MODULE_TAG_NAME} Tag value
-     * @deprecated Use {@link #RecordExecutionTimeDurableQueueInterceptor(MeasurementTaker, String)}. Assemble the
-     *         {@link MeasurementTaker} once — typically one per metrics subsystem in the Spring Boot starter — rather
-     *         than having every interceptor re-derive one from an {@code Optional<MeterRegistry>}. Pass
-     *         {@link MeasurementTaker#none()} where {@code recordExecutionTimeEnabled} was {@code false}. This
-     *         constructor delegates and behaves identically, except that the logging recorder is now named after this
-     *         class rather than after the runtime subclass.
-     */
-    @Deprecated(forRemoval = true, since = "0.40.x")
-    @SuppressWarnings("OptionalUsedAsFieldOrParameterType")
-    public RecordExecutionTimeDurableQueueInterceptor(Optional<MeterRegistry> meterRegistryOptional,
-                                                      boolean recordExecutionTimeEnabled,
-                                                      LogThresholds thresholds,
-                                                      String moduleTag) {
-        this(recordExecutionTimeEnabled
-             ? MeasurementTaker.builder()
-                               .setLoggingRecorder(RecordExecutionTimeDurableQueueInterceptor.class, thresholds)
-                               .setMeterRegistry(meterRegistryOptional)
-                               .build()
-             : MeasurementTaker.none(),
-             moduleTag);
     }
 
     @Override

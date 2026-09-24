@@ -41,17 +41,13 @@ public class DefaultAggregateLifecycleApi implements AggregateLifecycleApi {
     private final ConfigurableEventStore<? extends AggregateEventStreamConfiguration> eventStore;
     private final JSONEventSerializer jsonSerializer;
 
-    /**
-     * @deprecated Use {@link #builder()}. This constructor declares an {@code Optional} parameter and/or more than five parameters; the builder names every argument and accepts both plain values and {@code Optional}s. It is unchanged and remains the implementation the builder delegates to.
-     */
-    @Deprecated(forRemoval = true, since = "0.40.x")
-    public DefaultAggregateLifecycleApi(EssentialsSecurityProvider securityProvider,
-                                        AggregateSnapshotPolicyRegistry snapshotPolicyRegistry,
-                                        AggregateClosingBooksPolicyRegistry closingBooksPolicyRegistry,
-                                        Optional<AggregateClosingBooksGenerationAccessProvider> closingBooksGenerationAccessProvider,
-                                        Optional<AggregateSnapshotStore> snapshotStore,
-                                        ConfigurableEventStore<? extends AggregateEventStreamConfiguration> eventStore,
-                                        JSONEventSerializer jsonSerializer) {
+    DefaultAggregateLifecycleApi(EssentialsSecurityProvider securityProvider,
+                                 AggregateSnapshotPolicyRegistry snapshotPolicyRegistry,
+                                 AggregateClosingBooksPolicyRegistry closingBooksPolicyRegistry,
+                                 Optional<AggregateClosingBooksGenerationAccessProvider> closingBooksGenerationAccessProvider,
+                                 Optional<AggregateSnapshotStore> snapshotStore,
+                                 ConfigurableEventStore<? extends AggregateEventStreamConfiguration> eventStore,
+                                 JSONEventSerializer jsonSerializer) {
         this.securityProvider = requireNonNull(securityProvider, "securityProvider must not be null");
         this.snapshotPolicyRegistry = requireNonNull(snapshotPolicyRegistry, "snapshotPolicyRegistry must not be null");
         this.closingBooksPolicyRegistry = requireNonNull(closingBooksPolicyRegistry, "closingBooksPolicyRegistry must not be null");
@@ -333,7 +329,6 @@ public class DefaultAggregateLifecycleApi implements AggregateLifecycleApi {
         /**
          * @return the new {@link DefaultAggregateLifecycleApi}
          */
-        @SuppressWarnings("removal")
         public DefaultAggregateLifecycleApi build() {
             return new DefaultAggregateLifecycleApi(securityProvider,
                                                     snapshotPolicyRegistry,

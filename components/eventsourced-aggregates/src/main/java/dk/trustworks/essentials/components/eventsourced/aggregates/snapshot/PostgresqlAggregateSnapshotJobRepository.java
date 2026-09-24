@@ -49,12 +49,8 @@ public class PostgresqlAggregateSnapshotJobRepository implements AggregateSnapsh
         this(unitOfWorkFactory, Optional.empty());
     }
 
-    /**
-     * @deprecated Use {@link #builder()}. This constructor declares an {@code Optional} parameter and/or more than five parameters; the builder names every argument and accepts both plain values and {@code Optional}s. It is unchanged and remains the implementation the builder delegates to.
-     */
-    @Deprecated(forRemoval = true, since = "0.40.x")
-    public PostgresqlAggregateSnapshotJobRepository(HandleAwareUnitOfWorkFactory<? extends HandleAwareUnitOfWork> unitOfWorkFactory,
-                                                    Optional<String> tableName) {
+    PostgresqlAggregateSnapshotJobRepository(HandleAwareUnitOfWorkFactory<? extends HandleAwareUnitOfWork> unitOfWorkFactory,
+                                      Optional<String> tableName) {
         this(unitOfWorkFactory, tableName, Optional.empty());
     }
 
@@ -65,11 +61,9 @@ public class PostgresqlAggregateSnapshotJobRepository implements AggregateSnapsh
      * @param tableName               An optional custom table name to use for storing aggregate snapshot jobs. Defaults to a predefined name if not provided.
      * @param meterRegistryOptional   An optional {@link MeterRegistry} for metric collection and monitoring. Can be empty if metric support is not required.
      * @throws IllegalArgumentException If {@code unitOfWorkFactory} or {@code tableName} are null.
-     * @deprecated Use {@link #builder()}. This constructor declares an {@code Optional} parameter and/or more than five parameters; the builder names every argument and accepts both plain values and {@code Optional}s. It is unchanged and remains the implementation the builder delegates to.
      */
     @SuppressWarnings("OptionalUsedAsFieldOrParameterType")
-    @Deprecated(forRemoval = true, since = "0.40.x")
-    public PostgresqlAggregateSnapshotJobRepository(HandleAwareUnitOfWorkFactory<? extends HandleAwareUnitOfWork> unitOfWorkFactory,
+    PostgresqlAggregateSnapshotJobRepository(HandleAwareUnitOfWorkFactory<? extends HandleAwareUnitOfWork> unitOfWorkFactory,
                                                     Optional<String> tableName,
                                                     Optional<MeterRegistry> meterRegistryOptional) {
         this.unitOfWorkFactory = requireNonNull(unitOfWorkFactory, "No unitOfWorkFactory provided");
@@ -345,7 +339,6 @@ public class PostgresqlAggregateSnapshotJobRepository implements AggregateSnapsh
         /**
          * @return the new {@link PostgresqlAggregateSnapshotJobRepository}
          */
-        @SuppressWarnings("removal")
         public PostgresqlAggregateSnapshotJobRepository build() {
             return new PostgresqlAggregateSnapshotJobRepository(unitOfWorkFactory,
                                                                 Optional.ofNullable(tableName),

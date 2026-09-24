@@ -82,16 +82,14 @@ public class ClosingBooksCoordinator<ID> {
      * @param unitOfWorkFactory     The factory for creating instances of {@code HandleAwareUnitOfWork}.
      * @param clock                 The clock used to timestamp policy evaluations and rollovers.
      * @param meterRegistryOptional Optional Micrometer registry. When empty, no metrics are recorded.
-     * @deprecated Use {@link #builder()}. This constructor declares an {@code Optional} parameter and/or more than five parameters; the builder names every argument and accepts both plain values and {@code Optional}s. It is unchanged and remains the implementation the builder delegates to.
      */
     @SuppressWarnings("OptionalUsedAsFieldOrParameterType")
-    @Deprecated(forRemoval = true, since = "0.40.x")
-    public ClosingBooksCoordinator(AggregateType aggregateType,
-                                   ClosingBooksGenerationRepository<ID> generationRepository,
-                                   ClosingBooksStreamIdGenerator<ID> streamIdGenerator,
-                                   HandleAwareUnitOfWorkFactory<? extends HandleAwareUnitOfWork> unitOfWorkFactory,
-                                   Clock clock,
-                                   Optional<MeterRegistry> meterRegistryOptional) {
+    ClosingBooksCoordinator(AggregateType aggregateType,
+                            ClosingBooksGenerationRepository<ID> generationRepository,
+                            ClosingBooksStreamIdGenerator<ID> streamIdGenerator,
+                            HandleAwareUnitOfWorkFactory<? extends HandleAwareUnitOfWork> unitOfWorkFactory,
+                            Clock clock,
+                            Optional<MeterRegistry> meterRegistryOptional) {
         this.aggregateType = requireNonNull(aggregateType, "No aggregateType provided");
         this.generationRepository = requireNonNull(generationRepository, "No generationRepository provided");
         this.streamIdGenerator = requireNonNull(streamIdGenerator, "No streamIdGenerator provided");
@@ -311,7 +309,6 @@ public class ClosingBooksCoordinator<ID> {
         /**
          * @return the new {@link ClosingBooksCoordinator}
          */
-        @SuppressWarnings("removal")
         public ClosingBooksCoordinator<ID> build() {
             return new ClosingBooksCoordinator<>(aggregateType,
                                                    generationRepository,

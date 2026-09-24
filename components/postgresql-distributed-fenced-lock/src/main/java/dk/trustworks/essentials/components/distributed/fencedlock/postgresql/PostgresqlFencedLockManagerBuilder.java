@@ -170,7 +170,6 @@ public final class PostgresqlFencedLockManagerBuilder {
      *
      * @return the new {@link PostgresqlFencedLockManager} instance
      */
-    @SuppressWarnings("removal")
     public PostgresqlFencedLockManager build() {
         return new PostgresqlFencedLockManager(jdbi,
                                                unitOfWorkFactory,

@@ -197,7 +197,6 @@ public final class DurableQueuedMessageBuilder {
      *
      * @return the message
      */
-    @SuppressWarnings("removal")
     public DurableQueuedMessage build() {
         return new DurableQueuedMessage(id,
                                         queueName,

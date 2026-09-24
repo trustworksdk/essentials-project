@@ -129,8 +129,6 @@ public final class PostgresqlDurableQueues implements BatchMessageFetchingCapabl
     private volatile DurableQueueMessageObserver messageObserver = DurableQueueMessageObserver.none();
 
     private   Function<QueueName, QueuePollingOptimizer> centralizedQueuePollingOptimizerFactory;
-    /**
-     */
     private   int                                        messageHandlingTimeoutMs;
     /**
      * Contains the timestamp of the last performed {@link #resetMessagesStuckBeingDelivered(QueueName)} check<br>

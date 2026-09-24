@@ -124,44 +124,6 @@ public abstract class DBFencedLockManager<UOW extends UnitOfWork, LOCK extends D
                         });
     }
 
-    /**
-     * @param lockStorage                                                    the lock storage used for the lock manager
-     * @param unitOfWorkFactory                                              the {@link UnitOfWork} factory
-     * @param lockManagerInstanceId                                          The unique name for this lock manager instance. If left {@link Optional#empty()} then the machines hostname is used
-     * @param lockTimeOut                                                    the period between {@link FencedLock#getLockLastConfirmedTimestamp()} and the current time before the lock is marked as timed out
-     * @param lockConfirmationInterval                                       how often should the locks be confirmed. MUST is less than the <code>lockTimeOut</code>
-     * @param releaseAcquiredLocksInCaseOfIOExceptionsDuringLockConfirmation Should {@link FencedLock}'s acquired by this {@link FencedLockManager} be released in case calls to {@link FencedLockStorage#confirmLockInDB(DBFencedLockManager, UnitOfWork, DBFencedLock, OffsetDateTime)} fails
-     *                                                                       with an exception where {@link IOExceptionUtil#isIOException(Throwable)} returns true -
-     *                                                                       If releaseAcquiredLocksInCaseOfIOExceptionsDuringLockConfirmation is true, then {@link FencedLock}'s will be released locally,
-     *                                                                       otherwise we will retain the {@link FencedLock}'s as locked.
-     * @param eventBus                                                       optional {@link LocalEventBus} where {@link FencedLockEvents} will be published
-     * @deprecated Use {@link #DBFencedLockManager(FencedLockStorage, UnitOfWorkFactory, FencedLockManagerSettings, EventBus)}.
-     *         The four configuration arguments in the middle are now one {@link FencedLockManagerSettings} value —
-     *         build it with {@link FencedLockManagerSettings#builder()} — and the {@code Optional<EventBus>} is a
-     *         plain nullable argument. This constructor delegates and behaves identically; note only that the
-     *         {@code lockConfirmationInterval < lockTimeOut} check now fires when the settings are created rather
-     *         than here, which is strictly earlier.
-     */
-    @Deprecated(forRemoval = true, since = "0.40.x")
-    @SuppressWarnings("OptionalUsedAsFieldOrParameterType")
-    protected DBFencedLockManager(FencedLockStorage<UOW, LOCK> lockStorage,
-                                  UnitOfWorkFactory<? extends UOW> unitOfWorkFactory,
-                                  Optional<String> lockManagerInstanceId,
-                                  Duration lockTimeOut,
-                                  Duration lockConfirmationInterval,
-                                  boolean releaseAcquiredLocksInCaseOfIOExceptionsDuringLockConfirmation,
-                                  Optional<EventBus> eventBus) {
-        this(lockStorage,
-             unitOfWorkFactory,
-             FencedLockManagerSettings.builder()
-                                      .setLockManagerInstanceId(requireNonNull(lockManagerInstanceId, "No lockManagerInstanceId option provided"))
-                                      .setLockTimeOut(lockTimeOut)
-                                      .setLockConfirmationInterval(lockConfirmationInterval)
-                                      .setReleaseAcquiredLocksInCaseOfIOExceptionsDuringLockConfirmation(releaseAcquiredLocksInCaseOfIOExceptionsDuringLockConfirmation)
-                                      .build(),
-             requireNonNull(eventBus, "No eventBus option provided").orElse(null));
-    }
-
     @Override
     public void start() {
         if (!started) {

@@ -178,21 +178,19 @@ public final class EventStreamTableColumnNames {
      *                              a valid PostgreSQL column-name and not a reserved keyword.
      * @throws InvalidTableOrColumnNameException If any of the provided column names are null, empty, matches a reserved keyword,
      *                                           or contains invalid characters.(see {@link PostgresqlUtil#checkIsValidTableOrColumnName(String)}).
-     * @deprecated Use {@link #builder()}. This constructor declares an {@code Optional} parameter and/or more than five parameters; the builder names every argument and accepts both plain values and {@code Optional}s. It is unchanged and remains the implementation the builder delegates to.
      */
-    @Deprecated(forRemoval = true, since = "0.40.x")
-    public EventStreamTableColumnNames(String globalOrderColumn,
-                                       String timestampColumn,
-                                       String eventIdColumn,
-                                       String causedByEventIdColumn,
-                                       String correlationIdColumn,
-                                       String aggregateIdColumn,
-                                       String eventOrderColumn,
-                                       String eventTypeColumn,
-                                       String eventRevisionColumn,
-                                       String eventPayloadColumn,
-                                       String eventMetaDataColumn,
-                                       String tenantColumn) {
+    EventStreamTableColumnNames(String globalOrderColumn,
+                                String timestampColumn,
+                                String eventIdColumn,
+                                String causedByEventIdColumn,
+                                String correlationIdColumn,
+                                String aggregateIdColumn,
+                                String eventOrderColumn,
+                                String eventTypeColumn,
+                                String eventRevisionColumn,
+                                String eventPayloadColumn,
+                                String eventMetaDataColumn,
+                                String tenantColumn) {
         this.globalOrderColumn = requireNonNull(globalOrderColumn, "You must provide a globalOrderColumn").toLowerCase();
         this.timestampColumn = requireNonNull(timestampColumn, "You must provide a timestampColumn").toLowerCase();
         this.eventIdColumn = requireNonNull(eventIdColumn, "You must provide a eventIdColumn").toLowerCase();

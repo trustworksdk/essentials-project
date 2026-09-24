@@ -82,7 +82,6 @@ public final class CdcInboxRepositoryBuilder {
      *
      * @return the repository
      */
-    @SuppressWarnings("removal")
     public CdcInboxRepository build() {
         return new CdcInboxRepository(requireNonNull(unitOfWorkFactory, "unitOfWorkFactory cannot be null"),
                                       Optional.ofNullable(meterRegistry),

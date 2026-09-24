@@ -79,19 +79,17 @@ class CdcDispatcherPoisonGapFailureTest {
         when(plugin.extractGaps(any(byte[].class)))
                 .thenThrow(new RuntimeException("simulated gap extraction failure"));
 
-        var dispatcher = new CdcDispatcher(
-                inbox,
-                uowFactory,
-                gapHandler,
-                plugin,
-                Optional.of(notifier),
-                events -> { /* no-op */ },
-                SLOT,
-                CdcProperties.CdcDispatcherProperties.defaults(),
-                CdcProperties.CdcDeliveryMode.INBOX,
-                ignoreAvailability(),
-                Optional.empty()
-        );
+        var dispatcher = new CdcDispatcher(CdcDispatcherDependencies.builder()
+                                                                    .setInbox(inbox)
+                                                                    .setUnitOfWorkFactory(uowFactory)
+                                                                    .setEventStreamGapHandler(gapHandler)
+                                                                    .setLogicalDecodingPlugin(plugin)
+                                                                    .setCdcPoisonNotifier(notifier)
+                                                                    .setOnEvents((events -> { }))
+                                                                    .setAvailability(ignoreAvailability())
+                                                                    .setMeterRegistry(Optional.empty())
+                                                                    .build(),
+                                           new CdcDispatcherSettings(SLOT, CdcProperties.CdcDispatcherProperties.defaults(), CdcProperties.CdcDeliveryMode.INBOX));
 
         // When — run one tick directly (no scheduler).
         dispatcher.tick();
@@ -132,19 +130,16 @@ class CdcDispatcherPoisonGapFailureTest {
                 .thenThrow(new RuntimeException("simulated DB failure"))
                 .thenReturn(List.of());
 
-        var dispatcher = new CdcDispatcher(
-                inbox,
-                uowFactory,
-                gapHandler,
-                plugin,
-                Optional.empty(),
-                events -> { /* no-op */ },
-                SLOT,
-                CdcProperties.CdcDispatcherProperties.defaults(),
-                CdcProperties.CdcDeliveryMode.INBOX,
-                ignoreAvailability(),
-                Optional.empty()
-        );
+        var dispatcher = new CdcDispatcher(CdcDispatcherDependencies.builder()
+                                                                    .setInbox(inbox)
+                                                                    .setUnitOfWorkFactory(uowFactory)
+                                                                    .setEventStreamGapHandler(gapHandler)
+                                                                    .setLogicalDecodingPlugin(plugin)
+                                                                    .setOnEvents((events -> { }))
+                                                                    .setAvailability(ignoreAvailability())
+                                                                    .setMeterRegistry(Optional.empty())
+                                                                    .build(),
+                                           new CdcDispatcherSettings(SLOT, CdcProperties.CdcDispatcherProperties.defaults(), CdcProperties.CdcDeliveryMode.INBOX));
 
         // tick() must NOT throw — the outer catch-all keeps the scheduler alive.
         dispatcher.tick();
@@ -179,19 +174,16 @@ class CdcDispatcherPoisonGapFailureTest {
 
         when(inbox.fetchNextBatch(eq(SLOT), anyInt(), anyInt())).thenReturn(List.of());
 
-        var dispatcher = new CdcDispatcher(
-                inbox,
-                uowFactory,
-                gapHandler,
-                plugin,
-                Optional.empty(),
-                events -> { /* no-op */ },
-                SLOT,
-                CdcProperties.CdcDispatcherProperties.defaults(),
-                CdcProperties.CdcDeliveryMode.INBOX,
-                startingInactive,
-                Optional.empty()
-        );
+        var dispatcher = new CdcDispatcher(CdcDispatcherDependencies.builder()
+                                                                    .setInbox(inbox)
+                                                                    .setUnitOfWorkFactory(uowFactory)
+                                                                    .setEventStreamGapHandler(gapHandler)
+                                                                    .setLogicalDecodingPlugin(plugin)
+                                                                    .setOnEvents((events -> { }))
+                                                                    .setAvailability(startingInactive)
+                                                                    .setMeterRegistry(Optional.empty())
+                                                                    .build(),
+                                           new CdcDispatcherSettings(SLOT, CdcProperties.CdcDispatcherProperties.defaults(), CdcProperties.CdcDeliveryMode.INBOX));
 
         // While INACTIVE: tick must not query the inbox (no wasted round-trips) and must not
         // fault or increment any failure counter.
@@ -235,19 +227,16 @@ class CdcDispatcherPoisonGapFailureTest {
         var props = CdcProperties.CdcDispatcherProperties.defaults();
         props.setPoisonPolicy(PoisonPolicy.STOP);
 
-        var dispatcher = new CdcDispatcher(
-                inbox,
-                uowFactory,
-                gapHandler,
-                plugin,
-                Optional.empty(),
-                events -> { /* no-op */ },
-                SLOT,
-                props,
-                CdcProperties.CdcDeliveryMode.INBOX,
-                ignoreAvailability(),
-                Optional.empty()
-        );
+        var dispatcher = new CdcDispatcher(CdcDispatcherDependencies.builder()
+                                                                    .setInbox(inbox)
+                                                                    .setUnitOfWorkFactory(uowFactory)
+                                                                    .setEventStreamGapHandler(gapHandler)
+                                                                    .setLogicalDecodingPlugin(plugin)
+                                                                    .setOnEvents((events -> { }))
+                                                                    .setAvailability(ignoreAvailability())
+                                                                    .setMeterRegistry(Optional.empty())
+                                                                    .build(),
+                                           new CdcDispatcherSettings(SLOT, props, CdcProperties.CdcDeliveryMode.INBOX));
 
         dispatcher.start();
 
@@ -286,19 +275,16 @@ class CdcDispatcherPoisonGapFailureTest {
         when(plugin.decode(any(byte[].class))).thenReturn(decoded);
 
         // ...but publishing it to the bus loses a concurrent-emission race (transient).
-        var dispatcher = new CdcDispatcher(
-                inbox,
-                uowFactory,
-                gapHandler,
-                plugin,
-                Optional.empty(),
-                events -> { throw new CdcNonSerializedEmitException("simulated non-serialized race"); },
-                SLOT,
-                CdcProperties.CdcDispatcherProperties.defaults(),
-                CdcProperties.CdcDeliveryMode.INBOX,
-                ignoreAvailability(),
-                Optional.empty()
-        );
+        var dispatcher = new CdcDispatcher(CdcDispatcherDependencies.builder()
+                                                                    .setInbox(inbox)
+                                                                    .setUnitOfWorkFactory(uowFactory)
+                                                                    .setEventStreamGapHandler(gapHandler)
+                                                                    .setLogicalDecodingPlugin(plugin)
+                                                                    .setOnEvents((events -> { throw new CdcNonSerializedEmitException("simulated non-serialized race"); }))
+                                                                    .setAvailability(ignoreAvailability())
+                                                                    .setMeterRegistry(Optional.empty())
+                                                                    .build(),
+                                           new CdcDispatcherSettings(SLOT, CdcProperties.CdcDispatcherProperties.defaults(), CdcProperties.CdcDeliveryMode.INBOX));
 
         dispatcher.tick();
 

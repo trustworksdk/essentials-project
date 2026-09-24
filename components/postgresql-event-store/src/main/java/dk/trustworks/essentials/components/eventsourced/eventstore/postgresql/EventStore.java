@@ -416,7 +416,7 @@ public interface EventStore {
                                                          List<?> eventsToAppend) {
         return appendToStream(new AppendToStream<>(aggregateType,
                                                    aggregateId,
-                                                   appendEventsAfterEventOrder,
+                                                   requireNonNull(appendEventsAfterEventOrder, "No appendEventsAfterEventOrder option provided").orElse(null),
                                                    eventsToAppend));
     }
 
@@ -456,10 +456,12 @@ public interface EventStore {
                                                          ID aggregateId,
                                                          Optional<Long> appendEventsAfterEventOrder,
                                                          Object... eventsToAppend) {
+        // List.of(...) matters: passed as-is, the array and the Optional before it would both bind to the
+        // AppendToStream(AggregateType, ID, Object...) constructor and be appended as two "events"
         return appendToStream(new AppendToStream<>(aggregateType,
                                                    aggregateId,
-                                                   appendEventsAfterEventOrder,
-                                                   eventsToAppend));
+                                                   requireNonNull(appendEventsAfterEventOrder, "No appendEventsAfterEventOrder option provided").orElse(null),
+                                                   List.of(eventsToAppend)));
     }
 
     /**
@@ -707,7 +709,7 @@ public interface EventStore {
                                                                 ID aggregateId,
                                                                 LongRange eventOrderRange,
                                                                 Optional<Tenant> tenant) {
-        return fetchStream(new FetchStream<>(aggregateType, aggregateId, eventOrderRange, tenant));
+        return fetchStream(new FetchStream<>(aggregateType, aggregateId, eventOrderRange, requireNonNull(tenant, "No tenant option provided").orElse(null)));
     }
 
     /**
@@ -828,7 +830,8 @@ public interface EventStore {
                                                            LongRange globalEventOrderRange,
                                                            List<GlobalEventOrder> includeAdditionalGlobalOrders,
                                                            Optional<Tenant> onlyIncludeEventIfItBelongsToTenant) {
-        return loadEventsByGlobalOrder(new LoadEventsByGlobalOrder(aggregateType, globalEventOrderRange, includeAdditionalGlobalOrders, onlyIncludeEventIfItBelongsToTenant));
+        return loadEventsByGlobalOrder(new LoadEventsByGlobalOrder(aggregateType, globalEventOrderRange, includeAdditionalGlobalOrders,
+                                                                    requireNonNull(onlyIncludeEventIfItBelongsToTenant, "No onlyIncludeEventIfItBelongsToTenant option provided").orElse(null)));
     }
 
     /**

@@ -23,14 +23,12 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import reactor.core.Disposable;
 
-import java.time.Duration;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.concurrent.atomic.AtomicLong;
 
 import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 
@@ -111,15 +109,13 @@ public final class CdcEffectivenessMonitor implements Lifecycle {
      * @param deliveryMode the CDC delivery mode — only {@link CdcDeliveryMode#INBOX} is monitored
      * @param config       the health-check thresholds
      * @param slotName     the replication slot name
-     * @deprecated Use {@link #builder()}. This constructor declares an {@code Optional} parameter and/or more than five parameters; the builder names every argument and accepts both plain values and {@code Optional}s. It is unchanged and remains the implementation the builder delegates to.
      */
-    @Deprecated(forRemoval = true, since = "0.40.x")
-    public CdcEffectivenessMonitor(WalReplicationTailer tailer,
-                                   CdcDispatcher dispatcher,
-                                   CdcAvailability availability,
-                                   CdcDeliveryMode deliveryMode,
-                                   CdcHealthCheckProperties config,
-                                   String slotName) {
+    CdcEffectivenessMonitor(WalReplicationTailer tailer,
+                            CdcDispatcher dispatcher,
+                            CdcAvailability availability,
+                            CdcDeliveryMode deliveryMode,
+                            CdcHealthCheckProperties config,
+                            String slotName) {
         this.tailer = requireNonNull(tailer, "tailer cannot be null");
         this.dispatcher = requireNonNull(dispatcher, "dispatcher cannot be null");
         this.availability = requireNonNull(availability, "availability cannot be null");

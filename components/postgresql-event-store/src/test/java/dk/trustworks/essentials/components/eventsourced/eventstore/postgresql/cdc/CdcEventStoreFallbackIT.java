@@ -62,7 +62,7 @@ class CdcEventStoreFallbackIT extends AbstractLogicalReplicationPostgresIT {
 
         persistenceStrategy.addAggregateEventStreamConfiguration(ORDERS, OrderId.class);
         eventStore = new PostgresqlEventStore<>(unitOfWorkFactory, persistenceStrategy);
-        gapHandler = new PostgresqlEventStreamGapHandler<>(eventStore, unitOfWorkFactory);
+        gapHandler = new PostgresqlEventStreamGapHandler<>(unitOfWorkFactory);
     }
 
     @Test

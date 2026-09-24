@@ -84,7 +84,7 @@ import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.Po
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.persistence.table_per_aggregate_type.SeparateTablePerAggregateEventStreamConfiguration;
 
 ConfigurableEventStore<SeparateTablePerAggregateEventStreamConfiguration> eventStore =
-    new PostgresqlEventStore<>(...);
+    PostgresqlEventStore.<SeparateTablePerAggregateEventStreamConfiguration>builder()...build();
 eventStore.addAggregateEventStreamConfiguration(AggregateType.of("Orders"), OrderId.class);
 eventStore.addEventStoreInterceptor(new MyInterceptor());
 
@@ -131,13 +131,12 @@ var persistenceStrategy = new SeparateTablePerAggregateTypePersistenceStrategy(
 );
 
 // 3. EventStore
-var eventStore = new PostgresqlEventStore<>(
-    unitOfWorkFactory,
-    persistenceStrategy,
-    Optional.empty(),  // Optional EventBus for in-tx publishing
-    es -> new PostgresqlEventStreamGapHandler<>(es, unitOfWorkFactory),
-    new EventStoreSubscriptionObserver.NoOpEventStoreSubscriptionObserver()
-);
+var eventStore = PostgresqlEventStore.<SeparateTablePerAggregateEventStreamConfiguration>builder()
+                                     .setUnitOfWorkFactory(unitOfWorkFactory)
+                                     .setPersistenceStrategy(persistenceStrategy)
+                                     // .setEventStoreEventBus(eventBus) - optional, for in-tx publishing
+                                     .setEventStreamGapHandlerFactory(es -> new PostgresqlEventStreamGapHandler<>(unitOfWorkFactory))
+                                     .build();
 
 // 4. Register aggregate types - REQUIRED before persisting events
 eventStore.addAggregateEventStreamConfiguration(
@@ -753,13 +752,16 @@ Later TX1 commits → resolves: 1, 2, 3
 ```java
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.gap.*;
 
-// Enable (default)
-var eventStore = new PostgresqlEventStore<>(...,
-    es -> new PostgresqlEventStreamGapHandler<>(es, unitOfWorkFactory), ...);
+// Enable - PostgresqlEventStore.withGapHandling(unitOfWorkFactory, persistenceStrategy) is the shorthand
+var eventStore = PostgresqlEventStore.<SeparateTablePerAggregateEventStreamConfiguration>builder()
+                                     ...
+                                     .setEventStreamGapHandlerFactory(es -> new PostgresqlEventStreamGapHandler<>(unitOfWorkFactory))
+                                     .build();
 
-// Disable
-var eventStore = new PostgresqlEventStore<>(...,
-    es -> new NoEventStreamGapHandler<>(), ...);
+// Disable - NoEventStreamGapHandler is the builder's default, so just leave the factory unset
+var eventStore = PostgresqlEventStore.<SeparateTablePerAggregateEventStreamConfiguration>builder()
+                                     ...
+                                     .build();
 
 // Reset permanent gaps
 eventStreamGapHandler.resetPermanentGapsFor(AggregateType.of("Orders"));
@@ -912,7 +914,10 @@ Optional shared event bus. If not provided, default instance created.
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.bus.EventStoreEventBus;
 
 var eventBus = new EventStoreEventBus(unitOfWorkFactory);
-var eventStore = new PostgresqlEventStore<>(..., Optional.of(eventBus), ...);
+var eventStore = PostgresqlEventStore.<SeparateTablePerAggregateEventStreamConfiguration>builder()
+                                     ...
+                                     .setEventStoreEventBus(eventBus)
+                                     .build();
 
 // Sync subscribers (BEFORE commit)
 eventBus.addSyncSubscriber(events ->
@@ -983,26 +988,31 @@ Observability for `EventStore` operations and subscription lifecycle.
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.observability.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.observability.micrometer.*;
 
-// No observability (default)
-var eventStore = new PostgresqlEventStore<>(...,
-    new EventStoreSubscriptionObserver.NoOpEventStoreSubscriptionObserver());
+// No observability: NoOpEventStoreSubscriptionObserver is the builder's default
+var eventStore = PostgresqlEventStore.<SeparateTablePerAggregateEventStreamConfiguration>builder()...build();
 
 // With Micrometer
 var observer = new MeasurementEventStoreSubscriptionObserver(
-    Optional.of(meterRegistry),
-    true,  // Log slow operations
-    LogThresholds.defaultThresholds(),
-    null   // Optional observation registry
-);
-var eventStore = new PostgresqlEventStore<>(..., observer);
+    MeasurementTaker.builder()
+                    .setLoggingRecorder(MeasurementEventStoreSubscriptionObserver.class,
+                                        LogThresholds.defaultThresholds())   // Log slow operations
+                    .setMeterRegistry(meterRegistry)
+                    .build(),
+    null);   // Optional module tag
+var eventStore = PostgresqlEventStore.<SeparateTablePerAggregateEventStreamConfiguration>builder()
+                                     ...
+                                     .setEventStoreSubscriptionObserver(observer)
+                                     .build();
 ```
 
 The SPI has a single slot, so collecting statistics **composes** with the metrics observer rather than replacing it:
 
 ```java
 var statisticsRegistry = new SubscriptionStatisticsRegistry();      // read by EventStoreApi
-var eventStore = new PostgresqlEventStore<>(...,
-    new StatisticsCollectingEventStoreSubscriptionObserver(observer, statisticsRegistry));
+var eventStore = PostgresqlEventStore.<SeparateTablePerAggregateEventStreamConfiguration>builder()
+                                     ...
+                                     .setEventStoreSubscriptionObserver(new StatisticsCollectingEventStoreSubscriptionObserver(observer, statisticsRegistry))
+                                     .build();
 ```
 
 The Spring Boot starter wires exactly that by default (`essentials.eventstore.subscription-manager.statistics.enabled=true`, `...max-tracked-subscriptions=1000`). Defining your own `EventStoreSubscriptionObserver` bean replaces both - wrap it the same way to keep the statistics.

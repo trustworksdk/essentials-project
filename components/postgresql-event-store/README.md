@@ -212,7 +212,7 @@ The `PostgresqlEventStore` class implements both interfaces, allowing it to be c
 ```java
 // Configuration phase - use ConfigurableEventStore
 ConfigurableEventStore<SeparateTablePerAggregateEventStreamConfiguration> eventStore =
-    new PostgresqlEventStore<>(...);
+    PostgresqlEventStore.<SeparateTablePerAggregateEventStreamConfiguration>builder()...build();
 
 // Register aggregate types
 eventStore.addAggregateEventStreamConfiguration(AggregateType.of("Orders"), OrderId.class);
@@ -560,13 +560,12 @@ var persistenceStrategy = new SeparateTablePerAggregateTypePersistenceStrategy(
 );
 
 // Create EventStore
-var eventStore = new PostgresqlEventStore<>(
-    unitOfWorkFactory,
-    persistenceStrategy,
-    Optional.empty(),  // Optional: EventBus for in-transaction event publishing
-    eventStore -> new PostgresqlEventStreamGapHandler<>(eventStore, unitOfWorkFactory),
-    new EventStoreSubscriptionObserver.NoOpEventStoreSubscriptionObserver()
-);
+var eventStore = PostgresqlEventStore.<SeparateTablePerAggregateEventStreamConfiguration>builder()
+                                     .setUnitOfWorkFactory(unitOfWorkFactory)
+                                     .setPersistenceStrategy(persistenceStrategy)
+                                     // Optional: .setEventStoreEventBus(eventBus) for in-transaction event publishing
+                                     .setEventStreamGapHandlerFactory(es -> new PostgresqlEventStreamGapHandler<>(unitOfWorkFactory))
+                                     .build();
 
 // Register aggregate types (this needs to happen before using the AggregateType for persistence)
 eventStore.addAggregateEventStreamConfiguration(
@@ -926,7 +925,10 @@ Subscribe to events **within** the appending transaction using `EventStoreEventB
 ```java
 // Configure EventStore with EventBus
 var eventBus = new EventStoreEventBus(unitOfWorkFactory);
-var eventStore = new PostgresqlEventStore<>(..., Optional.of(eventBus), ...);
+var eventStore = PostgresqlEventStore.<SeparateTablePerAggregateEventStreamConfiguration>builder()
+                                     ...
+                                     .setEventStoreEventBus(eventBus)
+                                     .build();
 
 // Synchronous: runs in SAME transaction (before commit)
 eventBus.addSyncSubscriber(PersistedEvent persistedEvent -> {
@@ -1887,12 +1889,11 @@ The gap handler detects this by tracking how long a gap persists. If a gap excee
 ### Configuration
 
 ```java
-var eventStore = new PostgresqlEventStore<>(
-    unitOfWorkFactory,
-    persistenceStrategy,
-    Optional.empty(),
-    eventStore -> new PostgresqlEventStreamGapHandler<>(eventStore, unitOfWorkFactory)
-);
+var eventStore = PostgresqlEventStore.<SeparateTablePerAggregateEventStreamConfiguration>builder()
+                                     .setUnitOfWorkFactory(unitOfWorkFactory)
+                                     .setPersistenceStrategy(persistenceStrategy)
+                                     .setEventStreamGapHandlerFactory(es -> new PostgresqlEventStreamGapHandler<>(unitOfWorkFactory))
+                                     .build();
 ```
 
 ### Gap Types
@@ -1914,12 +1915,11 @@ var eventStore = new PostgresqlEventStore<>(
 ### Disabling Gap Handling
 
 ```java
-var eventStore = new PostgresqlEventStore<>(
-    unitOfWorkFactory,
-    persistenceStrategy,
-    Optional.empty(),
-    eventStore -> new NoEventStreamGapHandler<>()  // No gap tracking
-);
+// NoEventStreamGapHandler - no gap tracking - is the builder's default
+var eventStore = PostgresqlEventStore.<SeparateTablePerAggregateEventStreamConfiguration>builder()
+                                     .setUnitOfWorkFactory(unitOfWorkFactory)
+                                     .setPersistenceStrategy(persistenceStrategy)
+                                     .build();
 ```
 
 ---
@@ -2087,30 +2087,28 @@ The observer tracks:
 ### Configuration
 
 ```java
-// No observability (default)
-var eventStore = new PostgresqlEventStore<>(
-    unitOfWorkFactory,
-    persistenceStrategy,
-    Optional.empty(),
-    es -> new PostgresqlEventStreamGapHandler<>(es, unitOfWorkFactory),
-    new EventStoreSubscriptionObserver.NoOpEventStoreSubscriptionObserver()
-);
+// No observability (the builder's default is NoOpEventStoreSubscriptionObserver)
+var eventStore = PostgresqlEventStore.<SeparateTablePerAggregateEventStreamConfiguration>builder()
+                                     .setUnitOfWorkFactory(unitOfWorkFactory)
+                                     .setPersistenceStrategy(persistenceStrategy)
+                                     .setEventStreamGapHandlerFactory(es -> new PostgresqlEventStreamGapHandler<>(unitOfWorkFactory))
+                                     .build();
 
 // With Micrometer metrics
 var observer = new MeasurementEventStoreSubscriptionObserver(
-    Optional.of(meterRegistry),  // MeterRegistry for metrics
-    true,                         // Log slow operations
-    LogThresholds.defaultThresholds(),
-    null                          // Optional: custom observation registry
-);
+    MeasurementTaker.builder()
+                    .setLoggingRecorder(MeasurementEventStoreSubscriptionObserver.class,
+                                        LogThresholds.defaultThresholds())   // Log slow operations
+                    .setMeterRegistry(meterRegistry)                         // MeterRegistry for metrics
+                    .build(),
+    null);                                                                   // Optional module tag
 
-var eventStore = new PostgresqlEventStore<>(
-    unitOfWorkFactory,
-    persistenceStrategy,
-    Optional.empty(),
-    es -> new PostgresqlEventStreamGapHandler<>(es, unitOfWorkFactory),
-    observer
-);
+var eventStore = PostgresqlEventStore.<SeparateTablePerAggregateEventStreamConfiguration>builder()
+                                     .setUnitOfWorkFactory(unitOfWorkFactory)
+                                     .setPersistenceStrategy(persistenceStrategy)
+                                     .setEventStreamGapHandlerFactory(es -> new PostgresqlEventStreamGapHandler<>(unitOfWorkFactory))
+                                     .setEventStoreSubscriptionObserver(observer)
+                                     .build();
 ```
 
 ### Custom Observer
@@ -2178,15 +2176,15 @@ Provides Micrometer-based metrics for EventStore and subscription operations:
 
 ```java
 var observer = new MeasurementEventStoreSubscriptionObserver(
-    Optional.of(meterRegistry),              // Micrometer registry
-    true,                                     // Enable slow operation logging
-    new LogThresholds(
-        Duration.ofMillis(100),              // Warn on slow event handling
-        Duration.ofMillis(500),              // Warn on slow polling
-        Duration.ofMillis(50)                // Warn on slow gap reconciliation
-    ),
-    observationRegistry                      // Optional: for distributed tracing
-);
+    MeasurementTaker.builder()
+                    .setLoggingRecorder(MeasurementEventStoreSubscriptionObserver.class,   // Enable slow operation logging
+                                        new LogThresholds(
+                                            Duration.ofMillis(100),   // Warn on slow event handling
+                                            Duration.ofMillis(500),   // Warn on slow polling
+                                            Duration.ofMillis(50)))   // Warn on slow gap reconciliation
+                    .setMeterRegistry(meterRegistry)                   // Micrometer registry
+                    .build(),
+    "OrderService");                                                   // Optional module tag, or null
 ```
 
 **Integration with monitoring systems:**
@@ -2424,18 +2422,18 @@ var factory = SeparateTablePerAggregateTypeEventStreamConfigurationFactory
 For complete control over all configuration options:
 
 ```java
-var factory = new SeparateTablePerAggregateTypeEventStreamConfigurationFactory(
-    aggregateType -> aggregateType + "_events",  // Table name resolver - ⚠️ See Security warning above
-    EventStreamTableColumnNames.defaultColumnNames(),
-    100,                                         // Query fetch size
-    jsonSerializer,
-    IdentifierColumnType.UUID,                   // Aggregate ID column type
-    IdentifierColumnType.UUID,                   // Event ID column type
-    IdentifierColumnType.UUID,                   // Correlation ID column type
-    JSONColumnType.JSONB,                        // Event JSON column type
-    JSONColumnType.JSONB,                        // Metadata JSON column type
-    new TenantSerializer.TenantIdSerializer()
-);
+var factory = SeparateTablePerAggregateTypeEventStreamConfigurationFactory.builder()
+    .setResolveEventStreamTableName(aggregateType -> aggregateType + "_events")  // ⚠️ See Security warning above
+    .setEventStreamTableColumnNames(EventStreamTableColumnNames.defaultColumnNames())
+    .setQueryFetchSize(100)
+    .setJsonSerializer(jsonSerializer)
+    .setAggregateIdColumnType(IdentifierColumnType.UUID)
+    .setEventIdColumnType(IdentifierColumnType.UUID)
+    .setCorrelationIdColumnType(IdentifierColumnType.UUID)
+    .setEventJsonColumnType(JSONColumnType.JSONB)
+    .setEventMetadataJsonColumnType(JSONColumnType.JSONB)
+    .setTenantSerializer(new TenantSerializer.TenantIdSerializer())
+    .build();
 ```
 
 #### Configuration Parameters

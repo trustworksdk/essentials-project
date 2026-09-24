@@ -64,18 +64,16 @@ public final class BuiltInClosingBooksPolicyEvaluator<AGGREGATE> {
      * @param meterRegistry      an optional meter registry for instrumentation and metrics; must not be null.
      * @param eventCountProvider a function that provides the event count for the given aggregate; must not be null.
      * @throws IllegalArgumentException if any required parameter is null.
-     * @deprecated Use {@link #builder()}. This constructor declares an {@code Optional} parameter and/or more than five parameters; the builder names every argument and accepts both plain values and {@code Optional}s. It is unchanged and remains the implementation the builder delegates to.
      */
-    @Deprecated(forRemoval = true, since = "0.40.x")
-    public BuiltInClosingBooksPolicyEvaluator(AggregateType aggregateType,
-                                              ClosingBooksDefaultPolicyType defaultPolicy,
-                                              long eventThreshold,
-                                              ClosingBooksTimeBoundary timeBoundary,
-                                              ZoneId zoneId,
-                                              Integer intervalDays,
-                                              Clock clock,
-                                              Optional<MeterRegistry> meterRegistry,
-                                              ToLongFunction<AGGREGATE> eventCountProvider) {
+    BuiltInClosingBooksPolicyEvaluator(AggregateType aggregateType,
+                                ClosingBooksDefaultPolicyType defaultPolicy,
+                                long eventThreshold,
+                                ClosingBooksTimeBoundary timeBoundary,
+                                ZoneId zoneId,
+                                Integer intervalDays,
+                                Clock clock,
+                                Optional<MeterRegistry> meterRegistry,
+                                ToLongFunction<AGGREGATE> eventCountProvider) {
         this(aggregateType,
              defaultPolicy,
              eventThreshold,
@@ -102,19 +100,17 @@ public final class BuiltInClosingBooksPolicyEvaluator<AGGREGATE> {
      * @param eventCountProvider        a function that provides the event count for the given aggregate; must not be null.
      * @param aggregateTypeWithPeriodId the class type representing aggregates with a closing books period identifier; must not be null.
      * @throws IllegalArgumentException if any required parameter is null.
-     * @deprecated Use {@link #builder()}. This constructor declares an {@code Optional} parameter and more than five parameters; the builder names every argument and accepts both plain values and {@code Optional}s. It is unchanged and remains the implementation the builder delegates to.
      */
-    @Deprecated(forRemoval = true, since = "0.40.x")
-    public <T extends HasClosingBooksPeriodId> BuiltInClosingBooksPolicyEvaluator(AggregateType aggregateType,
-                                                                                  ClosingBooksDefaultPolicyType defaultPolicy,
-                                                                                  long eventThreshold,
-                                                                                  ClosingBooksTimeBoundary timeBoundary,
-                                                                                  ZoneId zoneId,
-                                                                                  Integer intervalDays,
-                                                                                  Clock clock,
-                                                                                  Optional<MeterRegistry> meterRegistry,
-                                                                                  ToLongFunction<AGGREGATE> eventCountProvider,
-                                                                                  Class<T> aggregateTypeWithPeriodId) {
+    <T extends HasClosingBooksPeriodId> BuiltInClosingBooksPolicyEvaluator(AggregateType aggregateType,
+                                                                           ClosingBooksDefaultPolicyType defaultPolicy,
+                                                                           long eventThreshold,
+                                                                           ClosingBooksTimeBoundary timeBoundary,
+                                                                           ZoneId zoneId,
+                                                                           Integer intervalDays,
+                                                                           Clock clock,
+                                                                           Optional<MeterRegistry> meterRegistry,
+                                                                           ToLongFunction<AGGREGATE> eventCountProvider,
+                                                                           Class<T> aggregateTypeWithPeriodId) {
         this(aggregateType,
              defaultPolicy,
              eventThreshold,
@@ -143,10 +139,8 @@ public final class BuiltInClosingBooksPolicyEvaluator<AGGREGATE> {
      * @param currentPeriodIdProvider a function that provides the current period identifier for the given aggregate;
      *                                required when using a time-boundary closing books policy. May be null otherwise.
      * @throws IllegalArgumentException if any required parameter is null.
-     * @deprecated Use {@link #builder()}. This constructor declares an {@code Optional} parameter and/or more than five parameters; the builder names every argument and accepts both plain values and {@code Optional}s. It is unchanged and remains the implementation the builder delegates to.
      */
-    @Deprecated(forRemoval = true, since = "0.40.x")
-    public BuiltInClosingBooksPolicyEvaluator(AggregateType aggregateType,
+    BuiltInClosingBooksPolicyEvaluator(AggregateType aggregateType,
                                               ClosingBooksDefaultPolicyType defaultPolicy,
                                               long eventThreshold,
                                               ClosingBooksTimeBoundary timeBoundary,
@@ -402,7 +396,6 @@ public final class BuiltInClosingBooksPolicyEvaluator<AGGREGATE> {
         /**
          * @return the new {@link BuiltInClosingBooksPolicyEvaluator}
          */
-        @SuppressWarnings("removal")
         public BuiltInClosingBooksPolicyEvaluator<AGGREGATE> build() {
             return new BuiltInClosingBooksPolicyEvaluator<>(aggregateType,
                                                                      defaultPolicy,

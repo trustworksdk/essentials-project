@@ -83,6 +83,6 @@ public final class LoadEventsByGlobalOrderBuilder {
      * @return the {@link LoadEventsByGlobalOrder} instance
      */
     public LoadEventsByGlobalOrder build() {
-        return new LoadEventsByGlobalOrder(aggregateType, globalEventOrderRange, includeAdditionalGlobalOrders, onlyIncludeEventIfItBelongsToTenant);
+        return new LoadEventsByGlobalOrder(aggregateType, globalEventOrderRange, includeAdditionalGlobalOrders, onlyIncludeEventIfItBelongsToTenant.orElse(null));
     }
 }

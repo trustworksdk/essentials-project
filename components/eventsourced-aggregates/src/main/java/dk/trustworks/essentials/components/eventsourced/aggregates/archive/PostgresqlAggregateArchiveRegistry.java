@@ -51,12 +51,8 @@ public class PostgresqlAggregateArchiveRegistry implements AggregateArchiveRegis
         this(unitOfWorkFactory, Optional.empty());
     }
 
-    /**
-     * @deprecated Use {@link #builder()}. This constructor declares an {@code Optional} parameter and/or more than five parameters; the builder names every argument and accepts both plain values and {@code Optional}s. It is unchanged and remains the implementation the builder delegates to.
-     */
-    @Deprecated(forRemoval = true, since = "0.40.x")
-    public PostgresqlAggregateArchiveRegistry(HandleAwareUnitOfWorkFactory<? extends HandleAwareUnitOfWork> unitOfWorkFactory,
-                                              Optional<String> tableName) {
+    PostgresqlAggregateArchiveRegistry(HandleAwareUnitOfWorkFactory<? extends HandleAwareUnitOfWork> unitOfWorkFactory,
+                                       Optional<String> tableName) {
         this.unitOfWorkFactory = requireNonNull(unitOfWorkFactory, "No unitOfWorkFactory provided");
         this.tableName = requireNonNull(tableName, "No tableName provided").orElse(DEFAULT_TABLE_NAME).toLowerCase();
         this.archivedTsIndexName = this.tableName + "_aggregate_type_archived_ts_idx";
@@ -322,7 +318,6 @@ public class PostgresqlAggregateArchiveRegistry implements AggregateArchiveRegis
         /**
          * @return the new {@link PostgresqlAggregateArchiveRegistry}
          */
-        @SuppressWarnings("removal")
         public PostgresqlAggregateArchiveRegistry build() {
             return new PostgresqlAggregateArchiveRegistry(unitOfWorkFactory,
                                                           Optional.ofNullable(tableName));

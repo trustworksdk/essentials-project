@@ -17,9 +17,7 @@
 package dk.trustworks.essentials.components.eventsourced.aggregates.stateful;
 
 import dk.trustworks.essentials.components.foundation.json.EssentialsObjectMappers;
-import com.fasterxml.jackson.annotation.JsonAutoDetect;
 import tools.jackson.databind.*;
-import tools.jackson.databind.json.JsonMapper;
 import dk.trustworks.essentials.components.eventsourced.aggregates.*;
 import dk.trustworks.essentials.components.eventsourced.aggregates.modern.*;
 import dk.trustworks.essentials.components.eventsourced.aggregates.modern.Order;
@@ -88,10 +86,12 @@ class StatefulAggregateRepositoryIT {
                                                                        aggregateEventStreamConfigurationFactory.jsonSerializer,
                                                                        AddNewAggregateSnapshotStrategy.updateWhenBehindByNumberOfEvents(2),
                                                                        AggregateSnapshotDeletionStrategy.keepALimitedNumberOfHistoricSnapshots(3));
-        snapshotStore = new PostgresqlAggregateSnapshotStore(eventStore,
-                                                             unitOfWorkFactory,
-                                                             Optional.empty(),
-                                                             aggregateEventStreamConfigurationFactory.jsonSerializer);
+        snapshotStore = PostgresqlAggregateSnapshotStore.builder()
+                                                        .setEventStore(eventStore)
+                                                        .setUnitOfWorkFactory(unitOfWorkFactory)
+                                                        .setJsonSerializer(aggregateEventStreamConfigurationFactory.jsonSerializer)
+                                                        .setMeterRegistry(Optional.empty())
+                                                        .build();
         snapshotRepositorySpy = Mockito.spy(snapshotRepository);
         ordersRepository = StatefulAggregateRepository.from(eventStore,
                                                             ORDERS,

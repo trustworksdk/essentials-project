@@ -51,7 +51,9 @@ public class AggregateArchiveApiConfiguration {
     @Bean
     @ConditionalOnMissingBean
     public AggregateArchiveRegistry aggregateArchiveRegistry(HandleAwareUnitOfWorkFactory<? extends HandleAwareUnitOfWork> unitOfWorkFactory) {
-        return new PostgresqlAggregateArchiveRegistry(unitOfWorkFactory, Optional.empty());
+        return PostgresqlAggregateArchiveRegistry.builder()
+                                                 .setUnitOfWorkFactory(unitOfWorkFactory)
+                                                 .build();
     }
 
     @Bean
@@ -107,12 +109,14 @@ public class AggregateArchiveApiConfiguration {
                                                                    AggregateArchiveExporter aggregateArchiveExporter,
                                                                    AggregateArchiveDestination aggregateArchiveDestination,
                                                                    Optional<MeterRegistry> meterRegistryOptional) {
-        return new DefaultAggregateGenerationArchiver(aggregateArchiveRegistry,
-                                                      generationAccessProvider,
-                                                      eventStore,
-                                                      unitOfWorkFactory,
-                                                      aggregateArchiveExporter,
-                                                      aggregateArchiveDestination,
-                                                      meterRegistryOptional);
+        return DefaultAggregateGenerationArchiver.builder()
+                                                 .setArchiveRegistry(aggregateArchiveRegistry)
+                                                 .setGenerationAccessProvider(generationAccessProvider)
+                                                 .setEventStore(eventStore)
+                                                 .setUnitOfWorkFactory(unitOfWorkFactory)
+                                                 .setArchiveExporter(aggregateArchiveExporter)
+                                                 .setArchiveDestination(aggregateArchiveDestination)
+                                                 .setMeterRegistry(meterRegistryOptional)
+                                                 .build();
     }
 }

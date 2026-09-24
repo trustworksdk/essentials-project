@@ -754,9 +754,10 @@ var consumer = durableQueues.consumeFromQueue(
 // Add interceptors via constructor
 var handler = new PatternMatchingQueuedMessageHandler(List.of(
     new RecordExecutionTimeMessageHandlerInterceptor(
-        Optional.of(meterRegistry),
-        true,
-        LogThresholds.defaultThresholds(),
+        MeasurementTaker.builder()
+                        .setLoggingRecorder(RecordExecutionTimeMessageHandlerInterceptor.class, LogThresholds.defaultThresholds())
+                        .setMeterRegistry(meterRegistry)
+                        .build(),
         "OrderService")
 )) {
     @MessageHandler

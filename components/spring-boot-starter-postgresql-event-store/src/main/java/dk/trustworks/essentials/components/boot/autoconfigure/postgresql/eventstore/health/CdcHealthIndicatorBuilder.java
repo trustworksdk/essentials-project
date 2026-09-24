@@ -102,7 +102,6 @@ public final class CdcHealthIndicatorBuilder {
      *
      * @return the indicator
      */
-    @SuppressWarnings("removal")
     public CdcHealthIndicator build() {
         return new CdcHealthIndicator(requireNonNull(availability, "availability cannot be null"),
                                       Optional.ofNullable(tailer),

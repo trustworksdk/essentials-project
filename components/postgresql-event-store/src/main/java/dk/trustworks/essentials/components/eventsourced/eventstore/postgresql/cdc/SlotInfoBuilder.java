@@ -184,7 +184,6 @@ public final class SlotInfoBuilder {
      *
      * @return the slot info
      */
-    @SuppressWarnings("removal")
     public SlotInfo build() {
         return new SlotInfo(slotName,
                             slotType,

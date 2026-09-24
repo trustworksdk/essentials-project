@@ -45,13 +45,11 @@ public class CdcHealthIndicator implements HealthIndicator {
      * @param tailer       the WAL replication tailer, when one is configured
      * @param dispatcher   the CDC dispatcher, when INBOX delivery is configured
      * @param properties   the event-store properties, read for the configured {@link CdcMode}
-     * @deprecated Use {@link #builder()}. This constructor declares an {@code Optional} parameter and/or more than five parameters; the builder names every argument and accepts both plain values and {@code Optional}s. It is unchanged and remains the implementation the builder delegates to.
      */
-    @Deprecated(forRemoval = true, since = "0.40.x")
-    public CdcHealthIndicator(CdcAvailability availability,
-                              Optional<WalReplicationTailer> tailer,
-                              Optional<CdcDispatcher> dispatcher,
-                              EssentialsEventStoreProperties properties) {
+    CdcHealthIndicator(CdcAvailability availability,
+                       Optional<WalReplicationTailer> tailer,
+                       Optional<CdcDispatcher> dispatcher,
+                       EssentialsEventStoreProperties properties) {
         this.availability = availability;
         this.tailer = tailer;
         this.dispatcher = dispatcher;

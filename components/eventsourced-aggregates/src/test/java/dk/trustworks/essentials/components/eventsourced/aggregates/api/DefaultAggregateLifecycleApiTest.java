@@ -55,16 +55,17 @@ class DefaultAggregateLifecycleApiTest {
                                                                                TestAggregate.class.getAnnotation(dk.trustworks.essentials.components.eventsourced.aggregates.closingbooks.AggregateClosingBooksPolicy.class)));
 
         var eventStore = mock(ConfigurableEventStore.class);
-        var eventStreamConfiguration = new AggregateEventStreamConfiguration(AggregateType.of("Orders"),
-                                                                            100,
-                                                                            mock(JSONEventSerializer.class),
-                                                                            new AggregateIdSerializer.StringIdSerializer(),
-                                                                            IdentifierColumnType.TEXT,
-                                                                            IdentifierColumnType.TEXT,
-                                                                            IdentifierColumnType.TEXT,
-                                                                            JSONColumnType.JSONB,
-                                                                            JSONColumnType.JSONB,
-                                                                            new TenantSerializer.NoSupportForMultiTenancySerializer());
+        var eventStreamConfiguration = AggregateEventStreamConfiguration.builder()
+                                                                        .setAggregateType(AggregateType.of("Orders"))
+                                                                        .setJsonSerializer(mock(JSONEventSerializer.class))
+                                                                        .setAggregateIdSerializer(new AggregateIdSerializer.StringIdSerializer())
+                                                                        .setAggregateIdColumnType(IdentifierColumnType.TEXT)
+                                                                        .setEventIdColumnType(IdentifierColumnType.TEXT)
+                                                                        .setCorrelationIdColumnType(IdentifierColumnType.TEXT)
+                                                                        .setEventJsonColumnType(JSONColumnType.JSONB)
+                                                                        .setEventMetadataJsonColumnType(JSONColumnType.JSONB)
+                                                                        .setTenantSerializer(new TenantSerializer.NoSupportForMultiTenancySerializer())
+                                                                        .build();
         when(eventStore.getAggregateEventStreamConfiguration(AggregateType.of("Orders"))).thenReturn(eventStreamConfiguration);
 
         var snapshotStore = mock(AggregateSnapshotStore.class);

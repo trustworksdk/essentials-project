@@ -62,16 +62,6 @@ public class DefaultWalMessageFilter implements WalMessageFilter {
     }
 
     /**
-     * @deprecated the serializer is no longer needed — pre-filtering uses its own streaming parser. Use
-     *             {@link #DefaultWalMessageFilter(Supplier)}.
-     */
-    @Deprecated(forRemoval = true)
-    public DefaultWalMessageFilter(JSONEventSerializer jsonSerializer,
-                                   Supplier<Collection<String>> aggregateEventStreamTableNamesSupplier) {
-        this(aggregateEventStreamTableNamesSupplier);
-    }
-
-    /**
      * Back-compat convenience for callers (typically tests) with a static table-name → aggregate
      * map. Wraps the keySet in a constant supplier — use the {@link Supplier} constructor when
      * runtime registrations matter.

@@ -154,15 +154,13 @@ public class PostgresqlAggregateSnapshotRepository implements AggregateSnapshotR
      *                                 vulnerabilities, compromising the security and integrity of the database.</b>
      * @param addNewSnapshotStrategy   the strategy determining when a new {@link AggregateSnapshot} will be stored
      * @param snapshotDeletionStrategy the strategy determining when an existing {@link AggregateSnapshot} will be deleted
-     * @deprecated Use {@link #builder()}. This constructor declares an {@code Optional} parameter and/or more than five parameters; the builder names every argument and accepts both plain values and {@code Optional}s. It is unchanged and remains the implementation the builder delegates to.
      */
-    @Deprecated(forRemoval = true, since = "0.40.x")
-    public PostgresqlAggregateSnapshotRepository(ConfigurableEventStore<? extends AggregateEventStreamConfiguration> eventStore,
-                                                 HandleAwareUnitOfWorkFactory<? extends HandleAwareUnitOfWork> unitOfWorkFactory,
-                                                 String snapshotTableName,
-                                                 JSONEventSerializer jsonSerializer,
-                                                 AddNewAggregateSnapshotStrategy addNewSnapshotStrategy,
-                                                 AggregateSnapshotDeletionStrategy snapshotDeletionStrategy) {
+    PostgresqlAggregateSnapshotRepository(ConfigurableEventStore<? extends AggregateEventStreamConfiguration> eventStore,
+                            HandleAwareUnitOfWorkFactory<? extends HandleAwareUnitOfWork> unitOfWorkFactory,
+                            String snapshotTableName,
+                            JSONEventSerializer jsonSerializer,
+                            AddNewAggregateSnapshotStrategy addNewSnapshotStrategy,
+                            AggregateSnapshotDeletionStrategy snapshotDeletionStrategy) {
         this(eventStore,
              unitOfWorkFactory,
              Optional.ofNullable(snapshotTableName),
@@ -221,10 +219,8 @@ public class PostgresqlAggregateSnapshotRepository implements AggregateSnapshotR
      * @param jsonSerializer           JSON serializer that will be used to serialize Aggregate instances
      * @param addNewSnapshotStrategy   the strategy determining when a new {@link AggregateSnapshot} will be stored
      * @param snapshotDeletionStrategy the strategy determining when an existing {@link AggregateSnapshot} will be deleted
-     * @deprecated Use {@link #builder()}. This constructor declares an {@code Optional} parameter and/or more than five parameters; the builder names every argument and accepts both plain values and {@code Optional}s. It is unchanged and remains the implementation the builder delegates to.
      */
-    @Deprecated(forRemoval = true, since = "0.40.x")
-    public PostgresqlAggregateSnapshotRepository(ConfigurableEventStore<? extends AggregateEventStreamConfiguration> eventStore,
+    PostgresqlAggregateSnapshotRepository(ConfigurableEventStore<? extends AggregateEventStreamConfiguration> eventStore,
                                                  HandleAwareUnitOfWorkFactory<? extends HandleAwareUnitOfWork> unitOfWorkFactory,
                                                  Optional<String> snapshotTableName,
                                                  JSONEventSerializer jsonSerializer,
@@ -240,11 +236,7 @@ public class PostgresqlAggregateSnapshotRepository implements AggregateSnapshotR
     }
 
     @SuppressWarnings("OptionalUsedAsFieldOrParameterType")
-    /**
-     * @deprecated Use {@link #builder()}. This constructor declares an {@code Optional} parameter and/or more than five parameters; the builder names every argument and accepts both plain values and {@code Optional}s. It is unchanged and remains the implementation the builder delegates to.
-     */
-    @Deprecated(forRemoval = true, since = "0.40.x")
-    public PostgresqlAggregateSnapshotRepository(ConfigurableEventStore<? extends AggregateEventStreamConfiguration> eventStore,
+    PostgresqlAggregateSnapshotRepository(ConfigurableEventStore<? extends AggregateEventStreamConfiguration> eventStore,
                                                  HandleAwareUnitOfWorkFactory<? extends HandleAwareUnitOfWork> unitOfWorkFactory,
                                                  Optional<String> snapshotTableName,
                                                  JSONEventSerializer jsonSerializer,
@@ -512,7 +504,6 @@ public class PostgresqlAggregateSnapshotRepository implements AggregateSnapshotR
         /**
          * @return the new {@link PostgresqlAggregateSnapshotRepository}
          */
-        @SuppressWarnings("removal")
         public PostgresqlAggregateSnapshotRepository build() {
             return new PostgresqlAggregateSnapshotRepository(eventStore,
                                                              unitOfWorkFactory,

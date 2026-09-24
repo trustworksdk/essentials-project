@@ -22,7 +22,6 @@ import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.cd
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.cdc.converter.WalGlobalOrdersExtractor;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.PersistedEvent;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.gap.EventStreamGapHandler;
-import dk.trustworks.essentials.components.foundation.postgresql.PostgresqlUtil;
 import dk.trustworks.essentials.components.foundation.transaction.jdbi.*;
 import dk.trustworks.essentials.shared.*;
 import io.micrometer.core.instrument.*;
@@ -166,48 +165,6 @@ public final class CdcDispatcher implements Lifecycle {
         this.meterRegistry = dependencies.meterRegistry();
         warnOnDispatcherKnobsIgnoredInDirectMode(cdcDispatcherProperties);
         initMetrics();
-    }
-
-    /**
-     * @param inbox                   the CDC inbox repository
-     * @param unitOfWorkFactory       the unit-of-work factory
-     * @param eventStreamGapHandler   the gap handler
-     * @param logicalDecodingPlugin   the decoding plugin
-     * @param cdcPoisonNotifier       optional poison-row notifier
-     * @param onEvents                where decoded batches are published
-     * @param slotName                the replication slot whose inbox is drained
-     * @param cdcDispatcherProperties poll/batch/timeout and policy settings
-     * @param deliveryMode            INBOX or DIRECT
-     * @param availability            the CDC availability tracker
-     * @param meterRegistry           optional Micrometer registry
-     * @deprecated Use {@link #CdcDispatcher(CdcDispatcherDependencies, CdcDispatcherSettings)}. Eleven positional
-     *         arguments — two of them {@code Optional} — are now two cohesive values. This constructor delegates and
-     *         behaves identically.
-     */
-    @Deprecated(forRemoval = true, since = "0.40.x")
-    @SuppressWarnings("OptionalUsedAsFieldOrParameterType")
-    public CdcDispatcher(CdcInboxRepository inbox,
-                         HandleAwareUnitOfWorkFactory<? extends HandleAwareUnitOfWork> unitOfWorkFactory,
-                         EventStreamGapHandler<?> eventStreamGapHandler,
-                         LogicalDecodingPlugin logicalDecodingPlugin,
-                         Optional<CdcPoisonNotifier> cdcPoisonNotifier,
-                         Consumer<List<PersistedEvent>> onEvents,
-                         String slotName,
-                         CdcDispatcherProperties cdcDispatcherProperties,
-                         CdcDeliveryMode deliveryMode,
-                         CdcAvailability availability,
-                         Optional<MeterRegistry> meterRegistry) {
-        this(CdcDispatcherDependencies.builder()
-                                      .setInbox(inbox)
-                                      .setUnitOfWorkFactory(unitOfWorkFactory)
-                                      .setEventStreamGapHandler(eventStreamGapHandler)
-                                      .setLogicalDecodingPlugin(logicalDecodingPlugin)
-                                      .setCdcPoisonNotifier(requireNonNull(cdcPoisonNotifier, "cdcPoisonNotifier cannot be null"))
-                                      .setOnEvents(onEvents)
-                                      .setAvailability(availability)
-                                      .setMeterRegistry(requireNonNull(meterRegistry, "meterRegistry cannot be null"))
-                                      .build(),
-             new CdcDispatcherSettings(slotName, cdcDispatcherProperties, deliveryMode));
     }
 
     /**

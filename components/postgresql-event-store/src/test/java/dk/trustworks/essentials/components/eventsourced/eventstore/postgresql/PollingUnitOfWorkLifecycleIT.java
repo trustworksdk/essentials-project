@@ -105,7 +105,7 @@ class PollingUnitOfWorkLifecycleIT {
         eventStore = new PostgresqlEventStore<>(unitOfWorkFactory,
                                                 persistenceStrategy,
                                                 Optional.empty(),
-                                                eventStore -> new PostgresqlEventStreamGapHandler<>(eventStore, unitOfWorkFactory),
+                                                eventStore -> new PostgresqlEventStreamGapHandler<>(unitOfWorkFactory),
                                                 observer);
         eventStore.addAggregateEventStreamConfiguration(ORDERS, AggregateIdSerializer.serializerFor(OrderId.class));
 

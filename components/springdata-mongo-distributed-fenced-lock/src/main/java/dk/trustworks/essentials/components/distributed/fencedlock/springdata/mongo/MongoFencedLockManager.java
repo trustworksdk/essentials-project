@@ -28,6 +28,8 @@ import org.springframework.data.mongodb.core.MongoTemplate;
 import java.time.*;
 import java.util.Optional;
 
+import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
+
 /**
  * Provides a {@link FencedLockManager} implementation using MongoDB and the SpringData MongoDB library to coordinate intra-service distributed locks<br>
  * <br>
@@ -106,26 +108,25 @@ public final class MongoFencedLockManager extends DBFencedLockManager<ClientSess
      *                                                                       with an exception where {@link IOExceptionUtil#isIOException(Throwable)} returns true -
      *                                                                       If releaseAcquiredLocksInCaseOfIOExceptionsDuringLockConfirmation is true, then {@link FencedLock}'s will be released locally,
      *                                                                       otherwise we will retain the {@link FencedLock}'s as locked.
-     * @deprecated Use {@link #builder()}. This constructor declares an {@code Optional} parameter and/or more than five parameters; the builder names every argument and accepts both plain values and {@code Optional}s. It is unchanged and remains the implementation the builder delegates to.
      */
     @SuppressWarnings("OptionalUsedAsFieldOrParameterType")
-    @Deprecated(forRemoval = true, since = "0.40.x")
-    public MongoFencedLockManager(MongoTemplate mongoTemplate,
-                                  UnitOfWorkFactory<? extends ClientSessionAwareUnitOfWork> unitOfWorkFactory,
-                                  Optional<String> lockManagerInstanceId,
-                                  String fencedLocksCollectionName,
-                                  Duration lockTimeOut,
-                                  Duration lockConfirmationInterval,
-                                  boolean releaseAcquiredLocksInCaseOfIOExceptionsDuringLockConfirmation) {
+    MongoFencedLockManager(MongoTemplate mongoTemplate,
+             UnitOfWorkFactory<? extends ClientSessionAwareUnitOfWork> unitOfWorkFactory,
+             Optional<String> lockManagerInstanceId,
+             String fencedLocksCollectionName,
+             Duration lockTimeOut,
+             Duration lockConfirmationInterval,
+             boolean releaseAcquiredLocksInCaseOfIOExceptionsDuringLockConfirmation) {
         super(new MongoFencedLockStorage(mongoTemplate,
                                          fencedLocksCollectionName),
               unitOfWorkFactory,
-              lockManagerInstanceId,
-              lockTimeOut,
-              lockConfirmationInterval,
-              releaseAcquiredLocksInCaseOfIOExceptionsDuringLockConfirmation,
-              Optional.empty()
-             );
+              FencedLockManagerSettings.builder()
+                                       .setLockManagerInstanceId(requireNonNull(lockManagerInstanceId, "No lockManagerInstanceId option provided"))
+                                       .setLockTimeOut(lockTimeOut)
+                                       .setLockConfirmationInterval(lockConfirmationInterval)
+                                       .setReleaseAcquiredLocksInCaseOfIOExceptionsDuringLockConfirmation(releaseAcquiredLocksInCaseOfIOExceptionsDuringLockConfirmation)
+                                       .build(),
+              null);
     }
 
     /**
@@ -157,11 +158,9 @@ public final class MongoFencedLockManager extends DBFencedLockManager<ClientSess
      *                                                                       If releaseAcquiredLocksInCaseOfIOExceptionsDuringLockConfirmation is true, then {@link FencedLock}'s will be released locally,
      *                                                                       otherwise we will retain the {@link FencedLock}'s as locked.
      * @param eventBus                                                       optional {@link LocalEventBus} where {@link FencedLockEvents} will be published
-     * @deprecated Use {@link #builder()}. This constructor declares an {@code Optional} parameter and/or more than five parameters; the builder names every argument and accepts both plain values and {@code Optional}s. It is unchanged and remains the implementation the builder delegates to.
      */
     @SuppressWarnings("OptionalUsedAsFieldOrParameterType")
-    @Deprecated(forRemoval = true, since = "0.40.x")
-    public MongoFencedLockManager(MongoTemplate mongoTemplate,
+    MongoFencedLockManager(MongoTemplate mongoTemplate,
                                   UnitOfWorkFactory<? extends ClientSessionAwareUnitOfWork> unitOfWorkFactory,
                                   Optional<String> lockManagerInstanceId,
                                   String fencedLocksCollectionName,
@@ -172,12 +171,13 @@ public final class MongoFencedLockManager extends DBFencedLockManager<ClientSess
         super(new MongoFencedLockStorage(mongoTemplate,
                                          fencedLocksCollectionName),
               unitOfWorkFactory,
-              lockManagerInstanceId,
-              lockTimeOut,
-              lockConfirmationInterval,
-              releaseAcquiredLocksInCaseOfIOExceptionsDuringLockConfirmation,
-              eventBus
-             );
+              FencedLockManagerSettings.builder()
+                                       .setLockManagerInstanceId(requireNonNull(lockManagerInstanceId, "No lockManagerInstanceId option provided"))
+                                       .setLockTimeOut(lockTimeOut)
+                                       .setLockConfirmationInterval(lockConfirmationInterval)
+                                       .setReleaseAcquiredLocksInCaseOfIOExceptionsDuringLockConfirmation(releaseAcquiredLocksInCaseOfIOExceptionsDuringLockConfirmation)
+                                       .build(),
+              requireNonNull(eventBus, "No eventBus option provided").orElse(null));
     }
 
     /**
@@ -193,11 +193,9 @@ public final class MongoFencedLockManager extends DBFencedLockManager<ClientSess
      *                                                                       If releaseAcquiredLocksInCaseOfIOExceptionsDuringLockConfirmation is true, then {@link FencedLock}'s will be released locally,
      *                                                                       otherwise we will retain the {@link FencedLock}'s as locked.
      * @param eventBus                                                       optional {@link LocalEventBus} where {@link FencedLockEvents} will be published
-     * @deprecated Use {@link #builder()}. This constructor declares an {@code Optional} parameter and/or more than five parameters; the builder names every argument and accepts both plain values and {@code Optional}s. It is unchanged and remains the implementation the builder delegates to.
      */
     @SuppressWarnings("OptionalUsedAsFieldOrParameterType")
-    @Deprecated(forRemoval = true, since = "0.40.x")
-    public MongoFencedLockManager(MongoTemplate mongoTemplate,
+    MongoFencedLockManager(MongoTemplate mongoTemplate,
                                   UnitOfWorkFactory<? extends ClientSessionAwareUnitOfWork> unitOfWorkFactory,
                                   Optional<String> lockManagerInstanceId,
                                   Duration lockTimeOut,

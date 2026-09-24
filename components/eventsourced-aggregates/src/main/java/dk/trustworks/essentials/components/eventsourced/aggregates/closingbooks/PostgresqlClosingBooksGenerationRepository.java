@@ -88,11 +88,9 @@ public class PostgresqlClosingBooksGenerationRepository<ID> implements ClosingBo
      * @param tableName an optional name of the table to be used for storage; if not provided, a default table
      *                  name is used
      * @throws IllegalArgumentException if the {@code unitOfWorkFactory} parameter is null
-     * @deprecated Use {@link #builder()}. This constructor declares an {@code Optional} parameter and/or more than five parameters; the builder names every argument and accepts both plain values and {@code Optional}s. It is unchanged and remains the implementation the builder delegates to.
      */
-    @Deprecated(forRemoval = true, since = "0.40.x")
-    public PostgresqlClosingBooksGenerationRepository(HandleAwareUnitOfWorkFactory<? extends HandleAwareUnitOfWork> unitOfWorkFactory,
-                                                      Optional<String> tableName) {
+    PostgresqlClosingBooksGenerationRepository(HandleAwareUnitOfWorkFactory<? extends HandleAwareUnitOfWork> unitOfWorkFactory,
+                                        Optional<String> tableName) {
         this(unitOfWorkFactory,
              tableName,
              defaultLogicalAggregateIdSerializer());
@@ -109,10 +107,8 @@ public class PostgresqlClosingBooksGenerationRepository<ID> implements ClosingBo
      * @param logicalAggregateIdSerializer the serializer used for logical aggregate ID serialization and
      *                                      deserialization; must not be null
      * @throws IllegalArgumentException if any of the required parameters are null
-     * @deprecated Use {@link #builder()}. This constructor declares an {@code Optional} parameter and/or more than five parameters; the builder names every argument and accepts both plain values and {@code Optional}s. It is unchanged and remains the implementation the builder delegates to.
      */
-    @Deprecated(forRemoval = true, since = "0.40.x")
-    public PostgresqlClosingBooksGenerationRepository(HandleAwareUnitOfWorkFactory<? extends HandleAwareUnitOfWork> unitOfWorkFactory,
+    PostgresqlClosingBooksGenerationRepository(HandleAwareUnitOfWorkFactory<? extends HandleAwareUnitOfWork> unitOfWorkFactory,
                                                       Optional<String> tableName,
                                                       ClosingBooksIdSerializer<ID> logicalAggregateIdSerializer) {
         this.unitOfWorkFactory = requireNonNull(unitOfWorkFactory, "No unitOfWorkFactory provided");
@@ -515,7 +511,6 @@ public class PostgresqlClosingBooksGenerationRepository<ID> implements ClosingBo
         /**
          * @return the new {@link PostgresqlClosingBooksGenerationRepository}
          */
-        @SuppressWarnings("removal")
         public PostgresqlClosingBooksGenerationRepository<ID> build() {
             return new PostgresqlClosingBooksGenerationRepository<>(unitOfWorkFactory,
                                                                       Optional.ofNullable(tableName),

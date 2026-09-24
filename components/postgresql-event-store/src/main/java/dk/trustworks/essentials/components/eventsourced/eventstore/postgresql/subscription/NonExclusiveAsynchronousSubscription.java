@@ -18,7 +18,6 @@ package dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.s
 
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.*;
-import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.observability.EventStoreSubscriptionObserver;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.types.GlobalEventOrder;
 import dk.trustworks.essentials.components.foundation.types.*;
 import dk.trustworks.essentials.shared.time.StopWatch;
@@ -63,31 +62,6 @@ public class NonExclusiveAsynchronousSubscription extends AbstractEventStoreSubs
         this.onFirstSubscriptionSubscribeFromAndIncludingGlobalOrder = durableContext.resolveOnFirstSubscriptionGlobalOrder(context.aggregateType());
         this.eventHandler = requireNonNull(eventHandler, "No eventHandler provided");
         this.eventStoreSubscriptionManagerSettings = durableContext.eventStoreSubscriptionManagerSettings();
-    }
-
-    /**
-     * @deprecated Use {@link #NonExclusiveAsynchronousSubscription(EventStoreSubscriptionContext, DurableSubscriptionContext, PersistedEventHandler)}.
-     *         The shared arguments are now two context values. This constructor delegates and behaves identically.
-     */
-    @Deprecated(forRemoval = true, since = "0.40.x")
-    @SuppressWarnings("OptionalUsedAsFieldOrParameterType")
-    public NonExclusiveAsynchronousSubscription(EventStore eventStore,
-                                                DurableSubscriptionRepository durableSubscriptionRepository,
-                                                AggregateType aggregateType,
-                                                SubscriberId subscriberId,
-                                                GlobalEventOrder onFirstSubscriptionSubscribeFromAndIncludingGlobalOrder,
-                                                Optional<Tenant> onlyIncludeEventsForTenant,
-                                                PersistedEventHandler eventHandler,
-                                                EventStoreSubscriptionObserver eventStoreSubscriptionObserver,
-                                                EventStoreSubscriptionManagerSettings eventStoreSubscriptionManagerSettings,
-                                                Consumer<EventStoreSubscription> unsubscribeCallback,
-                                                Function<String, EventStorePollingOptimizer> eventStorePollingOptimizerFactory) {
-        super(eventStore, aggregateType, subscriberId, onlyIncludeEventsForTenant, eventStoreSubscriptionObserver, unsubscribeCallback, eventStorePollingOptimizerFactory);
-        this.durableSubscriptionRepository = requireNonNull(durableSubscriptionRepository, "No durableSubscriptionRepository provided");
-        this.onFirstSubscriptionSubscribeFromAndIncludingGlobalOrder = requireNonNull(onFirstSubscriptionSubscribeFromAndIncludingGlobalOrder,
-                "No onFirstSubscriptionSubscribeFromAndIncludingGlobalOrder provided");
-        this.eventHandler = requireNonNull(eventHandler, "No eventHandler provided");
-        this.eventStoreSubscriptionManagerSettings = requireNonNull(eventStoreSubscriptionManagerSettings, "No eventStoreSubscriptionManagerSettings provided");
     }
 
     @Override

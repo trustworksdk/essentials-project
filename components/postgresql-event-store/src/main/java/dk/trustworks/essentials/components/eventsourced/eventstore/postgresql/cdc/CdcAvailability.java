@@ -101,18 +101,6 @@ public final class CdcAvailability {
     }
 
     /**
-     * @param meterRegistry an Optional registry to publish the CDC availability gauge and counters on
-     * @deprecated Use {@link #CdcAvailability(MeterRegistry)}, passing {@code null} for "no metrics", or the no-arg
-     *         {@link #CdcAvailability()}. The {@code Optional} was unwrapped to a nullable field on the first line of
-     *         the body, so it never bought anything. This constructor delegates and behaves identically.
-     */
-    @Deprecated(forRemoval = true, since = "0.40.x")
-    @SuppressWarnings("OptionalUsedAsFieldOrParameterType")
-    public CdcAvailability(Optional<MeterRegistry> meterRegistry) {
-        this(requireNonNull(meterRegistry, "meterRegistry cannot be null").orElse(null));
-    }
-
-    /**
      * @param meterRegistry the registry to publish the CDC availability gauge and counters on, or {@code null} for no
      *                      metrics. Nullable rather than {@code Optional}: this class registers Micrometer
      *                      {@code Gauge}s and {@code Counter}s directly, which a {@code MeasurementTaker} — a timing

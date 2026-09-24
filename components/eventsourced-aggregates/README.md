@@ -1411,18 +1411,20 @@ threads, so a forgotten `stop()` cannot keep the JVM alive. In `SYNC` mode no ex
 tasks run on the calling thread.
 
 ```java
-var snapshotStore = new PostgresqlAggregateSnapshotStore(eventStore,
-                                                         unitOfWorkFactory,
-                                                         Optional.empty(),   // default snapshot table name
-                                                         jsonSerializer);
+var snapshotStore = PostgresqlAggregateSnapshotStore.builder()
+                                                    .setEventStore(eventStore)
+                                                    .setUnitOfWorkFactory(unitOfWorkFactory)
+                                                    .setJsonSerializer(jsonSerializer)   // default snapshot table name
+                                                    .build();
 
-var snapshotRepository = new AsyncAggregateSnapshotRepository(
-        snapshotStore,
-        jsonSerializer,
-        AddNewAggregateSnapshotStrategy.updateWhenBehindByNumberOfEvents(100),
-        AggregateSnapshotDeletionStrategy.keepALimitedNumberOfHistoricSnapshots(3),
-        AsyncAggregateSnapshotSettings.asynchronous(),   // or .synchronous()
-        unitOfWorkFactory);
+var snapshotRepository = AsyncAggregateSnapshotRepository.builder()
+                                                         .setSnapshotStore(snapshotStore)
+                                                         .setJsonSerializer(jsonSerializer)
+                                                         .setAddNewSnapshotStrategy(AddNewAggregateSnapshotStrategy.updateWhenBehindByNumberOfEvents(100))
+                                                         .setSnapshotDeletionStrategy(AggregateSnapshotDeletionStrategy.keepALimitedNumberOfHistoricSnapshots(3))
+                                                         .setSettings(AsyncAggregateSnapshotSettings.asynchronous())   // or .synchronous()
+                                                         .setUnitOfWorkFactory(unitOfWorkFactory)
+                                                         .build();
 
 snapshotRepository.start();
 ```

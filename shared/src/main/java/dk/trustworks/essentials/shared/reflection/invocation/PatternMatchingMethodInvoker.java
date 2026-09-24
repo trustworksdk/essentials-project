@@ -198,35 +198,6 @@ public final class PatternMatchingMethodInvoker<ARGUMENT_COMMON_ROOT_TYPE> {
         }
     }
 
-    /**
-     * @param invokeMethodsOn                 The object that contains the methods that we will perform pattern matching and invoke methods on
-     * @param methodPatternMatcher            The strategy that determines the methods that can be invoked as well as determine which type of argument the
-     *                                        given method supports and how the method later is going to be invoked
-     * @param invocationStrategy              When {@link #invoke(Object)} or {@link #invoke(Object, NoMatchingMethodsHandler)} is called this strategy determines which Methods, among all the methods that match the argument,
-     *                                        will be invoked
-     * @param defaultNoMatchingMethodsHandler default consumer that will be called if {@link #invoke(Object)} is called with an argument that doesn't match any methods
-     * @param invocationTracker               optional tracker notified of every dispatched method invocation
-     * @deprecated Use {@link #PatternMatchingMethodInvoker(Object, MethodPatternMatcher, InvocationStrategy, NoMatchingMethodsHandler, InvocationTracker)}
-     *         with {@link NoMatchingMethodsHandler#ignore()} / {@link InvocationTracker#noOp()} in place of the empty
-     *         {@code Optional}s, or {@link #builder()}. The two {@code Optional} parameters only ever selected those
-     *         two neutral defaults, so nothing is lost; this constructor delegates and behaves identically.
-     */
-    @Deprecated(forRemoval = true, since = "0.40.x")
-    @SuppressWarnings("OptionalUsedAsFieldOrParameterType")
-    public PatternMatchingMethodInvoker(Object invokeMethodsOn,
-                                        MethodPatternMatcher<ARGUMENT_COMMON_ROOT_TYPE> methodPatternMatcher,
-                                        InvocationStrategy invocationStrategy,
-                                        Optional<NoMatchingMethodsHandler> defaultNoMatchingMethodsHandler,
-                                        Optional<InvocationTracker> invocationTracker) {
-        this(invokeMethodsOn,
-             methodPatternMatcher,
-             invocationStrategy,
-             requireNonNull(defaultNoMatchingMethodsHandler, "No defaultNoMatchingMethodsHandler instance provided")
-                     .orElseGet(NoMatchingMethodsHandler::ignore),
-             requireNonNull(invocationTracker, "No invocationTracker instance provided")
-                     .orElseGet(InvocationTracker::noOp));
-    }
-
     private void resolveInvokableMethods() {
         var onClass = invokeMethodsOn.getClass();
         invokableMethods = Methods.methods(onClass)
@@ -245,7 +216,7 @@ public final class PatternMatchingMethodInvoker<ARGUMENT_COMMON_ROOT_TYPE> {
     /**
      * Invoke matching methods based on the <code>argument</code> on the {@link #invokeMethodsOn} based on
      * the {@link MethodPatternMatcher} and {@link InvocationStrategy} using the default <code>defaultNoMatchingMethodsHandler</code>
-     * defined in the {@link PatternMatchingMethodInvoker#PatternMatchingMethodInvoker(Object, MethodPatternMatcher, InvocationStrategy, Optional, Optional)}
+     * defined in the {@link PatternMatchingMethodInvoker#PatternMatchingMethodInvoker(Object, MethodPatternMatcher, InvocationStrategy, NoMatchingMethodsHandler, InvocationTracker)}
      *
      * @param argument The argument that will be forwarded to the {@link MethodPatternMatcher} for method invocation
      */

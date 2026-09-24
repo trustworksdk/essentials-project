@@ -193,34 +193,30 @@ public final class SeparateTablePerAggregateEventStreamConfiguration extends Agg
         return new SeparateTablePerAggregateEventStreamConfigurationBuilder();
     }
 
-    /**
-     * @deprecated Use {@link #builder()}. Twelve positional arguments — five of them consecutive column-type enums of
-     *         only two distinct types — cannot be checked by the compiler and cannot be read at the call site. This
-     *         constructor is unchanged and remains the implementation the builder delegates to.
-     */
-    @Deprecated(forRemoval = true, since = "0.40.x")
-    public SeparateTablePerAggregateEventStreamConfiguration(AggregateType aggregateType,
-                                                             String eventStreamTableName,
-                                                             EventStreamTableColumnNames eventStreamTableColumnNames,
-                                                             int queryFetchSize,
-                                                             JSONEventSerializer jsonSerializer,
-                                                             AggregateIdSerializer aggregateIdSerializer,
-                                                             IdentifierColumnType aggregateIdColumnType,
-                                                             IdentifierColumnType eventIdColumnType,
-                                                             IdentifierColumnType correlationIdColumnType,
-                                                             JSONColumnType eventJsonColumnType,
-                                                             JSONColumnType eventMetadataJsonColumnType,
-                                                             TenantSerializer<?> tenantSerializer) {
-        super(aggregateType,
-              queryFetchSize,
-              jsonSerializer,
-              aggregateIdSerializer,
-              aggregateIdColumnType,
-              eventIdColumnType,
-              correlationIdColumnType,
-              eventJsonColumnType,
-              eventMetadataJsonColumnType,
-              tenantSerializer);
+    SeparateTablePerAggregateEventStreamConfiguration(AggregateType aggregateType,
+                                                      String eventStreamTableName,
+                                                      EventStreamTableColumnNames eventStreamTableColumnNames,
+                                                      int queryFetchSize,
+                                                      JSONEventSerializer jsonSerializer,
+                                                      AggregateIdSerializer aggregateIdSerializer,
+                                                      IdentifierColumnType aggregateIdColumnType,
+                                                      IdentifierColumnType eventIdColumnType,
+                                                      IdentifierColumnType correlationIdColumnType,
+                                                      JSONColumnType eventJsonColumnType,
+                                                      JSONColumnType eventMetadataJsonColumnType,
+                                                      TenantSerializer<?> tenantSerializer) {
+        super(AggregateEventStreamConfiguration.builder()
+                                               .setAggregateType(aggregateType)
+                                               .setQueryFetchSize(queryFetchSize)
+                                               .setJsonSerializer(jsonSerializer)
+                                               .setAggregateIdSerializer(aggregateIdSerializer)
+                                               .setAggregateIdColumnType(aggregateIdColumnType)
+                                               .setEventIdColumnType(eventIdColumnType)
+                                               .setCorrelationIdColumnType(correlationIdColumnType)
+                                               .setEventJsonColumnType(eventJsonColumnType)
+                                               .setEventMetadataJsonColumnType(eventMetadataJsonColumnType)
+                                               .setTenantSerializer(tenantSerializer)
+                                               .build());
         this.eventStreamTableName = requireNonNull(eventStreamTableName, "No eventStreamTableName provided").toLowerCase();
         this.eventStreamTableColumnNames = requireNonNull(eventStreamTableColumnNames, "No eventStreamTableColumnNames provided");
 

@@ -488,6 +488,47 @@ dequeueing are separate transactions, acknowledging and retrying are their own, 
 
 ---
 
+## The 0.50 `forRemoval` members are removed everywhere else
+
+The queue modules were done above. Every other member 0.50 marked `@Deprecated(forRemoval = true)` is gone from the
+public API too — in `shared`, `reactive`, `foundation`, the fenced-lock modules, `postgresql-event-store`,
+`eventsourced-aggregates` and the Spring Boot starters. Each had a replacement named in its own `@deprecated` tag; the
+per-module before-and-after tables in [MIGRATION-NEXT_MAJOR.md](./MIGRATION-NEXT_MAJOR.md) list them all.
+
+Where a removed constructor was the one its builder delegated to, it survives as package-private — an implementation
+detail now, and the builder is the only public way in. Code that still calls a removed member no longer compiles.
+
+**What to do:** switch each call to the replacement in [MIGRATION-NEXT_MAJOR.md](./MIGRATION-NEXT_MAJOR.md). Three are
+not in its tables:
+
+| Removed | Replacement |
+|---|---|
+| `DefaultWalMessageFilter(JSONEventSerializer, Supplier)` | `DefaultWalMessageFilter(Supplier)` — the serializer was already unused |
+| `PostgresqlEventStreamGapHandler(PostgresqlEventStore, EventStoreUnitOfWorkFactory)` | `PostgresqlEventStreamGapHandler(EventStoreUnitOfWorkFactory)` |
+| `PostgresqlEventStreamGapHandler(PostgresqlEventStore, EventStoreUnitOfWorkFactory, Duration, …, …)` | `PostgresqlEventStreamGapHandler(EventStoreUnitOfWorkFactory, Duration, …, …)` — new in 0.60; the event store parameter was never used |
+
+**Subclassing `AggregateEventStreamConfiguration`** from another package: its ten-parameter constructor is
+package-private now. Build the base settings with `AggregateEventStreamConfiguration.builder()` and pass them to the new
+`protected AggregateEventStreamConfiguration(AggregateEventStreamConfiguration base)` constructor.
+
+### ⚠️ One removed constructor fails at runtime, not at compile time
+
+`AppendToStream` had an `(AggregateType, ID, Optional<Long>, List<?>)` constructor. A call written for it still
+compiles, against `AppendToStream(AggregateType, ID, Object...)`, which would append the `Optional` and the list as two
+events. That constructor now throws `IllegalArgumentException` for an event that is an `Optional`, a `Collection` or an
+array, naming the replacement. **Search for `new AppendToStream` with an `Optional` argument** and use
+`AppendToStream(AggregateType, ID, Long, List)` or `AppendToStream.builder()` instead. Every other removed signature
+fails to compile.
+
+### Fixed: `EventStore.appendToStream(…, Optional<Long>, Object...)` appended the wrong events
+
+The `appendToStream(AggregateType, ID, Optional<Long> appendEventsAfterEventOrder, Object... eventsToAppend)` default
+method hit the trap above for as long as it has existed (at least since 0.40): it appended the `Optional` and the event
+array as two events, instead of the events. It now appends the events it is given. Nothing in Essentials called it; if
+your code did, the affected streams hold those malformed events.
+
+---
+
 ## `types-springdata-jpa`: exact `numeric` converters for `Amount` and `Percentage` (opt-in)
 
 Nothing changes unless you opt in. It is listed here because opting in is a **database schema** change.
