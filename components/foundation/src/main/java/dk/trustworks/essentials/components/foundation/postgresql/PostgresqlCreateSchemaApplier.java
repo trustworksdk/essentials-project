@@ -15,6 +15,7 @@
  */
 package dk.trustworks.essentials.components.foundation.postgresql;
 
+import dk.trustworks.essentials.components.foundation.postgresql.PostgresqlSchemaHistory.ChangeKey;
 import dk.trustworks.essentials.components.foundation.schema.*;
 import dk.trustworks.essentials.components.foundation.transaction.jdbi.*;
 import dk.trustworks.essentials.shared.network.Network;
@@ -148,15 +149,7 @@ public final class PostgresqlCreateSchemaApplier implements SchemaApplier {
 
         transactions.inTransaction(handle -> {
             PostgresqlUtil.acquireBootstrapLock(handle);
-            handle.execute("CREATE TABLE IF NOT EXISTS " + schemaHistoryTableName + " (\n" +
-                                   "    module_id   TEXT        NOT NULL,\n" +
-                                   "    change_id   TEXT        NOT NULL,\n" +
-                                   "    object_name TEXT        NOT NULL,\n" +
-                                   "    checksum    TEXT        NOT NULL,\n" +
-                                   "    applied_ts  TIMESTAMPTZ NOT NULL,\n" +
-                                   "    applied_by  TEXT        NOT NULL,\n" +
-                                   "    PRIMARY KEY (module_id, change_id, object_name)\n" +
-                                   ")");
+            handle.execute(PostgresqlSchemaHistory.createTableStatement(schemaHistoryTableName));
         });
 
         var recorded = readLedger();
@@ -170,7 +163,7 @@ public final class PostgresqlCreateSchemaApplier implements SchemaApplier {
                 var executed = 0;
                 for (var change : changeSet.changes()) {
                     var checksum      = change.checksum();
-                    var recordedEntry = current.get(new ChangeKey(changeSet.moduleId(), change.changeId(), change.objectName()));
+                    var recordedEntry = current.get(ChangeKey.of(changeSet, change));
                     if (!change.repeatable() && recordedEntry != null) {
                         continue;
                     }
@@ -202,16 +195,7 @@ public final class PostgresqlCreateSchemaApplier implements SchemaApplier {
     }
 
     private Map<ChangeKey, String> readLedger(Handle handle, String onlyModuleId) {
-        var query = handle.createQuery("SELECT module_id, change_id, object_name, checksum FROM " + schemaHistoryTableName +
-                                               (onlyModuleId != null ? " WHERE module_id = :moduleId" : ""));
-        if (onlyModuleId != null) {
-            query.bind("moduleId", onlyModuleId);
-        }
-        var result = new HashMap<ChangeKey, String>();
-        query.map((rs, ctx) -> Map.entry(new ChangeKey(rs.getString("module_id"), rs.getString("change_id"), rs.getString("object_name")),
-                                         rs.getString("checksum")))
-             .forEach(entry -> result.put(entry.getKey(), entry.getValue()));
-        return result;
+        return PostgresqlSchemaHistory.read(handle, schemaHistoryTableName, onlyModuleId);
     }
 
     private static void rejectEditedOneShotChanges(List<SchemaChangeSet> changeSets, Map<ChangeKey, String> recorded) {
@@ -221,7 +205,7 @@ public final class PostgresqlCreateSchemaApplier implements SchemaApplier {
                 if (change.repeatable()) {
                     continue;
                 }
-                var recordedChecksum = recorded.get(new ChangeKey(changeSet.moduleId(), change.changeId(), change.objectName()));
+                var recordedChecksum = recorded.get(ChangeKey.of(changeSet, change));
                 if (recordedChecksum != null && !recordedChecksum.equals(change.checksum())) {
                     edited.add(msg("'{}' change '{}' on '{}': recorded checksum {}, now {}",
                                    changeSet.moduleId(), change.changeId(), change.objectName(), recordedChecksum, change.checksum()));
@@ -257,9 +241,6 @@ public final class PostgresqlCreateSchemaApplier implements SchemaApplier {
               .bind("appliedTs", OffsetDateTime.now())
               .bind("appliedBy", appliedBy)
               .execute();
-    }
-
-    private record ChangeKey(String moduleId, String changeId, String objectName) {
     }
 
     /**

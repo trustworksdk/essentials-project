@@ -209,6 +209,24 @@ essentials.schema.mode = create   # create (default) | validate | emit | externa
 `emit` is the mode that makes `validate` usable: run `emit` once against any environment, give the output to
 whoever holds DDL rights, then run `validate` from then on. Neither mode needs Flyway.
 
+**As built (step 6).** `PostgresqlValidateSchemaApplier` compares against the **ledger**, not the catalog. A
+contribution is plain SQL, so there is no structured description of the objects to diff `information_schema`
+against without parsing SQL. Instead every described change must have a ledger row with the checksum of its
+current statements: a missing row is "not applied", a different checksum is "applied with other statements"
+(for a one-shot change, "edited after it was applied"). Every problem is listed in one
+`SchemaValidationException`, and nothing is executed - not even the ledger table. The trade-off: the ledger is
+trusted, so an object dropped by hand after it was recorded goes unnoticed.
+
+`PostgresqlSchemaScript` renders what the create applier does as one script: one transaction under the
+bootstrap lock, the ledger table, then a header per module and each change followed by its ledger upsert
+(`applied_by = 'essentials-schema-script'`, first `applied_ts` kept). One-shot changes run inside a `DO` guard
+that checks the ledger and `EXECUTE`s the statements under a dedicated dollar-quote tag, so a re-run skips them.
+`PostgresqlEmitSchemaApplier` writes that script, replacing the file on the first apply and appending a
+self-contained block for each later dynamic registration, and then validates - so startup fails until the script
+has been run and passes afterwards. `EssentialsSchemaScriptRoundTripIT` (postgresql-event-store) runs every
+PostgreSQL contributor through emit -> run script -> validate, and checks the script records exactly the ledger
+the create mode does.
+
 ---
 
 ## 4. The version ledger
