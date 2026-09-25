@@ -353,8 +353,12 @@ public class EventStoreConfiguration {
     @Bean
     @ConditionalOnMissingBean
     public DurableSubscriptionRepository durableSubscriptionRepository(Jdbi jdbi,
-                                                                       EventStore eventStore) {
-        return new PostgresqlDurableSubscriptionRepository(jdbi, eventStore);
+                                                                       EventStore eventStore,
+                                                                       EssentialsComponentsProperties essentialsComponentsProperties) {
+        return new PostgresqlDurableSubscriptionRepository(jdbi,
+                                                           eventStore,
+                                                           PostgresqlDurableSubscriptionRepository.DEFAULT_DURABLE_SUBSCRIPTIONS_TABLE_NAME,
+                                                           essentialsComponentsProperties.getSchema().getMode().schemaOwnership());
     }
 
     /**
@@ -376,7 +380,8 @@ public class EventStoreConfiguration {
                                                                                                                                     PersistableEventMapper persistableEventMapper,
                                                                                                                                     JSONEventSerializer jsonEventSerializer,
                                                                                                                                     EssentialsEventStoreProperties properties,
-                                                                                                                                    List<PersistableEventEnricher> persistableEventEnrichers) {
+                                                                                                                                    List<PersistableEventEnricher> persistableEventEnrichers,
+                                                                                                                                    EssentialsComponentsProperties essentialsComponentsProperties) {
         return SeparateTablePerAggregateTypePersistenceStrategy.builder()
                                                                .setJdbi(jdbi)
                                                                .setUnitOfWorkFactory(unitOfWorkFactory)
@@ -385,6 +390,7 @@ public class EventStoreConfiguration {
                                                                                                                                                                                                           properties.getIdentifierColumnType(),
                                                                                                                                                                                                           properties.getJsonColumnType()))
                                                                .setPersistableEventEnrichers(persistableEventEnrichers)
+                                                               .setSchemaOwnership(essentialsComponentsProperties.getSchema().getMode().schemaOwnership())
                                                                .build();
     }
 
@@ -439,8 +445,10 @@ public class EventStoreConfiguration {
 
     @Bean
     @ConditionalOnMissingBean
-    public EventStreamGapHandler<SeparateTablePerAggregateEventStreamConfiguration> eventStreamGapHandler(EventStoreUnitOfWorkFactory<? extends EventStoreUnitOfWork> eventStoreUnitOfWorkFactory) {
-        return new PostgresqlEventStreamGapHandler<SeparateTablePerAggregateEventStreamConfiguration>(eventStoreUnitOfWorkFactory);
+    public EventStreamGapHandler<SeparateTablePerAggregateEventStreamConfiguration> eventStreamGapHandler(EventStoreUnitOfWorkFactory<? extends EventStoreUnitOfWork> eventStoreUnitOfWorkFactory,
+                                                                                                          EssentialsComponentsProperties essentialsComponentsProperties) {
+        return new PostgresqlEventStreamGapHandler<SeparateTablePerAggregateEventStreamConfiguration>(eventStoreUnitOfWorkFactory,
+                                                                                                      essentialsComponentsProperties.getSchema().getMode().schemaOwnership());
     }
 
     @Bean
@@ -970,7 +978,8 @@ public class EventStoreConfiguration {
                                                  Optional<MeterRegistry> meterRegistry,
                                                  EssentialsEventStoreProperties essentialsProperties,
                                                  CdcConsumerGroup group,
-                                                 CdcSlotNameProvider slotNameProvider) {
+                                                 CdcSlotNameProvider slotNameProvider,
+                                                 EssentialsComponentsProperties essentialsComponentsProperties) {
         var cdc = essentialsProperties.getCdc();
         // Use the configured inbox table name so the repository reads/writes the SAME table the
         // @TTLJob (essentials.eventstore.cdc.inbox-table-name) cleans. Passing the default here would
@@ -979,6 +988,7 @@ public class EventStoreConfiguration {
                                      .setUnitOfWorkFactory(eventStoreUnitOfWorkFactory)
                                      .setMeterRegistry(meterRegistry)
                                      .setCdcInboxTableName(cdc.getInboxTableName())
+                                     .setSchemaOwnership(essentialsComponentsProperties.getSchema().getMode().schemaOwnership())
                                      .build();
         // Inbox depth gauges are scoped to a known slot. Register them once here, gated on
         // INBOX delivery mode (DIRECT bypasses the inbox; the gauges would be permanently 0

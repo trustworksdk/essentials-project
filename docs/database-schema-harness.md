@@ -232,7 +232,8 @@ that checks the ledger and `EXECUTE`s the statements under a dedicated dollar-qu
 self-contained block for each later dynamic registration, and does nothing else. Decided 2026-09-25: `emit` is a
 **pre-step, not a startup mode that fails**. It needs no database connection - the script is rendered from what the
 contributors describe - so it runs in a build or deployment pipeline; the Spring wiring (step 7) exits the
-application cleanly once it is written. `validate` is the only mode that refuses to start. This replaces the
+application cleanly once it is written (under Spring the context is still built, so the database has to be
+reachable, though it may be empty). `validate` is the only mode that refuses to start. This replaces the
 earlier "emit, then fail unless validate passes", which made generating the script a start-and-fail step, at odds
 with how easy an Essentials setup otherwise is. The default mode stays `create`, so nothing changes for anyone who
 does not opt in.
@@ -363,6 +364,46 @@ bean must be constructed before any component whose DDL it now owns, which for t
 existing component beans take a dependency on it. Silent-startup-failure risk here is real: a component
 constructed before the harness would find no table and fail at first query rather than at startup. One
 integration test per starter that asserts the ordering.
+
+**As built (step 7).** The ordering is solved the other way round: no component depends on the harness.
+`EssentialsSchemaHarnessRunner` (`spring-boot-starter-postgresql`) is a `SmartInitializingSingleton`, so it
+applies every `EssentialsSchemaContributor` bean once all singletons exist and before any lifecycle starts.
+Components built with `SchemaOwnership.HARNESS` touch no schema while they are constructed, so the gap between
+construction and the harness is harmless, and nothing consumes, polls or subscribes before `validate` has
+passed. The details:
+
+- `essentials.schema.*` lives on `EssentialsComponentsProperties.getSchema()`: `mode` (`create` | `validate` |
+  `emit` | `external`, default `create`), `history-table-name`, `emit.script-file` (default
+  `essentials-schema.sql`) and `emit.exit` (default `true`).
+- `create`: every component still creates its own schema as it is constructed (`SchemaMode.schemaOwnership()`
+  is `COMPONENT`), exactly as in earlier releases; the runner then re-runs those repeatable changes, which finds
+  nothing to do and covers any application contributor. All other modes build the components with `HARNESS`.
+- The fenced lock manager is started by the lifecycle manager outside `create`, not at construction: its
+  lock-confirmation thread reads the lock table at once.
+- `emit`: the lifecycle manager does not start the Essentials lifecycles, and the runner stops the application
+  with exit code 0 on `ApplicationStartedEvent` - after the context refresh, where `System.exit` cannot deadlock
+  with Spring's shutdown hook, and before any `ApplicationRunner`. `emit.exit=false` keeps it running, for tests.
+  The context is still built, so the components are constructed and some open a connection while they are;
+  the database may be empty, but it has to be reachable.
+- One component can be reachable as several beans, and two components can describe the same table (the
+  snapshot store bean and the snapshot repositories the factory builds). The runner de-duplicates contributors
+  by identity, and the harness drops a change described identically twice and rejects only one described
+  differently.
+- Nested contributors pass the ownership through and contribute on behalf of what they build:
+  `PostgresqlFencedLockManager` (its lock storage), `DefaultEssentialsScheduler` (its job repository),
+  `PostgresqlAggregateSnapshotRepository` (its snapshot store).
+- `spring-boot-starter-postgresql-queue-shard-owned` does not depend on the base starter; it reads
+  `essentials.schema.mode` itself. `create` is unchanged. `validate` checks for the registry table before
+  registering the configured queues, so a missing schema is a `SchemaValidationException` rather than an SQL
+  error, and the queues' sequences are created directly as decided above. `emit` registers nothing. A
+  `ShardOwnedSchemaContributor` bean carries the fixed schema into the base starter's harness, and is absent when
+  `essentials.shard-owned-queue.initialize-schema=false`.
+- Not covered: the closing-books generation repository that `ClosingBooksSetupBuilder` builds is application
+  code, not a starter bean, so the runner cannot see it; it keeps creating its own table. An application in a
+  non-create mode supplies its own `PostgresqlClosingBooksGenerationRepository` built with `HARNESS` and exposes
+  it as a bean.
+- ITs: `EssentialsSchemaModeIT` (base starter), `EventStoreSchemaModeIT` (event store starter, including an
+  AggregateType registered at runtime being refused in `validate`) and `ShardOwnedSchemaModeIT`.
 
 **Admin surface: deferred.** A "what schema does this deployment have" endpoint is an obvious follow-on and is
 deliberately not in this plan. If it lands, the repo rule applies — the `*Api` SPI, the `EssentialsAdminApiSpec`

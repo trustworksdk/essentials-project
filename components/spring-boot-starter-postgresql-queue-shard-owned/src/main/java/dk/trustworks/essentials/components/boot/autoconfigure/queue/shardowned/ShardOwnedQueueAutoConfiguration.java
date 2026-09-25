@@ -23,7 +23,8 @@ import dk.trustworks.essentials.components.foundation.json.JSONSerializer;
 import dk.trustworks.essentials.components.foundation.messaging.queue.DurableQueues;
 import dk.trustworks.essentials.components.foundation.messaging.queue.DurableQueuesInterceptor;
 import dk.trustworks.essentials.components.foundation.transaction.*;
-import dk.trustworks.essentials.components.queue.shardowned.adapter.ShardOwnedDurableQueues;
+import dk.trustworks.essentials.components.foundation.schema.*;
+import dk.trustworks.essentials.components.queue.shardowned.adapter.*;
 import dk.trustworks.essentials.components.boot.autoconfigure.queue.shardowned.rest.*;
 import dk.trustworks.essentials.components.queue.shardowned.*;
 import dk.trustworks.essentials.components.queue.shardowned.api.*;
@@ -35,6 +36,8 @@ import org.springframework.boot.autoconfigure.condition.*;
 import org.springframework.boot.jdbc.autoconfigure.DataSourceAutoConfiguration;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
+import org.springframework.boot.context.properties.bind.Binder;
+import org.springframework.core.env.Environment;
 import org.springframework.context.annotation.*;
 import org.springframework.web.bind.annotation.RestController;
 
@@ -106,8 +109,27 @@ public class ShardOwnedQueueAutoConfiguration {
     @Bean
     @ConditionalOnMissingBean
     public ShardOwnedQueueInitializer shardOwnedQueueInitializer(DataSource dataSource,
-                                                                ShardOwnedQueueProperties properties) {
-        return new ShardOwnedQueueInitializer(dataSource, properties);
+                                                                ShardOwnedQueueProperties properties,
+                                                                ObjectProvider<ShardOwnedSchemaContributor> schemaContributor,
+                                                                Environment environment) {
+        return new ShardOwnedQueueInitializer(dataSource,
+                                              properties,
+                                              schemaContributor.getIfAvailable(),
+                                              Binder.get(environment).bind("essentials.schema.mode", SchemaMode.class).orElse(SchemaMode.CREATE));
+    }
+
+    /**
+     * The engine's fixed schema - tables, views, fixed sequences - as a schema-harness contribution, so the
+     * {@code essentials.schema.mode} of {@code spring-boot-starter-postgresql} covers it like every other module's.
+     * Absent when {@code essentials.shard-owned-queue.initialize-schema=false}: then a migration tool owns the schema.
+     * <p>
+     * Queue sequences are not part of it outside the create mode - see {@link ShardOwnedSchemaContributor}.
+     */
+    @Bean
+    @ConditionalOnMissingBean
+    @ConditionalOnProperty(prefix = "essentials.shard-owned-queue", name = "initialize-schema", havingValue = "true", matchIfMissing = true)
+    public ShardOwnedSchemaContributor shardOwnedSchemaContributor(DataSource dataSource) {
+        return new ShardOwnedSchemaContributor(dataSource);
     }
 
     /**
@@ -165,22 +187,54 @@ public class ShardOwnedQueueAutoConfiguration {
      * discovered much later.
      */
     public static class ShardOwnedQueueInitializer {
-        private final DataSource                dataSource;
-        private final ShardOwnedQueueProperties properties;
+        private final DataSource                  dataSource;
+        private final ShardOwnedQueueProperties   properties;
+        private final ShardOwnedSchemaContributor schemaContributor;
+        private final SchemaMode                  schemaMode;
 
         public ShardOwnedQueueInitializer(DataSource dataSource, ShardOwnedQueueProperties properties) {
+            this(dataSource, properties, null, SchemaMode.CREATE);
+        }
+
+        /**
+         * @param schemaContributor the engine's schema contribution, {@code null} when a migration tool owns the schema
+         * @param schemaMode        {@code essentials.schema.mode}
+         */
+        public ShardOwnedQueueInitializer(DataSource dataSource,
+                                          ShardOwnedQueueProperties properties,
+                                          ShardOwnedSchemaContributor schemaContributor,
+                                          SchemaMode schemaMode) {
             this.dataSource = dataSource;
             this.properties = properties;
+            this.schemaContributor = schemaContributor;
+            this.schemaMode = schemaMode;
             initialize();
         }
 
         private void initialize() {
+            if (schemaMode == SchemaMode.EMIT) {
+                // The fixed schema goes into the script through the schema contributor; there is no registry to
+                // register against, and the application stops once the script is written
+                log.info("Schema mode 'emit': the shard-owned engine's schema is written to the script, no queue is registered");
+                return;
+            }
             try {
-                if (properties.isInitializeSchema()) {
-                    // Non-destructive, idempotent, and serialised across instances by the framework's
-                    // bootstrap advisory lock — PostgreSQL's IF NOT EXISTS is not atomic against
-                    // concurrent sessions, and every instance runs this at the same moment.
-                    ShardOwnedSchema.initialize(dataSource);
+                if (schemaMode == SchemaMode.CREATE) {
+                    if (properties.isInitializeSchema()) {
+                        // Non-destructive, idempotent, and serialised across instances by the framework's
+                        // bootstrap advisory lock — PostgreSQL's IF NOT EXISTS is not atomic against
+                        // concurrent sessions, and every instance runs this at the same moment.
+                        ShardOwnedSchema.initialize(dataSource);
+                    }
+                } else {
+                    if (schemaContributor != null) {
+                        // Not the create mode, so each queue's sequences are created by the engine as it registers
+                        // below - which is what attaching a sink that does not create the schema says, and warns about
+                        schemaContributor.attach(new ExternalSchemaApplier().sinkFor(schemaContributor));
+                    }
+                    if (schemaMode == SchemaMode.VALIDATE) {
+                        requireRegistry();
+                    }
                 }
                 for (var entry : properties.getQueues().entrySet()) {
                     var name = QueueName.of(entry.getKey());
@@ -195,6 +249,27 @@ public class ShardOwnedQueueAutoConfiguration {
                 }
             } catch (SQLException e) {
                 throw new IllegalStateException("Failed to initialise the shard-owned queue schema", e);
+            }
+        }
+
+        /**
+         * Registration writes to the registry, so in the validate mode its absence is reported here, before the first
+         * registration fails with a bare SQL error. The schema harness validates the rest of the schema afterwards.
+         */
+        private void requireRegistry() throws SQLException {
+            try (var connection = dataSource.getConnection();
+                 var statement = connection.prepareStatement("SELECT to_regclass(?) IS NOT NULL")) {
+                statement.setString(1, ShardOwnedSchema.REGISTRY_TABLE);
+                try (var resultSet = statement.executeQuery()) {
+                    resultSet.next();
+                    if (!resultSet.getBoolean(1)) {
+                        throw new SchemaValidationException("Schema mode 'validate': the shard-owned queue engine's table '" + ShardOwnedSchema.REGISTRY_TABLE +
+                                                                    "' does not exist, so no queue can be registered. Generate the schema script with " +
+                                                                    "essentials.schema.mode=emit, have it run by a user with DDL rights, and start again",
+                                                            List.of("'" + ShardOwnedSchemaContributor.MODULE_ID + "' change 'engine-schema' on '" +
+                                                                            ShardOwnedSchema.REGISTRY_TABLE + "': not applied"));
+                    }
+                }
             }
         }
     }

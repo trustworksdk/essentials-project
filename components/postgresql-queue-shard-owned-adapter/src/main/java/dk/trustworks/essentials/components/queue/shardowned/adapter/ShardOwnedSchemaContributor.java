@@ -25,7 +25,7 @@ import javax.sql.DataSource;
 import java.sql.SQLException;
 import java.util.*;
 import java.util.concurrent.ConcurrentSkipListMap;
-import java.util.concurrent.atomic.AtomicReference;
+import java.util.concurrent.atomic.*;
 
 import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 
@@ -64,6 +64,7 @@ public final class ShardOwnedSchemaContributor implements DynamicSchemaContribut
     private final DataSource                                 dataSource;
     private final ConcurrentSkipListMap<Short, List<String>> queueSequences = new ConcurrentSkipListMap<>();
     private final AtomicReference<SchemaChangeSink>          sink           = new AtomicReference<>();
+    private final AtomicBoolean                              warned         = new AtomicBoolean();
 
     /**
      * @param dataSource the engine's database - queues are registered against it, and it is where the queue
@@ -101,12 +102,14 @@ public final class ShardOwnedSchemaContributor implements DynamicSchemaContribut
     public void attach(SchemaChangeSink sink) {
         requireNonNull(sink, "No sink provided");
         this.sink.set(sink);
-        if (!sink.createsSchema()) {
+        if (!sink.createsSchema() && warned.compareAndSet(false, true)) {
             log.warn("The schema harness is not creating the schema in this mode, but the shard-owned queue engine creates each queue's " +
                              "sequences itself when the queue registers: their names contain the queue id the registry assigns at registration, " +
                              "so they cannot be part of a script written beforehand. The database user this application connects as therefore " +
                              "needs the right to create sequences at runtime. The engine's tables, views and fixed sequences are covered by the " +
                              "harness as usual.");
+        }
+        if (!sink.createsSchema()) {
             // Registered before the harness ran: nobody else will create them now
             for (var queueId : new ArrayList<>(queueSequences.keySet())) {
                 var statements = queueSequences.remove(queueId);
