@@ -591,3 +591,106 @@ this if the unspecified case can be made exact.
 
 Note that `types-springdata-jpa` is **EXPERIMENTAL** and may be discontinued; `types-jdbi` remains the recommended
 module for SQL persistence.
+
+---
+
+## Database schema harness
+
+Every Essentials component that owns tables now *describes* its schema instead of executing DDL itself, and a
+schema harness decides what happens to it. The design, and the reasons behind each decision, are in
+[database-schema-harness.md](./database-schema-harness.md).
+
+**If you change nothing, nothing changes.** The default mode is `create`. Every component still creates its own
+tables, indexes, functions and triggers while it is constructed, exactly as in 0.50. The only visible difference
+is one new table.
+
+### A new table: `essentials_schema_history`
+
+The first 0.60 start creates `essentials_schema_history` (configurable with `essentials.schema.history-table-name`).
+It records every schema change a component applied, keyed on module, change and object, with a checksum of the
+statements. It is created under the framework's bootstrap advisory lock, like every other Essentials table.
+
+On a database created by 0.50 there is no special adoption step. Every statement is safe against objects that
+already exist (`CREATE … IF NOT EXISTS`, `DROP … IF EXISTS`), so the first start runs them, finds everything in
+place, and records it. The event-stream tables are now created with `CREATE TABLE IF NOT EXISTS` instead of a
+`to_regclass` check, to the same effect.
+
+### Opting in: `essentials.schema.mode`
+
+```properties
+essentials.schema.mode = create      # the default - components create their own schema
+essentials.schema.mode = validate    # execute nothing; refuse to start unless the ledger records every change
+essentials.schema.mode = emit        # write the schema as one SQL script, and stop
+essentials.schema.mode = external    # execute nothing, verify nothing
+essentials.schema.emit.script-file = essentials-schema.sql
+essentials.schema.emit.exit = true   # emit stops the application (exit code 0) once the script is written
+```
+
+The path for a database whose application user has no DDL rights:
+
+1. Run the application once with `essentials.schema.mode=emit`, e.g. as a pipeline step. It writes the script,
+   starts none of the Essentials lifecycles, and exits with code 0. The database must be reachable, since the
+   Spring context is built, but it may be empty; nothing is executed.
+2. Have the script run by a user with DDL rights. It is one transaction, under the bootstrap lock, with a header
+   per module, and it records every change in `essentials_schema_history` itself. It is safe to run again.
+3. Deploy with `essentials.schema.mode=validate`. Startup compares what the components describe with the ledger and
+   fails with a `SchemaValidationException` listing every change that is missing or differs. Rerun `emit` after an
+   upgrade to get the new statements.
+
+`validate` checks the ledger, not the catalog: an object dropped by hand after it was recorded goes unnoticed.
+
+Outside `create`, an event-stream table for an `AggregateType` registered at runtime goes through the same applier:
+in `validate`, registering a type whose table is not in the ledger throws `SchemaValidationException`. So every
+AggregateType must be in the script - register them at startup, before running `emit`.
+
+### Your own `ClosingBooksSetup` bean
+
+The generation repository `ClosingBooksSetupBuilder` creates is not a bean, but your `ClosingBooksSetup` is, and it
+now contributes the repository's table to the harness. The starter cannot choose its ownership, so outside
+`create` pass it yourself:
+
+```java
+@Bean
+ClosingBooksSetup<OrderId, OrderGenerationId> orderClosingBooks(HandleAwareUnitOfWorkFactory<? extends HandleAwareUnitOfWork> unitOfWorkFactory,
+                                                                EssentialsComponentsProperties essentialsComponentsProperties) {
+    return ClosingBooksSetup.<OrderId, OrderGenerationId>builder(Orders.AGGREGATE_TYPE, Order.class)
+                            // ...
+                            .setSchemaOwnership(essentialsComponentsProperties.getSchema().getMode().schemaOwnership())
+                            .build();
+}
+```
+
+Without it, the repository still runs its DDL while it is built, which a user without DDL rights cannot do even
+when the table exists.
+
+### The shard-owned engine needs the right to create sequences at runtime
+
+Each shard-owned queue has one sequence per shard, named after the queue id the registry assigns when the queue
+registers, so they cannot be part of a script written beforehand. Outside `create` the engine's tables, views and
+fixed sequences come from the script like everything else, but each queue's sequences are created by the engine as
+the queue registers. `ShardOwnedSchemaContributor` logs a warning saying so. Grant `CREATE` on the schema, or
+register every queue once with a user that has it. See the engine README, "Database rights".
+
+`ShardOwnedSchema.growShardCount(…)` no longer seeds ordered-lane lease rows for the build's default 64 units on a
+queue registered with fewer; it uses the queue's recorded `ordered_units`. The stray rows it created before were
+never leased, so delivery was unaffected; they can be removed with
+`DELETE FROM shard_queue_lease l USING shard_queue_registry r WHERE l.queue_id = r.queue_id AND l.lane = 'ordered' AND l.shard >= r.ordered_units`.
+
+### Deprecated: installing the event store's notify trigger yourself
+
+`SeparateTablePerAggregateTypePersistenceStrategy.enableNotifyTriggerInstallation(NotifyTriggerInstaller)` executes
+the `pg_notify` trigger DDL itself, beside the schema harness, so `validate` and `emit` never see it. It is
+deprecated in favour of `enableNotifyTriggers(Consumer<String>)`: the trigger becomes part of each event-stream
+table's schema, and the callback only registers the table with your change listener. The two exclude each other.
+The starter's `EventStoreNotifyPollingBootstrap` uses the new method; its constructor taking a `Jdbi` is deprecated,
+as the `Jdbi` is no longer used.
+
+### Building components yourself
+
+Every schema-owning component gained a way to leave its schema to a harness - `setSchemaOwnership(SchemaOwnership)`
+on the builders (`PostgresqlDurableQueuesBuilder`, `PostgresqlFencedLockManagerBuilder`, `CdcInboxRepositoryBuilder`,
+`SeparateTablePerAggregateTypePersistenceStrategyBuilder`, the snapshot, archive and closing-books builders) or a
+constructor overload (`PostgresqlDurableSubscriptionRepository`, `PostgresqlEventStreamGapHandler`,
+`DefaultEssentialsScheduler`, `PostgresqlTTLManager`, `ExecutorScheduledJobRepository`,
+`PostgresqlFencedLockStorage`). The default, `SchemaOwnership.COMPONENT`, is the 0.50 behaviour. Pass `HARNESS` and
+register the component with an `EssentialsSchemaHarness` - see [LLM-foundation.md](../LLM/LLM-foundation.md#database-schema-harness).

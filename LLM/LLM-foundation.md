@@ -30,6 +30,7 @@
 - [Inbox/Outbox Patterns](#inboxoutbox-patterns)
 - [Ordered Message Processing](#ordered-message-processing)
 - [DurableLocalCommandBus](#durablelocalcommandbus)
+- [Database Schema Harness](#database-schema-harness)
 - [Utilities](#utilities)
 - ⚠️ [Security](#security)
 
@@ -847,6 +848,65 @@ commandBus.sendAndDontWait(new SendReminderCommand(customerId), Duration.ofHours
 // Synchronous (returns result)
 OrderId result = commandBus.send(new CreateOrderCommand(...));
 ```
+
+## Database Schema Harness
+
+**Package**: `dk.trustworks.essentials.components.foundation.schema` (SPI), PostgreSQL appliers in `.postgresql`.
+Design and rationale: [docs/database-schema-harness.md](../docs/database-schema-harness.md).
+
+Every Essentials component that owns tables *describes* its schema as `SchemaChange`s; an applier decides what
+happens to them. In Spring, `essentials.schema.mode` selects the applier - see
+[LLM-spring-boot-starter-modules.md](./LLM-spring-boot-starter-modules.md). Default: nothing changes, each
+component creates its own schema as it is constructed.
+
+| Type | Role |
+|---|---|
+| `EssentialsSchemaContributor` | `moduleId()`, `order()` (`SchemaOrder` constants), `contribute(SchemaContext)` → `List<SchemaChange>`. Never executes DDL |
+| `DynamicSchemaContributor` | For objects registered at any time (a table per `AggregateType`). `contribute` describes what is registered so far; `attach(SchemaChangeSink)` receives each later registration's changes |
+| `SchemaChange` | `repeatable(changeId, objectName, statements...)` - runs every time, checksum tracked; `once(...)` - runs once per `(module, changeId, objectName)`, edited-after-applied fails startup |
+| `SchemaOwnership` | `COMPONENT` (default): the component applies its own schema on construction. `HARNESS`: it leaves it to a harness |
+| `SchemaMode` | `CREATE` / `VALIDATE` / `EMIT` / `EXTERNAL`; `schemaOwnership()` is `COMPONENT` only for `CREATE` |
+| `EssentialsSchemaHarness` | `new EssentialsSchemaHarness(applier, context, contributors).apply()` - orders by `order()` then `moduleId()`, drops a change described identically twice, rejects one described differently |
+| `SchemaApplier` | `apply(List<SchemaChangeSet>)`; `createsSchema()` tells a dynamic contributor whether later objects get created |
+| `PostgresqlCreateSchemaApplier` | Executes under the bootstrap advisory lock, records in `essentials_schema_history` |
+| `PostgresqlValidateSchemaApplier` | Executes nothing; throws `SchemaValidationException` (`problems()`) for every change not in the ledger or recorded with other statements. Checks the ledger, not the catalog |
+| `PostgresqlEmitSchemaApplier` | Writes the whole schema as one script (`PostgresqlSchemaScript`) - one transaction, bootstrap lock, header per module, ledger rows included, re-runnable. Needs no connection |
+| `ExternalSchemaApplier` | Executes and verifies nothing |
+
+Without Spring - applying components built with `SchemaOwnership.HARNESS`:
+
+```java
+var queues = PostgresqlDurableQueues.builder()
+                                    .setUnitOfWorkFactory(unitOfWorkFactory)
+                                    .setSchemaOwnership(SchemaOwnership.HARNESS)
+                                    .build();
+new EssentialsSchemaHarness(new PostgresqlValidateSchemaApplier(jdbi),   // or Create / Emit
+                            SchemaContext.empty(),
+                            List.of(queues, fencedLockManager, persistenceStrategy))
+        .apply();
+```
+
+Your own contributor, e.g. for an application table:
+
+```java
+public final class OrderViewSchema implements EssentialsSchemaContributor {
+    public String moduleId() { return "order-view"; }
+    public int order() { return SchemaOrder.ORDER_APPLICATION; }
+    public List<SchemaChange> contribute(SchemaContext context) {
+        return List.of(SchemaChange.repeatable("order-view-table", "order_view",
+                                               "CREATE TABLE IF NOT EXISTS order_view (id TEXT PRIMARY KEY, total NUMERIC)"));
+    }
+}
+```
+
+As a Spring bean it is applied with the Essentials ones. Rules that hold everywhere:
+- A statement must be safe against an object that already exists - there is no special adoption path for databases
+  created before 0.60; the first start runs everything and records it.
+- `objectName` is a validated identifier and part of the ledger key; for an index change use its table.
+- Keep repeatable changes repeatable: prefer `IF [NOT] EXISTS` over `once(...)`. `once` is for what must not run
+  twice (a backfill, a type change); editing a `once` change after release fails startup - ship a new change id.
+- DDL outside a contributor fails the `EssentialsSchemaRules` guard in `foundation-test` - see
+  [LLM-foundation-test.md](./LLM-foundation-test.md).
 
 ## Utilities
 
