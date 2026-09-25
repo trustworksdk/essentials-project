@@ -359,6 +359,18 @@ and all three Spring Boot starters. Mostly moving statements into a contributor 
 statement starting `CREATE`, `ALTER`, `DROP` or `TRUNCATE`. Wrapped in `FreezingArchRule.freeze(…)` in the
 usual way if the sweep does not finish in one pass, so the violation store's size is the progress metric.
 
+**As built (step 9).** `EssentialsSchemaRules.ddlLivesInSchemaContributors(…)` in `foundation-test`, run by
+`AbstractEssentialsSchemaRulesTest` subclasses in `spring-boot-starter-postgresql-event-store` (whose classpath
+reaches foundation, the fenced lock, the durable queues, the event store and the aggregates) and in
+`postgresql-queue-shard-owned`. ArchUnit exposes no string literals, so the condition reads each class file's
+constant pool, where literals, text blocks and string-concatenation recipes all end up; a class holding a
+statement is a contributor, is nested in one, or is on `ALLOWED_DDL_HOLDERS` with its reason: the statement
+holders `DurableQueuesSql` and `CdcSql`, the ledger `PostgresqlSchemaHistory`, `ListenNotify` (a public helper for
+application tables), `DefaultPostgresqlQueryStatisticsApi` (best-effort `CREATE EXTENSION pg_stat_statements`) and
+the engine's `ShardOwnedSchema`. The sweep finished, so the rule is **not frozen**: a new violation fails at once.
+It sees only DDL that starts a string constant; `EssentialsSchemaRulesTest` (foundation-test) proves what it does
+catch.
+
 **The starters gain one bean and one property block** — the harness, and `essentials.schema.*`. The harness
 bean must be constructed before any component whose DDL it now owns, which for the Spring path means the
 existing component beans take a dependency on it. Silent-startup-failure risk here is real: a component
