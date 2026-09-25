@@ -586,7 +586,9 @@ public final class ShardOwnedSchema {
         // was effectively frozen for the life of the queue. The ordered lane now routes on a fixed
         // space of its own (ORDERED_UNITS) and does not consult this number at all, so growing it
         // moves nothing and can happen with ordered traffic in flight.
-        registerQueue(dataSource, current.queueId(), newShardCount, ORDERED_UNITS, queueDdl);
+        // The queue's own recorded routing space, never this build's default: seeding ORDERED_UNITS here once left a
+        // queue registered with fewer units with lease rows for units nothing routes to
+        registerQueue(dataSource, current.queueId(), newShardCount, current.orderedUnits(), queueDdl);
         try (var connection = dataSource.getConnection();
              var statement = connection.prepareStatement(
                      "UPDATE " + REGISTRY_TABLE + " SET shard_count = ? WHERE queue_id = ?")) {
