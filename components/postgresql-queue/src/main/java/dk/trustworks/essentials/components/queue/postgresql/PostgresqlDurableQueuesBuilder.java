@@ -17,6 +17,7 @@
 package dk.trustworks.essentials.components.queue.postgresql;
 
 import dk.trustworks.essentials.components.foundation.json.*;
+import dk.trustworks.essentials.components.foundation.schema.*;
 import dk.trustworks.essentials.components.foundation.messaging.queue.*;
 import dk.trustworks.essentials.components.foundation.messaging.queue.operations.*;
 import dk.trustworks.essentials.components.foundation.postgresql.*;
@@ -46,6 +47,7 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
  * vulnerabilities, compromising the security and integrity of the database.</b>
  */
 public final class PostgresqlDurableQueuesBuilder {
+    private SchemaOwnership schemaOwnership = SchemaOwnership.COMPONENT;
     private HandleAwareUnitOfWorkFactory<? extends HandleAwareUnitOfWork> unitOfWorkFactory;
     private JSONSerializer                                                jsonSerializer;
     private String                                                        sharedQueueTableName         = DEFAULT_DURABLE_QUEUES_TABLE_NAME;
@@ -229,6 +231,17 @@ public final class PostgresqlDurableQueuesBuilder {
     }
 
     /**
+     * @param schemaOwnership {@link SchemaOwnership#COMPONENT} (the default) creates the queue table when the
+     *                        {@link PostgresqlDurableQueues} is built; {@link SchemaOwnership#HARNESS} leaves it to an
+     *                        {@link EssentialsSchemaHarness} the queues are registered with
+     * @return this builder instance
+     */
+    public PostgresqlDurableQueuesBuilder setSchemaOwnership(SchemaOwnership schemaOwnership) {
+        this.schemaOwnership = requireNonNull(schemaOwnership, "No schemaOwnership provided");
+        return this;
+    }
+
+    /**
      * Set the {@link DurableQueueMessageObserver} notified of how each delivery ended — handled, retried,
      * dead-lettered or redelivery-requested. Use {@link DurableQueueMessageObserver#composite(java.util.List)}
      * to notify several, for example a statistics registry and a Micrometer observer.
@@ -256,7 +269,8 @@ public final class PostgresqlDurableQueuesBuilder {
                                                        centralizedQueuePollingOptimizerFactory,
                                                        useBatchedFetch,
                                                        batchedFetchSwitchThreshold,
-                                                       batchedFetchWarnRowsThreshold);
+                                                       batchedFetchWarnRowsThreshold,
+                                                       schemaOwnership);
         durableQueues.setMessageObserver(messageObserver);
         return durableQueues;
     }

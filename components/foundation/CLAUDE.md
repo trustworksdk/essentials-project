@@ -13,9 +13,10 @@ Cross-cutting infrastructure abstractions: transactions, distributed locking, du
 | `messaging.queue.operations` | Command objects for every queue operation (used by interceptor chain) |
 | `messaging.queue.observability` | `QueueStatisticsRegistry`, `QueueStatistics`, `StatisticsCollectingDurableQueueMessageObserver` — per-JVM delivery counters |
 | `messaging.eip.store_and_forward` | `Inbox`/`Outbox`/`Inboxes`/`Outboxes` SPIs, `PatternMatchingMessageHandler` |
-| `postgresql` | `ListenNotify`, `MultiTableChangeListener`, `PostgresqlUtil`, `NotificationDuplicationFilter` |
+| `postgresql` | `ListenNotify`, `MultiTableChangeListener`, `PostgresqlUtil`, `NotificationDuplicationFilter`, `PostgresqlCreateSchemaApplier` |
 | `postgresql.ttl` | Postgres-specific TTL job plumbing |
 | `ttl` | `TTLManager` SPI, `TTLJob`, `TTLJobDefinition`, `TTLJobBeanPostProcessor` |
+| `schema` | Schema harness SPI (0.60, in progress): `EssentialsSchemaContributor`, `SchemaChange`, `SchemaApplier`, `EssentialsSchemaHarness`, `SchemaOrder`. Plan: `docs/database-schema-harness.md` |
 | `scheduler` | `EssentialsScheduler` SPI, `DefaultEssentialsScheduler`; `pgcron` and `executor` sub-packages |
 | `lifecycle` | `DefaultLifecycleManager` (Spring `SmartLifecycle` adapter) |
 | `json` | `JSONSerializer` SPI, `Jackson3JSONSerializer`, `EssentialsObjectMappers`, `EssentialsJacksonModules` |
