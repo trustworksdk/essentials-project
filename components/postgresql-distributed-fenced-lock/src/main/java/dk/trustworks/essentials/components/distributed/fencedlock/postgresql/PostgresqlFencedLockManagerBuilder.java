@@ -19,6 +19,7 @@ package dk.trustworks.essentials.components.distributed.fencedlock.postgresql;
 import dk.trustworks.essentials.components.foundation.IOExceptionUtil;
 import dk.trustworks.essentials.components.foundation.fencedlock.*;
 import dk.trustworks.essentials.components.foundation.postgresql.PostgresqlUtil;
+import dk.trustworks.essentials.components.foundation.schema.*;
 import dk.trustworks.essentials.components.foundation.transaction.UnitOfWork;
 import dk.trustworks.essentials.components.foundation.transaction.jdbi.*;
 import dk.trustworks.essentials.reactive.*;
@@ -26,6 +27,8 @@ import org.jdbi.v3.core.Jdbi;
 
 import java.time.*;
 import java.util.Optional;
+
+import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 
 /**
  * <u>Security</u><br>
@@ -52,6 +55,7 @@ public final class PostgresqlFencedLockManagerBuilder {
     private Duration                                                      lockConfirmationInterval;
     boolean releaseAcquiredLocksInCaseOfIOExceptionsDuringLockConfirmation = false;
     private Optional<EventBus>                                            eventBus              = Optional.empty();
+    private SchemaOwnership                                               schemaOwnership       = SchemaOwnership.COMPONENT;
 
     /**
      * @param jdbi the jdbi instance used
@@ -178,7 +182,19 @@ public final class PostgresqlFencedLockManagerBuilder {
                                                lockTimeOut,
                                                lockConfirmationInterval,
                                                releaseAcquiredLocksInCaseOfIOExceptionsDuringLockConfirmation,
-                                               eventBus);
+                                               eventBus,
+                                               schemaOwnership);
+    }
+
+    /**
+     * @param schemaOwnership {@link SchemaOwnership#COMPONENT} (the default) creates the lock table when the manager
+     *                        starts; {@link SchemaOwnership#HARNESS} leaves it to the {@link EssentialsSchemaHarness}
+     *                        the manager is registered with
+     * @return this builder instance
+     */
+    public PostgresqlFencedLockManagerBuilder setSchemaOwnership(SchemaOwnership schemaOwnership) {
+        this.schemaOwnership = requireNonNull(schemaOwnership, "No schemaOwnership provided");
+        return this;
     }
 
     /**

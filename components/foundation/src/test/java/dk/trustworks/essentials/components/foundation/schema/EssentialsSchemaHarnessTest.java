@@ -39,7 +39,7 @@ class EssentialsSchemaHarnessTest {
     }
 
     @Test
-    void two_instances_of_one_module_may_contribute_for_different_objects_but_not_for_the_same() {
+    void two_instances_of_one_module_may_contribute_for_different_objects() {
         var applier = new RecordingApplier();
         new EssentialsSchemaHarness(applier,
                                     SchemaContext.empty(),
@@ -47,21 +47,30 @@ class EssentialsSchemaHarnessTest {
                                             contributor("queues", SchemaOrder.ORDER_QUEUES, SchemaChange.repeatable("queue-table", "billing_queue", "SELECT 1"))))
                 .apply();
         assertThat(applier.applied).hasSize(2);
-
-        var clash = new EssentialsSchemaHarness(new RecordingApplier(),
-                                                SchemaContext.empty(),
-                                                List.of(contributor("queues", SchemaOrder.ORDER_QUEUES, SchemaChange.repeatable("queue-table", "orders_queue", "SELECT 1")),
-                                                        contributor("queues", SchemaOrder.ORDER_QUEUES, SchemaChange.repeatable("queue-table", "orders_queue", "SELECT 1"))));
-        assertThatThrownBy(clash::apply).isInstanceOf(IllegalStateException.class).hasMessageContaining("'orders_queue'");
     }
 
     @Test
-    void a_change_may_not_be_contributed_twice_for_one_object() {
-        var harness = new EssentialsSchemaHarness(new RecordingApplier(),
-                                                  SchemaContext.empty(),
-                                                  List.of(contributor("queues", SchemaOrder.ORDER_QUEUES, change("table"), change("table"))));
+    void the_same_change_described_identically_twice_is_applied_once() {
+        var applier = new RecordingApplier();
+        new EssentialsSchemaHarness(applier,
+                                    SchemaContext.empty(),
+                                    List.of(contributor("snapshots", SchemaOrder.ORDER_AGGREGATES, SchemaChange.repeatable("snapshot-table", "snapshots", "SELECT 1")),
+                                            contributor("snapshots", SchemaOrder.ORDER_AGGREGATES, SchemaChange.repeatable("snapshot-table", "snapshots", "SELECT 1"))))
+                .apply();
 
-        assertThatThrownBy(harness::apply).isInstanceOf(IllegalStateException.class).hasMessageContaining("'table'");
+        assertThat(applier.applied).as("the second, now empty, set is dropped").hasSize(1);
+        assertThat(applier.applied.getFirst().changes()).hasSize(1);
+    }
+
+    @Test
+    void the_same_change_described_differently_twice_is_rejected() {
+        var clash = new EssentialsSchemaHarness(new RecordingApplier(),
+                                                SchemaContext.empty(),
+                                                List.of(contributor("queues", SchemaOrder.ORDER_QUEUES, SchemaChange.repeatable("queue-table", "orders_queue", "SELECT 1")),
+                                                        contributor("queues", SchemaOrder.ORDER_QUEUES, SchemaChange.repeatable("queue-table", "orders_queue", "SELECT 2"))));
+
+        assertThatThrownBy(clash::apply).isInstanceOf(IllegalStateException.class)
+                                        .hasMessageContaining("'orders_queue', with different statements");
     }
 
     @Test

@@ -37,6 +37,7 @@ import dk.trustworks.essentials.components.foundation.messaging.queue.observabil
 import dk.trustworks.essentials.components.foundation.messaging.queue.api.*;
 import dk.trustworks.essentials.components.foundation.messaging.queue.micrometer.*;
 import dk.trustworks.essentials.components.foundation.postgresql.*;
+import dk.trustworks.essentials.components.foundation.schema.SchemaMode;
 import dk.trustworks.essentials.components.foundation.postgresql.api.*;
 import dk.trustworks.essentials.components.foundation.postgresql.micrometer.RecordSqlExecutionTimeLogger;
 import dk.trustworks.essentials.components.foundation.postgresql.ttl.PostgresqlTTLManager;
@@ -250,7 +251,7 @@ public class EssentialsComponentsConfiguration {
                                                HandleAwareUnitOfWorkFactory<? extends HandleAwareUnitOfWork> unitOfWorkFactory,
                                                EventBus eventBus,
                                                EssentialsComponentsProperties properties) {
-        return PostgresqlFencedLockManager.builder()
+        var builder = PostgresqlFencedLockManager.builder()
                                           .setJdbi(jdbi)
                                           .setUnitOfWorkFactory(unitOfWorkFactory)
                                           .setLockTimeOut(properties.getFencedLockManager().getLockTimeOut())
@@ -258,7 +259,10 @@ public class EssentialsComponentsConfiguration {
                                           .setFencedLocksTableName(properties.getFencedLockManager().getFencedLocksTableName())
                                           .setReleaseAcquiredLocksInCaseOfIOExceptionsDuringLockConfirmation(properties.getFencedLockManager().isReleaseAcquiredLocksInCaseOfIOExceptionsDuringLockConfirmation())
                                           .setEventBus(eventBus)
-                                          .buildAndStart();
+                                          .setSchemaOwnership(properties.getSchema().getMode().schemaOwnership());
+        // Started at once in the create mode, as it always was. Otherwise the lifecycle manager starts it, after the
+        // schema harness has run: its lock-confirmation thread reads the lock table straight away
+        return properties.getSchema().getMode() == SchemaMode.CREATE ? builder.buildAndStart() : builder.build();
     }
 
     /**
@@ -279,6 +283,7 @@ public class EssentialsComponentsConfiguration {
                                        List<DurableQueuesInterceptor> durableQueuesInterceptors,
                                        List<DurableQueueMessageObserver> durableQueueMessageObservers) {
         var durableQueues = PostgresqlDurableQueues.builder()
+                                                   .setSchemaOwnership(properties.getSchema().getMode().schemaOwnership())
                                                    .setMessageObserver(DurableQueueMessageObserver.composite(durableQueueMessageObservers))
                                                    .setUnitOfWorkFactory(unitOfWorkFactory)
                                                    .setMessageHandlingTimeout(properties.getDurableQueues().getMessageHandlingTimeout())
@@ -475,8 +480,10 @@ public class EssentialsComponentsConfiguration {
     @Bean
     @ConditionalOnMissingBean
     public LifecycleManager lifecycleController(EssentialsComponentsProperties properties) {
+        // The emit mode only writes the schema script: nothing may consume, poll or subscribe against a database that
+        // does not have the schema yet
         return new DefaultLifecycleManager(this::onContextRefreshedEvent,
-                                           properties.getLifeCycles().isStartLifeCycles());
+                                           properties.getLifeCycles().isStartLifeCycles() && properties.getSchema().getMode() != SchemaMode.EMIT);
     }
 
     private void onContextRefreshedEvent(ApplicationContext applicationContext) {
@@ -555,15 +562,17 @@ public class EssentialsComponentsConfiguration {
     public EssentialsScheduler essentialsScheduler(HandleAwareUnitOfWorkFactory<? extends HandleAwareUnitOfWork> unitOfWorkFactory,
                                                    FencedLockManager fencedLockManager,
                                                    EssentialsComponentsProperties properties) {
-        return new DefaultEssentialsScheduler(unitOfWorkFactory, fencedLockManager, properties.getScheduler().getNumberOfThreads());
+        return new DefaultEssentialsScheduler(unitOfWorkFactory, fencedLockManager, properties.getScheduler().getNumberOfThreads(),
+                                              properties.getSchema().getMode().schemaOwnership());
     }
 
     @Bean
     @ConditionalOnMissingBean
     @ConditionalOnBean(EssentialsScheduler.class)
     public PostgresqlTTLManager postgresqlTTLManager(HandleAwareUnitOfWorkFactory<? extends HandleAwareUnitOfWork> unitOfWorkFactory,
-                                                     EssentialsScheduler scheduler) {
-        return new PostgresqlTTLManager(scheduler, unitOfWorkFactory);
+                                                     EssentialsScheduler scheduler,
+                                                     EssentialsComponentsProperties properties) {
+        return new PostgresqlTTLManager(scheduler, unitOfWorkFactory, properties.getSchema().getMode().schemaOwnership());
     }
 
     @Bean

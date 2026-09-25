@@ -23,6 +23,7 @@ import dk.trustworks.essentials.components.foundation.messaging.queue.*;
 import dk.trustworks.essentials.components.foundation.messaging.queue.health.DurableQueuesHealthIndicator;
 import dk.trustworks.essentials.components.foundation.messaging.queue.operations.ConsumeFromQueue;
 import dk.trustworks.essentials.components.foundation.postgresql.*;
+import dk.trustworks.essentials.components.foundation.schema.SchemaMode;
 import dk.trustworks.essentials.components.foundation.transaction.UnitOfWork;
 import dk.trustworks.essentials.components.queue.postgresql.*;
 import dk.trustworks.essentials.reactive.*;
@@ -33,6 +34,7 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.context.annotation.Configuration;
 import reactor.core.publisher.Sinks;
 
+import java.nio.file.Path;
 import java.time.*;
 
 /**
@@ -96,6 +98,7 @@ public class EssentialsComponentsProperties {
     private       boolean                               reactiveBeanPostProcessorEnabled = true;
     private final EssentialsComponentsMetricsProperties metrics                          = new EssentialsComponentsMetricsProperties();
     private final SchedulerProperties                   scheduler                        = new SchedulerProperties();
+    private final SchemaProperties                      schema                           = new SchemaProperties();
 
     /**
      * Should the EssentialsImmutableJacksonModule be included in the ObjectMapper configuration - default is true<br>
@@ -233,6 +236,14 @@ public class EssentialsComponentsProperties {
 
     public SchedulerProperties getScheduler() {
         return scheduler;
+    }
+
+    /**
+     * @return the {@code essentials.schema.*} properties - what happens to the database schema the Essentials
+     * components describe
+     */
+    public SchemaProperties getSchema() {
+        return schema;
     }
 
     public static class MultiTableChangeListenerProperties {
@@ -1285,6 +1296,97 @@ public class EssentialsComponentsProperties {
          */
         public void setNumberOfThreads(int numberOfThreads) {
             this.numberOfThreads = numberOfThreads;
+        }
+    }
+
+    /**
+     * {@code essentials.schema.*}: what happens to the database schema the Essentials components describe.
+     * <table>
+     *     <tr><td>{@code mode}</td><td>{@code create} (default) - every component creates its own schema, as in earlier
+     *     releases; {@code validate} - execute nothing, refuse to start unless the schema history ledger records every
+     *     change; {@code emit} - write the schema as one script to {@code emit.script-file} and stop; {@code external} -
+     *     execute and verify nothing</td></tr>
+     *     <tr><td>{@code history-table-name}</td><td>the schema history ledger, default {@code essentials_schema_history}</td></tr>
+     *     <tr><td>{@code emit.script-file}</td><td>where {@code emit} writes the script, default {@code essentials-schema.sql}</td></tr>
+     *     <tr><td>{@code emit.exit}</td><td>whether {@code emit} stops the application once the script is written, default {@code true}</td></tr>
+     * </table>
+     */
+    public static class SchemaProperties {
+        private       SchemaMode     mode             = SchemaMode.CREATE;
+        private       String         historyTableName = PostgresqlCreateSchemaApplier.DEFAULT_SCHEMA_HISTORY_TABLE_NAME;
+        private final EmitProperties emit             = new EmitProperties();
+
+        /**
+         * @return what happens to the schema - {@link SchemaMode#CREATE} unless configured
+         */
+        public SchemaMode getMode() {
+            return mode;
+        }
+
+        /**
+         * @param mode what happens to the schema
+         */
+        public void setMode(SchemaMode mode) {
+            this.mode = mode;
+        }
+
+        /**
+         * @return the schema history ledger table. <b>Concatenated into SQL</b> - validated with
+         * {@link PostgresqlUtil#checkIsValidTableOrColumnName(String)}, but only ever configure a trusted value
+         */
+        public String getHistoryTableName() {
+            return historyTableName;
+        }
+
+        /**
+         * @param historyTableName the schema history ledger table
+         */
+        public void setHistoryTableName(String historyTableName) {
+            this.historyTableName = historyTableName;
+        }
+
+        /**
+         * @return the {@code emit} mode's settings
+         */
+        public EmitProperties getEmit() {
+            return emit;
+        }
+    }
+
+    /**
+     * {@code essentials.schema.emit.*}
+     */
+    public static class EmitProperties {
+        private Path    scriptFile = Path.of("essentials-schema.sql");
+        private boolean exit       = true;
+
+        /**
+         * @return where the script is written - relative to the working directory unless absolute
+         */
+        public Path getScriptFile() {
+            return scriptFile;
+        }
+
+        /**
+         * @param scriptFile where the script is written
+         */
+        public void setScriptFile(Path scriptFile) {
+            this.scriptFile = scriptFile;
+        }
+
+        /**
+         * @return whether the application stops, with exit code 0, once the script is written. The Essentials
+         * lifecycles are never started in the emit mode either way
+         */
+        public boolean isExit() {
+            return exit;
+        }
+
+        /**
+         * @param exit whether the application stops once the script is written
+         */
+        public void setExit(boolean exit) {
+            this.exit = exit;
         }
     }
 }
