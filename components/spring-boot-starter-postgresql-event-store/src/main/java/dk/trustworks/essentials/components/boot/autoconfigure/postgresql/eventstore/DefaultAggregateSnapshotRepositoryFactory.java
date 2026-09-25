@@ -16,6 +16,7 @@
 
 package dk.trustworks.essentials.components.boot.autoconfigure.postgresql.eventstore;
 
+import dk.trustworks.essentials.components.foundation.schema.SchemaOwnership;
 import dk.trustworks.essentials.components.eventsourced.aggregates.snapshot.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.ConfigurableEventStore;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.AggregateType;
@@ -43,6 +44,7 @@ public class DefaultAggregateSnapshotRepositoryFactory implements AggregateSnaps
     private final EssentialsEventStoreProperties                                            properties;
     private final Optional<AggregateSnapshotJobRepository>                                  jobRepository;
     private final Optional<MeterRegistry>                                                   meterRegistry;
+    private final SchemaOwnership schemaOwnership;
 
     /**
      * Constructs a {@code DefaultAggregateSnapshotRepositoryFactory} with the specified dependencies.
@@ -67,6 +69,26 @@ public class DefaultAggregateSnapshotRepositoryFactory implements AggregateSnaps
                                               EssentialsEventStoreProperties properties,
                                               Optional<AggregateSnapshotJobRepository> jobRepository,
                                               Optional<MeterRegistry> meterRegistry) {
+        this(eventStore, unitOfWorkFactory, jsonSerializer, snapshotStore, resolver, durableSettings, properties, jobRepository, meterRegistry,
+             SchemaOwnership.COMPONENT);
+    }
+
+    /**
+     * @param schemaOwnership who creates the snapshot table of the {@link SnapshotExecutionMode#SYNC} repositories this
+     *                        factory creates - the same table the {@link AggregateSnapshotStore} bean contributes
+     */
+    @SuppressWarnings("OptionalUsedAsFieldOrParameterType")
+    DefaultAggregateSnapshotRepositoryFactory(ConfigurableEventStore<SeparateTablePerAggregateEventStreamConfiguration> eventStore,
+                                              EventStoreUnitOfWorkFactory<? extends EventStoreUnitOfWork> unitOfWorkFactory,
+                                              JSONEventSerializer jsonSerializer,
+                                              AggregateSnapshotStore snapshotStore,
+                                              AggregateSnapshotConfigurationResolver resolver,
+                                              DurableAsyncSnapshotSettings durableSettings,
+                                              EssentialsEventStoreProperties properties,
+                                              Optional<AggregateSnapshotJobRepository> jobRepository,
+                                              Optional<MeterRegistry> meterRegistry,
+                                              SchemaOwnership schemaOwnership) {
+        this.schemaOwnership = requireNonNull(schemaOwnership, "No schemaOwnership provided");
         this.eventStore = requireNonNull(eventStore, "No eventStore provided");
         this.unitOfWorkFactory = requireNonNull(unitOfWorkFactory, "No unitOfWorkFactory provided");
         this.jsonSerializer = requireNonNull(jsonSerializer, "No jsonSerializer provided");
@@ -101,6 +123,7 @@ public class DefaultAggregateSnapshotRepositoryFactory implements AggregateSnaps
                                                               .setAddNewSnapshotStrategy(triggerStrategy)
                                                               .setSnapshotDeletionStrategy(deletionStrategy)
                                                               .setMeterRegistry(meterRegistry)
+                                                              .setSchemaOwnership(schemaOwnership)
                                                               .build();
             case ASYNC_IN_MEMORY -> AsyncAggregateSnapshotRepository.builder()
                                                                     .setSnapshotStore(snapshotStore)

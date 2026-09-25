@@ -16,6 +16,7 @@
 
 package dk.trustworks.essentials.components.boot.autoconfigure.postgresql.eventstore;
 
+import dk.trustworks.essentials.components.boot.autoconfigure.postgresql.EssentialsComponentsProperties;
 import dk.trustworks.essentials.components.eventsourced.aggregates.api.*;
 import dk.trustworks.essentials.components.eventsourced.aggregates.archive.*;
 import dk.trustworks.essentials.components.eventsourced.aggregates.closingbooks.AggregateClosingBooksGenerationAccessProvider;
@@ -50,9 +51,11 @@ public class AggregateArchiveApiConfiguration {
 
     @Bean
     @ConditionalOnMissingBean
-    public AggregateArchiveRegistry aggregateArchiveRegistry(HandleAwareUnitOfWorkFactory<? extends HandleAwareUnitOfWork> unitOfWorkFactory) {
+    public AggregateArchiveRegistry aggregateArchiveRegistry(HandleAwareUnitOfWorkFactory<? extends HandleAwareUnitOfWork> unitOfWorkFactory,
+                                                             EssentialsComponentsProperties essentialsComponentsProperties) {
         return PostgresqlAggregateArchiveRegistry.builder()
                                                  .setUnitOfWorkFactory(unitOfWorkFactory)
+                                                 .setSchemaOwnership(essentialsComponentsProperties.getSchema().getMode().schemaOwnership())
                                                  .build();
     }
 

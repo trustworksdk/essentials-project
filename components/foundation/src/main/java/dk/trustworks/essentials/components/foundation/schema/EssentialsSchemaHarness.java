@@ -28,9 +28,10 @@ import static dk.trustworks.essentials.shared.MessageFormatter.msg;
  * <p>
  * Ordering is by {@link EssentialsSchemaContributor#order()}, then {@link EssentialsSchemaContributor#moduleId()}, so it
  * never depends on bean-construction order; contributors that tie keep their registration order. Several contributors
- * may share a module id - two durable-queue tables in one database are two instances of one module - but before the
- * applier sees anything the harness rejects two changes with the same {@code (module, changeId, objectName)}, which
- * would make the ledger ambiguous.
+ * may share a module id - two durable-queue tables in one database are two instances of one module. Two changes with
+ * the same {@code (module, changeId, objectName)} are one change: described identically - two components over the
+ * same table, say - the second is dropped; described differently, the harness rejects them before the applier sees
+ * anything, as the ledger could record only one of them.
  */
 public final class EssentialsSchemaHarness {
     private static final Logger log = LoggerFactory.getLogger(EssentialsSchemaHarness.class);
@@ -62,19 +63,25 @@ public final class EssentialsSchemaHarness {
     public List<SchemaChangeSet> collect() {
         var ordered = new ArrayList<EssentialsSchemaContributor>(contributors);
         ordered.sort(ORDERING);
-        var identities = new HashSet<String>();
+        var checksums  = new HashMap<String, String>();
         var changeSets = new ArrayList<SchemaChangeSet>(ordered.size());
         for (var contributor : ordered) {
             var moduleId = requireNonNull(contributor.moduleId(), "Contributor {} has no moduleId", contributor.getClass().getName());
             var changes = requireNonNull(contributor.contribute(context), "Contributor '{}' returned no change list", moduleId);
+            var kept    = new ArrayList<SchemaChange>(changes.size());
             for (var change : changes) {
                 requireNonNull(change, "Contributor '{}' returned a null change", moduleId);
-                if (!identities.add(moduleId + '\u0000' + change.changeId() + '\u0000' + change.objectName())) {
-                    throw new IllegalStateException(msg("Module '{}' change '{}' is contributed twice for object '{}' - by {}", moduleId, change.changeId(), change.objectName(),
-                                                        contributor.getClass().getName()));
+                var earlier = checksums.putIfAbsent(moduleId + '\u0000' + change.changeId() + '\u0000' + change.objectName(), change.checksum());
+                if (earlier == null) {
+                    kept.add(change);
+                } else if (!earlier.equals(change.checksum())) {
+                    throw new IllegalStateException(msg("Module '{}' change '{}' is contributed twice for object '{}', with different statements - the second by {}",
+                                                        moduleId, change.changeId(), change.objectName(), contributor.getClass().getName()));
                 }
             }
-            changeSets.add(new SchemaChangeSet(moduleId, contributor.order(), changes));
+            if (!kept.isEmpty()) {
+                changeSets.add(new SchemaChangeSet(moduleId, contributor.order(), kept));
+            }
         }
         return changeSets;
     }

@@ -62,6 +62,18 @@ public final class PostgresqlEventStreamGapHandler<CONFIG extends AggregateEvent
      * @param unitOfWorkFactory the unit of work factory that coordinates the event store {@link UnitOfWork}
      */
     public PostgresqlEventStreamGapHandler(EventStoreUnitOfWorkFactory<?> unitOfWorkFactory) {
+        this(unitOfWorkFactory, SchemaOwnership.COMPONENT);
+    }
+
+    /**
+     * The default configuration of {@link #PostgresqlEventStreamGapHandler(EventStoreUnitOfWorkFactory)}, plus who
+     * creates the gap tables.
+     *
+     * @param unitOfWorkFactory the unit of work factory that coordinates the event store {@link UnitOfWork}
+     * @param schemaOwnership   {@link SchemaOwnership#COMPONENT} creates the gap tables now; {@link SchemaOwnership#HARNESS}
+     *                          leaves them to an {@link EssentialsSchemaHarness}
+     */
+    public PostgresqlEventStreamGapHandler(EventStoreUnitOfWorkFactory<?> unitOfWorkFactory, SchemaOwnership schemaOwnership) {
         this(unitOfWorkFactory,
              Duration.ofSeconds(60),
              (forAggregateType, globalOrderQueryRange, allTransientGaps) -> {
@@ -72,7 +84,8 @@ public final class PostgresqlEventStreamGapHandler<CONFIG extends AggregateEvent
                                                                     .map(Pair::_1)
                                                                     .collect(Collectors.toList()) : NO_GAPS;
              },
-             ResolveTransientGapsToPermanentGapsPromotionStrategy.thresholdBased(120));
+             ResolveTransientGapsToPermanentGapsPromotionStrategy.thresholdBased(120),
+             schemaOwnership);
     }
 
     /**

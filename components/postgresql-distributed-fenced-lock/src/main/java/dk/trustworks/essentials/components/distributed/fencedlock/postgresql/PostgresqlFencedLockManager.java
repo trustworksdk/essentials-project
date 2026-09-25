@@ -19,13 +19,14 @@ package dk.trustworks.essentials.components.distributed.fencedlock.postgresql;
 import dk.trustworks.essentials.components.foundation.IOExceptionUtil;
 import dk.trustworks.essentials.components.foundation.fencedlock.*;
 import dk.trustworks.essentials.components.foundation.postgresql.PostgresqlUtil;
+import dk.trustworks.essentials.components.foundation.schema.*;
 import dk.trustworks.essentials.components.foundation.transaction.UnitOfWork;
 import dk.trustworks.essentials.components.foundation.transaction.jdbi.*;
 import dk.trustworks.essentials.reactive.*;
 import org.jdbi.v3.core.Jdbi;
 
 import java.time.*;
-import java.util.Optional;
+import java.util.*;
 
 import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 
@@ -51,7 +52,9 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
  * <b>Failure to adequately sanitize and validate this value could expose the application to SQL injection
  * vulnerabilities, compromising the security and integrity of the database.</b>
  */
-public final class PostgresqlFencedLockManager extends DBFencedLockManager<HandleAwareUnitOfWork, DBFencedLock> {
+public final class PostgresqlFencedLockManager extends DBFencedLockManager<HandleAwareUnitOfWork, DBFencedLock> implements EssentialsSchemaContributor {
+    private final PostgresqlFencedLockStorage schemaStorage;
+
     /**
      * <u><b>Security:</b></u><br>
      * To support customization of storage table name, the {@code fencedLocksTableName} will be directly used in constructing SQL statements
@@ -116,16 +119,8 @@ public final class PostgresqlFencedLockManager extends DBFencedLockManager<Handl
            Duration lockTimeOut,
            Duration lockConfirmationInterval,
            boolean releaseAcquiredLocksInCaseOfIOExceptionsDuringLockConfirmation) {
-        super(new PostgresqlFencedLockStorage(jdbi,
-                                              fencedLocksTableName),
-              unitOfWorkFactory,
-              FencedLockManagerSettings.builder()
-                                       .setLockManagerInstanceId(requireNonNull(lockManagerInstanceId, "No lockManagerInstanceId option provided"))
-                                       .setLockTimeOut(lockTimeOut)
-                                       .setLockConfirmationInterval(lockConfirmationInterval)
-                                       .setReleaseAcquiredLocksInCaseOfIOExceptionsDuringLockConfirmation(releaseAcquiredLocksInCaseOfIOExceptionsDuringLockConfirmation)
-                                       .build(),
-              null);
+        this(jdbi, unitOfWorkFactory, lockManagerInstanceId, fencedLocksTableName, lockTimeOut, lockConfirmationInterval,
+             releaseAcquiredLocksInCaseOfIOExceptionsDuringLockConfirmation, Optional.empty());
     }
 
     /**
@@ -168,8 +163,41 @@ public final class PostgresqlFencedLockManager extends DBFencedLockManager<Handl
                                        Duration lockConfirmationInterval,
                                        boolean releaseAcquiredLocksInCaseOfIOExceptionsDuringLockConfirmation,
                                        Optional<EventBus> eventBus) {
-        super(new PostgresqlFencedLockStorage(jdbi,
-                                              fencedLocksTableName),
+        this(jdbi, unitOfWorkFactory, lockManagerInstanceId, fencedLocksTableName, lockTimeOut, lockConfirmationInterval,
+             releaseAcquiredLocksInCaseOfIOExceptionsDuringLockConfirmation, eventBus, SchemaOwnership.COMPONENT);
+    }
+
+    /**
+     * The {@link PostgresqlFencedLockManagerBuilder}'s constructor.
+     *
+     * @param schemaOwnership {@link SchemaOwnership#COMPONENT} creates the lock table when the manager starts;
+     *                        {@link SchemaOwnership#HARNESS} leaves it to an {@link EssentialsSchemaHarness} this manager
+     *                        is registered with
+     */
+    @SuppressWarnings("OptionalUsedAsFieldOrParameterType")
+    PostgresqlFencedLockManager(Jdbi jdbi,
+                                HandleAwareUnitOfWorkFactory<? extends HandleAwareUnitOfWork> unitOfWorkFactory,
+                                Optional<String> lockManagerInstanceId,
+                                String fencedLocksTableName,
+                                Duration lockTimeOut,
+                                Duration lockConfirmationInterval,
+                                boolean releaseAcquiredLocksInCaseOfIOExceptionsDuringLockConfirmation,
+                                Optional<EventBus> eventBus,
+                                SchemaOwnership schemaOwnership) {
+        this(new PostgresqlFencedLockStorage(jdbi, fencedLocksTableName, schemaOwnership),
+             unitOfWorkFactory, lockManagerInstanceId, lockTimeOut, lockConfirmationInterval,
+             releaseAcquiredLocksInCaseOfIOExceptionsDuringLockConfirmation, eventBus);
+    }
+
+    @SuppressWarnings("OptionalUsedAsFieldOrParameterType")
+    private PostgresqlFencedLockManager(PostgresqlFencedLockStorage lockStorage,
+                                        HandleAwareUnitOfWorkFactory<? extends HandleAwareUnitOfWork> unitOfWorkFactory,
+                                        Optional<String> lockManagerInstanceId,
+                                        Duration lockTimeOut,
+                                        Duration lockConfirmationInterval,
+                                        boolean releaseAcquiredLocksInCaseOfIOExceptionsDuringLockConfirmation,
+                                        Optional<EventBus> eventBus) {
+        super(lockStorage,
               unitOfWorkFactory,
               FencedLockManagerSettings.builder()
                                        .setLockManagerInstanceId(requireNonNull(lockManagerInstanceId, "No lockManagerInstanceId option provided"))
@@ -178,6 +206,25 @@ public final class PostgresqlFencedLockManager extends DBFencedLockManager<Handl
                                        .setReleaseAcquiredLocksInCaseOfIOExceptionsDuringLockConfirmation(releaseAcquiredLocksInCaseOfIOExceptionsDuringLockConfirmation)
                                        .build(),
               requireNonNull(eventBus, "No eventBus option provided").orElse(null));
+        this.schemaStorage = lockStorage;
+    }
+
+    /**
+     * The lock table, as contributed by this manager's {@link PostgresqlFencedLockStorage}.
+     */
+    @Override
+    public String moduleId() {
+        return schemaStorage.moduleId();
+    }
+
+    @Override
+    public int order() {
+        return schemaStorage.order();
+    }
+
+    @Override
+    public List<SchemaChange> contribute(SchemaContext context) {
+        return schemaStorage.contribute(context);
     }
 
     /**
