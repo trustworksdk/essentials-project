@@ -24,6 +24,7 @@ This module implements the `MessageQueue` SPI it ships — it is **not** an impl
 - [Transactional Enqueue (Outbox)](#transactional-enqueue-outbox)
 - [Pull Sessions](#pull-sessions)
 - [Table Schema](#table-schema)
+  - [Database rights](#database-rights)
 - [Configuration Reference](#configuration-reference)
 - [Shard Count, Scaling and Autoscaling](#shard-count-scaling-and-autoscaling)
 - [Sizing Formulas](#sizing-formulas)
@@ -464,6 +465,25 @@ Created by `ShardOwnedSchema.initialize(dataSource)`. Names are fixed.
 | `shard_queue_unordered_readable` / `_ordered_readable` / `_dead_letter_readable` | Views for psql: queue **name** as a column, payload as text where it is valid UTF-8, hex otherwise |
 
 Payloads are `bytea`. **Read them in psql through the views, not the tables.**
+
+Besides these, `registerQueue` creates **one sequence per unordered shard plus one for the ordered lane, per
+queue** (`shard_queue_seq_q<queue>_s<shard>`, `shard_queue_ordered_seq_q<queue>`), and `growShardCount` creates
+the new shards' sequences.
+
+### Database rights
+
+**The shard-owned engine needs the right to create sequences at runtime**, whatever else manages your schema.
+Each queue's sequences are named after the queue id the registry assigns when the queue registers, so they
+cannot be part of a script written beforehand. Under the schema harness this means:
+
+- `create` mode (the default): everything, sequences included, is created and recorded as usual.
+- `validate` / `emit` / `external`: the tables, views and fixed sequences come from the script like every other
+  module's schema, but each queue's sequences are created by the engine itself when the queue registers - under
+  the bootstrap lock, as without a harness - and are not recorded in the ledger.
+  `ShardOwnedSchemaContributor` logs a warning saying so when the harness attaches it.
+
+If your database user has no DDL rights at all, grant `CREATE` on the schema for the sequences, or register
+every queue once with a user that has them.
 
 ## Configuration Reference
 

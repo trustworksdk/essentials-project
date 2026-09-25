@@ -63,7 +63,10 @@ class PostgresqlValidateAndEmitSchemaApplierIT {
 
     @Test
     void validate_passes_once_the_create_applier_has_applied_the_same_schema() {
-        new PostgresqlCreateSchemaApplier(jdbi).apply(schema());
+        var creator = new PostgresqlCreateSchemaApplier(jdbi);
+        assertThat(creator.createsSchema()).isTrue();
+        assertThat(creator.sinkFor(contributor("orders")).createsSchema()).isTrue();
+        creator.apply(schema());
 
         new PostgresqlValidateSchemaApplier(jdbi).apply(schema());
     }
@@ -80,12 +83,14 @@ class PostgresqlValidateAndEmitSchemaApplierIT {
     }
 
     @Test
-    void emit_writes_the_script_and_fails_until_it_has_been_run_then_passes() throws Exception {
+    void emit_only_writes_the_script_and_validate_accepts_the_database_once_it_has_been_run() throws Exception {
         var scriptFile = tempDir.resolve("schema/essentials.sql");
-        var emitter    = new PostgresqlEmitSchemaApplier(scriptFile, jdbi);
+        var emitter    = new PostgresqlEmitSchemaApplier(scriptFile);
 
-        assertThatThrownBy(() -> emitter.apply(schema())).isInstanceOf(SchemaValidationException.class);
+        emitter.apply(schema());
+        assertThat(emitter.createsSchema()).isFalse();
         assertThat(exists("orders")).as("emit executes nothing").isFalse();
+        assertThatThrownBy(() -> new PostgresqlValidateSchemaApplier(jdbi).apply(schema())).isInstanceOf(SchemaValidationException.class);
 
         var script = Files.readString(scriptFile);
         assertThat(script).contains("-- Module orders (order 1000)")
@@ -96,7 +101,7 @@ class PostgresqlValidateAndEmitSchemaApplierIT {
         assertThat(exists("orders")).isTrue();
         assertThat(exists("orders_idx")).isTrue();
         assertThat(ledgerAppliedBy()).containsOnly(PostgresqlSchemaScript.APPLIED_BY);
-        new PostgresqlEmitSchemaApplier(tempDir.resolve("again.sql"), jdbi).apply(schema());
+        new PostgresqlValidateSchemaApplier(jdbi).apply(schema());
     }
 
     @Test
@@ -116,14 +121,13 @@ class PostgresqlValidateAndEmitSchemaApplierIT {
     @Test
     void a_later_registration_is_appended_to_the_script_as_its_own_block() throws Exception {
         var scriptFile  = tempDir.resolve("essentials.sql");
-        var emitter     = new PostgresqlEmitSchemaApplier(scriptFile, jdbi);
+        var emitter     = new PostgresqlEmitSchemaApplier(scriptFile);
         var contributor = contributor("products");
-        assertThatThrownBy(() -> emitter.apply(schema())).isInstanceOf(SchemaValidationException.class);
+        emitter.apply(schema());
 
-        assertThatThrownBy(() -> emitter.sinkFor(contributor).apply(List.of(SchemaChange.repeatable("products-table", "products",
-                                                                                                    "CREATE TABLE IF NOT EXISTS products (id BIGINT)"))))
-                .as("a registration fails validation until the appended block has been run")
-                .isInstanceOf(SchemaValidationException.class);
+        var sink = emitter.sinkFor(contributor);
+        assertThat(sink.createsSchema()).isFalse();
+        sink.apply(List.of(SchemaChange.repeatable("products-table", "products", "CREATE TABLE IF NOT EXISTS products (id BIGINT)")));
 
         var script = Files.readString(scriptFile);
         assertThat(script).contains("-- Registered after start-up").contains("-- Module products");

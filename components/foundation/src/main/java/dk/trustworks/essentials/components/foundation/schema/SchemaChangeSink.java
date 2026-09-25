@@ -30,4 +30,11 @@ public interface SchemaChangeSink {
      *                          fails
      */
     void apply(List<SchemaChange> changes);
+
+    /**
+     * @return whether {@link #apply} executes the changes - see {@link SchemaApplier#createsSchema()}
+     */
+    default boolean createsSchema() {
+        return false;
+    }
 }

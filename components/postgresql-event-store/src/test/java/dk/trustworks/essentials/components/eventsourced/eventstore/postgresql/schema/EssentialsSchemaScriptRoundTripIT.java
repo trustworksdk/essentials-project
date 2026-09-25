@@ -49,7 +49,7 @@ import static org.mockito.Mockito.mock;
 
 /**
  * Every PostgreSQL contributor the event store's classpath reaches, through the emit path: the script they render is
- * run as a DBA would run it, after which the validate mode passes and the create mode finds nothing to record that
+ * run as a DBA would run it - emit itself needs no database - after which the validate mode passes and the create mode finds nothing to record that
  * the script did not. Guards that every real statement - PL/pgSQL bodies, DO blocks, triggers - survives being
  * written out as a script.
  */
@@ -109,9 +109,9 @@ class EssentialsSchemaScriptRoundTripIT {
     @Test
     void the_emitted_script_creates_what_validate_then_accepts() throws Exception {
         var scriptFile = tempDir.resolve("essentials.sql");
-        assertThatThrownBy(() -> harness(new PostgresqlEmitSchemaApplier(scriptFile, jdbi)).apply())
-                .isInstanceOf(SchemaValidationException.class);
+        harness(new PostgresqlEmitSchemaApplier(scriptFile)).apply();
         assertThat(exists("orders_events")).as("emit executes nothing").isFalse();
+        assertThatThrownBy(() -> harness(new PostgresqlValidateSchemaApplier(jdbi)).apply()).isInstanceOf(SchemaValidationException.class);
 
         run(Files.readString(scriptFile));
 
@@ -124,7 +124,7 @@ class EssentialsSchemaScriptRoundTripIT {
     @Test
     void the_script_records_exactly_the_ledger_the_create_mode_records() throws Exception {
         var scriptFile = tempDir.resolve("essentials.sql");
-        assertThatThrownBy(() -> harness(new PostgresqlEmitSchemaApplier(scriptFile, jdbi)).apply()).isInstanceOf(SchemaValidationException.class);
+        harness(new PostgresqlEmitSchemaApplier(scriptFile)).apply();
         var script = Files.readString(scriptFile);
         run(script);
         run(script);

@@ -17,7 +17,6 @@ package dk.trustworks.essentials.components.foundation.postgresql;
 
 import dk.trustworks.essentials.components.foundation.schema.*;
 import dk.trustworks.essentials.shared.network.Network;
-import org.jdbi.v3.core.Jdbi;
 import org.slf4j.*;
 
 import java.io.*;
@@ -29,63 +28,54 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 
 /**
- * The {@code emit} mode: executes nothing, writes the complete schema as one script (see
- * {@link PostgresqlSchemaScript}), and then validates with {@link PostgresqlValidateSchemaApplier} - so startup fails
- * until someone with DDL rights has run the script, and passes once they have.
+ * The {@code emit} mode: a pre-step that writes the complete schema as one script (see {@link PostgresqlSchemaScript})
+ * and executes nothing. It needs no database connection - the script is rendered from what the contributors describe
+ * - so it can run in a build or deployment pipeline. Hand the script to whoever holds DDL rights, then run the
+ * application with {@link PostgresqlValidateSchemaApplier}, which refuses to start until the script has been run.
  * <p>
- * Emit once against any environment, hand the script over, and run {@code validate} from then on. Objects a
- * {@link DynamicSchemaContributor} registers later are appended to the same file as blocks of their own.
+ * Objects a {@link DynamicSchemaContributor} registers later are appended to the same file as blocks of their own.
  */
 public final class PostgresqlEmitSchemaApplier implements SchemaApplier {
     private static final Logger log = LoggerFactory.getLogger(PostgresqlEmitSchemaApplier.class);
 
-    private final Path                            scriptFile;
-    private final PostgresqlSchemaScript          script;
-    private final PostgresqlValidateSchemaApplier validator;
-    private final AtomicBoolean                   written = new AtomicBoolean();
+    private final Path                   scriptFile;
+    private final PostgresqlSchemaScript script;
+    private final AtomicBoolean          written = new AtomicBoolean();
 
     /**
-     * Uses {@link PostgresqlCreateSchemaApplier#DEFAULT_SCHEMA_HISTORY_TABLE_NAME}.
+     * Records into {@link PostgresqlCreateSchemaApplier#DEFAULT_SCHEMA_HISTORY_TABLE_NAME}.
      *
      * @param scriptFile where the script is written - replaced on the first {@link #apply}
-     * @param jdbi       the database to validate against afterwards
      */
-    public PostgresqlEmitSchemaApplier(Path scriptFile, Jdbi jdbi) {
-        this(scriptFile, new PostgresqlValidateSchemaApplier(jdbi));
+    public PostgresqlEmitSchemaApplier(Path scriptFile) {
+        this(scriptFile, PostgresqlCreateSchemaApplier.DEFAULT_SCHEMA_HISTORY_TABLE_NAME);
     }
 
     /**
-     * @param scriptFile where the script is written - replaced on the first {@link #apply}
-     * @param validator  what the database is validated with afterwards; its ledger table is the one the script records into
+     * @param scriptFile             where the script is written - replaced on the first {@link #apply}
+     * @param schemaHistoryTableName the ledger table the script records into - the one the validate mode reads
      */
-    public PostgresqlEmitSchemaApplier(Path scriptFile, PostgresqlValidateSchemaApplier validator) {
+    public PostgresqlEmitSchemaApplier(Path scriptFile, String schemaHistoryTableName) {
         this.scriptFile = requireNonNull(scriptFile, "No scriptFile provided");
-        this.validator = requireNonNull(validator, "No validator provided");
-        this.script = new PostgresqlSchemaScript(validator.getSchemaHistoryTableName());
+        this.script = new PostgresqlSchemaScript(schemaHistoryTableName);
     }
 
     public Path getScriptFile() {
         return scriptFile;
     }
 
-    /**
-     * @throws SchemaValidationException if the database does not have the schema yet - the expected outcome until the
-     *                                   written script has been run
-     */
     @Override
     public void apply(List<SchemaChangeSet> changeSets) {
         requireNonNull(changeSets, "No changeSets provided");
         var first = written.compareAndSet(false, true);
         var text  = first ? script.render(changeSets, Network.hostName()) : script.renderAddition(changeSets);
         write(text, first);
-        log.info("{} the schema of {} change set(s), {} change(s), to '{}' - validating the database against it next",
+        log.info("{} the schema of {} change set(s), {} change(s), to '{}'",
                  first ? "Wrote" : "Appended",
                  changeSets.size(),
                  changeSets.stream().mapToInt(changeSet -> changeSet.changes().size()).sum(),
                  scriptFile.toAbsolutePath());
-        validator.apply(changeSets);
     }
-
     private synchronized void write(String text, boolean replace) {
         try {
             var parent = scriptFile.toAbsolutePath().getParent();

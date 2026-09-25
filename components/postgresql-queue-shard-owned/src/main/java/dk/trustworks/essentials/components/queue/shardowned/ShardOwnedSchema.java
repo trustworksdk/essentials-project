@@ -470,7 +470,7 @@ public final class ShardOwnedSchema {
      */
     public static RegisteredQueue registerQueue(DataSource dataSource, QueueName name, int shardCount,
                                                 int orderedUnits) throws SQLException {
-        return registerQueue(dataSource, name, shardCount, orderedUnits, lockedExecutor(dataSource));
+        return registerQueue(dataSource, name, shardCount, orderedUnits, lockedQueueDdl(dataSource));
     }
 
     /**
@@ -557,7 +557,7 @@ public final class ShardOwnedSchema {
      * @throws IllegalStateException if the count is not an increase
      */
     public static RegisteredQueue growShardCount(DataSource dataSource, QueueName name, int newShardCount) throws SQLException {
-        return growShardCount(dataSource, name, newShardCount, lockedExecutor(dataSource));
+        return growShardCount(dataSource, name, newShardCount, lockedQueueDdl(dataSource));
     }
 
     /**
@@ -749,7 +749,7 @@ public final class ShardOwnedSchema {
 
     public static void registerQueue(DataSource dataSource, short queueId, int shardCount,
                                      int orderedUnits) throws SQLException {
-        registerQueue(dataSource, queueId, shardCount, orderedUnits, lockedExecutor(dataSource));
+        registerQueue(dataSource, queueId, shardCount, orderedUnits, lockedQueueDdl(dataSource));
     }
 
     /**
@@ -810,7 +810,11 @@ public final class ShardOwnedSchema {
         void execute(short queueId, List<String> statements) throws SQLException;
     }
 
-    private static QueueDdlExecutor lockedExecutor(DataSource dataSource) {
+    /**
+     * @return the executor the registration overloads without one use: the statements run under the framework's
+     * bootstrap advisory lock, in one transaction, on {@code dataSource}
+     */
+    public static QueueDdlExecutor lockedQueueDdl(DataSource dataSource) {
         requireNonNull(dataSource, "No dataSource provided");
         return (queueId, statements) -> withBootstrapLock(dataSource, statement -> {
             for (var sql : statements) {

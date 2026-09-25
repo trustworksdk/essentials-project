@@ -16,7 +16,7 @@
 package dk.trustworks.essentials.components.queue.shardowned.adapter;
 
 import com.zaxxer.hikari.*;
-import dk.trustworks.essentials.components.foundation.postgresql.PostgresqlCreateSchemaApplier;
+import dk.trustworks.essentials.components.foundation.postgresql.*;
 import dk.trustworks.essentials.components.foundation.schema.*;
 import dk.trustworks.essentials.components.queue.shardowned.ShardOwnedSchema;
 import dk.trustworks.essentials.components.queue.shardowned.spi.QueueName;
@@ -51,7 +51,7 @@ class ShardOwnedSchemaContributorIT {
         config.setPassword(postgres.getPassword());
         dataSource = new HikariDataSource(config);
         jdbi = Jdbi.create(dataSource);
-        contributor = new ShardOwnedSchemaContributor();
+        contributor = new ShardOwnedSchemaContributor(dataSource);
     }
 
     @AfterEach
@@ -66,7 +66,7 @@ class ShardOwnedSchemaContributorIT {
         assertThat(exists(ShardOwnedSchema.DLQ_VIEW)).isTrue();
         assertThat(ledger("engine-schema")).containsExactly(ShardOwnedSchema.REGISTRY_TABLE);
 
-        var queue = contributor.registerQueue(dataSource, ORDERS, 3, ShardOwnedSchema.ORDERED_UNITS);
+        var queue = contributor.registerQueue(ORDERS, 3, ShardOwnedSchema.ORDERED_UNITS);
 
         assertThat(exists(ShardOwnedSchema.orderedSequenceName(queue.queueId()))).isTrue();
         for (var shard = 0; shard < 3; shard++) {
@@ -78,10 +78,10 @@ class ShardOwnedSchemaContributorIT {
     @Test
     void growing_a_queue_creates_the_new_shards_sequences_and_re_records_the_same_change() throws Exception {
         harness().apply();
-        var queue    = contributor.registerQueue(dataSource, ORDERS, 2, ShardOwnedSchema.ORDERED_UNITS);
+        var queue    = contributor.registerQueue(ORDERS, 2, ShardOwnedSchema.ORDERED_UNITS);
         var original = checksum("shard_queue_q" + queue.queueId());
 
-        contributor.growShardCount(dataSource, ORDERS, 4);
+        contributor.growShardCount(ORDERS, 4);
 
         assertThat(exists(ShardOwnedSchema.sequenceName(queue.queueId(), 3))).isTrue();
         assertThat(ledger("queue-sequences")).containsExactly("shard_queue_q" + queue.queueId());
@@ -96,7 +96,7 @@ class ShardOwnedSchemaContributorIT {
 
         // Re-registering is a no-op for the registry and re-runs only CREATE ... IF NOT EXISTS
         harness().apply();
-        contributor.registerQueue(dataSource, ORDERS, 2, ShardOwnedSchema.ORDERED_UNITS);
+        contributor.registerQueue(ORDERS, 2, ShardOwnedSchema.ORDERED_UNITS);
 
         assertThat(ledger("engine-schema")).containsExactly(ShardOwnedSchema.REGISTRY_TABLE);
         assertThat(ledger("queue-sequences")).containsExactly("shard_queue_q" + queue.queueId());
@@ -116,6 +116,36 @@ class ShardOwnedSchemaContributorIT {
         assertThat(created).containsExactlyInAnyOrder(ShardOwnedSchema.orderedSequenceName(queue.queueId()),
                                                       ShardOwnedSchema.sequenceName(queue.queueId(), 0),
                                                       ShardOwnedSchema.sequenceName(queue.queueId(), 1));
+    }
+
+    @Test
+    void in_a_mode_that_does_not_create_the_schema_the_engine_creates_queue_sequences_itself_and_warns_once() throws Exception {
+        // The DBA ran the script: the fixed schema is there and recorded
+        var script = new PostgresqlSchemaScript(PostgresqlCreateSchemaApplier.DEFAULT_SCHEMA_HISTORY_TABLE_NAME)
+                .render(new EssentialsSchemaHarness(new PostgresqlCreateSchemaApplier(jdbi), SchemaContext.empty(), List.of(new ShardOwnedSchemaContributor(dataSource))).collect(),
+                        "test");
+        jdbi.useHandle(handle -> {
+            try (var statement = handle.getConnection().createStatement()) {
+                statement.execute(script);
+            }
+        });
+
+        var logger   = (ch.qos.logback.classic.Logger) org.slf4j.LoggerFactory.getLogger(ShardOwnedSchemaContributor.class);
+        var appender = new ch.qos.logback.core.read.ListAppender<ch.qos.logback.classic.spi.ILoggingEvent>();
+        appender.start();
+        logger.addAppender(appender);
+        try {
+            new EssentialsSchemaHarness(new PostgresqlValidateSchemaApplier(jdbi), SchemaContext.empty(), List.of(contributor)).apply();
+            var queue = contributor.registerQueue(ORDERS, 2, ShardOwnedSchema.ORDERED_UNITS);
+
+            assertThat(exists(ShardOwnedSchema.sequenceName(queue.queueId(), 1))).as("created directly, not validated").isTrue();
+            assertThat(ledger("queue-sequences")).as("and not recorded as a harness change").isEmpty();
+            assertThat(appender.list).filteredOn(event -> event.getLevel() == ch.qos.logback.classic.Level.WARN)
+                                     .singleElement()
+                                     .satisfies(event -> assertThat(event.getFormattedMessage()).contains("needs the right to create sequences"));
+        } finally {
+            logger.detachAppender(appender);
+        }
     }
 
     private EssentialsSchemaHarness harness() {

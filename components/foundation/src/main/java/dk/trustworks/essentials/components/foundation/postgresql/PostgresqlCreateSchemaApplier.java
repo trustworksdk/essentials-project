@@ -138,6 +138,14 @@ public final class PostgresqlCreateSchemaApplier implements SchemaApplier {
         this.appliedBy = requireNonBlank(appliedBy, "No appliedBy provided");
     }
 
+    /**
+     * @return {@code true}: this applier executes the statements
+     */
+    @Override
+    public boolean createsSchema() {
+        return true;
+    }
+
     public String getSchemaHistoryTableName() {
         return schemaHistoryTableName;
     }

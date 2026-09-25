@@ -39,6 +39,26 @@ public interface SchemaApplier {
      */
     default SchemaChangeSink sinkFor(EssentialsSchemaContributor contributor) {
         FailFast.requireNonNull(contributor, "No contributor provided");
-        return changes -> apply(List.of(new SchemaChangeSet(contributor.moduleId(), contributor.order(), changes)));
+        var createsSchema = createsSchema();
+        return new SchemaChangeSink() {
+            @Override
+            public void apply(List<SchemaChange> changes) {
+                SchemaApplier.this.apply(List.of(new SchemaChangeSet(contributor.moduleId(), contributor.order(), changes)));
+            }
+
+            @Override
+            public boolean createsSchema() {
+                return createsSchema;
+            }
+        };
+    }
+
+    /**
+     * @return whether {@link #apply} executes the statements - {@code true} for the create mode; {@code false} for
+     * appliers that only verify or write them out, or leave them to someone else. A contributor that cannot describe
+     * everything up front uses it to decide whether it must create what it registers later itself
+     */
+    default boolean createsSchema() {
+        return false;
     }
 }
