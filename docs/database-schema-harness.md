@@ -276,12 +276,12 @@ silently skipping.
 **What the ledger unlocks**, concretely:
 
 - **One-shot changes become possible.** `repeatable = false` runs once per `(module, change, object)` and never
-  again. The legacy index drops at `PostgresqlDurableQueues:526-533`, and the two more that the queue
-  refactor's Q1 adds, become one-shot and can be deleted from the codebase in a later release instead of
-  accumulating forever.
-- **`ALTER TABLE` stops being a special case.** `PostgresqlClosingBooksGenerationRepository:154` is a
-  hand-rolled migration today, kept safe only by `ADD COLUMN IF NOT EXISTS`. Under the ledger it is an ordinary
-  one-shot change.
+  again. The legacy index drops and the queue-statistics removal were meant to become one-shot; they stay
+  repeatable, because a 0.50 instance restarting during a rolling upgrade re-creates what they remove (§9, step 10).
+  Either way they can be deleted from the codebase in a later release.
+- **`ALTER TABLE` stops being a special case.** `PostgresqlClosingBooksGenerationRepository`'s
+  `ADD COLUMN IF NOT EXISTS` could be an ordinary one-shot change; it stays repeatable, as it is idempotent, and a
+  migration that is not can now be shipped as a one-shot.
 - **A non-idempotent change becomes expressible at all** — a backfill, a column type change, an index rebuild.
   None of which the framework can currently ship.
 
@@ -359,6 +359,18 @@ and all three Spring Boot starters. Mostly moving statements into a contributor 
 statement starting `CREATE`, `ALTER`, `DROP` or `TRUNCATE`. Wrapped in `FreezingArchRule.freeze(…)` in the
 usual way if the sweep does not finish in one pass, so the violation store's size is the progress metric.
 
+**As built (step 9).** `EssentialsSchemaRules.ddlLivesInSchemaContributors(…)` in `foundation-test`, run by
+`AbstractEssentialsSchemaRulesTest` subclasses in `spring-boot-starter-postgresql-event-store` (whose classpath
+reaches foundation, the fenced lock, the durable queues, the event store and the aggregates) and in
+`postgresql-queue-shard-owned`. ArchUnit exposes no string literals, so the condition reads each class file's
+constant pool, where literals, text blocks and string-concatenation recipes all end up; a class holding a
+statement is a contributor, is nested in one, or is on `ALLOWED_DDL_HOLDERS` with its reason: the statement
+holders `DurableQueuesSql` and `CdcSql`, the ledger `PostgresqlSchemaHistory`, `ListenNotify` (a public helper for
+application tables), `DefaultPostgresqlQueryStatisticsApi` (best-effort `CREATE EXTENSION pg_stat_statements`) and
+the engine's `ShardOwnedSchema`. The sweep finished, so the rule is **not frozen**: a new violation fails at once.
+It sees only DDL that starts a string constant; `EssentialsSchemaRulesTest` (foundation-test) proves what it does
+catch.
+
 **The starters gain one bean and one property block** — the harness, and `essentials.schema.*`. The harness
 bean must be constructed before any component whose DDL it now owns, which for the Spring path means the
 existing component beans take a dependency on it. Silent-startup-failure risk here is real: a component
@@ -419,7 +431,7 @@ consequence.
 the root `CLAUDE.md` Critical Gotchas because it crosses every module. Then `graphify update .`.
 
 **Interaction with the durable-queues refactor.** Settled: the refactor shipped first, so its `DROP INDEX IF EXISTS`
-statements are repeatable today and become one-shot changes in step 10.
+statements are repeatable today, and stay repeatable - see step 10 in §9.
 
 ---
 
@@ -436,10 +448,21 @@ statements are repeatable today and become one-shot changes in step 10.
 | 7 | Spring starter wiring, `essentials.schema.*` properties, ordering ITs | After 3, finalised after 6 |
 | 8 | Mongo contributors (rows 14, 17) + `MongoSchemaApplier` | After 3; independent of 4–7. **Deferred** (2026-09-25): not in 0.60 |
 | 9 | ArchUnit rule, frozen | After 4, 5 and 8 — it can only pass once the sweep is done |
-| 10 | Convert existing repeatable one-shots to `repeatable = false`: the legacy index drops, the closing-books `ALTER TABLE`, the queue refactor's index drops | After 4 |
+| 10 | ~~Convert existing repeatable one-shots to `repeatable = false`: the legacy index drops, the closing-books `ALTER TABLE`, the queue refactor's index drops~~ | **Skipped** (2026-09-25) - see below |
 | 11 | `essentials-schema-flyway` | After 6. Optional module, can slip past 0.60 |
 | 12 | `essentials-schema-liquibase` | After 11. Optional module, can slip past 0.60 |
 | 13 | Migration guide, docs, `graphify update .` | Release |
+
+**Why step 10 was skipped.** A multi-instance service upgrading from 0.50 runs both versions side by side, and a
+0.50 instance that restarts in that window runs its old DDL again: it re-creates the legacy queue indexes, and the
+queue-statistics table with its trigger - which then fires on every queue write, 0.60 instances' included, and
+keeps filling a table nothing cleans any more. As one-shot changes the 0.60 removals would already be recorded and
+never run again, so those leftovers would stay; as repeatable changes the next 0.60 restart removes them. And a
+one-shot buys nothing for these statements: every one is safe to repeat (`DROP … IF EXISTS`,
+`ADD COLUMN IF NOT EXISTS`, the guarded statistics `DO` block) and cheap, and deleting them in a later release works
+the same either way, as a change no longer contributed simply stops running. One-shot is for a change that must not
+run twice - a backfill, a column type change - and 0.60 has none. The mechanism (create applier, the emitted
+script's guard, their tests) stays for the first change that needs it.
 
 Steps 11 and 12 are the ones to drop if 0.60 gets tight; the seam they plug into is step 6, which is where the
 practical value is.
