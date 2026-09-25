@@ -18,6 +18,9 @@ package dk.trustworks.essentials.components.eventsourced.aggregates.closingbooks
 
 import dk.trustworks.essentials.components.eventsourced.aggregates.stateful.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.AggregateType;
+import dk.trustworks.essentials.components.foundation.schema.*;
+
+import java.util.List;
 
 import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 
@@ -46,7 +49,7 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
  * @param <LOGICAL_ID> the logical/business aggregate id type
  * @param <STREAM_ID>  the generation stream id type
  */
-public class ClosingBooksSetup<LOGICAL_ID, STREAM_ID> {
+public class ClosingBooksSetup<LOGICAL_ID, STREAM_ID> implements EssentialsSchemaContributor {
     private final AggregateType                                   aggregateType;
     private final Class<?>                                        aggregateImplementationType;
     private final ClosingBooksGenerationRepository<LOGICAL_ID>    generationRepository;
@@ -90,6 +93,34 @@ public class ClosingBooksSetup<LOGICAL_ID, STREAM_ID> {
 
     public ClosingBooksGenerationRepository<LOGICAL_ID> generationRepository() {
         return generationRepository;
+    }
+
+    /**
+     * The generation table of this setup's repository, when it is the PostgreSQL one - so a {@code ClosingBooksSetup}
+     * bean brings its table to the schema harness, which cannot see a repository that is not a bean itself.
+     */
+    @Override
+    public String moduleId() {
+        return generationRepository instanceof EssentialsSchemaContributor contributor
+               ? contributor.moduleId()
+               : PostgresqlClosingBooksGenerationRepository.MODULE_ID;
+    }
+
+    @Override
+    public int order() {
+        return generationRepository instanceof EssentialsSchemaContributor contributor
+               ? contributor.order()
+               : SchemaOrder.ORDER_AGGREGATES;
+    }
+
+    /**
+     * @return the repository's changes, or none when the repository is not a schema contributor
+     */
+    @Override
+    public List<SchemaChange> contribute(SchemaContext context) {
+        return generationRepository instanceof EssentialsSchemaContributor contributor
+               ? contributor.contribute(context)
+               : List.of();
     }
 
     public ClosingBooksCoordinator<LOGICAL_ID> coordinator() {

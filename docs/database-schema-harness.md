@@ -398,10 +398,13 @@ passed. The details:
   error, and the queues' sequences are created directly as decided above. `emit` registers nothing. A
   `ShardOwnedSchemaContributor` bean carries the fixed schema into the base starter's harness, and is absent when
   `essentials.shard-owned-queue.initialize-schema=false`.
-- Not covered: the closing-books generation repository that `ClosingBooksSetupBuilder` builds is application
-  code, not a starter bean, so the runner cannot see it; it keeps creating its own table. An application in a
-  non-create mode supplies its own `PostgresqlClosingBooksGenerationRepository` built with `HARNESS` and exposes
-  it as a bean.
+- Closing books: the generation repository is built by `ClosingBooksSetupBuilder` in application code and is not
+  a bean, but the application's `ClosingBooksSetup` is, so the setup implements `EssentialsSchemaContributor` and
+  hands on its repository's schema. Its ownership cannot be chosen by a starter, so an application outside
+  `create` passes it: `ClosingBooksSetupBuilder.setSchemaOwnership(essentialsComponentsProperties.getSchema()
+  .getMode().schemaOwnership())`, as the trading demo does. Without it the repository runs its DDL while it is
+  built, which a database user without DDL rights cannot do even when the table exists - PostgreSQL checks the
+  right to create before it checks for the table.
 - ITs: `EssentialsSchemaModeIT` (base starter), `EventStoreSchemaModeIT` (event store starter, including an
   AggregateType registered at runtime being refused in `validate`) and `ShardOwnedSchemaModeIT`.
 
@@ -431,7 +434,7 @@ statements are repeatable today and become one-shot changes in step 10.
 | 5 | `DynamicSchemaContributor`; convert rows 9 and 15; fold in `enableNotifyTriggerInstallation` | After 4. The riskiest step — the event store's table-per-`AggregateType` path, and the shard-owned engine's per-queue sequence |
 | 6 | `validate` and `emit` appliers | After 4; independent of 5 |
 | 7 | Spring starter wiring, `essentials.schema.*` properties, ordering ITs | After 3, finalised after 6 |
-| 8 | Mongo contributors (rows 14, 17) + `MongoSchemaApplier` | After 3; independent of 4–7 |
+| 8 | Mongo contributors (rows 14, 17) + `MongoSchemaApplier` | After 3; independent of 4–7. **Deferred** (2026-09-25): not in 0.60 |
 | 9 | ArchUnit rule, frozen | After 4, 5 and 8 — it can only pass once the sweep is done |
 | 10 | Convert existing repeatable one-shots to `repeatable = false`: the legacy index drops, the closing-books `ALTER TABLE`, the queue refactor's index drops | After 4 |
 | 11 | `essentials-schema-flyway` | After 6. Optional module, can slip past 0.60 |

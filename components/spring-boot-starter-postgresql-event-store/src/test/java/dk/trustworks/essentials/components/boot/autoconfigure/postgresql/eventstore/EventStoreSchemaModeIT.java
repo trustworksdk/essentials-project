@@ -20,7 +20,9 @@ import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.ev
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.persistence.AggregateEventStreamPersistenceStrategy;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.persistence.table_per_aggregate_type.SeparateTablePerAggregateEventStreamConfiguration;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.serializer.AggregateIdSerializer;
+import dk.trustworks.essentials.components.eventsourced.aggregates.closingbooks.ClosingBooksSetup;
 import dk.trustworks.essentials.components.foundation.schema.SchemaValidationException;
+import dk.trustworks.essentials.components.foundation.transaction.jdbi.*;
 import dk.trustworks.essentials.shared.security.EssentialsSecurityProvider;
 import org.junit.jupiter.api.*;
 import org.junit.jupiter.api.io.TempDir;
@@ -120,6 +122,49 @@ class EventStoreSchemaModeIT {
                                  .hasMessageContaining("'postgresql-event-store' change 'event-stream-table' on 'orders_events': not applied");
                      });
         assertThat(exists("orders_events")).isFalse();
+    }
+
+    @Test
+    void an_application_declared_closing_books_setup_brings_its_generation_table_to_the_harness() throws Exception {
+        var closingBooks = contextRunner.withUserConfiguration(ClosingBooksApplicationConfiguration.class);
+
+        closingBooks.withPropertyValues("essentials.schema.mode=validate")
+                    .run(ctx -> {
+                        assertThat(ctx).hasFailed();
+                        assertThat(rootCause(ctx.getStartupFailure())).isInstanceOf(SchemaValidationException.class)
+                                                                      .hasMessageContaining("'eventsourced-aggregates-closing-books' change 'generation-table'");
+                    });
+        assertThat(exists("aggregate_generations")).as("a HARNESS-owned setup runs no DDL while it is built").isFalse();
+
+        var scriptFile = tempDir.resolve("essentials-schema.sql");
+        closingBooks.withPropertyValues("essentials.schema.mode=emit",
+                                        "essentials.schema.emit.exit=false",
+                                        "essentials.schema.emit.script-file=" + scriptFile)
+                    .run(ctx -> assertThat(ctx).hasNotFailed());
+        assertThat(Files.readString(scriptFile)).contains("-- Module eventsourced-aggregates-closing-books");
+
+        closingBooks.run(ctx -> {
+            assertThat(ctx).as("create mode").hasNotFailed();
+            assertThat(exists("aggregate_generations")).isTrue();
+            assertThat(ledgerModules()).contains("eventsourced-aggregates-closing-books");
+        });
+    }
+
+    /**
+     * What an application writes: the setup is its own bean, built with the ownership the schema mode selects
+     */
+    @org.springframework.context.annotation.Configuration(proxyBeanMethods = false)
+    static class ClosingBooksApplicationConfiguration {
+        @org.springframework.context.annotation.Bean
+        ClosingBooksSetup<String, String> ordersClosingBooks(HandleAwareUnitOfWorkFactory<? extends HandleAwareUnitOfWork> unitOfWorkFactory,
+                                                             EssentialsComponentsProperties essentialsComponentsProperties) {
+            return ClosingBooksSetup.<String, String>builder(ORDERS, Object.class)
+                                    .setLogicalAggregateIdType(String.class)
+                                    .setStreamIdType(String.class)
+                                    .setUnitOfWorkFactory(unitOfWorkFactory)
+                                    .setSchemaOwnership(essentialsComponentsProperties.getSchema().getMode().schemaOwnership())
+                                    .build();
+        }
     }
 
     @SuppressWarnings("unchecked")
