@@ -393,6 +393,16 @@ protected abstract UOW_FACTORY createUnitOfWorkFactory();
 
 ## Test Utilities
 
+### Schema rules (ArchUnit)
+
+**Package**: `dk.trustworks.essentials.components.foundation.test.architecture`
+
+`EssentialsSchemaRules.ddlLivesInSchemaContributors(allowed)` fails for a class holding a `CREATE`/`ALTER`/`DROP`/`TRUNCATE`
+statement that is no `EssentialsSchemaContributor` and not nested in one ([LLM-foundation.md](./LLM-foundation.md#database-schema-harness)). It reads the class files'
+constant pools (literals, text blocks, concatenation recipes), so it sees DDL that starts a string constant.
+`ALLOWED_DDL_HOLDERS` lists the justified exceptions with their reasons. Subclass `AbstractEssentialsSchemaRulesTest`
+in a module whose classpath reaches the modules to guard; it is not frozen.
+
 ### ProxyJSONSerializer
 
 **Package**: `dk.trustworks.essentials.components.foundation.test.messaging.queue`

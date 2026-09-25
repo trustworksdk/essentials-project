@@ -19,6 +19,7 @@ Spring Boot auto-configuration for all PostgreSQL-focused Essentials components.
   - [Scheduler Configuration](#scheduler-configuration)
   - [Metrics Configuration](#metrics-configuration)
   - [Lifecycle Configuration](#lifecycle-configuration)
+  - [Database Schema Configuration](#database-schema-configuration)
 - [DurableLocalCommandBus Customization](#durablelocalcommandbus-customization)
 - [JdbiConfigurationCallback](#jdbiconfigurationcallback)
 - [Typical Dependencies](#typical-dependencies)
@@ -52,13 +53,13 @@ While Essentials applies naming convention validation as an initial defense laye
 ### Module-Specific Security Guidance
 
 See individual module documentation for detailed security considerations:
-- [foundation](foundation/README.md#security)
-- [foundation-types](foundation-types/README.md#security)
-- [postgresql-event-store](postgresql-event-store/README.md#security)
-- [postgresql-distributed-fenced-lock](postgresql-distributed-fenced-lock/README.md#security)
-- [postgresql-queue](postgresql-queue/README.md#security)
-- [eventsourced-aggregates](eventsourced-aggregates/README.md#security)
-- [kotlin-eventsourcing](kotlin-eventsourcing/README.md#security)
+- [foundation](../foundation/README.md#security)
+- [foundation-types](../foundation-types/README.md#security)
+- [postgresql-event-store](../postgresql-event-store/README.md#security)
+- [postgresql-distributed-fenced-lock](../postgresql-distributed-fenced-lock/README.md#security)
+- [postgresql-queue](../postgresql-queue/README.md#security)
+- [eventsourced-aggregates](../eventsourced-aggregates/README.md#security)
+- [kotlin-eventsourcing](../kotlin-eventsourcing/README.md#security)
 
 ### What Validation Does NOT Protect Against
 
@@ -327,6 +328,31 @@ essentials.immutable-jackson-module-enabled=true
 | `life-cycles.start-life-cycles` | `true` | **true**: Automatically call `start()` on all `Lifecycle` beans (FencedLockManager, DurableQueues, etc.) when ApplicationContext starts, and `stop()` on shutdown.  <br/>**false**: You must manually start/stop Lifecycle beans. |
 | `reactive-bean-post-processor-enabled` | `true` | **true**: Auto-register `EventHandler` beans with `EventBus` and `CommandHandler` beans with `CommandBus`.  <br/>**false**: You must manually register handlers with their buses. |
 | `immutable-jackson-module-enabled` | `true` | **true**: Enable `EssentialsImmutableJacksonModule` for deserializing immutable objects (requires Objenesis).  <br/>**false**: Disable even if Objenesis is available. |
+
+### Database Schema Configuration
+
+Every Essentials component describes the tables, indexes, functions and triggers it needs; `essentials.schema.mode`
+decides what happens to them. Design: [docs/database-schema-harness.md](../../docs/database-schema-harness.md).
+
+```properties
+essentials.schema.mode=create
+essentials.schema.history-table-name=essentials_schema_history
+essentials.schema.emit.script-file=essentials-schema.sql
+essentials.schema.emit.exit=true
+```
+
+| Property | Default | Description |
+|----------|---------|-------------|
+| `schema.mode` | `create` | **create**: each component creates its own schema as it is constructed - the behaviour of every earlier release - and records it in the history table.  <br/>**validate**: execute nothing; refuse to start with a `SchemaValidationException` unless the history table records every change - for a database user without DDL rights.  <br/>**emit**: write the whole schema as one SQL script, start none of the Essentials lifecycles, and exit with code 0 - to hand the script to whoever holds DDL rights. The database must be reachable, but may be empty.  <br/>**external**: execute and verify nothing - the schema is managed elsewhere. |
+| `schema.history-table-name` | `essentials_schema_history` | The schema history ledger. |
+| `schema.emit.script-file` | `essentials-schema.sql` | Where `emit` writes the script. |
+| `schema.emit.exit` | `true` | Whether `emit` stops the application once the script is written. |
+
+For a locked-down database: run once with `emit`, have the script run by a user with DDL rights, and deploy with
+`validate`. Outside `create`, a `ClosingBooksSetup` bean you build needs
+`.setSchemaOwnership(essentialsComponentsProperties.getSchema().getMode().schemaOwnership())`, and the shard-owned
+queue engine still needs the right to create sequences at runtime. Your own `EssentialsSchemaContributor` beans are
+applied together with the Essentials ones.
 
 ---
 

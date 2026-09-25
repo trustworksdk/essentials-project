@@ -51,6 +51,7 @@ See [spring-boot-starter-postgresql README](../components/spring-boot-starter-po
 **Core Infrastructure:**
 - `Jdbi` - JDBI with PostgresPlugin + TransactionAwareDataSourceProxy
 - `SpringTransactionAwareJdbiUnitOfWorkFactory` - Spring transaction integration
+- `SchemaApplier` + `EssentialsSchemaHarnessRunner` - the schema harness, driven by `essentials.schema.mode` ([Database Schema](#database-schema))
 
 **Components:**
 - `PostgresqlFencedLockManager` - Distributed locks
@@ -278,6 +279,26 @@ Prefix: `essentials`
 | `life-cycles.start-life-cycles` | `true` | Auto-start Lifecycle beans |
 | `reactive-bean-post-processor-enabled` | `true` | Auto-register handlers |
 | `immutable-jackson-module-enabled` | `true` | Enable immutable deserialization |
+
+#### Database Schema
+
+Prefix: `essentials.schema` - what happens to the schema every Essentials component describes. SPI and rules:
+[LLM-foundation.md](./LLM-foundation.md#database-schema-harness).
+
+| Property | Default | Effect |
+|----------|---------|--------|
+| `mode` | `create` | `create`: each component creates its own schema on construction (0.50 behaviour). `validate`: execute nothing, fail startup with `SchemaValidationException` unless `essentials_schema_history` records every change. `emit`: write the schema as one SQL script, start no Essentials lifecycle, exit 0. `external`: execute and verify nothing |
+| `history-table-name` | `essentials_schema_history` | The ledger table |
+| `emit.script-file` | `essentials-schema.sql` | Where `emit` writes the script |
+| `emit.exit` | `true` | Whether `emit` stops the application once the script is written |
+
+- Beans: `SchemaApplier` (selected by `mode`, `@ConditionalOnMissingBean`) and `EssentialsSchemaHarnessRunner`, which
+  applies every `EssentialsSchemaContributor` bean after all singletons exist and before lifecycles start. Your own
+  contributor beans are applied with them.
+- Outside `create`: registering an `AggregateType` whose table is not in the ledger throws in `validate`; a
+  `ClosingBooksSetup` bean needs `.setSchemaOwnership(essentialsComponentsProperties.getSchema().getMode().schemaOwnership())`;
+  the shard-owned engine creates each queue's sequences itself and so needs `CREATE` rights at runtime.
+- DBA flow: run once with `emit`, have the script run by a user with DDL rights, deploy with `validate`.
 
 ### MongoDB Starter
 

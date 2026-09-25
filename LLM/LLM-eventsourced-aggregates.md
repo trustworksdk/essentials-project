@@ -894,6 +894,7 @@ ClosingBooksLogicalAggregateRepository<AccountId, AccountGenerationId, AccountEv
 | `setStreamIdGenerator` | no | `logicalAggregateId + "#" + generation` |
 | `setClock` | no | `Clock.systemUTC()` |
 | `setMeterRegistry` | no | `Optional.empty()` — no metrics |
+| `setSchemaOwnership` | no | `SchemaOwnership.COMPONENT` — the repository creates `aggregate_generations` when built. Outside `essentials.schema.mode=create` pass `essentialsComponentsProperties.getSchema().getMode().schemaOwnership()`; the setup bean then contributes the table to the schema harness ([LLM-foundation.md](./LLM-foundation.md#database-schema-harness)) |
 
 ⚠️ **The default stream-id generator is `id#generation`.** An application with existing persisted stream ids in another
 format MUST keep calling `setStreamIdGenerator(...)`.
@@ -901,6 +902,8 @@ format MUST keep calling `setStreamIdGenerator(...)`.
 The Spring Boot starter feeds every `ClosingBooksSetup` bean's `generationAccess()` into
 `AggregateClosingBooksGenerationAccessProvider`, so the admin API's generation endpoints work with no extra wiring.
 Expose `setup.generationRepository()` or `setup.coordinator()` as beans if your own code needs them.
+The setup is also an `EssentialsSchemaContributor` for its repository's table, which is how the schema harness sees
+it - the repository itself is not a bean.
 
 ### Repositories (manual assembly)
 ```java

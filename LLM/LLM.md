@@ -215,6 +215,13 @@ Domain modeling:
 - `Decider` / `EventStreamDecider` + `EventStreamEvolver` - Functional style
 - `AggregateRepository` / `StatefulAggregateRepository` - Load/save
 
+### Database Schema Harness
+
+**Docs:** [LLM-foundation.md](LLM-foundation.md#database-schema-harness), properties in [LLM-spring-boot-starter-modules.md](LLM-spring-boot-starter-modules.md#database-schema)
+
+Components describe their schema as `SchemaChange`s instead of executing DDL; `essentials.schema.mode`
+(`create` default | `validate` | `emit` | `external`) decides what happens. Ledger: `essentials_schema_history`.
+
 ---
 
 ## Common Patterns

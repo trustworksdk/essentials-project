@@ -234,7 +234,10 @@ var durableQueues = PostgresqlDurableQueues.builder()
 
 ## Database Schema
 
-Auto-created on start.
+Auto-created on start - unless a schema harness owns it: `PostgresqlDurableQueuesBuilder.setSchemaOwnership(SchemaOwnership.HARNESS)`
+(the Spring starter does it when `essentials.schema.mode` is not `create`), after which the queues are a schema
+contributor (module `postgresql-queue`) - see [LLM-foundation.md](./LLM-foundation.md#database-schema-harness). The legacy index drops and the 0.50 queue-statistics
+removal stay repeatable changes, so a 0.50 instance restarting mid-rollout cannot leave them behind.
 
 ```sql
 CREATE TABLE durable_queues (

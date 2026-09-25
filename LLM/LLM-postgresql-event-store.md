@@ -216,7 +216,7 @@ Poison handling:
 - `CdcPoisonNotifier` (e.g. `SubscriptionResetOnPoisonNotifier`) can reset resume points backward
 
 Design reference:
-- [Hybrid CDC design](../components/postgresql-event-store/src/main/java/dk/trustworks/essentials/components/eventsourced/eventstore/postgresql/cdc/hybrid-cdc-eventstore.md)
+- [Hybrid CDC design](../docs/cdc.md)
 
 ## Event Operations
 
@@ -1020,6 +1020,19 @@ The Spring Boot starter wires exactly that by default (`essentials.eventstore.su
 **Statistics scope**: counters live in the JVM that runs the subscription. `EventStoreApi.findAllSubscriptions` reports database-backed resume points and therefore every instance's subscriptions; `findSubscriptionStatistics` only answers for subscriptions running in the instance queried. An exclusive subscription handles events only where it holds its fenced lock, so zero throughput on the other instances is normal. Polling counters stay at zero while CDC delivers the events. `resetFrom(...)` does not clear the counters - it is reported as a reset instead.
 
 See [README EventStoreSubscriptionObserver](../components/postgresql-event-store/README.md#eventstoresubscriptionobserver) for metrics and custom implementations.
+
+### Schema ownership and notify triggers
+
+Every schema-owning class - `SeparateTablePerAggregateTypePersistenceStrategy`, `PostgresqlDurableSubscriptionRepository`,
+`PostgresqlEventStreamGapHandler`, `CdcInboxRepository` - creates its tables itself by default, and takes a
+`SchemaOwnership` (builder setter or constructor overload) to leave them to a schema harness instead
+([LLM-foundation.md](./LLM-foundation.md#database-schema-harness)). The persistence strategy is a `DynamicSchemaContributor`: event-stream tables registered after the
+harness ran go through its applier, so in `validate` mode registering an `AggregateType` whose table is not in the
+ledger throws `SchemaValidationException`.
+
+NOTIFY-driven polling wake-up: use `strategy.enableNotifyTriggers(tableName -> listener.listenToNotificationsFor(tableName, EventStreamTableChangeNotification.class))`.
+The `pg_notify` trigger is then part of each table's schema. `enableNotifyTriggerInstallation(NotifyTriggerInstaller)`
+is deprecated - it runs the trigger DDL itself, where `validate`/`emit` cannot see it - and the two exclude each other.
 
 ### IdentifierColumnType
 
