@@ -183,6 +183,13 @@ The registry row and lease rows stay data written by the engine. Two consequence
 
 The engine keeps its own copy of the bootstrap-lock key, for use without a harness.
 
+Decided 2026-09-25: **the shard-owned engine needs the right to create sequences at runtime.** In a mode that
+does not create the schema (`validate`, `emit`, `external`) `ShardOwnedSchemaContributor` contributes only the fixed
+schema; each queue's sequences are created by the engine itself as the queue registers, under the bootstrap lock,
+and are not recorded. It logs one warning saying so when the harness attaches it. The engine's README documents
+the right under "Database rights". A later option, not in 0.60: a script-created function the engine calls to
+create a queue's sequences, so only `EXECUTE` on it is needed at runtime.
+
 ---
 
 ## 3. The applier
@@ -208,6 +215,33 @@ essentials.schema.mode = create   # create (default) | validate | emit | externa
 
 `emit` is the mode that makes `validate` usable: run `emit` once against any environment, give the output to
 whoever holds DDL rights, then run `validate` from then on. Neither mode needs Flyway.
+
+**As built (step 6).** `PostgresqlValidateSchemaApplier` compares against the **ledger**, not the catalog. A
+contribution is plain SQL, so there is no structured description of the objects to diff `information_schema`
+against without parsing SQL. Instead every described change must have a ledger row with the checksum of its
+current statements: a missing row is "not applied", a different checksum is "applied with other statements"
+(for a one-shot change, "edited after it was applied"). Every problem is listed in one
+`SchemaValidationException`, and nothing is executed - not even the ledger table. The trade-off: the ledger is
+trusted, so an object dropped by hand after it was recorded goes unnoticed.
+
+`PostgresqlSchemaScript` renders what the create applier does as one script: one transaction under the
+bootstrap lock, the ledger table, then a header per module and each change followed by its ledger upsert
+(`applied_by = 'essentials-schema-script'`, first `applied_ts` kept). One-shot changes run inside a `DO` guard
+that checks the ledger and `EXECUTE`s the statements under a dedicated dollar-quote tag, so a re-run skips them.
+`PostgresqlEmitSchemaApplier` writes that script, replacing the file on the first apply and appending a
+self-contained block for each later dynamic registration, and does nothing else. Decided 2026-09-25: `emit` is a
+**pre-step, not a startup mode that fails**. It needs no database connection - the script is rendered from what the
+contributors describe - so it runs in a build or deployment pipeline; the Spring wiring (step 7) exits the
+application cleanly once it is written. `validate` is the only mode that refuses to start. This replaces the
+earlier "emit, then fail unless validate passes", which made generating the script a start-and-fail step, at odds
+with how easy an Essentials setup otherwise is. The default mode stays `create`, so nothing changes for anyone who
+does not opt in.
+
+`SchemaApplier.createsSchema()` (and the same on `SchemaChangeSink`) says whether an applier executes the
+statements: `true` only for the create applier. A dynamic contributor that cannot describe everything up front uses
+it to decide whether it has to create later objects itself. `EssentialsSchemaScriptRoundTripIT` (postgresql-event-store) runs every
+PostgreSQL contributor through emit -> run script -> validate, and checks the script records exactly the ledger
+the create mode does.
 
 ---
 
