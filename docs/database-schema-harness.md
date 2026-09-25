@@ -134,19 +134,54 @@ Row 9 cannot produce its change set up front. It gets a second interface:
 
 ```java
 public interface DynamicSchemaContributor extends EssentialsSchemaContributor {
-    /** Invoked once per object registered after bootstrap. Must be idempotent. */
-    SchemaChangeSet contributeFor(Object registrationKey, SchemaContext context);
+    /** Route the changes of every object registered from now on to sink. */
+    void attach(SchemaChangeSink sink);
+}
+
+@FunctionalInterface
+public interface SchemaChangeSink {
+    void apply(List<SchemaChange> changes);   // the changes of one newly registered object
 }
 ```
 
-`SeparateTablePerAggregateTypePersistenceStrategy` implements it, keyed by `AggregateType`. `ShardOwnedSchema`
-(row 15) is the second dynamic contributor, keyed by queue name: its fixed tables are an ordinary change set, and
-each `registerQueue(…)` contributes that queue's sequence. It also carries its own copy of the bootstrap-lock key,
-which goes away once the harness owns the lock. At bootstrap the
-harness sweeps the already-registered configurations; afterwards, `addAggregateEventStreamConfiguration(…)`
-routes through the harness instead of executing directly. This is exactly the two-phase shape
-`enableNotifyTriggerInstallation` already uses, so that method folds into the harness rather than sitting
-beside it.
+`contribute(…)` describes every object registered so far, so the sweep covers them like any other
+contribution. `EssentialsSchemaHarness.apply()` first attaches each dynamic contributor to
+`applier.sinkFor(contributor)` (a default method on `SchemaApplier` that wraps the changes as one
+`SchemaChangeSet` of that contributor) and only then collects. Attaching first means an object registered
+while the sweep runs is not missed; it may reach the applier twice, which is why a dynamic contributor's
+changes must be safe to repeat. The design originally had the harness pull `contributeFor(key, …)`; the
+harness cannot know when a key is registered, so the contributor pushes instead.
+
+`SeparateTablePerAggregateTypePersistenceStrategy` implements it, keyed by `AggregateType`. In
+`SchemaOwnership.COMPONENT` mode (the default) the strategy attaches its own create applier at construction,
+so `addAggregateEventStreamConfiguration(…)` behaves as before. In `HARNESS` mode nothing is attached until
+the harness runs: types registered before that are covered by the sweep, types registered after go through
+the harness' applier. `resetEventStorageFor(…)` always re-creates the table, with the harness' applier if
+one is attached and its own create applier otherwise, because a reset is an explicit request to start over.
+
+`enableNotifyTriggerInstallation(NotifyTriggerInstaller)` executed the trigger DDL itself, beside the
+table's schema, so a `validate` or `emit` harness would never have seen the trigger. It is deprecated in
+favour of `enableNotifyTriggers(Consumer<String>)`: the `pg_notify` trigger becomes a
+`change-notification-trigger` change of each table's contribution, and the callback only registers the table
+with the change listener (`LISTEN` does not need the trigger to exist). The two methods exclude each other.
+The Spring starter's `EventStoreNotifyPollingBootstrap` uses the new one.
+
+`ShardOwnedSchema` (row 15) is the second dynamic contributor, keyed by queue id. Decided 2026-09-24: the
+engine stays dependent on `shared` only, so it does not implement the SPI itself. It exposes its DDL as plain
+statements - `schemaStatements()` (exactly what `initialize` executes) and
+`queueSequenceStatements(queueId, shardCount)` - and every registration method has an overload taking a
+`QueueDdlExecutor`, whose default runs the statements under the engine's copy of the bootstrap lock, as
+before. `ShardOwnedSchemaContributor` in `postgresql-queue-shard-owned-adapter` (which already depends on
+`foundation`) carries them into the harness: the fixed schema is one `engine-schema` change, and each queue's
+sequences are a `queue-sequences` change on object `shard_queue_q<id>`, applied as the queue registers.
+The registry row and lease rows stay data written by the engine. Two consequences:
+
+- A queue's sequence names embed the id the registry allocates at registration, so they can never be part of
+  a script written before the queue exists (`emit`). They are created or checked as queues register.
+- Registration writes to the registry table, which is part of the fixed schema, so queues register after the
+  harness ran. `growShardCount` re-records the same change with the larger statement set.
+
+The engine keeps its own copy of the bootstrap-lock key, for use without a harness.
 
 ---
 

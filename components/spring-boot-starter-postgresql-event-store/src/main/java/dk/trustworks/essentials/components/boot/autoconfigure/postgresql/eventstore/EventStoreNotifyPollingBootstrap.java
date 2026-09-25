@@ -21,15 +21,11 @@ import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.pe
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.persistence.table_per_aggregate_type.SeparateTablePerAggregateTypePersistenceStrategy;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.subscription.notify.EventStreamTableChangeNotification;
 import dk.trustworks.essentials.components.foundation.postgresql.ListenNotify;
-import dk.trustworks.essentials.components.foundation.postgresql.ListenNotify.SqlOperation;
 import dk.trustworks.essentials.components.foundation.postgresql.MultiTableChangeListener;
-import dk.trustworks.essentials.components.foundation.postgresql.PostgresqlUtil;
 import dk.trustworks.essentials.components.foundation.postgresql.TableChangeNotification;
 import org.jdbi.v3.core.Jdbi;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-
-import java.util.List;
 
 import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 
@@ -37,19 +33,16 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
  * S1 (NOTIFY-driven polling wake-up) bootstrap. Created by the event-store Spring
  * autoconfig when {@code essentials.eventstore.subscription-manager.notify-polling.enabled=true}.
  * <p>
- * On construction, this wires a {@code NotifyTriggerInstaller} into the persistence
- * strategy so that every event-stream table (already-registered and future) gets:
+ * On construction, this enables notify triggers on the persistence strategy, so that every
+ * event-stream table (already-registered and future) gets:
  * <ol>
- *   <li>An idempotent {@code AFTER INSERT} {@code pg_notify} trigger via
- *       {@link ListenNotify#addChangeNotificationTriggerToTable}.</li>
+ *   <li>An {@code AFTER INSERT} {@code pg_notify} trigger, described as part of the table's schema
+ *       (see {@link ListenNotify#changeNotificationTriggerStatements}) - so it is created by
+ *       whichever applier owns the event store's schema, under the framework's bootstrap lock,
+ *       exactly like the table.</li>
  *   <li>Registration with the shared {@link MultiTableChangeListener} for
  *       {@link EventStreamTableChangeNotification}s.</li>
  * </ol>
- * Each install runs inside a {@link Jdbi#useTransaction} block that first calls
- * {@link PostgresqlUtil#acquireBootstrapLock} — concurrent JVMs starting against the
- * same database serialise DDL through the same advisory lock the table-creation path
- * (P6) already uses, eliminating CREATE-OR-REPLACE races.
- * <p>
  * Skipped (with a WARN) when the configured persistence strategy is not a
  * {@link SeparateTablePerAggregateTypePersistenceStrategy} — S1 is specific to the
  * standard table-per-aggregate-type strategy.
@@ -57,10 +50,19 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 public final class EventStoreNotifyPollingBootstrap {
     private static final Logger log = LoggerFactory.getLogger(EventStoreNotifyPollingBootstrap.class);
 
+    /**
+     * @deprecated the trigger is now part of the event store's schema, so {@code jdbi} is not used. Use
+     * {@link #EventStoreNotifyPollingBootstrap(AggregateEventStreamPersistenceStrategy, MultiTableChangeListener)}
+     */
+    @Deprecated
     public EventStoreNotifyPollingBootstrap(Jdbi jdbi,
                                             AggregateEventStreamPersistenceStrategy<SeparateTablePerAggregateEventStreamConfiguration> persistenceStrategy,
                                             MultiTableChangeListener<TableChangeNotification> multiTableChangeListener) {
-        requireNonNull(jdbi, "jdbi cannot be null");
+        this(persistenceStrategy, multiTableChangeListener);
+    }
+
+    public EventStoreNotifyPollingBootstrap(AggregateEventStreamPersistenceStrategy<SeparateTablePerAggregateEventStreamConfiguration> persistenceStrategy,
+                                            MultiTableChangeListener<TableChangeNotification> multiTableChangeListener) {
         requireNonNull(persistenceStrategy, "persistenceStrategy cannot be null");
         requireNonNull(multiTableChangeListener, "multiTableChangeListener cannot be null");
 
@@ -73,19 +75,11 @@ public final class EventStoreNotifyPollingBootstrap {
             return;
         }
 
-        strategy.enableNotifyTriggerInstallation(tableName ->
-                jdbi.useTransaction(handle -> {
-                    PostgresqlUtil.acquireBootstrapLock(handle);
-                    ListenNotify.addChangeNotificationTriggerToTable(handle,
-                                                                     tableName,
-                                                                     List.of(SqlOperation.INSERT));
-                    multiTableChangeListener.listenToNotificationsFor(
-                            tableName,
-                            EventStreamTableChangeNotification.class);
-                    log.info("Notify-polling: installed pg_notify trigger and registered listener for table='{}'",
-                             tableName);
-                }));
+        strategy.enableNotifyTriggers(tableName -> {
+            multiTableChangeListener.listenToNotificationsFor(tableName, EventStreamTableChangeNotification.class);
+            log.info("Notify-polling: pg_notify trigger described and listener registered for table='{}'", tableName);
+        });
 
-        log.info("Notify-polling bootstrap registered NotifyTriggerInstaller on persistence strategy");
+        log.info("Notify-polling bootstrap enabled notify triggers on the persistence strategy");
     }
 }

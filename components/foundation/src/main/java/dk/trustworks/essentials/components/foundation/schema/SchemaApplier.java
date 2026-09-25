@@ -15,6 +15,8 @@
  */
 package dk.trustworks.essentials.components.foundation.schema;
 
+import dk.trustworks.essentials.shared.FailFast;
+
 import java.util.List;
 
 /**
@@ -30,4 +32,13 @@ public interface SchemaApplier {
      *                          startup failure
      */
     void apply(List<SchemaChangeSet> changeSets);
+
+    /**
+     * @param contributor the contributor whose later registrations the sink receives
+     * @return a sink that applies each batch of changes as one change set of {@code contributor}
+     */
+    default SchemaChangeSink sinkFor(EssentialsSchemaContributor contributor) {
+        FailFast.requireNonNull(contributor, "No contributor provided");
+        return changes -> apply(List.of(new SchemaChangeSet(contributor.moduleId(), contributor.order(), changes)));
+    }
 }

@@ -51,7 +51,7 @@ All under `dk.trustworks.essentials.components.eventsourced.eventstore.postgresq
 | `PostgresqlEventStreamGapHandler` | DB-backed gap tracker; promotes transient→permanent after tx-timeout window |
 | `EventStoreInterceptor` | SPI: around-advice for append, load, fetch, poll operations |
 | `EventStorePollingOptimizer` | SPI: controls inter-poll sleep; impls: `SimpleEventStorePollingOptimizer`, `JitteredEventStorePollingOptimizer`, `NotifyAwareEventStorePollingOptimizer` |
-| `NotifyTriggerInstaller` | Functional interface; persistence strategy calls back to install `pg_notify` trigger per table |
+| `NotifyTriggerInstaller` | Functional interface; persistence strategy calls back to install `pg_notify` trigger per table. Only used by the deprecated `enableNotifyTriggerInstallation` - `enableNotifyTriggers(Consumer<String>)` describes the trigger as part of the table's schema instead |
 | `InMemoryProjector` | SPI for in-memory aggregate rehydration |
 | `EventStoreUnitOfWork` | UoW carrying accumulated `PersistedEvent` list; fires `PersistedEventsCommitLifecycleCallback` on commit |
 | `SubscriptionStatisticsRegistry` | In-memory per-subscription counters keyed `(SubscriberId, AggregateType)`; capped by `maxTrackedSubscriptions`, entry evicted on unsubscribe. Read by `EventStoreApi` |
@@ -82,7 +82,7 @@ All under `dk.trustworks.essentials.components.eventsourced.eventstore.postgresq
 | `WalMessageFilter` | Pre-decode WAL payload filtering |
 | `WalReplicationTailerErrorHandler` | Custom replication error recovery |
 | `EventStoreSubscriptionObserver` | Subscription lifecycle observability hook |
-| `NotifyTriggerInstaller` | Invoked per new event-stream table when NOTIFY polling enabled |
+| `NotifyTriggerInstaller` | Invoked per new event-stream table by the deprecated `enableNotifyTriggerInstallation`; prefer `enableNotifyTriggers` |
 | `DurableSubscriptionRepository` | Custom storage for subscriber resume points |
 
 ## Jackson

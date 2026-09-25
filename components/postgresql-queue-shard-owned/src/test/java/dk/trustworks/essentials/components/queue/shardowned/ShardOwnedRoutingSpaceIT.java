@@ -85,6 +85,29 @@ class ShardOwnedRoutingSpaceIT {
      * deployment would actually hit, and what it does when it hits it.
      */
     @Test
+    void growing_seeds_ordered_lease_rows_for_the_queues_own_routing_space_not_the_builds_default() throws Exception {
+        var name  = QueueName.of("narrow_ordered_space");
+        var queue = ShardOwnedSchema.registerQueue(dataSource, name, 2, 8);
+
+        ShardOwnedSchema.growShardCount(dataSource, name, 4);
+
+        try (var connection = dataSource.getConnection();
+             var statement = connection.prepareStatement("SELECT lane, count(*) FROM " + ShardOwnedSchema.LEASE_TABLE
+                                                                 + " WHERE queue_id = ? GROUP BY lane")) {
+            statement.setShort(1, queue.queueId());
+            var rowsPerLane = new java.util.HashMap<String, Integer>();
+            try (var resultSet = statement.executeQuery()) {
+                while (resultSet.next()) {
+                    rowsPerLane.put(resultSet.getString(1), resultSet.getInt(2));
+                }
+            }
+            assertThat(rowsPerLane).containsEntry("unordered", 4)
+                                   .as("one lease row per unit the queue was registered with")
+                                   .containsEntry("ordered", 8);
+        }
+    }
+
+    @Test
     void more_instances_than_units_degrades_rather_than_breaks() throws Exception {
         ShardOwnedSchema.registerQueue(dataSource, QUEUE_ID, SHARD_COUNT);
 

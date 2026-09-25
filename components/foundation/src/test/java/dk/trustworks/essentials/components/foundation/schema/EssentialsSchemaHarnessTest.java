@@ -124,6 +124,67 @@ class EssentialsSchemaHarnessTest {
                 .as("statement boundaries count").isNotEqualTo(original.checksum());
     }
 
+    @Test
+    void a_dynamic_contributor_is_attached_before_the_sweep_and_its_later_registrations_reach_the_applier_as_its_own_change_set() {
+        var applier     = new RecordingApplier();
+        var contributor = new RegisteringContributor();
+        contributor.register("orders_events");
+        var harness = new EssentialsSchemaHarness(applier, SchemaContext.empty(), List.of(contributor));
+
+        harness.apply();
+        assertThat(contributor.attachedBeforeSweep).isTrue();
+        assertThat(applier.applied).hasSize(1);
+        assertThat(applier.applied.getFirst().changes()).extracting(SchemaChange::objectName).containsExactly("orders_events");
+
+        contributor.register("products_events");
+        assertThat(applier.applied).hasSize(2);
+        var later = applier.applied.get(1);
+        assertThat(later.moduleId()).isEqualTo("event-store");
+        assertThat(later.order()).isEqualTo(SchemaOrder.ORDER_EVENT_STORE);
+        assertThat(later.changes()).extracting(SchemaChange::objectName).containsExactly("products_events");
+    }
+
+    /**
+     * Registers objects the way a table-per-type store does: remembered always, handed to the sink once there is one
+     */
+    private static final class RegisteringContributor implements DynamicSchemaContributor {
+        private final List<String>     registered = new ArrayList<>();
+        private       SchemaChangeSink sink;
+        private       boolean          attachedBeforeSweep;
+
+        void register(String table) {
+            registered.add(table);
+            if (sink != null) {
+                sink.apply(changesFor(table));
+            }
+        }
+
+        private static List<SchemaChange> changesFor(String table) {
+            return List.of(SchemaChange.repeatable("stream-table", table, "SELECT 1"));
+        }
+
+        @Override
+        public void attach(SchemaChangeSink sink) {
+            this.sink = sink;
+        }
+
+        @Override
+        public String moduleId() {
+            return "event-store";
+        }
+
+        @Override
+        public int order() {
+            return SchemaOrder.ORDER_EVENT_STORE;
+        }
+
+        @Override
+        public List<SchemaChange> contribute(SchemaContext context) {
+            attachedBeforeSweep = sink != null;
+            return registered.stream().flatMap(table -> changesFor(table).stream()).toList();
+        }
+    }
+
     private static SchemaChange change(String changeId) {
         return SchemaChange.repeatable(changeId, "t_" + changeId, "SELECT 1");
     }
