@@ -84,7 +84,7 @@ import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.Po
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.persistence.table_per_aggregate_type.SeparateTablePerAggregateEventStreamConfiguration;
 
 ConfigurableEventStore<SeparateTablePerAggregateEventStreamConfiguration> eventStore =
-    new PostgresqlEventStore<>(...);
+    PostgresqlEventStore.<SeparateTablePerAggregateEventStreamConfiguration>builder()...build();
 eventStore.addAggregateEventStreamConfiguration(AggregateType.of("Orders"), OrderId.class);
 eventStore.addEventStoreInterceptor(new MyInterceptor());
 
@@ -105,22 +105,19 @@ public class OrderService {
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.persistence.table_per_aggregate_type.*;
-import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.serializer.json.JacksonJSONEventSerializer;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.serializer.json.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.transaction.EventStoreManagedUnitOfWorkFactory;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.gap.PostgresqlEventStreamGapHandler;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.observability.EventStoreSubscriptionObserver;
 
-// 1. JDBI + Jackson
+// 1. JDBI
 var jdbi = Jdbi.create(url, user, pass);
 jdbi.installPlugin(new PostgresPlugin());
 
-ObjectMapper mapper = JsonMapper.builder()
-    .addModule(new EssentialTypesJacksonModule())
-    .addModule(new EssentialsImmutableJacksonModule())
-    .build();
-
 // 2. EventStore components
-var jsonSerializer = new JacksonJSONEventSerializer(mapper);
+// Canonical Jackson 3 event serializer (EssentialsObjectMappers configuration: the frozen persisted wire format).
+// Need extra modules? new Jackson3JSONEventSerializer(EssentialsObjectMappers.createJackson3ObjectMapper(myModule))
+var jsonSerializer = EssentialsJSONEventSerializers.create();
 var unitOfWorkFactory = new EventStoreManagedUnitOfWorkFactory(jdbi);
 
 var persistenceStrategy = new SeparateTablePerAggregateTypePersistenceStrategy(
@@ -134,13 +131,12 @@ var persistenceStrategy = new SeparateTablePerAggregateTypePersistenceStrategy(
 );
 
 // 3. EventStore
-var eventStore = new PostgresqlEventStore<>(
-    unitOfWorkFactory,
-    persistenceStrategy,
-    Optional.empty(),  // Optional EventBus for in-tx publishing
-    es -> new PostgresqlEventStreamGapHandler<>(es, unitOfWorkFactory),
-    new EventStoreSubscriptionObserver.NoOpEventStoreSubscriptionObserver()
-);
+var eventStore = PostgresqlEventStore.<SeparateTablePerAggregateEventStreamConfiguration>builder()
+                                     .setUnitOfWorkFactory(unitOfWorkFactory)
+                                     .setPersistenceStrategy(persistenceStrategy)
+                                     // .setEventStoreEventBus(eventBus) - optional, for in-tx publishing
+                                     .setEventStreamGapHandlerFactory(es -> new PostgresqlEventStreamGapHandler<>(unitOfWorkFactory))
+                                     .build();
 
 // 4. Register aggregate types - REQUIRED before persisting events
 eventStore.addAggregateEventStreamConfiguration(
@@ -220,7 +216,7 @@ Poison handling:
 - `CdcPoisonNotifier` (e.g. `SubscriptionResetOnPoisonNotifier`) can reset resume points backward
 
 Design reference:
-- [Hybrid CDC design](../components/postgresql-event-store/src/main/java/dk/trustworks/essentials/components/eventsourced/eventstore/postgresql/cdc/hybrid-cdc-eventstore.md)
+- [Hybrid CDC design](../docs/cdc.md)
 
 ## Event Operations
 
@@ -484,6 +480,8 @@ Base package: `dk.trustworks.essentials.components.eventsourced.eventstore.postg
 
 Note: All `@MessageHandler` annotated methods accept an optional `OrderedMessage` parameter as 2. parameter.
 
+Note: `@MessageHandler(unitOfWork = UnitOfWorkMode.NONE)` runs a handler with no `UnitOfWork` — and therefore no database connection — held, for handlers doing blocking I/O. Supported by `EventProcessor` only; see [Blocking I/O in a handler](#blocking-io-in-a-handler-unitofworkmodenone).
+
 ### EventProcessor (Inbox-based)
 
 For asynchronous external system integrations (Kafka, email, webhooks), long-running operations, operations needing retry. Events queued to `Inbox` with configurable parallelism and redelivery.
@@ -518,6 +516,63 @@ public class ShippingKafkaPublisher extends EventProcessor {
 ```
 
 **Features**: Exclusive (`FencedLock`), ordered per-aggregate (`OrderedMessage` via `Inbox`), redelivery (`RedeliveryPolicy`), command handling (`@CmdHandler` via `DurableLocalCommandBus`).
+
+#### Blocking I/O in a handler: `UnitOfWorkMode.NONE`
+
+A `@MessageHandler` method runs inside a `UnitOfWork` by default — i.e. holding a pooled connection with an open transaction. For a handler that blocks on an external system (HTTP, SOAP, SFTP, a slow gRPC call) that connection sits in `idle in transaction` for the whole round trip, one per parallel consumer, writing nothing. Declare such a handler `UnitOfWorkMode.NONE` and wrap only the database work that follows it:
+
+```java
+import dk.trustworks.essentials.components.foundation.messaging.MessageHandler;
+import dk.trustworks.essentials.components.foundation.messaging.UnitOfWorkMode;
+
+public class InstrumentRiskApprovalProcessor extends EventProcessor {
+    @Override
+    public String getProcessorName() { return "InstrumentRiskApprovalProcessor"; }
+
+    @Override
+    protected List<AggregateType> reactsToEventsRelatedToAggregateTypes() {
+        return List.of(AggregateType.of("Instruments"));
+    }
+
+    @MessageHandler(unitOfWork = UnitOfWorkMode.NONE)
+    void on(InstrumentRegistered e) {
+        var assessment = riskService.assess(e.instrumentId(), e.symbol());  // blocking, no UnitOfWork, no connection
+
+        usingUnitOfWork(() -> {                                            // the transactional tail
+            var instrument = instruments.getInstrument(e.instrumentId());
+            instrument.recordRiskApproval(assessment.riskRating());
+        });
+    }
+
+    @MessageHandler                                                        // REQUIRED (default), unchanged
+    void on(InstrumentSuspended e) { ... }
+}
+```
+
+**Helpers** (on `AbstractEventProcessor`, available to every processor subclass):
+
+| Helper | Signature | Use |
+|--------|-----------|-----|
+| `usingUnitOfWork(...)` | `void usingUnitOfWork(CheckedRunnable)` | Transactional tail with no result |
+| `withUnitOfWork(...)` | `<R> R withUnitOfWork(CheckedSupplier<R>)` | Transactional tail returning a value |
+
+Both join an already active `UnitOfWork` if there is one. Between the blocking call and the wrapper there is no ambient `UnitOfWork`, so touching a transactional resource there fails fast rather than quietly opening a transaction — loading the aggregate *before* the call is the mistake to watch for.
+
+**Processor support**:
+
+| Processor | `UnitOfWorkMode.NONE` |
+|-----------|----------------------|
+| `EventProcessor` | **Supported.** Its inbox consumer owns the `UnitOfWork` boundary; the event reference is resolved in its own short `UnitOfWork`, and the handler's scope is the handler's own |
+| `ViewEventProcessor` | **Rejected at start-up** (`IllegalStateException`). It handles each message in a single `UnitOfWork` so that the view update and the acknowledgement commit together |
+| `InTransactionEventProcessor` | **Rejected at start-up** (`IllegalStateException`). It processes inside the transaction that appended the event by definition, so there is no `UnitOfWork`-free window. Don't put blocking I/O here |
+
+**Requirements the mode shifts onto the handler**:
+
+1. **Idempotency is mandatory.** The blocking call is no longer part of the transaction that acknowledges the message: a failure after it returned but before the tail committed redelivers the event and repeats the call. Guard on state (e.g. the aggregate applies nothing once the decision exists), don't assume once-only.
+2. **The blocking call must time out well inside `DurableQueues` `messageHandlingTimeout`** (`essentials.durable-queues.message-handling-timeout`, 30s by default). Past it the message is reset as stuck and can be redelivered while the first attempt is still blocked.
+3. **Ordering degrades on that timeout** — a stuck-message reset can hand the same `OrderedMessage` key to another consumer thread, so the per-key guarantee holds only while handlers complete inside the timeout.
+
+Worked example: `market_data/use_cases/risk_approve_instrument` in `examples/essentials-trading-demo`. See also `UnitOfWorkMode` in [LLM-foundation.md](./LLM-foundation.md#blocking-io-in-a-message-handler-unitofworkmode) for handlers dispatched by an `Inbox`/`Outbox` rather than a processor.
 
 **`@CmdHandler` + Delayed Messages:**
 ```java
@@ -571,6 +626,8 @@ For asynchronous view projections where low latency is critical but occasional f
 If the queue has pending messages for a given aggregate id, new events related to the same aggregate-id are queued to maintain ordering.
 Only supports exclusive processing.
 
+Rejects `@MessageHandler(unitOfWork = UnitOfWorkMode.NONE)` handlers at start-up: the view update and the acknowledgement commit in one `UnitOfWork` here, which a `NONE` handler would break. Blocking I/O belongs in an `EventProcessor`.
+
 ```java
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.processor.ViewEventProcessor;
 
@@ -610,6 +667,12 @@ void on(OrderConfirmed event, OrderedMessage message) {
 |------------|-------------|
 | `(Event)` | Event only |
 | `(Event, OrderedMessage)` | Event + metadata (aggregateId, messageOrder) |
+
+Attributes:
+
+| Attribute | Values | Description |
+|-----------|--------|-------------|
+| `unitOfWork` | `REQUIRED` (default), `NONE` | `REQUIRED` invokes the method inside a `UnitOfWork`. `NONE` invokes it with none active, for blocking I/O — `EventProcessor` only, and the handler wraps its own transactional tail. See [Blocking I/O in a handler](#blocking-io-in-a-handler-unitofworkmodenone) |
 
 ## In-Memory Projections
 
@@ -689,13 +752,16 @@ Later TX1 commits → resolves: 1, 2, 3
 ```java
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.gap.*;
 
-// Enable (default)
-var eventStore = new PostgresqlEventStore<>(...,
-    es -> new PostgresqlEventStreamGapHandler<>(es, unitOfWorkFactory), ...);
+// Enable - PostgresqlEventStore.withGapHandling(unitOfWorkFactory, persistenceStrategy) is the shorthand
+var eventStore = PostgresqlEventStore.<SeparateTablePerAggregateEventStreamConfiguration>builder()
+                                     ...
+                                     .setEventStreamGapHandlerFactory(es -> new PostgresqlEventStreamGapHandler<>(unitOfWorkFactory))
+                                     .build();
 
-// Disable
-var eventStore = new PostgresqlEventStore<>(...,
-    es -> new NoEventStreamGapHandler<>(), ...);
+// Disable - NoEventStreamGapHandler is the builder's default, so just leave the factory unset
+var eventStore = PostgresqlEventStore.<SeparateTablePerAggregateEventStreamConfiguration>builder()
+                                     ...
+                                     .build();
 
 // Reset permanent gaps
 eventStreamGapHandler.resetPermanentGapsFor(AggregateType.of("Orders"));
@@ -848,7 +914,10 @@ Optional shared event bus. If not provided, default instance created.
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.bus.EventStoreEventBus;
 
 var eventBus = new EventStoreEventBus(unitOfWorkFactory);
-var eventStore = new PostgresqlEventStore<>(..., Optional.of(eventBus), ...);
+var eventStore = PostgresqlEventStore.<SeparateTablePerAggregateEventStreamConfiguration>builder()
+                                     ...
+                                     .setEventStoreEventBus(eventBus)
+                                     .build();
 
 // Sync subscribers (BEFORE commit)
 eventBus.addSyncSubscriber(events ->
@@ -919,26 +988,31 @@ Observability for `EventStore` operations and subscription lifecycle.
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.observability.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.observability.micrometer.*;
 
-// No observability (default)
-var eventStore = new PostgresqlEventStore<>(...,
-    new EventStoreSubscriptionObserver.NoOpEventStoreSubscriptionObserver());
+// No observability: NoOpEventStoreSubscriptionObserver is the builder's default
+var eventStore = PostgresqlEventStore.<SeparateTablePerAggregateEventStreamConfiguration>builder()...build();
 
 // With Micrometer
 var observer = new MeasurementEventStoreSubscriptionObserver(
-    Optional.of(meterRegistry),
-    true,  // Log slow operations
-    LogThresholds.defaultThresholds(),
-    null   // Optional observation registry
-);
-var eventStore = new PostgresqlEventStore<>(..., observer);
+    MeasurementTaker.builder()
+                    .setLoggingRecorder(MeasurementEventStoreSubscriptionObserver.class,
+                                        LogThresholds.defaultThresholds())   // Log slow operations
+                    .setMeterRegistry(meterRegistry)
+                    .build(),
+    null);   // Optional module tag
+var eventStore = PostgresqlEventStore.<SeparateTablePerAggregateEventStreamConfiguration>builder()
+                                     ...
+                                     .setEventStoreSubscriptionObserver(observer)
+                                     .build();
 ```
 
 The SPI has a single slot, so collecting statistics **composes** with the metrics observer rather than replacing it:
 
 ```java
 var statisticsRegistry = new SubscriptionStatisticsRegistry();      // read by EventStoreApi
-var eventStore = new PostgresqlEventStore<>(...,
-    new StatisticsCollectingEventStoreSubscriptionObserver(observer, statisticsRegistry));
+var eventStore = PostgresqlEventStore.<SeparateTablePerAggregateEventStreamConfiguration>builder()
+                                     ...
+                                     .setEventStoreSubscriptionObserver(new StatisticsCollectingEventStoreSubscriptionObserver(observer, statisticsRegistry))
+                                     .build();
 ```
 
 The Spring Boot starter wires exactly that by default (`essentials.eventstore.subscription-manager.statistics.enabled=true`, `...max-tracked-subscriptions=1000`). Defining your own `EventStoreSubscriptionObserver` bean replaces both - wrap it the same way to keep the statistics.
@@ -946,6 +1020,19 @@ The Spring Boot starter wires exactly that by default (`essentials.eventstore.su
 **Statistics scope**: counters live in the JVM that runs the subscription. `EventStoreApi.findAllSubscriptions` reports database-backed resume points and therefore every instance's subscriptions; `findSubscriptionStatistics` only answers for subscriptions running in the instance queried. An exclusive subscription handles events only where it holds its fenced lock, so zero throughput on the other instances is normal. Polling counters stay at zero while CDC delivers the events. `resetFrom(...)` does not clear the counters - it is reported as a reset instead.
 
 See [README EventStoreSubscriptionObserver](../components/postgresql-event-store/README.md#eventstoresubscriptionobserver) for metrics and custom implementations.
+
+### Schema ownership and notify triggers
+
+Every schema-owning class - `SeparateTablePerAggregateTypePersistenceStrategy`, `PostgresqlDurableSubscriptionRepository`,
+`PostgresqlEventStreamGapHandler`, `CdcInboxRepository` - creates its tables itself by default, and takes a
+`SchemaOwnership` (builder setter or constructor overload) to leave them to a schema harness instead
+([LLM-foundation.md](./LLM-foundation.md#database-schema-harness)). The persistence strategy is a `DynamicSchemaContributor`: event-stream tables registered after the
+harness ran go through its applier, so in `validate` mode registering an `AggregateType` whose table is not in the
+ledger throws `SchemaValidationException`.
+
+NOTIFY-driven polling wake-up: use `strategy.enableNotifyTriggers(tableName -> listener.listenToNotificationsFor(tableName, EventStreamTableChangeNotification.class))`.
+The `pg_notify` trigger is then part of each table's schema. `enableNotifyTriggerInstallation(NotifyTriggerInstaller)`
+is deprecated - it runs the trigger DDL itself, where `validate`/`emit` cannot see it - and the two exclude each other.
 
 ### IdentifierColumnType
 
@@ -1035,6 +1122,7 @@ was disposed right after an idle poll — the connection stayed `idle in transac
 - Use immutable event classes (records or final fields)
 - Include `OrderedMessage` parameter in `@MessageHandler` when needed
 - Use durable subscriptions (`EventStoreSubscriptionManager`) for production
+- Declare a blocking-I/O handler `@MessageHandler(unitOfWork = UnitOfWorkMode.NONE)` on an `EventProcessor`, make it idempotent, and time the call out well inside `messageHandlingTimeout`
 
 ### ❌ Don't
 
@@ -1045,6 +1133,7 @@ was disposed right after an idle poll — the connection stayed `idle in transac
 - Forget to sanitize table/column names from external input
 - Use `EventProcessor` for projections - use `InTransactionEventProcessor` or `ViewEventProcessor`
 - Process events outside `UnitOfWork` when using in-transaction subscriptions
+- Perform blocking I/O in a default (`REQUIRED`) handler - it holds a pooled connection in `idle in transaction` for the whole call; use `UnitOfWorkMode.NONE` and wrap the tail
 
 ### Common Mistakes
 

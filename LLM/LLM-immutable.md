@@ -312,7 +312,7 @@ void toStringFormat() {
 - `shared` - `Reflector` for field introspection, `Tuple` for internal ops
 
 **Dependent modules:**
-- `immutable-jackson` - Jackson serialization/deserialization support
+- `immutable-jackson3` - Jackson 3 serialization/deserialization support (the Jackson 2 `immutable-jackson` was removed in 0.60)
 
 **See:** [LLM-immutable-jackson.md](./LLM-immutable-jackson.md)
 

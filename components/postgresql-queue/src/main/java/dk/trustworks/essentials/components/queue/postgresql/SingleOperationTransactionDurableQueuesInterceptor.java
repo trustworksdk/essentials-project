@@ -27,7 +27,7 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 
 /**
  * Interceptor that wraps each operation in a transaction.
- * This is used when the TransactionalMode is set to SingleOperationTransaction.
+ * Wired unconditionally: since 0.60 every queue operation runs in its own transaction.
  */
 public class SingleOperationTransactionDurableQueuesInterceptor implements DurableQueuesInterceptor {
     private final HandleAwareUnitOfWorkFactory<? extends HandleAwareUnitOfWork> unitOfWorkFactory;
@@ -94,6 +94,12 @@ public class SingleOperationTransactionDurableQueuesInterceptor implements Durab
 
     @Override
     public Void intercept(HandleQueuedMessage operation, InterceptorChain<HandleQueuedMessage, Void, DurableQueuesInterceptor> interceptorChain) {
+        if (operation.getMessageHandler() instanceof UnitOfWorkBoundaryOwningQueuedMessageHandler) {
+            // The handler opens and commits its own UnitOfWork(s) per message, which is what allows part of its
+            // message handling (typically a blocking call to an external system) to run with no UnitOfWork and
+            // therefore no database connection held - see UnitOfWorkMode#NONE
+            return interceptorChain.proceed();
+        }
         return unitOfWorkFactory.withUnitOfWork(interceptorChain::proceed);
     }
 

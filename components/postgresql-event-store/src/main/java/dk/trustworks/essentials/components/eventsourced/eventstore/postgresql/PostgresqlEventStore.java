@@ -140,10 +140,8 @@ public final class PostgresqlEventStore<CONFIG extends AggregateEventStreamConfi
      *                                                measure statistics related to {@link EventStoreSubscription}'s
      *                                                and calls to {@link #pollEvents(AggregateType, long, Optional, Optional, Optional, Optional, Optional)}
      * @param <STRATEGY>                              the persistence strategy type
-     * @deprecated Use {@link #builder()}. This constructor declares an {@code Optional} parameter and/or more than five parameters; the builder names every argument and accepts both plain values and {@code Optional}s. It is unchanged and remains the implementation the builder delegates to.
      */
-    @Deprecated(forRemoval = true, since = "0.40.x")
-    public <STRATEGY extends AggregateEventStreamPersistenceStrategy<CONFIG>> PostgresqlEventStore(EventStoreUnitOfWorkFactory unitOfWorkFactory,
+    <STRATEGY extends AggregateEventStreamPersistenceStrategy<CONFIG>> PostgresqlEventStore(EventStoreUnitOfWorkFactory unitOfWorkFactory,
                                                                                                    STRATEGY aggregateEventStreamPersistenceStrategy,
                                                                                                    Optional<EventStoreEventBus> eventStoreLocalEventBusOption,
                                                                                                    Function<PostgresqlEventStore<CONFIG>, EventStreamGapHandler<CONFIG>> eventStreamGapHandlerFactory,
@@ -196,7 +194,7 @@ public final class PostgresqlEventStore<CONFIG extends AggregateEventStreamConfi
         return new PostgresqlEventStore<>(unitOfWorkFactory,
                                           aggregateEventStreamPersistenceStrategy,
                                           Optional.empty(),
-                                          eventStore -> new PostgresqlEventStreamGapHandler<>(eventStore, unitOfWorkFactory),
+                                          eventStore -> new PostgresqlEventStreamGapHandler<>(unitOfWorkFactory),
                                           new NoOpEventStoreSubscriptionObserver());
     }
 

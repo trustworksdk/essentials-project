@@ -16,12 +16,6 @@
 
 package dk.trustworks.essentials.components.boot.autoconfigure.postgresql.eventstore;
 
-import com.fasterxml.jackson.annotation.JsonAutoDetect;
-import com.fasterxml.jackson.databind.*;
-import com.fasterxml.jackson.databind.Module;
-import com.fasterxml.jackson.databind.json.JsonMapper;
-import com.fasterxml.jackson.datatype.jdk8.Jdk8Module;
-import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 import dk.trustworks.essentials.shared.measurement.*;
 import dk.trustworks.essentials.components.boot.autoconfigure.postgresql.*;
 import dk.trustworks.essentials.components.eventsourced.aggregates.EventHandler;
@@ -43,7 +37,6 @@ import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.ob
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.persistence.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.persistence.table_per_aggregate_type.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.processor.*;
-import dk.trustworks.essentials.components.foundation.json.EssentialsJacksonModules;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.serializer.json.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.spring.SpringTransactionAwareEventStoreUnitOfWorkFactory;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.AggregateType;
@@ -82,7 +75,6 @@ import org.springframework.boot.jdbc.autoconfigure.DataSourceProperties;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.ApplicationContext;
 import org.springframework.context.annotation.Bean;
-import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Primary;
 import org.springframework.transaction.PlatformTransactionManager;
 
@@ -344,26 +336,29 @@ public class EventStoreConfiguration {
     }
 
     /**
-     * S1: bootstrap bean that wires the persistence strategy's {@code NotifyTriggerInstaller}
-     * so that every event-stream table (existing and future) gets a {@code pg_notify}
-     * trigger and is registered with the shared {@link MultiTableChangeListener}.
+     * S1: bootstrap bean that enables notify triggers on the persistence strategy, so that
+     * every event-stream table (existing and future) gets a {@code pg_notify} trigger as part
+     * of its schema and is registered with the shared {@link MultiTableChangeListener}.
      * See {@link EventStoreNotifyPollingBootstrap} for the full lifecycle and rationale.
      */
     @Bean
     @ConditionalOnProperty(prefix = "essentials.eventstore.subscription-manager.notify-polling", name = "enabled", havingValue = "true")
     @ConditionalOnMissingBean
     public EventStoreNotifyPollingBootstrap eventStoreNotifyPollingBootstrap(
-            Jdbi jdbi,
             AggregateEventStreamPersistenceStrategy<SeparateTablePerAggregateEventStreamConfiguration> persistenceStrategy,
             MultiTableChangeListener<TableChangeNotification> multiTableChangeListener) {
-        return new EventStoreNotifyPollingBootstrap(jdbi, persistenceStrategy, multiTableChangeListener);
+        return new EventStoreNotifyPollingBootstrap(persistenceStrategy, multiTableChangeListener);
     }
 
     @Bean
     @ConditionalOnMissingBean
     public DurableSubscriptionRepository durableSubscriptionRepository(Jdbi jdbi,
-                                                                       EventStore eventStore) {
-        return new PostgresqlDurableSubscriptionRepository(jdbi, eventStore);
+                                                                       EventStore eventStore,
+                                                                       EssentialsComponentsProperties essentialsComponentsProperties) {
+        return new PostgresqlDurableSubscriptionRepository(jdbi,
+                                                           eventStore,
+                                                           PostgresqlDurableSubscriptionRepository.DEFAULT_DURABLE_SUBSCRIPTIONS_TABLE_NAME,
+                                                           essentialsComponentsProperties.getSchema().getMode().schemaOwnership());
     }
 
     /**
@@ -385,14 +380,18 @@ public class EventStoreConfiguration {
                                                                                                                                     PersistableEventMapper persistableEventMapper,
                                                                                                                                     JSONEventSerializer jsonEventSerializer,
                                                                                                                                     EssentialsEventStoreProperties properties,
-                                                                                                                                    List<PersistableEventEnricher> persistableEventEnrichers) {
-        return new SeparateTablePerAggregateTypePersistenceStrategy(jdbi,
-                                                                    unitOfWorkFactory,
-                                                                    persistableEventMapper,
-                                                                    SeparateTablePerAggregateTypeEventStreamConfigurationFactory.standardSingleTenantConfiguration(jsonEventSerializer,
-                                                                                                                                                                   properties.getIdentifierColumnType(),
-                                                                                                                                                                   properties.getJsonColumnType()),
-                                                                    persistableEventEnrichers);
+                                                                                                                                    List<PersistableEventEnricher> persistableEventEnrichers,
+                                                                                                                                    EssentialsComponentsProperties essentialsComponentsProperties) {
+        return SeparateTablePerAggregateTypePersistenceStrategy.builder()
+                                                               .setJdbi(jdbi)
+                                                               .setUnitOfWorkFactory(unitOfWorkFactory)
+                                                               .setEventMapper(persistableEventMapper)
+                                                               .setAggregateEventStreamConfigurationFactory(SeparateTablePerAggregateTypeEventStreamConfigurationFactory.standardSingleTenantConfiguration(jsonEventSerializer,
+                                                                                                                                                                                                          properties.getIdentifierColumnType(),
+                                                                                                                                                                                                          properties.getJsonColumnType()))
+                                                               .setPersistableEventEnrichers(persistableEventEnrichers)
+                                                               .setSchemaOwnership(essentialsComponentsProperties.getSchema().getMode().schemaOwnership())
+                                                               .build();
     }
 
     /**
@@ -415,13 +414,13 @@ public class EventStoreConfiguration {
                                                                                                 List<EventStoreInterceptor> eventStoreInterceptors,
                                                                                                 EventStoreSubscriptionObserver eventStoreSubscriptionObserver,
                                                                                                 EventStreamGapHandler<SeparateTablePerAggregateEventStreamConfiguration> eventStreamGapHandler) {
-        var configurableEventStore = new PostgresqlEventStore<>(eventStoreUnitOfWorkFactory,
-                                                                persistenceStrategy,
-                                                                Optional.of(eventStoreLocalEventBus),
-                                                                eventStore -> essentialsComponentsProperties.isUseEventStreamGapHandler() ?
-                                                                              eventStreamGapHandler :
-                                                                              new NoEventStreamGapHandler<>(),
-                                                                eventStoreSubscriptionObserver);
+        var configurableEventStore = PostgresqlEventStore.<SeparateTablePerAggregateEventStreamConfiguration>builder()
+                                                         .setUnitOfWorkFactory(eventStoreUnitOfWorkFactory)
+                                                         .setPersistenceStrategy(persistenceStrategy)
+                                                         .setEventStoreEventBus(eventStoreLocalEventBus)
+                                                         .setEventStreamGapHandlerFactory(eventStore -> essentialsComponentsProperties.isUseEventStreamGapHandler() ? eventStreamGapHandler : new NoEventStreamGapHandler<>())
+                                                         .setEventStoreSubscriptionObserver(eventStoreSubscriptionObserver)
+                                                         .build();
         configurableEventStore.addEventStoreInterceptors(eventStoreInterceptors);
         return configurableEventStore;
     }
@@ -446,8 +445,10 @@ public class EventStoreConfiguration {
 
     @Bean
     @ConditionalOnMissingBean
-    public EventStreamGapHandler<SeparateTablePerAggregateEventStreamConfiguration> eventStreamGapHandler(EventStoreUnitOfWorkFactory<? extends EventStoreUnitOfWork> eventStoreUnitOfWorkFactory) {
-        return new PostgresqlEventStreamGapHandler<SeparateTablePerAggregateEventStreamConfiguration>(eventStoreUnitOfWorkFactory);
+    public EventStreamGapHandler<SeparateTablePerAggregateEventStreamConfiguration> eventStreamGapHandler(EventStoreUnitOfWorkFactory<? extends EventStoreUnitOfWork> eventStoreUnitOfWorkFactory,
+                                                                                                          EssentialsComponentsProperties essentialsComponentsProperties) {
+        return new PostgresqlEventStreamGapHandler<SeparateTablePerAggregateEventStreamConfiguration>(eventStoreUnitOfWorkFactory,
+                                                                                                      essentialsComponentsProperties.getSchema().getMode().schemaOwnership());
     }
 
     @Bean
@@ -551,72 +552,21 @@ public class EventStoreConfiguration {
     }
 
     /**
-     * The Jackson 2 {@link JSONEventSerializer}, for applications that have Jackson 2 on the classpath - including those on the
-     * Jackson 3 flavor, where the method picks the Jackson 3 serializer itself.
+     * The {@link JSONEventSerializer} that handles both {@link EventStore} event/metadata serialization as well as
+     * {@link DurableQueues} message payload serialization and deserialization, with the canonical Essentials mapper
+     * configuration.
      * <p>
-     * In a nested configuration of its own because its bean method names Jackson 2's {@code Module}: on the outer
-     * configuration class, that signature alone made Spring fail to introspect the whole auto-configuration on a
-     * classpath with only Jackson 3. Spring evaluates the class condition below from bytecode metadata, before loading
-     * this class.
+     * {@code JacksonModule} beans in the {@link ApplicationContext} are deliberately <em>not</em> collected: those are
+     * usually registered for the web layer, and adding them here would silently change the persisted JSON format. An
+     * application that needs extra modules for persistence defines its own {@link JSONEventSerializer} bean, which
+     * this backs off from.
+     *
+     * @return the {@link JSONEventSerializer} responsible for serializing/deserializing the raw Java events to and from JSON
      */
-    @Configuration(proxyBeanMethods = false)
-    @ConditionalOnClass(name = "com.fasterxml.jackson.databind.Module")
-    static class Jackson2JsonSerializerConfiguration {
-        /**
-         * The {@link JSONEventSerializer} that handles both {@link EventStore} event/metadata serialization as well as {@link DurableQueues} message payload serialization and deserialization
-         *
-         * @param additionalModules additional {@link Module}'s found in the {@link ApplicationContext}
-         * @return the {@link JSONEventSerializer} responsible for serializing/deserializing the raw Java events to and from JSON
-         */
-        @Bean
-        @ConditionalOnMissingBean
-        public JSONEventSerializer jsonSerializer(List<Module> additionalModules) {
-            if (EssentialsJacksonModules.isJackson3Flavor()) {
-                // The application is on Jackson 3, so no Jackson 2 Module beans can exist to collect. A Jackson 3
-                // deployment that needs extra modules defines its own JSONEventSerializer bean, which this backs off from.
-                return EssentialsJSONEventSerializers.createForActiveJacksonFlavor();
-            }
-            var objectMapperBuilder = JsonMapper.builder()
-                                                .disable(MapperFeature.AUTO_DETECT_GETTERS)
-                                                .disable(MapperFeature.AUTO_DETECT_IS_GETTERS)
-                                                .disable(MapperFeature.AUTO_DETECT_SETTERS)
-                                                .disable(MapperFeature.DEFAULT_VIEW_INCLUSION)
-                                                .disable(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS)
-                                                .disable(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES)
-                                                .disable(SerializationFeature.FAIL_ON_EMPTY_BEANS)
-                                                .enable(MapperFeature.AUTO_DETECT_CREATORS)
-                                                .enable(MapperFeature.AUTO_DETECT_FIELDS)
-                                                .enable(MapperFeature.PROPAGATE_TRANSIENT_MARKER)
-                                                .addModule(new Jdk8Module())
-                                                .addModule(new JavaTimeModule());
-
-            additionalModules.forEach(objectMapperBuilder::addModule);
-
-            var objectMapper = objectMapperBuilder.build();
-            objectMapper.setVisibility(objectMapper.getSerializationConfig().getDefaultVisibilityChecker()
-                                                   .withGetterVisibility(JsonAutoDetect.Visibility.NONE)
-                                                   .withSetterVisibility(JsonAutoDetect.Visibility.NONE)
-                                                   .withFieldVisibility(JsonAutoDetect.Visibility.ANY)
-                                                   .withCreatorVisibility(JsonAutoDetect.Visibility.ANY));
-
-            return new JacksonJSONEventSerializer(objectMapper);
-        }
-    }
-
-    /**
-     * The {@link JSONEventSerializer} for applications whose only Jackson is Jackson 3.
-     */
-    @Configuration(proxyBeanMethods = false)
-    @ConditionalOnMissingClass("com.fasterxml.jackson.databind.Module")
-    static class Jackson3OnlyJsonSerializerConfiguration {
-        /**
-         * @return the {@link JSONEventSerializer} with the canonical Essentials Jackson 3 mapper configuration
-         */
-        @Bean
-        @ConditionalOnMissingBean
-        public JSONEventSerializer jsonSerializer() {
-            return EssentialsJSONEventSerializers.createForActiveJacksonFlavor();
-        }
+    @Bean
+    @ConditionalOnMissingBean
+    public JSONEventSerializer jsonSerializer() {
+        return EssentialsJSONEventSerializers.create();
     }
 
     /**
@@ -720,7 +670,12 @@ public class EventStoreConfiguration {
                                               Optional<WalReplicationTailer> tailer,
                                               Optional<CdcDispatcher> dispatcher,
                                               EssentialsEventStoreProperties properties) {
-        return new CdcHealthIndicator(availability, tailer, dispatcher, properties);
+        return CdcHealthIndicator.builder()
+                                 .setAvailability(availability)
+                                 .setTailer(tailer)
+                                 .setDispatcher(dispatcher)
+                                 .setProperties(properties)
+                                 .build();
     }
 
     /**
@@ -761,15 +716,15 @@ public class EventStoreConfiguration {
                                                                                                    EssentialsEventStoreProperties essentialsProperties,
                                                                                                    CdcAvailability availability,
                                                                                                    Optional<MeterRegistry> meterRegistry) {
-        return new CdcEventStore<>(
-                eventStore,
-                eventStoreUnitOfWorkFactory,
-                eventStreamGapHandler,
-                cdcEventBus,
-                essentialsProperties.getCdc(),
-                availability,
-                meterRegistry
-        );
+        return CdcEventStore.<SeparateTablePerAggregateEventStreamConfiguration>builder()
+                            .setDelegate(eventStore)
+                            .setUnitOfWorkFactory(eventStoreUnitOfWorkFactory)
+                            .setEventStreamGapHandler(eventStreamGapHandler)
+                            .setCdcBus(cdcEventBus)
+                            .setCdcProperties(essentialsProperties.getCdc())
+                            .setAvailability(availability)
+                            .setMeterRegistry(meterRegistry)
+                            .build();
     }
 
     @Bean
@@ -797,18 +752,19 @@ public class EventStoreConfiguration {
 
         String slotName = getCdcSlotName(essentialsProperties, group, slotNameProvider);
 
-        return new CdcDispatcher(cdcInboxRepository,
-                                 eventStoreUnitOfWorkFactory,
-                                 eventStreamGapHandler,
-                                 logicalDecodingPlugin,
-                                 Optional.of(subscriptionResetOnPoisonNotifier),
-                                 cdcEventBus::publish,
-                                 slotName,
-                                 essentialsProperties.getCdc().getCdcDispatcher(),
-                                 essentialsProperties.getCdc().getDeliveryMode(),
-                                 availability,
-                                 meterRegistry
-        );
+        return new CdcDispatcher(CdcDispatcherDependencies.builder()
+                                                          .setInbox(cdcInboxRepository)
+                                                          .setUnitOfWorkFactory(eventStoreUnitOfWorkFactory)
+                                                          .setEventStreamGapHandler(eventStreamGapHandler)
+                                                          .setLogicalDecodingPlugin(logicalDecodingPlugin)
+                                                          .setCdcPoisonNotifier(subscriptionResetOnPoisonNotifier)
+                                                          .setOnEvents(cdcEventBus::publish)
+                                                          .setAvailability(availability)
+                                                          .setMeterRegistry(meterRegistry)
+                                                          .build(),
+                                 new CdcDispatcherSettings(slotName,
+                                                           essentialsProperties.getCdc().getCdcDispatcher(),
+                                                           essentialsProperties.getCdc().getDeliveryMode()));
     }
 
     private static String getCdcSlotName(EssentialsEventStoreProperties essentialsProperties, CdcConsumerGroup group, CdcSlotNameProvider slotNameProvider) {
@@ -900,7 +856,7 @@ public class EventStoreConfiguration {
             return new dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.cdc.filter.PgOutputRawPayloadFilter(
                     tablesSupplier);
         }
-        return WalMessageFilters.createForActiveJacksonFlavor(tablesSupplier);
+        return new DefaultWalMessageFilter(tablesSupplier);
     }
 
     @Bean
@@ -994,23 +950,25 @@ public class EventStoreConfiguration {
                                           .getSeparateTablePerEventStreamTableNameAggregates()
                                           .keySet();
 
-        return new WalReplicationTailer(replicationDataSource,
-                                        jdbi,
-                                        eventStoreUnitOfWorkFactory,
-                                        slotName,
-                                        cdcInboxRepository,
-                                        properties.getCdc().getWalReplicationTailer(),
-                                        properties.getCdc().getSlot().getMode(),
-                                        properties.getCdc().getMode(),
-                                        properties.getCdc().getDeliveryMode(),
-                                        logicalDecodingPlugin,
-                                        Optional.of(cdcEventBus::publish),
-                                        Optional.of(walMessageFilter),
-                                        availability,
-                                        meterRegistry,
-                                        errorHandler,
-                                        Optional.of(eventStreamTableNamesSupplier),
-                                        properties.getCdc().getSlot().isRecreateOnStart());
+        return new WalReplicationTailer(CdcTailerDependencies.builder()
+                                                             .setReplicationDataSource(replicationDataSource)
+                                                             .setJdbi(jdbi)
+                                                             .setUnitOfWorkFactory(eventStoreUnitOfWorkFactory)
+                                                             .setLogicalDecodingPlugin(logicalDecodingPlugin)
+                                                             .setAvailability(availability)
+                                                             .setMeterRegistry(meterRegistry)
+                                                             .setErrorHandler(errorHandler)
+                                                             .setWalMessageFilter(walMessageFilter)
+                                                             .setEventStreamTableNamesSupplier(eventStreamTableNamesSupplier)
+                                                             .build(),
+                                        new CdcTailerSettings(slotName,
+                                                              properties.getCdc().getWalReplicationTailer(),
+                                                              properties.getCdc().getSlot().getMode(),
+                                                              properties.getCdc().getMode(),
+                                                              properties.getCdc().getSlot().isRecreateOnStart()),
+                                        properties.getCdc().getDeliveryMode() == CdcProperties.CdcDeliveryMode.DIRECT
+                                        ? CdcDelivery.direct(cdcEventBus::publish)
+                                        : CdcDelivery.inbox(cdcInboxRepository));
     }
 
     @Bean
@@ -1020,12 +978,18 @@ public class EventStoreConfiguration {
                                                  Optional<MeterRegistry> meterRegistry,
                                                  EssentialsEventStoreProperties essentialsProperties,
                                                  CdcConsumerGroup group,
-                                                 CdcSlotNameProvider slotNameProvider) {
+                                                 CdcSlotNameProvider slotNameProvider,
+                                                 EssentialsComponentsProperties essentialsComponentsProperties) {
         var cdc = essentialsProperties.getCdc();
         // Use the configured inbox table name so the repository reads/writes the SAME table the
         // @TTLJob (essentials.eventstore.cdc.inbox-table-name) cleans. Passing the default here would
         // let a custom-named TTL job clean a table the repository never touches, leaking rows.
-        var repo = new CdcInboxRepository(eventStoreUnitOfWorkFactory, meterRegistry, cdc.getInboxTableName());
+        var repo = CdcInboxRepository.builder()
+                                     .setUnitOfWorkFactory(eventStoreUnitOfWorkFactory)
+                                     .setMeterRegistry(meterRegistry)
+                                     .setCdcInboxTableName(cdc.getInboxTableName())
+                                     .setSchemaOwnership(essentialsComponentsProperties.getSchema().getMode().schemaOwnership())
+                                     .build();
         // Inbox depth gauges are scoped to a known slot. Register them once here, gated on
         // INBOX delivery mode (DIRECT bypasses the inbox; the gauges would be permanently 0
         // and misleading) and the dispatcher's metrics-enabled toggle. The gauges sample on
@@ -1054,13 +1018,14 @@ public class EventStoreConfiguration {
                                                            CdcConsumerGroup group,
                                                            CdcSlotNameProvider slotNameProvider) {
         String slotName = getCdcSlotName(essentialsProperties, group, slotNameProvider);
-        return new CdcEffectivenessMonitor(
-                walReplicationTailer,
-                cdcDispatcher,
-                availability,
-                essentialsProperties.getCdc().getDeliveryMode(),
-                essentialsProperties.getCdc().getHealthCheck(),
-                slotName);
+        return CdcEffectivenessMonitor.builder()
+                                      .setTailer(walReplicationTailer)
+                                      .setDispatcher(cdcDispatcher)
+                                      .setAvailability(availability)
+                                      .setDeliveryMode(essentialsProperties.getCdc().getDeliveryMode())
+                                      .setConfig(essentialsProperties.getCdc().getHealthCheck())
+                                      .setSlotName(slotName)
+                                      .build();
     }
 
     /**
@@ -1121,11 +1086,13 @@ public class EventStoreConfiguration {
                                        DurableSubscriptionRepository durableSubscriptionRepository,
                                        Optional<EventStoreSubscriptionManager> eventStoreSubscriptionManager,
                                        Optional<SubscriptionStatisticsRegistry> subscriptionStatisticsRegistry) {
-        return new DefaultEventStoreApi(securityProvider,
-                                        eventStore,
-                                        durableSubscriptionRepository,
-                                        eventStoreSubscriptionManager,
-                                        subscriptionStatisticsRegistry);
+        return DefaultEventStoreApi.builder()
+                                   .setEssentialsSecurityProvider(securityProvider)
+                                   .setEventStore(eventStore)
+                                   .setDurableSubscriptionRepository(durableSubscriptionRepository)
+                                   .setEventStoreSubscriptionManager(eventStoreSubscriptionManager)
+                                   .setSubscriptionStatisticsRegistry(subscriptionStatisticsRegistry)
+                                   .build();
     }
 
     @Bean
@@ -1140,13 +1107,15 @@ public class EventStoreConfiguration {
                          Optional<WalReplicationTailer> tailer,
                          Optional<CdcDispatcher> dispatcher) {
         String slotName = getCdcSlotName(properties, group, slotNameProvider);
-        return new DefaultCdcApi(securityProvider,
-                                 eventStoreUnitOfWorkFactory,
-                                 availability,
-                                 properties.getCdc(),
-                                 slotName,
-                                 tailer,
-                                 dispatcher);
+        return DefaultCdcApi.builder()
+                            .setSecurityProvider(securityProvider)
+                            .setUnitOfWorkFactory(eventStoreUnitOfWorkFactory)
+                            .setAvailability(availability)
+                            .setProperties(properties.getCdc())
+                            .setConfiguredSlotName(slotName)
+                            .setTailer(tailer)
+                            .setDispatcher(dispatcher)
+                            .build();
     }
 
     @Bean

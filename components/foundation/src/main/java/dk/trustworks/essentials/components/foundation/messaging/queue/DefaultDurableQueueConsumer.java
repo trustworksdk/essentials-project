@@ -21,7 +21,6 @@ import dk.trustworks.essentials.components.foundation.messaging.RedeliveryPolicy
 import dk.trustworks.essentials.components.foundation.messaging.queue.QueuedMessage.DeliveryMode;
 import dk.trustworks.essentials.components.foundation.messaging.queue.operations.*;
 import dk.trustworks.essentials.components.foundation.transaction.*;
-import dk.trustworks.essentials.shared.Exceptions;
 import dk.trustworks.essentials.shared.concurrent.ThreadFactoryBuilder;
 import org.slf4j.*;
 import reactor.core.publisher.Mono;
@@ -95,11 +94,9 @@ public abstract class DefaultDurableQueueConsumer<DURABLE_QUEUES extends Durable
         consumeFromQueue.validate();
 
         this.durableQueues = requireNonNull(durableQueues, "durableQueues is missing");
-        if (durableQueues.getTransactionalMode() == TransactionalMode.FullyTransactional) {
-            this.unitOfWorkFactory = requireNonNull(unitOfWorkFactory, "You must specify a unitOfWorkFactory");
-        } else {
-            this.unitOfWorkFactory = null;
-        }
+        // Retained for subclasses that need it; the consumer itself performs each queue operation in its own
+        // transaction and never wraps a poll in one.
+        this.unitOfWorkFactory = unitOfWorkFactory;
         this.removeDurableQueueConsumer = requireNonNull(removeDurableQueueConsumer, "removeDurableQueueConsumer is missing");
         this.queueName = consumeFromQueue.queueName;
 
@@ -136,38 +133,6 @@ public abstract class DefaultDurableQueueConsumer<DURABLE_QUEUES extends Durable
                  consumeFromQueue.getParallelConsumers(),
                  pollingIntervalMs);
 
-    }
-
-    /**
-     * @param consumeFromQueue           what to consume
-     * @param unitOfWorkFactory          the {@link UnitOfWorkFactory}, required only in {@link TransactionalMode#FullyTransactional}
-     * @param durableQueues              the {@link DurableQueues} instance this consumer belongs to
-     * @param removeDurableQueueConsumer callback invoked when the consumer stops
-     * @param pollingIntervalMs          how often to poll for new messages
-     * @param queuePollingOptimizer      the polling optimizer, or {@code null} for {@link QueuePollingOptimizer#None()}
-     * @param interceptors               the interceptor chain applied to every queue operation
-     * @deprecated Use {@link #DefaultDurableQueueConsumer(ConsumeFromQueue, DurableQueueConsumerDependencies)}. The
-     *         five collaborator arguments are the same for every {@link DurableQueues} implementation, so they belong
-     *         in one {@link DurableQueueConsumerDependencies} bundle rather than being repeated positionally in each
-     *         subclass. This constructor delegates and behaves identically.
-     */
-    @Deprecated(forRemoval = true, since = "0.40.x")
-    public DefaultDurableQueueConsumer(ConsumeFromQueue consumeFromQueue,
-                                       UOW_FACTORY unitOfWorkFactory,
-                                       DURABLE_QUEUES durableQueues,
-                                       Consumer<DurableQueueConsumer> removeDurableQueueConsumer,
-                                       long pollingIntervalMs,
-                                       QueuePollingOptimizer queuePollingOptimizer,
-                                       List<DurableQueuesInterceptor> interceptors) {
-        this(consumeFromQueue,
-             DurableQueueConsumerDependencies.<DURABLE_QUEUES, UOW, UOW_FACTORY>builder()
-                                             .setUnitOfWorkFactory(unitOfWorkFactory)
-                                             .setDurableQueues(durableQueues)
-                                             .setRemoveDurableQueueConsumer(removeDurableQueueConsumer)
-                                             .setPollingIntervalMs(pollingIntervalMs)
-                                             .setQueuePollingOptimizer(queuePollingOptimizer)
-                                             .setInterceptors(interceptors)
-                                             .build());
     }
 
     @Override
@@ -262,31 +227,14 @@ public abstract class DefaultDurableQueueConsumer<DURABLE_QUEUES extends Durable
                 return;
             }
 
-            LOG.trace("[{}] {} - Polling Queue for the next message ready for delivery. Transactional mode: {}",
+            LOG.trace("[{}] {} - Polling Queue for the next message ready for delivery",
                       queueName,
-                      consumeFromQueue.consumerName,
-                      durableQueues.getTransactionalMode());
+                      consumeFromQueue.consumerName);
             Runnable postTransactionalSideEffect = null;
-            if (durableQueues.getTransactionalMode() == TransactionalMode.FullyTransactional) {
-                if (unitOfWorkFactory.getCurrentUnitOfWork().isPresent()) {
-                    throw new DurableQueueException(msg("[{}] {} - Previous UnitOfWork isn't completed/removed: {}",
-                                                        queueName,
-                                                        consumeFromQueue.consumerName,
-                                                        unitOfWorkFactory.getCurrentUnitOfWork().get()),
-                                                    queueName);
-                }
-
-                try {
-                    postTransactionalSideEffect = unitOfWorkFactory.withUnitOfWork(handleAwareUnitOfWork -> processNextMessageReadyForDelivery());
-                } catch (Exception e) {
-                    handleProcessNextMessageReadyForDeliveryException(e);
-                }
-            } else {
-                try {
-                    postTransactionalSideEffect = processNextMessageReadyForDelivery();
-                } catch (Exception e) {
-                    handleProcessNextMessageReadyForDeliveryException(e);
-                }
+            try {
+                postTransactionalSideEffect = processNextMessageReadyForDelivery();
+            } catch (Exception e) {
+                handleProcessNextMessageReadyForDeliveryException(e);
             }
 
             if (postTransactionalSideEffect != null) {
@@ -451,6 +399,7 @@ public abstract class DefaultDurableQueueConsumer<DURABLE_QUEUES extends Durable
             // Keep track of the ordered message being handled, to ensure other threads on this node doesn't start processing messages related to the OrderedMessage#getKey
             orderedMessageDeliveryThreads.put(Thread.currentThread(), (OrderedMessage) queuedMessage.getMessage());
         }
+        var handlerStartedAtNanos = System.nanoTime();
         try {
             var operation = new HandleQueuedMessage(queuedMessage, consumeFromQueue.queueMessageHandler);
             newInterceptorChainForOperation(operation,
@@ -467,6 +416,7 @@ public abstract class DefaultDurableQueueConsumer<DURABLE_QUEUES extends Durable
                           queueName,
                           queuedMessage.getId(),
                           consumeFromQueue.consumerName);
+                durableQueues.getMessageObserver().messageRedeliveryRequested(queuedMessage);
                 return retryMessage(queuedMessage, null, queuedMessage.getRedeliveryDelay());
             } else {
                 LOG.debug("[{}:{}] {} - Message handled successfully. Deleting the message in the Queue Store message. Total attempts: {}, Redelivery Attempts: {}",
@@ -476,49 +426,50 @@ public abstract class DefaultDurableQueueConsumer<DURABLE_QUEUES extends Durable
                           queuedMessage.getTotalDeliveryAttempts(),
                           queuedMessage.getRedeliveryAttempts());
                 durableQueues.acknowledgeMessageAsHandled(queuedMessage.getId());
+                // After the acknowledgement, so the count means "delivered and removed", not "the handler returned"
+                durableQueues.getMessageObserver()
+                             .messageHandled(queuedMessage, Duration.ofNanos(System.nanoTime() - handlerStartedAtNanos));
                 orderedMessageDeliveryThreads.remove(Thread.currentThread());
                 return () -> queuePollingOptimizer.queuePollingReturnedMessage(queuedMessage);
             }
         } catch (Throwable e) {
             rethrowIfCriticalError(e);
-            var isPermanentError = isPermanentError(queuedMessage, e);
-            if (isPermanentError || queuedMessage.getTotalDeliveryAttempts() >= consumeFromQueue.getRedeliveryPolicy().maximumNumberOfRedeliveries + 1) {
+            var decision         = MessageDeliveryClassifier.classify(queuedMessage, e, consumeFromQueue.getRedeliveryPolicy());
+            var isPermanentError = decision.outcome() == MessageDeliveryOutcome.PERMANENT_ERROR;
+            if (decision.isDeadLetter()) {
                 // Dead letter message
                 if (isPermanentError) {
-                    MESSAGE_HANDLING_FAILURE_LOG.error(msg("[{}:{}] {} - Marking Message as Dead Letter. Is Permanent Error: {}. Message: {}",
+                    MESSAGE_HANDLING_FAILURE_LOG.error(msg("[{}:{}] {} - Marking Message as Dead Letter. {}. Message: {}",
                                                            queueName,
                                                            queuedMessage.getId(),
                                                            consumeFromQueue.consumerName,
-                                                           isPermanentError,
+                                                           decision.describe(),
                                                            queuedMessage),
                                                        e);
                 } else {
-                    MESSAGE_HANDLING_FAILURE_LOG.warn(msg("[{}:{}] {} - Too many deliveries, marking Message as Dead Letter. Is Permanent Error: {}. Message: {}",
+                    MESSAGE_HANDLING_FAILURE_LOG.warn(msg("[{}:{}] {} - Too many deliveries, marking Message as Dead Letter. {}. Message: {}",
                                                           queueName,
                                                           queuedMessage.getId(),
                                                           consumeFromQueue.consumerName,
-                                                          isPermanentError,
+                                                          decision.describe(),
                                                           queuedMessage),
                                                       e);
                 }
 
                 try {
                     durableQueues.markAsDeadLetterMessage(queuedMessage.getId(), e);
+                    durableQueues.getMessageObserver().messageDeadLettered(queuedMessage, e, decision.outcome());
                     orderedMessageDeliveryThreads.remove(Thread.currentThread());
                     return () -> queuePollingOptimizer.queuePollingReturnedMessage(queuedMessage);
                 } catch (Throwable ex) {
                     rethrowIfCriticalError(e);
-                    var msg = msg("[{}:{}] {} - Failed to mark the Message as a Dead Letter Message. Details: Is Permanent Error: {}. Message: {}",
+                    var msg = msg("[{}:{}] {} - Failed to mark the Message as a Dead Letter Message. Details: {}. Message: {}",
                                   queueName,
                                   queuedMessage.getId(),
                                   consumeFromQueue.consumerName,
-                                  isPermanentError,
+                                  decision.describe(),
                                   queuedMessage);
                     MESSAGE_HANDLING_FAILURE_LOG.error(msg, ex);
-                    if (durableQueues.getTransactionalMode() == TransactionalMode.FullyTransactional) {
-                        // throw Exception to rollback unit of work
-                        throw new DurableQueueException(msg, ex, queueName);
-                    }
                     // Note: Don't clean up orderedMessageDeliveryThreads yet
                     return NO_POSTPROCESSING_AFTER_PROCESS_NEXT_MESSAGE;
                 }
@@ -555,6 +506,10 @@ public abstract class DefaultDurableQueueConsumer<DURABLE_QUEUES extends Durable
             durableQueues.retryMessage(queuedMessage.getId(),
                                        e,
                                        redeliveryDelay);
+            if (e != null) {
+                // A null cause means the handler asked for redelivery, which messageRedeliveryRequested already reported
+                durableQueues.getMessageObserver().messageRetried(queuedMessage, e, redeliveryDelay);
+            }
             orderedMessageDeliveryThreads.remove(Thread.currentThread());
             return NO_POSTPROCESSING_AFTER_PROCESS_NEXT_MESSAGE;
         } catch (Throwable ex) {
@@ -572,24 +527,10 @@ public abstract class DefaultDurableQueueConsumer<DURABLE_QUEUES extends Durable
                               queuedMessage.getId(),
                               consumeFromQueue.consumerName);
                 MESSAGE_HANDLING_FAILURE_LOG.error(msg, ex);
-                if (durableQueues.getTransactionalMode() == TransactionalMode.FullyTransactional) {
-                    // throw Exception to rollback unit of work
-                    throw new DurableQueueException(msg, ex, queueName);
-                }
             }
             // Note: Don't clean up orderedMessageDeliveryThreads yet
             return NO_POSTPROCESSING_AFTER_PROCESS_NEXT_MESSAGE;
         }
-    }
-
-    protected boolean isPermanentError(QueuedMessage queuedMessage, Throwable e) {
-        var rootCause = Exceptions.getRootCause(e);
-        return consumeFromQueue.getRedeliveryPolicy().isPermanentError(queuedMessage, e) ||
-                e instanceof DurableQueueDeserializationException ||
-                e instanceof ClassCastException || rootCause instanceof ClassCastException ||
-                e instanceof NoClassDefFoundError || rootCause instanceof NoClassDefFoundError ||
-                MismatchedJsonInput.isMismatchedJsonInput(rootCause) ||
-                e instanceof IllegalArgumentException || rootCause instanceof IllegalArgumentException;
     }
 
     @Override

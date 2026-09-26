@@ -231,24 +231,6 @@ public class MeasurementTaker {
         }
 
         /**
-         * Optionally configures a MeterRegistry.
-         * If the provided {@code Optional<MeterRegistry>} is non-empty,
-         * a {@link MicrometerMeasurementRecorder} is added.
-         *
-         * @param meterRegistryOptional an Optional MeterRegistry instance
-         * @return this builder instance for fluent chaining
-         * @deprecated Use {@link #setMeterRegistry(MeterRegistry)}, or {@link #setMeterRegistry(Optional)} at a Spring
-         *         {@code @Bean} boundary. Renamed to match the project-wide {@code setXxx} builder convention; the
-         *         behaviour is unchanged and this method delegates.
-         */
-        @Deprecated(forRemoval = true, since = "0.40.x")
-        @SuppressWarnings("OptionalUsedAsFieldOrParameterType")
-        public Builder withOptionalMicrometerMeasurementRecorder(Optional<MeterRegistry> meterRegistryOptional) {
-            requireNonNull(meterRegistryOptional, "No meterRegistryOptional provided");
-            return setMeterRegistry(meterRegistryOptional);
-        }
-
-        /**
          * Builds the MeasurementTaker instance.
          *
          * @return a new MeasurementTaker with the configured recorders

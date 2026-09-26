@@ -16,7 +16,8 @@
 
 package dk.trustworks.essentials.components.eventsourced.aggregates.eventstream;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
+import dk.trustworks.essentials.components.foundation.json.EssentialsObjectMappers;
+import tools.jackson.databind.ObjectMapper;
 import dk.trustworks.essentials.components.eventsourced.aggregates.*;
 import dk.trustworks.essentials.components.eventsourced.aggregates.eventstream.adapters.EventStreamDeciderCommandHandlerAdapter;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.PostgresqlEventStore;
@@ -42,7 +43,6 @@ import java.time.*;
 import java.util.*;
 import java.util.concurrent.ConcurrentLinkedQueue;
 
-import static dk.trustworks.essentials.components.eventsourced.aggregates.TestFasterxmlObjectMapperFactory.createObjectMapper;
 import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 import static org.assertj.core.api.Assertions.*;
 
@@ -463,7 +463,7 @@ class EventStreamDeciderIT {
         unitOfWorkFactory = new EventStoreManagedUnitOfWorkFactory(jdbi);
 
         // Setup serialization
-        objectMapper = createObjectMapper();
+        objectMapper = EssentialsObjectMappers.createJackson3ObjectMapper();
         eventMapper = new TestPersistableEventMapper();
 
         // Setup event store
@@ -471,7 +471,7 @@ class EventStreamDeciderIT {
                                                 new SeparateTablePerAggregateTypePersistenceStrategy(jdbi,
                                                                                                      unitOfWorkFactory,
                                                                                                      eventMapper,
-                                                                                                     SeparateTablePerAggregateTypeEventStreamConfigurationFactory.standardSingleTenantConfiguration(EssentialsJSONEventSerializers.createForActiveJacksonFlavor(),
+                                                                                                     SeparateTablePerAggregateTypeEventStreamConfigurationFactory.standardSingleTenantConfiguration(EssentialsJSONEventSerializers.create(),
                                                                                                                                                                                                     IdentifierColumnType.TEXT,
                                                                                                                                                                                                     JSONColumnType.JSONB)));
         eventStore.addAggregateEventStreamConfiguration(ORDERS, OrderId.class);

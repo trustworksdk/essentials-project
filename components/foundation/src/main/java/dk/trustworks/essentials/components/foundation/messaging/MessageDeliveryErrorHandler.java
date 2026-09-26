@@ -47,6 +47,31 @@ public interface MessageDeliveryErrorHandler {
     boolean isPermanentError(QueuedMessage queuedMessage, Throwable error);
 
     /**
+     * The three-valued form of {@link #isPermanentError(QueuedMessage, Throwable)}, which the
+     * {@link DurableQueueConsumer} consults instead.
+     * <p>
+     * The default implementation maps {@code isPermanentError}'s two values onto
+     * {@link MessageDeliveryVerdict#PERMANENT_ERROR} and {@link MessageDeliveryVerdict#NO_OPINION}, so every
+     * existing implementation keeps compiling and behaving exactly as before. That mapping is also the right
+     * answer for a handler that has not considered {@link MessageDeliveryVerdict#RETRY}: {@code false} from
+     * such a handler means "no opinion", not "retry this".
+     * <p>
+     * Override it to answer {@link MessageDeliveryVerdict#RETRY} and override the consumer's built-in
+     * permanent-error list where that list allows it. {@link MessageDeliveryErrorHandlerBuilder}'s product does
+     * exactly this for the types passed to
+     * {@link MessageDeliveryErrorHandlerBuilder#alwaysRetryOn(Class[])}.
+     *
+     * @param queuedMessage the message that failed to be delivered
+     * @param error         the error experienced
+     * @return this handler's verdict on the failure
+     */
+    default MessageDeliveryVerdict verdict(QueuedMessage queuedMessage, Throwable error) {
+        return isPermanentError(queuedMessage, error)
+               ? MessageDeliveryVerdict.PERMANENT_ERROR
+               : MessageDeliveryVerdict.NO_OPINION;
+    }
+
+    /**
      * Create a {@link MessageDeliveryErrorHandler} that always retries no matter which exception occurs
      *
      * @return a {@link MessageDeliveryErrorHandler} that always retries no matter which exception occurs

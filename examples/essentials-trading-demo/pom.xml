@@ -50,6 +50,22 @@
             <artifactId>spring-boot-starter-postgresql-event-store</artifactId>
             <version>${project.version}</version>
         </dependency>
+        <!--
+            The shard-owned queue engine. Experimental and unpublished, which is exactly why the demo
+            carries it: this app is where the engine gets exercised against a real workload — two
+            lanes, sustained traffic and spikes — rather than only against its own tests.
+        -->
+        <dependency>
+            <groupId>dk.trustworks.essentials.components</groupId>
+            <artifactId>spring-boot-starter-postgresql-queue-shard-owned</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+        <!--
+            The DurableQueues adapter over that engine. This is what lets the demo run its REAL work
+            on it: an EventProcessor forwards every event through an Inbox, so putting the Inbox on
+            this engine puts the projections on it — handlers that write SQL, not handlers that
+            sleep.
+        -->
         <dependency>
             <groupId>dk.trustworks.essentials.components</groupId>
             <artifactId>eventsourced-aggregates</artifactId>
@@ -82,7 +98,7 @@
         </dependency>
         <dependency>
             <groupId>dk.trustworks.essentials</groupId>
-            <artifactId>${essentials.types-jackson.artifactId}</artifactId>
+            <artifactId>types-jackson3</artifactId>
             <version>${project.version}</version>
         </dependency>
         <dependency>
@@ -92,7 +108,7 @@
         </dependency>
         <dependency>
             <groupId>dk.trustworks.essentials</groupId>
-            <artifactId>${essentials.immutable-jackson.artifactId}</artifactId>
+            <artifactId>immutable-jackson3</artifactId>
             <version>${project.version}</version>
         </dependency>
         <dependency>
@@ -157,18 +173,6 @@
         <dependency>
             <groupId>io.projectreactor</groupId>
             <artifactId>reactor-core</artifactId>
-        </dependency>
-        <dependency>
-            <groupId>com.fasterxml.jackson.core</groupId>
-            <artifactId>jackson-databind</artifactId>
-        </dependency>
-        <dependency>
-            <groupId>com.fasterxml.jackson.datatype</groupId>
-            <artifactId>jackson-datatype-jdk8</artifactId>
-        </dependency>
-        <dependency>
-            <groupId>com.fasterxml.jackson.datatype</groupId>
-            <artifactId>jackson-datatype-jsr310</artifactId>
         </dependency>
         <dependency>
             <groupId>org.springframework.boot</groupId>

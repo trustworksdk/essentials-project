@@ -314,12 +314,13 @@ public class PostgresqlEventStore<CONFIG extends EventStoreEventStreamConfigurat
 
 ```java
 // Package: dk.trustworks.essentials.components.eventsourced.eventstore.postgresql
-var eventStore = new PostgresqlEventStore<>(
-    eventStoreManagedUnitOfWorkFactory,
-    separateTablePerAggregateTypePersistenceStrategy,
-    Optional.of(eventStoreEventBus),
-    eventStreamGapHandlerFactory,
-    eventStoreSubscriptionObserver);
+var eventStore = PostgresqlEventStore.<SeparateTablePerAggregateEventStreamConfiguration>builder()
+                                     .setUnitOfWorkFactory(eventStoreManagedUnitOfWorkFactory)
+                                     .setPersistenceStrategy(separateTablePerAggregateTypePersistenceStrategy)
+                                     .setEventStoreEventBus(eventStoreEventBus)
+                                     .setEventStreamGapHandlerFactory(eventStreamGapHandlerFactory)
+                                     .setEventStoreSubscriptionObserver(eventStoreSubscriptionObserver)
+                                     .build();
 
 // Register aggregate type (required before persisting events)
 eventStore.addAggregateEventStreamConfiguration(
@@ -447,7 +448,6 @@ essentials:
     lock-time-out: "15s"
   durable-queues:
     shared-queue-table-name: "durable_queues"
-    transactional-mode: "single-operation-transaction"
 ```
 
 ### Override Pattern

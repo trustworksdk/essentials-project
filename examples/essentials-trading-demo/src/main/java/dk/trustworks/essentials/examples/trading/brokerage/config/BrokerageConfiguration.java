@@ -16,6 +16,7 @@
 
 package dk.trustworks.essentials.examples.trading.brokerage.config;
 
+import dk.trustworks.essentials.components.boot.autoconfigure.postgresql.EssentialsComponentsProperties;
 import dk.trustworks.essentials.components.eventsourced.aggregates.EssentialsAggregateDeclarations;
 import dk.trustworks.essentials.components.eventsourced.aggregates.closingbooks.*;
 import dk.trustworks.essentials.components.eventsourced.aggregates.snapshot.*;
@@ -89,7 +90,8 @@ public class BrokerageConfiguration {
     @Bean
     public ClosingBooksSetup<TradingAccountId, TradingAccountGenerationId> tradingAccountClosingBooks(
             HandleAwareUnitOfWorkFactory<? extends HandleAwareUnitOfWork> unitOfWorkFactory,
-            Optional<MeterRegistry> meterRegistry) {
+            Optional<MeterRegistry> meterRegistry,
+            EssentialsComponentsProperties essentialsComponentsProperties) {
         return ClosingBooksSetup.<TradingAccountId, TradingAccountGenerationId>builder(TradingAccounts.AGGREGATE_TYPE,
                                                                                       TradingAccount.class)
                                 .setLogicalAggregateIdType(TradingAccountId.class)
@@ -101,6 +103,9 @@ public class BrokerageConfiguration {
                                                               TradingAccountGenerationId.of(logicalAggregateId.value(), generation).toString())
                                 .setUnitOfWorkFactory(unitOfWorkFactory)
                                 .setMeterRegistry(meterRegistry)
+                                // Follows essentials.schema.mode: outside 'create' the generation table is left to the
+                                // schema harness, which reaches it through this bean
+                                .setSchemaOwnership(essentialsComponentsProperties.getSchema().getMode().schemaOwnership())
                                 .build();
     }
 

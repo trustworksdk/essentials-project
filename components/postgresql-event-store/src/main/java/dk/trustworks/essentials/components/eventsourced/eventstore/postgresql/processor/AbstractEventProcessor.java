@@ -26,10 +26,12 @@ import dk.trustworks.essentials.components.foundation.messaging.*;
 import dk.trustworks.essentials.components.foundation.messaging.eip.store_and_forward.*;
 import dk.trustworks.essentials.components.foundation.messaging.queue.*;
 import dk.trustworks.essentials.components.foundation.reactive.command.DurableLocalCommandBus;
+import dk.trustworks.essentials.components.foundation.transaction.*;
 import dk.trustworks.essentials.components.foundation.types.SubscriberId;
 import dk.trustworks.essentials.reactive.Handler;
 import dk.trustworks.essentials.reactive.command.*;
 import dk.trustworks.essentials.shared.Lifecycle;
+import dk.trustworks.essentials.shared.functional.*;
 import dk.trustworks.essentials.types.LongRange;
 import org.slf4j.*;
 
@@ -160,48 +162,129 @@ public abstract class AbstractEventProcessor implements Lifecycle {
      * appropriately and invokes the specified delegate for handling events or direct messages.
      */
     protected Consumer<Message> handleQueuedMessageConsumer(PatternMatchingMessageHandler patternMatchingMessageHandlerDelegate) {
-        return msg -> {
+        return new EventReferenceResolvingMessageConsumer(patternMatchingMessageHandlerDelegate);
+    }
+
+    /**
+     * Runs the given action inside a {@link UnitOfWork}, joining an already active {@link UnitOfWork} if there is one.
+     * <p>
+     * Intended for {@link MessageHandler} annotated methods declared with {@link UnitOfWorkMode#NONE}, which run
+     * without an ambient {@link UnitOfWork} so that they can perform blocking I/O: use this to wrap the transactional
+     * tail that follows the blocking call.
+     * <pre>{@code
+     * @MessageHandler(unitOfWork = UnitOfWorkMode.NONE)
+     * void on(InstrumentRegistrationRequested e) {
+     *     var decision = riskService.check(e.instrumentId(), e.symbol());   // blocking, no UnitOfWork held
+     *     usingUnitOfWork(() -> getCommandBus().sendAndDontWait(new RecordRiskDecision(e.instrumentId(), decision)));
+     * }
+     * }</pre>
+     *
+     * @param action the action to perform inside a {@link UnitOfWork}
+     */
+    protected void usingUnitOfWork(CheckedRunnable action) {
+        requireNonNull(action, "No action provided");
+        eventStore.getUnitOfWorkFactory().usingUnitOfWork(action);
+    }
+
+    /**
+     * Runs the given action inside a {@link UnitOfWork} and returns its result, joining an already active
+     * {@link UnitOfWork} if there is one.
+     *
+     * @param action the action to perform inside a {@link UnitOfWork}
+     * @param <R>    the result type
+     * @return the result of the action
+     * @see #usingUnitOfWork(CheckedRunnable)
+     */
+    protected <R> R withUnitOfWork(CheckedSupplier<R> action) {
+        requireNonNull(action, "No action provided");
+        return eventStore.getUnitOfWorkFactory().withUnitOfWork(action);
+    }
+
+    /**
+     * {@link Message} consumer that resolves an event-reference {@link OrderedMessage} into the actual
+     * {@link PersistedEvent} payload before delegating to the {@link PatternMatchingMessageHandler}.
+     * <p>
+     * It owns its {@link UnitOfWork} boundary (see {@link UnitOfWorkBoundaryOwningMessageConsumer}), which splits
+     * message handling into distinct phases:
+     * <ol>
+     *   <li>Loading the event from the {@link EventStore} happens in its own short {@link UnitOfWork} - it is a
+     *       database read and cannot be done without one</li>
+     *   <li>Invoking the {@link MessageHandler} annotated method is left to the
+     *       {@link PatternMatchingMessageHandler}, which opens a {@link UnitOfWork} per method according to that
+     *       method's {@link MessageHandler#unitOfWork()} - so a {@link UnitOfWorkMode#NONE} handler runs with no
+     *       database connection held and can perform blocking I/O</li>
+     * </ol>
+     */
+    protected class EventReferenceResolvingMessageConsumer implements UnitOfWorkBoundaryOwningMessageConsumer {
+        private final PatternMatchingMessageHandler patternMatchingMessageHandlerDelegate;
+
+        protected EventReferenceResolvingMessageConsumer(PatternMatchingMessageHandler patternMatchingMessageHandlerDelegate) {
+            this.patternMatchingMessageHandlerDelegate = requireNonNull(patternMatchingMessageHandlerDelegate, "No patternMatchingMessageHandlerDelegate provided");
+        }
+
+        @Override
+        public void accept(Message msg) {
             if (msg instanceof OrderedMessage orderedMessage && AbstractEventProcessor.EventReferenceOrderedMessage.isEventReference(orderedMessage)) {
-                var aggregateType         = (AggregateType) orderedMessage.getPayload();
-                var aggregateIdSerializer = resolveAggregateIdSerializer(aggregateType);
-
-                var stringAggregateId = orderedMessage.getKey();
-                var aggregateId       = aggregateIdSerializer.deserialize(stringAggregateId);
-
-                var eventOrder = orderedMessage.order;
-                log.trace("Looking up event for aggregate '{}' with id '{}' and event-order {}",
-                          aggregateType,
-                          aggregateId,
-                          eventOrder);
-                var events = eventStore.fetchStream(aggregateType,
-                                                    aggregateId,
-                                                    LongRange.only(eventOrder))
-                                       .orElseThrow(() -> new IllegalArgumentException(msg("Couldn't find a matching event for aggregate '{}' with id '{}' and event-order {}",
-                                                                                           aggregateType,
-                                                                                           aggregateId,
-                                                                                           eventOrder)))
-                                       .eventList();
-                if (events.size() != 1) {
-                    throw new IllegalArgumentException(msg("Couldn't find a matching event for aggregate '{}' with id '{}' and event-order {}",
-                                                           aggregateType,
-                                                           aggregateId,
-                                                           eventOrder));
-                }
-                var persistedEvent = events.get(0);
-                log.debug("[{}:{}] Handling Event of type '{}'", aggregateType, aggregateId, persistedEvent.event().getEventTypeOrNamePersistenceValue());
-                try {
-                    patternMatchingMessageHandlerDelegate.accept(OrderedMessage.of(persistedEvent.event().deserialize(),
-                                                                                   stringAggregateId,
-                                                                                   eventOrder,
-                                                                                   msg.getMetaData()));
-                } catch (JSONDeserializationException e) {
-                    log.error("Failed to deserialize PersistedEvent '{}'", persistedEvent.event().getEventTypeOrNamePersistenceValue(), e);
-                    throw e;
-                }
+                // Phase 1: resolve the event reference into the actual event - a database read, so it needs its own UnitOfWork
+                var resolvedMessage = withUnitOfWork(() -> resolveEventReference(orderedMessage));
+                // Phase 2: hand it to the handler methods, which decide their own UnitOfWork scope
+                patternMatchingMessageHandlerDelegate.accept(resolvedMessage);
             } else {
                 patternMatchingMessageHandlerDelegate.accept(msg);
             }
-        };
+        }
+
+        @Override
+        public boolean hasNonTransactionalMessageHandlers() {
+            return patternMatchingMessageHandlerDelegate.hasNonTransactionalMessageHandlers();
+        }
+
+        /**
+         * Load the {@link PersistedEvent} that the given event-reference {@link OrderedMessage} points to and return it
+         * as an {@link OrderedMessage} carrying the deserialized event as its payload.<br>
+         * <b>Must be called with an active {@link UnitOfWork}</b>
+         *
+         * @param orderedMessage the event-reference message
+         * @return the resolved {@link OrderedMessage} carrying the deserialized event
+         */
+        private OrderedMessage resolveEventReference(OrderedMessage orderedMessage) {
+            var aggregateType         = (AggregateType) orderedMessage.getPayload();
+            var aggregateIdSerializer = resolveAggregateIdSerializer(aggregateType);
+
+            var stringAggregateId = orderedMessage.getKey();
+            var aggregateId       = aggregateIdSerializer.deserialize(stringAggregateId);
+
+            var eventOrder = orderedMessage.order;
+            log.trace("Looking up event for aggregate '{}' with id '{}' and event-order {}",
+                      aggregateType,
+                      aggregateId,
+                      eventOrder);
+            var events = eventStore.fetchStream(aggregateType,
+                                                aggregateId,
+                                                LongRange.only(eventOrder))
+                                   .orElseThrow(() -> new IllegalArgumentException(msg("Couldn't find a matching event for aggregate '{}' with id '{}' and event-order {}",
+                                                                                       aggregateType,
+                                                                                       aggregateId,
+                                                                                       eventOrder)))
+                                   .eventList();
+            if (events.size() != 1) {
+                throw new IllegalArgumentException(msg("Couldn't find a matching event for aggregate '{}' with id '{}' and event-order {}",
+                                                       aggregateType,
+                                                       aggregateId,
+                                                       eventOrder));
+            }
+            var persistedEvent = events.get(0);
+            log.debug("[{}:{}] Handling Event of type '{}'", aggregateType, aggregateId, persistedEvent.event().getEventTypeOrNamePersistenceValue());
+            try {
+                return OrderedMessage.of(persistedEvent.event().deserialize(),
+                                         stringAggregateId,
+                                         eventOrder,
+                                         orderedMessage.getMetaData());
+            } catch (JSONDeserializationException e) {
+                log.error("Failed to deserialize PersistedEvent '{}'", persistedEvent.event().getEventTypeOrNamePersistenceValue(), e);
+                throw e;
+            }
+        }
     }
 
     /**

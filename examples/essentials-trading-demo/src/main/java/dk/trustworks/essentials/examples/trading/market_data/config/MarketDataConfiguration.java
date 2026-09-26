@@ -21,6 +21,8 @@ import dk.trustworks.essentials.examples.trading.market_data.aggregates.Instrume
 import dk.trustworks.essentials.examples.trading.market_data.aggregates.InstrumentPrice;
 import dk.trustworks.essentials.examples.trading.market_data.aggregates.InstrumentPrices;
 import dk.trustworks.essentials.examples.trading.market_data.aggregates.Instruments;
+import dk.trustworks.essentials.examples.trading.market_data.use_cases.risk_approve_instrument.RiskApprovalProperties;
+import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
@@ -29,8 +31,12 @@ import org.springframework.context.annotation.Configuration;
  *
  * <p>There is only one bean: both aggregates' repositories are built by their own wrappers
  * ({@code Instruments}, {@code InstrumentPrices}), the way the house template's {@code Accounts} does.
+ *
+ * <p>{@link RiskApprovalProperties} is registered here rather than on the application class, because it belongs to a
+ * slice of this context — the same split as {@code brokerage}'s closing-books properties.
  */
 @Configuration
+@EnableConfigurationProperties(RiskApprovalProperties.class)
 public class MarketDataConfiguration {
 
     /**

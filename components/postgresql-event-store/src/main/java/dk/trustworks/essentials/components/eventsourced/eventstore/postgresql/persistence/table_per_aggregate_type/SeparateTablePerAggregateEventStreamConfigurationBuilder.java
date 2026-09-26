@@ -114,7 +114,6 @@ public final class SeparateTablePerAggregateEventStreamConfigurationBuilder exte
 
     /** @return the new {@link SeparateTablePerAggregateEventStreamConfiguration} */
     @Override
-    @SuppressWarnings("removal")
     public SeparateTablePerAggregateEventStreamConfiguration build() {
         return new SeparateTablePerAggregateEventStreamConfiguration(aggregateType,
                                                                      eventStreamTableName,

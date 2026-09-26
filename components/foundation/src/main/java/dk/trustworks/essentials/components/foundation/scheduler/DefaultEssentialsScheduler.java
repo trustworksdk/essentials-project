@@ -23,6 +23,7 @@ import dk.trustworks.essentials.components.foundation.scheduler.executor.*;
 import dk.trustworks.essentials.components.foundation.scheduler.executor.ExecutorScheduledJobRepository.ExecutorJobEntry;
 import dk.trustworks.essentials.components.foundation.scheduler.pgcron.*;
 import dk.trustworks.essentials.components.foundation.scheduler.pgcron.PgCronRepository.*;
+import dk.trustworks.essentials.components.foundation.schema.*;
 import dk.trustworks.essentials.components.foundation.transaction.jdbi.*;
 import dk.trustworks.essentials.shared.Lifecycle;
 import dk.trustworks.essentials.shared.concurrent.ThreadFactoryBuilder;
@@ -51,7 +52,7 @@ import static dk.trustworks.essentials.shared.FailFast.*;
  *   <li>Manages task lifecycle using a distributed lock to ensure coordinated task execution across multiple nodes.</li>
  * </ul>
  */
-public class DefaultEssentialsScheduler implements EssentialsScheduler, Lifecycle {
+public class DefaultEssentialsScheduler implements EssentialsScheduler, Lifecycle, EssentialsSchemaContributor {
 
     private static final Logger log = LoggerFactory.getLogger(DefaultEssentialsScheduler.class);
 
@@ -77,13 +78,45 @@ public class DefaultEssentialsScheduler implements EssentialsScheduler, Lifecycl
     public DefaultEssentialsScheduler(HandleAwareUnitOfWorkFactory<?> unitOfWorkFactory,
                                       FencedLockManager lockManager,
                                       int schedulerThreads) {
+        this(unitOfWorkFactory, lockManager, schedulerThreads, SchemaOwnership.COMPONENT);
+    }
+
+    /**
+     * @param schemaOwnership {@link SchemaOwnership#COMPONENT} creates the scheduled-jobs table now;
+     *                        {@link SchemaOwnership#HARNESS} leaves it to an {@link EssentialsSchemaHarness} this
+     *                        scheduler is registered with
+     */
+    public DefaultEssentialsScheduler(HandleAwareUnitOfWorkFactory<?> unitOfWorkFactory,
+                                      FencedLockManager lockManager,
+                                      int schedulerThreads,
+                                      SchemaOwnership schemaOwnership) {
         this.unitOfWorkFactory = requireNonNull(unitOfWorkFactory, "unitOfWorkFactory cannot be null");
         this.fencedLockManager = requireNonNull(lockManager, "lockManager cannot be null");
         requireTrue(schedulerThreads > 0, "schedulerThreads must be greater than 0");
         this.schedulerThreads = schedulerThreads;
         this.pgCronRepository = new PgCronRepository(unitOfWorkFactory);
-        this.executorScheduledJobRepository = new ExecutorScheduledJobRepository(unitOfWorkFactory);
+        this.executorScheduledJobRepository = new ExecutorScheduledJobRepository(unitOfWorkFactory,
+                                                                                 ExecutorScheduledJobRepository.DEFAULT_SCHEDULED_JOBS_TABLE_NAME,
+                                                                                 requireNonNull(schemaOwnership, "schemaOwnership cannot be null"));
         this.lockName = new LockName("essentials-scheduler");
+    }
+
+    /**
+     * The scheduled-jobs table, as contributed by this scheduler's {@link ExecutorScheduledJobRepository}.
+     */
+    @Override
+    public String moduleId() {
+        return executorScheduledJobRepository.moduleId();
+    }
+
+    @Override
+    public int order() {
+        return executorScheduledJobRepository.order();
+    }
+
+    @Override
+    public List<SchemaChange> contribute(SchemaContext context) {
+        return executorScheduledJobRepository.contribute(context);
     }
 
     /**

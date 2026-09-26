@@ -55,7 +55,7 @@ public class CdcPoisonGapIntegrationIT extends AbstractLogicalReplicationPostgre
 
     @BeforeEach
     void setup() {
-        jacksonJSONSerializer = EssentialsJSONEventSerializers.createForActiveJacksonFlavor();
+        jacksonJSONSerializer = EssentialsJSONEventSerializers.create();
         eventMapper = new EventProcessorIT.TestPersistableEventMapper();
 
         var persistenceStrategy =
@@ -70,7 +70,7 @@ public class CdcPoisonGapIntegrationIT extends AbstractLogicalReplicationPostgre
         persistenceStrategy.addAggregateEventStreamConfiguration(ORDERS, OrderId.class);
 
         eventStore = new PostgresqlEventStore<>(unitOfWorkFactory, persistenceStrategy);
-        gapHandler = new PostgresqlEventStreamGapHandler<>(eventStore, unitOfWorkFactory);
+        gapHandler = new PostgresqlEventStreamGapHandler<>(unitOfWorkFactory);
 
         var availability = new CdcAvailability();
         availability.active("test");
@@ -91,8 +91,7 @@ public class CdcPoisonGapIntegrationIT extends AbstractLogicalReplicationPostgre
         // Given
         String slotName = "slot_" + UUID.randomUUID().toString().replace("-", "");
 
-        var gapHandler = new PostgresqlEventStreamGapHandler<>(eventStore,
-                                                               unitOfWorkFactory);
+        var gapHandler = new PostgresqlEventStreamGapHandler<>(unitOfWorkFactory);
 
         AggregateTypeResolver resolver = table -> {
             if ("orders_events".equalsIgnoreCase(table)) return ORDERS;
@@ -115,19 +114,17 @@ public class CdcPoisonGapIntegrationIT extends AbstractLogicalReplicationPostgre
         var plugin = new Wal2JsonLogicalDecodingPlugin(
                 CdcProperties.WalReplicationTailerProperties.defaults(Duration.ofMillis(25), Duration.ofMillis(50), Duration.ofSeconds(2), Duration.ofMillis(100)),
                 converter, walGlobalOrdersExtractor, CdcProperties.WalParserMode.STRING);
-        var dispatcher = new CdcDispatcher(
-                inboxRepository,
-                unitOfWorkFactory,
-                gapHandler,
-                plugin,
-                Optional.of(poisonNotifier),
-                cdcBus::addAll,
-                slotName,
-                CdcDispatcherProperties.defaults(),
-                CdcProperties.CdcDeliveryMode.INBOX,
-                availability,
-                Optional.empty()
-        );
+        var dispatcher = new CdcDispatcher(CdcDispatcherDependencies.builder()
+                                                                    .setInbox(inboxRepository)
+                                                                    .setUnitOfWorkFactory(unitOfWorkFactory)
+                                                                    .setEventStreamGapHandler(gapHandler)
+                                                                    .setLogicalDecodingPlugin(plugin)
+                                                                    .setCdcPoisonNotifier(poisonNotifier)
+                                                                    .setOnEvents((cdcBus::addAll))
+                                                                    .setAvailability(availability)
+                                                                    .setMeterRegistry(Optional.empty())
+                                                                    .build(),
+                                           new CdcDispatcherSettings(slotName, CdcDispatcherProperties.defaults(), CdcProperties.CdcDeliveryMode.INBOX));
 
         var orderId = OrderId.of("beed77fb-1115-1115-9c48-03ed5bfe8f89");
         var persistableEvents = List.of(
@@ -331,19 +328,17 @@ public class CdcPoisonGapIntegrationIT extends AbstractLogicalReplicationPostgre
         var plugin = new Wal2JsonLogicalDecodingPlugin(
                 CdcProperties.WalReplicationTailerProperties.defaults(Duration.ofMillis(25), Duration.ofMillis(50), Duration.ofSeconds(2), Duration.ofMillis(100)),
                 converter, walGlobalOrdersExtractor, CdcProperties.WalParserMode.STRING);
-        var dispatcher = new CdcDispatcher(
-                inboxRepository,
-                unitOfWorkFactory,
-                gapHandler,
-                plugin,
-                Optional.of(poisonNotifier),
-                dispatched::addAll,
-                slotName,
-                dispatcherProps,
-                CdcProperties.CdcDeliveryMode.INBOX,
-                availability,
-                Optional.empty()
-        );
+        var dispatcher = new CdcDispatcher(CdcDispatcherDependencies.builder()
+                                                                    .setInbox(inboxRepository)
+                                                                    .setUnitOfWorkFactory(unitOfWorkFactory)
+                                                                    .setEventStreamGapHandler(gapHandler)
+                                                                    .setLogicalDecodingPlugin(plugin)
+                                                                    .setCdcPoisonNotifier(poisonNotifier)
+                                                                    .setOnEvents((dispatched::addAll))
+                                                                    .setAvailability(availability)
+                                                                    .setMeterRegistry(Optional.empty())
+                                                                    .build(),
+                                           new CdcDispatcherSettings(slotName, dispatcherProps, CdcProperties.CdcDeliveryMode.INBOX));
 
         // Same batch: first row is poison, second row is valid.
         inboxRepository.insertRaw(slotName, "0/POISON-1", poisonWalForGlobalOrder(41L), "RECEIVED");
@@ -388,19 +383,17 @@ public class CdcPoisonGapIntegrationIT extends AbstractLogicalReplicationPostgre
         var plugin = new Wal2JsonLogicalDecodingPlugin(
                 CdcProperties.WalReplicationTailerProperties.defaults(Duration.ofMillis(25), Duration.ofMillis(50), Duration.ofSeconds(2), Duration.ofMillis(100)),
                 converter, walGlobalOrdersExtractor, CdcProperties.WalParserMode.STRING);
-        var dispatcher = new CdcDispatcher(
-                inboxRepository,
-                unitOfWorkFactory,
-                gapHandler,
-                plugin,
-                Optional.of(poisonNotifier),
-                events -> dispatchedCount.addAndGet(events.size()),
-                slotName,
-                dispatcherProps,
-                CdcProperties.CdcDeliveryMode.INBOX,
-                availability,
-                Optional.empty()
-        );
+        var dispatcher = new CdcDispatcher(CdcDispatcherDependencies.builder()
+                                                                    .setInbox(inboxRepository)
+                                                                    .setUnitOfWorkFactory(unitOfWorkFactory)
+                                                                    .setEventStreamGapHandler(gapHandler)
+                                                                    .setLogicalDecodingPlugin(plugin)
+                                                                    .setCdcPoisonNotifier(poisonNotifier)
+                                                                    .setOnEvents((events -> dispatchedCount.addAndGet(events.size())))
+                                                                    .setAvailability(availability)
+                                                                    .setMeterRegistry(Optional.empty())
+                                                                    .build(),
+                                           new CdcDispatcherSettings(slotName, dispatcherProps, CdcProperties.CdcDeliveryMode.INBOX));
 
         // Same batch: first row is poison, second row is valid.
         inboxRepository.insertRaw(slotName, "0/POISON-STOP", poisonWalForGlobalOrder(51L), "RECEIVED");

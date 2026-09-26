@@ -16,8 +16,8 @@
 
 package dk.trustworks.essentials.components.eventsourced.aggregates.snapshot;
 
-import com.fasterxml.jackson.databind.*;
-import com.fasterxml.jackson.databind.json.JsonMapper;
+import tools.jackson.databind.*;
+import tools.jackson.databind.json.JsonMapper;
 import dk.trustworks.essentials.components.eventsourced.aggregates.*;
 import dk.trustworks.essentials.components.eventsourced.aggregates.modern.OrderEvent;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.serializer.json.*;
@@ -29,7 +29,7 @@ import java.util.Map;
 import static org.assertj.core.api.Assertions.assertThat;
 
 class DefaultAggregateSnapshotStateAdapterTest {
-    private final AggregateSnapshotStateAdapter adapter = new DefaultAggregateSnapshotStateAdapter(EssentialsJSONEventSerializers.createForActiveJacksonFlavor());
+    private final AggregateSnapshotStateAdapter adapter = new DefaultAggregateSnapshotStateAdapter(EssentialsJSONEventSerializers.create());
 
     @Test
     void serializes_domain_state_without_framework_runtime_fields_for_plain_modern_aggregate() {
@@ -81,18 +81,22 @@ class DefaultAggregateSnapshotStateAdapterTest {
         // (and therefore Jackson alone cannot instantiate the type from "{}"). Objenesis is used
         // directly by DefaultAggregateSnapshotStateAdapter to bypass the constructor.
         //
-        // Deliberately pinned to a bare Jackson 2 mapper rather than going through
-        // EssentialsJSONEventSerializers: the scenario needs a mapper that CANNOT instantiate the type,
-        // and Jackson 3 reads a lone single-argument constructor as a creator, which would construct the
-        // aggregate itself and never reach the Objenesis fallback this test covers. No Essentials Jackson
-        // module is registered here, so nothing flavor-specific is exercised.
+        // Deliberately a bare mapper rather than EssentialsJSONEventSerializers: the scenario needs a mapper that
+        // CANNOT instantiate the type. Jackson 3 would otherwise read the lone single-argument constructor as a
+        // creator (parameter names are compiled in), construct the aggregate itself and never reach the Objenesis
+        // fallback this test covers, so creator detection is switched off. No Essentials Jackson module is
+        // registered.
         var jsonMapper = JsonMapper.builder()
-                                   .disable(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS)
+                                   .changeDefaultVisibility(visibility -> tools.jackson.databind.introspect.VisibilityChecker
+                                           .defaultInstance()
+                                           .withGetterVisibility(com.fasterxml.jackson.annotation.JsonAutoDetect.Visibility.NONE)
+                                           .withSetterVisibility(com.fasterxml.jackson.annotation.JsonAutoDetect.Visibility.NONE)
+                                           .withFieldVisibility(com.fasterxml.jackson.annotation.JsonAutoDetect.Visibility.ANY)
+                                           .withCreatorVisibility(com.fasterxml.jackson.annotation.JsonAutoDetect.Visibility.NONE))
                                    .disable(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES)
                                    .disable(SerializationFeature.FAIL_ON_EMPTY_BEANS)
-                                   .enable(MapperFeature.AUTO_DETECT_FIELDS)
                                    .build();
-        var serializer = new JacksonJSONEventSerializer(jsonMapper);
+        var serializer = new Jackson3JSONEventSerializer(jsonMapper);
         var adapter = new DefaultAggregateSnapshotStateAdapter(serializer);
 
         var snapshot = "{\"orderNumber\":42}";

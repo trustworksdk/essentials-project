@@ -18,23 +18,18 @@ package dk.trustworks.essentials.components.boot.autoconfigure.mongodb;
 
 
 import com.fasterxml.jackson.annotation.*;
-import com.fasterxml.jackson.databind.*;
-import com.fasterxml.jackson.databind.Module;
-import com.fasterxml.jackson.databind.json.JsonMapper;
-import com.fasterxml.jackson.datatype.jdk8.Jdk8Module;
-import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 import com.mongodb.*;
 import dk.trustworks.essentials.shared.measurement.*;
 import dk.trustworks.essentials.components.distributed.fencedlock.springdata.mongo.MongoFencedLockManager;
 import dk.trustworks.essentials.components.foundation.fencedlock.*;
 import dk.trustworks.essentials.components.foundation.interceptor.micrometer.*;
-import dk.trustworks.essentials.components.foundation.json.EssentialsJacksonModules;
 import dk.trustworks.essentials.components.foundation.json.EssentialsObjectMappers;
 import dk.trustworks.essentials.components.foundation.json.*;
 import dk.trustworks.essentials.components.foundation.lifecycle.*;
 import dk.trustworks.essentials.components.foundation.messaging.RedeliveryPolicy;
 import dk.trustworks.essentials.components.foundation.messaging.eip.store_and_forward.*;
 import dk.trustworks.essentials.components.foundation.messaging.queue.*;
+import dk.trustworks.essentials.components.foundation.messaging.queue.health.DurableQueuesHealthIndicator;
 import dk.trustworks.essentials.components.foundation.messaging.queue.micrometer.*;
 import dk.trustworks.essentials.components.foundation.messaging.queue.operations.ConsumeFromQueue;
 import dk.trustworks.essentials.components.foundation.reactive.command.*;
@@ -57,9 +52,10 @@ import org.slf4j.*;
 import org.springframework.boot.autoconfigure.AutoConfiguration;
 import org.springframework.boot.autoconfigure.condition.*;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
+import org.springframework.boot.health.autoconfigure.contributor.ConditionalOnEnabledHealthIndicator;
+import org.springframework.boot.health.contributor.HealthIndicator;
 import org.springframework.context.ApplicationContext;
 import org.springframework.context.annotation.Bean;
-import org.springframework.context.annotation.Configuration;
 import org.springframework.context.event.*;
 import org.springframework.context.event.EventListener;
 import org.springframework.core.convert.converter.*;
@@ -314,7 +310,8 @@ public class EssentialsComponentsConfiguration {
                                        SpringMongoTransactionAwareUnitOfWorkFactory unitOfWorkFactory,
                                        JSONSerializer jsonSerializer,
                                        EssentialsComponentsProperties properties,
-                                       List<DurableQueuesInterceptor> durableQueuesInterceptors) {
+                                       List<DurableQueuesInterceptor> durableQueuesInterceptors,
+                                       List<DurableQueueMessageObserver> durableQueueMessageObservers) {
         Function<ConsumeFromQueue, QueuePollingOptimizer> pollingOptimizerFactory =
                 consumeFromQueue -> new SimpleQueuePollingOptimizer(consumeFromQueue,
                                                                     (long) (consumeFromQueue.getPollingInterval().toMillis() *
@@ -324,22 +321,52 @@ public class EssentialsComponentsConfiguration {
                                                                                                     .getMaxPollingInterval()
                                                                                                     .toMillis()
                 );
-        MongoDurableQueues durableQueues;
-        if (properties.getDurableQueues().getTransactionalMode() == TransactionalMode.FullyTransactional) {
-            durableQueues = new MongoDurableQueues(mongoTemplate,
-                                                   unitOfWorkFactory,
-                                                   jsonSerializer,
-                                                   properties.getDurableQueues().getSharedQueueCollectionName(),
-                                                   pollingOptimizerFactory);
-        } else {
-            durableQueues = new MongoDurableQueues(mongoTemplate,
-                                                   properties.getDurableQueues().getMessageHandlingTimeout(),
-                                                   jsonSerializer,
-                                                   properties.getDurableQueues().getSharedQueueCollectionName(),
-                                                   pollingOptimizerFactory);
-        }
+        var durableQueues = MongoDurableQueues.builder()
+                                              .setMessageObserver(DurableQueueMessageObserver.composite(durableQueueMessageObservers))
+                                              .setMongoTemplate(mongoTemplate)
+                                              .setUnitOfWorkFactory(unitOfWorkFactory)
+                                              .setMessageHandlingTimeout(properties.getDurableQueues().getMessageHandlingTimeout())
+                                              .setJsonSerializer(jsonSerializer)
+                                              .setSharedQueueCollectionName(properties.getDurableQueues().getSharedQueueCollectionName())
+                                              .setQueuePollingOptimizerFactory(pollingOptimizerFactory)
+                                              .build();
         durableQueues.addInterceptors(durableQueuesInterceptors);
         return durableQueues;
+    }
+
+    /**
+     * The dead-letter counter, registered whenever a {@link MeterRegistry} is present and deliberately
+     * <em>not</em> gated behind {@code essentials.metrics.durable-queues.enabled}: that switch controls
+     * execution-time measurement, and a timing switch must not turn an incident counter off.
+     * <p>
+     * Nothing about the counter is database-specific — {@link MongoDurableQueues} delivers through
+     * {@code DefaultDurableQueueConsumer}, which is the class that notifies the observer.
+     */
+    @Bean
+    @ConditionalOnBean(MeterRegistry.class)
+    @ConditionalOnMissingBean(MicrometerDurableQueueMessageObserver.class)
+    public MicrometerDurableQueueMessageObserver micrometerDurableQueueMessageObserver(MeterRegistry meterRegistry,
+                                                                                        EssentialsComponentsProperties properties) {
+        return new MicrometerDurableQueueMessageObserver(meterRegistry, properties.getTracingProperties().getModuleTag());
+    }
+
+    /**
+     * Surfaces dead-letter counts on {@code /actuator/health}. Registered by default, and reports {@code UP}
+     * regardless of the counts until {@code essentials.durable-queues.health.dead-letter-threshold} is set to a
+     * positive number — see {@link DurableQueuesHealthIndicator} for why that default is not timidity.
+     * <p>
+     * Turn it off entirely with {@code management.health.durable-queues.enabled=false}.
+     */
+    @Bean
+    @ConditionalOnClass(HealthIndicator.class)
+    @ConditionalOnEnabledHealthIndicator("durablequeues")
+    @ConditionalOnMissingBean(DurableQueuesHealthIndicator.class)
+    public DurableQueuesHealthIndicator durableQueuesHealthIndicator(DurableQueues durableQueues,
+                                                                                         EssentialsComponentsProperties properties) {
+        var health = properties.getDurableQueues().getHealth();
+        return new DurableQueuesHealthIndicator(durableQueues,
+                                                          health.getDeadLetterThreshold(),
+                                                          health.getCacheTimeToLive());
     }
 
     /**
@@ -415,74 +442,22 @@ public class EssentialsComponentsConfiguration {
     }
 
     /**
-     * The Jackson 2 {@link JSONSerializer}, for applications that have Jackson 2 on the classpath - including those on the
-     * Jackson 3 flavor, where the method picks the Jackson 3 serializer itself.
+     * {@link JSONSerializer} responsible for serializing/deserializing the raw Java events to and from JSON
+     * (including handling {@link DurableQueues} message payload serialization and deserialization), with the canonical
+     * Essentials mapper configuration from {@link EssentialsObjectMappers}.
      * <p>
-     * In a nested configuration of its own because its bean method names Jackson 2's {@code Module}: on the outer
-     * configuration class, that signature alone made Spring fail to introspect the whole auto-configuration on a
-     * classpath with only Jackson 3. Spring evaluates the class condition below from bytecode metadata, before loading
-     * this class.
+     * {@code JacksonModule} beans in the {@link ApplicationContext} are deliberately <em>not</em> collected: those are
+     * usually registered for the web layer, and adding them here would silently change the persisted JSON format. An
+     * application that needs extra modules for persistence defines its own {@link JSONSerializer} bean, which this
+     * backs off from.
+     *
+     * @return the {@link JSONSerializer} responsible for serializing/deserializing the raw Java events to and from JSON
      */
-    @Configuration(proxyBeanMethods = false)
-    @ConditionalOnClass(name = "com.fasterxml.jackson.databind.Module")
+    @Bean
     @ConditionalOnMissingClass("dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.serializer.json.JSONEventSerializer")
-    static class Jackson2JsonSerializerConfiguration {
-        /**
-         * {@link JSONSerializer} responsible for serializing/deserializing the raw Java events to and from JSON
-         * (including handling {@link DurableQueues} message payload serialization and deserialization)
-         *
-         * @param additionalModules additional {@link Module}'s found in the {@link ApplicationContext}
-         * @return the {@link JSONSerializer} responsible for serializing/deserializing the raw Java events to and from JSON
-         */
-        @Bean
-        @ConditionalOnMissingBean
-        public JSONSerializer jsonSerializer(List<Module> additionalModules) {
-            if (EssentialsJacksonModules.isJackson3Flavor()) {
-                // The application is on Jackson 3, so no Jackson 2 Module beans can exist to collect. A Jackson 3
-                // deployment that needs extra modules defines its own JSONSerializer bean, which this backs off from.
-                return EssentialsObjectMappers.createJSONSerializer();
-            }
-            var objectMapperBuilder = JsonMapper.builder()
-                                                .disable(MapperFeature.AUTO_DETECT_GETTERS)
-                                                .disable(MapperFeature.AUTO_DETECT_IS_GETTERS)
-                                                .disable(MapperFeature.AUTO_DETECT_SETTERS)
-                                                .disable(MapperFeature.DEFAULT_VIEW_INCLUSION)
-                                                .disable(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS)
-                                                .disable(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES)
-                                                .disable(SerializationFeature.FAIL_ON_EMPTY_BEANS)
-                                                .enable(MapperFeature.AUTO_DETECT_CREATORS)
-                                                .enable(MapperFeature.AUTO_DETECT_FIELDS)
-                                                .enable(MapperFeature.PROPAGATE_TRANSIENT_MARKER)
-                                                .addModule(new Jdk8Module())
-                                                .addModule(new JavaTimeModule());
-
-            additionalModules.forEach(objectMapperBuilder::addModule);
-
-            var objectMapper = objectMapperBuilder.build();
-            objectMapper.setVisibility(objectMapper.getSerializationConfig().getDefaultVisibilityChecker()
-                                                   .withGetterVisibility(JsonAutoDetect.Visibility.NONE)
-                                                   .withSetterVisibility(JsonAutoDetect.Visibility.NONE)
-                                                   .withFieldVisibility(JsonAutoDetect.Visibility.ANY)
-                                                   .withCreatorVisibility(JsonAutoDetect.Visibility.ANY));
-
-            return new JacksonJSONSerializer(objectMapper);
-        }
-    }
-
-    /**
-     * The {@link JSONSerializer} for applications whose only Jackson is Jackson 3.
-     */
-    @Configuration(proxyBeanMethods = false)
-    @ConditionalOnMissingClass({"com.fasterxml.jackson.databind.Module", "dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.serializer.json.JSONEventSerializer"})
-    static class Jackson3OnlyJsonSerializerConfiguration {
-        /**
-         * @return the {@link JSONSerializer} with the canonical Essentials Jackson 3 mapper configuration
-         */
-        @Bean
-        @ConditionalOnMissingBean
-        public JSONSerializer jsonSerializer() {
-            return EssentialsObjectMappers.createJSONSerializer();
-        }
+    @ConditionalOnMissingBean
+    public JSONSerializer jsonSerializer() {
+        return EssentialsObjectMappers.createJSONSerializer();
     }
 
     @Bean
@@ -536,12 +511,7 @@ public class EssentialsComponentsConfiguration {
         return new SpringBootDevToolsClassLoaderChangeContextRefreshedListener(jsonSerializer);
     }
 
-    /**
-     * Points the {@link JSONSerializer} at the class loader of a context restarted by Spring Boot DevTools, so payload
-     * types resolve to the new generation of application classes. Works for any {@link JSONSerializer}: the class
-     * loader is part of that interface.
-     */
-    static class SpringBootDevToolsClassLoaderChangeContextRefreshedListener {
+    private static class SpringBootDevToolsClassLoaderChangeContextRefreshedListener {
         private static final Logger         log = LoggerFactory.getLogger(SpringBootDevToolsClassLoaderChangeContextRefreshedListener.class);
         private final        JSONSerializer jsonSerializer;
 

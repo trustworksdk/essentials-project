@@ -19,7 +19,7 @@
 **Dependencies from other modules**:
 - `InterceptorChain`, `PatternMatchingMethodInvoker` from [shared](./LLM-shared.md)
 - `CommandBus`, `LocalCommandBus` from [reactive](./LLM-reactive.md)
-- `JSONSerializer` from [immutable-jackson](./LLM-immutable-jackson.md)
+- `EssentialTypesJacksonModule` from [types-jackson3](./LLM-types-jackson.md) and `EssentialsImmutableJacksonModule` from [immutable-jackson3](./LLM-immutable-jackson.md), registered by `EssentialsObjectMappers`
 - `CorrelationId`, `MessageId`, `SubscriberId` from [foundation-types](./LLM-foundation-types.md)
 
 ## TOC
@@ -30,6 +30,7 @@
 - [Inbox/Outbox Patterns](#inboxoutbox-patterns)
 - [Ordered Message Processing](#ordered-message-processing)
 - [DurableLocalCommandBus](#durablelocalcommandbus)
+- [Database Schema Harness](#database-schema-harness)
 - [Utilities](#utilities)
 - ⚠️ [Security](#security)
 
@@ -245,12 +246,140 @@ MessageDeliveryErrorHandler.stopRedeliveryOn(
 )
 ```
 
-**Built-in permanent errors.** Independently of the handler, the queue consumers dead-letter a message on its first
-failure when the exception, or its root cause, is a `DurableQueueDeserializationException`, `ClassCastException`,
-`NoClassDefFoundError`, `IllegalArgumentException`, or Jackson's `MismatchedInputException` (JSON that cannot be bound to
-the message type) — Jackson 2 or Jackson 3, including subclasses such as `InvalidFormatException`. Up to and including
-0.50.0 only the Jackson 2 `MismatchedInputException` was recognised, so under the Jackson 3 flavor such messages were
-redelivered until the `RedeliveryPolicy` gave up; fixed in 0.50.1.
+#### The built-in permanent-error list
+
+The consumer applies its own list of permanent error types **after** consulting your
+`MessageDeliveryErrorHandler`. A message failing with one of these is dead-lettered on the first delivery
+attempt, whatever the `RedeliveryPolicy`'s backoff says — unless the handler explicitly asks to retry that
+type and the type allows it:
+
+| Type | Overridable by `alwaysRetryOn` | Why |
+|---|---|---|
+| `DurableQueueDeserializationException` | No | The stored bytes will not parse on the hundredth attempt either |
+| `MismatchedInputException` | No | Same |
+| `NoClassDefFoundError` | No | A missing class is a deployment fault, not a transient one |
+| `IllegalArgumentException` (incl. `NumberFormatException`) | **Yes** | The house guard idiom, frequently thrown about data that may be valid later |
+| `ClassCastException` | **Yes** | Usually a genuine bug, but a cast against a projection that has not caught up is legitimately transient |
+
+`IllegalArgumentException` on that list is the one that surprises people. `FailFast.requireNonNull(...)` and
+`requireTrue(...)` — the validation idiom used across this codebase — throw it, and so does Kotlin's
+`require(...)`. A `@MessageHandler` that guards its arguments dead-letters its message on the first delivery
+attempt unless you opt out:
+
+```java
+RedeliveryPolicy.exponentialBackoff()
+    // ...
+    .setDeliveryErrorHandler(MessageDeliveryErrorHandler.builder()
+                                                        .alwaysRetryOn(IllegalArgumentException.class)
+                                                        .build())
+    .build();
+```
+
+Two limits on that opt-out. It cannot override the three types marked "No" above, and it does not lift
+`maximumNumberOfRedeliveries` — the message is still dead-lettered once its attempts are used up. Note also
+that `MessageDeliveryErrorHandler.alwaysRetry()` is *not* the same thing: it means "I have no opinion", so the
+built-in list still applies. Only the explicit `alwaysRetryOn(...)` list overrides it.
+
+The whole cause chain is examined, not just its ends. A handler throw arrives wrapped
+(`UnitOfWorkException → ReflectionException → InvocationTargetException → yours`), and a match anywhere in that
+chain counts — so classification no longer depends on whether your exception happens to carry a cause of its
+own.
+
+The dead-letter log line names which rule fired, the matched type, its depth in the cause chain, and the
+attempt count, e.g.
+`PERMANENT_ERROR (built-in permanent list matched IllegalArgumentException at cause-chain depth 3; attempt 1 of 6)`.
+
+#### Validating inside a message handler
+
+Pick the exception type by whether the condition can ever become true:
+
+```java
+@MessageHandler
+void handle(OrderShipped event) {
+    // The message can never be processed: the payload itself is wrong.
+    // IllegalArgumentException -> dead-lettered immediately, unless you opted out above.
+    requireNonNull(event.orderId, "orderId is required");
+
+    var order = orderRepository.find(event.orderId);
+    if (order == null) {
+        // The projection may simply not have caught up yet. Throw something retryable,
+        // NOT IllegalArgumentException, or the message is dead-lettered on first delivery.
+        throw new IllegalStateException("Order " + event.orderId + " not projected yet");
+    }
+}
+```
+
+### Delivery observability
+
+**Interface**: `dk.trustworks.essentials.components.foundation.messaging.queue.DurableQueueMessageObserver`
+
+Notified of how each delivery *ended*. Not an interceptor: an interceptor sees the operation, not the outcome.
+
+```java
+var registry = new QueueStatisticsRegistry();
+
+PostgresqlDurableQueues.builder()
+    .setUnitOfWorkFactory(unitOfWorkFactory)
+    .setMessageObserver(new StatisticsCollectingDurableQueueMessageObserver(registry))
+    .build();
+
+// Per-queue, this JVM only
+registry.findStatistics(queueName).ifPresent(stats -> {
+    stats.delivery().messagesHandled();
+    stats.delivery().averageHandlerDuration();
+    stats.outcomes().messagesDeadLettered();
+    stats.outcomes().lastFailureReason();
+});
+```
+
+| Callback | When |
+|---|---|
+| `messageHandled(message, handlerDuration)` | after the acknowledgement — "delivered and removed", not "the handler returned" |
+| `messageRetried(message, cause, redeliveryDelay)` | a failed delivery that will be redelivered |
+| `messageDeadLettered(message, cause)` | a delivery that ended as a dead letter |
+| `messageRedeliveryRequested(message)` | the handler asked for redelivery; not a failure |
+
+Use `DurableQueueMessageObserver.composite(List)` for more than one observer — it is not a single-slot SPI. The
+queue wraps whatever it is given in `safe(...)`, so an observer that throws cannot break delivery; it runs on
+delivery threads, so it must not block.
+
+`deleteMessage` and `purgeQueue` deliberately do **not** notify. They are administrative, not deliveries.
+
+**Dead-letter metric.** `MicrometerDurableQueueMessageObserver` increments
+`essentials.messaging.durable_queues.dead_lettered` once per dead letter, tagged `queue_name`,
+`message_payload_type` and `reason` (`permanent_error` | `redeliveries_exhausted`). Both Spring Boot starters
+register it whenever a `MeterRegistry` is present — deliberately *not* behind
+`essentials.metrics.durable-queues.enabled`, which controls execution-time measurement. A timing switch must
+not turn an incident counter off. This is the counter to alert on; the pre-existing
+`essentials.messaging.durable_queues.mark_as_dead_letter_message` timer measures how long the marking took and
+carries no reason.
+
+**Dead-letter health indicator.** `DurableQueuesHealthIndicator` reports per-queue dead-letter counts under
+`durableQueues` on `/actuator/health`. Both Spring Boot starters register it by default.
+
+```properties
+# Reports UP regardless of the counts unless this is set to a positive number
+essentials.durable-queues.health.dead-letter-threshold=100
+# How long a computed result is reused before the counts are read again (default 10s)
+essentials.durable-queues.health.cache-time-to-live=10s
+# Do not register the indicator at all
+management.health.durable-queues.enabled=false
+```
+
+⚠️ **The default never reports `DOWN`, and that is the point.** A `HealthIndicator` contributes to the
+composite `/actuator/health` status, which readiness and liveness probes are routinely pointed at — so an
+indicator that went `DOWN` on the first dead letter would take working pods out of service, or restart them,
+leaving fewer consumers to drain the queue behind the poison message. Set a threshold only if a queue reaching
+that count really does mean the instance should stop taking traffic. This is the same rule `CdcHealthIndicator`
+follows with `CdcMode.REQUIRE`. To alert without touching a probe, use the Micrometer counter above.
+
+The threshold applies **per queue**, not to the total, so the number does not silently mean something else in
+an application with more queues. A failure reading the counts reports `UNKNOWN`, not `DOWN` — that is the
+`DataSource` indicator's job, and `UNKNOWN` does not drag the aggregated status down on its own.
+
+⚠️ **`QueueStatisticsRegistry` is per-JVM and resets on restart.** The queued and dead-letter counts from
+`getQueuedMessageCountsFor` are cluster-wide. Do not present them as one set of numbers — see
+`ApiQueueStatistics`, which keeps the two halves apart for exactly this reason.
 
 ### Dead Letter Queue
 
@@ -523,6 +652,55 @@ public void handle(OrderEvent event) {
 }
 ```
 
+### Blocking I/O in a Message Handler: `UnitOfWorkMode`
+
+**Enum**: `dk.trustworks.essentials.components.foundation.messaging.UnitOfWorkMode`
+**Attribute**: `MessageHandler.unitOfWork()`, default `REQUIRED`
+
+**Problem**: A `@MessageHandler` method runs inside a `UnitOfWork` by default, and a `UnitOfWork` holds a pooled database connection with an open transaction. A handler that calls an external system therefore parks a connection in `idle in transaction` for the duration of that call — one per parallel consumer — while writing nothing.
+
+**Solution**: Declare the handler `UnitOfWorkMode.NONE`. It is then invoked with **no** `UnitOfWork` active, and wraps its own transactional tail after the blocking call returns.
+
+```java
+new PatternMatchingMessageHandler() {
+    @MessageHandler(unitOfWork = UnitOfWorkMode.NONE)
+    void handle(AssessRiskCommand cmd) {
+        var assessment = riskServiceHttpClient.assess(cmd.instrumentId());   // no connection held
+
+        unitOfWorkFactory.usingUnitOfWork(() -> repository.save(assessment)); // transactional tail
+    }
+
+    @MessageHandler                                                          // REQUIRED (default), unchanged
+    void handle(ProcessOrderCommand cmd) { }
+}
+```
+
+There is no ambient `UnitOfWork` between the two statements, so touching a transactional resource outside the wrapper fails fast instead of silently opening a transaction.
+
+| Mode | Handler invoked | Commit/rollback |
+|------|-----------------|-----------------|
+| `REQUIRED` (default) | Inside a `UnitOfWork`; joins an active one if present | On normal return / on throw. Historic behaviour |
+| `NONE` | With no `UnitOfWork`, no connection, no open transaction | Handler's own `usingUnitOfWork(...)` / `withUnitOfWork(...)` blocks |
+
+**Who honours it**: only dispatchers that own the `UnitOfWork` boundary — see `UnitOfWorkBoundaryOwningMessageConsumer` and `PatternMatchingMessageHandler.setUnitOfWorkFactory(...)`. In practice that means an `EventProcessor`; the snippet above is the handler body, not a wiring example. Everything else wraps the delivery in a `UnitOfWork` of its own, so it cannot honour the mode — and rejects it rather than ignoring it, see **Guards** below.
+
+**Two responsibilities the mode shifts onto the handler**:
+
+1. **Idempotency is mandatory.** Delivery is at-least-once and the blocking call is no longer part of the transaction that acknowledges the message. A failure after the call returned but before the tail committed redelivers the message and repeats the call.
+2. **The blocking call must time out well inside `DurableQueues` `messageHandlingTimeout`** (30s by default in the Spring Boot starters). Past that timeout the in-flight message is reset as stuck and can be delivered again *concurrently with the still-running first attempt* — which also degrades `OrderedMessage` per-key ordering for as long as that overlap lasts. Size the client's timeout, not just the happy path.
+
+**Guards**: `NONE` is never silently ignored. Every dispatcher that cannot provide a `UnitOfWork`-free window throws `IllegalStateException` at wiring/start-up time instead:
+
+| Dispatcher | Rejects `NONE` when | Why |
+|---|---|---|
+| `Inbox` | The consumer is not a `UnitOfWorkBoundaryOwningMessageConsumer` and the `DurableQueues` has a `UnitOfWorkFactory` | The `Inbox` itself wraps every delivery in a `UnitOfWork` |
+| `Outbox` | Always, when the `DurableQueues` has a `UnitOfWorkFactory` | An `Outbox` has no boundary-owning consumer variant |
+| `PatternMatchingQueuedMessageHandler` | Always, at construction time | It invokes handlers as-is and never owns the boundary |
+
+Whether a consumer needs the window is introspected from the `@MessageHandler` annotations by `MessageHandlerMethods` — nothing has to be declared by hand. The one exception is a consumer whose handler methods live on *another* object: `UnitOfWorkBoundaryOwningMessageConsumer.hasNonTransactionalMessageHandlers()` defaults to introspecting the consumer itself, so a delegating consumer overrides it to answer for its delegate.
+
+For `EventProcessor` handlers — including the `usingUnitOfWork` / `withUnitOfWork` helpers used above and which processor types support the mode — see [LLM-postgresql-event-store.md](./LLM-postgresql-event-store.md#blocking-io-in-a-handler-unitofworkmodenone).
+
 ### Outbox Pattern
 
 **Problem**: Dual write when updating database + publishing to Kafka.
@@ -671,21 +849,101 @@ commandBus.sendAndDontWait(new SendReminderCommand(customerId), Duration.ofHours
 OrderId result = commandBus.send(new CreateOrderCommand(...));
 ```
 
+## Database Schema Harness
+
+**Package**: `dk.trustworks.essentials.components.foundation.schema` (SPI), PostgreSQL appliers in `.postgresql`.
+Design and rationale: [docs/database-schema-harness.md](../docs/database-schema-harness.md).
+
+Every Essentials component that owns tables *describes* its schema as `SchemaChange`s; an applier decides what
+happens to them. In Spring, `essentials.schema.mode` selects the applier - see
+[LLM-spring-boot-starter-modules.md](./LLM-spring-boot-starter-modules.md). Default: nothing changes, each
+component creates its own schema as it is constructed.
+
+| Type | Role |
+|---|---|
+| `EssentialsSchemaContributor` | `moduleId()`, `order()` (`SchemaOrder` constants), `contribute(SchemaContext)` → `List<SchemaChange>`. Never executes DDL |
+| `DynamicSchemaContributor` | For objects registered at any time (a table per `AggregateType`). `contribute` describes what is registered so far; `attach(SchemaChangeSink)` receives each later registration's changes |
+| `SchemaChange` | `repeatable(changeId, objectName, statements...)` - runs every time, checksum tracked; `once(...)` - runs once per `(module, changeId, objectName)`, edited-after-applied fails startup |
+| `SchemaOwnership` | `COMPONENT` (default): the component applies its own schema on construction. `HARNESS`: it leaves it to a harness |
+| `SchemaMode` | `CREATE` / `VALIDATE` / `EMIT` / `EXTERNAL`; `schemaOwnership()` is `COMPONENT` only for `CREATE` |
+| `EssentialsSchemaHarness` | `new EssentialsSchemaHarness(applier, context, contributors).apply()` - orders by `order()` then `moduleId()`, drops a change described identically twice, rejects one described differently |
+| `SchemaApplier` | `apply(List<SchemaChangeSet>)`; `createsSchema()` tells a dynamic contributor whether later objects get created |
+| `PostgresqlCreateSchemaApplier` | Executes under the bootstrap advisory lock, records in `essentials_schema_history` |
+| `PostgresqlValidateSchemaApplier` | Executes nothing; throws `SchemaValidationException` (`problems()`) for every change not in the ledger or recorded with other statements. Checks the ledger, not the catalog |
+| `PostgresqlEmitSchemaApplier` | Writes the whole schema as one script (`PostgresqlSchemaScript`) - one transaction, bootstrap lock, header per module, ledger rows included, re-runnable. Needs no connection |
+| `ExternalSchemaApplier` | Executes and verifies nothing |
+
+Without Spring - applying components built with `SchemaOwnership.HARNESS`:
+
+```java
+var queues = PostgresqlDurableQueues.builder()
+                                    .setUnitOfWorkFactory(unitOfWorkFactory)
+                                    .setSchemaOwnership(SchemaOwnership.HARNESS)
+                                    .build();
+new EssentialsSchemaHarness(new PostgresqlValidateSchemaApplier(jdbi),   // or Create / Emit
+                            SchemaContext.empty(),
+                            List.of(queues, fencedLockManager, persistenceStrategy))
+        .apply();
+```
+
+Your own contributor, e.g. for an application table:
+
+```java
+public final class OrderViewSchema implements EssentialsSchemaContributor {
+    public String moduleId() { return "order-view"; }
+    public int order() { return SchemaOrder.ORDER_APPLICATION; }
+    public List<SchemaChange> contribute(SchemaContext context) {
+        return List.of(SchemaChange.repeatable("order-view-table", "order_view",
+                                               "CREATE TABLE IF NOT EXISTS order_view (id TEXT PRIMARY KEY, total NUMERIC)"));
+    }
+}
+```
+
+As a Spring bean it is applied with the Essentials ones. Rules that hold everywhere:
+- A statement must be safe against an object that already exists - there is no special adoption path for databases
+  created before 0.60; the first start runs everything and records it.
+- `objectName` is a validated identifier and part of the ledger key; for an index change use its table.
+- Keep repeatable changes repeatable: prefer `IF [NOT] EXISTS` over `once(...)`. `once` is for what must not run
+  twice (a backfill, a type change); editing a `once` change after release fails startup - ship a new change id.
+- DDL outside a contributor fails the `EssentialsSchemaRules` guard in `foundation-test` - see
+  [LLM-foundation-test.md](./LLM-foundation-test.md).
+
 ## Utilities
 
 ### JSONSerializer
 
 **Package**: `dk.trustworks.essentials.components.foundation.json`
 
+Jackson 3 (`tools.jackson`) only. Build persistence serializers through `EssentialsObjectMappers`, which carries the
+canonical configuration the persisted wire format depends on (field access, ISO-8601 dates, final-field mutation
+re-enabled, Essentials value-type modules registered). That format is byte-identical to what the Jackson 2 mapper of
+0.50 wrote, so data persisted before 0.60 stays readable.
+
 ```java
-// dk.trustworks.essentials.components.foundation.json.JacksonJSONSerializer
-JSONSerializer serializer = new JacksonJSONSerializer(objectMapper);
+// Canonical serializer (Jackson3JSONSerializer over the canonical mapper)
+JSONSerializer serializer = EssentialsObjectMappers.createJSONSerializer();
+
+// Canonical mapper + extra application modules (tools.jackson.databind.JacksonModule)
+tools.jackson.databind.ObjectMapper mapper = EssentialsObjectMappers.createJackson3ObjectMapper(new MyModule());
+JSONSerializer custom = new Jackson3JSONSerializer(mapper);
 
 String json = serializer.serialize(order);
 byte[] bytes = serializer.serializeAsBytes(order);
 Order order = serializer.deserialize(json, Order.class);
 Object event = serializer.deserialize(json, "com.example.OrderCreatedEvent");
 ```
+
+⚠️ `EssentialsJacksonModules.modules()` (used by `EssentialsObjectMappers`) throws `IllegalStateException` when a
+0.50-era Jackson 2 `types-jackson` / `immutable-jackson` jar is on the classpath (same FQCNs, wrong Jackson major) —
+depend on `types-jackson3` / `immutable-jackson3`.
+
+⚠️ Under Jackson 3 a constructor parameter **name** is part of the JSON contract: Jackson 3 binds a class's constructor
+by parameter names read from the bytecode, so a parameter named differently from the JSON property receives `null`.
+Rename the parameter or annotate it with `@JsonProperty("…")` (`com.fasterxml.jackson.annotation`, shared by both
+Jackson majors).
+
+⚠️ Upgrading from 0.50: `JacksonJSONSerializer` (Jackson 2) was removed — use `Jackson3JSONSerializer` or
+`EssentialsObjectMappers.createJSONSerializer()`.
 
 ### LifecycleManager
 

@@ -51,7 +51,10 @@ public class DurableLocalCommandBusIT extends AbstractDurableLocalCommandBusIT<M
 
     @Override
     protected MongoDurableQueues createDurableQueues(SpringMongoTransactionAwareUnitOfWorkFactory unitOfWorkFactory) {
-        return new MongoDurableQueues(mongoTemplate, unitOfWorkFactory);
+        return MongoDurableQueues.builder()
+                                  .setMongoTemplate(mongoTemplate)
+                                  .setUnitOfWorkFactory(unitOfWorkFactory)
+                                  .build();
     }
 
     @Override

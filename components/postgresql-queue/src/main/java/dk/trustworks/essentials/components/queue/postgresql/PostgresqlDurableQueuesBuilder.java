@@ -17,6 +17,7 @@
 package dk.trustworks.essentials.components.queue.postgresql;
 
 import dk.trustworks.essentials.components.foundation.json.*;
+import dk.trustworks.essentials.components.foundation.schema.*;
 import dk.trustworks.essentials.components.foundation.messaging.queue.*;
 import dk.trustworks.essentials.components.foundation.messaging.queue.operations.*;
 import dk.trustworks.essentials.components.foundation.postgresql.*;
@@ -27,6 +28,7 @@ import java.time.Duration;
 import java.util.function.Function;
 
 import static dk.trustworks.essentials.components.queue.postgresql.PostgresqlDurableQueues.DEFAULT_DURABLE_QUEUES_TABLE_NAME;
+import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 
 /**
  * <u>Security</u><br>
@@ -45,15 +47,12 @@ import static dk.trustworks.essentials.components.queue.postgresql.PostgresqlDur
  * vulnerabilities, compromising the security and integrity of the database.</b>
  */
 public final class PostgresqlDurableQueuesBuilder {
+    private SchemaOwnership schemaOwnership = SchemaOwnership.COMPONENT;
     private HandleAwareUnitOfWorkFactory<? extends HandleAwareUnitOfWork> unitOfWorkFactory;
     private JSONSerializer                                                jsonSerializer;
     private String                                                        sharedQueueTableName         = DEFAULT_DURABLE_QUEUES_TABLE_NAME;
     private MultiTableChangeListener<TableChangeNotification>             multiTableChangeListener     = null;
     private Function<ConsumeFromQueue, QueuePollingOptimizer>             queuePollingOptimizerFactory = null;
-    private TransactionalMode                                             transactionalMode            = TransactionalMode.SingleOperationTransaction;
-    /**
-     * Only used if {@link #transactionalMode} has value {@link TransactionalMode#SingleOperationTransaction}
-     */
     private Duration                                                      messageHandlingTimeout       = Duration.ofSeconds(30);
 
     /**
@@ -66,12 +65,7 @@ public final class PostgresqlDurableQueuesBuilder {
     private boolean                                    useBatchedFetch                          = PostgresqlDurableQueues.DEFAULT_USE_BATCHED_FETCH;
     private int                                        batchedFetchSwitchThreshold              = PostgresqlDurableQueues.DEFAULT_BATCHED_FETCH_SWITCH_THRESHOLD;
     private int                                        batchedFetchWarnRowsThreshold            = PostgresqlDurableQueues.DEFAULT_BATCHED_FETCH_WARN_ROWS_THRESHOLD;
-
-    /**
-     * Use the separate ordered/unordered fetch queries rather than the single unified query. Default is
-     * {@code true} — see {@link #setUseOrderedUnorderedQuery(boolean)}.
-     */
-    private boolean useOrderedUnorderedQuery = PostgresqlDurableQueues.DEFAULT_USE_ORDERED_UNORDERED_QUERY;
+    private DurableQueueMessageObserver                messageObserver                          = DurableQueueMessageObserver.none();
 
     /**
      * @param unitOfWorkFactory the {@link UnitOfWorkFactory} needed to access the database
@@ -84,7 +78,7 @@ public final class PostgresqlDurableQueuesBuilder {
 
     /**
      * @param jsonSerializer Set the {@link JSONSerializer} that is used to serialize/deserialize message payloads.<br>
-     *                       If not set, then {@link JacksonJSONSerializer} with the {@link DurableQueuesSerialization#createDefaultObjectMapper()} will be used
+     *                       If not set, then {@link Jackson3JSONSerializer} with the {@link DurableQueuesSerialization#createDefaultObjectMapper()} will be used
      * @return this builder instance
      */
     public PostgresqlDurableQueuesBuilder setJsonSerializer(JSONSerializer jsonSerializer) {
@@ -140,7 +134,7 @@ public final class PostgresqlDurableQueuesBuilder {
     }
 
     /**
-     * @param messageHandlingTimeout Only required if <code>transactionalMode</code> is {@link TransactionalMode#SingleOperationTransaction}.<br>
+     * @param messageHandlingTimeout the timeout for messages being delivered but not yet acknowledged
      *                               The parameter defines the timeout for messages being delivered, but haven't yet been acknowledged.
      *                               After this timeout the message delivery will be reset and the message will again be a candidate for delivery<br>
      *                               Default is 30 seconds
@@ -151,17 +145,6 @@ public final class PostgresqlDurableQueuesBuilder {
         return this;
     }
 
-    /**
-     * @param transactionalMode The {@link TransactionalMode} for this {@link DurableQueues} instance. If set to {@link TransactionalMode#SingleOperationTransaction}
-     *                          then the consumer MUST call the {@link DurableQueues#acknowledgeMessageAsHandled(AcknowledgeMessageAsHandled)} explicitly in a new {@link UnitOfWork}<br>
-     *                          Note: The default consumer calls {@link DurableQueues#acknowledgeMessageAsHandled(AcknowledgeMessageAsHandled)} after successful message handling
-     *                          Default value {@link TransactionalMode#SingleOperationTransaction}
-     * @return this builder instance
-     */
-    public PostgresqlDurableQueuesBuilder setTransactionalMode(TransactionalMode transactionalMode) {
-        this.transactionalMode = transactionalMode;
-        return this;
-    }
 
     /**
      * Set whether to use the {@link CentralizedMessageFetcher} for optimized message fetching across multiple queues.
@@ -248,36 +231,47 @@ public final class PostgresqlDurableQueuesBuilder {
     }
 
     /**
-     * Sets whether to use the ordered/unordered query optimization for message fetching. When {@code true}
-     * (the default) separate fetch queries and partial indexes are used for ordered and unordered messages;
-     * when {@code false} a single unified query serves both.
-     * <p>
-     * Leave this on unless you have a measured reason not to.
-     *
-     * @param useOrderedUnorderedQuery flag to enable/disable the query optimization
+     * @param schemaOwnership {@link SchemaOwnership#COMPONENT} (the default) creates the queue table when the
+     *                        {@link PostgresqlDurableQueues} is built; {@link SchemaOwnership#HARNESS} leaves it to an
+     *                        {@link EssentialsSchemaHarness} the queues are registered with
      * @return this builder instance
      */
-    public PostgresqlDurableQueuesBuilder setUseOrderedUnorderedQuery(boolean useOrderedUnorderedQuery) {
-        this.useOrderedUnorderedQuery = useOrderedUnorderedQuery;
+    public PostgresqlDurableQueuesBuilder setSchemaOwnership(SchemaOwnership schemaOwnership) {
+        this.schemaOwnership = requireNonNull(schemaOwnership, "No schemaOwnership provided");
         return this;
     }
 
-    @SuppressWarnings("removal")
+    /**
+     * Set the {@link DurableQueueMessageObserver} notified of how each delivery ended — handled, retried,
+     * dead-lettered or redelivery-requested. Use {@link DurableQueueMessageObserver#composite(java.util.List)}
+     * to notify several, for example a statistics registry and a Micrometer observer.
+     * <p>
+     * The observer is wrapped in {@link DurableQueueMessageObserver#safe(DurableQueueMessageObserver)}, so a
+     * failure inside it can never affect message delivery. It runs on delivery threads, so it must not block.
+     *
+     * @param messageObserver the observer
+     * @return this builder instance
+     */
+    public PostgresqlDurableQueuesBuilder setMessageObserver(DurableQueueMessageObserver messageObserver) {
+        this.messageObserver = requireNonNull(messageObserver, "No messageObserver provided");
+        return this;
+    }
 
     public PostgresqlDurableQueues build() {
-        return new PostgresqlDurableQueues(unitOfWorkFactory,
-                                           jsonSerializer != null ? jsonSerializer : DurableQueuesSerialization.createDefaultJSONSerializer(),
-                                           sharedQueueTableName,
-                                           multiTableChangeListener,
-                                           queuePollingOptimizerFactory,
-                                           transactionalMode,
-                                           messageHandlingTimeout,
-                                           useCentralizedMessageFetcher,
-                                           centralizedMessageFetcherPollingInterval,
-                                           centralizedQueuePollingOptimizerFactory,
-                                           useOrderedUnorderedQuery,
-                                           useBatchedFetch,
-                                           batchedFetchSwitchThreshold,
-                                           batchedFetchWarnRowsThreshold);
+        var durableQueues = new PostgresqlDurableQueues(unitOfWorkFactory,
+                                                       jsonSerializer != null ? jsonSerializer : DurableQueuesSerialization.createDefaultJSONSerializer(),
+                                                       sharedQueueTableName,
+                                                       multiTableChangeListener,
+                                                       queuePollingOptimizerFactory,
+                                                       messageHandlingTimeout,
+                                                       useCentralizedMessageFetcher,
+                                                       centralizedMessageFetcherPollingInterval,
+                                                       centralizedQueuePollingOptimizerFactory,
+                                                       useBatchedFetch,
+                                                       batchedFetchSwitchThreshold,
+                                                       batchedFetchWarnRowsThreshold,
+                                                       schemaOwnership);
+        durableQueues.setMessageObserver(messageObserver);
+        return durableQueues;
     }
 }

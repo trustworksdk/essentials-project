@@ -81,15 +81,13 @@ public class DefaultClosingBooksScheduledScanProcessor<ID, AGGREGATE> implements
      * @param policy the decision policy applied to the aggregates during processing
      * @param coordinator the coordinator responsible for managing the overall processing workflow
      * @param meterRegistryOptional an optional registry used to track and measure processing metrics
-     * @deprecated Use {@link #builder()}. This constructor declares an {@code Optional} parameter and/or more than five parameters; the builder names every argument and accepts both plain values and {@code Optional}s. It is unchanged and remains the implementation the builder delegates to.
      */
-    @Deprecated(forRemoval = true, since = "0.40.x")
-    public DefaultClosingBooksScheduledScanProcessor(AggregateType aggregateType,
-                                                     ClosingBooksOpenGenerationRepository<ID> generationRepository,
-                                                     ClosingBooksAggregateLoader<AGGREGATE> aggregateLoader,
-                                                     ClosingBooksDecisionPolicy<ID, AGGREGATE> policy,
-                                                     ClosingBooksCoordinator<ID> coordinator,
-                                                     Optional<MeterRegistry> meterRegistryOptional) {
+    DefaultClosingBooksScheduledScanProcessor(AggregateType aggregateType,
+                                       ClosingBooksOpenGenerationRepository<ID> generationRepository,
+                                       ClosingBooksAggregateLoader<AGGREGATE> aggregateLoader,
+                                       ClosingBooksDecisionPolicy<ID, AGGREGATE> policy,
+                                       ClosingBooksCoordinator<ID> coordinator,
+                                       Optional<MeterRegistry> meterRegistryOptional) {
         this(aggregateType,
              generationRepository,
              aggregateLoader,
@@ -112,10 +110,8 @@ public class DefaultClosingBooksScheduledScanProcessor<ID, AGGREGATE> implements
      * @param clock the clock used to derive the scan-eligibility cut-off and deferral deadlines
      * @param scanRetryDelay how long a generation the scan could not process is skipped for, so that one broken
      *                       generation costs one attempt per window instead of the whole batch on every poll
-     * @deprecated Use {@link #builder()}. This constructor declares an {@code Optional} parameter and/or more than five parameters; the builder names every argument and accepts both plain values and {@code Optional}s. It is unchanged and remains the implementation the builder delegates to.
      */
-    @Deprecated(forRemoval = true, since = "0.40.x")
-    public DefaultClosingBooksScheduledScanProcessor(AggregateType aggregateType,
+    DefaultClosingBooksScheduledScanProcessor(AggregateType aggregateType,
                                                      ClosingBooksOpenGenerationRepository<ID> generationRepository,
                                                      ClosingBooksAggregateLoader<AGGREGATE> aggregateLoader,
                                                      ClosingBooksDecisionPolicy<ID, AGGREGATE> policy,
@@ -340,7 +336,6 @@ public class DefaultClosingBooksScheduledScanProcessor<ID, AGGREGATE> implements
         /**
          * @return the new {@link DefaultClosingBooksScheduledScanProcessor}
          */
-        @SuppressWarnings("removal")
         public DefaultClosingBooksScheduledScanProcessor<ID, AGGREGATE> build() {
             return new DefaultClosingBooksScheduledScanProcessor<>(aggregateType,
                                                                                 generationRepository,

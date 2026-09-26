@@ -5,7 +5,7 @@
 ## Quick Facts
 - **Base package**: `dk.trustworks.essentials.components.eventsourced.aggregates`
 - **Purpose**: Event-sourced aggregate patterns for DDD
-- **Deps**: postgresql-event-store (EventStore), foundation (UnitOfWork), foundation-types (AggregateType, EventOrder, GlobalEventOrder, ...), immutable-jackson
+- **Deps**: postgresql-event-store (EventStore), foundation (UnitOfWork), foundation-types (AggregateType, EventOrder, GlobalEventOrder, ...), immutable-jackson3
 - **Status**: WORK-IN-PROGRESS
 
 ```xml
@@ -702,7 +702,7 @@ registers the descriptors before configuration validation runs. The aggregate ty
 
 **Dependencies from other modules**:
 - `UnitOfWorkFactory` from [foundation](./LLM-foundation.md)
-- `JSONSerializer` from [immutable-jackson](./LLM-immutable-jackson.md)
+- `JSONSerializer` / `EssentialsObjectMappers` from [foundation](./LLM-foundation.md) (Jackson 3; value types via [types-jackson3](./LLM-types-jackson.md), immutables via [immutable-jackson3](./LLM-immutable-jackson.md))
 
 Optimize loading for aggregates with many events. Snapshots save state at EventOrder N, then only load events after N.
 
@@ -769,13 +769,19 @@ public class Order extends AggregateRoot<OrderId, OrderEvent, Order> { }
 `AggregateSnapshotJobStatus`: `PENDING` → `PROCESSING` (reclaimed after `processingTimeout`, default 5m) → `FAILED` (retried up to `maxRetries`) → `PARKED` (retries exhausted; a re-enqueue **replaces** only `PARKED` rows).
 
 ```java
-var store = new PostgresqlAggregateSnapshotStore(eventStore, unitOfWorkFactory, Optional.empty(), jsonSerializer);
-var repo  = new AsyncAggregateSnapshotRepository(store,
-                                                 jsonSerializer,
-                                                 AddNewAggregateSnapshotStrategy.updateWhenBehindByNumberOfEvents(100),
-                                                 AggregateSnapshotDeletionStrategy.keepALimitedNumberOfHistoricSnapshots(3),
-                                                 AsyncAggregateSnapshotSettings.asynchronous(),
-                                                 unitOfWorkFactory);
+var store = PostgresqlAggregateSnapshotStore.builder()
+                                            .setEventStore(eventStore)
+                                            .setUnitOfWorkFactory(unitOfWorkFactory)
+                                            .setJsonSerializer(jsonSerializer)   // snapshot table name: the default
+                                            .build();
+var repo  = AsyncAggregateSnapshotRepository.builder()
+                                            .setSnapshotStore(store)
+                                            .setJsonSerializer(jsonSerializer)
+                                            .setAddNewSnapshotStrategy(AddNewAggregateSnapshotStrategy.updateWhenBehindByNumberOfEvents(100))
+                                            .setSnapshotDeletionStrategy(AggregateSnapshotDeletionStrategy.keepALimitedNumberOfHistoricSnapshots(3))
+                                            .setSettings(AsyncAggregateSnapshotSettings.asynchronous())
+                                            .setUnitOfWorkFactory(unitOfWorkFactory)
+                                            .build();
 repo.start();   // Lifecycle
 ```
 
@@ -888,6 +894,7 @@ ClosingBooksLogicalAggregateRepository<AccountId, AccountGenerationId, AccountEv
 | `setStreamIdGenerator` | no | `logicalAggregateId + "#" + generation` |
 | `setClock` | no | `Clock.systemUTC()` |
 | `setMeterRegistry` | no | `Optional.empty()` — no metrics |
+| `setSchemaOwnership` | no | `SchemaOwnership.COMPONENT` — the repository creates `aggregate_generations` when built. Outside `essentials.schema.mode=create` pass `essentialsComponentsProperties.getSchema().getMode().schemaOwnership()`; the setup bean then contributes the table to the schema harness ([LLM-foundation.md](./LLM-foundation.md#database-schema-harness)) |
 
 ⚠️ **The default stream-id generator is `id#generation`.** An application with existing persisted stream ids in another
 format MUST keep calling `setStreamIdGenerator(...)`.
@@ -895,6 +902,8 @@ format MUST keep calling `setStreamIdGenerator(...)`.
 The Spring Boot starter feeds every `ClosingBooksSetup` bean's `generationAccess()` into
 `AggregateClosingBooksGenerationAccessProvider`, so the admin API's generation endpoints work with no extra wiring.
 Expose `setup.generationRepository()` or `setup.coordinator()` as beans if your own code needs them.
+The setup is also an `EssentialsSchemaContributor` for its repository's table, which is how the schema harness sees
+it - the repository itself is not a bean.
 
 ### Repositories (manual assembly)
 ```java

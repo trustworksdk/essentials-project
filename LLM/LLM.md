@@ -16,10 +16,10 @@
 
 | Aspect | Details                                                                                |
 |--------|----------------------------------------------------------------------------------------|
-| **What** | Java 21+ building blocks for strongly-typed, framework-independent distributed systems |
+| **What** | Java 25+ building blocks for strongly-typed, framework-independent distributed systems |
 | **GroupId** | `dk.trustworks.essentials` (core), `dk.trustworks.essentials.components` (components)  |
 | **License** | Apache 2.0                                                                             |
-| **Spring Boot** | 4.0.x (Jackson 3 + Jakarta EE 11; Spring Boot 3.x is not supported)                    |
+| **Spring Boot** | 4.1.x (Jackson 3 + Jakarta EE 11; Spring Boot 3.x is not supported)                    |
 | **Philosophy** | Zero-dependency core, `provided` scope integrations                                    |
 | **Scope** | Intra-service coordination (same service, shared DB)                                   |
 
@@ -47,13 +47,13 @@
 
 | Module | Framework | Purpose | Docs |
 |--------|-----------|---------|------|
-| **types-jackson** | Jackson | JSON serialization | [LLM-types-jackson.md](LLM-types-jackson.md) |
+| **types-jackson3** | Jackson 3 | JSON serialization | [LLM-types-jackson.md](LLM-types-jackson.md) |
 | **types-jdbi** | JDBI v3 | SQL argument/column mapping | [LLM-types-jdbi.md](LLM-types-jdbi.md) |
 | **types-avro** | Avro | Binary serialization, schema evolution | [LLM-types-avro.md](LLM-types-avro.md) |
 | **types-spring-web** | Spring WebMVC/WebFlux | `@PathVariable`/`@RequestParam` conversion | [LLM-types-spring-web.md](LLM-types-spring-web.md) |
 | **types-springdata-mongo** | Spring Data MongoDB | MongoDB persistence | [LLM-types-springdata-mongo.md](LLM-types-springdata-mongo.md) |
 | **types-springdata-jpa** | Spring Data JPA | JPA persistence (experimental) | [LLM-types-springdata-jpa.md](LLM-types-springdata-jpa.md) |
-| **immutable-jackson** | Jackson | Immutable object deserialization | [LLM-immutable-jackson.md](LLM-immutable-jackson.md) |
+| **immutable-jackson3** | Jackson 3 | Immutable object deserialization | [LLM-immutable-jackson.md](LLM-immutable-jackson.md) |
 
 ### Components (Advanced Features)
 
@@ -71,6 +71,7 @@ Consolidated view of all component modules [LLM-components.md](LLM-components.md
 | **spring-postgresql-event-store** | Spring transaction integration for `EventStore` | [LLM-spring-postgresql-event-store.md](LLM-spring-postgresql-event-store.md) |
 | **postgresql-distributed-fenced-lock** | Distributed locking via PostgreSQL | [LLM-postgresql-distributed-fenced-lock.md](LLM-postgresql-distributed-fenced-lock.md) |
 | **postgresql-queue** | Durable queues with PostgreSQL | [LLM-postgresql-queue.md](LLM-postgresql-queue.md) |
+| **postgresql-queue-shard-owned** | Experimental shard-owned queue engine — no claim write, cross-process ordering. Not published | [LLM-postgresql-queue-shard-owned.md](LLM-postgresql-queue-shard-owned.md) |
 | **postgresql-document-db** | Document database using PostgreSQL | [LLM-postgresql-document-db.md](LLM-postgresql-document-db.md) |
 | **springdata-mongo-distributed-fenced-lock** | Distributed locking via Spring Data MongoDB | [LLM-springdata-mongo-distributed-fenced-lock.md](LLM-springdata-mongo-distributed-fenced-lock.md) |
 | **springdata-mongo-queue** | Durable queues with Spring Data MongoDB | [LLM-springdata-mongo-queue.md](LLM-springdata-mongo-queue.md) |
@@ -201,6 +202,7 @@ Store-and-forward pattern:
 - **Inbox**: External → internal (e.g., Kafka → app)
 - **Outbox**: Internal → external (e.g., app → Kafka)
 - Deduplication, guaranteed delivery
+- `@MessageHandler(unitOfWork = UnitOfWorkMode.NONE)` for handlers doing blocking I/O — no `UnitOfWork`, hence no pooled connection, held during the call
 
 ### Event-Sourced Aggregates
 
@@ -212,6 +214,13 @@ Domain modeling:
 - `Aggregate` - Modern aggregate pattern
 - `Decider` / `EventStreamDecider` + `EventStreamEvolver` - Functional style
 - `AggregateRepository` / `StatefulAggregateRepository` - Load/save
+
+### Database Schema Harness
+
+**Docs:** [LLM-foundation.md](LLM-foundation.md#database-schema-harness), properties in [LLM-spring-boot-starter-modules.md](LLM-spring-boot-starter-modules.md#database-schema)
+
+Components describe their schema as `SchemaChange`s instead of executing DDL; `essentials.schema.mode`
+(`create` default | `validate` | `emit` | `external`) decides what happens. Ledger: `essentials_schema_history`.
 
 ---
 

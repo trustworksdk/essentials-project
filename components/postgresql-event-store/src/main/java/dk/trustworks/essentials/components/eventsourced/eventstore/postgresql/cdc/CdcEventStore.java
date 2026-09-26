@@ -161,15 +161,13 @@ public class CdcEventStore<CONFIG extends AggregateEventStreamConfiguration> imp
      * @param cdcBus                the in-memory CDC fan-out bus
      * @param cdcProperties         the CDC configuration
      * @param availability          the shared CDC availability tracker
-     * @deprecated Use {@link #builder()}. This constructor declares an {@code Optional} parameter and/or more than five parameters; the builder names every argument and accepts both plain values and {@code Optional}s. It is unchanged and remains the implementation the builder delegates to.
      */
-    @Deprecated(forRemoval = true, since = "0.40.x")
-    public CdcEventStore(ConfigurableEventStore<CONFIG> delegate,
-                         EventStoreUnitOfWorkFactory<? extends EventStoreUnitOfWork> unitOfWorkFactory,
-                         EventStreamGapHandler<?> eventStreamGapHandler,
-                         CdcEventBus cdcBus,
-                         CdcProperties cdcProperties,
-                         CdcAvailability availability) {
+    CdcEventStore(ConfigurableEventStore<CONFIG> delegate,
+           EventStoreUnitOfWorkFactory<? extends EventStoreUnitOfWork> unitOfWorkFactory,
+           EventStreamGapHandler<?> eventStreamGapHandler,
+           CdcEventBus cdcBus,
+           CdcProperties cdcProperties,
+           CdcAvailability availability) {
         this(delegate, unitOfWorkFactory, eventStreamGapHandler, cdcBus, cdcProperties, availability, Optional.empty());
     }
 
@@ -181,10 +179,8 @@ public class CdcEventStore<CONFIG extends AggregateEventStreamConfiguration> imp
      * @param cdcProperties         the CDC configuration
      * @param availability          the shared CDC availability tracker
      * @param meterRegistry         optional {@link MeterRegistry} — when empty, no CDC event-store metrics are recorded
-     * @deprecated Use {@link #builder()}. This constructor declares an {@code Optional} parameter and/or more than five parameters; the builder names every argument and accepts both plain values and {@code Optional}s. It is unchanged and remains the implementation the builder delegates to.
      */
-    @Deprecated(forRemoval = true, since = "0.40.x")
-    public CdcEventStore(ConfigurableEventStore<CONFIG> delegate,
+    CdcEventStore(ConfigurableEventStore<CONFIG> delegate,
                          EventStoreUnitOfWorkFactory<? extends EventStoreUnitOfWork> unitOfWorkFactory,
                          EventStreamGapHandler<?> eventStreamGapHandler,
                          CdcEventBus cdcBus,

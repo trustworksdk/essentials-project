@@ -21,7 +21,8 @@ import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.ev
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.persistence.AggregateEventStreamConfiguration;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.serializer.json.JSONEventSerializer;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.types.EventOrder;
-import dk.trustworks.essentials.components.foundation.postgresql.PostgresqlUtil;
+import dk.trustworks.essentials.components.foundation.postgresql.*;
+import dk.trustworks.essentials.components.foundation.schema.*;
 import dk.trustworks.essentials.components.foundation.transaction.jdbi.*;
 import dk.trustworks.essentials.shared.reflection.Classes;
 import dk.trustworks.essentials.types.NumberType;
@@ -53,7 +54,12 @@ import static dk.trustworks.essentials.shared.MessageFormatter.NamedArgumentBind
  * storage, retrieval, and deletion of both individual and bulk snapshots in a type-safe manner.
  */
 @SuppressWarnings("unchecked")
-public class PostgresqlAggregateSnapshotStore implements AggregateSnapshotStore {
+public class PostgresqlAggregateSnapshotStore implements AggregateSnapshotStore, EssentialsSchemaContributor {
+    /**
+     * The {@link #moduleId()} the snapshot table is recorded under
+     */
+    public static final String MODULE_ID = "eventsourced-aggregates-snapshots";
+
     private static final Logger log = LoggerFactory.getLogger(PostgresqlAggregateSnapshotStore.class);
 
     private final ConfigurableEventStore<? extends AggregateEventStreamConfiguration> eventStore;
@@ -72,13 +78,11 @@ public class PostgresqlAggregateSnapshotStore implements AggregateSnapshotStore 
      * @param unitOfWorkFactory The factory that provides {@link HandleAwareUnitOfWork} objects for database operations.
      * @param snapshotTableName The optional name of the database table used for storing aggregate snapshots.
      * @param jsonSerializer The serializer used for converting events and snapshots to and from JSON format.
-     * @deprecated Use {@link #builder()}. This constructor declares an {@code Optional} parameter and/or more than five parameters; the builder names every argument and accepts both plain values and {@code Optional}s. It is unchanged and remains the implementation the builder delegates to.
      */
-    @Deprecated(forRemoval = true, since = "0.40.x")
-    public PostgresqlAggregateSnapshotStore(ConfigurableEventStore<? extends AggregateEventStreamConfiguration> eventStore,
-                                            HandleAwareUnitOfWorkFactory<? extends HandleAwareUnitOfWork> unitOfWorkFactory,
-                                            Optional<String> snapshotTableName,
-                                            JSONEventSerializer jsonSerializer) {
+    PostgresqlAggregateSnapshotStore(ConfigurableEventStore<? extends AggregateEventStreamConfiguration> eventStore,
+                              HandleAwareUnitOfWorkFactory<? extends HandleAwareUnitOfWork> unitOfWorkFactory,
+                              Optional<String> snapshotTableName,
+                              JSONEventSerializer jsonSerializer) {
         this(eventStore,
              unitOfWorkFactory,
              snapshotTableName,
@@ -87,15 +91,25 @@ public class PostgresqlAggregateSnapshotStore implements AggregateSnapshotStore 
     }
 
     @SuppressWarnings("OptionalUsedAsFieldOrParameterType")
-    /**
-     * @deprecated Use {@link #builder()}. This constructor declares an {@code Optional} parameter and/or more than five parameters; the builder names every argument and accepts both plain values and {@code Optional}s. It is unchanged and remains the implementation the builder delegates to.
-     */
-    @Deprecated(forRemoval = true, since = "0.40.x")
-    public PostgresqlAggregateSnapshotStore(ConfigurableEventStore<? extends AggregateEventStreamConfiguration> eventStore,
+    PostgresqlAggregateSnapshotStore(ConfigurableEventStore<? extends AggregateEventStreamConfiguration> eventStore,
                                             HandleAwareUnitOfWorkFactory<? extends HandleAwareUnitOfWork> unitOfWorkFactory,
                                             Optional<String> snapshotTableName,
                                             JSONEventSerializer jsonSerializer,
                                             Optional<MeterRegistry> meterRegistryOptional) {
+        this(eventStore, unitOfWorkFactory, snapshotTableName, jsonSerializer, meterRegistryOptional, SchemaOwnership.COMPONENT);
+    }
+
+    /**
+     * @param schemaOwnership {@link SchemaOwnership#COMPONENT} creates the snapshot table now; {@link SchemaOwnership#HARNESS}
+     *                        leaves it to an {@link EssentialsSchemaHarness}
+     */
+    @SuppressWarnings("OptionalUsedAsFieldOrParameterType")
+    PostgresqlAggregateSnapshotStore(ConfigurableEventStore<? extends AggregateEventStreamConfiguration> eventStore,
+                                     HandleAwareUnitOfWorkFactory<? extends HandleAwareUnitOfWork> unitOfWorkFactory,
+                                     Optional<String> snapshotTableName,
+                                     JSONEventSerializer jsonSerializer,
+                                     Optional<MeterRegistry> meterRegistryOptional,
+                                     SchemaOwnership schemaOwnership) {
         this.eventStore = requireNonNull(eventStore, "No eventStore instance provided");
         this.unitOfWorkFactory = requireNonNull(unitOfWorkFactory, "No unitOfWorkFactory instance provided");
         this.snapshotTableName = requireNonNull(snapshotTableName, "No snapshotTableName provided")
@@ -105,32 +119,44 @@ public class PostgresqlAggregateSnapshotStore implements AggregateSnapshotStore 
         this.measurementSupport = new AggregateSnapshotMeasurementSupport(meterRegistryOptional);
         aggregateSnapshotWithSnapshotPayloadRowMapper = new AggregateSnapshotRowMapper(true);
         aggregateSnapshotWithoutSnapshotPayloadRowMapper = new AggregateSnapshotRowMapper(false);
-        initializeStorage();
+        PostgresqlUtil.checkIsValidTableOrColumnName(this.snapshotTableName);
+        if (requireNonNull(schemaOwnership, "No schemaOwnership provided") == SchemaOwnership.COMPONENT) {
+            PostgresqlCreateSchemaApplier.applyOwnSchema(unitOfWorkFactory, this);
+            log.info("Ensured that aggregate snapshot table '{}' exists", this.snapshotTableName);
+        }
     }
 
-    private void initializeStorage() {
-        PostgresqlUtil.checkIsValidTableOrColumnName(snapshotTableName);
-        // Holds the framework's bootstrap lock: CREATE ... IF NOT EXISTS is not atomic against concurrent sessions, so
-        // two JVMs starting together can both see "doesn't exist" and one fails on a duplicate catalog entry. See
-        // PostgresqlUtil#acquireBootstrapLock.
-        unitOfWorkFactory.usingUnitOfWork(uow -> {
-            PostgresqlUtil.acquireBootstrapLock(uow.handle());
-            uow.handle().execute(bind("""
-                                      CREATE TABLE IF NOT EXISTS {:tableName} (
-                                          aggregate_impl_type TEXT NOT NULL,
-                                          aggregate_id TEXT NOT NULL,
-                                          aggregate_type TEXT NOT NULL,
-                                          last_included_event_order bigint NOT NULL,
-                                          snapshot JSONB NOT NULL,
-                                          created_ts TIMESTAMP WITH TIME ZONE NOT NULL,
-                                          statistics JSONB,
-                                          PRIMARY KEY (aggregate_type,
-                                                       aggregate_impl_type,
-                                                       aggregate_id,
-                                                       last_included_event_order)
-                                      )""", arg("tableName", snapshotTableName)));
-        });
-        log.info("Ensured that aggregate snapshot table '{}' exists", snapshotTableName);
+    @Override
+    public String moduleId() {
+        return MODULE_ID;
+    }
+
+    @Override
+    public int order() {
+        return SchemaOrder.ORDER_AGGREGATES;
+    }
+
+    /**
+     * The snapshot table.
+     */
+    @Override
+    public List<SchemaChange> contribute(SchemaContext context) {
+        return List.of(SchemaChange.repeatable("snapshot-table",
+                                               snapshotTableName,
+                                               bind("""
+                                                    CREATE TABLE IF NOT EXISTS {:tableName} (
+                                                        aggregate_impl_type TEXT NOT NULL,
+                                                        aggregate_id TEXT NOT NULL,
+                                                        aggregate_type TEXT NOT NULL,
+                                                        last_included_event_order bigint NOT NULL,
+                                                        snapshot JSONB NOT NULL,
+                                                        created_ts TIMESTAMP WITH TIME ZONE NOT NULL,
+                                                        statistics JSONB,
+                                                        PRIMARY KEY (aggregate_type,
+                                                                     aggregate_impl_type,
+                                                                     aggregate_id,
+                                                                     last_included_event_order)
+                                                    )""", arg("tableName", snapshotTableName))));
     }
 
     @Override
@@ -475,6 +501,7 @@ public class PostgresqlAggregateSnapshotStore implements AggregateSnapshotStore 
         private String snapshotTableName;
         private JSONEventSerializer jsonSerializer;
         private MeterRegistry meterRegistryOptional;
+        private SchemaOwnership schemaOwnership = SchemaOwnership.COMPONENT;
 
         /**
          * @param eventStore required
@@ -546,15 +573,26 @@ public class PostgresqlAggregateSnapshotStore implements AggregateSnapshotStore 
         }
 
         /**
+         * @param schemaOwnership {@link SchemaOwnership#COMPONENT} (the default) creates the snapshot table when the
+         *                        store is built; {@link SchemaOwnership#HARNESS} leaves it to the
+         *                        {@link EssentialsSchemaHarness} the store is registered with
+         * @return this builder
+         */
+        public Builder setSchemaOwnership(SchemaOwnership schemaOwnership) {
+            this.schemaOwnership = requireNonNull(schemaOwnership, "No schemaOwnership provided");
+            return this;
+        }
+
+        /**
          * @return the new {@link PostgresqlAggregateSnapshotStore}
          */
-        @SuppressWarnings("removal")
         public PostgresqlAggregateSnapshotStore build() {
             return new PostgresqlAggregateSnapshotStore(eventStore,
                                                         unitOfWorkFactory,
                                                         Optional.ofNullable(snapshotTableName),
                                                         jsonSerializer,
-                                                        Optional.ofNullable(meterRegistryOptional));
+                                                        Optional.ofNullable(meterRegistryOptional),
+                                                        schemaOwnership);
         }
     }
 

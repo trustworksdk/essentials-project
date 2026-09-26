@@ -34,7 +34,7 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
  * The gap handler defaults to {@link NoEventStreamGapHandler} and the subscription observer to
  * {@link NoOpEventStoreSubscriptionObserver}, matching the two-argument constructor. For the gap-handling counterpart of
  * {@link PostgresqlEventStore#withGapHandling}, set {@link #setEventStreamGapHandlerFactory(Function)} to
- * {@code eventStore -> PostgresqlEventStreamGapHandler.builder()...build()}.
+ * {@code eventStore -> new PostgresqlEventStreamGapHandler<>(unitOfWorkFactory)}.
  * <p>
  * The {@link EventStoreEventBus} is held as a plain nullable field — absent means the store creates its own — and also
  * has an {@code Optional} overload, for Spring {@code @Bean} methods where an {@code Optional} injection point is
@@ -119,7 +119,6 @@ public final class PostgresqlEventStoreBuilder<CONFIG extends AggregateEventStre
      *
      * @return the event store
      */
-    @SuppressWarnings("removal")
     public PostgresqlEventStore<CONFIG> build() {
         return new PostgresqlEventStore<>(requireNonNull(unitOfWorkFactory, "unitOfWorkFactory cannot be null"),
                                           requireNonNull(persistenceStrategy, "persistenceStrategy cannot be null"),

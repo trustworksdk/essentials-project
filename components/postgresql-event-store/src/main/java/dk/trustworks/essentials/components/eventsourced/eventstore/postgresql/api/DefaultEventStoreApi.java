@@ -77,15 +77,13 @@ public class DefaultEventStoreApi implements EventStoreApi {
      *                                       runs no subscription manager
      * @param subscriptionStatisticsRegistry the registry holding the statistics collected in this instance.
      *                                       {@link Optional#empty()} when statistics collection is disabled
-     * @deprecated Use {@link #builder()}. This constructor declares an {@code Optional} parameter and/or more than five parameters; the builder names every argument and accepts both plain values and {@code Optional}s. It is unchanged and remains the implementation the builder delegates to.
      */
     @SuppressWarnings("OptionalUsedAsFieldOrParameterType")
-    @Deprecated(forRemoval = true, since = "0.40.x")
-    public DefaultEventStoreApi(EssentialsSecurityProvider essentialsSecurityProvider,
-                                EventStore eventStore,
-                                DurableSubscriptionRepository durableSubscriptionRepository,
-                                Optional<EventStoreSubscriptionManager> eventStoreSubscriptionManager,
-                                Optional<SubscriptionStatisticsRegistry> subscriptionStatisticsRegistry) {
+    DefaultEventStoreApi(EssentialsSecurityProvider essentialsSecurityProvider,
+                         EventStore eventStore,
+                         DurableSubscriptionRepository durableSubscriptionRepository,
+                         Optional<EventStoreSubscriptionManager> eventStoreSubscriptionManager,
+                         Optional<SubscriptionStatisticsRegistry> subscriptionStatisticsRegistry) {
         this.essentialsSecurityProvider = requireNonNull(essentialsSecurityProvider, "EssentialsSecurityProvider must not be null");
         this.eventStore = requireNonNull(eventStore, "EventStore must not be null");
         this.durableSubscriptionRepository = requireNonNull(durableSubscriptionRepository, "DurableSubscriptionRepository must not be null");
@@ -310,7 +308,6 @@ public class DefaultEventStoreApi implements EventStoreApi {
         /**
          * @return the new {@link DefaultEventStoreApi}
          */
-        @SuppressWarnings("removal")
         public DefaultEventStoreApi build() {
             return new DefaultEventStoreApi(essentialsSecurityProvider,
                                             eventStore,

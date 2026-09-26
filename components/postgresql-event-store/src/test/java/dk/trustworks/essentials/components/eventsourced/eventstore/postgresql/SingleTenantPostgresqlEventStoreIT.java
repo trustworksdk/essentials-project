@@ -16,11 +16,8 @@
 
 package dk.trustworks.essentials.components.eventsourced.eventstore.postgresql;
 
-import com.fasterxml.jackson.annotation.JsonAutoDetect;
-import com.fasterxml.jackson.databind.*;
-import com.fasterxml.jackson.databind.json.JsonMapper;
-import com.fasterxml.jackson.datatype.jdk8.Jdk8Module;
-import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
+import dk.trustworks.essentials.components.foundation.json.EssentialsObjectMappers;
+import tools.jackson.databind.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.bus.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.gap.PostgresqlEventStreamGapHandler;
@@ -93,14 +90,13 @@ class SingleTenantPostgresqlEventStoreIT {
                                                                                        eventMapper,
                                                                                        standardSingleTenantConfiguration(aggregateType_ -> aggregateType_ + "_events",
                                                                                                                          EventStreamTableColumnNames.defaultColumnNames(),
-                                                                                                                         EssentialsJSONEventSerializers.createForActiveJacksonFlavor(),
+                                                                                                                         EssentialsJSONEventSerializers.create(),
                                                                                                                          IdentifierColumnType.UUID,
                                                                                                                          JSONColumnType.JSONB));
         eventStore = new PostgresqlEventStore<>(unitOfWorkFactory,
                                                 persistenceStrategy,
                                                 Optional.empty(),
-                                                eventStore -> new PostgresqlEventStreamGapHandler<>(eventStore,
-                                                                                                    unitOfWorkFactory),
+                                                eventStore -> new PostgresqlEventStreamGapHandler<>(unitOfWorkFactory),
                                                 new EventStoreSubscriptionObserver.NoOpEventStoreSubscriptionObserver());
         eventStore.addAggregateEventStreamConfiguration(aggregateType,
                                                         AggregateIdSerializer.serializerFor(OrderId.class));
@@ -949,7 +945,7 @@ class SingleTenantPostgresqlEventStoreIT {
     void test_loadEventsByGlobalOrder() {
         // Add support for the Product aggregate
         eventStore.addAggregateEventStreamConfiguration(SeparateTablePerAggregateEventStreamConfiguration.standardSingleTenantConfiguration(PRODUCTS,
-                                                                                                                                            EssentialsJSONEventSerializers.createForActiveJacksonFlavor(),
+                                                                                                                                            EssentialsJSONEventSerializers.create(),
                                                                                                                                             AggregateIdSerializer.serializerFor(ProductId.class),
                                                                                                                                             IdentifierColumnType.TEXT,
                                                                                                                                             JSONColumnType.JSON));
@@ -1056,7 +1052,7 @@ class SingleTenantPostgresqlEventStoreIT {
     void test_loadEvents() {
         // Add support for the Product aggregate
         eventStore.addAggregateEventStreamConfiguration(SeparateTablePerAggregateEventStreamConfiguration.standardSingleTenantConfiguration(PRODUCTS,
-                                                                                                                                            EssentialsJSONEventSerializers.createForActiveJacksonFlavor(),
+                                                                                                                                            EssentialsJSONEventSerializers.create(),
                                                                                                                                             AggregateIdSerializer.serializerFor(ProductId.class),
                                                                                                                                             IdentifierColumnType.TEXT,
                                                                                                                                             JSONColumnType.JSON));
@@ -1125,7 +1121,7 @@ class SingleTenantPostgresqlEventStoreIT {
         requireNonNull(ordersFluxSupplier);
         // Add support for the Product aggregate
         eventStore.addAggregateEventStreamConfiguration(SeparateTablePerAggregateEventStreamConfiguration.standardSingleTenantConfiguration(PRODUCTS,
-                                                                                                                                            EssentialsJSONEventSerializers.createForActiveJacksonFlavor(),
+                                                                                                                                            EssentialsJSONEventSerializers.create(),
                                                                                                                                             AggregateIdSerializer.serializerFor(ProductId.class),
                                                                                                                                             IdentifierColumnType.TEXT,
                                                                                                                                             JSONColumnType.JSON));
@@ -1276,7 +1272,7 @@ class SingleTenantPostgresqlEventStoreIT {
     void test_pollEvents_with_pauses() throws InterruptedException {
         // Add support for the Product aggregate
         eventStore.addAggregateEventStreamConfiguration(SeparateTablePerAggregateEventStreamConfiguration.standardSingleTenantConfiguration(PRODUCTS,
-                                                                                                                                            EssentialsJSONEventSerializers.createForActiveJacksonFlavor(),
+                                                                                                                                            EssentialsJSONEventSerializers.create(),
                                                                                                                                             AggregateIdSerializer.serializerFor(ProductId.class),
                                                                                                                                             IdentifierColumnType.TEXT,
                                                                                                                                             JSONColumnType.JSON));
@@ -1540,28 +1536,7 @@ class SingleTenantPostgresqlEventStoreIT {
     }
 
     private ObjectMapper createObjectMapper() {
-        var objectMapper = JsonMapper.builder()
-                                     .disable(MapperFeature.AUTO_DETECT_GETTERS)
-                                     .disable(MapperFeature.AUTO_DETECT_IS_GETTERS)
-                                     .disable(MapperFeature.AUTO_DETECT_SETTERS)
-                                     .disable(MapperFeature.DEFAULT_VIEW_INCLUSION)
-                                     .disable(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS)
-                                     .disable(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES)
-                                     .disable(SerializationFeature.FAIL_ON_EMPTY_BEANS)
-                                     .enable(MapperFeature.AUTO_DETECT_CREATORS)
-                                     .enable(MapperFeature.AUTO_DETECT_FIELDS)
-                                     .enable(MapperFeature.PROPAGATE_TRANSIENT_MARKER)
-                                     .addModule(new Jdk8Module())
-                                     .addModule(new JavaTimeModule())
-                                     .addModules(dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.TestFasterxmlModules.optionalEssentialsModules())
-                                     .build();
-
-        objectMapper.setVisibility(objectMapper.getSerializationConfig().getDefaultVisibilityChecker()
-                                               .withGetterVisibility(JsonAutoDetect.Visibility.NONE)
-                                               .withSetterVisibility(JsonAutoDetect.Visibility.NONE)
-                                               .withFieldVisibility(JsonAutoDetect.Visibility.ANY)
-                                               .withCreatorVisibility(JsonAutoDetect.Visibility.ANY));
-        return objectMapper;
+        return EssentialsObjectMappers.createJackson3ObjectMapper();
     }
 
     private static class TestPersistableEventMapper implements PersistableEventMapper {

@@ -17,6 +17,7 @@
 package dk.trustworks.essentials.components.eventsourced.aggregates.closingbooks;
 
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.AggregateType;
+import dk.trustworks.essentials.components.foundation.schema.SchemaOwnership;
 import dk.trustworks.essentials.components.foundation.transaction.jdbi.*;
 import io.micrometer.core.instrument.MeterRegistry;
 
@@ -69,6 +70,7 @@ public final class ClosingBooksSetupBuilder<LOGICAL_ID, STREAM_ID> {
     private ClosingBooksStreamIdGenerator<LOGICAL_ID>                     streamIdGenerator             = defaultStreamIdGenerator();
     private Clock                                                        clock                         = Clock.systemUTC();
     private Optional<MeterRegistry>                                      meterRegistry                 = Optional.empty();
+    private SchemaOwnership                                              schemaOwnership               = SchemaOwnership.COMPONENT;
 
     ClosingBooksSetupBuilder(AggregateType aggregateType,
                              Class<?> aggregateImplementationType) {
@@ -191,7 +193,24 @@ public final class ClosingBooksSetupBuilder<LOGICAL_ID, STREAM_ID> {
      * @return the assembled {@link ClosingBooksSetup}
      * @throws IllegalArgumentException if a required setter was not called
      */
-    @SuppressWarnings("removal")
+    /**
+     * Who creates the generation table of the repository this builder creates - ignored when
+     * {@link #setGenerationRepository(ClosingBooksGenerationRepository)} supplies one.
+     * <p>
+     * {@link SchemaOwnership#COMPONENT} (the default) creates it when the setup is built. Under a schema harness in a
+     * mode that does not create the schema - Spring's {@code essentials.schema.mode} other than {@code create} - pass
+     * {@link SchemaOwnership#HARNESS}: the setup then contributes the table to the harness, which validates it or
+     * writes it to the script, instead of running DDL the database user may not be allowed to run. With the Spring
+     * starter: {@code essentialsComponentsProperties.getSchema().getMode().schemaOwnership()}.
+     *
+     * @param schemaOwnership who creates the generation table
+     * @return this builder
+     */
+    public ClosingBooksSetupBuilder<LOGICAL_ID, STREAM_ID> setSchemaOwnership(SchemaOwnership schemaOwnership) {
+        this.schemaOwnership = requireNonNull(schemaOwnership, "No schemaOwnership provided");
+        return this;
+    }
+
     public ClosingBooksSetup<LOGICAL_ID, STREAM_ID> build() {
         requireNonNull(logicalAggregateIdSerializer,
                        "No logicalAggregateIdSerializer provided - call setLogicalAggregateIdType(...) or setLogicalAggregateIdSerializer(...)");
@@ -205,7 +224,8 @@ public final class ClosingBooksSetupBuilder<LOGICAL_ID, STREAM_ID> {
                                            ? generationRepository
                                            : new PostgresqlClosingBooksGenerationRepository<LOGICAL_ID>(unitOfWorkFactory,
                                                                                                        generationRepositoryTableName,
-                                                                                                       logicalAggregateIdSerializer);
+                                                                                                       logicalAggregateIdSerializer,
+                                                                                                       schemaOwnership);
 
         var resolvedCoordinator = new ClosingBooksCoordinator<>(aggregateType,
                                                                resolvedGenerationRepository,

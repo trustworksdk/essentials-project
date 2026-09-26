@@ -4,6 +4,11 @@
 
 This module enables Jackson to deserialize immutable classes (including Java Records) that don't have constructors matching all JSON fields. It uses reflection to set field values directly, even on `final` fields, with Objenesis as a fallback for object instantiation.
 
+This is the Jackson 3 (`tools.jackson`) module — from Essentials 0.60 the only supported Jackson major; the Jackson 2
+`immutable-jackson` module has been removed. Package and class names are unchanged, so upgrading from 0.50 means
+swapping the `immutable-jackson` artifactId for `immutable-jackson3` and moving your own imports from
+`com.fasterxml.jackson.databind` to `tools.jackson.databind`.
+
 > **NOTE:** This library is WORK-IN-PROGRESS
 
 **LLM Context:** [LLM-immutable-jackson.md](../LLM/LLM-immutable-jackson.md)
@@ -45,34 +50,27 @@ This module enables Jackson to deserialize immutable classes (including Java Rec
     <artifactId>types-jackson3</artifactId>
     <version>${essentials.version}</version>
 </dependency>
-<dependency>
-    <groupId>tools.jackson.datatype</groupId>
-    <artifactId>jackson-datatype-jdk8</artifactId>
-</dependency>
-<dependency>
-    <groupId>tools.jackson.datatype</groupId>
-    <artifactId>jackson-datatype-jsr310</artifactId>
-</dependency>
 ```
+
+`Optional` and `java.time` support is built into Jackson 3's databind — no separate datatype modules are needed.
 
 ## Quick Start
 
 Base package: `dk.trustworks.essentials.jackson.immutable`
 
-Register `EssentialsImmutableJacksonModule` with your `ObjectMapper`:
+Register `EssentialsImmutableJacksonModule` when building your mapper:
 
 ```java
-ObjectMapper objectMapper = new ObjectMapper();
-objectMapper.registerModule(new EssentialsImmutableJacksonModule());
+ObjectMapper objectMapper = JsonMapper.builder()
+                                      .addModule(new EssentialsImmutableJacksonModule())
+                                      .build();
 ```
 
 Or use the convenience factory with opinionated defaults:
 
 ```java
 ObjectMapper objectMapper = EssentialsImmutableJacksonModule.createObjectMapper(
-    new EssentialTypesJacksonModule(),
-    new Jdk8Module(),
-    new JavaTimeModule()
+    new EssentialTypesJacksonModule()
 );
 ```
 
@@ -195,9 +193,7 @@ public class ValidatedOrder {
 
 ```java
 ObjectMapper objectMapper = EssentialsImmutableJacksonModule.createObjectMapper(
-    new EssentialTypesJacksonModule(),  // SingleValueType support
-    new Jdk8Module(),                   // Optional support
-    new JavaTimeModule()                // java.time support
+    new EssentialTypesJacksonModule()  // SingleValueType support
 );
 ```
 
@@ -241,9 +237,14 @@ public class Config {
 The module requires field-based serialization (not getter/setter). Use `createObjectMapper()` or configure manually:
 
 ```java
-objectMapper.setVisibility(PropertyAccessor.FIELD, Visibility.ANY);
-objectMapper.setVisibility(PropertyAccessor.GETTER, Visibility.NONE);
-objectMapper.setVisibility(PropertyAccessor.SETTER, Visibility.NONE);
+ObjectMapper objectMapper = JsonMapper.builder()
+        .changeDefaultVisibility(v -> VisibilityChecker.defaultInstance()
+                                                       .withGetterVisibility(Visibility.NONE)
+                                                       .withSetterVisibility(Visibility.NONE)
+                                                       .withFieldVisibility(Visibility.ANY)
+                                                       .withCreatorVisibility(Visibility.ANY))
+        .addModule(new EssentialsImmutableJacksonModule())
+        .build();
 ```
 
 ### Private Fields Work
@@ -263,5 +264,5 @@ public class PrivateFields {
 ## See Also
 
 - [LLM-immutable-jackson.md](../LLM/LLM-immutable-jackson.md) - API reference for LLM assistance
-- [types-jackson](../types-jackson) - Jackson support for `SingleValueType`
+- [types-jackson3](../types-jackson3) - Jackson support for `SingleValueType`
 - [immutable](../immutable) - Core immutable value object patterns

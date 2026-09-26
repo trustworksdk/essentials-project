@@ -23,7 +23,8 @@ import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.su
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.subscription.jdbi.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.transaction.EventStoreUnitOfWorkFactory;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.types.GlobalEventOrder;
-import dk.trustworks.essentials.components.foundation.postgresql.PostgresqlUtil;
+import dk.trustworks.essentials.components.foundation.postgresql.*;
+import dk.trustworks.essentials.components.foundation.schema.*;
 import dk.trustworks.essentials.components.foundation.transaction.UnitOfWork;
 import dk.trustworks.essentials.components.foundation.types.*;
 import dk.trustworks.essentials.shared.functional.tuple.Pair;
@@ -44,7 +45,7 @@ import static dk.trustworks.essentials.shared.FailFast.*;
  *
  * @param <CONFIG> The concrete {@link AggregateEventStreamConfiguration}
  */
-public final class PostgresqlEventStreamGapHandler<CONFIG extends AggregateEventStreamConfiguration> implements EventStreamGapHandler<CONFIG> {
+public final class PostgresqlEventStreamGapHandler<CONFIG extends AggregateEventStreamConfiguration> implements EventStreamGapHandler<CONFIG>, EssentialsSchemaContributor {
     private static final Logger                                               log                                  = LoggerFactory.getLogger(PostgresqlEventStreamGapHandler.class);
     public static final  String                                               TRANSIENT_SUBSCRIBER_GAPS_TABLE_NAME = "transient_subscriber_gaps";
     private static final String                                               TRANSIENT_SUBSCRIBER_GAPS_INDEX_NAME = "transient_subscriber_gaps_index";
@@ -61,41 +62,30 @@ public final class PostgresqlEventStreamGapHandler<CONFIG extends AggregateEvent
      * @param unitOfWorkFactory the unit of work factory that coordinates the event store {@link UnitOfWork}
      */
     public PostgresqlEventStreamGapHandler(EventStoreUnitOfWorkFactory<?> unitOfWorkFactory) {
-        this(   null,
-                unitOfWorkFactory,
-                Duration.ofSeconds(60),
-                (forAggregateType, globalOrderQueryRange, allTransientGaps) -> {
-                    var numberOfGaps          = allTransientGaps.size();
-                    var numberOfGapsToInclude = Math.min(numberOfGaps, 2);
-                    return numberOfGapsToInclude > 0 ? allTransientGaps.subList(0, numberOfGapsToInclude)
-                                                                       .stream()
-                                                                       .map(Pair::_1)
-                                                                       .collect(Collectors.toList()) : NO_GAPS;
-                },
-                ResolveTransientGapsToPermanentGapsPromotionStrategy.thresholdBased(120));
+        this(unitOfWorkFactory, SchemaOwnership.COMPONENT);
     }
 
     /**
-     * Default configuration that includes the earliest 10 transient gaps and which will promote transient gaps to permanent gaps after 120 seconds.
+     * The default configuration of {@link #PostgresqlEventStreamGapHandler(EventStoreUnitOfWorkFactory)}, plus who
+     * creates the gap tables.
      *
-     * @param postgresqlEventStore the postgresql event store
-     * @param unitOfWorkFactory    the unit of work factory that coordinates the event store {@link UnitOfWork}
+     * @param unitOfWorkFactory the unit of work factory that coordinates the event store {@link UnitOfWork}
+     * @param schemaOwnership   {@link SchemaOwnership#COMPONENT} creates the gap tables now; {@link SchemaOwnership#HARNESS}
+     *                          leaves them to an {@link EssentialsSchemaHarness}
      */
-    @Deprecated(forRemoval = true)
-    public PostgresqlEventStreamGapHandler(PostgresqlEventStore<CONFIG> postgresqlEventStore,
-                                           EventStoreUnitOfWorkFactory<?> unitOfWorkFactory) {
-        this(   null,
-                unitOfWorkFactory,
-                Duration.ofSeconds(60),
-                (forAggregateType, globalOrderQueryRange, allTransientGaps) -> {
-                    var numberOfGaps          = allTransientGaps.size();
-                    var numberOfGapsToInclude = Math.min(numberOfGaps, 2);
-                    return numberOfGapsToInclude > 0 ? allTransientGaps.subList(0, numberOfGapsToInclude)
-                                                                       .stream()
-                                                                       .map(Pair::_1)
-                                                                       .collect(Collectors.toList()) : NO_GAPS;
-                },
-                ResolveTransientGapsToPermanentGapsPromotionStrategy.thresholdBased(120));
+    public PostgresqlEventStreamGapHandler(EventStoreUnitOfWorkFactory<?> unitOfWorkFactory, SchemaOwnership schemaOwnership) {
+        this(unitOfWorkFactory,
+             Duration.ofSeconds(60),
+             (forAggregateType, globalOrderQueryRange, allTransientGaps) -> {
+                 var numberOfGaps          = allTransientGaps.size();
+                 var numberOfGapsToInclude = Math.min(numberOfGaps, 2);
+                 return numberOfGapsToInclude > 0 ? allTransientGaps.subList(0, numberOfGapsToInclude)
+                                                                    .stream()
+                                                                    .map(Pair::_1)
+                                                                    .collect(Collectors.toList()) : NO_GAPS;
+             },
+             ResolveTransientGapsToPermanentGapsPromotionStrategy.thresholdBased(120),
+             schemaOwnership);
     }
 
     /**
@@ -111,53 +101,77 @@ public final class PostgresqlEventStreamGapHandler<CONFIG extends AggregateEvent
      *                                                             (which is called from {@link PostgresqlEventStore#pollEvents(AggregateType, long, Optional, Optional, Optional, Optional, Optional)})
      * @param resolveTransientGapsToPermanentGapsPromotionStrategy strategy for when the {@link PostgresqlEventStreamGapHandler} will promote a transient gap to a permanent gap
      */
-    @Deprecated(forRemoval = true)
-    public PostgresqlEventStreamGapHandler(PostgresqlEventStore<CONFIG> postgresqlEventStore,
-            EventStoreUnitOfWorkFactory<?> unitOfWorkFactory,
-            Duration refreshTransientGapsFromStorageInterval,
-            ResolveTransientGapsToIncludeInQueryStrategy resolveTransientGapsToIncludeInQueryStrategy,
-            ResolveTransientGapsToPermanentGapsPromotionStrategy resolveTransientGapsToPermanentGapsPromotionStrategy) {
+    public PostgresqlEventStreamGapHandler(EventStoreUnitOfWorkFactory<?> unitOfWorkFactory,
+                                           Duration refreshTransientGapsFromStorageInterval,
+                                           ResolveTransientGapsToIncludeInQueryStrategy resolveTransientGapsToIncludeInQueryStrategy,
+                                           ResolveTransientGapsToPermanentGapsPromotionStrategy resolveTransientGapsToPermanentGapsPromotionStrategy) {
+        this(unitOfWorkFactory, refreshTransientGapsFromStorageInterval, resolveTransientGapsToIncludeInQueryStrategy, resolveTransientGapsToPermanentGapsPromotionStrategy,
+             SchemaOwnership.COMPONENT);
+    }
+
+    /**
+     * Same as {@link #PostgresqlEventStreamGapHandler(EventStoreUnitOfWorkFactory, Duration, ResolveTransientGapsToIncludeInQueryStrategy, ResolveTransientGapsToPermanentGapsPromotionStrategy)},
+     * plus who creates the gap tables: {@link SchemaOwnership#COMPONENT} creates them now, {@link SchemaOwnership#HARNESS}
+     * leaves them to an {@link EssentialsSchemaHarness}.
+     */
+    public PostgresqlEventStreamGapHandler(EventStoreUnitOfWorkFactory<?> unitOfWorkFactory,
+                                           Duration refreshTransientGapsFromStorageInterval,
+                                           ResolveTransientGapsToIncludeInQueryStrategy resolveTransientGapsToIncludeInQueryStrategy,
+                                           ResolveTransientGapsToPermanentGapsPromotionStrategy resolveTransientGapsToPermanentGapsPromotionStrategy,
+                                           SchemaOwnership schemaOwnership) {
         this.unitOfWorkFactory = requireNonNull(unitOfWorkFactory, "No unitOfWorkFactory provided");
         this.refreshTransientGapsFromStorageEverySeconds = requireNonNull(refreshTransientGapsFromStorageInterval, "No refreshTransientGapsFromStorageInterval provided").toSeconds();
         this.resolveTransientGapsToIncludeInQueryStrategy = requireNonNull(resolveTransientGapsToIncludeInQueryStrategy, "No resolveTransientGapsToIncludeInQuery provided");
         this.resolveTransientGapsToPermanentGapsPromotionStrategy = requireNonNull(resolveTransientGapsToPermanentGapsPromotionStrategy, "No resolveTransientGapsToPermanentGapsPromotionStrategy provided");
-        createGapHandlingTablesAndIndexes();
-    }
-
-    private void createGapHandlingTablesAndIndexes() {
-        PostgresqlUtil.checkIsValidTableOrColumnName(TRANSIENT_SUBSCRIBER_GAPS_TABLE_NAME);
-        PostgresqlUtil.checkIsValidTableOrColumnName(TRANSIENT_SUBSCRIBER_GAPS_INDEX_NAME);
-        PostgresqlUtil.checkIsValidTableOrColumnName(PERMANENT_GAPS_TABLE_NAME);
-
         unitOfWorkFactory.usingUnitOfWork(unitOfWork -> {
-            var handle = unitOfWork.handle();
-            PostgresqlUtil.acquireBootstrapLock(handle);
-            var jdbi   = handle.getJdbi();
+            var jdbi = unitOfWork.handle().getJdbi();
             jdbi.registerArgument(new AggregateTypeArgumentFactory());
             jdbi.registerColumnMapper(new AggregateTypeColumnMapper());
             jdbi.registerArgument(new SubscriberIdArgumentFactory());
             jdbi.registerColumnMapper(new SubscriberIdColumnMapper());
-            handle.execute("CREATE TABLE IF NOT EXISTS " + TRANSIENT_SUBSCRIBER_GAPS_TABLE_NAME + " (\n" +
-                                   "   subscriber_id text NOT NULL,\n" +
-                                   "   aggregate_type text NOT NULL,\n" +
-                                   "   gap_global_event_order bigint NOT NULL\n," +
-                                   "   first_discovered TIMESTAMP WITH TIME ZONE NOT NULL\n," +
-                                   "   PRIMARY KEY (subscriber_id, aggregate_type, gap_global_event_order)\n" +
-                                   ")");
-            log.info("Ensured Table '{}' exists", TRANSIENT_SUBSCRIBER_GAPS_TABLE_NAME);
-
-            handle.execute("CREATE INDEX IF NOT EXISTS " + TRANSIENT_SUBSCRIBER_GAPS_INDEX_NAME + " ON \n" +
-                                   TRANSIENT_SUBSCRIBER_GAPS_TABLE_NAME + "(subscriber_id, aggregate_type)");
-            log.info("Ensured Index '{}' exists", TRANSIENT_SUBSCRIBER_GAPS_INDEX_NAME);
-
-            handle.execute("CREATE TABLE IF NOT EXISTS " + PERMANENT_GAPS_TABLE_NAME + " (\n" +
-                                   "   aggregate_type text NOT NULL,\n" +
-                                   "   gap_global_event_order bigint NOT NULL\n," +
-                                   "   added_timestamp TIMESTAMP WITH TIME ZONE NOT NULL," +
-                                   "   PRIMARY KEY (aggregate_type, gap_global_event_order)\n" +
-                                   ")");
-            log.info("Ensured table '{}' exists", PERMANENT_GAPS_TABLE_NAME);
         });
+        if (requireNonNull(schemaOwnership, "No schemaOwnership provided") == SchemaOwnership.COMPONENT) {
+            PostgresqlCreateSchemaApplier.applyOwnSchema(unitOfWorkFactory, this);
+            log.info("Ensured the gap tables '{}' and '{}' exist", TRANSIENT_SUBSCRIBER_GAPS_TABLE_NAME, PERMANENT_GAPS_TABLE_NAME);
+        }
+    }
+
+    @Override
+    public String moduleId() {
+        return "postgresql-event-store-gaps";
+    }
+
+    @Override
+    public int order() {
+        return SchemaOrder.ORDER_EVENT_STORE;
+    }
+
+    /**
+     * The transient-gaps table and its index, and the permanent-gaps table.
+     */
+    @Override
+    public List<SchemaChange> contribute(SchemaContext context) {
+        return List.of(SchemaChange.repeatable("transient-gaps-table",
+                                               TRANSIENT_SUBSCRIBER_GAPS_TABLE_NAME,
+                                               "CREATE TABLE IF NOT EXISTS " + TRANSIENT_SUBSCRIBER_GAPS_TABLE_NAME + " (\n" +
+                                                       "   subscriber_id text NOT NULL,\n" +
+                                                       "   aggregate_type text NOT NULL,\n" +
+                                                       "   gap_global_event_order bigint NOT NULL\n," +
+                                                       "   first_discovered TIMESTAMP WITH TIME ZONE NOT NULL\n," +
+                                                       "   PRIMARY KEY (subscriber_id, aggregate_type, gap_global_event_order)\n" +
+                                                       ")"),
+                       SchemaChange.repeatable("transient-gaps-index",
+                                               TRANSIENT_SUBSCRIBER_GAPS_TABLE_NAME,
+                                               "CREATE INDEX IF NOT EXISTS " + TRANSIENT_SUBSCRIBER_GAPS_INDEX_NAME + " ON \n" +
+                                                       TRANSIENT_SUBSCRIBER_GAPS_TABLE_NAME + "(subscriber_id, aggregate_type)"),
+                       SchemaChange.repeatable("permanent-gaps-table",
+                                               PERMANENT_GAPS_TABLE_NAME,
+                                               "CREATE TABLE IF NOT EXISTS " + PERMANENT_GAPS_TABLE_NAME + " (\n" +
+                                                       "   aggregate_type text NOT NULL,\n" +
+                                                       "   gap_global_event_order bigint NOT NULL\n," +
+                                                       "   added_timestamp TIMESTAMP WITH TIME ZONE NOT NULL," +
+                                                       "   PRIMARY KEY (aggregate_type, gap_global_event_order)\n" +
+                                                       ")"));
     }
 
     @Override

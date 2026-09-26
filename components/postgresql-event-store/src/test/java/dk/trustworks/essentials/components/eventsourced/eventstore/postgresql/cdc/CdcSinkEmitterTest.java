@@ -16,7 +16,7 @@
 
 package dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.cdc;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.databind.ObjectMapper;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.serializer.json.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.test_data.OrderId;
@@ -168,13 +168,13 @@ class CdcSinkEmitterTest {
                 EventId.random(),
                 ORDERS,
                 OrderId.of("beed77fb-1115-1115-9c48-03ed5bfe8f89"),
-                new EventJSON(new JacksonJSONEventSerializer(new ObjectMapper()), EventType.of("TestEvent"), """
+                new EventJSON(EssentialsJSONEventSerializers.create(), EventType.of("TestEvent"), """
                                                                                                              {"type":"TestEvent","globalOrder":%d}
                                                                                                              """.formatted(globalOrder)),
                 EventOrder.of(1L),
                 EventRevision.of(1),
                 GlobalEventOrder.of(globalOrder),
-                new EventMetaDataJSON(new JacksonJSONEventSerializer(new ObjectMapper()), "", ""),
+                new EventMetaDataJSON(EssentialsJSONEventSerializers.create(), "", ""),
                 OffsetDateTime.now(),
                 Optional.empty(),
                 Optional.empty(),

@@ -124,7 +124,6 @@ public final class DefaultAggregateLifecycleConfigurationValidatorBuilder {
      *
      * @return the validator
      */
-    @SuppressWarnings("removal")
     public DefaultAggregateLifecycleConfigurationValidator build() {
         return new DefaultAggregateLifecycleConfigurationValidator(requireNonNull(snapshotPolicyRegistry, "snapshotPolicyRegistry cannot be null"),
                                                                    requireNonNull(closingBooksPolicyRegistry, "closingBooksPolicyRegistry cannot be null"),

@@ -134,6 +134,6 @@ public final class AppendToStreamBuilder<ID> {
      * @return the {@link AppendToStream} instance
      */
     public AppendToStream<ID> build() {
-        return new AppendToStream<>(aggregateType, aggregateId, appendEventsAfterEventOrder, eventsToAppend);
+        return new AppendToStream<>(aggregateType, aggregateId, appendEventsAfterEventOrder.orElse(null), eventsToAppend);
     }
 }

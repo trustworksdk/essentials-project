@@ -17,12 +17,11 @@
 package dk.trustworks.essentials.components.foundation.json;
 
 import com.fasterxml.jackson.annotation.JsonAutoDetect.Visibility;
-import com.fasterxml.jackson.databind.*;
 
 import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 
 /**
- * The canonical Essentials JSON mapper configuration, for both Jackson majors.
+ * The canonical Essentials JSON mapper configuration.
  * <p>
  * Essentials persists JSON that outlives the library version which wrote it: event payloads, event metadata,
  * durable-queue message payloads. The <em>exact</em> mapper configuration is therefore part of the compatibility
@@ -31,12 +30,13 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
  * estate cannot read.
  * <p>
  * This class exists because that configuration was previously copied into every place that needed a mapper, letting the
- * copies drift — most consequentially between the Jackson 2 and Jackson 3 paths, where a divergence silently changes
- * the persisted format. Both factories here apply the same settings and register the Essentials modules through
- * {@link EssentialsJacksonModules}, which fails loudly on a flavor mismatch instead of quietly omitting them.
+ * copies drift, and a divergence silently changes the persisted format. The factory here registers the Essentials
+ * modules through {@link EssentialsJacksonModules}, which fails loudly when they are missing or of the wrong Jackson
+ * major instead of quietly omitting them.
  * <p>
- * That the two produce byte-identical JSON is asserted by {@code EssentialsObjectMappersWireFormatTest} — that
- * equivalence is what lets an application move to Spring Boot 4 and Jackson 3 and still read what Jackson 2 persisted.
+ * Up to 0.50 a second, Jackson 2 factory existed alongside this one. The Jackson 3 mapper is configured to write
+ * byte-identical JSON to it, and {@code EssentialsObjectMappersWireFormatTest} holds golden documents written by that
+ * Jackson 2 mapper: they are what guarantees that data persisted before 0.60 stays readable.
  *
  * @see EssentialsJacksonModules
  */
@@ -47,21 +47,9 @@ public final class EssentialsObjectMappers {
 
     /**
      * @param additionalModules extra modules to register, e.g. application-specific serializers
-     * @return a Jackson 2 {@link ObjectMapper} with the canonical Essentials configuration
-     * @throws IllegalStateException if the Essentials Jackson modules on the classpath are the Jackson 3 flavor
-     */
-    public static ObjectMapper createJackson2ObjectMapper(com.fasterxml.jackson.databind.Module... additionalModules) {
-        // Delegates rather than building the mapper here: the JVM verifies every method of a class when the class is
-        // linked, so Jackson 2 code in this class would make it unusable - Jackson 3 path included - on a classpath
-        // without Jackson 2. See Jackson2ObjectMappers.
-        return Jackson2ObjectMappers.create(additionalModules);
-    }
-
-    /**
-     * @param additionalModules extra modules to register, e.g. application-specific serializers
-     * @return a Jackson 3 {@link tools.jackson.databind.ObjectMapper} configured to write the same JSON as
-     *         {@link #createJackson2ObjectMapper}
-     * @throws IllegalStateException if the Essentials Jackson modules on the classpath are the Jackson 2 flavor
+     * @return a Jackson 3 {@link tools.jackson.databind.ObjectMapper} with the canonical Essentials configuration,
+     *         writing the same JSON the Jackson 2 mapper of Essentials 0.50 and earlier wrote
+     * @throws IllegalStateException if an Essentials Jackson module on the classpath was built for Jackson 2
      */
     public static tools.jackson.databind.ObjectMapper createJackson3ObjectMapper(tools.jackson.databind.JacksonModule... additionalModules) {
         requireNonNull(additionalModules, "No additionalModules provided");
@@ -113,23 +101,15 @@ public final class EssentialsObjectMappers {
         // Jackson uses the sole constructor regardless. The parameter name is therefore part of the JSON contract under
         // Jackson 3, and a mismatch has to be fixed on the type rather than configured away.
         builder.addModule(new Jackson3CollectionWrapperModule());
-        EssentialsJacksonModules.jackson3Modules().forEach(builder::addModule);
+        EssentialsJacksonModules.modules().forEach(builder::addModule);
         builder.addModules(additionalModules);
         return builder.build();
     }
 
     /**
-     * Builds the {@link JSONSerializer} matching the Jackson flavor on the classpath — the Jackson 3 one when the
-     * Essentials Jackson 3 modules are present, otherwise the Jackson 2 one.
-     *
-     * @return a {@link JSONSerializer} using the canonical configuration for the active flavor
+     * @return a {@link JSONSerializer} using the canonical Essentials configuration
      */
     public static JSONSerializer createJSONSerializer() {
-        // Two returns rather than a conditional expression: merging the two branch types makes the verifier load
-        // JacksonJSONSerializer, which is not needed - and not wanted - on a classpath without Jackson 2.
-        if (EssentialsJacksonModules.isJackson3Flavor()) {
-            return new Jackson3JSONSerializer(createJackson3ObjectMapper());
-        }
-        return new JacksonJSONSerializer(createJackson2ObjectMapper());
+        return new Jackson3JSONSerializer(createJackson3ObjectMapper());
     }
 }

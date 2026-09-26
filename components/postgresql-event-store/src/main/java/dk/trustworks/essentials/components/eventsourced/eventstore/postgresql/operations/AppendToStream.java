@@ -21,11 +21,11 @@ import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.ev
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.interceptor.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.types.*;
 import dk.trustworks.essentials.components.foundation.types.RandomIdGenerator;
-import dk.trustworks.essentials.types.NumberType;
 
 import java.util.*;
 
 import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
+import static dk.trustworks.essentials.shared.MessageFormatter.msg;
 
 /**
  * Operation matching the {@link EventStore#appendToStream(AggregateType, Object, Optional, List)} method call<br>
@@ -82,7 +82,7 @@ public final class AppendToStream<ID> {
      * is associated with the <code>aggregateType</code><br>
      * The the {@link EventStore} will call {@link EventStore#loadLastPersistedEventRelatedTo(AggregateType, Object)}
      * to resolve the {@link EventOrder} of the last persisted event for this aggregate instance.<br>
-     * IF you know the last persisted aggregate event order then please use {@link #AppendToStream(AggregateType, Object, Optional, List)} constructor
+     * IF you know the last persisted aggregate event order then please use {@link #AppendToStream(AggregateType, Object, Long, List)} constructor
      *
      * @param aggregateType  the aggregate type that the underlying {@link AggregateEventStream} is associated with
      * @param aggregateId    the identifier of the aggregate we want to persist eventsToAppend related to<br>
@@ -107,7 +107,7 @@ public final class AppendToStream<ID> {
     public AppendToStream(AggregateType aggregateType, ID aggregateId, List<?> eventsToAppend) {
         this(aggregateType,
              aggregateId,
-             Optional.empty(),
+             (Long) null,
              eventsToAppend);
     }
 
@@ -117,7 +117,7 @@ public final class AppendToStream<ID> {
      * is associated with the <code>aggregateType</code><br>
      * The the {@link EventStore} will call {@link EventStore#loadLastPersistedEventRelatedTo(AggregateType, Object)}
      * to resolve the {@link EventOrder} of the last persisted event for this aggregate instance.<br>
-     * IF you know the last persisted aggregate event order then please use {@link #AppendToStream(AggregateType, Object, Optional, List)} constructor
+     * IF you know the last persisted aggregate event order then please use {@link #AppendToStream(AggregateType, Object, Long, List)} constructor
      *
      * @param aggregateType  the aggregate type that the underlying {@link AggregateEventStream} is associated with
      * @param aggregateId    the identifier of the aggregate we want to persist eventsToAppend related to<br>
@@ -138,12 +138,34 @@ public final class AppendToStream<ID> {
      *                         <li>Use safe characters to prevent SQL injection attacks when used in database operations that perform SQL string concatenation</li>
      *                       </ul>
      * @param eventsToAppend the events to persist/append
+     * @throws IllegalArgumentException if one of the events is an {@link Optional}, a {@link Collection} or an array -
+     *                                  see {@link #requireEvents(Object[])}
      */
     public AppendToStream(AggregateType aggregateType, ID aggregateId, Object... eventsToAppend) {
         this(aggregateType,
              aggregateId,
-             Optional.empty(),
-             List.of(eventsToAppend));
+             (Long) null,
+             List.of(requireEvents(eventsToAppend)));
+    }
+
+    /**
+     * Guards the varargs constructor against arguments that were never meant as events. Up to 0.50 there was an
+     * {@code (AggregateType, ID, Optional<Long>, List<?>)} constructor; 0.60 removed it, and a call written against it
+     * still compiles - against {@link #AppendToStream(AggregateType, Object, Object...)}, with the {@code Optional} and the
+     * list appended as two events. No event is an {@code Optional}, a {@code Collection} or an array, so fail loudly rather
+     * than persist them.
+     */
+    private static Object[] requireEvents(Object[] eventsToAppend) {
+        requireNonNull(eventsToAppend, "No eventsToAppend provided");
+        for (var event : eventsToAppend) {
+            if (event instanceof Optional<?> || event instanceof Collection<?> || (event != null && event.getClass().isArray())) {
+                throw new IllegalArgumentException(msg("An event cannot be a {} - this looks like a call written for a constructor that no longer exists. " +
+                                                       "To append after a known event order use AppendToStream(AggregateType, ID, Long, List), " +
+                                                       "or AppendToStream.builder()",
+                                                       event instanceof Optional<?> ? "Optional" : event instanceof Collection<?> ? "Collection" : "array"));
+            }
+        }
+        return eventsToAppend;
     }
 
     /**
@@ -181,26 +203,6 @@ public final class AppendToStream<ID> {
         this.aggregateId = requireNonNull(aggregateId, "No aggregateId provided");
         this.appendEventsAfterEventOrder = appendEventsAfterEventOrder;
         this.eventsToAppend = requireNonNull(eventsToAppend, "No eventsToAppend provided");
-    }
-
-    /**
-     * @param aggregateType               the aggregate type that the underlying {@link AggregateEventStream} is associated with
-     * @param aggregateId                 the identifier of the aggregate we want to persist events related to
-     * @param appendEventsAfterEventOrder append the events after this event order. {@link Optional#empty()} lets the
-     *                                    {@link EventStore} resolve the last persisted event order itself
-     * @param eventsToAppend              the events to persist/append
-     * @deprecated Use {@link #AppendToStream(AggregateType, Object, Long, List)}, passing {@code null} where you
-     *         passed {@link Optional#empty()}, or {@link #builder()}. {@link #getAppendEventsAfterEventOrder()} still
-     *         returns an {@code Optional}, so reading code is unaffected. This constructor delegates and behaves
-     *         identically.
-     */
-    @Deprecated(forRemoval = true, since = "0.40.x")
-    @SuppressWarnings("OptionalUsedAsFieldOrParameterType")
-    public AppendToStream(AggregateType aggregateType, ID aggregateId, Optional<Long> appendEventsAfterEventOrder, List<?> eventsToAppend) {
-        this(aggregateType,
-             aggregateId,
-             requireNonNull(appendEventsAfterEventOrder, "No appendEventsAfterEventOrder provided").orElse(null),
-             eventsToAppend);
     }
 
     /**

@@ -49,7 +49,7 @@ class CdcEventStoreFallbackIT extends AbstractLogicalReplicationPostgresIT {
 
     @BeforeEach
     void setup() {
-        jacksonJSONSerializer = EssentialsJSONEventSerializers.createForActiveJacksonFlavor();
+        jacksonJSONSerializer = EssentialsJSONEventSerializers.create();
         var eventMapper = new EventProcessorIT.TestPersistableEventMapper();
 
         var persistenceStrategy =
@@ -62,7 +62,7 @@ class CdcEventStoreFallbackIT extends AbstractLogicalReplicationPostgresIT {
 
         persistenceStrategy.addAggregateEventStreamConfiguration(ORDERS, OrderId.class);
         eventStore = new PostgresqlEventStore<>(unitOfWorkFactory, persistenceStrategy);
-        gapHandler = new PostgresqlEventStreamGapHandler<>(eventStore, unitOfWorkFactory);
+        gapHandler = new PostgresqlEventStreamGapHandler<>(unitOfWorkFactory);
     }
 
     @Test

@@ -126,15 +126,13 @@ public final class EventStoreEventBus implements EventBus, Lifecycle {
      * @param onErrorHandler                 the error handler which will be called if any subscriber/consumer fails to handle an event
      * @param overflowMaxRetries     the maximum number of retries for events that overflow the Flux
      * @param queuedTaskCapFactor            the factor to calculate queued task capacity
-     * @deprecated Use {@link #builder()}. This constructor declares an {@code Optional} parameter and/or more than five parameters; the builder names every argument and accepts both plain values and {@code Optional}s. It is unchanged and remains the implementation the builder delegates to.
      */
-    @Deprecated(forRemoval = true, since = "0.40.x")
-    public EventStoreEventBus(EventStoreUnitOfWorkFactory<? extends EventStoreUnitOfWork> eventStoreUnitOfWorkFactory,
-                              int parallelThreads,
-                              int eventBusBackpressureBufferSize,
-                              OnErrorHandler onErrorHandler,
-                              int overflowMaxRetries,
-                              double queuedTaskCapFactor) {
+    EventStoreEventBus(EventStoreUnitOfWorkFactory<? extends EventStoreUnitOfWork> eventStoreUnitOfWorkFactory,
+                       int parallelThreads,
+                       int eventBusBackpressureBufferSize,
+                       OnErrorHandler onErrorHandler,
+                       int overflowMaxRetries,
+                       double queuedTaskCapFactor) {
         this(new LocalEventBus.Builder()
                      .busName("EventStoreLocalBus")
                      .parallelThreads(parallelThreads)

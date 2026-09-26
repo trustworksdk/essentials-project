@@ -155,16 +155,17 @@ class DefaultAggregateGenerationArchiverTest {
                                                    state == GenerationState.CLOSED
                                                            ? Optional.of(OffsetDateTime.parse("2026-04-10T00:00:00Z"))
                                                            : Optional.empty());
-        var aggregateConfiguration = new AggregateEventStreamConfiguration(AggregateType.of("Orders"),
-                                                                            100,
-                                                                            mock(JSONEventSerializer.class),
-                                                                            aggregateIdSerializer,
-                                                                            IdentifierColumnType.TEXT,
-                                                                            IdentifierColumnType.TEXT,
-                                                                            IdentifierColumnType.TEXT,
-                                                                            JSONColumnType.JSONB,
-                                                                            JSONColumnType.JSONB,
-                                                                            new TenantSerializer.NoSupportForMultiTenancySerializer());
+        var aggregateConfiguration = AggregateEventStreamConfiguration.builder()
+                                                                      .setAggregateType(AggregateType.of("Orders"))
+                                                                      .setJsonSerializer(mock(JSONEventSerializer.class))
+                                                                      .setAggregateIdSerializer(aggregateIdSerializer)
+                                                                      .setAggregateIdColumnType(IdentifierColumnType.TEXT)
+                                                                      .setEventIdColumnType(IdentifierColumnType.TEXT)
+                                                                      .setCorrelationIdColumnType(IdentifierColumnType.TEXT)
+                                                                      .setEventJsonColumnType(JSONColumnType.JSONB)
+                                                                      .setEventMetadataJsonColumnType(JSONColumnType.JSONB)
+                                                                      .setTenantSerializer(new TenantSerializer.NoSupportForMultiTenancySerializer())
+                                                                      .build();
         var aggregateEventStream = mock(AggregateEventStream.class);
         var persistedEvent = mock(PersistedEvent.class);
 

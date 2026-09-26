@@ -17,7 +17,8 @@
 package dk.trustworks.essentials.components.eventsourced.aggregates.closingbooks;
 
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.AggregateType;
-import dk.trustworks.essentials.components.foundation.postgresql.PostgresqlUtil;
+import dk.trustworks.essentials.components.foundation.postgresql.*;
+import dk.trustworks.essentials.components.foundation.schema.*;
 import dk.trustworks.essentials.components.foundation.transaction.UnitOfWorkException;
 import dk.trustworks.essentials.components.foundation.transaction.jdbi.HandleAwareUnitOfWork;
 import dk.trustworks.essentials.components.foundation.transaction.jdbi.HandleAwareUnitOfWorkFactory;
@@ -44,10 +45,14 @@ import static dk.trustworks.essentials.shared.MessageFormatter.msg;
  *
  * @param <ID> The type of the identifier used for aggregate generations.
  */
-public class PostgresqlClosingBooksGenerationRepository<ID> implements ClosingBooksOpenGenerationRepository<ID> {
+public class PostgresqlClosingBooksGenerationRepository<ID> implements ClosingBooksOpenGenerationRepository<ID>, EssentialsSchemaContributor {
     private static final Logger log = LoggerFactory.getLogger(PostgresqlClosingBooksGenerationRepository.class);
 
     public static final String DEFAULT_TABLE_NAME = "aggregate_generations";
+    /**
+     * The {@link #moduleId()} the generation table is recorded under
+     */
+    public static final String MODULE_ID          = "eventsourced-aggregates-closing-books";
 
     /**
      * Classifier for the two-argument advisory-lock key space used by {@link #withGenerationLock}. Postgres keeps the
@@ -61,7 +66,7 @@ public class PostgresqlClosingBooksGenerationRepository<ID> implements ClosingBo
     private final String                                                        tableName;
     private final ClosingBooksIdSerializer<ID>                                  logicalAggregateIdSerializer;
     private final String                                                        oneOpenGenerationIndexName;
-    /** Postgres' default name for the unnamed PRIMARY KEY declared by {@link #initializeStorage()}. */
+    /** Postgres' default name for the unnamed PRIMARY KEY declared by {@link #contribute(SchemaContext)}. */
     private final String                                                        primaryKeyName;
 
     /**
@@ -88,11 +93,9 @@ public class PostgresqlClosingBooksGenerationRepository<ID> implements ClosingBo
      * @param tableName an optional name of the table to be used for storage; if not provided, a default table
      *                  name is used
      * @throws IllegalArgumentException if the {@code unitOfWorkFactory} parameter is null
-     * @deprecated Use {@link #builder()}. This constructor declares an {@code Optional} parameter and/or more than five parameters; the builder names every argument and accepts both plain values and {@code Optional}s. It is unchanged and remains the implementation the builder delegates to.
      */
-    @Deprecated(forRemoval = true, since = "0.40.x")
-    public PostgresqlClosingBooksGenerationRepository(HandleAwareUnitOfWorkFactory<? extends HandleAwareUnitOfWork> unitOfWorkFactory,
-                                                      Optional<String> tableName) {
+    PostgresqlClosingBooksGenerationRepository(HandleAwareUnitOfWorkFactory<? extends HandleAwareUnitOfWork> unitOfWorkFactory,
+                                        Optional<String> tableName) {
         this(unitOfWorkFactory,
              tableName,
              defaultLogicalAggregateIdSerializer());
@@ -109,60 +112,83 @@ public class PostgresqlClosingBooksGenerationRepository<ID> implements ClosingBo
      * @param logicalAggregateIdSerializer the serializer used for logical aggregate ID serialization and
      *                                      deserialization; must not be null
      * @throws IllegalArgumentException if any of the required parameters are null
-     * @deprecated Use {@link #builder()}. This constructor declares an {@code Optional} parameter and/or more than five parameters; the builder names every argument and accepts both plain values and {@code Optional}s. It is unchanged and remains the implementation the builder delegates to.
      */
-    @Deprecated(forRemoval = true, since = "0.40.x")
-    public PostgresqlClosingBooksGenerationRepository(HandleAwareUnitOfWorkFactory<? extends HandleAwareUnitOfWork> unitOfWorkFactory,
+    PostgresqlClosingBooksGenerationRepository(HandleAwareUnitOfWorkFactory<? extends HandleAwareUnitOfWork> unitOfWorkFactory,
                                                       Optional<String> tableName,
                                                       ClosingBooksIdSerializer<ID> logicalAggregateIdSerializer) {
+        this(unitOfWorkFactory, tableName, logicalAggregateIdSerializer, SchemaOwnership.COMPONENT);
+    }
+
+    /**
+     * @param schemaOwnership {@link SchemaOwnership#COMPONENT} creates the generation table and its index now;
+     *                        {@link SchemaOwnership#HARNESS} leaves them to an {@link EssentialsSchemaHarness}
+     */
+    @SuppressWarnings("OptionalUsedAsFieldOrParameterType")
+    PostgresqlClosingBooksGenerationRepository(HandleAwareUnitOfWorkFactory<? extends HandleAwareUnitOfWork> unitOfWorkFactory,
+                                               Optional<String> tableName,
+                                               ClosingBooksIdSerializer<ID> logicalAggregateIdSerializer,
+                                               SchemaOwnership schemaOwnership) {
         this.unitOfWorkFactory = requireNonNull(unitOfWorkFactory, "No unitOfWorkFactory provided");
         this.tableName = requireNonNull(tableName, "No tableName provided").orElse(DEFAULT_TABLE_NAME).toLowerCase();
         this.logicalAggregateIdSerializer = requireNonNull(logicalAggregateIdSerializer, "No logicalAggregateIdSerializer provided");
         this.oneOpenGenerationIndexName = this.tableName + "_one_open_idx";
         this.primaryKeyName = this.tableName + "_pkey";
-        initializeStorage();
-    }
-
-    private void initializeStorage() {
-        PostgresqlUtil.checkIsValidTableOrColumnName(tableName);
+        PostgresqlUtil.checkIsValidTableOrColumnName(this.tableName);
         // Derived, so it can exceed PostgresqlUtil.MAX_IDENTIFIER_LENGTH even when the table name does not. Postgres
         // would silently truncate it to 63 characters, and two long table names could then derive the same index name.
         PostgresqlUtil.checkIsValidTableOrColumnName(oneOpenGenerationIndexName);
-        // One transaction, holding the framework's bootstrap lock: CREATE / ALTER ... IF NOT EXISTS is not atomic
-        // against concurrent sessions, so two JVMs starting together can both see "doesn't exist" and one fails on a
-        // duplicate catalog entry. See PostgresqlUtil#acquireBootstrapLock. Keeping the table, its column additions and
-        // its indexes in the same transaction also means a partially created table is never left behind.
-        unitOfWorkFactory.usingUnitOfWork(uow -> {
-            PostgresqlUtil.acquireBootstrapLock(uow.handle());
-            uow.handle().execute(bind("""
-                                      CREATE TABLE IF NOT EXISTS {:tableName} (
-                                          aggregate_type TEXT NOT NULL,
-                                          logical_aggregate_id TEXT NOT NULL,
-                                          generation BIGINT NOT NULL,
-                                          stream_aggregate_id TEXT NOT NULL,
-                                          state TEXT NOT NULL,
-                                          opened_ts TIMESTAMP WITH TIME ZONE NOT NULL,
-                                          closed_ts TIMESTAMP WITH TIME ZONE,
-                                          next_scan_ts TIMESTAMP WITH TIME ZONE,
-                                          PRIMARY KEY (aggregate_type, logical_aggregate_id, generation),
-                                          UNIQUE (aggregate_type, stream_aggregate_id)
-                                      )
-                                      """, arg("tableName", tableName)));
-            // Added after the table shipped without it, so existing installations get it here rather than only via
-            // CREATE TABLE. NULL means "eligible for scanning now", which is what every pre-existing row should be.
-            uow.handle().execute(bind("""
-                                      ALTER TABLE {:tableName}
-                                      ADD COLUMN IF NOT EXISTS next_scan_ts TIMESTAMP WITH TIME ZONE
-                                      """, arg("tableName", tableName)));
-            uow.handle().execute(bind("""
-                                      CREATE UNIQUE INDEX IF NOT EXISTS {:indexName}
-                                      ON {:tableName} (aggregate_type, logical_aggregate_id)
-                                      WHERE state = 'OPEN'
-                                      """,
-                                      arg("indexName", oneOpenGenerationIndexName),
-                                      arg("tableName", tableName)));
-        });
-        log.info("Ensured that closing books generation table '{}' exists", tableName);
+        if (requireNonNull(schemaOwnership, "No schemaOwnership provided") == SchemaOwnership.COMPONENT) {
+            PostgresqlCreateSchemaApplier.applyOwnSchema(unitOfWorkFactory, this);
+            log.info("Ensured that closing books generation table '{}' exists", this.tableName);
+        }
+    }
+
+    @Override
+    public String moduleId() {
+        return MODULE_ID;
+    }
+
+    @Override
+    public int order() {
+        return SchemaOrder.ORDER_AGGREGATES;
+    }
+
+    /**
+     * The generation table, the column added after it first shipped, and the one-open-generation index.
+     */
+    @Override
+    public List<SchemaChange> contribute(SchemaContext context) {
+        return List.of(SchemaChange.repeatable("generation-table",
+                                               tableName,
+                                               bind("""
+                                                    CREATE TABLE IF NOT EXISTS {:tableName} (
+                                                        aggregate_type TEXT NOT NULL,
+                                                        logical_aggregate_id TEXT NOT NULL,
+                                                        generation BIGINT NOT NULL,
+                                                        stream_aggregate_id TEXT NOT NULL,
+                                                        state TEXT NOT NULL,
+                                                        opened_ts TIMESTAMP WITH TIME ZONE NOT NULL,
+                                                        closed_ts TIMESTAMP WITH TIME ZONE,
+                                                        next_scan_ts TIMESTAMP WITH TIME ZONE,
+                                                        PRIMARY KEY (aggregate_type, logical_aggregate_id, generation),
+                                                        UNIQUE (aggregate_type, stream_aggregate_id)
+                                                    )
+                                                    """, arg("tableName", tableName)),
+                                               // Added after the table shipped without it, so existing installations get it here rather than only via
+                                               // CREATE TABLE. NULL means "eligible for scanning now", which is what every pre-existing row should be.
+                                               bind("""
+                                                    ALTER TABLE {:tableName}
+                                                    ADD COLUMN IF NOT EXISTS next_scan_ts TIMESTAMP WITH TIME ZONE
+                                                    """, arg("tableName", tableName))),
+                       SchemaChange.repeatable("generation-one-open-index",
+                                               tableName,
+                                               bind("""
+                                                    CREATE UNIQUE INDEX IF NOT EXISTS {:indexName}
+                                                    ON {:tableName} (aggregate_type, logical_aggregate_id)
+                                                    WHERE state = 'OPEN'
+                                                    """,
+                                                    arg("indexName", oneOpenGenerationIndexName),
+                                                    arg("tableName", tableName))));
     }
 
     /**
@@ -472,6 +498,7 @@ public class PostgresqlClosingBooksGenerationRepository<ID> implements ClosingBo
         private HandleAwareUnitOfWorkFactory<? extends HandleAwareUnitOfWork> unitOfWorkFactory;
         private String tableName;
         private ClosingBooksIdSerializer<ID> logicalAggregateIdSerializer;
+        private SchemaOwnership schemaOwnership = SchemaOwnership.COMPONENT;
 
         /**
          * @param unitOfWorkFactory required
@@ -513,13 +540,24 @@ public class PostgresqlClosingBooksGenerationRepository<ID> implements ClosingBo
         }
 
         /**
+         * @param schemaOwnership {@link SchemaOwnership#COMPONENT} (the default) creates the generation table and its
+         *                        index when the repository is built; {@link SchemaOwnership#HARNESS} leaves them to the
+         *                        {@link EssentialsSchemaHarness} the repository is registered with
+         * @return this builder
+         */
+        public Builder<ID> setSchemaOwnership(SchemaOwnership schemaOwnership) {
+            this.schemaOwnership = requireNonNull(schemaOwnership, "No schemaOwnership provided");
+            return this;
+        }
+
+        /**
          * @return the new {@link PostgresqlClosingBooksGenerationRepository}
          */
-        @SuppressWarnings("removal")
         public PostgresqlClosingBooksGenerationRepository<ID> build() {
             return new PostgresqlClosingBooksGenerationRepository<>(unitOfWorkFactory,
                                                                       Optional.ofNullable(tableName),
-                                                                      logicalAggregateIdSerializer);
+                                                                      logicalAggregateIdSerializer,
+                                                                      schemaOwnership);
         }
     }
 

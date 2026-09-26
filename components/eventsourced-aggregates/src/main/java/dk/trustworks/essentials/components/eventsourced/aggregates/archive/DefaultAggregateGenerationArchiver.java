@@ -52,16 +52,12 @@ public class DefaultAggregateGenerationArchiver implements AggregateGenerationAr
     private final AggregateArchiveDestination archiveDestination;
     private final AggregateArchiveMeasurementSupport measurementSupport;
 
-    /**
-     * @deprecated Use {@link #builder()}. This constructor declares an {@code Optional} parameter and/or more than five parameters; the builder names every argument and accepts both plain values and {@code Optional}s. It is unchanged and remains the implementation the builder delegates to.
-     */
-    @Deprecated(forRemoval = true, since = "0.40.x")
-    public DefaultAggregateGenerationArchiver(AggregateArchiveRegistry archiveRegistry,
-                                              AggregateClosingBooksGenerationAccessProvider generationAccessProvider,
-                                              ConfigurableEventStore<? extends AggregateEventStreamConfiguration> eventStore,
-                                              HandleAwareUnitOfWorkFactory<? extends HandleAwareUnitOfWork> unitOfWorkFactory,
-                                              AggregateArchiveExporter archiveExporter,
-                                              AggregateArchiveDestination archiveDestination) {
+    DefaultAggregateGenerationArchiver(AggregateArchiveRegistry archiveRegistry,
+                                AggregateClosingBooksGenerationAccessProvider generationAccessProvider,
+                                ConfigurableEventStore<? extends AggregateEventStreamConfiguration> eventStore,
+                                HandleAwareUnitOfWorkFactory<? extends HandleAwareUnitOfWork> unitOfWorkFactory,
+                                AggregateArchiveExporter archiveExporter,
+                                AggregateArchiveDestination archiveDestination) {
         this(archiveRegistry,
              generationAccessProvider,
              eventStore,
@@ -72,11 +68,7 @@ public class DefaultAggregateGenerationArchiver implements AggregateGenerationAr
     }
 
     @SuppressWarnings("OptionalUsedAsFieldOrParameterType")
-    /**
-     * @deprecated Use {@link #builder()}. This constructor declares an {@code Optional} parameter and/or more than five parameters; the builder names every argument and accepts both plain values and {@code Optional}s. It is unchanged and remains the implementation the builder delegates to.
-     */
-    @Deprecated(forRemoval = true, since = "0.40.x")
-    public DefaultAggregateGenerationArchiver(AggregateArchiveRegistry archiveRegistry,
+    DefaultAggregateGenerationArchiver(AggregateArchiveRegistry archiveRegistry,
                                               AggregateClosingBooksGenerationAccessProvider generationAccessProvider,
                                               ConfigurableEventStore<? extends AggregateEventStreamConfiguration> eventStore,
                                               HandleAwareUnitOfWorkFactory<? extends HandleAwareUnitOfWork> unitOfWorkFactory,
@@ -339,7 +331,6 @@ public class DefaultAggregateGenerationArchiver implements AggregateGenerationAr
         /**
          * @return the new {@link DefaultAggregateGenerationArchiver}
          */
-        @SuppressWarnings("removal")
         public DefaultAggregateGenerationArchiver build() {
             return new DefaultAggregateGenerationArchiver(archiveRegistry,
                                                           generationAccessProvider,

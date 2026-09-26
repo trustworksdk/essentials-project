@@ -50,7 +50,7 @@ public class WalReplicationWithEssentialsAggregateWal2JsonIT extends AbstractLog
 
     @BeforeEach
     void setup() {
-        jacksonJSONSerializer = EssentialsJSONEventSerializers.createForActiveJacksonFlavor();
+        jacksonJSONSerializer = EssentialsJSONEventSerializers.create();
         eventMapper = new EventProcessorIT.TestPersistableEventMapper();
 
         var persistenceStrategy =
@@ -74,7 +74,7 @@ public class WalReplicationWithEssentialsAggregateWal2JsonIT extends AbstractLog
 
         inboxRepository = new CdcInboxRepository(unitOfWorkFactory);
 
-        gapHandler = new PostgresqlEventStreamGapHandler<>(eventStore, unitOfWorkFactory);
+        gapHandler = new PostgresqlEventStreamGapHandler<>(unitOfWorkFactory);
     }
 
     @AfterEach
@@ -105,39 +105,28 @@ public class WalReplicationWithEssentialsAggregateWal2JsonIT extends AbstractLog
 
         var availability = new CdcAvailability();
         var plugin = new Wal2JsonLogicalDecodingPlugin(cfg, converter, extractor, CdcProperties.WalParserMode.STRING);
-        var tailer = new WalReplicationTailer(
-                replicationDataSource,
-                jdbi,
-                unitOfWorkFactory,
-                slotName,
-                inboxRepository,
-                cfg,
-                PgSlotMode.CREATE_IF_MISSING,
-                CdcMode.AUTO,
-                CdcProperties.CdcDeliveryMode.INBOX,
-                plugin,
-                Optional.empty(),
-                Optional.empty(),
-                availability,
-                Optional.empty(),
-                Optional.empty(),
-                Optional.of(eventStreamTablesSupplier()),
-                false
-        );
+        var tailer = new WalReplicationTailer(CdcTailerDependencies.builder()
+                                                                   .setReplicationDataSource(replicationDataSource)
+                                                                   .setJdbi(jdbi)
+                                                                   .setUnitOfWorkFactory(unitOfWorkFactory)
+                                                                   .setLogicalDecodingPlugin(plugin)
+                                                                   .setAvailability(availability)
+                                                                   .setMeterRegistry(Optional.empty())
+                                                                   .setEventStreamTableNamesSupplier((Optional.of(eventStreamTablesSupplier())))
+                                                                   .build(),
+                                              new CdcTailerSettings(slotName, cfg, PgSlotMode.CREATE_IF_MISSING, CdcMode.AUTO, false),
+                                              CdcDelivery.inbox(inboxRepository));
 
-        var dispatcher = new CdcDispatcher(
-                inboxRepository,
-                unitOfWorkFactory,
-                gapHandler,
-                plugin,
-                Optional.empty(),
-                cdcPersistedEvents::addAll,
-                slotName,
-                CdcDispatcherProperties.defaults(),
-                CdcProperties.CdcDeliveryMode.INBOX,
-                availability,
-                Optional.empty()
-        );
+        var dispatcher = new CdcDispatcher(CdcDispatcherDependencies.builder()
+                                                                    .setInbox(inboxRepository)
+                                                                    .setUnitOfWorkFactory(unitOfWorkFactory)
+                                                                    .setEventStreamGapHandler(gapHandler)
+                                                                    .setLogicalDecodingPlugin(plugin)
+                                                                    .setOnEvents((cdcPersistedEvents::addAll))
+                                                                    .setAvailability(availability)
+                                                                    .setMeterRegistry(Optional.empty())
+                                                                    .build(),
+                                           new CdcDispatcherSettings(slotName, CdcDispatcherProperties.defaults(), CdcProperties.CdcDeliveryMode.INBOX));
 
         tailer.startAndAwaitReady(Duration.ofSeconds(10));
         dispatcher.start();
@@ -193,39 +182,28 @@ public class WalReplicationWithEssentialsAggregateWal2JsonIT extends AbstractLog
 
         var availability = new CdcAvailability();
         var plugin = new Wal2JsonLogicalDecodingPlugin(cfg, converter, extractor, CdcProperties.WalParserMode.STRING);
-        var tailer = new WalReplicationTailer(
-                replicationDataSource,
-                jdbi,
-                unitOfWorkFactory,
-                slotName,
-                inboxRepository,
-                cfg,
-                PgSlotMode.CREATE_IF_MISSING,
-                CdcMode.AUTO,
-                CdcProperties.CdcDeliveryMode.INBOX,
-                plugin,
-                Optional.empty(),
-                Optional.empty(),
-                availability,
-                Optional.empty(),
-                Optional.empty(),
-                Optional.of(eventStreamTablesSupplier()),
-                false
-        );
+        var tailer = new WalReplicationTailer(CdcTailerDependencies.builder()
+                                                                   .setReplicationDataSource(replicationDataSource)
+                                                                   .setJdbi(jdbi)
+                                                                   .setUnitOfWorkFactory(unitOfWorkFactory)
+                                                                   .setLogicalDecodingPlugin(plugin)
+                                                                   .setAvailability(availability)
+                                                                   .setMeterRegistry(Optional.empty())
+                                                                   .setEventStreamTableNamesSupplier((Optional.of(eventStreamTablesSupplier())))
+                                                                   .build(),
+                                              new CdcTailerSettings(slotName, cfg, PgSlotMode.CREATE_IF_MISSING, CdcMode.AUTO, false),
+                                              CdcDelivery.inbox(inboxRepository));
 
-        var dispatcher = new CdcDispatcher(
-                inboxRepository,
-                unitOfWorkFactory,
-                gapHandler,
-                plugin,
-                Optional.empty(),
-                cdcPersistedEvents::addAll,
-                slotName,
-                CdcDispatcherProperties.defaults(),
-                CdcProperties.CdcDeliveryMode.INBOX,
-                availability,
-                Optional.empty()
-        );
+        var dispatcher = new CdcDispatcher(CdcDispatcherDependencies.builder()
+                                                                    .setInbox(inboxRepository)
+                                                                    .setUnitOfWorkFactory(unitOfWorkFactory)
+                                                                    .setEventStreamGapHandler(gapHandler)
+                                                                    .setLogicalDecodingPlugin(plugin)
+                                                                    .setOnEvents((cdcPersistedEvents::addAll))
+                                                                    .setAvailability(availability)
+                                                                    .setMeterRegistry(Optional.empty())
+                                                                    .build(),
+                                           new CdcDispatcherSettings(slotName, CdcDispatcherProperties.defaults(), CdcProperties.CdcDeliveryMode.INBOX));
 
         tailer.startAndAwaitReady(Duration.ofSeconds(10));
         dispatcher.start();
@@ -280,25 +258,17 @@ public class WalReplicationWithEssentialsAggregateWal2JsonIT extends AbstractLog
         var availability = new CdcAvailability();
         WalGlobalOrdersExtractor noGaps = (String ignored) -> List.of();
         var plugin = new Wal2JsonLogicalDecodingPlugin(cfg, converter, noGaps, CdcProperties.WalParserMode.BYTES);
-        var tailer = new WalReplicationTailer(
-                replicationDataSource,
-                jdbi,
-                unitOfWorkFactory,
-                slotName,
-                inboxRepository,
-                cfg,
-                PgSlotMode.CREATE_IF_MISSING,
-                CdcMode.AUTO,
-                CdcDeliveryMode.DIRECT,
-                plugin,
-                Optional.of(cdcPersistedEvents::addAll),
-                Optional.empty(),
-                availability,
-                Optional.empty(),
-                Optional.empty(),
-                Optional.of(eventStreamTablesSupplier()),
-                false
-        );
+        var tailer = new WalReplicationTailer(CdcTailerDependencies.builder()
+                                                                   .setReplicationDataSource(replicationDataSource)
+                                                                   .setJdbi(jdbi)
+                                                                   .setUnitOfWorkFactory(unitOfWorkFactory)
+                                                                   .setLogicalDecodingPlugin(plugin)
+                                                                   .setAvailability(availability)
+                                                                   .setMeterRegistry(Optional.empty())
+                                                                   .setEventStreamTableNamesSupplier((Optional.of(eventStreamTablesSupplier())))
+                                                                   .build(),
+                                              new CdcTailerSettings(slotName, cfg, PgSlotMode.CREATE_IF_MISSING, CdcMode.AUTO, false),
+                                              CdcDelivery.direct(cdcPersistedEvents::addAll));
 
         tailer.startAndAwaitReady(Duration.ofSeconds(10));
 

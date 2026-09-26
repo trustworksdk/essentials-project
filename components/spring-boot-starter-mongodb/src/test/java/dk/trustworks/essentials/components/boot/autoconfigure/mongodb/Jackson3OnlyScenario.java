@@ -29,12 +29,11 @@ public final class Jackson3OnlyScenario {
     /** What Spring does with an auto-configuration class before it creates any bean from it. */
     public static void introspectTheAutoConfiguration() {
         EssentialsComponentsConfiguration.class.getDeclaredMethods();
-        EssentialsComponentsConfiguration.Jackson3OnlyJsonSerializerConfiguration.class.getDeclaredMethods();
     }
 
-    /** The serializer bean the starter defines when Jackson 3 is the only Jackson, used for a value type. */
+    /** The serializer bean the starter defines by default, used for a value type. */
     public static String serializeWithTheDefaultSerializer() {
-        var serializer = new EssentialsComponentsConfiguration.Jackson3OnlyJsonSerializerConfiguration().jsonSerializer();
+        var serializer = new EssentialsComponentsConfiguration().jsonSerializer();
         if (!(serializer instanceof Jackson3JSONSerializer)) {
             throw new IllegalStateException("Expected the Jackson 3 serializer, got " + serializer.getClass().getName());
         }

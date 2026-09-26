@@ -9,7 +9,6 @@ decisions taken when this module was converted from layered packages, and the op
 
 ```bash
 mvn verify -pl :essentials-trading-demo                 # unit + ITs (needs Docker)
-mvn -Pjackson2 verify -pl :essentials-trading-demo -am  # other Jackson flavour; -am is required
 mvn spring-boot:run -pl :essentials-trading-demo        # after `docker compose up -d`
 ```
 
@@ -18,7 +17,7 @@ mvn spring-boot:run -pl :essentials-trading-demo        # after `docker compose 
 | BC | Aggregates | Slices |
 |---|---|---|
 | `brokerage` | `TradingAccount`, `Trade`, `Settlement` | 19 command, 6 view |
-| `market_data` | `Instrument`, `InstrumentPrice` | 5 command, 2 view |
+| `market_data` | `Instrument`, `InstrumentPrice` | 5 command, 1 automation, 2 view |
 
 Both on the **aggregate write style** (§R5) — `AggregateRoot` + `StatefulAggregateRepository`. Sanctioned
 lane. Do **not** convert to `Decider`s.
@@ -61,6 +60,13 @@ lane. Do **not** convert to `Decider`s.
   this replaced.
 - **Two projections are eventually consistent** (`account_statement`, `trade_settlement_status`). Tests must
   await them. `trade_valuation` likewise.
+- **`market_data.risk_approve_instrument` is the only `UnitOfWorkMode.NONE` handler here**, and the demo's
+  worked example of one. It blocks on a stubbed external risk service with no `UnitOfWork` — hence no pooled
+  connection — and wraps its transactional tail in `usingUnitOfWork(...)`. Three constraints travel with the
+  mode: the handler must be idempotent (the aggregate's risk methods no-op once a decision exists), the
+  blocking call must finish well inside `essentials.durable-queues.message-handling-timeout`
+  (`trading-demo.risk-approval.latency` is 500ms against a 30s default), and it cannot be a
+  `ViewEventProcessor`, which rejects `NONE` outright. Read that slice's `CLAUDE.md` before copying the shape.
 - **`EssentialsWebMvcConfigurer` + `EssentialTypesJacksonModule` are registered in
   `config/TradingDemoWebConfiguration`.** Neither is auto-configuration. Without the first, a typed
   `@PathVariable` is an HTTP 500; without the second, a semantic type in a request/response body has no
@@ -68,6 +74,42 @@ lane. Do **not** convert to `Decider`s.
 - **Command bus and handler registration are free.** `spring-boot-starter-postgresql` supplies
   `essentialsCommandBus` and `ReactiveHandlersBeanPostProcessor`; `@Service extends AnnotatedCommandHandler`
   is the whole wiring. No `@Transactional` on handlers — the bus owns the UnitOfWork.
+
+## Running more than one instance
+
+`./run-instance.sh 1` and `./run-instance.sh 2` — ports 8080/8081, instance ids `demo-1`/`demo-2`,
+trading load generator on the first only. This is the configuration the shard-owned engine exists
+for; one instance exercises none of its ownership, rebalancing or fencing.
+
+- **Two generators, two prefixes, and the script gates only one.** `--trading-demo.load.enabled`
+  is `TradingLoadGeneratorManager`; the queue load generator is `trading-demo.queue-load.enabled`
+  and runs on **every** instance by design — it is also the queue's consumer, so disabling it on
+  instance 2 would take that instance out of the exercise entirely. It is safe to run everywhere
+  because each instance produces under its own ordered key prefix; see `_demo_harness/CLAUDE.md`.
+
+- **A distinct `instance-id` is not optional, and getting it wrong is silent.** The engine defaults
+  it to the hostname — right on a container platform, wrong for two processes on one machine. They
+  would register as *one* instance, and since `acquireLease` matches when `owner` already equals the
+  asking instance *without bumping the fence*, both processes would own every unit and deliver the
+  same messages. Per-key ordering is gone at that point and nothing reports it.
+- **A second instance looks idle, and is not.** Measured with two: `trading-events` splits 34 units
+  each, nothing unowned. But the four projection queues are consumed by `demo-1` alone, because
+  `EventProcessor`/`ViewEventProcessor` take *exclusive* subscriptions behind fenced locks — one
+  instance runs each projection cluster-wide, by design.
+- **The status endpoint is cluster-wide; the statistics endpoint is per-instance.** Both instances
+  report `ordered 64/64` because all 64 units have an owner *somewhere*, not because each holds 64.
+  The console says so on each card now.
+- **Ctrl-C is graceful, and that is worth knowing rather than assuming.** SIGINT reaches the forked
+  application JVM through the foreground process group, so the shutdown hook runs: every lease
+  released and the instance deregistered. Measured — 408 units held, 0 owned and no membership rows
+  seconds later. Maven then prints `Failed to execute goal ... Process terminated`, which is the
+  plugin reporting a child killed by a signal, not the application failing.
+- **Instances may be stopped in any order, and that took a setting.** Spring Boot's Docker Compose
+  support defaults to `start-and-stop`, so whichever instance started PostgreSQL took it down with
+  it — every survivor then logged connection refusals forever, because each layer is built to ride
+  out a transient outage and none can tell this one is permanent. `application-compose.yml` sets
+  `spring.docker.compose.lifecycle-management: start-only`; the database outlives the demo and
+  `docker compose down` stops it.
 
 ## Admin UI
 

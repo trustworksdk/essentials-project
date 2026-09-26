@@ -20,7 +20,6 @@ import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.cd
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.cdc.converter.LogicalReplicationToPersistedEventConverter;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.cdc.converter.PgOutputToPersistedEventConverter;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.cdc.converter.WalGlobalOrdersExtractor;
-import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.processor.EventProcessorIT;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.serializer.json.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.transaction.EventStoreManagedUnitOfWorkFactory;
 import dk.trustworks.essentials.components.foundation.transaction.jdbi.HandleAwareUnitOfWork;
@@ -226,11 +225,16 @@ public class CdcModeAutoRequireIT {
         LogicalReplicationToPersistedEventConverter noConverter = (String s) -> List.of();
         WalGlobalOrdersExtractor noExtractor = (String s) -> List.of();
         var plugin = new Wal2JsonLogicalDecodingPlugin(props, noConverter, noExtractor, CdcProperties.WalParserMode.STRING);
-        return new WalReplicationTailer(
-                ds, jdbi, uow, slotName, inboxRepository, props,
-                PgSlotMode.CREATE_IF_MISSING, mode, CdcProperties.CdcDeliveryMode.INBOX, plugin,
-                Optional.empty(), Optional.empty(), availability,
-                Optional.empty(), Optional.empty());
+        return new WalReplicationTailer(CdcTailerDependencies.builder()
+                                                             .setReplicationDataSource(ds)
+                                                             .setJdbi(jdbi)
+                                                             .setUnitOfWorkFactory(uow)
+                                                             .setLogicalDecodingPlugin(plugin)
+                                                             .setAvailability(availability)
+                                                             .setMeterRegistry(Optional.empty())
+                                                             .build(),
+                                        new CdcTailerSettings(slotName, props, PgSlotMode.CREATE_IF_MISSING, mode, false),
+                                        CdcDelivery.inbox(inboxRepository));
     }
 
     private WalReplicationTailer pgOutputDirectTailer(String slotName,
@@ -239,16 +243,19 @@ public class CdcModeAutoRequireIT {
                                                       CdcMode mode) {
         var props = tailerProps();
         var pgConverter = new PgOutputToPersistedEventConverter(
-                EssentialsJSONEventSerializers.createForActiveJacksonFlavor(),
+                EssentialsJSONEventSerializers.create(),
                 table -> null,
                 aggregateType -> Optional.empty());
-        return new WalReplicationTailer(
-                adminReplicationDataSource, adminJdbi, new EventStoreManagedUnitOfWorkFactory(adminJdbi),
-                slotName, inboxRepository, props,
-                PgSlotMode.CREATE_IF_MISSING, mode, CdcProperties.CdcDeliveryMode.DIRECT,
-                pgOutputPlugin(publicationName, pgConverter),
-                Optional.of(events -> { }), Optional.empty(), availability,
-                Optional.empty(), Optional.empty());
+        return new WalReplicationTailer(CdcTailerDependencies.builder()
+                                                             .setReplicationDataSource(adminReplicationDataSource)
+                                                             .setJdbi(adminJdbi)
+                                                             .setUnitOfWorkFactory(new EventStoreManagedUnitOfWorkFactory(adminJdbi))
+                                                             .setLogicalDecodingPlugin(pgOutputPlugin(publicationName, pgConverter))
+                                                             .setAvailability(availability)
+                                                             .setMeterRegistry(Optional.empty())
+                                                             .build(),
+                                        new CdcTailerSettings(slotName, props, PgSlotMode.CREATE_IF_MISSING, mode, false),
+                                        CdcDelivery.direct(events -> { }));
     }
 
     private static PgOutputLogicalDecodingPlugin pgOutputPlugin(String publicationName,

@@ -147,15 +147,14 @@ public class WalReplicationTailer implements Lifecycle {
     private final        AtomicReference<String> lastMessagePreview              = new AtomicReference<>("");
     private final        AtomicBoolean           slotLockAcquired                = new AtomicBoolean(false);
     /**
-     * Counters for the slot-lock contention escalation. When another tailer holds the
-     * advisory lock, {@link #handleSlotLockContention()} increments {@link #slotLockFailureAttempts}
-     * and selects a log level — {@code INFO} on the first occurrence, {@code WARN} at each
-     * multiple of {@link #SLOT_LOCK_WARN_EVERY_N_ATTEMPTS}, {@code DEBUG} otherwise — so
-     * prolonged contention is visible at operator-level log verbosity without spamming INFO
-     * on every retry. Both counters reset after a successful acquisition.
+     * How long this instance has been standing by, for the one line it logs on entering that state.
+     * Both counters reset after a successful acquisition. See {@link #handleSlotLockContention()}
+     * for why standing by is not escalated.
      */
     private final        AtomicLong              slotLockFailureAttempts         = new AtomicLong(0);
     private final        AtomicLong              slotLockFirstFailureEpochMs     = new AtomicLong(0);
+    /** Elapsed standby time at which the next reminder is due. Reset with the two counters above. */
+    private final        AtomicLong              nextStandbyReminderMs           = new AtomicLong(STANDBY_REMINDER_INTERVAL.toMillis());
     /**
      * Set to {@code true} when {@link #stop()} is explicitly called by the framework's
      * lifecycle manager. Distinguishes "clean shutdown requested by owner" from "runPollLoop
@@ -166,11 +165,11 @@ public class WalReplicationTailer implements Lifecycle {
      */
     private final        AtomicBoolean           stopRequestedByOwner            = new AtomicBoolean(false);
     /**
-     * How often to escalate slot-lock-contention logs from INFO/DEBUG to WARN. The first
-     * failure always logs INFO; every Nth subsequent failure logs WARN with cumulative
-     * attempt-count + elapsed time; others log at DEBUG.
+     * How often a standing-by instance repeats its one INFO line. Deliberately long: the state is
+     * steady rather than developing, so the repeat exists to reassure someone reading a log tail
+     * hours later, not to draw attention.
      */
-    private static final long                    SLOT_LOCK_WARN_EVERY_N_ATTEMPTS = 20;
+    private static final Duration                STANDBY_REMINDER_INTERVAL       = Duration.ofMinutes(30);
 
     private Counter connectAttemptsCounter;
     private Counter connectSuccessCounter;
@@ -180,128 +179,6 @@ public class WalReplicationTailer implements Lifecycle {
     private Counter inboxDuplicatesCounter;
     private Counter inboxWriteFailuresCounter;
     private Counter handlerFailuresCounter;
-
-    /**
-     * Constructs a new WalReplicationTailer.
-     *
-     * @param replicationDataSource the replication {@link DataSource}
-     * @param jdbi                  the {@link Jdbi} instance for db interaction
-     * @param unitOfWorkFactory     the {@link HandleAwareUnitOfWork} factory
-     * @param slotName              the replication slot name
-     * @param inboxRepository       the CDC inbox repository
-     * @param tailerProperties      the tailer configuration properties
-     * @param pgSlotMode            the PostgreSQL slot lifecycle mode
-     * @param cdcMode               REQUIRE / AUTO semantics for startup failures
-     * @param deliveryMode          INBOX (default) or DIRECT
-     * @param logicalDecodingPlugin the plugin that owns payload decoding and gap extraction
-     * @param directOnEvents        consumer for decoded events in DIRECT mode (required when deliveryMode=DIRECT)
-     * @param walMessageFilter      optional raw-payload filter (applied only when plugin opts in via {@link LogicalDecodingPlugin#preFiltersRawPayloads()})
-     * @param availability          CDC availability state machine
-     * @param meterRegistry         optional metrics registry
-     * @param errorHandler          optional error handler
-     * @deprecated Use {@link #WalReplicationTailer(CdcTailerDependencies, CdcTailerSettings, CdcDelivery)}. Fifteen
-     *         positional arguments are now three cohesive values. This constructor delegates and behaves identically.
-     */
-    @Deprecated(forRemoval = true, since = "0.40.x")
-    @SuppressWarnings("OptionalUsedAsFieldOrParameterType")
-    public WalReplicationTailer(
-            DataSource replicationDataSource,
-            Jdbi jdbi,
-            HandleAwareUnitOfWorkFactory<? extends HandleAwareUnitOfWork> unitOfWorkFactory,
-            String slotName,
-            CdcInboxRepository inboxRepository,
-            WalReplicationTailerProperties tailerProperties,
-            PgSlotMode pgSlotMode,
-            CdcMode cdcMode,
-            CdcDeliveryMode deliveryMode,
-            LogicalDecodingPlugin logicalDecodingPlugin,
-            Optional<Consumer<List<PersistedEvent>>> directOnEvents,
-            Optional<WalMessageFilter> walMessageFilter,
-            CdcAvailability availability,
-            Optional<MeterRegistry> meterRegistry,
-            Optional<WalReplicationTailerErrorHandler> errorHandler) {
-        this(replicationDataSource, jdbi, unitOfWorkFactory, slotName, inboxRepository,
-             tailerProperties, pgSlotMode, cdcMode, deliveryMode, logicalDecodingPlugin,
-             directOnEvents, walMessageFilter, availability, meterRegistry, errorHandler,
-             Optional.empty(), false);
-    }
-
-    /**
-     * @param replicationDataSource         the replication-enabled DataSource
-     * @param jdbi                          the Jdbi instance
-     * @param unitOfWorkFactory             the unit-of-work factory
-     * @param slotName                      the replication slot name
-     * @param inboxRepository               the CDC inbox repository
-     * @param tailerProperties              poll/backoff timing settings
-     * @param pgSlotMode                    how the slot is created/managed
-     * @param cdcMode                       AUTO or REQUIRE
-     * @param deliveryMode                  INBOX or DIRECT
-     * @param logicalDecodingPlugin         the WAL decoding plugin
-     * @param directOnEvents                consumer for decoded events in DIRECT mode
-     * @param walMessageFilter              optional pre-decode payload filter
-     * @param availability                  the CDC availability tracker
-     * @param meterRegistry                 optional Micrometer registry
-     * @param errorHandler                  optional replication error handler
-     * @param eventStreamTableNamesSupplier optional supplier of event-stream table names
-     * @param recreateSlotOnStart           force-drop and recreate the slot on first connection
-     * @deprecated Use {@link #WalReplicationTailer(CdcTailerDependencies, CdcTailerSettings, CdcDelivery)}. Seventeen
-     *         positional arguments — five of them {@code Optional} — are now three cohesive values: the collaborators,
-     *         the configuration, and the delivery target. Note that {@code deliveryMode} + {@code inboxRepository} +
-     *         {@code directOnEvents} collapse into the single sealed {@link CdcDelivery}, which is what makes
-     *         "DIRECT with no consumer" impossible to express rather than merely rejected at runtime. This
-     *         constructor delegates and behaves identically.
-     */
-    @Deprecated(forRemoval = true, since = "0.40.x")
-    @SuppressWarnings("OptionalUsedAsFieldOrParameterType")
-    public WalReplicationTailer(
-            DataSource replicationDataSource,
-            Jdbi jdbi,
-            HandleAwareUnitOfWorkFactory<? extends HandleAwareUnitOfWork> unitOfWorkFactory,
-            String slotName,
-            CdcInboxRepository inboxRepository,
-            WalReplicationTailerProperties tailerProperties,
-            PgSlotMode pgSlotMode,
-            CdcMode cdcMode,
-            CdcDeliveryMode deliveryMode,
-            LogicalDecodingPlugin logicalDecodingPlugin,
-            Optional<Consumer<List<PersistedEvent>>> directOnEvents,
-            Optional<WalMessageFilter> walMessageFilter,
-            CdcAvailability availability,
-            Optional<MeterRegistry> meterRegistry,
-            Optional<WalReplicationTailerErrorHandler> errorHandler,
-            Optional<Supplier<Set<String>>> eventStreamTableNamesSupplier,
-            boolean recreateSlotOnStart) {
-        this(CdcTailerDependencies.builder()
-                                  .setReplicationDataSource(replicationDataSource)
-                                  .setJdbi(jdbi)
-                                  .setUnitOfWorkFactory(unitOfWorkFactory)
-                                  .setLogicalDecodingPlugin(logicalDecodingPlugin)
-                                  .setAvailability(availability)
-                                  .setMeterRegistry(requireNonNull(meterRegistry, "meterRegistry cannot be null"))
-                                  .setErrorHandler(requireNonNull(errorHandler, "errorHandler cannot be null"))
-                                  .setWalMessageFilter(requireNonNull(walMessageFilter, "walMessageFilter cannot be null"))
-                                  .setEventStreamTableNamesSupplier(requireNonNull(eventStreamTableNamesSupplier, "eventStreamTableNamesSupplier cannot be null"))
-                                  .build(),
-             new CdcTailerSettings(slotName, tailerProperties, pgSlotMode, cdcMode, recreateSlotOnStart),
-             toDelivery(deliveryMode, inboxRepository, directOnEvents));
-    }
-
-    /**
-     * Reconstructs the sealed {@link CdcDelivery} from the old enum-plus-collaborators triple, preserving the exact
-     * failure the deprecated constructors used to produce for "DIRECT with no consumer".
-     */
-    @SuppressWarnings("OptionalUsedAsFieldOrParameterType")
-    private static CdcDelivery toDelivery(CdcDeliveryMode deliveryMode,
-                                          CdcInboxRepository inboxRepository,
-                                          Optional<Consumer<List<PersistedEvent>>> directOnEvents) {
-        requireNonNull(deliveryMode, "deliveryMode cannot be null");
-        requireNonNull(directOnEvents, "directOnEvents cannot be null");
-        if (deliveryMode == CdcDeliveryMode.DIRECT) {
-            return CdcDelivery.direct(requireNonNull(directOnEvents.orElse(null),
-                                                     "directOnEvents cannot be null in DIRECT delivery mode"));
-        }
-        return CdcDelivery.inbox(inboxRepository);
-    }
 
     /**
      * The tailer's single construction path: what it runs with, what it runs under, and where what it reads goes.
@@ -539,7 +416,11 @@ public class WalReplicationTailer implements Lifecycle {
      * - Maintaining metrics and logs to provide visibility into the replication behavior.
      */
     private void streamOnce() throws SQLException, InterruptedException {
-        log.info("[{}] Opening replication connection...", slotName);
+        if (standingBy()) {
+            log.debug("[{}] Opening replication connection to try for the slot again...", slotName);
+        } else {
+            log.info("[{}] Opening replication connection...", slotName);
+        }
 
         Connection replConn = null;
         try {
@@ -558,9 +439,12 @@ public class WalReplicationTailer implements Lifecycle {
                 handleSlotLockContention();
                 return;
             }
-            // Acquired — reset contention counters so the next contention episode starts fresh.
-            slotLockFailureAttempts.set(0);
+            // Acquired — reset the standby counters so a later spell of standing by starts fresh.
+            if (slotLockFailureAttempts.getAndSet(0) > 0) {
+                log.info("[{}] Took over the CDC replication slot after standing by", slotName);
+            }
             slotLockFirstFailureEpochMs.set(0);
+            nextStandbyReminderMs.set(STANDBY_REMINDER_INTERVAL.toMillis());
 
             // Plugin-specific bootstrap (pgoutput publication auto-manage, etc.) happens in
             // initializePluginAvailability() at tailer start — before the unusableReason()
@@ -738,13 +622,36 @@ public class WalReplicationTailer implements Lifecycle {
         return false;
     }
 
+    /**
+     * A standing-by instance loops here for the life of the process, so these two are DEBUG once it
+     * is clear that is what is happening.
+     * <p>
+     * They describe a connection opened and closed again without streaming anything — informative for
+     * the instance that is trying to take the slot and coming back empty, and pure repetition for the
+     * one whose job is to wait. Left at INFO they were three lines every few seconds, forever, which
+     * buries the single line that says what is actually going on and trains everyone to ignore the
+     * tailer's output. {@link #handleSlotLockContention()} carries the reasoning.
+     */
+    private boolean standingBy() {
+        return slotLockFailureAttempts.get() > 0;
+    }
+
     private void logConnectAttempt(long attempt, long backoffMs) {
+        if (standingBy()) {
+            log.debug("[{}] CDC connect attempt #{} while standing by (backoffMs={})", slotName, attempt, backoffMs);
+            return;
+        }
         log.info("[{}] CDC connect attempt #{} (backoffMs={}, pollIntervalMs={})",
                  slotName, attempt, backoffMs, tailerProperties.getPollInterval().toMillis());
     }
 
     private void logNormalExit(long attempt, long startNs) {
         long durMs = (System.nanoTime() - startNs) / 1_000_000;
+        if (standingBy()) {
+            log.debug("[{}] CDC streamOnce exited normally while standing by (attempt #{}, durationMs={})",
+                      slotName, attempt, durMs);
+            return;
+        }
         log.info("[{}] CDC streamOnce exited normally (attempt #{}, durationMs={})",
                  slotName, attempt, durMs);
     }
@@ -1028,26 +935,36 @@ public class WalReplicationTailer implements Lifecycle {
     }
 
     /**
-     * Invoked from {@code streamOnce()} when {@code tryAcquireSlotLock} returns false. Handles
-     * the progressive logging + backoff sleep for slot-lock contention so prolonged
-     * stand-offs don't silently drown in INFO-level noise. Logging tiers:
+     * Invoked from {@code streamOnce()} when {@code tryAcquireSlotLock} returns false: another
+     * instance holds the slot, and this one is standing by to take it over.
      *
-     * <ul>
-     *   <li><b>INFO</b> — first occurrence of a contention episode. One-line "another tailer
-     *       holds the slot; will retry" so operators see the situation immediately.</li>
-     *   <li><b>WARN</b> — every {@link #SLOT_LOCK_WARN_EVERY_N_ATTEMPTS} subsequent
-     *       occurrences. Includes cumulative attempt count and elapsed time since the first
-     *       failure so an operator can tell "hours-long stand-off" from "momentary
-     *       contention during a failover".</li>
-     *   <li><b>DEBUG</b> — everything in between. Allows retrieval of full traffic at DEBUG
-     *       without cluttering INFO.</li>
-     * </ul>
+     * <h2>Standing by is the design, not a fault</h2>
+     * A replication slot is exclusive by construction — exactly one tailer may stream from it — so in
+     * a deployment of n instances, n-1 are permanently here. That is what makes CDC deliver each
+     * event once cluster-wide, and it is the same shape as an exclusive subscription behind a fenced
+     * lock. Nothing about it needs an operator.
      * <p>
-     * Sleep uses the exponential-with-jitter backoff instead of the fixed
-     * {@code pollInterval} so sustained contention doesn't hammer Postgres with 500ms-
-     * cadence advisory-lock attempts forever. Backoff state is local (not shared with the
-     * connection-failure retry path) — a lock-contention episode is semantically different
-     * from a connection failure and shouldn't share a backoff budget with it.
+     * This used to escalate to WARN every twentieth attempt, with cumulative failure counts and an
+     * instruction to "check for stuck replica pods or duplicate deployments of this consumer group".
+     * Every word of that reads as a defect report, and on the second instance of an ordinary
+     * two-instance deployment it repeated for as long as the application ran. The reasoning behind it
+     * was that an operator should be able to tell an hours-long stand-off from momentary contention
+     * during a failover — but duration does not separate those, because a healthy standby stands by
+     * for the life of the process. What it produced instead was a warning whose only true reading is
+     * "you are running more than one instance".
+     *
+     * <h2>What to watch instead</h2>
+     * The question worth alerting on is not "is this instance holding the slot" but "is anything
+     * delivering", and no instance can answer the first on its own. That belongs to
+     * {@code CdcEffectivenessMonitor}, which sees delivery rather than ownership, and to the
+     * {@code essentials.cdc.wal2json.slot_lock_acquired} gauge, which reports this instance's state
+     * without asserting it is wrong. So this logs the transition once, repeats it rarely enough to
+     * reassure someone reading a log tail hours later, and otherwise keeps to DEBUG.
+     * <p>
+     * Sleep uses the exponential-with-jitter backoff rather than the fixed {@code pollInterval}, so
+     * standing by does not attempt the advisory lock on a 500ms cadence forever. The backoff state is
+     * local, not shared with the connection-failure retry path: waiting for a peer is not a failure
+     * and should not consume a failure budget.
      */
     private void handleSlotLockContention() {
         long attempts = slotLockFailureAttempts.incrementAndGet();
@@ -1055,15 +972,17 @@ public class WalReplicationTailer implements Lifecycle {
         slotLockFirstFailureEpochMs.compareAndSet(0, nowMs);
         long elapsedMs = nowMs - slotLockFirstFailureEpochMs.get();
 
-        availability.inactive(slotName, "slot lock not acquired");
+        availability.inactive(slotName, "another instance holds the slot");
 
         if (attempts == 1) {
-            log.info("[{}] CDC slot lock not acquired; another tailer is active for this slot — will retry with backoff", slotName);
-        } else if (attempts % SLOT_LOCK_WARN_EVERY_N_ATTEMPTS == 0) {
-            log.warn("[{}] CDC slot lock still contended — {} consecutive failures over {} ms. " +
-                             "Another tailer instance continues to hold the slot. Check for stuck replica " +
-                             "pods or duplicate deployments of this consumer group.",
-                     slotName, attempts, elapsedMs);
+            log.info("[{}] Standing by for CDC: another instance holds the replication slot and is "
+                     + "streaming it. Expected whenever more than one instance runs — the slot is "
+                     + "exclusive, so exactly one tailer streams and the rest wait to take over",
+                     slotName);
+        } else if (elapsedMs >= nextStandbyReminderMs.get()) {
+            nextStandbyReminderMs.addAndGet(STANDBY_REMINDER_INTERVAL.toMillis());
+            log.info("[{}] Still standing by for CDC after {} — the slot's holder is still streaming it",
+                     slotName, Duration.ofMillis(elapsedMs));
         } else if (log.isDebugEnabled()) {
             log.debug("[{}] CDC slot lock not acquired (attempt #{}, elapsed {} ms)", slotName, attempts, elapsedMs);
         }

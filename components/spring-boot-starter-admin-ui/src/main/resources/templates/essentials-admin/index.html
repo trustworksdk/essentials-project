@@ -58,6 +58,10 @@
                 th:title="${canReadQueues} ? null : 'Requires essentials_queue_reader'">
             <span class="ic">≡</span> Durable queues
         </button>
+        <button class="nav-item" data-view="shardOwnedQueues" th:disabled="${!canReadQueues}"
+                th:title="${canReadQueues} ? null : 'Requires essentials_queue_reader'">
+            <span class="ic">⛁</span> Shard-owned queues
+        </button>
         <button class="nav-item" data-view="scheduler" th:disabled="${!canReadScheduler}"
                 th:title="${canReadScheduler} ? null : 'Requires essentials_scheduler_reader'">
             <span class="ic">◷</span> Scheduler
@@ -110,6 +114,7 @@
     <section class="section is-active" data-section="overview"></section>
     <section class="section" data-section="locks"></section>
     <section class="section" data-section="queues"></section>
+    <section class="section" data-section="shardOwnedQueues"></section>
     <section class="section" data-section="scheduler"></section>
     <section class="section" data-section="subscriptions"></section>
     <section class="section" data-section="cdc"></section>

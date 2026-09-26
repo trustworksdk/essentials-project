@@ -1,0 +1,185 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  ~ Copyright 2021-2026 the original author or authors.
+  ~
+  ~ Licensed under the Apache License, Version 2.0 (the "License");
+  ~ you may not use this file except in compliance with the License.
+  ~ You may obtain a copy of the License at
+  ~
+  ~      https://www.apache.org/licenses/LICENSE-2.0
+  ~
+  ~ Unless required by applicable law or agreed to in writing, software
+  ~ distributed under the License is distributed on an "AS IS" BASIS,
+  ~ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+  ~ See the License for the specific language governing permissions and
+  ~ limitations under the License.
+  -->
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>dk.trustworks.essentials</groupId>
+        <artifactId>parent</artifactId>
+        <version>${revision}</version>
+        <relativePath>../../pom.xml</relativePath>
+    </parent>
+
+    <groupId>dk.trustworks.essentials.components</groupId>
+    <artifactId>postgresql-queue-shard-owned-adapter</artifactId>
+    <name>postgresql-queue-shard-owned-adapter</name>
+    <packaging>jar</packaging>
+    <description>
+        Presents the shard-owned PostgreSQL queue engine as a DurableQueues, so that Inbox, Outbox and
+        DurableLocalCommandBus can run on it without changing their own code. Experimental and NOT
+        published, following the engine it adapts.
+    </description>
+
+    <properties>
+        <!--
+          Follows the engine: adapting an unpublished SPI cannot itself be published. It also has its
+          own reason - the adapter serves the DurableQueues surface only partially, and what it cannot
+          serve is listed in ShardOwnedDurableQueues' javadoc and this module's CLAUDE.md. Publishing
+          a partial implementation of a stable interface would be a worse promise than publishing a
+          moving one.
+        -->
+        <!--
+             PUBLISHED, and the objection this flag used to carry is worth restating rather than
+             deleting: a partial implementation of a stable interface is a worse promise than a
+             moving one. It is published anyway for a concrete reason — the shard-owned starter
+             depends on it to serve essentials.shard-owned-queue.durable-queues-enabled, and making
+             that dependency optional turns the flag into a silent no-op for anyone who sets it
+             without adding the jar.
+
+             The partiality is therefore made loud instead of avoided. Every unsupported operation
+             throws with its reason rather than returning an approximation, ShardOwnedDurableQueues'
+             javadoc tables them, and the property that selects this implementation defaults to off.
+             getQueuedMessages, the one an admin console actually needs, is now served.
+        -->
+    </properties>
+
+    <dependencies>
+        <dependency>
+            <groupId>dk.trustworks.essentials.components</groupId>
+            <artifactId>postgresql-queue-shard-owned</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>dk.trustworks.essentials.components</groupId>
+            <artifactId>foundation</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+        <!--
+          provided, per the project-wide rule that third-party integrations are not transitive:
+          a consumer declares the driver and the connection pool it actually uses.
+        -->
+        <dependency>
+            <groupId>org.postgresql</groupId>
+            <artifactId>postgresql</artifactId>
+            <version>${postgresql.version}</version>
+            <scope>provided</scope>
+        </dependency>
+        <!--
+          provided: only reached to pull the JDBC Connection out of a HandleAwareUnitOfWork, which is
+          what makes a transactional enqueue transactional. An application that has a UnitOfWork
+          already has JDBI; one that does not, does not need it.
+        -->
+        <dependency>
+            <groupId>org.jdbi</groupId>
+            <artifactId>jdbi3-core</artifactId>
+            <scope>provided</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.slf4j</groupId>
+            <artifactId>slf4j-api</artifactId>
+        </dependency>
+
+        <!--
+          Jackson 3, test scope. foundation declares it optional, so it is not transitive and has to be
+          named here. Its jackson-databind covers java.time and Optional itself - no datatype modules.
+        -->
+        <dependency>
+            <groupId>tools.jackson.core</groupId>
+            <artifactId>jackson-databind</artifactId>
+            <version>${jackson3-bom.version}</version>
+            <scope>test</scope>
+        </dependency>
+        <!-- immutable-jackson instantiates payloads through it; not transitive from there. -->
+        <dependency>
+            <groupId>org.objenesis</groupId>
+            <artifactId>objenesis</artifactId>
+            <version>${objenesis.version}</version>
+            <scope>test</scope>
+        </dependency>
+
+        <dependency>
+            <groupId>dk.trustworks.essentials</groupId>
+            <artifactId>types-jackson3</artifactId>
+            <version>${project.version}</version>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>dk.trustworks.essentials</groupId>
+            <artifactId>immutable-jackson3</artifactId>
+            <version>${project.version}</version>
+            <scope>test</scope>
+        </dependency>
+        <!--
+          The Inbox needs a FencedLockManager, and the point of the tests is to run the real one.
+          reactor-core comes with it: the lock manager publishes to the local event bus, and every
+          module declares reactor provided so it does not arrive on its own.
+        -->
+        <dependency>
+            <groupId>io.projectreactor</groupId>
+            <artifactId>reactor-core</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>dk.trustworks.essentials.components</groupId>
+            <artifactId>postgresql-distributed-fenced-lock</artifactId>
+            <version>${project.version}</version>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.jdbi</groupId>
+            <artifactId>jdbi3-postgres</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.junit.jupiter</groupId>
+            <artifactId>junit-jupiter</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.assertj</groupId>
+            <artifactId>assertj-core</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.awaitility</groupId>
+            <artifactId>awaitility</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.testcontainers</groupId>
+            <artifactId>testcontainers-junit-jupiter</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.testcontainers</groupId>
+            <artifactId>testcontainers-postgresql</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>com.zaxxer</groupId>
+            <artifactId>HikariCP</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>ch.qos.logback</groupId>
+            <artifactId>logback-classic</artifactId>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+</project>

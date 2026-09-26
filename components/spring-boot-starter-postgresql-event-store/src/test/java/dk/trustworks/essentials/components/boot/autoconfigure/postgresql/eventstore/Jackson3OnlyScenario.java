@@ -31,12 +31,11 @@ public final class Jackson3OnlyScenario {
     public static void introspectTheAutoConfiguration() {
         EssentialsComponentsConfiguration.class.getDeclaredMethods();
         EventStoreConfiguration.class.getDeclaredMethods();
-        EventStoreConfiguration.Jackson3OnlyJsonSerializerConfiguration.class.getDeclaredMethods();
     }
 
-    /** The event serializer bean the starter defines when Jackson 3 is the only Jackson, used for a value type. */
+    /** The event serializer bean the starter defines by default, used for a value type. */
     public static String serializeWithTheDefaultSerializer() {
-        var serializer = new EventStoreConfiguration.Jackson3OnlyJsonSerializerConfiguration().jsonSerializer();
+        var serializer = new EventStoreConfiguration().jsonSerializer();
         if (!(serializer instanceof Jackson3JSONEventSerializer)) {
             throw new IllegalStateException("Expected the Jackson 3 serializer, got " + serializer.getClass().getName());
         }

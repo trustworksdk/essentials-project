@@ -19,22 +19,19 @@ import dk.trustworks.essentials.components.foundation.test.classpath.Jackson3Onl
 import org.junit.jupiter.api.*;
 
 import static org.assertj.core.api.Assertions.*;
-import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 /**
- * An application whose only Jackson is Jackson 3 - the default flavor, and what Spring Boot 4 ships - must be able to
+ * An application whose only Jackson is Jackson 3 - what Spring Boot 4 ships - must be able to
  * use this starter. Up to 0.50.0 it could not: Jackson 2 is only an optional/provided dependency of the Essentials
  * modules, yet introspecting the auto-configuration, building the default {@code JSONSerializer} and creating the
  * {@code MultiTableChangeListener} each failed with {@code NoClassDefFoundError: com/fasterxml/jackson/databind/...}.
- * The scenario runs through {@link Jackson3OnlyClassLoader}, as the test classpath itself has both Jackson majors.
+ * The scenario runs through {@link Jackson3OnlyClassLoader}, as the test classpath can still carry Jackson 2 transitively.
  */
 class Jackson3OnlyClasspathTest {
     private static Jackson3OnlyClassLoader jackson3Only;
 
     @BeforeAll
     static void createClassLoaderWithoutJackson2() {
-        assumeTrue(Jackson3OnlyClassLoader.isJackson3FlavorOnTestClasspath(),
-                   "A Jackson 3-only application needs the Jackson 3 flavor; this build uses -Pjackson2");
         jackson3Only = Jackson3OnlyClassLoader.fromTestClasspath();
     }
 

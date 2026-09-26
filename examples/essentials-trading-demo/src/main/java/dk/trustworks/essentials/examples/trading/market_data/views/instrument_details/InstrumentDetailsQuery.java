@@ -40,7 +40,8 @@ public class InstrumentDetailsQuery {
 
     public List<InstrumentDetails> instruments() {
         return jdbcTemplate.query("""
-                                          SELECT instrument_id, symbol, display_name, suspended, suspension_reason
+                                          SELECT instrument_id, symbol, display_name, suspended, suspension_reason,
+                                                 risk_status, risk_detail
                                           FROM projection_instrument_details
                                           ORDER BY instrument_id
                                           """,
@@ -48,13 +49,16 @@ public class InstrumentDetailsQuery {
                                                                       rs.getString("symbol"),
                                                                       rs.getString("display_name"),
                                                                       rs.getBoolean("suspended"),
-                                                                      rs.getString("suspension_reason")));
+                                                                      rs.getString("suspension_reason"),
+                                                                      rs.getString("risk_status"),
+                                                                      rs.getString("risk_detail")));
     }
 
     public Optional<InstrumentDetails> findInstrumentDetails(InstrumentId instrumentId) {
         requireNonNull(instrumentId, "No instrumentId provided");
         return jdbcTemplate.query("""
-                                          SELECT instrument_id, symbol, display_name, suspended, suspension_reason
+                                          SELECT instrument_id, symbol, display_name, suspended, suspension_reason,
+                                                 risk_status, risk_detail
                                           FROM projection_instrument_details
                                           WHERE instrument_id = ?
                                           """,
@@ -63,7 +67,9 @@ public class InstrumentDetailsQuery {
                                                                             rs.getString("symbol"),
                                                                             rs.getString("display_name"),
                                                                             rs.getBoolean("suspended"),
-                                                                            rs.getString("suspension_reason")))
+                                                                            rs.getString("suspension_reason"),
+                                                                            rs.getString("risk_status"),
+                                                                            rs.getString("risk_detail")))
                                           : Optional.empty(),
                                   instrumentId.toString());
     }
@@ -72,11 +78,15 @@ public class InstrumentDetailsQuery {
                                                          String symbol,
                                                          String displayName,
                                                          boolean suspended,
-                                                         String suspensionReason) {
+                                                         String suspensionReason,
+                                                         String riskStatus,
+                                                         String riskDetail) {
         return new InstrumentDetails(InstrumentId.of(instrumentId),
                                      Symbol.of(symbol),
                                      displayName,
                                      suspended,
-                                     suspensionReason);
+                                     suspensionReason,
+                                     InstrumentRiskStatus.valueOf(riskStatus),
+                                     riskDetail);
     }
 }

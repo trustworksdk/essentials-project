@@ -272,12 +272,14 @@ public final class MongoFencedLockStorage implements FencedLockStorage<ClientSes
                                               MongoFencedLock.class,
                                               this.fencedLocksCollectionName);
             return Optional.ofNullable(lock_)
-                           .map(lock -> new DBFencedLock(lockManager,
-                                                         lockName,
-                                                         lock.getLastIssuedFencedToken(),
-                                                         lock.getLockedByLockManagerInstanceId(),
-                                                         lock.lockAcquiredTimestamp != null ? lock.lockAcquiredTimestamp.atOffset(ZoneOffset.UTC) : null,
-                                                         lock.lockLastConfirmedTimestamp != null ? lock.lockLastConfirmedTimestamp.atOffset(ZoneOffset.UTC) : null));
+                           .map(lock -> DBFencedLock.builder()
+                                                    .setFencedLockManager(lockManager)
+                                                    .setLockName(lockName)
+                                                    .setCurrentToken(lock.getLastIssuedFencedToken())
+                                                    .setLockedByBusInstanceId(lock.getLockedByLockManagerInstanceId())
+                                                    .setLockAcquiredTimestamp(lock.lockAcquiredTimestamp != null ? lock.lockAcquiredTimestamp.atOffset(ZoneOffset.UTC) : null)
+                                                    .setLockLastConfirmedTimestamp(lock.lockLastConfirmedTimestamp != null ? lock.lockLastConfirmedTimestamp.atOffset(ZoneOffset.UTC) : null)
+                                                    .build());
         } catch (Exception e) {
             if (e instanceof MongoTransactionException) {
                 log.trace("[{}] Transactional issue looking up Lock", lockName);
@@ -292,12 +294,11 @@ public final class MongoFencedLockStorage implements FencedLockStorage<ClientSes
     @Override
     public final DBFencedLock createUninitializedLock(DBFencedLockManager<ClientSessionAwareUnitOfWork, DBFencedLock> lockManager,
                                                       LockName lockName) {
-        return new DBFencedLock(lockManager,
-                                lockName,
-                                getUninitializedTokenValue(),
-                                null,
-                                null,
-                                null);
+        return DBFencedLock.builder()
+                           .setFencedLockManager(lockManager)
+                           .setLockName(lockName)
+                           .setCurrentToken(getUninitializedTokenValue())
+                           .build();
     }
 
     @Override
@@ -307,12 +308,14 @@ public final class MongoFencedLockStorage implements FencedLockStorage<ClientSes
                                                     String lockedByLockManagerInstanceId,
                                                     OffsetDateTime lockAcquiredTimestamp,
                                                     OffsetDateTime lockLastConfirmedTimestamp) {
-        return new DBFencedLock(requireNonNull(lockManager, "lockManager is null"),
-                                requireNonNull(name, "name is null"),
-                                currentToken,
-                                requireNonNull(lockedByLockManagerInstanceId, "lockedByLockManagerInstanceId is null"),
-                                requireNonNull(lockAcquiredTimestamp, "lockAcquiredTimestamp is null"),
-                                requireNonNull(lockLastConfirmedTimestamp, "lockLastConfirmedTimestamp is null"));
+        return DBFencedLock.builder()
+                           .setFencedLockManager(requireNonNull(lockManager, "lockManager is null"))
+                           .setLockName(requireNonNull(name, "name is null"))
+                           .setCurrentToken(currentToken)
+                           .setLockedByBusInstanceId(requireNonNull(lockedByLockManagerInstanceId, "lockedByLockManagerInstanceId is null"))
+                           .setLockAcquiredTimestamp(requireNonNull(lockAcquiredTimestamp, "lockAcquiredTimestamp is null"))
+                           .setLockLastConfirmedTimestamp(requireNonNull(lockLastConfirmedTimestamp, "lockLastConfirmedTimestamp is null"))
+                           .build();
     }
 
     @Override
@@ -384,17 +387,14 @@ public final class MongoFencedLockStorage implements FencedLockStorage<ClientSes
     }
 
     private static Function<MongoFencedLock, DBFencedLock> mapToDBFencedLock(DBFencedLockManager<ClientSessionAwareUnitOfWork, DBFencedLock> lockManager) {
-        return lock -> new DBFencedLock(
-                lockManager,
-                lock.getName(),
-                lock.getLastIssuedFencedToken(),
-                lock.getLockedByLockManagerInstanceId(),
-                lock.lockAcquiredTimestamp != null
-                        ? lock.lockAcquiredTimestamp.atOffset(ZoneOffset.UTC)
-                        : null,
-                lock.lockLastConfirmedTimestamp != null
-                        ? lock.lockLastConfirmedTimestamp.atOffset(ZoneOffset.UTC)
-                        : null);
+        return lock -> DBFencedLock.builder()
+                                   .setFencedLockManager(lockManager)
+                                   .setLockName(lock.getName())
+                                   .setCurrentToken(lock.getLastIssuedFencedToken())
+                                   .setLockedByBusInstanceId(lock.getLockedByLockManagerInstanceId())
+                                   .setLockAcquiredTimestamp(lock.lockAcquiredTimestamp != null ? lock.lockAcquiredTimestamp.atOffset(ZoneOffset.UTC) : null)
+                                   .setLockLastConfirmedTimestamp(lock.lockLastConfirmedTimestamp != null ? lock.lockLastConfirmedTimestamp.atOffset(ZoneOffset.UTC) : null)
+                                   .build();
     }
 
     private static class MongoFencedLock {

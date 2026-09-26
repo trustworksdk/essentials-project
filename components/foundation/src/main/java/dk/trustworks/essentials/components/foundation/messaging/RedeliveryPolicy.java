@@ -81,14 +81,7 @@ public final class RedeliveryPolicy {
         return new FixedBackoffBuilder();
     }
 
-    /**
-     * @deprecated Use {@link #builder()}, or one of the {@link #exponentialBackoff()} / {@link #linearBackoff()} /
-     *         {@link #fixedBackoff()} shortcuts. Seven positional arguments — four of them {@code Duration}s and two
-     *         {@code double}s — are unreadable at a call site and silently transposable. This constructor is unchanged
-     *         and remains the implementation the builders delegate to.
-     */
-    @Deprecated(forRemoval = true, since = "0.40.x")
-    public RedeliveryPolicy(Duration initialRedeliveryDelay,
+    RedeliveryPolicy(Duration initialRedeliveryDelay,
                             Duration followupRedeliveryDelay,
                             double followupRedeliveryDelayMultiplier,
                             Duration maximumFollowupRedeliveryDelayThreshold,
@@ -194,6 +187,18 @@ public final class RedeliveryPolicy {
      */
     public boolean isPermanentError(QueuedMessage queuedMessage, Throwable error) {
         return deliveryErrorHandler.isPermanentError(queuedMessage, error);
+    }
+
+    /**
+     * The three-valued form of {@link #isPermanentError(QueuedMessage, Throwable)}, which the
+     * {@link dk.trustworks.essentials.components.foundation.messaging.queue.DurableQueueConsumer} consults.
+     *
+     * @param queuedMessage The message being processed by the message handler
+     * @param error         the exception that occurred
+     * @return this policy's {@link MessageDeliveryErrorHandler}'s verdict on the failure
+     */
+    public MessageDeliveryVerdict verdict(QueuedMessage queuedMessage, Throwable error) {
+        return deliveryErrorHandler.verdict(queuedMessage, error);
     }
 
     public Duration getInitialRedeliveryDelay() {

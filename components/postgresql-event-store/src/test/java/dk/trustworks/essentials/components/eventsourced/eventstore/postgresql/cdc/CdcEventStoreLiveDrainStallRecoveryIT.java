@@ -18,7 +18,6 @@ package dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.c
 
 import dk.trustworks.essentials.components.distributed.fencedlock.postgresql.PostgresqlFencedLockManager;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.PostgresqlEventStore;
-import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.PersistedEvent;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.gap.PostgresqlEventStreamGapHandler;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.persistence.table_per_aggregate_type.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.processor.EventProcessorIT;
@@ -74,7 +73,7 @@ class CdcEventStoreLiveDrainStallRecoveryIT extends AbstractLogicalReplicationPo
 
     @BeforeEach
     void setup() {
-        var serializer  = EssentialsJSONEventSerializers.createForActiveJacksonFlavor();
+        var serializer  = EssentialsJSONEventSerializers.create();
         var eventMapper = new EventProcessorIT.TestPersistableEventMapper();
 
         var persistenceStrategy = new SeparateTablePerAggregateTypePersistenceStrategy(
@@ -98,7 +97,7 @@ class CdcEventStoreLiveDrainStallRecoveryIT extends AbstractLogicalReplicationPo
         cdcEventStore = new CdcEventStore<>(
                 eventStore,
                 unitOfWorkFactory,
-                new PostgresqlEventStreamGapHandler<>(eventStore, unitOfWorkFactory),
+                new PostgresqlEventStreamGapHandler<>(unitOfWorkFactory),
                 cdcBus,
                 cdcProperties,
                 availability,
@@ -114,14 +113,13 @@ class CdcEventStoreLiveDrainStallRecoveryIT extends AbstractLogicalReplicationPo
                 cdcEventStore,
                 50,
                 Duration.ofMillis(50),
-                new PostgresqlFencedLockManager(
-                        jdbi,
-                        unitOfWorkFactory,
-                        Optional.of("node-1"),
-                        Duration.ofSeconds(3),
-                        Duration.ofMillis(500),
-                        false
-                ),
+                PostgresqlFencedLockManager.builder()
+                                           .setJdbi(jdbi)
+                                           .setUnitOfWorkFactory(unitOfWorkFactory)
+                                           .setLockManagerInstanceId("node-1")
+                                           .setLockTimeOut(Duration.ofSeconds(3))
+                                           .setLockConfirmationInterval(Duration.ofMillis(500))
+                                           .build(),
                 Duration.ofSeconds(1),
                 durableSubscriptionRepository
         );

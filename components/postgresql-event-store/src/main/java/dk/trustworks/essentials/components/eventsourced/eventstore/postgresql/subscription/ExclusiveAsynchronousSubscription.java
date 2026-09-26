@@ -18,7 +18,6 @@ package dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.s
 
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.*;
-import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.observability.EventStoreSubscriptionObserver;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.types.GlobalEventOrder;
 import dk.trustworks.essentials.components.foundation.fencedlock.*;
 import dk.trustworks.essentials.components.foundation.types.*;
@@ -75,36 +74,6 @@ public class ExclusiveAsynchronousSubscription extends AbstractEventStoreSubscri
         this.eventHandler = requireNonNull(eventHandler, "No eventHandler provided");
         this.eventStoreSubscriptionManagerSettings = durableContext.eventStoreSubscriptionManagerSettings();
         this.lockName = LockName.of(msg("[{}-{}]", context.subscriberId(), context.aggregateType()));
-    }
-
-    /**
-     * @deprecated Use {@link #ExclusiveAsynchronousSubscription(EventStoreSubscriptionContext, DurableSubscriptionContext, FencedLockManager, FencedLockAwareSubscriber, PersistedEventHandler)}.
-     *         Thirteen positional arguments are now five. This constructor delegates and behaves identically.
-     */
-    @Deprecated(forRemoval = true, since = "0.40.x")
-    @SuppressWarnings("OptionalUsedAsFieldOrParameterType")
-    public ExclusiveAsynchronousSubscription(EventStore eventStore,
-                                             FencedLockManager fencedLockManager,
-                                             DurableSubscriptionRepository durableSubscriptionRepository,
-                                             AggregateType aggregateType,
-                                             SubscriberId subscriberId,
-                                             Function<AggregateType, GlobalEventOrder> onFirstSubscriptionSubscribeFromAndIncludingGlobalOrder,
-                                             Optional<Tenant> onlyIncludeEventsForTenant,
-                                             FencedLockAwareSubscriber fencedLockAwareSubscriber,
-                                             PersistedEventHandler eventHandler, 
-                                             EventStoreSubscriptionObserver eventStoreSubscriptionObserver, 
-                                             EventStoreSubscriptionManagerSettings eventStoreSubscriptionManagerSettings, 
-                                             Consumer<EventStoreSubscription> unsubscribeCallback,
-                                             Function<String, EventStorePollingOptimizer> eventStorePollingOptimizerFactory) {
-        super(eventStore, aggregateType, subscriberId, onlyIncludeEventsForTenant, eventStoreSubscriptionObserver, unsubscribeCallback, eventStorePollingOptimizerFactory);
-        this.fencedLockManager = requireNonNull(fencedLockManager, "No fencedLockManager provided");
-        this.durableSubscriptionRepository = requireNonNull(durableSubscriptionRepository, "No durableSubscriptionRepository provided");
-        this.onFirstSubscriptionSubscribeFromAndIncludingGlobalOrder = requireNonNull(onFirstSubscriptionSubscribeFromAndIncludingGlobalOrder,
-                "No onFirstSubscriptionSubscribeFromAndIncludingGlobalOrder provided");
-        this.fencedLockAwareSubscriber = requireNonNull(fencedLockAwareSubscriber, "No fencedLockAwareSubscriber provided");
-        this.eventHandler = requireNonNull(eventHandler, "No eventHandler provided");
-        this.eventStoreSubscriptionManagerSettings = requireNonNull(eventStoreSubscriptionManagerSettings, "No eventStoreSubscriptionManagerSettings provided");
-        this.lockName = LockName.of(msg("[{}-{}]", subscriberId, aggregateType));
     }
 
     @Override

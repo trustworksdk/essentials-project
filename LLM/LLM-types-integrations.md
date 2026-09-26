@@ -36,7 +36,7 @@
 
 | Framework | Module | Use Case | Registration | Auto-Apply |
 |-----------|--------|----------|--------------|------------|
-| **Jackson** | `types-jackson3` (J3, default) / `types-jackson` (J2) | JSON ser/deser | `ObjectMapper.registerModule()` | ✅ All **Java** types; Kotlin needs `jackson-module-kotlin` |
+| **Jackson** | `types-jackson3` (Jackson 3 only) | JSON ser/deser | `JsonMapper.builder().addModule()` / Spring `@Bean` | ✅ All **Java** types; Kotlin needs `jackson-module-kotlin` |
 | **JDBI** | `types-jdbi` | SQL persistence | `Jdbi.registerArgument/Mapper()` | Per-type |
 | **Avro** | `types-avro` | Binary ser/deser | Maven plugin config | Per-type |
 | **Spring Web** | `types-spring-web` | `@PathVariable`/`@RequestParam` | `@Import(EssentialsWebMvcConfigurer.class)` | ✅ All **Java** types; Kotlin partly — see [LLM-types-spring-web.md](LLM-types-spring-web.md#kotlin-semantic-types) |
@@ -53,45 +53,49 @@
 |------------|----------------|-------------|
 | PostgreSQL/MySQL | `types-jdbi` | `types-springdata-jpa` (experimental) |
 | MongoDB | `types-springdata-mongo` | N/A |
-| NoSQL (general) | `types-jackson` + custom | N/A |
+| NoSQL (general) | `types-jackson3` + custom | N/A |
 
 ### By Framework Stack
 
 | Stack | Required | Optional |
 |-------|----------|----------|
-| **Spring Boot + PostgreSQL** | `types-jdbi` | `types-jackson3`/`types-jackson`, `types-spring-web` |
-| **Spring Boot + MongoDB** | `types-springdata-mongo` | `types-jackson3`/`types-jackson`, `types-spring-web` |
-| **Spring WebMVC/WebFlux** | `types-spring-web` | `types-jackson3`/`types-jackson` (for `@RequestBody`, on the **web** mapper) |
-| **Event Sourcing** | `types-avro` OR `types-jackson` | Depends on format |
-| **Microservices** | `types-jackson` | Framework-specific modules |
+| **Spring Boot + PostgreSQL** | `types-jdbi` | `types-jackson3`, `types-spring-web` |
+| **Spring Boot + MongoDB** | `types-springdata-mongo` | `types-jackson3`, `types-spring-web` |
+| **Spring WebMVC/WebFlux** | `types-spring-web` | `types-jackson3` (for `@RequestBody`, on the **web** mapper) |
+| **Event Sourcing** | `types-avro` OR `types-jackson3` | Depends on format |
+| **Microservices** | `types-jackson3` | Framework-specific modules |
 
 ---
 
 ## Jackson JSON
 
-**Module:** `types-jackson3` (Jackson 3 — the default) / `types-jackson` (Jackson 2). Same FQCN, pick one
+**Module:** `types-jackson3` (Jackson 3 / `tools.jackson`; the Jackson 2 `types-jackson` was removed in 0.60 — same FQCNs, swap the artifact id)
 **Package:** `dk.trustworks.essentials.jackson.types`
 **Detailed Docs:** [LLM-types-jackson.md](LLM-types-jackson.md)
 
 ### Core Class
 
 ```java
-public class EssentialTypesJacksonModule extends SimpleModule {
+public final class EssentialTypesJacksonModule extends SimpleModule {   // tools.jackson.databind.module
     public EssentialTypesJacksonModule();
-    public static ObjectMapper createObjectMapper(Module... additionalModules);
+    public static ObjectMapper createObjectMapper(JacksonModule... additionalModules);
 }
 ```
 
 ### Setup
 
 ```java
-// Option 1: Manual
-ObjectMapper mapper = new ObjectMapper();
-mapper.registerModule(new EssentialTypesJacksonModule());
+// Option 1: Manual (Jackson 3 mappers are immutable - use the builder)
+ObjectMapper mapper = JsonMapper.builder().addModule(new EssentialTypesJacksonModule()).build();
 
 // Option 2: Factory (includes module + opinionated defaults)
 ObjectMapper mapper = EssentialTypesJacksonModule.createObjectMapper();
+
+// Option 3: Spring Boot 4 - expose as bean; Boot registers it on its web JsonMapper
+@Bean EssentialTypesJacksonModule essentialTypesJacksonModule() { return new EssentialTypesJacksonModule(); }
 ```
+
+For persistence use `EssentialsObjectMappers.createJSONSerializer()` (foundation) instead — it carries the frozen wire-format configuration.
 
 ### Serialization Format
 
@@ -106,11 +110,10 @@ Base package: `dk.trustworks.essentials.types`
 
 ### Type Requirements
 
-**CharSequenceType (Jackson 2.18+):**
+**CharSequenceType:**
 ```java
 public class OrderId extends CharSequenceType<OrderId> {
-    public OrderId(CharSequence value) { super(value); }
-    public OrderId(String value) { super(value); }  // Required!
+    public OrderId(CharSequence value) { super(value); }  // pinned as delegating creator by the module
 }
 ```
 
@@ -124,17 +127,11 @@ public class CreatedAt extends InstantType<CreatedAt> {
 
 **Map Keys:**
 ```java
-// Custom KeyDeserializer required
-public class ProductIdKeyDeserializer extends KeyDeserializer {
-    @Override
-    public Object deserializeKey(String key, DeserializationContext ctxt) {
-        return ProductId.of(key);
-    }
-}
-
-@JsonDeserialize(keyUsing = ProductIdKeyDeserializer.class)
+// No annotation needed - SingleValueTypeKeyDeserializers (registered by the module) handles value-type keys
 Map<ProductId, Quantity> items;
 ```
+
+⚠️ A Jackson 2 `@JsonDeserialize(keyUsing = …)` (`com.fasterxml.jackson.databind.annotation`) left over from 0.50 is silently ignored by Jackson 3.
 
 ---
 
@@ -519,7 +516,7 @@ Base package: `dk.trustworks.essentials.types.springdata.jpa.converters`
     </dependency>
     <dependency>
         <groupId>dk.trustworks.essentials</groupId>
-        <artifactId>types-jackson</artifactId>
+        <artifactId>types-jackson3</artifactId>
     </dependency>
     <dependency>
         <groupId>dk.trustworks.essentials</groupId>
@@ -541,7 +538,7 @@ Base package: `dk.trustworks.essentials.types.springdata.jpa.converters`
     </dependency>
     <dependency>
         <groupId>dk.trustworks.essentials</groupId>
-        <artifactId>types-jackson</artifactId>
+        <artifactId>types-jackson3</artifactId>
     </dependency>
     <dependency>
         <groupId>dk.trustworks.essentials</groupId>
@@ -597,9 +594,9 @@ public class OrderController {
 ## Gotchas
 
 ### Jackson
-- ⚠️ `CharSequenceType` needs **both** `CharSequence` and `String` constructors (Jackson 2.18+)
+- ⚠️ Jackson 3 only (`types-jackson3`); `com.fasterxml.jackson.databind` imports become `tools.jackson.databind`
 - ⚠️ `JSR310SingleValueType` needs `@JsonCreator` on constructor
-- ⚠️ Map key deserialization requires `@JsonDeserialize(keyUsing = ...)`
+- ⚠️ Map keys typed by value types need no annotation; J2 `@JsonDeserialize(keyUsing = ...)` is silently ignored
 - ⚠️ `Money` serializes as object `{"amount":"...","currency":"..."}`, not single value
 
 ### JDBI
@@ -615,7 +612,7 @@ public class OrderController {
 - ⚠️ JSR-310 converters use UTC; nanoseconds truncated
 
 ### Spring Web
-- ⚠️ Only handles `@PathVariable`/`@RequestParam`; JSON bodies require `types-jackson`
+- ⚠️ Only handles `@PathVariable`/`@RequestParam`; JSON bodies require `types-jackson3` on the web mapper
 - ⚠️ `ZonedDateTimeType` must be URL-encoded (converter auto-decodes)
 
 ### Spring Data MongoDB
@@ -644,7 +641,7 @@ public class OrderController {
 - [LLM-types-springdata-jpa.md](LLM-types-springdata-jpa.md) - JPA integration
 
 ### README Files
-- [types-jackson README](../types-jackson/README.md)
+- [types-jackson3 README](../types-jackson3/README.md)
 - [types-jdbi README](../types-jdbi/README.md)
 - [types-avro README](../types-avro/README.md)
 - [types-spring-web README](../types-spring-web/README.md)

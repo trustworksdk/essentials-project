@@ -75,28 +75,6 @@ public final class LoadEventsByGlobalOrder {
     }
 
     /**
-     * @param aggregateType                       the aggregate type that the underlying events are associated with
-     * @param globalEventOrderRange               the range of {@link GlobalEventOrder}'s to include in the stream
-     * @param includeAdditionalGlobalOrders       a list of additional global orders to include. May be null or empty
-     * @param onlyIncludeEventIfItBelongsToTenant if {@link Optional#isPresent()} then only include events that belong to the specified {@link Tenant}
-     * @deprecated Use {@link #LoadEventsByGlobalOrder(AggregateType, LongRange, List, Tenant)}, passing {@code null}
-     *         for "all tenants", or {@link #builder()}. {@link #getOnlyIncludeEventIfItBelongsToTenant()} still
-     *         returns an {@code Optional}, so reading code is unaffected. This constructor delegates and behaves
-     *         identically.
-     */
-    @Deprecated(forRemoval = true, since = "0.40.x")
-    @SuppressWarnings("OptionalUsedAsFieldOrParameterType")
-    public LoadEventsByGlobalOrder(AggregateType aggregateType,
-                                   LongRange globalEventOrderRange,
-                                   List<GlobalEventOrder> includeAdditionalGlobalOrders,
-                                   Optional<Tenant> onlyIncludeEventIfItBelongsToTenant) {
-        this(aggregateType,
-             globalEventOrderRange,
-             includeAdditionalGlobalOrders,
-             requireNonNull(onlyIncludeEventIfItBelongsToTenant, "No onlyIncludeEventIfItBelongsToTenant option provided").orElse(null));
-    }
-
-    /**
      * @return the aggregate type that the underlying events are associated with
      */
     public AggregateType getAggregateType() {

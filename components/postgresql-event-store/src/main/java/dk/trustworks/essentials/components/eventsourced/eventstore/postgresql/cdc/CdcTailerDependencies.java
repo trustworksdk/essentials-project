@@ -102,7 +102,7 @@ public final class CdcTailerDependencies {
         return meterRegistry;
     }
 
-    /** @return the replication error handler. Never {@code null} — defaults to {@link DefaultWalReplicationTailerErrorHandler} */
+    /** @return the replication error handler. Never {@code null} — defaults to {@link dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.cdc.handler.DefaultWalReplicationTailerErrorHandler} */
     public WalReplicationTailerErrorHandler errorHandler() {
         return errorHandler;
     }
