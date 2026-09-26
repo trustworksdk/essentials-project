@@ -41,7 +41,6 @@ essentials:
   # that would then be part of the contract. The ordered lane takes no count: it routes on its own
   # fixed space, recorded per queue when the queue is created.
   shard-owned-queue:
-    enabled: true
     initialize-schema: true
     pump-threads: 2
     # No `queues:` list. Nothing here needs one: the DurableQueues adapter registers the queues the

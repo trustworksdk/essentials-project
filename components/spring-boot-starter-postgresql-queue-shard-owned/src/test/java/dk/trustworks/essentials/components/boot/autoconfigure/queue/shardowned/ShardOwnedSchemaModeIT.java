@@ -58,6 +58,7 @@ class ShardOwnedSchemaModeIT {
                 .withConfiguration(AutoConfigurations.of(DataSourceAutoConfiguration.class,
                                                          ShardOwnedQueueAutoConfiguration.class))
                 .withPropertyValues("spring.datasource.url=" + postgres.getJdbcUrl(),
+                                    "essentials.shard-owned-queue.enabled=true",
                                     "spring.datasource.username=" + postgres.getUsername(),
                                     "spring.datasource.password=" + postgres.getPassword());
     }

@@ -71,3 +71,9 @@ trading-demo:
     price-jitter:
       min: 3
       max: 9
+
+essentials:
+  # The shard-owned queue engine is off by default in its starter; the demo always runs it, since
+  # QueueLoadGenerator drives it and the adapter can back DurableQueues. Tuning lives in application-compose.yml.
+  shard-owned-queue:
+    enabled: true

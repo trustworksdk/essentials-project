@@ -75,7 +75,7 @@ import org.springframework.web.bind.annotation.RestController;
                 "dk.trustworks.essentials.components.boot.autoconfigure.admin.api.EssentialsAdminApiAutoConfiguration")
 @ConditionalOnClass({ShardOwnedQueue.class, RestController.class, AdminApiPrincipalResolver.class})
 @ConditionalOnProperty(prefix = "essentials.shard-owned-queue", name = "enabled",
-                       havingValue = "true", matchIfMissing = true)
+                       havingValue = "true")
 public class ShardOwnedQueuesAdminApiAutoConfiguration {
     private static final Logger log = LoggerFactory.getLogger(ShardOwnedQueuesAdminApiAutoConfiguration.class);
 

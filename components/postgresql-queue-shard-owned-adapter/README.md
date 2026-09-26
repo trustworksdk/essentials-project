@@ -84,16 +84,18 @@ which has it as a hard dependency and selects it behind a flag.
 
 ## Getting Started
 
-### Spring Boot — one property
+### Spring Boot — two properties
 
 ```yaml
 essentials:
   shard-owned-queue:
+    enabled: true                    # default false - the engine itself is opt-in
     durable-queues-enabled: true     # default false
     auto-register-shard-count: 4     # 0 refuses unknown queue names instead of registering them
 ```
 
-That is the whole change. The starter contributes a `ShardOwnedDurableQueues` bean which **displaces**
+That is the whole change. `durable-queues-enabled` has no effect without `enabled`: the engine's
+master switch governs the adapter too. The starter contributes a `ShardOwnedDurableQueues` bean which **displaces**
 the `PostgresqlDurableQueues` bean — it wins because `spring-boot-starter-postgresql` declares that
 bean `@ConditionalOnMissingBean`, and this starter orders itself
 `@AutoConfiguration(beforeName = "…EssentialsComponentsConfiguration")`.

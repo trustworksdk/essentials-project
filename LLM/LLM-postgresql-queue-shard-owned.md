@@ -5,7 +5,8 @@
 ## Quick Facts
 - **Package**: `dk.trustworks.essentials.components.queue.shardowned`
 - **Implementation**: `PostgresqlMessageQueue` implements `MessageQueue` — a **new SPI**, not `DurableQueues`. One `consume()` covers both lanes; it builds a `ShardOwnedQueue` per lane underneath, since one of those serves one lane
-- **As `DurableQueues`**: `postgresql-queue-shard-owned-adapter`, selected by `essentials.shard-owned-queue.durable-queues-enabled` (default false)
+- **Spring Boot**: the starter is **off by default** — nothing is configured until `essentials.shard-owned-queue.enabled=true` (default false), unlike the other Essentials starters
+- **As `DurableQueues`**: `postgresql-queue-shard-owned-adapter`, selected by `essentials.shard-owned-queue.durable-queues-enabled` (default false; needs `enabled=true` as well)
 - **Storage**: three lanes (`shard_queue_unordered`, `shard_queue_ordered`, `shard_queue_dead_letter`) plus `shard_queue_lease`, `shard_queue_instance` and `shard_queue_registry`; `bytea` payloads
 - **Locking**: none on the delivery path — a shard lease establishes ownership, so there is no claim write
 - **Notifications**: LISTEN/NOTIFY on one global channel, payload `queueId:lane:shard`

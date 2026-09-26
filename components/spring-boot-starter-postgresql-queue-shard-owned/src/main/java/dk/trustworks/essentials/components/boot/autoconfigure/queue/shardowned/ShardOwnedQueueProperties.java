@@ -33,12 +33,14 @@ import java.util.*;
 public class ShardOwnedQueueProperties {
 
     /**
-     * The engine's master switch. <b>Default {@code true}</b>: a starter on the classpath is taken as
-     * a request for the thing it configures, which is how the rest of Essentials behaves.
+     * The engine's master switch. <b>Default {@code false}</b>: unlike the rest of Essentials, a
+     * starter on the classpath is not taken as a request for the engine. 0.60 is the engine's first
+     * release, and running it holds {@code pumpThreads + 1} pool connections for the life of the
+     * process and creates its own tables, so an application has to ask for it explicitly.
      * <p>
-     * Turning it off leaves nothing running — no schema initialisation, no {@code ShardRuntime}, no
-     * pumps, no listener connection, and no administrative endpoints. Use it to keep the starter on
-     * the classpath while a deployment does not want the engine, rather than removing the dependency.
+     * While it is off nothing runs — no schema initialisation, no {@code ShardRuntime}, no pumps, no
+     * listener connection, and no administrative endpoints — and
+     * {@code durable-queues-enabled} has no effect.
      * <p>
      * Read by {@code @ConditionalOnProperty} on the auto-configurations rather than from this field,
      * because a condition has to be evaluated before any bean exists to read. The field is here so
@@ -46,7 +48,7 @@ public class ShardOwnedQueueProperties {
      * it, the one switch that governs the whole module was the only property an IDE could not
      * complete.
      */
-    private boolean enabled = true;
+    private boolean enabled = false;
 
     /**
      * Create the engine's tables, sequences and indexes at start-up if they are absent.

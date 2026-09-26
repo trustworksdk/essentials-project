@@ -74,6 +74,7 @@ class ShardOwnedQueueAutoConfigurationIT {
                 .withConfiguration(AutoConfigurations.of(DataSourceAutoConfiguration.class,
                                                          ShardOwnedQueueAutoConfiguration.class))
                 .withPropertyValues("spring.datasource.url=" + postgres.getJdbcUrl(),
+                                    "essentials.shard-owned-queue.enabled=true",
                                     "spring.datasource.username=" + postgres.getUsername(),
                                     "spring.datasource.password=" + postgres.getPassword());
     }
@@ -260,6 +261,37 @@ class ShardOwnedQueueAutoConfigurationIT {
     void durable_queues_stay_off_unless_asked() {
         runner().withUserConfiguration(DurableQueuesConfiguration.class)
                 .run(context -> assertThat(context).doesNotHaveBean(DurableQueues.class));
+    }
+
+    /** The engine is new in 0.60, so the starter on the classpath alone must not start it. */
+    @Test
+    void the_engine_stays_off_unless_enabled() {
+        runnerWithoutEnabled().run(context -> {
+            assertThat(context).hasNotFailed();
+            assertThat(context).doesNotHaveBean(ShardRuntime.class);
+            assertThat(context).doesNotHaveBean(ShardOwnedQueueFactory.class);
+        });
+    }
+
+    /** durable-queues-enabled is subordinate to the master switch, not a way around it. */
+    @Test
+    void durable_queues_enabled_alone_does_not_start_the_engine() {
+        runnerWithoutEnabled().withUserConfiguration(DurableQueuesConfiguration.class)
+                              .withPropertyValues("essentials.shard-owned-queue.durable-queues-enabled=true")
+                              .run(context -> {
+                                  assertThat(context).hasNotFailed();
+                                  assertThat(context).doesNotHaveBean(ShardRuntime.class);
+                                  assertThat(context).doesNotHaveBean(DurableQueues.class);
+                              });
+    }
+
+    private ApplicationContextRunner runnerWithoutEnabled() {
+        return new ApplicationContextRunner()
+                .withConfiguration(AutoConfigurations.of(DataSourceAutoConfiguration.class,
+                                                         ShardOwnedQueueAutoConfiguration.class))
+                .withPropertyValues("spring.datasource.url=" + postgres.getJdbcUrl(),
+                                    "spring.datasource.username=" + postgres.getUsername(),
+                                    "spring.datasource.password=" + postgres.getPassword());
     }
 
     @org.springframework.context.annotation.Configuration

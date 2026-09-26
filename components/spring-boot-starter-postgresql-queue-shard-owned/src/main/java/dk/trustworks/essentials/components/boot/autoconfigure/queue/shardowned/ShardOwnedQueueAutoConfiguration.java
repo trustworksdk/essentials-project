@@ -49,6 +49,9 @@ import dk.trustworks.essentials.shared.network.Network;
 /**
  * Auto-configuration for the shard-owned PostgreSQL queue engine.
  * <p>
+ * <b>The engine itself is opt-in, and off by default.</b> Nothing here applies until
+ * {@code essentials.shard-owned-queue.enabled=true}; see {@link ShardOwnedQueueProperties#isEnabled()}.
+ * <p>
  * <b>{@code DurableQueues} is opt-in, and off by default.</b> The engine's own contract is
  * {@code MessageQueue}; it is not an implementation of {@code DurableQueues}, because the design
  * rejects roughly two fifths of that interface as artefacts of a claim-based queue. An adapter over
@@ -72,7 +75,7 @@ import dk.trustworks.essentials.shared.network.Network;
 @ConditionalOnClass(ShardOwnedQueue.class)
 @ConditionalOnBean(DataSource.class)
 @ConditionalOnProperty(prefix = "essentials.shard-owned-queue", name = "enabled",
-                       havingValue = "true", matchIfMissing = true)
+                       havingValue = "true")
 @EnableConfigurationProperties(ShardOwnedQueueProperties.class)
 public class ShardOwnedQueueAutoConfiguration {
     private static final Logger log = LoggerFactory.getLogger(ShardOwnedQueueAutoConfiguration.class);

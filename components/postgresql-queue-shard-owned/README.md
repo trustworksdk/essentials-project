@@ -864,8 +864,17 @@ deliberately want a separate set of threads and connections.
 ## Spring Boot
 
 Use [spring-boot-starter-postgresql-queue-shard-owned](../spring-boot-starter-postgresql-queue-shard-owned).
-It wires `ShardOwnerSettings`, one `ShardRuntime`, non-destructive schema initialization, and a
-`ShardOwnedQueueFactory` that caches a `MessageQueue` per name:
+**It is off by default**, unlike the other Essentials starters: having it on the classpath configures
+nothing until you set
+
+```yaml
+essentials:
+  shard-owned-queue:
+    enabled: true     # default false
+```
+
+Once enabled, it wires `ShardOwnerSettings`, one `ShardRuntime`, non-destructive schema initialization,
+and a `ShardOwnedQueueFactory` that caches a `MessageQueue` per name:
 
 ```java
 @Bean
@@ -875,7 +884,7 @@ ApplicationRunner registerQueues(ShardOwnedQueueFactory queues) {
 ```
 
 Settings come from `essentials.shard-owned-queue.*` — the `ShardOwnerSettings` table above, plus
-`enabled`, `initialize-schema`, `instance-id`, and `durable-queues-enabled` (see the
+`enabled` (default `false`), `initialize-schema`, `instance-id`, and `durable-queues-enabled` (see the
 [adapter](../postgresql-queue-shard-owned-adapter/README.md)).
 
 There *is* an `essentials.shard-owned-queue.queues` map, and it is **not** the normal way to declare a
