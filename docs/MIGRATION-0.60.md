@@ -106,7 +106,10 @@ because there is no longer a choice to express. If you were setting it to `true`
 unchanged. If you were setting it to `false`, you now get the ordered/unordered pair; it was measured 5.4×
 faster on the unified query's own workload (`docs/RELEASE-NOTES-0.50.0.md` §1.1.3).
 
-The two constructors that took the flag change arity, so a positional call site will not compile:
+The two wide constructors that took the flag are no longer public API at all: they were
+`@Deprecated(forRemoval = true)` since 0.40.x and are removed in this release (see
+[below](#the-040x-forremoval-constructors-are-gone-from-the-queue-modules)). A positional call site does not
+compile. Switch it to the builder, which names every argument:
 
 ```java
 // Before
@@ -116,12 +119,21 @@ new PostgresqlDurableQueues(unitOfWorkFactory, jsonSerializer, tableName, listen
                             useOrderedUnorderedQuery);
 
 // After
-new PostgresqlDurableQueues(unitOfWorkFactory, jsonSerializer, tableName, listener,
-                            optimizerFactory, transactionalMode, messageHandlingTimeout,
-                            useCentralizedMessageFetcher, pollingInterval, centralizedOptimizerFactory);
+PostgresqlDurableQueues.builder()
+                       .setUnitOfWorkFactory(unitOfWorkFactory)
+                       .setJsonSerializer(jsonSerializer)
+                       .setSharedQueueTableName(tableName)
+                       .setMultiTableChangeListener(listener)
+                       .setQueuePollingOptimizerFactory(optimizerFactory)
+                       .setMessageHandlingTimeout(messageHandlingTimeout)
+                       .setUseCentralizedMessageFetcher(useCentralizedMessageFetcher)
+                       .setCentralizedMessageFetcherPollingInterval(pollingInterval)
+                       .setCentralizedQueuePollingOptimizerFactory(centralizedOptimizerFactory)
+                       .build();
 ```
 
-Both constructors remain `@Deprecated(forRemoval = true)`; prefer `PostgresqlDurableQueues.builder()`.
+The `transactionalMode` argument has no counterpart either — see
+[`TransactionalMode` is retired](#transactionalmode-is-retired).
 
 ### Two indexes are dropped on startup
 
