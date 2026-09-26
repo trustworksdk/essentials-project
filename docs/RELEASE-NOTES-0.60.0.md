@@ -359,9 +359,18 @@ turns red, and the two lanes are reported separately.
   **intra-service only**.
 - **PostgreSQL 13+** for the ordered lane (9.5+ for the unordered lane alone).
 - **`pg_stat_activity.backend_xid` must be readable** by the application user. The ordered lane's cursor
-  depends on it being complete, and a partial answer loses messages silently.
-- **`pumpThreads + 1` pool connections are held permanently** (3 by default). A smaller pool does not fail
-  cleanly: some pumps block forever.
+  depends on it being complete, and a partial answer would lose messages silently — so the ordered lane
+  probes for it at start-up and refuses to start where it is not visible, naming `pg_read_all_stats` as
+  the fix. An ordinary role reads it on stock PostgreSQL; the probe exists for managed platforms that
+  might redact it.
+- **`pumpThreads + 1` pool connections are held permanently** (3 by default), from the same pool as
+  lease renewal, enqueue and — under the Spring starter — the rest of the application. Size the pool
+  well above that. Under the Spring Boot starter the runtime checks at start-up, for any pool Spring
+  Boot can read (HikariCP, Commons DBCP2, Tomcat JDBC, Oracle UCP): a pool no larger than the held
+  connections fails the context, and one more than half consumed by them is logged as a warning. A
+  runtime constructed by hand is checked when given a `ConnectionPoolMetadata`; otherwise the
+  requirement is only logged. A pump that later cannot get a connection from a full pool logs
+  `connection pool exhausted` rather than a lost connection.
 - **A delayed ordered message is overtaken** by a later, undelayed message for the same key. `PostgresqlDurableQueues`
   blocks the key instead, so `queueMessage(queue, orderedMessage, deliveryDelay)` behaves differently on the two
   engines. For any one key, send either only delayed messages or only undelayed ones.

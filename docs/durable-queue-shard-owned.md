@@ -1206,8 +1206,24 @@ existed, defaulted to 512, and was removed because nothing measured or derived t
 could not bind before a default pool of ten was long exhausted. Eight consumers at the default of 8
 is 64 handlers, each potentially wanting a connection.
 
-A pool smaller than the floor does not fail cleanly: the engine starts, takes what it can, and the
-remaining pumps block acquiring a connection that will never be free.
+A pool at or below the floor cannot work: the pumps and the listener take everything, and lease
+renewal, which borrows per operation, has nothing left. Nothing about that fails on its own — a pump
+that cannot get a connection hits the pool's timeout, logs `lost its connection; reconnecting` and
+retries forever, which reads as a database blip. So `ShardRuntime.start()` checks first
+(`PoolBudget`), before taking a connection. `DataSource` has no standard way to report a pool's
+size, so the engine asks a `ConnectionPoolMetadata` and knows no pool itself; the Spring Boot starter
+adapts Spring Boot's `DataSourcePoolMetadataProvider`s, which cover HikariCP, Commons DBCP2, Tomcat
+JDBC and Oracle UCP and see through proxies. It refuses a pool whose maximum does not exceed
+`pumpThreads + 1`, and warns when the held connections take more than half of it, since the rest is
+shared with everything else on that `DataSource`. Held connections are summed across every running
+runtime on the same `DataSource` for that warning — only ever a warning, so the bookkeeping behind
+the sum can never refuse a healthy pool. Without metadata the requirement is logged at INFO and not
+checked.
+
+At runtime, a pump that fails to get a connection asks the metadata whether every connection is
+checked out. A full pool and an unreachable database fail acquisition with the same exception and
+need unrelated fixes, so a full pool is logged at ERROR as `connection pool exhausted: N of N
+connections checked out` instead of `lost its connection; reconnecting`.
 
 **Set `socketTimeout` on the DataSource.** It is the single setting that decides how long an instance
 keeps acting on beliefs it can no longer check. Measured across a real network partition
@@ -1252,7 +1268,9 @@ for the whole of it.
 | `startConsumingOrdered` throws naming `pg_read_all_stats` | §17.2's probe failed | Grant it, or use the unordered lane. Do not suppress the probe |
 | A queue's depth is non-zero and steady, no errors logged | Nobody owns its shards | Check `unownedShards`, not depth — depth cannot distinguish "unserved" from "busy" (§12) |
 | Ordered lane stops advancing, `watermarkCap` in the log | A write transaction outlived the cap | Find the long transaction; the cap protects the lane, it does not fix the writer |
-| Pumps never start, no error | Pool smaller than `pumpThreads + 1` | §17.3 |
+| `ShardRuntime` throws "The connection pool allows at most N connections" | Pool not larger than `pumpThreads + 1` | §17.3 — raise the pool size or lower `pumpThreads` |
+| Pumps log ERROR `connection pool exhausted` | Pool too small for `pumpThreads + 1` plus handlers and the rest of the application | §17.3 |
+| Pumps repeatedly log `lost its connection; reconnecting` with a healthy database | Pool too small, and its size is not known to the runtime (no `ConnectionPoolMetadata`) | §17.3 |
 | Delivery latency jumps to seconds when idle | Notifications not arriving | §17.4 — check the pooler's mode |
 | An instance goes silent — no deliveries, no errors, no heartbeat — while the rest of the cluster carries on | It is partitioned from the database and has no `socketTimeout`, so it is blocked in a read that will not return for minutes | §17.3. Its shards have already been taken; the instance recovers on its own once the read fails. Set `socketTimeout` so that it is seconds |
 | `deliveryPauses` climbing, "has not confirmed its liveness" in the log | The database was unreachable or slower than `leaseTtl` for that instance | §8.6. Nothing is lost and it resumes on its own. If every instance reports it at once, look at the disk rather than the network |

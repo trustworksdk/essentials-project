@@ -120,6 +120,23 @@ class ShardOwnedQueueAutoConfigurationIT {
     }
 
     @Test
+    void a_pool_the_pumps_would_exhaust_fails_the_context() {
+        // The default two pumps and the listener hold three connections permanently; a pool of three
+        // leaves nothing for lease renewal. Without the check this starts and the pumps retry forever.
+        // The pool size reaches the engine through Spring Boot's own pool metadata — no Hikari types.
+        runner().withPropertyValues("spring.datasource.hikari.maximum-pool-size=3")
+                .run(context -> {
+                    assertThat(context).hasFailed();
+                    assertThat(context.getStartupFailure())
+                            .rootCause()
+                            .isInstanceOf(IllegalStateException.class)
+                            .hasMessageContaining("at most 3 connections");
+                });
+        runner().withPropertyValues("spring.datasource.hikari.maximum-pool-size=4")
+                .run(context -> assertThat(context).hasNotFailed());
+    }
+
+    @Test
     void a_queue_from_the_factory_round_trips_a_message() {
         runner().withPropertyValues("essentials.shard-owned-queue.queues.orders=2")
                 .run(context -> {

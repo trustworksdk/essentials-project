@@ -125,6 +125,7 @@ public final class ShardRuntime implements Lifecycle, AutoCloseable {
     private final DataSource               dataSource;
     private final ShardOwnerSettings       settings;
     private final ShardOwnerMetrics        metrics;
+    private final ConnectionPoolMetadata   pool;
     private final AtomicBoolean            running     = new AtomicBoolean();
     private final AtomicBoolean            flushOnExit = new AtomicBoolean(true);
     private final List<ShardPump>          pumps       = new ArrayList<>();
@@ -138,15 +139,36 @@ public final class ShardRuntime implements Lifecycle, AutoCloseable {
     private       ExecutorService          handlerExecutor;
     private       ScheduledExecutorService heartbeat;
     private       ShardWakeupListener      listener;
+    private       PoolBudget.Reservation   poolReservation;
 
     public ShardRuntime(DataSource dataSource, ShardOwnerSettings settings) {
         this(dataSource, settings, new ShardOwnerMetrics());
     }
 
     public ShardRuntime(DataSource dataSource, ShardOwnerSettings settings, ShardOwnerMetrics metrics) {
+        this(dataSource, settings, metrics, ConnectionPoolMetadata.unknown());
+    }
+
+    /**
+     * A runtime that can check its pool before it takes from it.
+     * <p>
+     * The pumps and the listener hold {@code pumpThreads + 1} connections for as long as the runtime
+     * runs. Given the pool's size, a pool no larger than that is refused here — at construction,
+     * before any connection is taken — and a pool more than half consumed by it is logged as a
+     * warning. Without it, a pool too small does not fail: pumps retry forever while their shards stop
+     * delivering. The Spring Boot starter passes metadata for any pool Spring Boot can read.
+     *
+     * @param pool what can be learned about the pool behind {@code dataSource};
+     *             {@link ConnectionPoolMetadata#unknown()} skips the check
+     * @throws IllegalStateException if the pool's maximum size does not exceed
+     *                               {@code settings.pumpThreads() + 1}
+     */
+    public ShardRuntime(DataSource dataSource, ShardOwnerSettings settings, ShardOwnerMetrics metrics,
+                        ConnectionPoolMetadata pool) {
         this.dataSource = requireNonNull(dataSource, "No dataSource provided");
         this.settings = requireNonNull(settings, "No settings provided");
         this.metrics = requireNonNull(metrics, "No metrics provided");
+        this.pool = requireNonNull(pool, "No pool metadata provided");
         start();
     }
 
@@ -161,6 +183,14 @@ public final class ShardRuntime implements Lifecycle, AutoCloseable {
         if (!running.compareAndSet(false, true)) {
             return;
         }
+        try {
+            // Before the first connection is taken: a pool the pumps would exhaust does not fail, it
+            // retries forever — see PoolBudget.
+            this.poolReservation = PoolBudget.reserve(dataSource, pool, settings.pumpThreads());
+        } catch (RuntimeException e) {
+            running.set(false);
+            throw e;
+        }
         pumps.clear();
         var pumpCount = Math.max(1, settings.pumpThreads());
         this.pumpExecutor = Executors.newFixedThreadPool(pumpCount, named("shard-queue-pump"));
@@ -173,7 +203,8 @@ public final class ShardRuntime implements Lifecycle, AutoCloseable {
         // and every statement an owner issues carries its own queue id.
         var connections = new ShardOwnedStorage(dataSource, NO_QUEUE_ID);
         for (var index = 0; index < pumpCount; index++) {
-            var pump = new ShardPump(connections, settings, metrics, running, flushOnExit, "pump-" + index);
+            var pump = new ShardPump(connections, settings, metrics, running, flushOnExit, "pump-" + index,
+                                     () -> PoolBudget.exhaustion(dataSource, pool));
             pumps.add(pump);
             pumpExecutor.submit(pump);
         }
@@ -283,6 +314,8 @@ public final class ShardRuntime implements Lifecycle, AutoCloseable {
         handlerExecutor.shutdown();
         // Cleared so a restart does not signal wake-ups belonging to owners that no longer exist.
         wakeups.clear();
+        PoolBudget.release(poolReservation);
+        poolReservation = null;
         log.debug("Shard runtime stopped");
     }
 }

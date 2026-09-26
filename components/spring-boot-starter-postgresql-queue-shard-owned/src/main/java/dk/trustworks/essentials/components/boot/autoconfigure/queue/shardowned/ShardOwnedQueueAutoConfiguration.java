@@ -34,6 +34,7 @@ import org.slf4j.*;
 import org.springframework.boot.autoconfigure.AutoConfiguration;
 import org.springframework.boot.autoconfigure.condition.*;
 import org.springframework.boot.jdbc.autoconfigure.DataSourceAutoConfiguration;
+import org.springframework.boot.jdbc.metadata.*;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.boot.context.properties.bind.Binder;
@@ -95,11 +96,19 @@ public class ShardOwnedQueueAutoConfiguration {
      * The pumps, the LISTEN connection, the heartbeat and the handler executor are all process-wide;
      * a runtime per queue costs {@code pumpThreads + 1} connections each, and a hundred queues once
      * exhausted a 500-connection pool. Spring manages its lifecycle, so it stops with the context.
+     * <p>
+     * Given the pool's metadata through Spring Boot's own providers, so a pool too small for the
+     * connections the runtime holds fails the context at start-up instead of leaving pumps retrying
+     * forever. Any pool Spring Boot can read is covered; any other is logged and not checked.
      */
     @Bean(destroyMethod = "stop")
     @ConditionalOnMissingBean
-    public ShardRuntime shardRuntime(DataSource dataSource, ShardOwnerSettings settings) {
-        return new ShardRuntime(dataSource, settings);
+    public ShardRuntime shardRuntime(DataSource dataSource,
+                                     ShardOwnerSettings settings,
+                                     ObjectProvider<DataSourcePoolMetadataProvider> poolMetadataProviders) {
+        var provider = new CompositeDataSourcePoolMetadataProvider(poolMetadataProviders.orderedStream().toList());
+        return new ShardRuntime(dataSource, settings, new ShardOwnerMetrics(),
+                                SpringConnectionPoolMetadata.of(dataSource, provider));
     }
 
     /**

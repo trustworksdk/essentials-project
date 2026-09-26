@@ -22,6 +22,7 @@ import java.sql.*;
 import java.util.*;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.function.Supplier;
 
 import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 
@@ -57,15 +58,22 @@ final class ShardPump implements Runnable {
     private final AtomicBoolean                     running;
     private final AtomicBoolean                     flushOnExit;
     private final String                            name;
+    /**
+     * Whether the pool is full right now, asked only when acquiring a connection fails. A full pool and
+     * an unreachable database fail acquisition with the same exception, and the fixes are unrelated.
+     */
+    private final Supplier<Optional<String>>        poolExhaustion;
 
     ShardPump(ShardOwnedStorage storage, ShardOwnerSettings settings, ShardOwnerMetrics metrics,
-              AtomicBoolean running, AtomicBoolean flushOnExit, String name) {
+              AtomicBoolean running, AtomicBoolean flushOnExit, String name,
+              Supplier<Optional<String>> poolExhaustion) {
         this.storage = requireNonNull(storage, "No storage provided");
         this.settings = requireNonNull(settings, "No settings provided");
         this.metrics = requireNonNull(metrics, "No metrics provided");
         this.running = requireNonNull(running, "No running flag provided");
         this.flushOnExit = requireNonNull(flushOnExit, "No flushOnExit flag provided");
         this.name = requireNonNull(name, "No name provided");
+        this.poolExhaustion = requireNonNull(poolExhaustion, "No poolExhaustion provided");
     }
 
     /**
@@ -190,7 +198,18 @@ final class ShardPump implements Runnable {
                 return;
             } catch (SQLException e) {
                 metrics.connectionFailures.increment();
-                log.warn("{} lost its connection; reconnecting", name, e);
+                // Asked for any SQLException, not only a timeout type: pools disagree on what they
+                // throw when full (Hikari a SQLTransientConnectionException, DBCP2 and Tomcat plain
+                // SQLExceptions), and the live count is what separates the cases anyway.
+                var exhausted = poolExhaustion.get();
+                if (exhausted.isPresent()) {
+                    // Not a database problem, and reporting it as one sends the reader to the wrong
+                    // place. The shards this pump serves deliver nothing until a connection is free.
+                    log.error("{} could not get a connection: {}. Its shards stop delivering until one is "
+                                      + "free; raise the pool's maximum size. Retrying", name, exhausted.get(), e);
+                } else {
+                    log.warn("{} lost its connection; reconnecting", name, e);
+                }
                 try {
                     TimeUnit.MILLISECONDS.sleep(200L);
                 } catch (InterruptedException interrupted) {
