@@ -18,6 +18,7 @@ package dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.o
 
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.EventStoreSubscription;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.*;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.gap.GapReconciliation;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.observability.EventStoreSubscriptionObserver.NoOpEventStoreSubscriptionObserver;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.observability.SubscriptionStatisticsRegistry.SubscriptionKey;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.subscription.PersistedEventHandler;
@@ -125,6 +126,35 @@ class StatisticsCollectingEventStoreSubscriptionObserverTest {
         assertThat(polling.lastPollDuration()).isEqualTo(Duration.ofMillis(7));
         assertThat(polling.consecutiveNoPersistedEventsReturned()).isEqualTo(3);
         assertThat(polling.gapReconciliations()).isEqualTo(1);
+    }
+
+    /**
+     * gapReconciliations counts reconciliation passes - one per poll - so it cannot say whether there were any gaps.
+     * The gap statistics carry what the passes found.
+     */
+    @Test
+    void gap_statistics_count_what_reconciliation_found_not_how_often_it_ran() {
+        observer.gapReconciliationOutcome(SUBSCRIBER_ID, AGGREGATE_TYPE, new GapReconciliation(3, 0, 0));
+        observer.gapReconciliationOutcome(SUBSCRIBER_ID, AGGREGATE_TYPE, new GapReconciliation(1, 2, 1));
+        observer.gapReconciliationOutcome(SUBSCRIBER_ID, AGGREGATE_TYPE, GapReconciliation.NONE);
+
+        var gaps = statistics().gaps();
+        assertThat(gaps.newTransientGaps()).isEqualTo(4);
+        assertThat(gaps.resolvedTransientGaps()).isEqualTo(2);
+        assertThat(gaps.promotedToPermanentGaps()).isEqualTo(1);
+        assertThat(gaps.lastNewTransientGapAt()).isEqualTo(NOW);
+        assertThat(gaps.lastPromotedToPermanentGapAt()).isEqualTo(NOW);
+        // A pass that found nothing is not gap activity, and is not what the polling counter measures either.
+        assertThat(statistics().polling().gapReconciliations()).isZero();
+        verify(delegate).gapReconciliationOutcome(SUBSCRIBER_ID, AGGREGATE_TYPE, new GapReconciliation(1, 2, 1));
+    }
+
+    @Test
+    void a_subscriber_without_gap_activity_reports_no_gaps() {
+        observer.eventStorePolled(SUBSCRIBER_ID, AGGREGATE_TYPE, LongRange.from(1, 10), List.of(),
+                                  Optional.empty(), List.of(event(1)), Duration.ofMillis(4));
+
+        assertThat(statistics().gaps()).isEqualTo(SubscriptionStatistics.Gaps.NONE);
     }
 
     @Test

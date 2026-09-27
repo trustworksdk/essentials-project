@@ -715,15 +715,21 @@ async function openSubscriptionDrawer(subscriberId, aggregateType) {
         kvItem('lastFailureAt', ts(s.eventHandling.lastFailureAt)),
         kvItem('lastNumberOfEventsRequested', num(s.eventHandling.lastNumberOfEventsRequested))
     ])}
-      ${field('Polling — zero while CDC delivers the events', [
+      ${field('Polling — also under CDC: before CDC is active and on fallback; CDC catch-up not counted', [
         kvItem('polls', num(s.polling.polls)),
         kvItem('pollsWithoutEvents', num(s.polling.pollsWithoutEvents)),
         kvItem('skippedPolls', num(s.polling.skippedPolls)),
         kvItem('lastPollAt', ts(s.polling.lastPollAt)),
         kvItem('lastPollDuration', millis(s.polling.lastPollDurationMillis)),
-        kvItem('consecutiveNoPersistedEventsReturned', num(s.polling.consecutiveNoPersistedEventsReturned)),
-        kvItem('gapReconciliations', num(s.polling.gapReconciliations))
+        kvItem('consecutiveNoPersistedEventsReturned', num(s.polling.consecutiveNoPersistedEventsReturned))
     ])}
+      ${s.gaps ? field('Gaps — watch promotedToPermanentGaps: events this subscriber stopped waiting for', [
+        kvItem('newTransientGaps', num(s.gaps.newTransientGaps)),
+        kvItem('resolvedTransientGaps', num(s.gaps.resolvedTransientGaps)),
+        kvItem('promotedToPermanentGaps', num(s.gaps.promotedToPermanentGaps)),
+        kvItem('lastNewTransientGapAt', ts(s.gaps.lastNewTransientGapAt)),
+        kvItem('lastPromotedToPermanentGapAt', ts(s.gaps.lastPromotedToPermanentGapAt))
+    ]) : ''}
       ${field('Fenced lock — exclusive subscriptions only', [
         kvItem('currentlyHeld', String(s.lock.currentlyHeld)),
         kvItem('acquisitions', num(s.lock.acquisitions)),

@@ -559,6 +559,7 @@ public class CdcEventStore<CONFIG extends AggregateEventStreamConfiguration> imp
         var  range       = LongRange.between(fromInclusive, toInclusive);
         long startNs     = System.nanoTime();
 
+        var gapReconciliation = new AtomicReference<>(GapReconciliation.NONE);
         List<PersistedEvent> loaded =
                 unitOfWorkFactory.withUnitOfWork(uow -> {
                     List<GlobalEventOrder> transientGaps =
@@ -573,9 +574,15 @@ public class CdcEventStore<CONFIG extends AggregateEventStreamConfiguration> imp
                                     tenant.orElse(null)
                                                               ).toList();
 
-                    gapHandler.ifPresent(h -> h.reconcileGaps(aggregateType, range, events, transientGaps));
+                    gapHandler.ifPresent(h -> gapReconciliation.set(h.reconcileGapsAndReport(aggregateType, range, events, transientGaps)));
                     return events;
                 });
+        // Reported after the unit of work commits, as the polling path does. Backfill is invisible to the polling
+        // statistics, so without this the gaps a CDC subscription finds while catching up would be counted nowhere.
+        if (gapHandler.isPresent() && !gapReconciliation.get().isEmpty()) {
+            eventStore.getEventStoreSubscriptionObserver()
+                      .gapReconciliationOutcome(gapHandler.get().subscriberId(), aggregateType, gapReconciliation.get());
+        }
         if (backfillPageTimer != null) backfillPageTimer.record(System.nanoTime() - startNs, TimeUnit.NANOSECONDS);
         if (backfillLoadedSummary != null) backfillLoadedSummary.record(loaded.size());
         if (backfillQueryRangeSummary != null) backfillQueryRangeSummary.record(toInclusive - fromInclusive + 1);

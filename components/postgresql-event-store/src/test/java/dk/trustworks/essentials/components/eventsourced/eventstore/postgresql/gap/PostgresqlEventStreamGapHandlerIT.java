@@ -348,6 +348,55 @@ class PostgresqlEventStreamGapHandlerIT {
         assertThat(remainingRows).containsExactly(subscriberB.toString());
     }
 
+    /**
+     * The outcome feeds the subscription gap statistics, so each count must be what the reconciliation actually
+     * changed in the database - including zero when the gap was already registered, which is what a repeated query
+     * over the same range, or a concurrent non-exclusive reconciler, produces.
+     */
+    @Test
+    void reconciliation_reports_what_it_changed() throws InterruptedException {
+        var subscriber = SubscriberId.of("gap-outcome-sub");
+        var gapHandler = eventStore.getEventStreamGapHandler().gapHandlerFor(subscriber);
+        var events = unitOfWorkFactory.withUnitOfWork(() -> eventStore.appendToStream(aggregateType,
+                                                                                        OrderId.random(),
+                                                                                        List.of(new OrderEvent.OrderAccepted(OrderId.random()),
+                                                                                                new OrderEvent.OrderAccepted(OrderId.random()),
+                                                                                                new OrderEvent.OrderAccepted(OrderId.random()))))
+                                      .eventList();
+        var first  = events.get(0);
+        var middle = events.get(1);
+        var last   = events.get(2);
+        var range  = LongRange.between(first.globalEventOrder().longValue(), last.globalEventOrder().longValue());
+
+        // The middle event is missing from the result: one new transient gap
+        var detected = unitOfWorkFactory.withUnitOfWork(unitOfWork -> gapHandler.reconcileGapsAndReport(aggregateType, range, List.of(first, last), List.of()));
+        assertThat(detected).isEqualTo(new GapReconciliation(1, 0, 0));
+
+        // The same result again finds the same gap, but it is already registered: nothing new
+        var repeated = unitOfWorkFactory.withUnitOfWork(unitOfWork -> gapHandler.reconcileGapsAndReport(aggregateType, range, List.of(first, last), List.of()));
+        assertThat(repeated).isEqualTo(GapReconciliation.NONE);
+
+        // Asked for again and returned this time: resolved
+        var resolved = unitOfWorkFactory.withUnitOfWork(unitOfWork -> gapHandler.reconcileGapsAndReport(aggregateType,
+                                                                                                          LongRange.only(middle.globalEventOrder().longValue()),
+                                                                                                          List.of(middle),
+                                                                                                          List.of(middle.globalEventOrder())));
+        assertThat(resolved).isEqualTo(new GapReconciliation(0, 1, 0));
+        assertThat(gapHandler.getTransientGapsFor(aggregateType)).isEmpty();
+
+        // Missing again, and still missing past the promotion threshold: promoted to permanent. thresholdBased(1)
+        // promotes once MORE than one whole second has elapsed, so a gap needs two
+        unitOfWorkFactory.withUnitOfWork(unitOfWork -> gapHandler.reconcileGapsAndReport(aggregateType, range, List.of(first, last), List.of()));
+        Thread.sleep(2_500);
+        var promoted = unitOfWorkFactory.withUnitOfWork(unitOfWork -> gapHandler.reconcileGapsAndReport(aggregateType,
+                                                                                                          LongRange.only(middle.globalEventOrder().longValue()),
+                                                                                                          List.of(),
+                                                                                                          List.of(middle.globalEventOrder())));
+        assertThat(promoted.promotedToPermanentGaps()).isEqualTo(1);
+        List<GlobalEventOrder> permanentGaps = unitOfWorkFactory.withUnitOfWork(unitOfWork -> gapHandler.getPermanentGapsFor(aggregateType).toList());
+        assertThat(permanentGaps).contains(middle.globalEventOrder());
+    }
+
     private Pair<OrderId, List<? extends OrderEvent>> createTestEvents() {
         var orderId   = OrderId.random();
         var productId = ProductId.random();

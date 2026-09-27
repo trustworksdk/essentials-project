@@ -328,6 +328,11 @@ public final class PostgresqlEventStreamGapHandler<CONFIG extends AggregateEvent
 
         @Override
         public void reconcileGaps(AggregateType aggregateType, LongRange globalOrderQueryRange, List<PersistedEvent> persistedEvents, List<GlobalEventOrder> transientGapsIncludedInQuery) {
+            reconcileGapsAndReport(aggregateType, globalOrderQueryRange, persistedEvents, transientGapsIncludedInQuery);
+        }
+
+        @Override
+        public GapReconciliation reconcileGapsAndReport(AggregateType aggregateType, LongRange globalOrderQueryRange, List<PersistedEvent> persistedEvents, List<GlobalEventOrder> transientGapsIncludedInQuery) {
             requireNonNull(aggregateType, "No aggregateType provided");
             requireNonNull(globalOrderQueryRange, "No globalOrderQueryRange provided");
             requireNonNull(persistedEvents, "No persistedEvents provided");
@@ -345,10 +350,14 @@ public final class PostgresqlEventStreamGapHandler<CONFIG extends AggregateEvent
                                                        .filter(transientGapsIncludedInQuery::contains)
                                                        .collect(Collectors.toList());
             var findTransientGapsThatWereResolved = !transientGapsIncludedInQuery.isEmpty() && !persistedEvents.isEmpty();
+            // Counted from rows actually changed, not from the lists: under a non-exclusive subscription another
+            // instance may reconcile the same gap concurrently, and only one of them resolved it.
+            var resolvedCount = 0;
             if (findTransientGapsThatWereResolved) {
-                deleteTransientGaps(aggregateType,
-                                    resolvedTransientGaps);
+                resolvedCount = deleteTransientGaps(aggregateType,
+                                                    resolvedTransientGaps);
             }
+            var newCount = 0;
 
             // New Transient Gaps
             if (!persistedEvents.isEmpty()) {
@@ -379,7 +388,7 @@ public final class PostgresqlEventStreamGapHandler<CONFIG extends AggregateEvent
                               newTransientGapsToAdd,
                               persistedEventGlobalOrders);
                 }
-                addNewTransientGaps(aggregateType, newTransientGapsToAdd);
+                newCount = addNewTransientGaps(aggregateType, newTransientGapsToAdd);
             }
 
             // Promote Transient Gaps to Permanent Gaps
@@ -389,12 +398,17 @@ public final class PostgresqlEventStreamGapHandler<CONFIG extends AggregateEvent
                       allTransientGaps);
             var promotableTransientGaps = resolveTransientGapsToPermanentGapsPromotionStrategy.resolveTransientGapsReadyToBePromotedToPermanentGaps(aggregateType,
                                                                                                                                                     allTransientGaps.get(aggregateType));
-            promoteTransientGapsToPermanentGaps(aggregateType,
-                                                promotableTransientGaps);
+            var promotedCount = promoteTransientGapsToPermanentGaps(aggregateType,
+                                                                    promotableTransientGaps);
+            return new GapReconciliation(newCount, resolvedCount, promotedCount);
         }
 
-        private void promoteTransientGapsToPermanentGaps(AggregateType aggregateType, List<GlobalEventOrder> promotableTransientGaps) {
-            if (promotableTransientGaps.isEmpty()) return;
+        /**
+         * @return how many transient gaps this subscriber stopped waiting for - whether or not another subscriber had
+         * already recorded them as permanent, which only decides whether a permanent-gap row is inserted
+         */
+        private int promoteTransientGapsToPermanentGaps(AggregateType aggregateType, List<GlobalEventOrder> promotableTransientGaps) {
+            if (promotableTransientGaps.isEmpty()) return 0;
 
             var unitOfWork = unitOfWorkFactory.getRequiredUnitOfWork();
             deleteTransientGaps(aggregateType, promotableTransientGaps);
@@ -428,14 +442,19 @@ public final class PostgresqlEventStreamGapHandler<CONFIG extends AggregateEvent
                           aggregateType,
                           promotableTransientGaps);
             }
+            return (int) promotableTransientGaps.stream().distinct().count();
         }
 
-        private void addNewTransientGaps(AggregateType aggregateType, List<GlobalEventOrder> newTransientGapsToAdd) {
-            if (newTransientGapsToAdd.isEmpty()) return;
+        /**
+         * @return how many transient gaps were actually registered - fewer than asked when a concurrent reconciliation
+         * registered some of them first
+         */
+        private int addNewTransientGaps(AggregateType aggregateType, List<GlobalEventOrder> newTransientGapsToAdd) {
+            if (newTransientGapsToAdd.isEmpty()) return 0;
             var distinctTransientGapsToAdd = newTransientGapsToAdd.stream()
                                                                   .distinct()
                                                                   .collect(Collectors.toList());
-            if (distinctTransientGapsToAdd.isEmpty()) return;
+            if (distinctTransientGapsToAdd.isEmpty()) return 0;
 
             var unitOfWork = unitOfWorkFactory.getRequiredUnitOfWork();
             var now        = now();
@@ -488,14 +507,19 @@ public final class PostgresqlEventStreamGapHandler<CONFIG extends AggregateEvent
                          aggregateType,
                          distinctTransientGapsToAdd);
             }
+            return Math.min(rowsUpdated, distinctTransientGapsToAdd.size());
         }
 
-        private void deleteTransientGaps(AggregateType aggregateType, List<GlobalEventOrder> resolvedTransientGaps) {
-            if (resolvedTransientGaps.isEmpty()) return;
+        /**
+         * @return how many transient gaps were actually deleted - fewer than asked when a concurrent reconciliation
+         * deleted some of them first
+         */
+        private int deleteTransientGaps(AggregateType aggregateType, List<GlobalEventOrder> resolvedTransientGaps) {
+            if (resolvedTransientGaps.isEmpty()) return 0;
             var distinctResolvedTransientGaps = resolvedTransientGaps.stream()
                                                                      .distinct()
                                                                      .collect(Collectors.toList());
-            if (distinctResolvedTransientGaps.isEmpty()) return;
+            if (distinctResolvedTransientGaps.isEmpty()) return 0;
 
             var unitOfWork = unitOfWorkFactory.getRequiredUnitOfWork();
             var gaps       = internalGetTransientGapsFor(aggregateType);
@@ -540,6 +564,7 @@ public final class PostgresqlEventStreamGapHandler<CONFIG extends AggregateEvent
                           aggregateType,
                           allTransientGaps);
             }
+            return Math.min(numOfRowsChanges, distinctResolvedTransientGaps.size());
         }
 
         private List<Pair<GlobalEventOrder, OffsetDateTime>> internalGetTransientGapsFor(AggregateType aggregateType) {

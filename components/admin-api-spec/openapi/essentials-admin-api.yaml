@@ -3468,6 +3468,28 @@ components:
         lastNumberOfEventsRequested:
           type: integer
           format: int64
+    ApiSubscriptionGapStatistics:
+      required:
+      - newTransientGaps
+      - promotedToPermanentGaps
+      - resolvedTransientGaps
+      type: object
+      properties:
+        newTransientGaps:
+          type: integer
+          format: int64
+        resolvedTransientGaps:
+          type: integer
+          format: int64
+        promotedToPermanentGaps:
+          type: integer
+          format: int64
+        lastNewTransientGapAt:
+          type: string
+          format: date-time
+        lastPromotedToPermanentGapAt:
+          type: string
+          format: date-time
     ApiSubscriptionLifecycleStatistics:
       required:
       - starts
@@ -3580,6 +3602,8 @@ components:
           $ref: "#/components/schemas/ApiSubscriptionLockStatistics"
         reset:
           $ref: "#/components/schemas/ApiSubscriptionResetStatistics"
+        gaps:
+          $ref: "#/components/schemas/ApiSubscriptionGapStatistics"
     ApiTableActivityStatistics:
       required:
       - idx_scan

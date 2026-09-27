@@ -201,7 +201,10 @@ public class AdminUiDemoApplication {
                 new ApiSubscriptionPollingStatistics(41204, 38911, 12044,
                                                      OffsetDateTime.parse("2026-07-31T12:04:29Z"), 2L, 4, 18),
                 new ApiSubscriptionLockStatistics(1, 0, true, OffsetDateTime.parse("2026-07-31T09:12:05Z"), null),
-                new ApiSubscriptionResetStatistics(0, null, null));
+                new ApiSubscriptionResetStatistics(0, null, null),
+                new ApiSubscriptionGapStatistics(27, 24, 1,
+                                                 OffsetDateTime.parse("2026-07-31T12:03:51Z"),
+                                                 OffsetDateTime.parse("2026-07-31T10:40:12Z")));
         when(api.findAllSubscriptionStatistics(any())).thenReturn(List.of(orderProcessorStatistics));
         when(api.findSubscriptionStatistics(any(), any(), any())).thenReturn(Optional.of(orderProcessorStatistics));
         return api;

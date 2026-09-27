@@ -42,6 +42,7 @@ notes summarise both and link to them rather than repeating every table.
    - [1.4 The 0.50 `forRemoval` members are removed](#14-the-050-forremoval-members-are-removed)
    - [1.5 Durable queues](#15-durable-queues)
    - [1.6 Database objects changed on first startup](#16-database-objects-changed-on-first-startup)
+   - [1.7 Subscription statistics records have a new component](#17-subscription-statistics-records-have-a-new-component)
 2. [New features](#2-new-features)
 3. [Bug fixes](#3-bug-fixes)
 4. [Deprecations](#4-deprecations)
@@ -288,6 +289,14 @@ upgrade as you would any other index change.
 The queue tables keep three indexes: `idx_<table>_ordered_msg`, `idx_<table>_unordered_ready` and
 `idx_<table>_ordered_head`.
 
+### 1.7 Subscription statistics records have a new component
+
+`SubscriptionStatistics` and `ApiSubscriptionStatistics` end with a new `gaps` component (see
+[§2.7](#27-subscription-gap-statistics)), so their constructors take one more argument. Only code that builds these
+snapshots itself is affected, such as test fixtures and mocks of `EventStoreApi`; reading them is unaffected. Pass
+`SubscriptionStatistics.Gaps.NONE`, or `ApiSubscriptionGapStatistics.from(SubscriptionStatistics.Gaps.NONE)`, where
+there is no gap activity to report. The admin API response only gains an optional `gaps` field.
+
 ---
 
 ## 2. New features
@@ -502,6 +511,27 @@ the classpath no longer run without a flag. As a result, no starter shipped
 `META-INF/spring-configuration-metadata.json`. The build now passes `-proc:full`, so every starter ships
 metadata again, which brings back IDE completion and documented defaults for `essentials.*` properties.
 `spring-boot-starter-postgresql` alone documents 50 properties.
+
+### 2.7 Subscription gap statistics
+
+Subscription statistics now include a `gaps` section. It holds `newTransientGaps`, `resolvedTransientGaps` and
+`promotedToPermanentGaps`, plus when the last new gap and the last promoted gap happened. It is available as
+`SubscriptionStatistics.gaps()`, as `gaps` in the admin API, and in the admin UI's subscription drawer. Before this,
+the only gap figure was `polling.gapReconciliations`. That counts reconciliation passes, one per poll, whether or not
+there was a gap, so it could not show whether a subscriber was finding gaps or giving up on them. It is unchanged,
+now documented as what it is, and no longer shown in the admin UI.
+
+The new counts cover every path that reconciles gaps, including the CDC catch-up (backfill) that the polling
+statistics do not see. They come from the rows each reconciliation actually changed, and are recorded only after
+its unit of work commits. A rising `promotedToPermanentGaps` is the one to watch: each is a global event order the
+subscriber stopped waiting for.
+
+For a custom `SubscriptionGapHandler`, override the new default method `reconcileGapsAndReport` to contribute to
+these counts. An implementation that does not override it keeps working and reports nothing. Code that constructs
+the statistics records itself needs the new component; see [§1.7](#17-subscription-statistics-records-have-a-new-component).
+
+The polling statistics' description is corrected as well. It used to say they stay at zero under CDC, but a
+subscription polls when it starts before CDC is active and whenever it falls back to polling.
 
 ---
 
