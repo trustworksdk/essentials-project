@@ -81,6 +81,15 @@ public class CdcHealthIndicator implements HealthIndicator {
                                                      ? ""
                                                      : Instant.ofEpochMilli(snapshot.lastChangedEpochMs()).toString());
 
+        // Kept after CDC recovers: "reason" above describes the current state only, so without these a dropped
+        // replication connection that reconnected on its own left no trace here.
+        var interruptions = availability.interruptions();
+        builder.withDetail("interruptions.count", interruptions.count())
+               .withDetail("interruptions.ongoing", interruptions.ongoing())
+               .withDetail("interruptions.lastInterruptedAt", epochMsOrEmpty(interruptions.lastInterruptedAtEpochMs()))
+               .withDetail("interruptions.lastReason", interruptions.lastReason() == null ? "" : interruptions.lastReason())
+               .withDetail("interruptions.lastRecoveredAt", epochMsOrEmpty(interruptions.lastRecoveredAtEpochMs()));
+
         tailer.ifPresent(t -> {
             var s = t.getStatus();
             builder.withDetail("tailer.started", s.started())
@@ -95,5 +104,9 @@ public class CdcHealthIndicator implements HealthIndicator {
         );
 
         return builder.build();
+    }
+
+    private static String epochMsOrEmpty(long epochMs) {
+        return epochMs == 0 ? "" : Instant.ofEpochMilli(epochMs).toString();
     }
 }

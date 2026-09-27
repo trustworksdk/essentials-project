@@ -19,8 +19,10 @@ package dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.a
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.cdc.CdcAvailability;
 
 /**
- * @param fallbackCount   subscriptions that fell back to polling <em>after</em> CDC had been active - a real
- *                        CDC regression, and the number worth alerting on
+ * @param reason          why CDC is in its current state. Describes the current state only - cleared when CDC becomes
+ *                        active again, so a recovered interruption is in {@link ApiCdcStatus#interruptions()} instead
+ * @param fallbackCount   times a subscription started on, or switched to, polling <em>after</em> CDC had been
+ *                        active - one per subscription per interruption, and the number worth alerting on
  * @param warmupPollCount subscriptions that started on polling because CDC had not become active yet. Expected
  *                        on every startup, since the lifecycle starts subscriptions before the WAL tailer has
  *                        connected. Not an error

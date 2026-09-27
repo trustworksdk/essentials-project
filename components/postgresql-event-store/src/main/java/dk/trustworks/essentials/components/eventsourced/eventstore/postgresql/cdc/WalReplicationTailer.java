@@ -302,7 +302,7 @@ public class WalReplicationTailer implements Lifecycle {
                 }
             }
         }
-        transitionToStoppedState("stopped");
+        transitionToStoppedState(CdcAvailability.STOPPED_REASON);
     }
 
     /**
@@ -374,7 +374,7 @@ public class WalReplicationTailer implements Lifecycle {
             // an unexpected exception leak, or a bug flipping `stopping` out from under us —
             // and we want that to be loudly visible so operators don't discover a dead
             // tailer hours later via "why is the monitor not firing but delivery is zero".
-            String exitReason = stopRequestedByOwner.get() ? "stopped" : "unexpected-exit";
+            String exitReason = stopRequestedByOwner.get() ? CdcAvailability.STOPPED_REASON : "unexpected-exit";
             transitionToStoppedState(exitReason);
         }
     }
@@ -383,7 +383,7 @@ public class WalReplicationTailer implements Lifecycle {
         slotLockAcquired.set(false);
         availability.inactive(slotName, reason);
         started.set(false);
-        if ("stopped".equals(reason)) {
+        if (CdcAvailability.STOPPED_REASON.equals(reason)) {
             log.info("[{}] 🛑 Stopped Essentials WalReplicationTailer", slotName);
         } else {
             // Unexpected path — loud ERROR so this shows up in operator dashboards. The tailer
@@ -525,7 +525,14 @@ public class WalReplicationTailer implements Lifecycle {
             availability.failed(slotName, e.getMessage());
             WalReplicationTailerErrorHandler.Decision decision = errorHandler.onStreamError(slotName, e);
 
-            log.warn("[{}] CDC stream error (decision={}): '{}'", slotName, decision, e.getMessage(), e);
+            if (decision == WalReplicationTailerErrorHandler.Decision.RETRY_CONNECTION) {
+                // No stack trace here: the rethrow below reaches runPollLoop, whose "streamOnce failed" line logs
+                // this same exception with the attempt, duration and LSN context. Logging it twice made one
+                // dropped connection - a suspended laptop, a wal_sender_timeout - read as two separate failures.
+                log.warn("[{}] CDC stream error (decision={}): '{}' - reconnecting", slotName, decision, e.getMessage());
+            } else {
+                log.warn("[{}] CDC stream error (decision={}): '{}'", slotName, decision, e.getMessage(), e);
+            }
 
             switch (decision) {
                 case CONTINUE -> {
@@ -549,7 +556,14 @@ public class WalReplicationTailer implements Lifecycle {
                         releaseSlotLock(replConn, slotName);
                     }
                 } catch (Exception e) {
-                    log.warn("[{}] Failed to release advisory slot lock: {}", slotName, e.getMessage(), e);
+                    if (isConnectionFailure(e)) {
+                        // The session is gone, and PostgreSQL releases a session's advisory locks when it ends, so
+                        // there is nothing left to release. Not worth a WARN on every dropped connection.
+                        log.debug("[{}] Advisory slot lock not released explicitly - the connection is already broken, "
+                                          + "which releases it: {}", slotName, e.getMessage());
+                    } else {
+                        log.warn("[{}] Failed to release advisory slot lock: {}", slotName, e.getMessage(), e);
+                    }
                 } finally {
                     slotLockAcquired.set(false);
                     try {
@@ -1348,6 +1362,14 @@ public class WalReplicationTailer implements Lifecycle {
                 return acquired;
             }
         }
+    }
+
+    /**
+     * Whether {@code e} means the connection itself is broken (SQLState class 08, connection exception), rather than a
+     * statement failing on a healthy one.
+     */
+    private static boolean isConnectionFailure(Exception e) {
+        return e instanceof SQLException se && se.getSQLState() != null && se.getSQLState().startsWith("08");
     }
 
     private void releaseSlotLock(Connection c, String slotName) throws SQLException {

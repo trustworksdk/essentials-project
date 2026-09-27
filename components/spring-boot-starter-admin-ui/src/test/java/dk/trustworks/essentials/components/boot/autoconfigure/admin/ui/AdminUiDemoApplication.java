@@ -240,7 +240,12 @@ public class AdminUiDemoApplication {
                                      1073741824L, null, "f", null, false, false),
                 // tailer null: only the instance holding the slot lock runs it
                 null,
-                new ApiCdcDispatcherStatus("slot_orders_prod", true, false, 88412, 0, 0, 2, 0, 918204, 37, 1785488668000L)));
+                new ApiCdcDispatcherStatus("slot_orders_prod", true, false, 88412, 0, 0, 2, 0, 918204, 37, 1785488668000L),
+                // One recovered interruption: a dropped replication connection that reconnected on its own
+                new ApiCdcInterruptions(1, false,
+                                        OffsetDateTime.parse("2026-07-31T11:19:36Z"),
+                                        "Database connection failed when writing to copy",
+                                        OffsetDateTime.parse("2026-07-31T11:19:36.600Z"))));
         return api;
     }
 }

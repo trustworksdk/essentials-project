@@ -72,7 +72,8 @@ public class DefaultCdcApi implements CdcApi {
                 ApiCdcConfiguration.from(properties.isEnabled(), effectiveSlotName, properties),
                 slotStatus,
                 tailer.map(WalReplicationTailer::getStatus).map(ApiCdcTailerStatus::from).orElse(null),
-                dispatcher.map(CdcDispatcher::getStatus).map(ApiCdcDispatcherStatus::from).orElse(null)
+                dispatcher.map(CdcDispatcher::getStatus).map(ApiCdcDispatcherStatus::from).orElse(null),
+                ApiCdcInterruptions.from(availability.interruptions())
         );
     }
 

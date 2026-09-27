@@ -420,9 +420,17 @@ public class CdcEventStore<CONFIG extends AggregateEventStreamConfiguration> imp
                 })
                 .distinctUntilChanged();
 
+        // The source this subscription was last on. A switch off the CDC bus is a fallback in the same sense as
+        // starting on polling after CDC had been active (pollEvents records that case): without recording it, a
+        // running subscription that polled through a dropped replication connection left fallbackCount at zero.
+        var previousState = new AtomicReference<CdcAvailability.State>(null);
         return gatedStates
                 .switchMap(state -> {
                     if (liveSourceSwitchCounter != null) liveSourceSwitchCounter.increment();
+                    if (previousState.getAndSet(state) == CdcAvailability.State.ACTIVE && state != CdcAvailability.State.ACTIVE) {
+                        availability.fallbackUsed();
+                        if (fallbackPollCounter != null) fallbackPollCounter.increment();
+                    }
                     long resumeFrom = lastSeen.get() + 1;
                     if (state == CdcAvailability.State.ACTIVE) {
                         log.debug("[{}] Adaptive live source switching to CDC bus (resumeFrom={})",

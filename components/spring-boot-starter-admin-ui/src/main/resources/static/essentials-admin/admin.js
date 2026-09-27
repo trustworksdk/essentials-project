@@ -156,7 +156,10 @@ views.overview = async () => {
       ${tile('Subscriptions', subs ? subs.length : nil())}
       ${tile('CDC', cdc ? badge(cdc.availability.state === 'ACTIVE' ? 'good' : 'warning', cdc.availability.state) : nil(),
              cdc ? 'slot ' + esc(cdc.availability.slotName ?? '—') : '')}
-      ${tile('CDC fallbacks', cdc ? num(cdc.availability.fallbackCount) : nil(), 'since CDC went active',
+      ${tile('CDC interruptions', cdc && cdc.interruptions ? num(cdc.interruptions.count) : nil(),
+             cdc && cdc.interruptions ? (cdc.interruptions.ongoing ? 'ongoing' : 'recovered on their own') : '',
+             cdc && cdc.interruptions ? cdc.interruptions.count > 0 : false)}
+      ${tile('CDC fallbacks', cdc ? num(cdc.availability.fallbackCount) : nil(), 'subscription switches to polling',
              cdc ? cdc.availability.fallbackCount > 0 : false)}
     </div>
 
@@ -503,6 +506,7 @@ views.cdc = async () => {
     }
 
     const a = c.availability;
+    const i = c.interruptions;
     const s = c.slot;
     const d = c.dispatcher;
     const stateBadge = { ACTIVE: badge('good', 'ACTIVE'), INACTIVE: badge('neutral', 'INACTIVE'), FAILED: badge('critical', 'FAILED') }[a.state]
@@ -514,8 +518,15 @@ views.cdc = async () => {
        <span class="kv-val">${fmt[k] ? fmt[k](v) : v == null ? nil() : typeof v === 'boolean' ? String(v) : esc(String(v))}</span></div>`).join('')}</div>`;
 
     return `
-    ${a.fallbackCount > 0 ? `<div class="banner banner-warning"><span aria-hidden="true">▲</span>
-      <div><strong>CDC has fallen back to polling ${a.fallbackCount === 1 ? 'once' : a.fallbackCount + ' times'} after having been active.</strong>
+    ${i && i.count > 0 ? `<div class="banner banner-warning"><span aria-hidden="true">▲</span>
+      <div><strong>CDC has been interrupted ${i.count === 1 ? 'once' : num(i.count) + ' times'}${i.ongoing ? ', and still is' : ''}.</strong>
+      Last at ${ts(i.lastInterruptedAt)}${i.lastReason ? ': <code class="mono">' + esc(i.lastReason) + '</code>' : ''}${
+      !i.ongoing && i.lastRecoveredAt ? ` — active again at ${ts(i.lastRecoveredAt)}` : ''}.
+      Subscriptions poll for the duration, so an interruption costs latency, not events. A count that keeps rising
+      points at the connection: an idle timeout on a proxy, <code class="mono">wal_sender_timeout</code>, or a
+      suspended host.</div></div>` : ''}
+    ${a.fallbackCount > 0 && !(i && i.count > 0) ? `<div class="banner banner-warning"><span aria-hidden="true">▲</span>
+      <div><strong>Subscriptions have fallen back to polling ${a.fallbackCount === 1 ? 'once' : a.fallbackCount + ' times'} after CDC had been active.</strong>
       In <code class="mono">AUTO</code> mode a fallback is silent by design — polling keeps delivering events, so this
       is the only place it surfaces.</div></div>` : ''}
     ${/* Warm-up polls are the normal startup case and must not look like a fault: subscriptions start before the
@@ -530,7 +541,9 @@ views.cdc = async () => {
       ${tile('Availability', stateBadge, 'changed ' + epoch(a.lastChangedEpochMs))}
       ${tile('Published events', d ? num(d.publishedEvents) : nil(), d ? 'last batch ' + d.lastBatchSize : 'dispatcher not running')}
       ${tile('Poison rows', d ? num(d.poisonRows) : nil(), d && d.poisonRows > 0 ? 'inspect inbox' : null, d ? d.poisonRows > 0 : false)}
-      ${tile('Fallbacks', num(a.fallbackCount), 'since CDC went active', a.fallbackCount > 0)}
+      ${tile('Interruptions', i ? num(i.count) : nil(), i ? (i.ongoing ? 'ongoing' : 'last ' + (i.lastInterruptedAt ? ts(i.lastInterruptedAt) : 'never')) : null,
+             i ? i.count > 0 : false)}
+      ${tile('Fallbacks', num(a.fallbackCount), 'subscription switches to polling', a.fallbackCount > 0)}
       ${tile('Slot WAL', `<span class="is-text">${esc(s.walStatus ?? '—')}</span>`,
              s.safeWalSize != null ? 'safe ' + (s.safeWalSize / 1073741824).toFixed(0) + ' GiB' : null)}
     </div>
@@ -541,6 +554,14 @@ views.cdc = async () => {
         { state: () => stateBadge, lastChanged: (v) => v, reason: (v) => (v == null ? nil('no reason reported') : esc(v)),
           everActive: bool,
           warmupPollCount: (v) => `${num(v)}<span class="tile-sub" style="font-size:12px"> · started before CDC was ready</span>` }))}
+
+      ${i ? card('Interruptions', kv({ count: i.count, ongoing: i.ongoing, lastInterruptedAt: i.lastInterruptedAt,
+                                       lastReason: i.lastReason, lastRecoveredAt: i.lastRecoveredAt },
+        { count: (v) => num(v), ongoing: (v) => (v ? badge('warning', 'yes') : badge('neutral', 'no')),
+          lastInterruptedAt: (v) => (v == null ? nil('never') : ts(v)),
+          lastReason: (v) => (v == null ? nil('none') : esc(v)),
+          lastRecoveredAt: (v) => (v == null ? nil('—') : ts(v)) }),
+        'Kept after CDC recovers — the availability reason is cleared') : ''}
 
       ${card('Replication slot', kv(s, {
         exists: bool, active: bool, expectedPluginMatches: bool, temporary: bool, failover: bool, synced: bool,

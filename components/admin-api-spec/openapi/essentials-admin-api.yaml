@@ -2855,6 +2855,25 @@ components:
         lastTickEpochMs:
           type: integer
           format: int64
+    ApiCdcInterruptions:
+      required:
+      - count
+      - ongoing
+      type: object
+      properties:
+        count:
+          type: integer
+          format: int64
+        ongoing:
+          type: boolean
+        lastInterruptedAt:
+          type: string
+          format: date-time
+        lastReason:
+          type: string
+        lastRecoveredAt:
+          type: string
+          format: date-time
     ApiCdcSlotStatus:
       required:
       - active
@@ -2930,6 +2949,8 @@ components:
           nullable: true
           allOf:
           - $ref: "#/components/schemas/ApiCdcDispatcherStatus"
+        interruptions:
+          $ref: "#/components/schemas/ApiCdcInterruptions"
     ApiCdcTailerStatus:
       required:
       - handlerFailures

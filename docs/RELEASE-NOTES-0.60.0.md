@@ -533,6 +533,23 @@ the statistics records itself needs the new component; see [§1.7](#17-subscript
 The polling statistics' description is corrected as well. It used to say they stay at zero under CDC, but a
 subscription polls when it starts before CDC is active and whenever it falls back to polling.
 
+### 2.8 CDC interruptions are recorded
+
+The CDC status has a new `interruptions` section. It counts every time CDC stopped being active other than by a
+requested stop, such as a dropped replication connection, a stream error, or the slot taken over by another
+instance. It also keeps whether the latest interruption is still ongoing, and when and why it began and when CDC
+recovered. It is reported in the admin API (`event-store/cdc/status`), in the health details (`interruptions.*`),
+as the metric `essentials.cdc.interruptions_total`, and on the admin UI's CDC page. Before this, an interruption
+that recovered on its own left no trace: the availability `reason` is cleared when CDC is active again.
+
+Two related corrections:
+
+- **`fallbackCount` now counts a running subscription that switches from CDC to polling**, not only one that
+  starts on polling. So one interruption adds one fallback per affected subscription, where before it added
+  nothing.
+- **A dropped replication connection logs one stack trace, not two.** The failed advisory-lock release that
+  follows it is now logged at DEBUG, because PostgreSQL releases the lock when the session ends.
+
 ---
 
 ## 3. Bug fixes

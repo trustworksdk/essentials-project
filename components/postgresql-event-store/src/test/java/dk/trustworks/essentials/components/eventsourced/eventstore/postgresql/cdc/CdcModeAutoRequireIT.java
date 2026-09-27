@@ -38,6 +38,7 @@ import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
+import static org.awaitility.Awaitility.await;
 import static org.assertj.core.api.Assertions.*;
 
 @Testcontainers
@@ -197,6 +198,44 @@ public class CdcModeAutoRequireIT {
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessageContaining("required");
         assertThat(availability.snapshot().reason()).contains("publication").contains("does not exist");
+    }
+
+    /**
+     * The trading-demo case: the server drops the replication connection (a suspended host outliving
+     * wal_sender_timeout ends the same way) and the tailer reconnects on its own. Availability's reason is cleared on
+     * recovery, so the interruption record is what shows it happened - and a requested stop must not add one.
+     */
+    @Test
+    void a_dropped_replication_connection_is_recorded_as_an_interruption_that_recovers() {
+        String slotName = "slot_" + UUID.randomUUID().toString().replace("-", "");
+        String publicationName = publicationName();
+        createPublication(publicationName);
+
+        var availability = new CdcAvailability();
+        var tailer = pgOutputDirectTailer(slotName, publicationName, availability, CdcMode.AUTO);
+        tailer.startAndAwaitReady(Duration.ofSeconds(10));
+        assertThat(availability.getState()).isEqualTo(CdcAvailability.State.ACTIVE);
+        assertThat(availability.interruptions().count()).isZero();
+
+        var terminated = adminJdbi.withHandle(h -> h.createQuery("select pg_terminate_backend(active_pid) from pg_replication_slots where slot_name = :slot and active_pid is not null")
+                                                    .bind("slot", slotName)
+                                                    .mapTo(Boolean.class)
+                                                    .list());
+        assertThat(terminated).as("the injection has to hit the tailer's walsender, or this proves nothing").containsExactly(true);
+
+        await().atMost(Duration.ofSeconds(15))
+               .untilAsserted(() -> {
+                   var interruptions = availability.interruptions();
+                   assertThat(interruptions.count()).isEqualTo(1);
+                   assertThat(interruptions.ongoing()).isFalse();
+                   assertThat(availability.getState()).isEqualTo(CdcAvailability.State.ACTIVE);
+               });
+        assertThat(availability.interruptions().lastReason()).isNotBlank();
+        assertThat(availability.interruptions().lastRecoveredAtEpochMs())
+                .isGreaterThanOrEqualTo(availability.interruptions().lastInterruptedAtEpochMs());
+
+        tailer.stop();
+        assertThat(availability.interruptions().count()).as("a requested stop is not an interruption").isEqualTo(1);
     }
 
     private void createPublication(String publicationName) {
