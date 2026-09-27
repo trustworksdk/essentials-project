@@ -16,6 +16,8 @@ What lives here is the machinery that makes the demo demonstrate something:
 | `QueueLoadGenerator` | Drives the **shard-owned queue engine** on both lanes at once — sustained trickle plus on-demand spikes — and checks per-key ordering as messages arrive |
 | `QueueLoadGeneratorController` | `/api/admin/queue-load` — status, start/stop, `POST /spike?size=N` |
 
+**The dashboard's SSE emitters never time out, so `TradingDashboardStreamService` completes them on `ContextClosedEvent`.** Without that an open dashboard tab held Spring Boot's graceful shutdown for the full 30 s phase timeout on every Ctrl-C, ending in `AsyncRequestTimeoutException`.
+
 ## Why these are not slices
 
 An automation slice reacts to a domain event and issues a follow-up command; a view slice answers a
