@@ -92,6 +92,29 @@ public final class ShardOwnedStorage {
         }
     }
 
+    /**
+     * Give the current transaction its xid now, before it allocates an ordered-lane sequence value.
+     * <p>
+     * The ordered lane's watermark steps over a sequence value only once no transaction that could still
+     * commit it is running, and it finds those transactions by their {@code backend_xid}. That holds only if
+     * a writer has an xid by the time it holds a value, and PostgreSQL does not guarantee it: an xid is
+     * assigned lazily, at the first heap write, and {@code nextval()} assigns one only on the calls that
+     * WAL-log - one in every 32. For the other 31, {@code INSERT ... VALUES (..., nextval(...))} takes the
+     * value first and the xid only when the row is written, and in between the writer is invisible. A second
+     * producer committing a higher value into the same unit in that window let the watermark pass the first
+     * one; its row landed below the cursor, reachable only by the head sweep, and a later {@code key_order}
+     * of the same key was delivered first. Seen once in twenty minutes with two instances producing into
+     * shared units; {@code ShardOwnedWatermarkXidWindowIT} holds the window open and reproduces it every time.
+     * <p>
+     * One extra statement per transaction. Harmless inside a caller's transaction, which is about to write
+     * anyway.
+     */
+    private static void assignTransactionIdBeforeAllocating(Connection connection) throws SQLException {
+        try (var statement = connection.prepareStatement("SELECT pg_current_xact_id()")) {
+            statement.execute();
+        }
+    }
+
     @FunctionalInterface
     private interface SqlCall<T> {
         T call() throws SQLException;
@@ -996,6 +1019,7 @@ public final class ShardOwnedStorage {
     }
 
     private List<Long> enqueueOrderedBatchInternal(Connection connection, int shard, List<OrderedPayload> messages) throws SQLException {
+        assignTransactionIdBeforeAllocating(connection);
         var sql = "INSERT INTO " + ORDERED_TABLE
                 + " (queue_id, shard, msg_key, key_order, seq, payload, payload_type, visible_at)"
                 + " VALUES (?, ?, ?, ?, nextval(?::regclass), ?, ?, now() + make_interval(secs => ? / 1000.0))";
@@ -1659,6 +1683,7 @@ public final class ShardOwnedStorage {
             var autoCommit = connection.getAutoCommit();
             connection.setAutoCommit(false);
             try {
+                assignTransactionIdBeforeAllocating(connection);
                 int restored;
                 try (var insert = connection.prepareStatement(
                         "INSERT INTO " + ORDERED_TABLE
@@ -1759,6 +1784,9 @@ public final class ShardOwnedStorage {
         try (var connection = dataSource.getConnection()) {
             connection.setAutoCommit(false);
             try {
+                if (ordered) {
+                    assignTransactionIdBeforeAllocating(connection);
+                }
                 int restored;
                 try (var insert = connection.prepareStatement(
                         "INSERT INTO " + table + " (" + columns + ") SELECT " + selected

@@ -584,6 +584,11 @@ final class OrderedShardOwner implements BatchReadableOwner {
                 var previous = highestDeliveredOrder.get(key);
                 if (previous != null && next.getKey() < previous) {
                     metrics.orderViolations.increment();
+                    // Logged, not only counted: a bare counter cannot be traced to a key, and a violation
+                    // is either a producer committing out of order or a defect here - both worth finding.
+                    log.warn("Ordered unit {}: key '{}' is being delivered key_order {} after {} was already "
+                                     + "delivered. Either the producer committed them out of order, or the row was "
+                                     + "stepped over and recovered late by the head sweep", shard, key, next.getKey(), previous);
                 }
                 highestDeliveredOrder.merge(key, next.getKey(), Math::max);
 
@@ -776,8 +781,12 @@ final class OrderedShardOwner implements BatchReadableOwner {
      * Move the watermark up to the newest value the transaction horizon has retired.
      * <p>
      * <b>The argument.</b> Sequence values are handed out in increasing order over time — one sequence
-     * object per {@code (queue, shard)}, {@code CACHE 1} — and a transaction is assigned its xid no
-     * later than the value it allocates. So every value at or below {@code maxSeen} was allocated by a
+     * object per queue for the ordered lane, {@code CACHE 1} — and a transaction is assigned its xid no
+     * later than the value it allocates. PostgreSQL does not make that last part true on its own: an xid
+     * is assigned lazily, and {@code nextval()} assigns one only on the one call in 32 that WAL-logs, so
+     * every enqueue path forces it first ({@code ShardOwnedStorage.assignTransactionIdBeforeAllocating}).
+     * Without that a writer held a value while invisible here, and the watermark stepped over it. So
+     * every value at or below {@code maxSeen} was allocated by a
      * transaction that already held an xid when this owner observed it, and any such transaction still
      * running is in the set recorded alongside. Once none of that set is running, every value at or
      * below that {@code maxSeen} has resolved: committed and visible, or aborted and never coming.

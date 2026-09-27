@@ -38,9 +38,10 @@ package dk.trustworks.essentials.components.queue.shardowned.spi;
  * @param retriesScheduled                 redeliveries the policy decided on
  * @param retriesDispatched                redeliveries actually handed back to a handler
  * @param deadLettered                     messages parked after exhausting the policy
- * @param orderViolations                  ordered messages delivered out of their producer's {@code key_order}. Non-zero
- *                                         means the producer numbered and committed in different orders, not that the
- *                                         engine reordered them
+ * @param orderViolations                  ordered messages delivered below a {@code key_order} already delivered for
+ *                                         their key. Expected to be zero. Non-zero means either the producer committed
+ *                                         a key's messages out of order, or the engine stepped over a row and recovered
+ *                                         it late; each one is logged at WARN with the key and both values
  * @param sweepRecoveries                  messages the backstop sweep found that the cursor had not reached. Not a
  *                                         defect by itself — a queue filling faster than it drains legitimately
  *                                         produces them — but a rising share means the fast path is not keeping up

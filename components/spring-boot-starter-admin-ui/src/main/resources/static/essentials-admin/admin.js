@@ -1367,7 +1367,7 @@ views.shardOwnedQueues = async () => {
                  ${tile('Retries', `${num(stats.retriesDispatched)} <span class="tile-sub" style="font-size:13px">of ${num(stats.retriesScheduled)} scheduled</span>`)}
                  ${tile('Dead-lettered', num(stats.deadLettered), null, stats.deadLettered > 0)}
                  ${tile('Order violations', num(stats.orderViolations),
-                        'A producer numbered and committed in different orders', stats.orderViolations > 0)}
+                        'A key delivered below its highest key_order so far — see the WARN naming the key', stats.orderViolations > 0)}
                </div>
                <div class="kpi-row">
                  ${tile('Keys blocked', num(stats.keysBlockedByDeadLetter),

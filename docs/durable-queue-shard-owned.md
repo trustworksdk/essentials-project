@@ -309,6 +309,8 @@ The per-`(queue, shard)` scoping is load-bearing **for the unordered lane**. Its
 
 The ordered lane does not need it, which is why it has one sequence per queue rather than 64. It no longer infers anything from density: its cursor is a safe watermark that advances only once the transaction horizon says no running writer could still commit a lower value, so sparse sequence values within a unit mean nothing to it. `CACHE 1` matters more there, not less — the watermark's safety argument rests on values being handed out in wall-clock order.
 
+It rests on one more thing, which PostgreSQL does not provide by itself: **a writer must hold its xid before it holds a sequence value.** The watermark finds running writers by `backend_xid`, but an xid is assigned lazily, at a transaction's first heap write. `nextval()` assigns one only on the one call in 32 that WAL-logs. For the other 31, `INSERT … VALUES (…, nextval(…))` takes the value first and gets the xid only when the row is written. In between, the writer holds a value while `backend_xid` is null, so it is invisible to the watermark. If a second producer commits a higher value into the same unit in that window, the watermark steps over the first value. The first row then commits below the cursor, where only the head sweep reaches it, and a later `key_order` of the same key is delivered first. That happened once in about twenty minutes in the trading demo with two instances producing into shared units. Every ordered insert path therefore runs `SELECT pg_current_xact_id()` first (`ShardOwnedStorage.assignTransactionIdBeforeAllocating`). `ShardOwnedWatermarkXidWindowIT` holds the window open with a `BEFORE INSERT` trigger, which runs after `nextval` and before the heap write, and it failed on every run before the fix.
+
 ---
 
 ## 3. Process topology
@@ -588,16 +590,14 @@ The ordered lane acknowledges by sequence value rather than by range, batched wi
 ### 8.1 Acquiring
 
 ```sql
-UPDATE shard_queue_lease
-   SET owner = ?,
-       fence = CASE WHEN owner = ? THEN fence ELSE fence + 1 END,
-       lease_until = now() + make_interval(secs => ? / 1000.0)
- WHERE queue_id = ? AND lane = ? AND shard = ?
-   AND (lease_until < now() OR owner = ? OR owner IS NULL)
-RETURNING fence;
+UPDATE shard_queue_lease l
+   SET owner = ?, lease_until = NULL, fence = l.fence + 1
+ WHERE l.queue_id = ? AND l.lane = ? AND l.shard = ?
+   AND (l.owner IS NULL OR l.owner = ? OR <the owner's instance row is stale>)
+RETURNING l.fence;
 ```
 
-The fence increments on a **change** of owner and not on a renewal. An instance takes at most `ceil(shardCount / liveInstances)` shards, which makes the assignment self-balancing with no coordinator: every instance derives the same fair share from the same `shard_queue_instance` table, so the split converges with nobody deciding it.
+The fence increments on **every** acquisition. An instance's units carry no expiry: their liveness is the owner's row in `shard_queue_instance`. So nothing renews a unit, and this statement only ever takes a unit the queue instance does not hold in memory. A row that already names the same owner therefore belongs to an earlier incarnation. That is either this queue before a `stop()` that kept a busy ordered unit, or another process that ran under the same instance id. Taking the row over under the old fence would leave that incarnation's writes valid. Pull sessions do renew (`acquireSessionLease`), and they keep the fence on a renewal. An instance takes at most `ceil(shardCount / liveInstances)` shards, which makes the assignment self-balancing with no coordinator: every instance derives the same fair share from the same `shard_queue_instance` table, so the split converges with nobody deciding it.
 
 ### 8.2 Lease lifecycle
 
