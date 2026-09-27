@@ -87,11 +87,13 @@ for; one instance exercises none of its ownership, rebalancing or fencing.
   instance 2 would take that instance out of the exercise entirely. It is safe to run everywhere
   because each instance produces under its own ordered key prefix; see `_demo_harness/CLAUDE.md`.
 
-- **A distinct `instance-id` is not optional, and getting it wrong is silent.** The engine defaults
-  it to the hostname — right on a container platform, wrong for two processes on one machine. They
-  would register as *one* instance, and since `acquireLease` matches when `owner` already equals the
-  asking instance *without bumping the fence*, both processes would own every unit and deliver the
-  same messages. Per-key ordering is gone at that point and nothing reports it.
+- **A distinct `instance-id` is not optional.** The engine defaults it to the hostname — right on a
+  container platform, wrong for two processes on one machine. They would register as *one* instance,
+  and `acquireLease` accepts a unit whose `owner` already equals the asking instance. It used to do so
+  *without bumping the fence*, so both processes owned every unit and delivered the same messages
+  silently. It now always bumps, so each takeover fences the other process out: ownership churns
+  between the two, in-flight messages are redelivered on every flip, and the `acknowledgement rejected`
+  WARNs are the symptom. Safer, still wrong — give each process its own id.
 - **A second instance looks idle, and is not.** Measured with two: `trading-events` splits 34 units
   each, nothing unowned. But the four projection queues are consumed by `demo-1` alone, because
   `EventProcessor`/`ViewEventProcessor` take *exclusive* subscriptions behind fenced locks — one

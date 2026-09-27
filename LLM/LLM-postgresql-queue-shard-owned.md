@@ -162,7 +162,7 @@ Full detail and the failure modes: [docs/durable-queue-shard-owned.md](../docs/d
 | `maxHolesPerChase` | 1 000 | **UNORDERED lane only.** Holes resolved per chase query | Rarely |
 | `watermarkCap` | 60 s | **ORDERED lane only.** How long one long-running *write* transaction may pin the lane before the cursor is forced past it — which can skip that transaction's messages | Leave it. It is an escape hatch, not a tuning knob; if it fires, fix the long transaction |
 | `leaseTtl` | 30 s | How long a shard stays unserved if its owner dies without releasing. Heartbeat renews at a third of it | Lower for faster failover, but not below your worst stop-the-world pause |
-| `shedGrace` | 5 s | How long an ordered shard waits to drain before abandoning a hand-over | Raise if handlers are slow and rebalancing stalls |
+| `shedGrace` | 5 s | How long an ordered shard waits to drain before abandoning a hand-over, and how long `stop()` waits for handlers in flight | Raise if handlers are slow and rebalancing stalls, or if `stop()` keeps ordered units |
 
 `watermarkCap` and `holeExpiry` answer the same question for different lanes and are deliberately
 separate settings with an order of magnitude between them. The ordered lane resolves a gap *exactly*
@@ -246,7 +246,7 @@ Almost never. The table is the whole answer:
 |---|---|---|
 | **Rolling redeploy** | no | nothing |
 | **Scale up** | no | nothing — new pods register and take a share within a heartbeat |
-| **Scale down / pod evicted** | no | nothing — a graceful stop releases its shards and deregisters immediately |
+| **Scale down / pod evicted** | no | nothing — a graceful stop drains in-flight handlers (up to `shedGrace`), releases its shards and deregisters immediately. An ordered unit whose key outlasts the grace is kept until this instance's liveness lapses (`leaseTtl`) instead, and the instance stays registered until then |
 | **Crash** | no | nothing — shards move when the lease expires (`leaseTtl`, 30 s default) |
 | **Grow an unordered queue** | yes | `growShardCount(...)`. That is all |
 | **Grow an ordered queue** | n/a | nothing to grow — the routing space is fixed |

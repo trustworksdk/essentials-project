@@ -626,6 +626,8 @@ The lease TTL is `ShardOwnerSettings.leaseTtl`, 30 seconds by default. It is its
 
 `ShardRuntime` is a restartable `Lifecycle` like everything above it — its executors are rebuilt by `start()`, because none of them can be revived once shut down. `stop()` releases every lease this instance holds, after the pumps have flushed their outstanding acknowledgements, so a rolling restart hands the shards over immediately instead of leaving them unserved for the remainder of the TTL.
 
+Before releasing, `stop()` **drains**: every owner stops dispatching, and the stop waits up to `shedGrace` for what is already in a handler, while the pumps go on acknowledging whatever finishes. Then the owners are ended, so a shared runtime's pumps stop serving them, and whatever acknowledgements remain are flushed under the still-valid fence. Without the drain, a handler running at stop lost its acknowledgement and the successor redelivered the message. On the ordered lane the successor could also start that key while it was still running here. If an ordered unit still has a key in a handler when the grace runs out, the unit is **kept rather than released**, and the instance stays registered. The unit becomes available when this instance's liveness lapses (`leaseTtl`), which is the same "unbalanced beats reordered" rule a rebalancing shed follows. Unordered units are released regardless, since at-least-once covers their redelivery.
+
 **Releasing a lease deliberately does not bump the fence.** The next acquirer does. Bumping on release would invalidate the releasing owner's own in-flight acknowledgements before it has finished draining them.
 
 ### 8.3 Fencing

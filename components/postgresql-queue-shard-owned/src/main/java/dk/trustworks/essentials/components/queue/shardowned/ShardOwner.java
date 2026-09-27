@@ -85,6 +85,10 @@ final class ShardOwner implements LeasedOwner {
      */
     private final    AtomicBoolean                                leaseHeld     = new AtomicBoolean(true);
     /**
+     * Set by {@link #beginDraining()}: nothing new is read or dispatched, acknowledgements still flush.
+     */
+    private final    AtomicBoolean                                draining      = new AtomicBoolean();
+    /**
      * Messages handed straight from a local enqueue, bypassing the read path entirely.
      * <p>
      * The head sweep deliberately does NOT exclude locally handed-off rows. If a hand-off is ever
@@ -204,6 +208,11 @@ final class ShardOwner implements LeasedOwner {
             metrics.wakeupsHonoured.increment();
             return true;
         }
+        if (draining.get()) {
+            // A drain only retires acknowledgements when this owner is pumped, and pumping it is cheap:
+            // it reads nothing, and flushes only when something finished.
+            return true;
+        }
         if (!localHandoffs.isEmpty()) {
             return true;
         }
@@ -277,7 +286,28 @@ final class ShardOwner implements LeasedOwner {
     }
 
     @Override
+    public void beginDraining() {
+        if (draining.compareAndSet(false, true)) {
+            wakeup.signal();
+        }
+    }
+
+    @Override
+    public int inFlight() {
+        synchronized (stateLock) {
+            return inFlight.size();
+        }
+    }
+
+    @Override
     public int pumpOnce(Connection connection) throws SQLException {
+        if (draining.get()) {
+            // Nothing new: not the local hand-offs, not the cursor, not a retry. A hand-off left
+            // undelivered is a pre-claimed row, which the next owner picks up - the same recovery a
+            // hand-off lost to a crash gets. Only what finished is acknowledged.
+            flushAcks(connection, true);
+            return 0;
+        }
         // Nothing useful to read with no budget to dispatch into: the rows would only be re-read.
         // Acknowledgements still have to go out, or the shard would never retire what it finished.
         if (dispatch.saturated()) {

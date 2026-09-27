@@ -86,6 +86,19 @@ interface LeasedOwner {
     boolean leaseHeld();
 
     /**
+     * Stop dispatching anything new, and let what is already in a handler finish. Acknowledgements keep
+     * flushing, so everything that completes is retired under this owner's fence. Irreversible, and
+     * independent of the ordered lane's rebalancing shed, which gives up and resumes dispatch when its
+     * grace runs out; a drain is for an owner that is going away regardless.
+     */
+    void beginDraining();
+
+    /**
+     * What is still in a handler: messages on the unordered lane, keys on the ordered lane.
+     */
+    int inFlight();
+
+    /**
      * Why an owner's lease ended, which decides how loudly it is reported.
      * <p>
      * The two look identical to the owner — it stops either way — and completely different to whoever

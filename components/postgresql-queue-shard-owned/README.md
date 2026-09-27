@@ -195,7 +195,7 @@ Re-registering a name with a *different* shard count is refused rather than acce
 |---|---|
 | `consume(handler, options)` | Registers a consumer and starts it. Returns a `Subscription` |
 | `start()` | Restarts consumers this queue created and then stopped. A queue that has never consumed has nothing to start |
-| `stop()` | Stops the consumers, **releasing their shard leases** so a successor picks them up immediately rather than waiting the lease out. They stay registered, so `start()` brings them back |
+| `stop()` | Stops the consumers: dispatches nothing new, **waits up to `shedGrace` for handlers already running** and acknowledges them, then **releases the shard leases** so a successor picks them up immediately rather than waiting the lease out. An ordered unit with a key still in a handler after the grace is kept instead, until this instance's liveness lapses, so no successor starts that key while it runs. They stay registered, so `start()` brings them back |
 | `close()` | `stop()` |
 
 Enqueueing and reading depth never require the queue to be started — matching `DurableQueues`, where
@@ -503,7 +503,7 @@ every queue once with a user that has them.
 | `maxHolesPerChase` | 1 000 | **Unordered lane only.** Holes resolved per chase query | Rarely |
 | `watermarkCap` | 60 s | **Ordered lane only.** How long one long-running *write* transaction may pin the lane before the cursor is forced past it — which can skip that transaction's messages | Leave it. An escape hatch, not a tuning knob; if it fires, fix the long transaction |
 | `leaseTtl` | 30 s | How long a shard stays unserved if its owner dies without releasing. The heartbeat renews at a third of it | Lower for faster failover, but not below your worst stop-the-world pause |
-| `shedGrace` | 5 s | How long an ordered shard waits to drain before abandoning a hand-over | Raise if handlers are slow and rebalancing stalls |
+| `shedGrace` | 5 s | How long an ordered shard waits to drain before abandoning a hand-over, and how long `stop()` waits for handlers in flight | Raise if handlers are slow and rebalancing stalls, or if `stop()` keeps ordered units |
 
 `watermarkCap` and `holeExpiry` answer the same question for different lanes, and are deliberately
 separate settings with an order of magnitude between them. The ordered lane resolves a gap *exactly*

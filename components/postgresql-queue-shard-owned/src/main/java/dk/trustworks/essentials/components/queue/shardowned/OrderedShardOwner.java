@@ -214,6 +214,11 @@ final class OrderedShardOwner implements BatchReadableOwner {
      * Set once the shard has quiesced and its acknowledgements are flushed — safe to release.
      */
     private final    AtomicBoolean                      shedComplete = new AtomicBoolean();
+    /**
+     * Set by {@link #beginDraining()}. Unlike {@link #shedding}, never cleared: the owner is going away
+     * whether or not its keys finish in time.
+     */
+    private final    AtomicBoolean                      draining     = new AtomicBoolean();
     private volatile long                               shedDeadlineNanos;
     /**
      * Whether this owner's instance has confirmed its own liveness recently enough to dispatch —
@@ -277,9 +282,10 @@ final class OrderedShardOwner implements BatchReadableOwner {
         if (nextVisibleAtNanos != Long.MAX_VALUE && now >= nextVisibleAtNanos) {
             return true;
         }
-        if (shedding.get()) {
+        if (shedding.get() || draining.get()) {
             // A shed only progresses when this owner is pumped, so it must not be skipped for being
-            // quiet — a shard nobody is enqueueing to is exactly the one that drains fastest.
+            // quiet — a shard nobody is enqueueing to is exactly the one that drains fastest. The
+            // same holds for a drain's acknowledgements.
             return true;
         }
         synchronized (stateLock) {
@@ -532,7 +538,7 @@ final class OrderedShardOwner implements BatchReadableOwner {
      * dispatch a key that already has something in flight.
      */
     private int dispatchReadyKeys() {
-        if (shedding.get()) {
+        if (shedding.get() || draining.get()) {
             // The whole point of the drain: no new key may start here once the shard is on its way
             // out, or the set this owner is waiting to empty never empties.
             return 0;
@@ -949,6 +955,20 @@ final class OrderedShardOwner implements BatchReadableOwner {
             return false;
         }
         return false;
+    }
+
+    @Override
+    public void beginDraining() {
+        if (draining.compareAndSet(false, true)) {
+            wakeup.signal();
+        }
+    }
+
+    @Override
+    public int inFlight() {
+        synchronized (stateLock) {
+            return keysInFlight.size();
+        }
     }
 
     /**

@@ -278,6 +278,14 @@ public final class ShardRuntime implements Lifecycle, AutoCloseable {
     }
 
     /**
+     * How many units the pumps are currently serving, across every queue and lane. Package-private: it is for
+     * asserting that a stopped queue's owners have left the pumps, not a figure to operate on.
+     */
+    int unitsServed() {
+        return pumps.stream().mapToInt(ShardPump::shardsServed).sum();
+    }
+
+    /**
      * Equivalent to {@link #stop()}, so try-with-resources and a container both work.
      */
     @Override

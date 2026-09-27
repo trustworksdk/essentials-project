@@ -979,14 +979,46 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
             heartbeat = null;
         }
         // Snapshot before releaseRuntime clears anything: the leases still have to be handed back
-        // afterwards, and the owner list is what says which ones this instance holds.
-        var held = List.copyOf(owners);
+        // afterwards, and the owner list is what says which ones this instance holds. Filtered on
+        // leaseHeld NOW, because ending the owners below turns it false for all of them.
+        var held = owners.stream().filter(LeasedOwner::leaseHeld).toList();
+        // Drain BEFORE releaseRuntime: the pumps are what flush a finishing handler's acknowledgement,
+        // and a runtime this queue created stops them. Without a drain, whatever was in a handler at
+        // stop lost its acknowledgement and was redelivered by the successor - and on the ordered lane
+        // the successor could start a key while this instance was still running it.
+        var stillInHandler = drain(held);
         // Hand the borrowed threads and connections back. A shared runtime keeps running for the
         // other queues; one this queue created is closed with it — and closing it is what flushes
         // the pumps' outstanding acknowledgements, so it has to happen before the leases go.
         releaseRuntime();
+        // End the owners, or a shared runtime goes on serving them. Its pumps outlive this queue - in
+        // Spring they run until the context destroys the runtime bean, after every graceful-shutdown
+        // phase - and cancelling the heartbeat above did nothing to stop them: they kept reading and
+        // dispatching for a queue that had been stopped, until the liveness gate noticed the missing
+        // heartbeat a lease TTL later and every owner of every stopped queue logged that it was
+        // pausing. An ended owner is skipped and dropped by its pump on the next pass.
+        held.forEach(owner -> owner.onLeaseEnded(LeasedOwner.LeaseEnd.RELEASED));
+        // An ordered unit with a key still in a handler is NOT handed back: a successor taking it now
+        // could start that key while it runs here, which is reordering. It is kept until this
+        // instance's liveness lapses - a lease TTL - which is also why the instance must stay
+        // registered. An unordered one is released regardless; at-least-once covers its redelivery.
+        var kept = stillInHandler.stream().filter(owner -> "ordered".equals(owner.lane())).toList();
+        var toRelease = held.stream().filter(owner -> !kept.contains(owner)).toList();
         withinShutdownBudget(() -> {
-            releaseHeldLeases(held);
+            // What the pumps would have flushed had they gone on serving these owners. Valid still:
+            // releasing a lease does not bump its fence, and the leases go only after this. Nothing to
+            // do for a runtime this queue closed itself - its pumps flushed on the way out.
+            flushAcknowledgements(held);
+            releaseHeldLeases(toRelease);
+            if (!kept.isEmpty()) {
+                log.warn("Instance {} is keeping {} ordered unit(s) [{}] on queue {}: a key was still in a handler "
+                                 + "{} after stop began. They become available to another instance when this one's "
+                                 + "liveness lapses ({} ms), so no successor starts a key that may still be running here. "
+                                 + "Raise shedGrace if handlers routinely outlast it",
+                         instanceId, kept.size(), summarise(kept.stream().map(LeasedOwner::shard).toList()), queueId,
+                         Duration.ofNanos(activeSettings.shedGraceNanos()), leaseTtlMillis);
+                return;
+            }
             // Stop counting towards everyone else's fair share. Releasing the leases without this
             // frees the shards and simultaneously forbids any survivor from taking them, for the
             // whole staleness window — which makes a graceful scale-in worse for the cluster than a
@@ -1045,6 +1077,60 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
     }
 
     /**
+     * Stop the owners dispatching and wait - up to {@code shedGrace} - for what is already in a handler.
+     * <p>
+     * The wait is on the pumps: they go on serving draining owners, which read and dispatch nothing but
+     * still flush the acknowledgement of every handler that finishes. The same grace the ordered lane
+     * gives a rebalancing shed, for the same reason - it bounds how long a key may still be running
+     * here - and on the stop path it also bounds how long shutdown waits for a slow handler.
+     *
+     * @return the owners with something still in a handler when the grace ran out
+     */
+    private List<LeasedOwner> drain(List<LeasedOwner> held) {
+        if (held.isEmpty() || runtime == null || !runtime.isStarted()) {
+            return List.of();
+        }
+        held.forEach(LeasedOwner::beginDraining);
+        var deadline = System.nanoTime() + activeSettings.shedGraceNanos();
+        while (true) {
+            var busy = held.stream().filter(owner -> owner.inFlight() > 0).toList();
+            if (busy.isEmpty() || System.nanoTime() >= deadline) {
+                return busy;
+            }
+            try {
+                Thread.sleep(10);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                return held.stream().filter(owner -> owner.inFlight() > 0).toList();
+            }
+        }
+    }
+
+    /**
+     * Flush the acknowledgements the given owners are still holding, on a connection of this queue's
+     * own. Best effort, like everything on the stop path: an acknowledgement that does not make it is
+     * redelivered by the successor, which at-least-once permits.
+     */
+    private void flushAcknowledgements(List<LeasedOwner> ended) {
+        if (ended.isEmpty()) {
+            return;
+        }
+        try (var connection = storage.connection()) {
+            for (var owner : ended) {
+                try {
+                    owner.flushOnStop(connection);
+                } catch (SQLException | RuntimeException e) {
+                    log.debug("Instance {} could not flush acknowledgements for {} unit {} on stop; they will be "
+                                      + "redelivered", instanceId, owner.lane(), owner.shard(), e);
+                }
+            }
+        } catch (SQLException e) {
+            log.debug("Instance {} could not get a connection to flush acknowledgements on stop; they will be "
+                              + "redelivered", instanceId, e);
+        }
+    }
+
+    /**
      * Hand every shard back on the way out.
      * <p>
      * Without this a graceful stop left the leases to expire on their own, so every shard this
@@ -1055,8 +1141,7 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
      * acknowledgements stay valid until a successor takes the shard and bumps it — which is why the
      * release is safe to do after the pumps have flushed rather than before.
      */
-    private void releaseHeldLeases(List<LeasedOwner> held) {
-        var stillHeld = held.stream().filter(LeasedOwner::leaseHeld).toList();
+    private void releaseHeldLeases(List<LeasedOwner> stillHeld) {
         if (stillHeld.isEmpty()) {
             return;
         }

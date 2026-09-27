@@ -782,22 +782,31 @@ public final class ShardOwnedStorage {
         }
     }
 
+    /**
+     * Take a unit for an instance. <b>Always bumps the fence</b>, including when the row already names this owner.
+     * <p>
+     * Keeping the fence for a matching owner is right for a renewal, which is what this statement once also was, and
+     * what {@link #acquireSessionLease} still is. For an instance it no longer renews anything - liveness is the
+     * instance row - and it is only ever called for a unit this queue instance does not hold in memory. So a row
+     * already naming this owner belongs to an earlier incarnation: this queue before a {@code stop()} that kept an
+     * ordered unit because a key was still in a handler, or an earlier process that ran under the same instance id.
+     * Taking it over under the same fence left that incarnation's writes valid - an in-JVM restart could start a key
+     * the old handler was still running, and two processes sharing an id both acknowledged. A new fence refuses them.
+     */
     public Optional<Long> acquireLease(String lane, int shard, String owner, long ttlMillis) throws SQLException {
         var sql = "UPDATE " + LEASE_TABLE + " l"
-                + " SET owner = ?, lease_until = NULL,"
-                + "     fence = CASE WHEN l.owner = ? THEN l.fence ELSE l.fence + 1 END"
+                + " SET owner = ?, lease_until = NULL, fence = l.fence + 1"
                 + " WHERE l.queue_id = ? AND l.lane = ? AND l.shard = ?"
                 + "   AND (l.owner IS NULL OR l.owner = ? OR" + ownerIsGoneClause() + ")"
                 + " RETURNING l.fence";
         try (var connection = dataSource.getConnection();
              var statement = connection.prepareStatement(sql)) {
             statement.setString(1, owner);
-            statement.setString(2, owner);
-            statement.setShort(3, queueId);
-            statement.setString(4, lane);
-            statement.setInt(5, shard);
-            statement.setString(6, owner);
-            statement.setLong(7, ttlMillis);
+            statement.setShort(2, queueId);
+            statement.setString(3, lane);
+            statement.setInt(4, shard);
+            statement.setString(5, owner);
+            statement.setLong(6, ttlMillis);
             try (var resultSet = statement.executeQuery()) {
                 return resultSet.next() ? Optional.of(resultSet.getLong(1)) : Optional.empty();
             }
