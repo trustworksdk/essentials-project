@@ -20,6 +20,7 @@ import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.ev
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.processor.EventProcessor
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.processor.EventProcessorDependencies
 import dk.trustworks.essentials.components.foundation.messaging.MessageHandler
+import dk.trustworks.essentials.components.foundation.messaging.UnitOfWorkMode
 import dk.trustworks.essentials.components.foundation.messaging.queue.OrderedMessage
 import dk.trustworks.essentials.examples.webshop.payment.config.PaymentAggregateTypes
 import dk.trustworks.essentials.examples.webshop.payment.events.CreditCardHoldPlaced
@@ -57,9 +58,28 @@ import org.springframework.stereotype.Service
  * it. A call made before the request was recorded is a charge that may exist at the bank with nothing in our
  * system to match it against - the one state from which no reconciliation is possible.
  *
- * And because the decider returns `null` when a request already exists, a redelivered `OrderPackagingRequested`
- * does not produce a second request. If the gateway call itself failed, the reconciler - not this policy - is
- * what tries again, using the key already on the recorded event.
+ * **Committed means committed - which is what `UnitOfWorkMode.NONE` is for.** By default a `@MessageHandler`
+ * runs inside one `UnitOfWork` from start to finish, so "send the command, then call the gateway" would put
+ * both inside the same open transaction: the request is not committed until the handler returns, *after* the
+ * call. Step 1 would be written first and committed last, and the rule above would hold on paper only. It also
+ * parks a pooled connection `idle in transaction` for the gateway's entire response time - one per parallel
+ * consumer, writing nothing.
+ *
+ * The two handlers that can complete the work item therefore declare `UnitOfWorkMode.NONE` and draw the
+ * transaction boundary themselves: the row update and `RequestFundsCapture` run in their own short
+ * `withUnitOfWork { }`, which commits, and only then does the blocking call run - with no transaction and no
+ * connection held. The two outcome handlers call no one and keep the default, `REQUIRED`; the mode is chosen per
+ * method, not per processor.
+ *
+ * The mode moves two responsibilities onto the handler, and this one already meets both:
+ *
+ * - **Idempotency.** The call is no longer part of the transaction that acknowledges the message, so a failure
+ *   after the request committed redelivers the event. The redelivery finds the request already recorded - the
+ *   decider returns `null` - and does not call again. If the gateway call itself failed, the reconciler - not
+ *   this policy - is what tries again, using the key already on the recorded event.
+ * - **A bounded call.** The gateway must answer well inside the durable queues' message-handling timeout (30s by
+ *   default), or the message is treated as stuck and delivered again while this attempt is still blocked. The
+ *   simulated gateway's `capture-request-latency` is 800ms.
  */
 @Service
 class CaptureFundsWhenPackagedPolicy(
@@ -99,48 +119,61 @@ class CaptureFundsWhenPackagedPolicy(
             ShippingAggregateTypes.SHIPPING_ORDERS
         )
 
-    @MessageHandler
+    @MessageHandler(unitOfWork = UnitOfWorkMode.NONE)
     fun on(e: CreditCardHoldPlaced, message: OrderedMessage) =
-        updateThenAct(e.id) { it.authorizedAmount = e.amount }
+        updateThenCapture(e.id) { it.authorizedAmount = e.amount }
 
-    @MessageHandler
+    @MessageHandler(unitOfWork = UnitOfWorkMode.NONE)
     fun on(e: OrderPackagingRequested, message: OrderedMessage) =
-        updateThenAct(e.id) { it.packaged = true }
+        updateThenCapture(e.id) { it.packaged = true }
 
     @MessageHandler
-    fun on(e: FundsCaptured, message: OrderedMessage) =
-        updateThenAct(e.id) { it.outcome = "CAPTURED" }
+    fun on(e: FundsCaptured, message: OrderedMessage) {
+        update(e.id) { it.outcome = "CAPTURED" }
+    }
 
     @MessageHandler
-    fun on(e: FundsCaptureFailed, message: OrderedMessage) =
-        updateThenAct(e.id) { it.outcome = "FAILED" }
+    fun on(e: FundsCaptureFailed, message: OrderedMessage) {
+        update(e.id) { it.outcome = "FAILED" }
+    }
 
-    private fun updateThenAct(orderId: OrderId, change: (OrderAwaitingCapture) -> Unit) {
+    /**
+     * Two phases with a commit between them. Everything that touches the database happens inside
+     * [withUnitOfWork] and is committed when it returns; the gateway call happens after, outside any transaction.
+     *
+     * Nothing transactional may be touched between the two - with `UnitOfWorkMode.NONE` there is no ambient
+     * `UnitOfWork` to join, so reading the row out here instead of inside the block is the mistake to avoid.
+     */
+    private fun updateThenCapture(orderId: OrderId, change: (OrderAwaitingCapture) -> Unit) {
+        val requested: FundsCaptureRequested = withUnitOfWork<FundsCaptureRequested?> {
+            val row = update(orderId, change)
+            if (row.needsCapture()) requestCapture(orderId, row) else null
+        } ?: return
+
+        callGateway(orderId, requested)
+    }
+
+    private fun update(orderId: OrderId, change: (OrderAwaitingCapture) -> Unit): OrderAwaitingCapture {
         val row = awaitingCapture.findById(orderId.toString())
             .orElseGet { OrderAwaitingCapture(id = orderId.toString()) }
         change(row)
-        awaitingCapture.save(row)
-
-        if (!row.needsCapture()) {
-            return
-        }
-        capture(orderId, row)
+        return awaitingCapture.save(row)
     }
 
-    private fun capture(orderId: OrderId, row: OrderAwaitingCapture) {
-        val amount = row.authorizedAmount!!
+    /** Record the request. `null` means it was already recorded, so there is nothing for this delivery to do. */
+    private fun requestCapture(orderId: OrderId, row: OrderAwaitingCapture): FundsCaptureRequested? {
         // Derived, not random: every retry of this charge recomputes the same key. See IdempotencyKey.
         val idempotencyKey = IdempotencyKey.forOrderCapture(orderId)
+        // Already asked when this returns null. The answer is outstanding and the reconciler owns it - asking the
+        // gateway again here would be safe thanks to the key, but it would also be this policy quietly becoming
+        // a retry loop with no backoff and no visibility.
+        return paymentCommandBus.send(RequestFundsCapture(orderId, row.authorizedAmount!!, idempotencyKey))
+    }
 
-        val requested: FundsCaptureRequested? =
-            paymentCommandBus.send(RequestFundsCapture(orderId, amount, idempotencyKey))
-        if (requested == null) {
-            // Already asked. The answer is outstanding and the reconciler owns it - asking the gateway again
-            // here would be safe thanks to the key, but it would also be this policy quietly becoming a retry
-            // loop with no backoff and no visibility.
-            return
-        }
-
+    /** The blocking call. By the time it runs, the request it answers is committed and the connection is back. */
+    private fun callGateway(orderId: OrderId, requested: FundsCaptureRequested) {
+        val amount = requested.amount
+        val idempotencyKey = requested.idempotencyKey
         logger.info("Capturing {} for order '{}' under key '{}'", amount, orderId, idempotencyKey)
         val accepted = paymentGateway.requestCapture(idempotencyKey, orderId, amount)
         logger.info(

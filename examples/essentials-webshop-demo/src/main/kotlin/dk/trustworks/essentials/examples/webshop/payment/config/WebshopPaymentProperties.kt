@@ -41,6 +41,19 @@ data class WebshopPaymentProperties(
      */
     val failCaptureAbove: Amount = Amount.of("5000.00"),
 
+    /**
+     * How long the gateway takes to *accept* a capture request - the `202`, not the outcome.
+     *
+     * The blocking call inside `CaptureFundsWhenPackagedPolicy`, made visible. A real gateway answers in a few
+     * hundred milliseconds on a good day and in seconds on a bad one, and for that whole time the calling thread
+     * waits. The policy declares its handler `UnitOfWorkMode.NONE` so that no database connection waits with it.
+     *
+     * Keep it comfortably below `essentials.durable-queues.message-handling-timeout` (30s by default). Past that
+     * timeout the in-flight message is treated as stuck and can be redelivered while the first attempt is still
+     * blocked here.
+     */
+    val captureRequestLatency: Duration = Duration.ofMillis(800),
+
     /** How long the gateway takes to call back. Long enough to see the pending state, short enough to demo. */
     val webhookDelay: Duration = Duration.ofMillis(1500),
 

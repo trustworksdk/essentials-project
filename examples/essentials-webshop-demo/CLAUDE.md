@@ -64,6 +64,14 @@ external_systems/<slice>/`, plus `events/ types/ routing/ config/` as context's 
 - **The idempotency key is derived (`IdempotencyKey.forOrderCapture`), and the request is recorded as an event
   before the gateway is called.** A key minted per retry is not an idempotency key; a charge made before the
   request was recorded cannot be reconciled.
+- **Capture handlers are `UnitOfWorkMode.NONE` — that is what makes "record, then call" true.** Under default
+  `REQUIRED` the whole handler is one transaction: `FundsCaptureRequested` commits *after* the gateway call, and a
+  connection sits `idle in transaction` through it. `CaptureFundsWhenPackagedPolicy` wraps row update + command in
+  `withUnitOfWork { }`, then calls the gateway with nothing held. Touch no repository between the two. Only the two
+  handlers that can trigger capture are `NONE`; outcome handlers stay `REQUIRED`. Gateway latency
+  (`capture-request-latency`, 800ms) must stay well under `message-handling-timeout` (30s). `WebshopFlowIT`'s
+  `RecordingPaymentGateway` asserts no UoW/tx at call time and the request already visible — flip a handler back
+  to `REQUIRED` and it fails. `HoldFundsOnOrderPlacedPolicy.placeHold` is also a blocking call, still `REQUIRED`.
 - **A webhook outcome arrives twice, early, or never** — idempotent decider; retryable
   `CaptureNotYetRequestedException` (never `require(...)`, which dead-letters instantly); and
   `captures_awaiting_outcome` + `CaptureReconciler`, the only clock-triggered automation here.

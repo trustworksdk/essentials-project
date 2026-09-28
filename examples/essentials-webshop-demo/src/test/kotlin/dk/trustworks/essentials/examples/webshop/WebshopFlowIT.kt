@@ -16,7 +16,14 @@
 
 package dk.trustworks.essentials.examples.webshop
 
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.EventStore
 import dk.trustworks.essentials.examples.webshop.payment.automations.capture_funds_when_packaged.OrderAwaitingCaptureRepository
+import dk.trustworks.essentials.examples.webshop.payment.config.PaymentAggregateTypes
+import dk.trustworks.essentials.examples.webshop.payment.events.FundsCaptureRequested
+import dk.trustworks.essentials.examples.webshop.payment.external_systems.payment_gateway.CaptureAccepted
+import dk.trustworks.essentials.examples.webshop.payment.external_systems.payment_gateway.InMemoryPaymentGateway
+import dk.trustworks.essentials.examples.webshop.payment.external_systems.payment_gateway.PaymentGateway
+import dk.trustworks.essentials.examples.webshop.payment.types.IdempotencyKey
 import dk.trustworks.essentials.examples.webshop.payment.automations.hold_funds_on_order_placed.OrderAwaitingHoldRepository
 import dk.trustworks.essentials.examples.webshop.payment.views.captures_awaiting_outcome.CaptureAwaitingOutcomeViewRepository
 import dk.trustworks.essentials.examples.webshop.sales.types.Address
@@ -47,6 +54,10 @@ import org.junit.jupiter.api.Test
 import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc
 import org.springframework.boot.test.context.SpringBootTest
+import org.springframework.boot.test.context.TestConfiguration
+import org.springframework.context.annotation.Bean
+import org.springframework.context.annotation.Import
+import org.springframework.context.annotation.Primary
 import org.springframework.http.MediaType
 import org.springframework.test.web.servlet.MockMvc
 import org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get
@@ -55,8 +66,10 @@ import org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPat
 import org.springframework.test.web.servlet.result.MockMvcResultMatchers.status
 import org.springframework.test.context.DynamicPropertyRegistry
 import org.springframework.test.context.DynamicPropertySource
+import org.springframework.transaction.support.TransactionSynchronizationManager
 import org.testcontainers.postgresql.PostgreSQLContainer
 import java.time.Duration
+import java.util.concurrent.ConcurrentHashMap
 
 /**
  * The whole flow, through the command bus and back out of the read models: catalogue, basket, checkout, order
@@ -81,6 +94,7 @@ import java.time.Duration
     webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT
 )
 @AutoConfigureMockMvc
+@Import(WebshopFlowIT.RecordingPaymentGatewayConfiguration::class)
 class WebshopFlowIT {
 
     companion object {
@@ -130,6 +144,56 @@ class WebshopFlowIT {
             registry.add("webshop-demo.payment.reconcile-interval") { "500ms" }
         }
     }
+
+    /** What was true at the moment the capture policy made its blocking gateway call. */
+    data class CaptureCall(
+        val unitOfWorkActive: Boolean,
+        val springTransactionActive: Boolean,
+        val requestVisibleToAnotherTransaction: Boolean
+    )
+
+    /**
+     * The real simulated gateway, with a window onto its caller.
+     *
+     * `CaptureFundsWhenPackagedPolicy` claims two things about the moment it calls [requestCapture]: that no
+     * transaction - and so no pooled connection - is held for the duration of the call, and that the
+     * `FundsCaptureRequested` it answers is already committed. Neither is visible from the outcome, which is the
+     * same whether or not they hold, so this records both at the call itself.
+     */
+    class RecordingPaymentGateway(
+        private val delegate: InMemoryPaymentGateway,
+        private val eventStore: EventStore
+    ) : PaymentGateway by delegate {
+        val captureCalls = ConcurrentHashMap<OrderId, CaptureCall>()
+
+        override fun requestCapture(idempotencyKey: IdempotencyKey, orderId: OrderId, amount: Amount): CaptureAccepted {
+            val unitOfWorkActive = eventStore.unitOfWorkFactory.currentUnitOfWork.isPresent
+            // Only meaningful when no UnitOfWork is active: with one, this would join it and see its own
+            // uncommitted writes. The assertion on unitOfWorkActive comes first for that reason.
+            val requestVisible = eventStore.unitOfWorkFactory.withUnitOfWork<Boolean> { _ ->
+                eventStore.fetchStream(PaymentAggregateTypes.CREDIT_CARD_HOLDS, orderId)
+                    .map { stream -> stream.eventList().any { it.event().deserialize<Any>() is FundsCaptureRequested } }
+                    .orElse(false)
+            }
+            captureCalls[orderId] = CaptureCall(
+                unitOfWorkActive = unitOfWorkActive,
+                springTransactionActive = TransactionSynchronizationManager.isActualTransactionActive(),
+                requestVisibleToAnotherTransaction = requestVisible
+            )
+            return delegate.requestCapture(idempotencyKey, orderId, amount)
+        }
+    }
+
+    @TestConfiguration
+    class RecordingPaymentGatewayConfiguration {
+        @Bean
+        @Primary
+        fun recordingPaymentGateway(delegate: InMemoryPaymentGateway, eventStore: EventStore) =
+            RecordingPaymentGateway(delegate, eventStore)
+    }
+
+    @Autowired
+    private lateinit var recordingPaymentGateway: RecordingPaymentGateway
 
     @Autowired
     private lateinit var commandBus: CommandBus
@@ -235,6 +299,16 @@ class WebshopFlowIT {
             assertThat(summary).isPresent
             assertThat(summary.get().paymentStatus).isEqualTo("CAPTURED")
         }
+        // The capture handler is UnitOfWorkMode.NONE: its request was committed before the gateway was called, and
+        // nothing - no UnitOfWork, no Spring transaction, no pooled connection - was held while the call blocked.
+        assertThat(recordingPaymentGateway.captureCalls[orderId])
+            .isEqualTo(
+                CaptureCall(
+                    unitOfWorkActive = false,
+                    springTransactionActive = false,
+                    requestVisibleToAnotherTransaction = true
+                )
+            )
         // Settled, so the parcel may leave - and the unknown-outcome list is empty again.
         await().atMost(Duration.ofSeconds(10)).untilAsserted {
             val workItem = packagingList.findById(orderId.toString())

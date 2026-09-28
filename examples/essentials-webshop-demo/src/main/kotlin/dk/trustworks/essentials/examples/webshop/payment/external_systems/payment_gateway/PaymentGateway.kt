@@ -47,7 +47,9 @@ import java.util.concurrent.TimeUnit
  * were synchronous:
  *
  * - the answer may arrive **twice**, so the decider that records it must be idempotent;
- * - the answer may arrive **before** our own transaction commits, so the handler must retry rather than reject;
+ * - the answer may arrive **before** our own transaction commits, so the handler must retry rather than reject
+ *   (the capture policy commits its request before calling, which closes the window from its side - the webhook
+ *   handler still cannot assume every caller does);
  * - the answer may **never** arrive, so a request we have no answer for has to be findable and re-askable -
  *   which is why the request is recorded as an event before this is ever called, and why
  *   [outcomeFor] exists at all;
@@ -114,7 +116,7 @@ sealed interface HoldResult {
  * exercises the actual inbound path rather than a shortcut into the Inbox.
  *
  * Every dial is in [WebshopPaymentProperties]: which amounts decline, which amounts authorize and then fail to
- * settle, how long the callback takes, whether it is delivered twice (it is), and which amounts never get a
+ * settle, how long accepting a capture blocks the caller, how long the callback takes, whether it is delivered twice (it is), and which amounts never get a
  * callback at all. A real implementation would be the only thing that changes, and only this file would know.
  */
 @Service
@@ -156,6 +158,10 @@ class InMemoryPaymentGateway(
         orderId: OrderId,
         amount: Amount
     ): CaptureAccepted {
+        // The network round trip. A Thread.sleep is a fair stand-in: what matters to the caller is that its thread
+        // is blocked for this long, not what it is blocked on.
+        Thread.sleep(properties.captureRequestLatency.toMillis())
+
         val key = idempotencyKey.toString()
         val existing = charges[key]
         if (existing != null && existing !is CaptureState.NeverReceived) {

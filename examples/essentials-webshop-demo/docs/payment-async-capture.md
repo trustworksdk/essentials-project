@@ -47,6 +47,50 @@ lost. In every one of those cases the recorded request is what lets us find the 
 call made before the request was recorded is a charge that may exist at the bank with nothing in our system to
 match it against — the one state from which no reconciliation is possible.
 
+### "Committed" is a transaction boundary, so the handler has to own it
+
+A `@MessageHandler` runs inside one `UnitOfWork` by default (`UnitOfWorkMode.REQUIRED`). In that mode, "send the
+command, then call the gateway" is one transaction: the request is *written* first but *committed* last, after
+the call has returned. The rule above would hold in the source code and not in the database. The same default
+also keeps a pooled connection `idle in transaction` for the gateway's whole response time, one per parallel
+consumer, writing nothing.
+
+So the two handlers that can complete the work item declare the mode explicitly and draw the boundary
+themselves:
+
+```kotlin
+@MessageHandler(unitOfWork = UnitOfWorkMode.NONE)
+fun on(e: OrderPackagingRequested, message: OrderedMessage) =
+    updateThenCapture(e.id) { it.packaged = true }
+
+private fun updateThenCapture(orderId: OrderId, change: (OrderAwaitingCapture) -> Unit) {
+    val requested: FundsCaptureRequested = withUnitOfWork<FundsCaptureRequested?> {
+        val row = update(orderId, change)                                  // the policy's own state
+        if (row.needsCapture()) requestCapture(orderId, row) else null     // RequestFundsCapture
+    } ?: return                                                            // committed here
+
+    callGateway(orderId, requested)                                        // blocking, nothing held
+}
+```
+
+The outcome handlers (`FundsCaptured`, `FundsCaptureFailed`) call nothing external and keep the default. The
+mode is chosen per method, not per processor.
+
+`UnitOfWorkMode.NONE` hands the handler two obligations, and this one meets both:
+
+- **Idempotency.** The gateway call is no longer inside the transaction that acknowledges the message, so a
+  failure after the commit redelivers the event. The redelivery finds the request already recorded, the decider
+  returns `null`, and nothing calls the gateway a second time. A failed call is the reconciler's to retry.
+- **A bounded call.** The call must return well inside the durable queues' `message-handling-timeout` (30s by
+  default), or the message is reset as stuck and redelivered while the first attempt is still blocked. The
+  simulated gateway blocks for `webshop-demo.payment.capture-request-latency` (800ms) on every capture request,
+  so the wait is visible in the server log between `Capturing …` and `Gateway accepted …`.
+
+`WebshopFlowIT` checks this at the moment of the call rather than from the outcome, which is identical either
+way. A recording gateway notes whether a `UnitOfWork` or Spring transaction is active and whether
+`FundsCaptureRequested` is already visible to a fresh transaction. Switch either handler back to `REQUIRED` and
+the happy-path test fails.
+
 ## The idempotency key
 
 ```kotlin
