@@ -563,6 +563,7 @@ Two related corrections:
 | **`QueueMessage.builder().setMessage(…)` dropped ordering**, see [§1.1.3](#113-queuemessagebuildersetmessageorderedmessage-now-keeps-the-ordering) | Ordered-message producers |
 | **Jackson 3 `MismatchedInputException` was never classified as permanent.** It is now matched by class name, so it is recognised under Jackson 3 | Queue consumers |
 | **`alwaysRetryOn(...)` had no effect**, see [§1.1.2](#112-dead-letter-classification-changed-in-two-ways) | Custom redelivery policies |
+| **Slow-query statistics were always empty, and `pg_cron` was never created by the framework.** The check before the best-effort `CREATE EXTENSION` read `pg_extension` (installed) instead of `pg_available_extensions` (installable), so the create only ran when the extension already existed. `pg_stat_statements` is now created at startup when the server preloads it and the role may create extensions, and `pg_cron` when the server offers it; a refusal is logged and treated as unavailable without failing the start | Admin API query statistics, the Essentials scheduler |
 | **The queue statistics trigger counted a purge as a delivery.** Fixed by the replacement in [§2.4](#24-durable-queue-observability) | Statistics consumers |
 
 **The 0.50.1 fixes are all in 0.60,** either merged directly or made unnecessary by other work. The polling

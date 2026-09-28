@@ -283,9 +283,15 @@ public class DefaultEssentialsScheduler implements EssentialsScheduler, Lifecycl
                                                               );
 
             unitOfWorkFactory.usingUnitOfWork(uow -> {
-                var available = PostgresqlUtil.isPGExtensionAvailable(uow.handle(), "pg_cron");
+                // Created when the server offers it and this role may create it. The check used to read pg_extension,
+                // so CREATE EXTENSION ran only when pg_cron already existed - pg_cron worked only where something else
+                // had created it first. Refused under a savepoint, so a role without the privilege, or a database other
+                // than cron.database_name, disables pg_cron support instead of aborting the start.
+                var handle    = uow.handle();
+                var available = PostgresqlUtil.isPGExtensionAvailable(handle, "pg_cron")
+                        || (PostgresqlUtil.isPGExtensionInstallable(handle, "pg_cron")
+                        && PostgresqlUtil.executeAllowingRefusal(handle, "CREATE EXTENSION IF NOT EXISTS pg_cron;"));
                 if (available) {
-                    uow.handle().execute("CREATE EXTENSION IF NOT EXISTS pg_cron;");
                     boolean loaded = determineIfPgCronIsLoaded();
                     pgCronAvailable = loaded;
                     if (!loaded) {

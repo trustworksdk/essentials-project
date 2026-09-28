@@ -982,7 +982,10 @@ PostgresqlUtil.isValidFunctionName("my_function");  // true
 
 // Other
 int version = PostgresqlUtil.getServiceMajorVersion(handle);
-boolean hasPgCron = PostgresqlUtil.isPGExtensionAvailable(handle, "pg_cron");
+boolean installed   = PostgresqlUtil.isPGExtensionAvailable(handle, "pg_cron");    // already CREATEd in this database
+boolean creatable   = PostgresqlUtil.isPGExtensionInstallable(handle, "pg_cron");  // offered by the server
+boolean preloaded   = PostgresqlUtil.isPGLibraryPreloaded(handle, "pg_cron");      // in shared_preload_libraries
+boolean created     = PostgresqlUtil.executeAllowingRefusal(handle, "CREATE EXTENSION IF NOT EXISTS pg_cron");  // refusal does not abort the UoW
 ```
 
 **Validation Rules** (see [Security](#security) for full details):
@@ -1262,7 +1265,7 @@ All APIs require `principal` parameter for authorization. Throw `EssentialsSecur
 | `DBFencedLockApi` | `getAllLocks()`, `releaseLock()` |
 | `DurableQueuesApi` | `getQueueNames()`, `getQueuedMessages()`, `resurrectDeadLetterMessage()`, `deleteMessage()` |
 | `SchedulerApi` | `getPgCronJobs()`, `getExecutorJobs()` |
-| `PostgresqlQueryStatisticsApi` | `getTopTenSlowestQueries()` (requires `pg_stat_statements`) |
+| `PostgresqlQueryStatisticsApi` | `getTopTenSlowestQueries()` (requires `pg_stat_statements`: in the server's `shared_preload_libraries`, and created in the database — the API creates it at startup when the server preloads it and the role may create extensions; otherwise it returns an empty list) |
 
 ## Common Patterns
 
