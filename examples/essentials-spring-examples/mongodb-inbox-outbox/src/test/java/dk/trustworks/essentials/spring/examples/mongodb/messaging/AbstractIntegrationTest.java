@@ -40,8 +40,7 @@ public abstract class AbstractIntegrationTest {
     protected static MongoDBContainer mongoDBContainer = new MongoDBContainer(MONGO_IMAGE);
 
     @Container
-    protected static org.testcontainers.kafka.KafkaContainer kafkaContainer = new org.testcontainers.kafka.KafkaContainer(KAFKA_IMAGE)
-            .withStartupAttempts(2);
+    protected static org.testcontainers.kafka.KafkaContainer kafkaContainer = newKafkaContainer();
 
     @DynamicPropertySource
     protected static void setProperties(DynamicPropertyRegistry registry) {

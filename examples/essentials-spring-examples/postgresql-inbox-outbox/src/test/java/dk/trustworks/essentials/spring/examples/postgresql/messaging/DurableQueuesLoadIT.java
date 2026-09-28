@@ -56,8 +56,7 @@ public class DurableQueuesLoadIT {
             .withPassword("test")
             .withUsername("test");
     @Container
-    static org.testcontainers.kafka.KafkaContainer kafkaContainer      = new org.testcontainers.kafka.KafkaContainer(KAFKA_IMAGE)
-            .withStartupAttempts(2);
+    static org.testcontainers.kafka.KafkaContainer kafkaContainer      = newKafkaContainer();
 
 
     @DynamicPropertySource
