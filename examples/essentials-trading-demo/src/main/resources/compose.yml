@@ -1,3 +1,8 @@
+# The project name is pinned, not derived. Spring Boot runs the classpath copy of this file, from
+# target/classes, and an unnamed project is named after its directory - so the demo showed up as
+# "classes", and `docker compose down` run next to the module's own copy could not find it.
+name: essentials-trading-demo
+
 networks:
   default:
     name: essentials-trading-demo
@@ -16,5 +21,7 @@ services:
       POSTGRES_USER: essentials
       POSTGRES_PASSWORD: password
       POSTGRES_DB: essentials-trading-demo
-      POSTGRES_SHARED_PRELOAD_LIBRARIES: pg_cron
+    # shared_preload_libraries is set here, and only here: the official image has no environment
+    # variable for it. Loading pg_stat_statements is not enough on its own - the extension also has to
+    # be created in the database, which the application does at startup when it can.
     command: ["postgres", "-c", "shared_preload_libraries=pg_cron,pg_stat_statements", "-c", "cron.database_name=essentials-trading-demo", "-c", "wal_level=logical", "-c", "max_replication_slots=10", "-c", "max_wal_senders=10"]

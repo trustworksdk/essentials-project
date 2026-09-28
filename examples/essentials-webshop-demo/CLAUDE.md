@@ -6,7 +6,6 @@ Kotlin Spring Boot demo of Module 6's event model (`docs/presentation/Module 6 -
 
 ```bash
 mvn verify -pl :essentials-webshop-demo                  # 34 unit + 3 ITs (Docker)
-mvn -Pjackson2 verify -pl :essentials-webshop-demo -am   # other flavour; -am required
 mvn spring-boot:run -pl :essentials-webshop-demo -Dspring-boot.run.profiles=compose
 #   shop: /shop/index.html   admin: /essentials/admin
 mvn spring-boot:run -pl :essentials-webshop-demo -Dspring-boot.run.profiles=compose,compose-fresh
@@ -53,7 +52,7 @@ external_systems/<slice>/`, plus `events/ types/ routing/ config/` as context's 
 - **Semantic types subclass Java `CharSequenceType`** — deviates from `.claude/rules/code-style.md` (Kotlin should
   implement `*ValueType<SELF>`). Reason: Kotlin `value class` needs `jackson-module-kotlin` on the *persistence*
   mapper to write a scalar, and under Jackson 3 the starter ignores `Module` beans by design — app would need own
-  `JSONEventSerializer` + per-flavour source sets. `CharSequenceType` needs none.
+  `JSONEventSerializer`. `CharSequenceType` needs none.
 - **Async capture, webhook, idempotency, reconciliation: `docs/payment-async-capture.md`.** Read it before
   touching `payment` — it carries the reasoning for the five rules below and the failure cases they exist for.
 - **A new automation must not act on history** — both payment policies override
@@ -127,7 +126,7 @@ external_systems/<slice>/`, plus `events/ types/ routing/ config/` as context's 
 - **Payment automation owns its state — keep it that way.** `OrderAwaitingHold` lives in the automation slice,
   written and read back in the same handler + transaction. Earlier split (view slice + policy on its own
   subscription) worked most of the time: two subscriptions have no relative order, policy ran before row existed,
-  leaned on redelivery. Under `-Pjackson2` retries ran out → dead letter → order never charged. Every handler ends
+  leaned on redelivery. When retries ran out → dead letter → order never charged. Every handler ends
   by re-asking "row complete now?", so whichever event lands last triggers authorization.
 - **Dead letter is silent** — one ERROR line, a dead-letter row, a queue count. Nothing throws (no caller is
   waiting), no test fails, health stays green, business outcome never happens.

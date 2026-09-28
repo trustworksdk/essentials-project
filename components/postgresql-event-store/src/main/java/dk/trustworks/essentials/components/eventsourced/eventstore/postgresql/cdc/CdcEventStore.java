@@ -161,15 +161,13 @@ public class CdcEventStore<CONFIG extends AggregateEventStreamConfiguration> imp
      * @param cdcBus                the in-memory CDC fan-out bus
      * @param cdcProperties         the CDC configuration
      * @param availability          the shared CDC availability tracker
-     * @deprecated Use {@link #builder()}. This constructor declares an {@code Optional} parameter and/or more than five parameters; the builder names every argument and accepts both plain values and {@code Optional}s. It is unchanged and remains the implementation the builder delegates to.
      */
-    @Deprecated(forRemoval = true, since = "0.40.x")
-    public CdcEventStore(ConfigurableEventStore<CONFIG> delegate,
-                         EventStoreUnitOfWorkFactory<? extends EventStoreUnitOfWork> unitOfWorkFactory,
-                         EventStreamGapHandler<?> eventStreamGapHandler,
-                         CdcEventBus cdcBus,
-                         CdcProperties cdcProperties,
-                         CdcAvailability availability) {
+    CdcEventStore(ConfigurableEventStore<CONFIG> delegate,
+           EventStoreUnitOfWorkFactory<? extends EventStoreUnitOfWork> unitOfWorkFactory,
+           EventStreamGapHandler<?> eventStreamGapHandler,
+           CdcEventBus cdcBus,
+           CdcProperties cdcProperties,
+           CdcAvailability availability) {
         this(delegate, unitOfWorkFactory, eventStreamGapHandler, cdcBus, cdcProperties, availability, Optional.empty());
     }
 
@@ -181,10 +179,8 @@ public class CdcEventStore<CONFIG extends AggregateEventStreamConfiguration> imp
      * @param cdcProperties         the CDC configuration
      * @param availability          the shared CDC availability tracker
      * @param meterRegistry         optional {@link MeterRegistry} — when empty, no CDC event-store metrics are recorded
-     * @deprecated Use {@link #builder()}. This constructor declares an {@code Optional} parameter and/or more than five parameters; the builder names every argument and accepts both plain values and {@code Optional}s. It is unchanged and remains the implementation the builder delegates to.
      */
-    @Deprecated(forRemoval = true, since = "0.40.x")
-    public CdcEventStore(ConfigurableEventStore<CONFIG> delegate,
+    CdcEventStore(ConfigurableEventStore<CONFIG> delegate,
                          EventStoreUnitOfWorkFactory<? extends EventStoreUnitOfWork> unitOfWorkFactory,
                          EventStreamGapHandler<?> eventStreamGapHandler,
                          CdcEventBus cdcBus,
@@ -424,9 +420,17 @@ public class CdcEventStore<CONFIG extends AggregateEventStreamConfiguration> imp
                 })
                 .distinctUntilChanged();
 
+        // The source this subscription was last on. A switch off the CDC bus is a fallback in the same sense as
+        // starting on polling after CDC had been active (pollEvents records that case): without recording it, a
+        // running subscription that polled through a dropped replication connection left fallbackCount at zero.
+        var previousState = new AtomicReference<CdcAvailability.State>(null);
         return gatedStates
                 .switchMap(state -> {
                     if (liveSourceSwitchCounter != null) liveSourceSwitchCounter.increment();
+                    if (previousState.getAndSet(state) == CdcAvailability.State.ACTIVE && state != CdcAvailability.State.ACTIVE) {
+                        availability.fallbackUsed();
+                        if (fallbackPollCounter != null) fallbackPollCounter.increment();
+                    }
                     long resumeFrom = lastSeen.get() + 1;
                     if (state == CdcAvailability.State.ACTIVE) {
                         log.debug("[{}] Adaptive live source switching to CDC bus (resumeFrom={})",
@@ -563,6 +567,7 @@ public class CdcEventStore<CONFIG extends AggregateEventStreamConfiguration> imp
         var  range       = LongRange.between(fromInclusive, toInclusive);
         long startNs     = System.nanoTime();
 
+        var gapReconciliation = new AtomicReference<>(GapReconciliation.NONE);
         List<PersistedEvent> loaded =
                 unitOfWorkFactory.withUnitOfWork(uow -> {
                     List<GlobalEventOrder> transientGaps =
@@ -577,9 +582,15 @@ public class CdcEventStore<CONFIG extends AggregateEventStreamConfiguration> imp
                                     tenant.orElse(null)
                                                               ).toList();
 
-                    gapHandler.ifPresent(h -> h.reconcileGaps(aggregateType, range, events, transientGaps));
+                    gapHandler.ifPresent(h -> gapReconciliation.set(h.reconcileGapsAndReport(aggregateType, range, events, transientGaps)));
                     return events;
                 });
+        // Reported after the unit of work commits, as the polling path does. Backfill is invisible to the polling
+        // statistics, so without this the gaps a CDC subscription finds while catching up would be counted nowhere.
+        if (gapHandler.isPresent() && !gapReconciliation.get().isEmpty()) {
+            eventStore.getEventStoreSubscriptionObserver()
+                      .gapReconciliationOutcome(gapHandler.get().subscriberId(), aggregateType, gapReconciliation.get());
+        }
         if (backfillPageTimer != null) backfillPageTimer.record(System.nanoTime() - startNs, TimeUnit.NANOSECONDS);
         if (backfillLoadedSummary != null) backfillLoadedSummary.record(loaded.size());
         if (backfillQueryRangeSummary != null) backfillQueryRangeSummary.record(toInclusive - fromInclusive + 1);

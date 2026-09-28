@@ -91,16 +91,14 @@ public class BatchedPersistedEventSubscriber extends BaseSubscriber<PersistedEve
      * @param eventStore                 The {@link EventStore} to use
      * @param maxBatchSize               The maximum number of events to include in a batch before processing
      * @param maxLatency                 The maximum time to wait before processing a partial batch
-     * @deprecated Use {@link #builder()}. This constructor declares an {@code Optional} parameter and/or more than five parameters; the builder names every argument and accepts both plain values and {@code Optional}s. It is unchanged and remains the implementation the builder delegates to.
      */
-    @Deprecated(forRemoval = true, since = "0.40.x")
-    public BatchedPersistedEventSubscriber(BatchedPersistedEventHandler eventHandler,
-                                           EventStoreSubscription eventStoreSubscription,
-                                           BiConsumer<PersistedEvent, Throwable> onErrorHandler,
-                                           long eventStorePollingBatchSize,
-                                           EventStore eventStore,
-                                           int maxBatchSize,
-                                           Duration maxLatency) {
+    BatchedPersistedEventSubscriber(BatchedPersistedEventHandler eventHandler,
+                             EventStoreSubscription eventStoreSubscription,
+                             BiConsumer<PersistedEvent, Throwable> onErrorHandler,
+                             long eventStorePollingBatchSize,
+                             EventStore eventStore,
+                             int maxBatchSize,
+                             Duration maxLatency) {
         this(eventHandler,
              eventStoreSubscription,
              onErrorHandler,
@@ -125,10 +123,8 @@ public class BatchedPersistedEventSubscriber extends BaseSubscriber<PersistedEve
      * @param eventStore                            The {@link EventStore} to use
      * @param maxBatchSize                          The maximum number of events to include in a batch before processing
      * @param maxLatency                            The maximum time to wait before processing a partial batch
-     * @deprecated Use {@link #builder()}. This constructor declares an {@code Optional} parameter and/or more than five parameters; the builder names every argument and accepts both plain values and {@code Optional}s. It is unchanged and remains the implementation the builder delegates to.
      */
-    @Deprecated(forRemoval = true, since = "0.40.x")
-    public BatchedPersistedEventSubscriber(BatchedPersistedEventHandler eventHandler,
+    BatchedPersistedEventSubscriber(BatchedPersistedEventHandler eventHandler,
                                            EventStoreSubscription eventStoreSubscription,
                                            BiConsumer<PersistedEvent, Throwable> onErrorHandler,
                                            RetryBackoffSpec forwardToEventHandlerRetryBackoffSpec,

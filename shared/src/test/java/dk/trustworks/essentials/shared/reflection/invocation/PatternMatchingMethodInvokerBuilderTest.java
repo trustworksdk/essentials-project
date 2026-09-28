@@ -86,25 +86,6 @@ class PatternMatchingMethodInvokerBuilderTest {
     }
 
     @Test
-    void the_deprecated_optional_constructor_delegates_to_the_replacement() {
-        var testSubject              = new OrderEventHandlerWithoutFallback();
-        var noMatchingMethodsHandler = new TestNoMatchingMethodsHandler();
-        var orderAccepted            = new OrderAccepted("1");
-
-        @SuppressWarnings("removal")
-        var deprecated = new PatternMatchingMethodInvoker<>(testSubject,
-                                                            new SingleArgumentAnnotatedMethodPatternMatcher<>(EventHandler.class,
-                                                                                                              OrderEvent.class),
-                                                            InvocationStrategy.InvokeMostSpecificTypeMatched,
-                                                            Optional.of(noMatchingMethodsHandler),
-                                                            Optional.empty());
-
-        deprecated.invoke(orderAccepted);
-
-        assertThat(noMatchingMethodsHandler.calledWithArgument).isSameAs(orderAccepted);
-    }
-
-    @Test
     void a_configured_invocation_tracker_sees_every_dispatch() {
         var testSubject = new OrderEventHandlerWithoutFallback();
         var tracker     = new RecordingInvocationTracker();

@@ -97,12 +97,12 @@
         </dependency>
         <dependency>
             <groupId>dk.trustworks.essentials</groupId>
-            <artifactId>${essentials.types-jackson.artifactId}</artifactId>
+            <artifactId>types-jackson3</artifactId>
             <version>${project.version}</version>
         </dependency>
         <dependency>
             <groupId>dk.trustworks.essentials</groupId>
-            <artifactId>${essentials.immutable-jackson.artifactId}</artifactId>
+            <artifactId>immutable-jackson3</artifactId>
             <version>${project.version}</version>
         </dependency>
         <dependency>
@@ -199,21 +199,6 @@
         <dependency>
             <groupId>io.projectreactor</groupId>
             <artifactId>reactor-core</artifactId>
-        </dependency>
-        <!-- As in the sibling examples: the Jackson 2 artifacts stay declared so
-             EssentialsComponentsConfiguration's Jackson 2 fallback @Bean method remains resolvable even when the
-             application runs on the Jackson 3 flavour. -->
-        <dependency>
-            <groupId>com.fasterxml.jackson.core</groupId>
-            <artifactId>jackson-databind</artifactId>
-        </dependency>
-        <dependency>
-            <groupId>com.fasterxml.jackson.datatype</groupId>
-            <artifactId>jackson-datatype-jdk8</artifactId>
-        </dependency>
-        <dependency>
-            <groupId>com.fasterxml.jackson.datatype</groupId>
-            <artifactId>jackson-datatype-jsr310</artifactId>
         </dependency>
         <dependency>
             <groupId>org.springframework.boot</groupId>

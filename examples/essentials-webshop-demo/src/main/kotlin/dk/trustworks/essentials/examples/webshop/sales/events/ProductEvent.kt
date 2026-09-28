@@ -30,8 +30,7 @@ import dk.trustworks.essentials.types.Amount
  * **The constructor parameter names are part of the JSON contract**, not just naming. Jackson 3 reads parameter
  * names from the bytecode and uses the primary constructor as a properties-based creator, so a parameter named
  * differently from the property it populates deserializes as `null`. Renaming `price` to `initialPrice` below
- * would silently break every already-persisted event. Jackson 2 populates the backing fields instead - so this
- * only bites on one of the two flavours, which is why both are built.
+ * would silently break every already-persisted event.
  */
 sealed interface ProductEvent {
     val id: ProductId

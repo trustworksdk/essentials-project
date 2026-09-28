@@ -115,7 +115,7 @@ class NotifyPollingIT {
                 standardSingleTenantConfiguration(
                         aggregateType -> aggregateType + "_events",
                         EventStreamTableColumnNames.defaultColumnNames(),
-                        EssentialsJSONEventSerializers.createForActiveJacksonFlavor(),
+                        EssentialsJSONEventSerializers.create(),
                         IdentifierColumnType.UUID,
                         JSONColumnType.JSONB));
 
@@ -260,7 +260,60 @@ class NotifyPollingIT {
         assertThat(optimizer.currentDelayMs()).isEqualTo(200L);
     }
 
+    @Test
+    void enableNotifyTriggers_describesTheTriggerWithTheTable_forExistingAndNewTables_andWakesTheOptimizer() throws Exception {
+        registerAggregate(ORDERS, OrderId.class);
+        assertThat(triggerExists("orders_events")).as("no trigger before notify triggers are enabled").isFalse();
+
+        var registered = ConcurrentHashMap.<String>newKeySet();
+        persistenceStrategy.enableNotifyTriggers(tableName -> {
+            registered.add(tableName);
+            changeListener.listenToNotificationsFor(tableName, EventStreamTableChangeNotification.class);
+        });
+        assertThat(registered).containsExactly("orders_events");
+        assertThat(triggerExists("orders_events")).as("the sweep hands the existing table's trigger on").isTrue();
+
+        registerAggregate(PRODUCTS, OrderId.class);
+        assertThat(registered).containsExactlyInAnyOrder("orders_events", "products_events");
+        assertThat(triggerExists("products_events")).as("a table registered later gets its trigger with it").isTrue();
+        int triggerLedgerEntries = jdbi.withHandle(h -> h.createQuery("SELECT count(*) FROM essentials_schema_history " +
+                                                                              "WHERE module_id = 'postgresql-event-store' AND change_id = 'change-notification-trigger'")
+                                                         .mapTo(Integer.class)
+                                                         .one());
+        assertThat(triggerLedgerEntries).as("recorded in the ledger like the table").isEqualTo(2);
+
+        appendOrderEvent(OrderId.random());
+        awaitEpochAtLeast("orders_events", 1L, Duration.ofSeconds(5));
+    }
+
+    @Test
+    void enableNotifyTriggers_isOneShot_andExclusiveWithEnableNotifyTriggerInstallation() {
+        persistenceStrategy.enableNotifyTriggers(tableName -> {});
+        assertThatThrownBy(() -> persistenceStrategy.enableNotifyTriggers(tableName -> {}))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("only be called once");
+        assertThatThrownBy(() -> persistenceStrategy.enableNotifyTriggerInstallation(tableName -> {}))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("enableNotifyTriggers");
+    }
+
+    @Test
+    void enableNotifyTriggerInstallation_excludesEnableNotifyTriggers() {
+        persistenceStrategy.enableNotifyTriggerInstallation(tableName -> {});
+        assertThatThrownBy(() -> persistenceStrategy.enableNotifyTriggers(tableName -> {}))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("enableNotifyTriggerInstallation");
+    }
+
     // ── Helpers ────────────────────────────────────────────────────────────────────
+
+    private boolean triggerExists(String tableName) {
+        return jdbi.withHandle(h -> h.createQuery("SELECT 1 FROM pg_trigger WHERE tgname = :triggerName")
+                                     .bind("triggerName", "notify_on_" + tableName + "_changes")
+                                     .mapTo(Integer.class)
+                                     .findOne()
+                                     .isPresent());
+    }
 
     private void registerAggregate(AggregateType type, Class<?> idType) {
         persistenceStrategy.addAggregateEventStreamConfiguration(type,

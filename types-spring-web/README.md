@@ -25,11 +25,10 @@ This module enables seamless use of `SingleValueType` implementations as `@PathV
 | `KotlinValueTypeConverter` | production | Converts to **Kotlin** semantic types — see [Kotlin semantic types](#kotlin-semantic-types) for the narrow case this covers |
 | `EssentialsWebMvcConfigurer` | production | Registers both, for a servlet application |
 | `EssentialsWebFluxConfigurer` | production | Registers both, for a reactive application |
-| `WebMvcConfig`, `WebFluxConfig` | **test** | Jackson **2** body/codec setup for this module's own `-Pjackson2` test runs. Not API, not on your classpath, not a template to copy |
 
 Neither configurer is auto-configuration: declaring the dependency changes nothing until you
 `@Import` one. Neither touches HTTP message converters or codecs, so adding this module cannot
-change which Jackson major serialises your request and response bodies.
+change how your request and response bodies are serialised.
 
 ## Installation
 
@@ -116,36 +115,25 @@ That is the whole path-variable/request-param setup. It registers `SingleValueTy
 
 `@PathVariable`/`@RequestParam` conversion and `@RequestBody`/`@ResponseBody` serialisation are two
 unrelated mechanisms. The converter above does nothing for bodies; a Jackson module on the **web**
-`ObjectMapper` does, and no Essentials starter registers one there for you.
+`JsonMapper` does.
 
-Depend on the Essentials Jackson module matching **your application's Jackson major**:
-
-```xml
-<!-- Spring Boot 4 / Jackson 3 -->
-<dependency>
-    <groupId>dk.trustworks.essentials</groupId>
-    <artifactId>types-jackson3</artifactId>
-    <version>${essentials.version}</version>
-</dependency>
-
-<!-- Spring Boot 3 / Jackson 2 -->
-<dependency>
-    <groupId>dk.trustworks.essentials</groupId>
-    <artifactId>types-jackson</artifactId>
-    <version>${essentials.version}</version>
-</dependency>
-```
-
-Both publish `dk.trustworks.essentials.jackson.types.EssentialTypesJacksonModule` under the same fully
-qualified name — one extends Jackson 3's `tools.jackson.databind` module type, the other Jackson 2's
-`com.fasterxml.jackson.databind`. Only ever put one on the classpath.
+From 0.60 Essentials supports Jackson 3 only (matching Spring Boot 4). `types-jackson3` is a dependency of
+this module, so `dk.trustworks.essentials.jackson.types.EssentialTypesJacksonModule` is already on your
+classpath. Declare it as a bean and Spring Boot registers it on its web `JsonMapper`:
 
 ```java
 @Bean
-public Module essentialTypesJacksonModule() {   // the Module type of your Jackson major
+public EssentialTypesJacksonModule essentialTypesJacksonModule() {   // a tools.jackson.databind.JacksonModule
     return new EssentialTypesJacksonModule();
 }
 ```
+
+The Essentials Postgres and Mongo Spring Boot starters already define this bean, so an application using
+one of them needs nothing extra. (Those starters do *not* pass web-layer module beans into their
+persistence serializer — web and persistence mappers are configured independently.)
+
+> **Upgrading from 0.50 (Jackson 2):** replace a `types-jackson` dependency with `types-jackson3` (same
+> class names), and change `com.fasterxml.jackson.databind` imports to `tools.jackson.databind`.
 
 ### Complete WebMvc Example
 
@@ -197,10 +185,10 @@ Bodies are the same separate concern as under WebMvc — see
 
 > **Do not override `configureHttpMessageCodecs` to register the Essentials Jackson module.** Doing so
 > *replaces* the application's JSON codecs, and on Spring Boot 4 the usual copy-paste version of that
-> override swaps Jackson 3 for Jackson 2 across the whole application, silently. `EssentialsWebFluxConfigurer`
+> override silently throws away the codecs Boot built from its configured `JsonMapper`. `EssentialsWebFluxConfigurer`
 > deliberately implements `addFormatters` and nothing else, and
 > `EssentialsWebFluxConfigurerJackson3Test` asserts the codecs come out untouched. Register your Jackson
-> module on the `ObjectMapper`/`JsonMapper` bean instead and let Boot build the codecs from it.
+> module as a bean instead and let Boot build the codecs from it.
 
 ### Complete WebFlux Example
 
@@ -258,11 +246,11 @@ have it.
 
 Not covered by anything in this module, and not by `EssentialTypesJacksonModule` either — that
 registers serializers for the Java hierarchy. Register `jackson-module-kotlin`'s `KotlinModule` on the
-web `ObjectMapper`.
+web `JsonMapper`.
 
 The failure mode if you skip it is silent rather than loud: a `@JvmInline value class` serialises as
 `{"value":"order-4711"}` instead of `"order-4711"`, so the wire format changes with no error.
-`KotlinJacksonBodyJackson2Test` / `KotlinJacksonBodyJackson3Test` assert this on both Jackson majors.
+`KotlinJacksonBodyJackson3Test` asserts this.
 
 ## JSR-310 Temporal Types
 
@@ -317,10 +305,6 @@ public List<Order> findByDueDateParam(@RequestParam("dueDate") DueDate dueDate) 
 - **Nothing is registered until you `@Import` a configurer** - putting `types-spring-web` on the classpath has no
   effect on its own. There is no `AutoConfiguration.imports` in this module.
 
-- **`WebMvcConfig` / `WebFluxConfig` are test classes, not API** - they exist in `src/test` to give this module's own
-  `-Pjackson2` runs a Jackson 2 body setup. They are not on your classpath and are not a template. Use
-  `EssentialsWebMvcConfigurer` / `EssentialsWebFluxConfigurer`.
-
 - **ZonedDateTime URL encoding** - `ZonedDateTimeType` values must be URL-encoded in path variables and query parameters:
   ```java
   mockMvc.perform(get("/orders/by-time/{time}",
@@ -331,9 +315,9 @@ public List<Order> findByDueDateParam(@RequestParam("dueDate") DueDate dueDate) 
   param.
 
 - **JSON bodies are a separate mechanism** - `SingleValueTypeConverter` only handles `@PathVariable` and
-  `@RequestParam`. Bodies need `EssentialTypesJacksonModule` registered on the **web** `ObjectMapper`, from the
-  `types-jackson`/`types-jackson3` artifact matching your application's Jackson major. No Essentials starter does
-  this for you — the starters configure the persistence mapper.
+  `@RequestParam`. Bodies need `EssentialTypesJacksonModule` (from `types-jackson3`) registered on the **web** `JsonMapper`,
+  which Spring Boot does when it is declared as a bean. The Essentials Postgres/Mongo starters declare that bean;
+  without a starter, declare it yourself.
 
 - **Kotlin is only partly this module's job** - see [Kotlin semantic types](#kotlin-semantic-types). Value classes bind
   without any Essentials converter; Kotlin *bodies* need `jackson-module-kotlin` and are covered by neither converter
@@ -349,5 +333,4 @@ public List<Order> findByDueDateParam(@RequestParam("dueDate") DueDate dueDate) 
 
 - [LLM-types-spring-web.md](../LLM/LLM-types-spring-web.md) - API reference for LLM assistance
 - [types](../types) - Core types module (`SingleValueType`, `CharSequenceType`, etc.)
-- [types-jackson3](../types-jackson3) / [types-jackson](../types-jackson) - Jackson serialization for types, for
-  Jackson 3 and Jackson 2 respectively (required for JSON bodies)
+- [types-jackson3](../types-jackson3) - Jackson 3 serialization for types (required for JSON bodies)

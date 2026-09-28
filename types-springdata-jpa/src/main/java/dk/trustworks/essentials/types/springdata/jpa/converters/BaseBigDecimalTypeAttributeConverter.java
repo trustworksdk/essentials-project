@@ -23,7 +23,7 @@ import java.math.BigDecimal;
 
 /**
  * Base implementation for all JPA {@link AttributeConverter}'s that can convert between a concrete {@link BigDecimalType} sub-class
- * and a database {@link Long} value.<br>
+ * and a database {@link Double} value, which Hibernate maps to a <code>double precision</code> column.<br>
  * Example:
  * <pre>{@code
  * @Converter(autoApply = true)
@@ -33,8 +33,23 @@ import java.math.BigDecimal;
  *         return Amount.class;
  *     }
  * }}</pre>
+ * <br>
+ * <b>⚠ This mapping is lossy, and silently so.</b> Two consequences follow from the column being binary floating point:
+ * <ul>
+ *     <li><b>The scale of the value written is lost.</b> {@code Amount.of("1999.50")} is read back as {@code 1999.5}.
+ *         The two are numerically equal but not {@link BigDecimal#equals(Object)}-equal, because {@link BigDecimal} equality
+ *         is scale-sensitive - so an assertion, a cache key or a {@code Map} lookup against the value that was written fails.</li>
+ *     <li><b>Arithmetic in the database is floating point.</b> <code>sum</code>, <code>avg</code> and every SQL comparison on the
+ *         column are IEEE-754 operations, so sums over many rows drift, and a value beyond roughly 15-17 significant digits
+ *         cannot be represented at all.</li>
+ * </ul>
+ * For monetary and other exact decimal values, prefer {@link BaseBigDecimalTypeNumericAttributeConverter}, which maps to an exact
+ * <code>numeric</code> column. This class stays the auto-applied default so that existing schemas keep working - switching
+ * the default would change the generated column type, and a generated <code>numeric(38,2)</code> rounds, which is worse than
+ * what it replaces. See <code>docs/MIGRATION-0.60.md</code>.
  *
  * @param <T> the concrete type of {@link BigDecimalType} supported by this converter
+ * @see BaseBigDecimalTypeNumericAttributeConverter
  */
 public abstract class BaseBigDecimalTypeAttributeConverter<T extends BigDecimalType<T>> implements AttributeConverter<T, Double> {
     @Override

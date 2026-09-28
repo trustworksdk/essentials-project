@@ -75,8 +75,8 @@ The `sharedQueueTableName` parameter is used directly in SQL statements via stri
 var unitOfWorkFactory = new JdbiUnitOfWorkFactory(jdbi);
 var durableQueues = PostgresqlDurableQueues.builder()
     .setUnitOfWorkFactory(unitOfWorkFactory)
-    .setJsonSerializer(new JacksonJSONSerializer(
-        PostgresqlDurableQueues.createDefaultObjectMapper()))
+    .setJsonSerializer(new Jackson3JSONSerializer(
+        DurableQueuesSerialization.createDefaultObjectMapper()))
     .setSharedQueueTableName("message_queue")
     .build();
 
@@ -104,7 +104,6 @@ public DurableQueues durableQueues(
         HandleAwareUnitOfWorkFactory<? extends HandleAwareUnitOfWork> unitOfWorkFactory) {
     return PostgresqlDurableQueues.builder()
         .setUnitOfWorkFactory(unitOfWorkFactory)
-        .setTransactionMode(TransactionMode.SingleOperationTransaction)
         .setSharedQueueTableName("durable_queues")
         .build();
 }
@@ -117,19 +116,16 @@ public DurableQueues durableQueues(
 | `unitOfWorkFactory` | Required | Transaction factory |
 | `jsonSerializer` | Default Jackson | Message serialization |
 | `sharedQueueTableName` | `durable_queues` | Database table name |
-| `transactionMode` | `SingleOperationTransaction` | Transaction behavior |
+| `messageHandlingTimeout` | 30s | Timeout before an unacknowledged message is redelivered |
 | `useCentralizedMessageFetcher` | `true` | Polling mechanism |
 | `centralizedMessageFetcherPollingInterval` | 20ms | Polling interval |
-| `useOrderedUnorderedQuery` | `false` | Optimized query approach |
 
-### Transaction Modes
+### Transactions
 
-| Mode | Description | Recommended |
-|------|-------------|-------------|
-| `SingleOperationTransaction` | Each queue operation in own transaction | **Yes** |
-| `FullyTransactional` | Operations share parent transaction | No |
-
-> ⚠️ **Warning:** `FullyTransactional` mode causes issues with retries and dead letter handling because the transaction is marked for rollback and retry counts are never increased.
+Every queue operation runs in its own transaction: queueing, fetching, acknowledging, retrying and dead-lettering are
+separate, so a failing handler can never roll back its own retry count. (0.60 removed `TransactionalMode`; its
+`FullyTransactional` mode broke exactly that.) A `queueMessage` called inside a caller's `UnitOfWork` joins it, so the
+enqueue commits or rolls back with the caller's writes - which is what an Outbox relies on.
 
 ## Polling Mechanisms
 

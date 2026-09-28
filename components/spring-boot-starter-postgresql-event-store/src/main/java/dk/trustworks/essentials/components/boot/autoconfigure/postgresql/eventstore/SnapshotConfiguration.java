@@ -16,6 +16,7 @@
 
 package dk.trustworks.essentials.components.boot.autoconfigure.postgresql.eventstore;
 
+import dk.trustworks.essentials.components.boot.autoconfigure.postgresql.EssentialsComponentsProperties;
 import dk.trustworks.essentials.components.eventsourced.aggregates.snapshot.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.ConfigurableEventStore;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.persistence.table_per_aggregate_type.SeparateTablePerAggregateEventStreamConfiguration;
@@ -137,12 +138,16 @@ public class SnapshotConfiguration {
                                                          EventStoreUnitOfWorkFactory<? extends EventStoreUnitOfWork> unitOfWorkFactory,
                                                          JSONEventSerializer jsonSerializer,
                                                          EssentialsEventStoreProperties properties,
-                                                         Optional<MeterRegistry> meterRegistry) {
-        return new PostgresqlAggregateSnapshotStore(eventStore,
-                                                    unitOfWorkFactory,
-                                                    Optional.ofNullable(properties.getSnapshots().getSnapshotTableName()),
-                                                    jsonSerializer,
-                                                    meterRegistry);
+                                                         Optional<MeterRegistry> meterRegistry,
+                                                         EssentialsComponentsProperties essentialsComponentsProperties) {
+        return PostgresqlAggregateSnapshotStore.builder()
+                                               .setEventStore(eventStore)
+                                               .setUnitOfWorkFactory(unitOfWorkFactory)
+                                               .setSnapshotTableName(Optional.ofNullable(properties.getSnapshots().getSnapshotTableName()))
+                                               .setJsonSerializer(jsonSerializer)
+                                               .setMeterRegistry(meterRegistry)
+                                               .setSchemaOwnership(essentialsComponentsProperties.getSchema().getMode().schemaOwnership())
+                                               .build();
     }
 
     /**
@@ -250,10 +255,14 @@ public class SnapshotConfiguration {
     @ConditionalOnMissingBean
     public AggregateSnapshotJobRepository aggregateSnapshotJobRepository(EventStoreUnitOfWorkFactory<? extends EventStoreUnitOfWork> unitOfWorkFactory,
                                                                         EssentialsEventStoreProperties properties,
-                                                                        Optional<MeterRegistry> meterRegistry) {
-        return new PostgresqlAggregateSnapshotJobRepository(unitOfWorkFactory,
-                                                            Optional.ofNullable(properties.getSnapshots().getDurable().getJobTableName()),
-                                                            meterRegistry);
+                                                                        Optional<MeterRegistry> meterRegistry,
+                                                                        EssentialsComponentsProperties essentialsComponentsProperties) {
+        return PostgresqlAggregateSnapshotJobRepository.builder()
+                                                       .setUnitOfWorkFactory(unitOfWorkFactory)
+                                                       .setTableName(Optional.ofNullable(properties.getSnapshots().getDurable().getJobTableName()))
+                                                       .setMeterRegistry(meterRegistry)
+                                                       .setSchemaOwnership(essentialsComponentsProperties.getSchema().getMode().schemaOwnership())
+                                                       .build();
     }
 
     /**
@@ -276,12 +285,14 @@ public class SnapshotConfiguration {
                                                                                  EventStoreUnitOfWorkFactory<? extends EventStoreUnitOfWork> unitOfWorkFactory,
                                                                                  DurableAsyncSnapshotSettings settings,
                                                                                  Optional<MeterRegistry> meterRegistry) {
-        return new PostgresqlAggregateSnapshotJobProcessor(eventStore,
-                                                           snapshotStore,
-                                                           jobRepository,
-                                                           unitOfWorkFactory,
-                                                           settings,
-                                                           meterRegistry);
+        return PostgresqlAggregateSnapshotJobProcessor.builder()
+                                                      .setEventStore(eventStore)
+                                                      .setSnapshotStore(snapshotStore)
+                                                      .setJobRepository(jobRepository)
+                                                      .setUnitOfWorkFactory(unitOfWorkFactory)
+                                                      .setSettings(settings)
+                                                      .setMeterRegistry(meterRegistry)
+                                                      .build();
     }
 
     /**
@@ -332,7 +343,8 @@ public class SnapshotConfiguration {
                                                                                  DurableAsyncSnapshotSettings durableSettings,
                                                                                  EssentialsEventStoreProperties properties,
                                                                                  Optional<AggregateSnapshotJobRepository> jobRepository,
-                                                                                 Optional<MeterRegistry> meterRegistry) {
+                                                                                 Optional<MeterRegistry> meterRegistry,
+                                                                                 EssentialsComponentsProperties essentialsComponentsProperties) {
         return new DefaultAggregateSnapshotRepositoryFactory(eventStore,
                                                              unitOfWorkFactory,
                                                              jsonSerializer,
@@ -341,7 +353,8 @@ public class SnapshotConfiguration {
                                                              durableSettings,
                                                              properties,
                                                              jobRepository,
-                                                             meterRegistry);
+                                                             meterRegistry,
+                                                             essentialsComponentsProperties.getSchema().getMode().schemaOwnership());
     }
 
     /**

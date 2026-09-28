@@ -96,7 +96,7 @@ public class ViewEventProcessorIT {
 
         unitOfWorkFactory = new EventStoreManagedUnitOfWorkFactory(jdbi);
         eventMapper = new EventProcessorIT.TestPersistableEventMapper();
-        var jsonSerializer = EssentialsJSONEventSerializers.createForActiveJacksonFlavor();
+        var jsonSerializer = EssentialsJSONEventSerializers.create();
         var persistenceStrategy = new SeparateTablePerAggregateTypePersistenceStrategy(jdbi,
                                                                                        unitOfWorkFactory,
                                                                                        eventMapper,
@@ -104,12 +104,12 @@ public class ViewEventProcessorIT {
                                                                                                jsonSerializer,
                                                                                                IdentifierColumnType.UUID,
                                                                                                JSONColumnType.JSONB));
-        eventStore = new PostgresqlEventStore<>(unitOfWorkFactory,
-                                                persistenceStrategy,
-                                                Optional.empty(),
-                                                eventStore -> new PostgresqlEventStreamGapHandler<>(eventStore,
-                                                                                                    unitOfWorkFactory),
-                                                new EventStoreSubscriptionObserver.NoOpEventStoreSubscriptionObserver());
+        eventStore = PostgresqlEventStore.<SeparateTablePerAggregateEventStreamConfiguration>builder()
+                                         .setUnitOfWorkFactory(unitOfWorkFactory)
+                                         .setPersistenceStrategy(persistenceStrategy)
+                                         .setEventStreamGapHandlerFactory(eventStore -> new PostgresqlEventStreamGapHandler<>(unitOfWorkFactory))
+                                         .setEventStoreSubscriptionObserver(new EventStoreSubscriptionObserver.NoOpEventStoreSubscriptionObserver())
+                                         .build();
 
         fencedLockManager = PostgresqlFencedLockManager.builder()
                                                        .setEventBus(eventStore.localEventBus())
@@ -133,7 +133,6 @@ public class ViewEventProcessorIT {
         durableQueues = PostgresqlDurableQueues.builder()
                                                .setJsonSerializer(jsonSerializer)
                                                .setMessageHandlingTimeout(Duration.ofSeconds(2))
-                                               .setTransactionalMode(TransactionalMode.SingleOperationTransaction)
                                                .setUnitOfWorkFactory(unitOfWorkFactory)
                                                .build();
         durableQueues.start();

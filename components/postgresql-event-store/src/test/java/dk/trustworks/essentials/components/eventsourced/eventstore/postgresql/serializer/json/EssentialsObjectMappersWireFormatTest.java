@@ -19,9 +19,11 @@ package dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.s
 import dk.trustworks.essentials.components.foundation.json.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.persistence.EventMetaData;
 import dk.trustworks.essentials.components.foundation.messaging.queue.*;
+import dk.trustworks.essentials.types.*;
 import org.junit.jupiter.api.Test;
 
 import java.io.*;
+import java.math.BigDecimal;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.*;
 import java.time.*;
@@ -32,24 +34,24 @@ import static org.assertj.core.api.Assertions.assertThat;
 /**
  * Pins the JSON that {@link EssentialsObjectMappers} writes for persisted payloads.
  * <p>
- * The same golden document is asserted under both Jackson flavors — the build selects one via
- * {@code essentials.types-jackson.artifactId}, so running the suite under the default profile and under
- * {@code -Pjackson3} exercises both halves against a single expected format. That is what proves an application can
- * move to Jackson 3 and still read durable-queue payloads, event payloads and metadata that Jackson 2 wrote.
+ * The golden documents were written by the Jackson 2 mapper of Essentials 0.50, the format already in production
+ * databases. Each is asserted byte for byte and read back, which is what proves that durable-queue payloads, event
+ * payloads and metadata persisted before 0.60 stay readable now that only Jackson 3 remains.
  * <p>
- * The two mapper factories cannot be compared directly in one JVM: only one flavor's modules are ever on the classpath,
- * and asking for the other throws by design. The golden document is the shared reference that makes them comparable.
- * <p>
- * Regenerate deliberately, and only under the default (Jackson 2) profile, since that is the format already in
- * production databases:
+ * Never regenerate the existing documents: the Jackson 2 writer is gone, so a regenerated file would only record what
+ * Jackson 3 writes today and would stop proving anything about data already persisted. The switch below exists for
+ * adding a document for a new shape, and its output needs review as the format commitment it is:
  * <pre>{@code
- * mvn -pl components/postgresql-event-store test -Dtest=EssentialsObjectMappersWireFormatTest -Dwireformat.regenerate=true
+ * mvn -pl components/postgresql-event-store -am test -Dtest=EssentialsObjectMappersWireFormatTest -Dwireformat.regenerate=true
  * }</pre>
  */
 class EssentialsObjectMappersWireFormatTest {
 
     private static final String GOLDEN_RESOURCE = "/wire-format/queue-payload.json";
     private static final Path   GOLDEN_SOURCE   = Path.of("src", "test", "resources", "wire-format", "queue-payload.json");
+
+    private static final String SHAPES_GOLDEN_RESOURCE = "/wire-format/persisted-shapes.json";
+    private static final Path   SHAPES_GOLDEN_SOURCE   = Path.of("src", "test", "resources", "wire-format", "persisted-shapes.json");
 
     private final JSONSerializer serializer = EssentialsObjectMappers.createJSONSerializer();
 
@@ -108,6 +110,167 @@ class EssentialsObjectMappersWireFormatTest {
         assertThat(serializer.deserialize(json, EventMetaData.class)).isEqualTo(eventMetaData);
     }
 
+    /**
+     * The payload shapes applications persist beyond the value types themselves: an immutable class with no default
+     * constructor, a record, enums, collections, explicit nulls, plain {@link BigDecimal}, {@link Instant},
+     * {@link UUID}, nested objects and {@link MessageMetaData}. The golden document was written by the Jackson 2 mapper,
+     * so this is the proof that Jackson 3 both reproduces and reads what is already in production databases.
+     * <p>
+     * {@link Optional} fields are deliberately absent: the Jackson 2 serializer could never write them (its
+     * {@code setClassLoader} replaced the mapper's {@code TypeFactory} and with it {@code Jdk8Module}'s type modifier),
+     * so no Jackson 2 format for them exists in any database. The {@link Money} amount has no trailing zero for a
+     * related reason: Jackson 2's {@code MoneyDeserializer} reads through a tree, whose node factory strips trailing
+     * zeros, so Jackson 2 itself read {@code 12.50} back as the scale-unequal {@code 12.5}. Jackson 3 keeps the scale.
+     */
+    @Test
+    void the_persisted_format_of_common_payload_shapes_is_unchanged() throws IOException {
+        var serialized = serializer.serialize(shapes());
+
+        if (Boolean.getBoolean("wireformat.regenerate")) {
+            Files.createDirectories(SHAPES_GOLDEN_SOURCE.getParent());
+            Files.writeString(SHAPES_GOLDEN_SOURCE, serialized + System.lineSeparator(), StandardCharsets.UTF_8);
+            System.out.println("Regenerated " + SHAPES_GOLDEN_SOURCE.toAbsolutePath());
+            return;
+        }
+
+        assertThat(serialized.trim())
+                .as("The persisted format of a common payload shape changed. Regenerate only if that is intended.")
+                .isEqualTo(golden(SHAPES_GOLDEN_RESOURCE).trim());
+    }
+
+    @Test
+    void common_payload_shapes_persisted_by_jackson_2_deserialize() throws IOException {
+        var deserialized = serializer.deserialize(golden(SHAPES_GOLDEN_RESOURCE), PersistedShapes.class);
+
+        assertThat(deserialized).isEqualTo(shapes());
+    }
+
+    private static PersistedShapes shapes() {
+        var metaData = new MessageMetaData(new TreeMap<>(Map.of("correlation_id", "corr-1", "tenant", "tenant-1")));
+        return new PersistedShapes(new ImmutableOrderLine(QueueEntryId.of("line-1"), 3, Money.of("12.75", "EUR")),
+                                   new ShipmentRecord("shipment-1", Instant.parse("2026-01-15T10:30:00.123456Z"), Status.SHIPPED),
+                                   Status.PENDING,
+                                   List.of(QueueName.of("orders"), QueueName.of("invoices")),
+                                   new TreeSet<>(Set.of("a", "b")),
+                                   null,
+                                   new BigDecimal("1234.5678901234567890123"),
+                                   Amount.of("99.95"),
+                                   LocalDate.of(2026, 2, 28),
+                                   UUID.fromString("0b0e6b8e-5c4e-4a7a-9f0e-3f4b2c1d0e9a"),
+                                   Long.MAX_VALUE,
+                                   true,
+                                   metaData);
+    }
+
+    enum Status {PENDING, SHIPPED}
+
+    /** A Java record, persisted field by field in declaration order. */
+    record ShipmentRecord(String shipmentId, Instant shippedAt, Status status) {
+    }
+
+    /**
+     * Immutable, with no default constructor: the shape {@code EssentialsImmutableJacksonModule} exists for under
+     * Jackson 2, and the shape Jackson 3 instead populates through its constructor (parameter names match the fields).
+     */
+    static final class ImmutableOrderLine {
+        private final QueueEntryId lineId;
+        private final int          quantity;
+        private final Money        price;
+
+        ImmutableOrderLine(QueueEntryId lineId, int quantity, Money price) {
+            this.lineId = lineId;
+            this.quantity = quantity;
+            this.price = price;
+        }
+
+        @Override
+        public boolean equals(Object o) {
+            return o instanceof ImmutableOrderLine that
+                    && Objects.equals(lineId, that.lineId)
+                    && quantity == that.quantity
+                    && Objects.equals(price, that.price);
+        }
+
+        @Override
+        public int hashCode() {
+            return Objects.hash(lineId, quantity, price);
+        }
+
+        @Override
+        public String toString() {
+            return "ImmutableOrderLine{lineId=" + lineId + ", quantity=" + quantity + ", price=" + price + "}";
+        }
+    }
+
+    static final class PersistedShapes {
+        private ImmutableOrderLine orderLine;
+        private ShipmentRecord     shipment;
+        private Status             status;
+        private List<QueueName>    queues;
+        private Set<String>        tags;
+        private String             explicitNull;
+        private BigDecimal         plainDecimal;
+        private Amount             amount;
+        private LocalDate          businessDate;
+        private UUID               uuid;
+        private long               largeLong;
+        private boolean            flag;
+        private MessageMetaData    metaData;
+
+        @SuppressWarnings("unused") // Jackson creator
+        PersistedShapes() {
+        }
+
+        PersistedShapes(ImmutableOrderLine orderLine, ShipmentRecord shipment, Status status, List<QueueName> queues,
+                        Set<String> tags, String explicitNull, BigDecimal plainDecimal, Amount amount, LocalDate businessDate, UUID uuid,
+                        long largeLong, boolean flag, MessageMetaData metaData) {
+            this.orderLine = orderLine;
+            this.shipment = shipment;
+            this.status = status;
+            this.queues = queues;
+            this.tags = tags;
+            this.explicitNull = explicitNull;
+            this.plainDecimal = plainDecimal;
+            this.amount = amount;
+            this.businessDate = businessDate;
+            this.uuid = uuid;
+            this.largeLong = largeLong;
+            this.flag = flag;
+            this.metaData = metaData;
+        }
+
+        @Override
+        public boolean equals(Object o) {
+            return o instanceof PersistedShapes that
+                    && Objects.equals(orderLine, that.orderLine)
+                    && Objects.equals(shipment, that.shipment)
+                    && status == that.status
+                    && Objects.equals(queues, that.queues)
+                    && Objects.equals(tags, that.tags)
+                    && Objects.equals(explicitNull, that.explicitNull)
+                    && Objects.equals(plainDecimal, that.plainDecimal)
+                    && Objects.equals(amount, that.amount)
+                    && Objects.equals(businessDate, that.businessDate)
+                    && Objects.equals(uuid, that.uuid)
+                    && largeLong == that.largeLong
+                    && flag == that.flag
+                    && Objects.equals(metaData, that.metaData);
+        }
+
+        @Override
+        public int hashCode() {
+            return Objects.hash(orderLine, shipment, status, queues, tags, explicitNull, plainDecimal, amount, businessDate, uuid, largeLong, flag, metaData);
+        }
+
+        @Override
+        public String toString() {
+            return "PersistedShapes{orderLine=" + orderLine + ", shipment=" + shipment + ", status=" + status
+                    + ", queues=" + queues + ", tags=" + tags + ", explicitNull=" + explicitNull + ", plainDecimal="
+                    + plainDecimal + ", amount=" + amount + ", businessDate=" + businessDate + ", uuid=" + uuid
+                    + ", largeLong=" + largeLong + ", flag=" + flag + ", metaData=" + metaData + "}";
+        }
+    }
+
     private static QueuePayload payload() {
         return new QueuePayload(QueueName.of("orders"),
                                 QueueEntryId.of("entry-1"),
@@ -118,9 +281,13 @@ class EssentialsObjectMappersWireFormatTest {
     }
 
     private static String golden() throws IOException {
-        try (InputStream goldenDocument = EssentialsObjectMappersWireFormatTest.class.getResourceAsStream(GOLDEN_RESOURCE)) {
+        return golden(GOLDEN_RESOURCE);
+    }
+
+    private static String golden(String resource) throws IOException {
+        try (InputStream goldenDocument = EssentialsObjectMappersWireFormatTest.class.getResourceAsStream(resource)) {
             assertThat(goldenDocument)
-                    .as("The golden wire-format document is missing from the test classpath at %s", GOLDEN_RESOURCE)
+                    .as("The golden wire-format document is missing from the test classpath at %s", resource)
                     .isNotNull();
             return new String(goldenDocument.readAllBytes(), StandardCharsets.UTF_8);
         }

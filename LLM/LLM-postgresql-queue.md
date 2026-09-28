@@ -21,10 +21,11 @@
 ## TOC
 - [Core API](#core-api)
 - [Configuration](#configuration)
-- [Transaction Modes](#transaction-modes)
+- [Transactions](#transactions)
 - [Polling Mechanisms](#polling-mechanisms)
 - [Polling Optimization](#polling-optimization)
 - [Database Schema](#database-schema)
+- [Dead-Letter Classification](#dead-letter-classification)
 - [Monitoring](#monitoring)
 - [Performance Tuning](#performance-tuning)
 - ⚠️ [Security](#security)
@@ -42,7 +43,6 @@ Base package: `dk.trustworks.essentials.components.queue.postgresql`
 |-------|---------|
 | `PostgresqlDurableQueues` | Main implementation |
 | `PostgresqlDurableQueuesBuilder` | Builder via `PostgresqlDurableQueues.builder()` |
-| `PostgresqlDurableQueuesStatistics` | Extended statistics API |
 | `PostgresqlDurableQueueConsumer` | Traditional per-consumer polling |
 
 Foundation classes (package: `dk.trustworks.essentials.components.foundation.messaging.queue`):
@@ -86,7 +86,6 @@ public SpringTransactionAwareJdbiUnitOfWorkFactory unitOfWorkFactory(
 public DurableQueues durableQueues(HandleAwareUnitOfWorkFactory unitOfWorkFactory) {
     return PostgresqlDurableQueues.builder()
         .setUnitOfWorkFactory(unitOfWorkFactory)
-        .setTransactionMode(TransactionMode.SingleOperationTransaction)
         .build();
 }
 ```
@@ -100,22 +99,19 @@ Created via `PostgresqlDurableQueues.builder()`.
 | `unitOfWorkFactory` | `HandleAwareUnitOfWorkFactory` | **Required** | JDBI transaction factory |
 | `jsonSerializer` | `JSONSerializer` | Jackson | Message serialization |
 | `sharedQueueTableName` | `String` | `durable_queues` | ⚠️ SQL injection risk - validate! |
-| `transactionMode` | `TransactionMode` | `SingleOperationTransaction` | See [Transaction Modes](#transaction-modes) |
+| `messageHandlingTimeout` | `Duration` | 30s | Stuck message timeout |
 | `useCentralizedMessageFetcher` | `boolean` | `true` | Centralized vs per-consumer |
 | `centralizedMessageFetcherPollingInterval` | `Duration` | 20ms | Polling interval |
-| `useOrderedUnorderedQuery` | `boolean` | `false` | Query optimization |
 | `queuePollingOptimizerFactory` | `Function<ConsumeFromQueue,QueuePollingOptimizer>` | null | For `DefaultDurableQueueConsumer` |
 | `centralizedQueuePollingOptimizerFactory` | `Function<QueueName,QueuePollingOptimizer>` | null | For `CentralizedMessageFetcher` |
 | `multiTableChangeListener` | `MultiTableChangeListener` | null | LISTEN/NOTIFY support |
 
-## Transaction Modes
+## Transactions
 
-| Mode | Behavior | Retries | DLQ | Recommended |
-|------|----------|---------|-----|-------------|
-| `SingleOperationTransaction` | Each op in own tx | ✅ Works | ✅ Works | ✅ **Use this** |
-| `FullyTransactional` | Join parent tx | ❌ Broken | ❌ Broken | ❌ Avoid |
-
-⚠️ **FullyTransactional breaks retry handling**: Transaction rollback prevents retry count updates and DLQ persistence.
+Every queue operation runs in its own transaction: queueing, fetching, acknowledging, retrying and dead-lettering are
+separate, so a failing handler can never roll back its own retry count. (0.60 removed `TransactionalMode`; its
+`FullyTransactional` mode broke exactly that.) A `queueMessage` called inside a caller's `UnitOfWork` joins it, so the
+enqueue commits or rolls back with the caller's writes - which is what an Outbox relies on.
 
 ## Polling Mechanisms
 
@@ -238,7 +234,10 @@ var durableQueues = PostgresqlDurableQueues.builder()
 
 ## Database Schema
 
-Auto-created on start.
+Auto-created on start - unless a schema harness owns it: `PostgresqlDurableQueuesBuilder.setSchemaOwnership(SchemaOwnership.HARNESS)`
+(the Spring starter does it when `essentials.schema.mode` is not `create`), after which the queues are a schema
+contributor (module `postgresql-queue`) - see [LLM-foundation.md](./LLM-foundation.md#database-schema-harness). The legacy index drops and the 0.50 queue-statistics
+removal stay repeatable changes, so a 0.50 instance restarting mid-rollout cannot leave them behind.
 
 ```sql
 CREATE TABLE durable_queues (
@@ -272,22 +271,7 @@ Auto-created. `*` = table name.
 CREATE INDEX idx_*_ordered_msg
   ON durable_queues (queue_name, key, key_order);
 
--- Next message to deliver
-CREATE INDEX idx_*_next_msg
-  ON durable_queues (queue_name, is_dead_letter_message, is_being_delivered, next_delivery_ts);
-
--- Ready messages (general)
-CREATE INDEX idx_*_ready
-  ON durable_queues (queue_name, next_delivery_ts, key, key_order)
-  WHERE is_dead_letter_message = FALSE AND is_being_delivered = FALSE;
-
--- Ordered messages ready (when useOrderedUnorderedQuery=true)
-CREATE INDEX idx_*_ordered_ready
-  ON durable_queues (key, queue_name, key_order, next_delivery_ts)
-  INCLUDE (id)
-  WHERE key IS NOT NULL AND NOT is_dead_letter_message AND NOT is_being_delivered;
-
--- Unordered messages ready (when useOrderedUnorderedQuery=true)
+-- Unordered messages ready
 CREATE INDEX idx_*_unordered_ready
   ON durable_queues (queue_name, next_delivery_ts)
   INCLUDE (id)
@@ -301,6 +285,30 @@ CREATE INDEX idx_*_ordered_head
 ```
 
 **Query pattern**: `FOR UPDATE SKIP LOCKED` for lock-free concurrent access.
+
+## Dead-Letter Classification
+
+A failed delivery is either retried according to the `RedeliveryPolicy` or dead-lettered immediately. The
+consumer asks the policy's `MessageDeliveryErrorHandler` first, then applies its own built-in list of permanent
+error types. Two of the five can be overridden by an explicit `alwaysRetryOn(...)`; three cannot:
+
+| Type | Overridable by `alwaysRetryOn` |
+|---|---|
+| `DurableQueueDeserializationException` | No |
+| `MismatchedInputException` | No |
+| `NoClassDefFoundError` | No |
+| `IllegalArgumentException` (incl. `NumberFormatException`) | **Yes** |
+| `ClassCastException` | **Yes** |
+
+`IllegalArgumentException` on that list is the common surprise: `FailFast.requireNonNull(...)` /
+`requireTrue(...)` and Kotlin's `require(...)` all throw it, so a `@MessageHandler` that guards its arguments
+dead-letters its message on the first delivery attempt unless the policy opts out.
+
+The whole cause chain is examined, not just the thrown exception and the deepest root cause. Overriding does
+not lift `maximumNumberOfRedeliveries`.
+
+See [LLM-foundation.md](./LLM-foundation.md) for `MessageDeliveryErrorHandler`, the opt-out, the
+`RedeliveryPolicy` strategies and the recipe for validating inside a handler.
 
 ## Monitoring
 
@@ -344,27 +352,27 @@ var durableQueues = PostgresqlDurableQueues.builder()
 | `DurableQueuesMicrometerTracingInterceptor` | Distributed tracing via Micrometer Observation |
 | `RecordExecutionTimeDurableQueueInterceptor` | Operation execution time |
 
-### PostgreSQL-Specific Statistics
+### Queue statistics
 
-Package: `dk.trustworks.essentials.components.foundation.messaging.queue.stats`
+The trigger-based statistics table was removed in 0.60. Delivery figures now come from an in-memory
+`QueueStatisticsRegistry` fed by a `DurableQueueMessageObserver`, joined with the cluster-wide queue depth at
+the API layer:
 
-```java
-import dk.trustworks.essentials.components.queue.postgresql.PostgresqlDurableQueues;
-import dk.trustworks.essentials.components.foundation.messaging.queue.stats.*;
-
-PostgresqlDurableQueues queues = (PostgresqlDurableQueues) durableQueues;
-DurableQueuesStatistics stats = queues.getStatistics();
-
-// Queue statistics
-Optional<QueueStatistics> queueStats = stats.getQueueStatistics(queueName);
-queueStats.ifPresent(s -> {
-    log.info("Total: {}, DLQ: {}, Earliest: {}",
-        s.getTotalMessages(), s.getDeadLetterMessages(), s.getEarliestMessageTimestamp());
-});
-
-// Individual message statistics
-Optional<QueuedStatisticsMessage> msgStats = stats.getQueueStatisticsMessage(queueEntryId);
 ```
+GET /durable-queues/queues/{queueName}/statistics   ->  ApiQueueStatistics
+```
+
+| Half | Source | Scope |
+|---|---|---|
+| `depth` | the queue table, one statement | **cluster-wide** — queued, dead letters, in flight, oldest ready age |
+| `instance` | `QueueStatisticsRegistry` | **this JVM only** — handled, retried, dead-lettered, handler durations, last failure. `null` when this instance has delivered nothing |
+
+`depth.messagesBeingDelivered` and `depth.oldestReadyMessageAgeMillis` are what separate "nothing to do" from
+"stalled": zero handled on this instance means nothing on its own. `PostgresqlDurableQueues` always reports
+`messagesBeingDelivered`; the field is a nullable `Long` because an implementation that cannot count it cluster-wide
+reports `null` — unknown, not zero.
+
+See [LLM-foundation.md](./LLM-foundation.md) for the observer contract.
 
 ### Logging
 
@@ -421,7 +429,6 @@ PostgresqlDurableQueues.builder()
     .setUnitOfWorkFactory(unitOfWorkFactory)
     .setUseCentralizedMessageFetcher(true)
     .setCentralizedMessageFetcherPollingInterval(Duration.ofMillis(5))
-    .setUseOrderedUnorderedQuery(true)
     .setMultiTableChangeListener(multiTableChangeListener)
     .setCentralizedQueuePollingOptimizerFactory(queueName ->
         new CentralizedQueuePollingOptimizer(queueName, 5, 10000, 1.5, 0.1))
@@ -482,7 +489,7 @@ See [README Security](../components/postgresql-queue/README.md#security) for ful
 
 | Issue | Wrong | Right |
 |-------|-------|-------|
-| FullyTransactional breaks retries | `.setTransactionMode(TransactionMode.FullyTransactional)` | `.setTransactionMode(TransactionMode.SingleOperationTransaction)` |
+| Expecting the handler's writes and the acknowledgement to commit together | Relying on a handler rollback to un-acknowledge | Idempotent handler - a retried delivery repeats it |
 | SQL injection via table name | `.setSharedQueueTableName(request.getParameter("table"))` | `.setSharedQueueTableName("message_queue")` |
 | Optimizer without listener | `.setQueuePollingOptimizerFactory(...)` alone | `.setMultiTableChangeListener(...).setQueuePollingOptimizerFactory(...)` |
 | Aggressive polling without optimization | `.setCentralizedMessageFetcherPollingInterval(Duration.ofMillis(1))` | Add optimizer + reasonable interval |
@@ -507,7 +514,7 @@ essentials.postgresql:
 | [foundation](./LLM-foundation.md#durablequeues-messaging) | `DurableQueues` interface and core patterns |
 | [springdata-mongo-queue](./LLM-springdata-mongo-queue.md) | MongoDB implementation |
 | [types-jdbi](./LLM-types-jdbi.md) | JDBI argument factories |
-| [types-jackson](./LLM-types-jackson.md) | JSON serialization |
+| [types-jackson3](./LLM-types-jackson.md) | JSON serialization |
 
 ### PostgreSQL vs MongoDB
 

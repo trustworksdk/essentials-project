@@ -21,7 +21,6 @@ import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.cd
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.cdc.converter.JacksonWal2JsonToPersistedEventConverter;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.cdc.converter.LogicalReplicationToPersistedEventConverter;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.cdc.converter.WalGlobalOrdersExtractor;
-import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.cdc.filter.WalMessageFilters;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.cdc.filter.DefaultWalMessageFilter;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.cdc.filter.WalMessageFilter;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.PersistedEvent;
@@ -122,7 +121,7 @@ public final class Wal2JsonLogicalDecodingPlugin implements LogicalDecodingPlugi
     public Optional<WalMessageFilter> defaultRawPayloadFilter(Supplier<Set<String>> eventStreamTableNamesSupplier) {
         requireNonNull(eventStreamTableNamesSupplier, "eventStreamTableNamesSupplier cannot be null");
         if (converter instanceof JacksonWal2JsonToPersistedEventConverter) {
-            return Optional.of(WalMessageFilters.createForActiveJacksonFlavor(eventStreamTableNamesSupplier::get));
+            return Optional.of(new DefaultWalMessageFilter(eventStreamTableNamesSupplier::get));
         }
         return Optional.empty();
     }

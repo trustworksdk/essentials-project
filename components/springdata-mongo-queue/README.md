@@ -73,7 +73,7 @@ The `sharedQueueCollectionName` parameter is used directly as a MongoDB collecti
 - **MongoDB 4.0+** with replica set (required for Change Streams and transactions)
 - Spring Data MongoDB
 
-### Basic Setup (SingleOperationTransaction - Recommended)
+### Basic Setup
 
 ```java
 @Bean
@@ -121,32 +121,37 @@ public class MongoQueueConfiguration {
 }
 ```
 
-### Constructor Options
+### Builder Options
 
-| Option | Description |
+`new MongoDurableQueues(mongoTemplate, messageHandlingTimeout)` covers the all-defaults case; everything else goes
+through `MongoDurableQueues.builder()`:
+
+| Setter | Description |
 |--------|-------------|
-| `mongoTemplate` | Required - MongoTemplate instance |
-| `messageHandlingTimeout` | Timeout before unacknowledged messages are redelivered (default: 10s) |
-| `sharedQueueCollectionName` | Collection name for all queues (default: `durable_queues`) |
-| `unitOfWorkFactory` | For FullyTransactional mode only |
-| `queuePollingOptimizerFactory` | Custom polling optimizer factory |
+| `setMongoTemplate` | Required - MongoTemplate instance |
+| `setMessageHandlingTimeout` | Timeout before unacknowledged messages are redelivered (default: 30s) |
+| `setSharedQueueCollectionName` | Collection name for all queues (default: `durable_queues`) |
+| `setUnitOfWorkFactory` | Optional - handle each message in a `UnitOfWork`; see [Transactions](#transactions) |
+| `setQueuePollingOptimizerFactory` | Custom polling optimizer factory |
 
-### Transaction Modes
+### Transactions
 
-| Mode | Description | Recommended |
-|------|-------------|-------------|
-| `SingleOperationTransaction` | Each queue operation in own transaction | **Yes** |
-| `FullyTransactional` | Operations share parent transaction | No |
+Every queue operation runs in its own transaction: queueing, fetching, acknowledging, retrying and dead-lettering are
+separate operations, so a failing handler can never roll back its own retry count. (0.60 removed `TransactionalMode`;
+its `FullyTransactional` mode broke exactly that.)
 
-> ⚠️ **Warning:** `FullyTransactional` mode causes issues with retries and dead letter handling because the transaction is marked for rollback and retry counts are never increased.
-
-### FullyTransactional Configuration (Not Recommended)
+With a `SpringMongoTransactionAwareUnitOfWorkFactory` each message is handled inside a `UnitOfWork` of its own, and a
+`queueMessage` called inside a caller's `UnitOfWork` joins it - the enqueue commits or rolls back with the caller's
+writes, which is what an Outbox relies on:
 
 ```java
 @Bean
 public DurableQueues durableQueues(MongoTemplate mongoTemplate,
-        SpringMongoTransactionAwareUnitOfWorkFactory unitOfWorkFactory) {
-    return new MongoDurableQueues(mongoTemplate, unitOfWorkFactory);
+                                   SpringMongoTransactionAwareUnitOfWorkFactory unitOfWorkFactory) {
+    return MongoDurableQueues.builder()
+                             .setMongoTemplate(mongoTemplate)
+                             .setUnitOfWorkFactory(unitOfWorkFactory)
+                             .build();
 }
 
 @Bean
@@ -196,17 +201,15 @@ MongoDB uses `SimpleQueuePollingOptimizer` with **linear backoff** — increases
 ```java
 @Bean
 public DurableQueues durableQueues(MongoTemplate mongoTemplate) {
-    return new MongoDurableQueues(
-        mongoTemplate,
-        null,  // unitOfWorkFactory - null for SingleOperationTransaction
-        "durable_queues",
-        Duration.ofSeconds(10),
-        consumeFromQueue -> new SimpleQueuePollingOptimizer(
-            consumeFromQueue,
-            100,    // delayIncrementMs - add 100ms each empty poll
-            5000    // maxDelayMs - cap at 5 seconds
-        )
-    );
+    return MongoDurableQueues.builder()
+                             .setMongoTemplate(mongoTemplate)
+                             .setSharedQueueCollectionName("durable_queues")
+                             .setMessageHandlingTimeout(Duration.ofSeconds(10))
+                             .setQueuePollingOptimizerFactory(consumeFromQueue -> new SimpleQueuePollingOptimizer(
+                                 consumeFromQueue,
+                                 100,    // delayIncrementMs - add 100ms each empty poll
+                                 5000))  // maxDelayMs - cap at 5 seconds
+                             .build();
 }
 ```
 

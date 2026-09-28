@@ -75,14 +75,12 @@ public class ClosingBooksManager implements Lifecycle {
      * @param lockName            The {@code LockName} used to identify the specific lock managed by {@code FencedLockManager}.
      * @param meterRegistryOptional An {@code Optional} containing the {@code MeterRegistry} for metrics and monitoring
      *                             support. This can be empty if metrics are not enabled.
-     * @deprecated Use {@link #builder()}. This constructor declares an {@code Optional} parameter and/or more than five parameters; the builder names every argument and accepts both plain values and {@code Optional}s. It is unchanged and remains the implementation the builder delegates to.
      */
-    @Deprecated(forRemoval = true, since = "0.40.x")
-    public ClosingBooksManager(List<ClosingBooksScheduledScanProcessor> processors,
-                               ClosingBooksManagerSettings settings,
-                               FencedLockManager fencedLockManager,
-                               LockName lockName,
-                               Optional<MeterRegistry> meterRegistryOptional) {
+    ClosingBooksManager(List<ClosingBooksScheduledScanProcessor> processors,
+                        ClosingBooksManagerSettings settings,
+                        FencedLockManager fencedLockManager,
+                        LockName lockName,
+                        Optional<MeterRegistry> meterRegistryOptional) {
         this.processors = new CopyOnWriteArrayList<>(requireNonNull(processors, "No processors provided"));
         if (this.processors.isEmpty()) {
             throw new IllegalArgumentException("At least one processor must be provided");
@@ -252,7 +250,6 @@ public class ClosingBooksManager implements Lifecycle {
         /**
          * @return the new {@link ClosingBooksManager}
          */
-        @SuppressWarnings("removal")
         public ClosingBooksManager build() {
             return new ClosingBooksManager(processors,
                                            settings,

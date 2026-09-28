@@ -28,10 +28,6 @@ public class TraditionalPostgresqlDurableQueuesPerformanceIT extends PostgresqlD
         return false;
     }
 
-    @Override
-    protected boolean useOrderedUnorderedQuery() {
-        return false;
-    }
 
     @Override
     protected long totalMessagesConsumedTarget() {

@@ -178,7 +178,7 @@ properties-based creator. Renaming a parameter, or routing it through a paramete
 change how a persisted type deserialises — silently, into `null` fields rather than an error. This is why
 `PersistedEvent.DefaultPersistedEvent` and `PersistableEvent.DefaultPersistableEvent` keep their wide
 constructors and are **deliberately excluded** from the sweep. Any conversion of a type that is
-serialised must be checked against both Jackson flavours before it lands.
+serialised must be checked against the persisted wire format (the golden-document tests) before it lands.
 
 **A builder can lose a default.** Moving construction from a constructor to a builder moves every default
 from an argument list to field initialisers, and an uninitialised `boolean` field is `false` whether or not

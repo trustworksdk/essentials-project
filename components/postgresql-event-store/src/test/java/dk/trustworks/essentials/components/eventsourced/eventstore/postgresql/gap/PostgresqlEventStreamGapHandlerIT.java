@@ -16,11 +16,8 @@
 
 package dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.gap;
 
-import com.fasterxml.jackson.annotation.JsonAutoDetect;
-import com.fasterxml.jackson.databind.*;
-import com.fasterxml.jackson.databind.json.JsonMapper;
-import com.fasterxml.jackson.datatype.jdk8.Jdk8Module;
-import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
+import dk.trustworks.essentials.components.foundation.json.EssentialsObjectMappers;
+import tools.jackson.databind.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.PostgresqlEventStore;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.gap.PostgresqlEventStreamGapHandler.ResolveTransientGapsToPermanentGapsPromotionStrategy;
@@ -85,27 +82,27 @@ class PostgresqlEventStreamGapHandlerIT {
         var persistenceStrategy = new SeparateTablePerAggregateTypePersistenceStrategy(jdbi,
                                                                                        unitOfWorkFactory,
                                                                                        eventMapper,
-                                                                                       SeparateTablePerAggregateTypeEventStreamConfigurationFactory.standardSingleTenantConfiguration(EssentialsJSONEventSerializers.createForActiveJacksonFlavor(),
+                                                                                       SeparateTablePerAggregateTypeEventStreamConfigurationFactory.standardSingleTenantConfiguration(EssentialsJSONEventSerializers.create(),
                                                                                                                                                                                       IdentifierColumnType.UUID,
                                                                                                                                                                                       JSONColumnType.JSONB));
         persistenceStrategy.addAggregateEventStreamConfiguration(aggregateType,
                                                                  OrderId.class);
-        eventStore = new PostgresqlEventStore<>(unitOfWorkFactory,
-                                                persistenceStrategy,
-                                                Optional.empty(),
-                                                eventStore -> new PostgresqlEventStreamGapHandler<>(eventStore,
-                                                                                                    unitOfWorkFactory,
-                                                                                                    Duration.ofMillis(1000),
-                                                                                                    (forAggregateType, globalOrderQueryRange, allTransientGaps) -> {
-                                                                                                        var numberOfGaps          = allTransientGaps.size();
-                                                                                                        var numberOfGapsToInclude = Math.min(numberOfGaps, 2);
-                                                                                                        return numberOfGapsToInclude > 0 ? allTransientGaps.subList(0, numberOfGapsToInclude)
-                                                                                                                                                           .stream()
-                                                                                                                                                           .map(Pair::_1)
-                                                                                                                                                           .collect(Collectors.toList()) : NO_TRANSIENT_GAPS;
-                                                                                                    },
-                                                                                                    ResolveTransientGapsToPermanentGapsPromotionStrategy.thresholdBased(1)),
-                                                new EventStoreSubscriptionObserver.NoOpEventStoreSubscriptionObserver());
+        eventStore = PostgresqlEventStore.<SeparateTablePerAggregateEventStreamConfiguration>builder()
+                                         .setUnitOfWorkFactory(unitOfWorkFactory)
+                                         .setPersistenceStrategy(persistenceStrategy)
+                                         .setEventStreamGapHandlerFactory(eventStore -> new PostgresqlEventStreamGapHandler<>(unitOfWorkFactory,
+                                                                                                                              Duration.ofMillis(1000),
+                                                                                                                              (forAggregateType, globalOrderQueryRange, allTransientGaps) -> {
+                                                                                                                                  var numberOfGaps          = allTransientGaps.size();
+                                                                                                                                  var numberOfGapsToInclude = Math.min(numberOfGaps, 2);
+                                                                                                                                  return numberOfGapsToInclude > 0 ? allTransientGaps.subList(0, numberOfGapsToInclude)
+                                                                                                                                                                                     .stream()
+                                                                                                                                                                                     .map(Pair::_1)
+                                                                                                                                                                                     .collect(Collectors.toList()) : NO_TRANSIENT_GAPS;
+                                                                                                                              },
+                                                                                                                              ResolveTransientGapsToPermanentGapsPromotionStrategy.thresholdBased(1)))
+                                         .setEventStoreSubscriptionObserver(new EventStoreSubscriptionObserver.NoOpEventStoreSubscriptionObserver())
+                                         .build();
     }
 
     @AfterEach
@@ -351,6 +348,55 @@ class PostgresqlEventStreamGapHandlerIT {
         assertThat(remainingRows).containsExactly(subscriberB.toString());
     }
 
+    /**
+     * The outcome feeds the subscription gap statistics, so each count must be what the reconciliation actually
+     * changed in the database - including zero when the gap was already registered, which is what a repeated query
+     * over the same range, or a concurrent non-exclusive reconciler, produces.
+     */
+    @Test
+    void reconciliation_reports_what_it_changed() throws InterruptedException {
+        var subscriber = SubscriberId.of("gap-outcome-sub");
+        var gapHandler = eventStore.getEventStreamGapHandler().gapHandlerFor(subscriber);
+        var events = unitOfWorkFactory.withUnitOfWork(() -> eventStore.appendToStream(aggregateType,
+                                                                                        OrderId.random(),
+                                                                                        List.of(new OrderEvent.OrderAccepted(OrderId.random()),
+                                                                                                new OrderEvent.OrderAccepted(OrderId.random()),
+                                                                                                new OrderEvent.OrderAccepted(OrderId.random()))))
+                                      .eventList();
+        var first  = events.get(0);
+        var middle = events.get(1);
+        var last   = events.get(2);
+        var range  = LongRange.between(first.globalEventOrder().longValue(), last.globalEventOrder().longValue());
+
+        // The middle event is missing from the result: one new transient gap
+        var detected = unitOfWorkFactory.withUnitOfWork(unitOfWork -> gapHandler.reconcileGapsAndReport(aggregateType, range, List.of(first, last), List.of()));
+        assertThat(detected).isEqualTo(new GapReconciliation(1, 0, 0));
+
+        // The same result again finds the same gap, but it is already registered: nothing new
+        var repeated = unitOfWorkFactory.withUnitOfWork(unitOfWork -> gapHandler.reconcileGapsAndReport(aggregateType, range, List.of(first, last), List.of()));
+        assertThat(repeated).isEqualTo(GapReconciliation.NONE);
+
+        // Asked for again and returned this time: resolved
+        var resolved = unitOfWorkFactory.withUnitOfWork(unitOfWork -> gapHandler.reconcileGapsAndReport(aggregateType,
+                                                                                                          LongRange.only(middle.globalEventOrder().longValue()),
+                                                                                                          List.of(middle),
+                                                                                                          List.of(middle.globalEventOrder())));
+        assertThat(resolved).isEqualTo(new GapReconciliation(0, 1, 0));
+        assertThat(gapHandler.getTransientGapsFor(aggregateType)).isEmpty();
+
+        // Missing again, and still missing past the promotion threshold: promoted to permanent. thresholdBased(1)
+        // promotes once MORE than one whole second has elapsed, so a gap needs two
+        unitOfWorkFactory.withUnitOfWork(unitOfWork -> gapHandler.reconcileGapsAndReport(aggregateType, range, List.of(first, last), List.of()));
+        Thread.sleep(2_500);
+        var promoted = unitOfWorkFactory.withUnitOfWork(unitOfWork -> gapHandler.reconcileGapsAndReport(aggregateType,
+                                                                                                          LongRange.only(middle.globalEventOrder().longValue()),
+                                                                                                          List.of(),
+                                                                                                          List.of(middle.globalEventOrder())));
+        assertThat(promoted.promotedToPermanentGaps()).isEqualTo(1);
+        List<GlobalEventOrder> permanentGaps = unitOfWorkFactory.withUnitOfWork(unitOfWork -> gapHandler.getPermanentGapsFor(aggregateType).toList());
+        assertThat(permanentGaps).contains(middle.globalEventOrder());
+    }
+
     private Pair<OrderId, List<? extends OrderEvent>> createTestEvents() {
         var orderId   = OrderId.random();
         var productId = ProductId.random();
@@ -367,28 +413,7 @@ class PostgresqlEventStreamGapHandlerIT {
 
 
     private ObjectMapper createObjectMapper() {
-        var objectMapper = JsonMapper.builder()
-                                     .disable(MapperFeature.AUTO_DETECT_GETTERS)
-                                     .disable(MapperFeature.AUTO_DETECT_IS_GETTERS)
-                                     .disable(MapperFeature.AUTO_DETECT_SETTERS)
-                                     .disable(MapperFeature.DEFAULT_VIEW_INCLUSION)
-                                     .disable(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS)
-                                     .disable(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES)
-                                     .disable(SerializationFeature.FAIL_ON_EMPTY_BEANS)
-                                     .enable(MapperFeature.AUTO_DETECT_CREATORS)
-                                     .enable(MapperFeature.AUTO_DETECT_FIELDS)
-                                     .enable(MapperFeature.PROPAGATE_TRANSIENT_MARKER)
-                                     .addModule(new Jdk8Module())
-                                     .addModule(new JavaTimeModule())
-                                     .addModules(dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.TestFasterxmlModules.optionalEssentialsModules())
-                                     .build();
-
-        objectMapper.setVisibility(objectMapper.getSerializationConfig().getDefaultVisibilityChecker()
-                                               .withGetterVisibility(JsonAutoDetect.Visibility.NONE)
-                                               .withSetterVisibility(JsonAutoDetect.Visibility.NONE)
-                                               .withFieldVisibility(JsonAutoDetect.Visibility.ANY)
-                                               .withCreatorVisibility(JsonAutoDetect.Visibility.ANY));
-        return objectMapper;
+        return EssentialsObjectMappers.createJackson3ObjectMapper();
     }
 
     private static class TestPersistableEventMapper implements PersistableEventMapper {

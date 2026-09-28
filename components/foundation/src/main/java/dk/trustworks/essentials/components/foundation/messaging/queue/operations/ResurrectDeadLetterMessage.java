@@ -25,9 +25,7 @@ import java.time.Duration;
 import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 
 /**
- * Resurrect a Dead Letter Message for redelivery after the specified <code>deliveryDelay</code><br>
- * Note this method MUST be called within an existing {@link UnitOfWork} IF
- * using {@link TransactionalMode#FullyTransactional}<br>
+ * Resurrect a Dead Letter Message for redelivery after the specified <code>deliveryDelay</code><br><br>
  * Operation also matches {@link DurableQueuesInterceptor#intercept(ResurrectDeadLetterMessage, InterceptorChain)}
  */
 public final class ResurrectDeadLetterMessage {
@@ -45,8 +43,6 @@ public final class ResurrectDeadLetterMessage {
 
     /**
      * Resurrect a Dead Letter Message for redelivery after the specified <code>deliveryDelay</code><br>
-     * Note this method MUST be called within an existing {@link UnitOfWork} IF
-     * using {@link TransactionalMode#FullyTransactional}
      *
      * @param queueEntryId  the unique id of the Dead Letter Message that must we will retry the delivery of
      * @param deliveryDelay how long will the queue wait until it delivers the message to the {@link DurableQueueConsumer}

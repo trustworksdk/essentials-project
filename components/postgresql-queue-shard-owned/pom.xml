@@ -1,0 +1,146 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  ~ Copyright 2021-2026 the original author or authors.
+  ~
+  ~ Licensed under the Apache License, Version 2.0 (the "License");
+  ~ you may not use this file except in compliance with the License.
+  ~ You may obtain a copy of the License at
+  ~
+  ~      https://www.apache.org/licenses/LICENSE-2.0
+  ~
+  ~ Unless required by applicable law or agreed to in writing, software
+  ~ distributed under the License is distributed on an "AS IS" BASIS,
+  ~ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+  ~ See the License for the specific language governing permissions and
+  ~ limitations under the License.
+  -->
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>dk.trustworks.essentials</groupId>
+        <artifactId>parent</artifactId>
+        <version>${revision}</version>
+        <relativePath>../../pom.xml</relativePath>
+    </parent>
+
+    <groupId>dk.trustworks.essentials.components</groupId>
+
+    <artifactId>postgresql-queue-shard-owned</artifactId>
+    <name>postgresql-queue-shard-owned</name>
+    <description>
+        Shard-owned PostgreSQL durable queue engine. Experimental: builds and tests with the reactor
+        but is NOT published, because its SPI is still moving.
+    </description>
+
+    <properties>
+        <!--
+          NOT a published artifact yet. The project's rule is that central APIs are stable and break
+          only on a major version; this SPI is still changing, so publishing it would commit to a
+          contract that is not ready. The open gaps are listed under "Known gaps" in
+          docs/durable-queue-shard-owned.md §13. It builds and tests with the reactor so it does not
+          rot, and the flag comes off when those gaps close.
+
+          See docs/durable-queue-shard-owned.md and docs/durable-queue-measurements.md.
+        -->
+        <!--
+             PUBLISHED as of this change. The gate this flag named was the "No admin UI" gap in
+             docs/durable-queue-shard-owned.md §15, and that gap is now closed: the engine has an
+             administrative contract, a controller, an entry in EssentialsAdminApiSpec and a console
+             page. The other listed gap — no semantic type for instanceId — is recorded there as
+             deliberate rather than outstanding.
+
+             What publication commits to is the MessageQueue SPI. It is a new interface this module
+             owns, so it evolves the way the rest of Essentials does: additive in minor, breaking only
+             in a major, deprecate-and-delegate in between. Widening it is no longer free — adding
+             messages(int, int, boolean) broke an implementor inside this repo, and after this it
+             would break them outside it.
+        -->
+    </properties>
+
+    <dependencies>
+        <dependency>
+            <groupId>dk.trustworks.essentials</groupId>
+            <artifactId>shared</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+        <!--
+          provided, per the project-wide rule that third-party integrations are not transitive:
+          a consumer declares the driver and the connection pool it actually uses.
+        -->
+        <dependency>
+            <groupId>org.postgresql</groupId>
+            <artifactId>postgresql</artifactId>
+            <version>${postgresql.version}</version>
+            <scope>provided</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.slf4j</groupId>
+            <artifactId>slf4j-api</artifactId>
+        </dependency>
+        <!--
+          provided for the same reason as the driver: the Micrometer binding is an optional adapter,
+          and a consumer that wants it already has Micrometer on its own classpath.
+        -->
+        <dependency>
+            <groupId>io.micrometer</groupId>
+            <artifactId>micrometer-core</artifactId>
+            <scope>provided</scope>
+        </dependency>
+
+        <dependency>
+            <groupId>org.junit.jupiter</groupId>
+            <artifactId>junit-jupiter</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <!--
+          The construction-ergonomics guard. archunit-junit5 supplies the engine; foundation-test
+          supplies the shared rule definitions (EssentialsConstructionRules) and nothing else — this
+          module's production code still depends on `shared` alone.
+        -->
+        <dependency>
+            <groupId>com.tngtech.archunit</groupId>
+            <artifactId>archunit-junit5</artifactId>
+            <version>${archunit-junit5.version}</version>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>dk.trustworks.essentials.components</groupId>
+            <artifactId>foundation-test</artifactId>
+            <version>${project.version}</version>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.assertj</groupId>
+            <artifactId>assertj-core</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.awaitility</groupId>
+            <artifactId>awaitility</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.testcontainers</groupId>
+            <artifactId>testcontainers-junit-jupiter</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.testcontainers</groupId>
+            <artifactId>testcontainers-postgresql</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>com.zaxxer</groupId>
+            <artifactId>HikariCP</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>ch.qos.logback</groupId>
+            <artifactId>logback-classic</artifactId>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+</project>

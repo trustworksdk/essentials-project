@@ -55,13 +55,27 @@ public class DefaultPostgresqlQueryStatisticsApi implements PostgresqlQueryStati
     private void initializePgStatStatementsAvailability() {
         try {
             unitOfWorkFactory.usingUnitOfWork(uow -> {
-                this.pgStatementsAvailable = PostgresqlUtil.isPGExtensionAvailable(uow.handle(), "pg_stat_statements");
-                if (pgStatementsAvailable) {
-                    log.info("pg_stat_statements extension is available");
-                    uow.handle().execute("CREATE EXTENSION IF NOT EXISTS pg_stat_statements;");
+                var handle = uow.handle();
+                if (PostgresqlUtil.isPGExtensionAvailable(handle, "pg_stat_statements")) {
+                    // Already created - by an operator, or by an earlier start of this application.
+                    this.pgStatementsAvailable = true;
+                } else if (!PostgresqlUtil.isPGExtensionInstallable(handle, "pg_stat_statements")) {
+                    this.pgStatementsAvailable = false;
+                } else if (!PostgresqlUtil.isPGLibraryPreloaded(handle, "pg_stat_statements")) {
+                    // Creatable, but its view errors on every read until the server preloads the library. Not
+                    // created, so as not to leave an extension behind that cannot work.
+                    log.info("pg_stat_statements is installed on the server but not in shared_preload_libraries - query statistics are unavailable");
+                    this.pgStatementsAvailable = false;
                 } else {
-                    log.info("pg_stat_statements extension is not available");
+                    // Best effort. It used to be attempted only when the extension already existed, because the
+                    // check above read pg_extension, so it never created anything and the statistics were silently
+                    // empty. A refusal - usually a role that may not create extensions - is the operator's choice.
+                    this.pgStatementsAvailable = PostgresqlUtil.executeAllowingRefusal(handle, "CREATE EXTENSION IF NOT EXISTS pg_stat_statements;");
+                    if (!pgStatementsAvailable) {
+                        log.info("pg_stat_statements could not be created by this role - query statistics are unavailable until an operator creates it");
+                    }
                 }
+                log.info("pg_stat_statements extension is {}", pgStatementsAvailable ? "available" : "not available");
             });
         } catch (Exception e) {
             this.pgStatementsAvailable = false;

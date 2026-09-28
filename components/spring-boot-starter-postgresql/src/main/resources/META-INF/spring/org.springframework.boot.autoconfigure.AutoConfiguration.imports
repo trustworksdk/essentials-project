@@ -1,1 +1,2 @@
 dk.trustworks.essentials.components.boot.autoconfigure.postgresql.EssentialsComponentsConfiguration
+dk.trustworks.essentials.components.boot.autoconfigure.postgresql.EssentialsSchemaConfiguration

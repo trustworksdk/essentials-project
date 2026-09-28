@@ -43,7 +43,7 @@ public final class DurableQueueConsumerDependenciesBuilder<DURABLE_QUEUES extend
 
     /**
      * @param unitOfWorkFactory the {@link UnitOfWorkFactory}. Only required when the {@link DurableQueues} implementation runs in
-     *                          {@link TransactionalMode#FullyTransactional}; may be {@code null} otherwise
+     *                          {@code FullyTransactional}; may be {@code null} otherwise
      * @return this builder instance for fluent chaining
      */
     public DurableQueueConsumerDependenciesBuilder<DURABLE_QUEUES, UOW, UOW_FACTORY> setUnitOfWorkFactory(UOW_FACTORY unitOfWorkFactory) {

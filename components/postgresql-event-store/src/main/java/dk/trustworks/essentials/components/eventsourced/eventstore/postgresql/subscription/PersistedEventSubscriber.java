@@ -134,15 +134,13 @@ public class PersistedEventSubscriber extends BaseSubscriber<PersistedEvent> {
      *                                                                                           </pre>
      * @param eventStorePollingBatchSize            The batch size used when polling events from the {@link EventStore}
      * @param eventStore                            The {@link EventStore} to use
-     * @deprecated Use {@link #builder()}. This constructor declares an {@code Optional} parameter and/or more than five parameters; the builder names every argument and accepts both plain values and {@code Optional}s. It is unchanged and remains the implementation the builder delegates to.
      */
-    @Deprecated(forRemoval = true, since = "0.40.x")
-    public PersistedEventSubscriber(PersistedEventHandler eventHandler,
-                                    EventStoreSubscription eventStoreSubscription,
-                                    BiConsumer<PersistedEvent, Throwable> onErrorHandler,
-                                    RetryBackoffSpec forwardToEventHandlerRetryBackoffSpec,
-                                    long eventStorePollingBatchSize,
-                                    EventStore eventStore) {
+    PersistedEventSubscriber(PersistedEventHandler eventHandler,
+                             EventStoreSubscription eventStoreSubscription,
+                             BiConsumer<PersistedEvent, Throwable> onErrorHandler,
+                             RetryBackoffSpec forwardToEventHandlerRetryBackoffSpec,
+                             long eventStorePollingBatchSize,
+                             EventStore eventStore) {
         this.eventHandler = requireNonNull(eventHandler, "No eventHandler provided");
         this.eventStoreSubscription = requireNonNull(eventStoreSubscription, "No eventStoreSubscription provided");
         this.onErrorHandler = requireNonNull(onErrorHandler, "No errorHandler provided");

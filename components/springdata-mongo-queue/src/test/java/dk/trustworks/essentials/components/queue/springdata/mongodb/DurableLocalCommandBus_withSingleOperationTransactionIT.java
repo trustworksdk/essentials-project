@@ -53,7 +53,10 @@ public class DurableLocalCommandBus_withSingleOperationTransactionIT extends Abs
 
     @Override
     protected MongoDurableQueues createDurableQueues(SpringMongoTransactionAwareUnitOfWorkFactory unitOfWorkFactory) {
-        return new MongoDurableQueues(mongoTemplate, Duration.ofSeconds(1));
+        return MongoDurableQueues.builder()
+                                  .setMongoTemplate(mongoTemplate)
+                                  .setMessageHandlingTimeout(Duration.ofSeconds(1))
+                                  .build();
     }
 
     @Override

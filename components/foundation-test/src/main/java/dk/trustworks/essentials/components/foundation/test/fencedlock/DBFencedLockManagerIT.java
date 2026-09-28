@@ -21,6 +21,7 @@ import org.awaitility.Awaitility;
 import org.junit.jupiter.api.*;
 
 import java.time.Duration;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -505,6 +506,61 @@ public abstract class DBFencedLockManagerIT<LOCK_MANAGER extends DBFencedLockMan
             assertThat(lockManagerNode2.isLockAcquired(lockName)).isTrue();
             assertThat(lockManagerNode2.isLockAcquiredByAnotherLockManagerInstance(lockName)).isTrue();
         }
+    }
+
+    /**
+     * A {@code lockAcquired} callback that throws must not leave the lock held.
+     *
+     * <h2>Why this is the assertion that matters</h2>
+     * The lock is recorded as owned by this instance <em>before</em> the callback runs. So if the
+     * callback throws and the lock stays held, the next tick finds the lock already owned here and
+     * takes neither branch — it does not re-acquire, and it does not call the callback again. The
+     * failure is permanent: this instance owns a lock it is not serving, no other instance can take
+     * it, and the only trace is a log line whose text says the acquisition failed, when it did not.
+     * <p>
+     * It surfaced through the store-and-forward machinery, where it is easy to hit by accident: an
+     * {@code Inbox} in {@code SingleGlobalConsumer} mode does all of its consumer wiring inside
+     * {@code onLockAcquired}, so anything wrong with that wiring — a queue that is not registered
+     * yet, a dependency that has not finished starting — produced an Inbox that silently never
+     * consumed while holding its own lock.
+     * <p>
+     * <b>Retrying is therefore the proof.</b> The callback below fails twice and succeeds on the
+     * third attempt, and there is no third attempt at all unless each failure released the lock. It
+     * also demonstrates the property that makes releasing the right response rather than merely the
+     * safe one: a cause that clears itself is picked up without a restart.
+     */
+    @Test
+    void a_failing_lockAcquired_callback_releases_the_lock_so_the_next_attempt_can_retry() {
+        var lockName          = LockName.of("callbackThrowsLock");
+        var attempts          = new AtomicInteger();
+        var succeededOnAttempt = new AtomicInteger(-1);
+        var failuresWanted    = 2;
+
+        getLockManagerNode1().acquireLockAsync(lockName,
+                                               LockCallback.builder()
+                                                           .onLockAcquired(lock -> {
+                                                               var attempt = attempts.incrementAndGet();
+                                                               if (attempt <= failuresWanted) {
+                                                                   throw new IllegalStateException(
+                                                                           "Deliberate callback failure on attempt " + attempt);
+                                                               }
+                                                               succeededOnAttempt.set(attempt);
+                                                           })
+                                                           .onLockReleased(lock -> {
+                                                           })
+                                                           .build());
+
+        Awaitility.await().atMost(Duration.ofSeconds(30))
+                  .untilAsserted(() -> assertThat(succeededOnAttempt.get())
+                          .describedAs("the callback must be retried after it throws, which cannot happen "
+                                       + "if the failed attempt left the lock held")
+                          .isEqualTo(failuresWanted + 1));
+
+        assertThat(getLockManagerNode1().isLockedByThisLockManagerInstance(lockName))
+                .describedAs("and once the callback finally succeeds the lock is genuinely held")
+                .isTrue();
+
+        getLockManagerNode1().cancelAsyncLockAcquiring(lockName);
     }
 
     private static class TestLockCallback implements LockCallback {

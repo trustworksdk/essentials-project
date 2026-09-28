@@ -16,7 +16,9 @@
 
 package dk.trustworks.essentials.components.foundation.postgresql.ttl;
 
+import dk.trustworks.essentials.components.foundation.postgresql.PostgresqlCreateSchemaApplier;
 import dk.trustworks.essentials.components.foundation.scheduler.EssentialsScheduler;
+import dk.trustworks.essentials.components.foundation.schema.*;
 import dk.trustworks.essentials.components.foundation.scheduler.executor.ExecutorJob;
 import dk.trustworks.essentials.components.foundation.scheduler.pgcron.PgCronJob;
 import dk.trustworks.essentials.components.foundation.transaction.jdbi.*;
@@ -68,20 +70,62 @@ import static dk.trustworks.essentials.shared.MessageFormatter.*;
  * <b>Failure to properly validate unprotected parameters may result in SQL injection vulnerabilities
  * that could compromise database security and integrity.</b>
  */
-public class PostgresqlTTLManager implements TTLManager, Lifecycle {
+public class PostgresqlTTLManager implements TTLManager, Lifecycle, EssentialsSchemaContributor {
 
     private static final Logger log = LoggerFactory.getLogger(PostgresqlTTLManager.class);
 
     private final EssentialsScheduler                                           scheduler;
     private final HandleAwareUnitOfWorkFactory<? extends HandleAwareUnitOfWork> unitOfWorkFactory;
+    private final SchemaOwnership                                               schemaOwnership;
     private final List<TTLJobDefinition>                                        ttlJobDefinitions = new CopyOnWriteArrayList<>();
 
     private volatile     boolean started;
 
     public PostgresqlTTLManager(EssentialsScheduler scheduler,
                                 HandleAwareUnitOfWorkFactory<? extends HandleAwareUnitOfWork> unitOfWorkFactory) {
+        this(scheduler, unitOfWorkFactory, SchemaOwnership.COMPONENT);
+    }
+
+    /**
+     * @param scheduler         the scheduler TTL jobs run on
+     * @param unitOfWorkFactory the unit of work factory
+     * @param schemaOwnership   {@link SchemaOwnership#COMPONENT} creates the TTL function on {@link #start()}, as the other
+     *                          constructor does; {@link SchemaOwnership#HARNESS} leaves it to an {@link EssentialsSchemaHarness}
+     *                          this manager is registered with
+     */
+    public PostgresqlTTLManager(EssentialsScheduler scheduler,
+                                HandleAwareUnitOfWorkFactory<? extends HandleAwareUnitOfWork> unitOfWorkFactory,
+                                SchemaOwnership schemaOwnership) {
         this.scheduler = requireNonNull(scheduler, "scheduler must not be null");
         this.unitOfWorkFactory = requireNonNull(unitOfWorkFactory, "unitOfWorkFactory must not be null");
+        this.schemaOwnership = requireNonNull(schemaOwnership, "schemaOwnership must not be null");
+    }
+
+    @Override
+    public String moduleId() {
+        return "foundation-ttl";
+    }
+
+    @Override
+    public int order() {
+        return SchemaOrder.ORDER_INFRASTRUCTURE;
+    }
+
+    /**
+     * The {@value DEFAULT_TTL_FUNCTION_NAME} function TTL jobs delete through.
+     */
+    @Override
+    public List<SchemaChange> contribute(SchemaContext context) {
+        return List.of(SchemaChange.repeatable("ttl-function",
+                                               DEFAULT_TTL_FUNCTION_NAME,
+                                               bind("""
+                                                    CREATE OR REPLACE FUNCTION {:functionName}
+                                                    (p_table_name text, p_delete_statement text) RETURNS void AS $$
+                                                    BEGIN
+                                                    -- Use format/identifier quoting to guard against SQL injection
+                                                    EXECUTE format('DELETE FROM %I WHERE %s', p_table_name, p_delete_statement);
+                                                    END;\
+                                                    $$ LANGUAGE plpgsql;""", arg("functionName", DEFAULT_TTL_FUNCTION_NAME))));
     }
 
     /**
@@ -154,27 +198,15 @@ public class PostgresqlTTLManager implements TTLManager, Lifecycle {
             started = true;
             log.info("⚙️ Starting Postgresql Time-to-Live manager");
 
-            initializeTimeToLiveFunction();
+            if (schemaOwnership == SchemaOwnership.COMPONENT) {
+                PostgresqlCreateSchemaApplier.applyOwnSchema(unitOfWorkFactory, this);
+            }
 
             log.info("Scheduling '{}' TTL job definitions", ttlJobDefinitions.size());
             for (TTLJobDefinition jobDefinition : ttlJobDefinitions) {
                 scheduleJob(jobDefinition);
             }
         }
-    }
-
-    private void initializeTimeToLiveFunction() {
-        unitOfWorkFactory.usingUnitOfWork(uow -> {
-            String sql = bind("""
-                            CREATE OR REPLACE FUNCTION {:functionName}
-                            (p_table_name text, p_delete_statement text) RETURNS void AS $$
-                            BEGIN
-                            -- Use format/identifier quoting to guard against SQL injection
-                            EXECUTE format('DELETE FROM %I WHERE %s', p_table_name, p_delete_statement);
-                            END;\
-                            $$ LANGUAGE plpgsql;""", arg("functionName", DEFAULT_TTL_FUNCTION_NAME));
-            uow.handle().execute(sql);
-        });
     }
 
     @Override

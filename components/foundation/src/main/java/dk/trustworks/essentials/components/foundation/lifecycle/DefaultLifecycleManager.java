@@ -68,9 +68,31 @@ public final class DefaultLifecycleManager implements SmartLifecycle, LifecycleM
         if (hasStartedLifeCycleBeans) {
             log.info("Stopping Essentials Lifecycle beans");
             lifeCycleBeans.forEach((beanName, lifecycleBean) -> {
-                if (lifecycleBean.isStarted()) {
+                try {
+                    if (!lifecycleBean.isStarted()) {
+                        return;
+                    }
                     log.info("Stopping {} bean '{}' of type '{}'", Lifecycle.class.getSimpleName(), beanName, lifecycleBean.getClass().getName());
                     lifecycleBean.stop();
+                } catch (RuntimeException e) {
+                    // One bean's shutdown must not decide whether the others get one.
+                    //
+                    // These are stopped serially in one pass, so an exception escaping here used to
+                    // abandon every bean after this one in the iteration — silently, and in an order
+                    // nobody chose, since it is the order getBeansOfType happened to return. The case
+                    // that reaches it is the one where shutting down matters most: a database that has
+                    // gone away, where several beans release leases, locks or slots and the first to
+                    // give up takes the rest of the shutdown with it.
+                    //
+                    // Logged at ERROR rather than swallowed. A stop that failed is a real finding —
+                    // something was probably not handed back — but it is a finding about that bean,
+                    // not a reason to leave the others running.
+                    //
+                    // start() is deliberately NOT given the same treatment: a bean that cannot start
+                    // should fail the context rather than leave the application running as though it
+                    // had. Stopping is the opposite — it is the last chance anything gets.
+                    log.error("{} bean '{}' of type '{}' failed to stop; continuing with the rest",
+                              Lifecycle.class.getSimpleName(), beanName, lifecycleBean.getClass().getName(), e);
                 }
             });
             hasStartedLifeCycleBeans = false;

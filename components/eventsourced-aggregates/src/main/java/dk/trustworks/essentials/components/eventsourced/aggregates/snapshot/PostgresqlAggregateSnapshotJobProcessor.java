@@ -83,16 +83,12 @@ public class PostgresqlAggregateSnapshotJobProcessor {
     }
 
     @SuppressWarnings("OptionalUsedAsFieldOrParameterType")
-    /**
-     * @deprecated Use {@link #builder()}. This constructor declares an {@code Optional} parameter and/or more than five parameters; the builder names every argument and accepts both plain values and {@code Optional}s. It is unchanged and remains the implementation the builder delegates to.
-     */
-    @Deprecated(forRemoval = true, since = "0.40.x")
-    public PostgresqlAggregateSnapshotJobProcessor(ConfigurableEventStore<? extends AggregateEventStreamConfiguration> eventStore,
-                                                   AggregateSnapshotStore snapshotStore,
-                                                   AggregateSnapshotJobRepository jobRepository,
-                                                   HandleAwareUnitOfWorkFactory<? extends HandleAwareUnitOfWork> unitOfWorkFactory,
-                                                   DurableAsyncSnapshotSettings settings,
-                                                   Optional<MeterRegistry> meterRegistryOptional) {
+    PostgresqlAggregateSnapshotJobProcessor(ConfigurableEventStore<? extends AggregateEventStreamConfiguration> eventStore,
+                                            AggregateSnapshotStore snapshotStore,
+                                            AggregateSnapshotJobRepository jobRepository,
+                                            HandleAwareUnitOfWorkFactory<? extends HandleAwareUnitOfWork> unitOfWorkFactory,
+                                            DurableAsyncSnapshotSettings settings,
+                                            Optional<MeterRegistry> meterRegistryOptional) {
         this.eventStore = requireNonNull(eventStore, "No eventStore provided");
         this.snapshotStore = requireNonNull(snapshotStore, "No snapshotStore provided");
         this.jobRepository = requireNonNull(jobRepository, "No jobRepository provided");
@@ -310,7 +306,6 @@ public class PostgresqlAggregateSnapshotJobProcessor {
         /**
          * @return the new {@link PostgresqlAggregateSnapshotJobProcessor}
          */
-        @SuppressWarnings("removal")
         public PostgresqlAggregateSnapshotJobProcessor build() {
             return new PostgresqlAggregateSnapshotJobProcessor(eventStore,
                                                                snapshotStore,

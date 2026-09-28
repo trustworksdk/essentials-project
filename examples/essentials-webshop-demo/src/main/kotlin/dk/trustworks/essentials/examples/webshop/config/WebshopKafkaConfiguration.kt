@@ -38,9 +38,8 @@ import tools.jackson.databind.json.JsonMapper
  * to be `<String, Any>` so the publisher can inject it without a generics mismatch.
  *
  * Spring for Apache Kafka 4 deprecated its Jackson 2 `JsonSerializer` in favour of [JacksonJsonSerializer],
- * which binds against Jackson 3 - the mapper Spring Boot 4 auto-configures. That is independent of the
- * Essentials Jackson flavour: `-Pjackson2` switches which `types-jackson` artifact serializes *persisted*
- * events, and Spring Boot brings Jackson 3 for the web and broker edges either way.
+ * which binds against Jackson 3 - the mapper Spring Boot 4 auto-configures, and the same major Essentials
+ * uses to serialize persisted events.
  */
 @Configuration
 class WebshopKafkaConfiguration {

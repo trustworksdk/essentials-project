@@ -2,11 +2,11 @@
 
 Jackson 3.x deserialization support for immutable objects (no-arg constructor not required). Maven: `immutable-jackson3`.
 
-Jackson 3 port of `immutable-jackson`. Same logic; different package namespace: `tools.jackson.*` instead of `com.fasterxml.jackson.*`.
+Jackson 3 port of 0.50's `immutable-jackson` (Jackson 2, deleted in 0.60). Same logic; uses `tools.jackson.*` instead of `com.fasterxml.jackson.*`.
 
 ## Package Structure
 
-- `dk.trustworks.essentials.jackson.immutable` — sole package; module + value instantiator (same package name as jackson2 sibling; different artifact/classpath)
+- `dk.trustworks.essentials.jackson.immutable` — sole package; module + value instantiator (same package/FQCNs as 0.50's Jackson 2 module; a stale 0.50 jar is detected by `EssentialsJacksonModules.modules()`)
 
 ## Key Classes
 
@@ -17,7 +17,7 @@ Jackson 3 port of `immutable-jackson`. Same logic; different package namespace: 
 
 `EssentialsImmutableJacksonModule.createObjectMapper(JacksonModule...)` — static factory: fields-only visibility, getters/setters disabled, `PROPAGATE_TRANSIENT_MARKER` on, dates as ISO strings, unknown properties ignored.
 
-## Key Jackson 3 Differences vs immutable-jackson
+## Key Jackson 3 Differences vs 0.50's immutable-jackson
 
 - Package namespace: `tools.jackson.*` (Jackson 3 GroupId `tools.jackson.core`)
 - `BeanDeserializerModifier` → `ValueDeserializerModifier`; `SetupContext.addBeanDeserializerModifier` → `addDeserializerModifier`
@@ -47,7 +47,6 @@ No SPIs for external extension. Internal: register custom `ValueDeserializerModi
 - `canCreateUsingDefault()` always returns `true` — Jackson always routes through `createUsingDefault`; the Objenesis/standard split is internal.
 - `createContextual` must propagate — it wraps the contextualized standard instantiator in a new `ImmutableObjectsValueInstantiator`; omitting this causes context-sensitive instantiation failures.
 - `createObjectMapper` opinionated defaults: getters/setters NONE, fields ANY → modules relying on getter-based serialization will not work without manual visibility reconfiguration.
-- Map keys with `SingleValueType` need explicit `@JsonDeserialize(keyUsing=...)` — module does not auto-handle Essentials map-key deserialization.
+- This module does not handle `SingleValueType` map keys — `types-jackson3`'s `SingleValueTypeKeyDeserializers` does (no annotation needed). Test model's `keyUsing` is explicit and still wins. Note `@JsonDeserialize` is from Jackson 3's `tools.jackson.databind.annotation`; J2's `com.fasterxml.jackson.databind.annotation` version is silently ignored.
 - `jackson-databind` and `objenesis` are `provided` scope → consumer must supply compatible versions.
 - JPMS module name: `dk.trustworks.essentials.immutable.jackson3`.
-- No `src/` in worktree — sources live in `immutable-jackson` sibling; `immutable-jackson3` is built from shared sources with Jackson3 on compile classpath.

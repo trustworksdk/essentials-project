@@ -17,14 +17,11 @@
 package dk.trustworks.essentials.components.foundation.json;
 
 import com.fasterxml.jackson.annotation.JsonAutoDetect.Visibility;
-import com.fasterxml.jackson.databind.*;
-import com.fasterxml.jackson.datatype.jdk8.Jdk8Module;
-import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 
 import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 
 /**
- * The canonical Essentials JSON mapper configuration, for both Jackson majors.
+ * The canonical Essentials JSON mapper configuration.
  * <p>
  * Essentials persists JSON that outlives the library version which wrote it: event payloads, event metadata,
  * durable-queue message payloads. The <em>exact</em> mapper configuration is therefore part of the compatibility
@@ -33,12 +30,13 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
  * estate cannot read.
  * <p>
  * This class exists because that configuration was previously copied into every place that needed a mapper, letting the
- * copies drift — most consequentially between the Jackson 2 and Jackson 3 paths, where a divergence silently changes
- * the persisted format. Both factories here apply the same settings and register the Essentials modules through
- * {@link EssentialsJacksonModules}, which fails loudly on a flavor mismatch instead of quietly omitting them.
+ * copies drift, and a divergence silently changes the persisted format. The factory here registers the Essentials
+ * modules through {@link EssentialsJacksonModules}, which fails loudly when they are missing or of the wrong Jackson
+ * major instead of quietly omitting them.
  * <p>
- * That the two produce byte-identical JSON is asserted by {@code EssentialsObjectMappersWireFormatTest} — that
- * equivalence is what lets an application move to Spring Boot 4 and Jackson 3 and still read what Jackson 2 persisted.
+ * Up to 0.50 a second, Jackson 2 factory existed alongside this one. The Jackson 3 mapper is configured to write
+ * byte-identical JSON to it, and {@code EssentialsObjectMappersWireFormatTest} holds golden documents written by that
+ * Jackson 2 mapper: they are what guarantees that data persisted before 0.60 stays readable.
  *
  * @see EssentialsJacksonModules
  */
@@ -49,50 +47,9 @@ public final class EssentialsObjectMappers {
 
     /**
      * @param additionalModules extra modules to register, e.g. application-specific serializers
-     * @return a Jackson 2 {@link ObjectMapper} with the canonical Essentials configuration
-     * @throws IllegalStateException if the Essentials Jackson modules on the classpath are the Jackson 3 flavor
-     */
-    public static ObjectMapper createJackson2ObjectMapper(com.fasterxml.jackson.databind.Module... additionalModules) {
-        requireNonNull(additionalModules, "No additionalModules provided");
-        var builder = com.fasterxml.jackson.databind.json.JsonMapper.builder()
-                                                                   .disable(MapperFeature.AUTO_DETECT_GETTERS)
-                                                                   .disable(MapperFeature.AUTO_DETECT_IS_GETTERS)
-                                                                   .disable(MapperFeature.AUTO_DETECT_SETTERS)
-                                                                   .disable(MapperFeature.DEFAULT_VIEW_INCLUSION)
-                                                                   .disable(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS)
-                                                                   .disable(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES)
-                                                                   .disable(SerializationFeature.FAIL_ON_EMPTY_BEANS)
-                                                                   .enable(MapperFeature.AUTO_DETECT_CREATORS)
-                                                                   .enable(MapperFeature.AUTO_DETECT_FIELDS)
-                                                                   .enable(MapperFeature.PROPAGATE_TRANSIENT_MARKER)
-                                                                   // Untyped binding (deserialize to Map/Object, as the
-                                                                   // CDC WAL path does) would otherwise map JSON floats
-                                                                   // to Double, so 1.10 re-serializes as 1.1 and large
-                                                                   // decimals lose precision. On the CDC path the
-                                                                   // re-serialized string IS the persisted event
-                                                                   // payload, so fidelity has to be exact.
-                                                                   .enable(DeserializationFeature.USE_BIG_DECIMAL_FOR_FLOATS)
-                                                                   .addModule(new Jdk8Module())
-                                                                   .addModule(new JavaTimeModule());
-        EssentialsJacksonModules.jackson2Modules().forEach(builder::addModule);
-        for (com.fasterxml.jackson.databind.Module additionalModule : additionalModules) {
-            builder.addModule(additionalModule);
-        }
-
-        var objectMapper = builder.build();
-        objectMapper.setVisibility(objectMapper.getSerializationConfig().getDefaultVisibilityChecker()
-                                               .withGetterVisibility(Visibility.NONE)
-                                               .withSetterVisibility(Visibility.NONE)
-                                               .withFieldVisibility(Visibility.ANY)
-                                               .withCreatorVisibility(Visibility.ANY));
-        return objectMapper;
-    }
-
-    /**
-     * @param additionalModules extra modules to register, e.g. application-specific serializers
-     * @return a Jackson 3 {@link tools.jackson.databind.ObjectMapper} configured to write the same JSON as
-     *         {@link #createJackson2ObjectMapper}
-     * @throws IllegalStateException if the Essentials Jackson modules on the classpath are the Jackson 2 flavor
+     * @return a Jackson 3 {@link tools.jackson.databind.ObjectMapper} with the canonical Essentials configuration,
+     *         writing the same JSON the Jackson 2 mapper of Essentials 0.50 and earlier wrote
+     * @throws IllegalStateException if an Essentials Jackson module on the classpath was built for Jackson 2
      */
     public static tools.jackson.databind.ObjectMapper createJackson3ObjectMapper(tools.jackson.databind.JacksonModule... additionalModules) {
         requireNonNull(additionalModules, "No additionalModules provided");
@@ -144,20 +101,15 @@ public final class EssentialsObjectMappers {
         // Jackson uses the sole constructor regardless. The parameter name is therefore part of the JSON contract under
         // Jackson 3, and a mismatch has to be fixed on the type rather than configured away.
         builder.addModule(new Jackson3CollectionWrapperModule());
-        EssentialsJacksonModules.jackson3Modules().forEach(builder::addModule);
+        EssentialsJacksonModules.modules().forEach(builder::addModule);
         builder.addModules(additionalModules);
         return builder.build();
     }
 
     /**
-     * Builds the {@link JSONSerializer} matching the Jackson flavor on the classpath — the Jackson 3 one when the
-     * Essentials Jackson 3 modules are present, otherwise the Jackson 2 one.
-     *
-     * @return a {@link JSONSerializer} using the canonical configuration for the active flavor
+     * @return a {@link JSONSerializer} using the canonical Essentials configuration
      */
     public static JSONSerializer createJSONSerializer() {
-        return EssentialsJacksonModules.isJackson3Flavor()
-               ? new Jackson3JSONSerializer(createJackson3ObjectMapper())
-               : new JacksonJSONSerializer(createJackson2ObjectMapper());
+        return new Jackson3JSONSerializer(createJackson3ObjectMapper());
     }
 }

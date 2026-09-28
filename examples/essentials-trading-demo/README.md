@@ -97,6 +97,11 @@ This uses:
 
 Spring Boot Docker Compose will start PostgreSQL automatically when the `compose` profile is active.
 
+```
+ ./examples/essentials-trading-demo/run-instance.sh 1   # port 8080, id demo-1, load generator on                                                                        
+  ./examples/essentials-trading-demo/run-instance.sh 2   # port 8081, id demo-2
+```
+
 ## Run From IntelliJ
 
 Create a Spring Boot run configuration for:

@@ -103,16 +103,14 @@ public class DefaultEventStoreSubscriptionManager implements EventStoreSubscript
      *                                          );
      *                                          }
      *                                          </pre>
-     * @deprecated Use {@link #builder()}. This constructor declares an {@code Optional} parameter and/or more than five parameters; the builder names every argument and accepts both plain values and {@code Optional}s. It is unchanged and remains the implementation the builder delegates to.
      */
-    @Deprecated(forRemoval = true, since = "0.40.x")
-    public DefaultEventStoreSubscriptionManager(EventStore eventStore,
-                                                int eventStorePollingBatchSize,
-                                                Duration eventStorePollingInterval,
-                                                FencedLockManager fencedLockManager,
-                                                Duration snapshotResumePointsEvery,
-                                                DurableSubscriptionRepository durableSubscriptionRepository,
-                                                boolean startLifeCycles) {
+    DefaultEventStoreSubscriptionManager(EventStore eventStore,
+                                  int eventStorePollingBatchSize,
+                                  Duration eventStorePollingInterval,
+                                  FencedLockManager fencedLockManager,
+                                  Duration snapshotResumePointsEvery,
+                                  DurableSubscriptionRepository durableSubscriptionRepository,
+                                  boolean startLifeCycles) {
         this(eventStore,
              eventStorePollingBatchSize,
              eventStorePollingInterval,
@@ -158,10 +156,8 @@ public class DefaultEventStoreSubscriptionManager implements EventStoreSubscript
      *                                          );
      *                                          }
      *                                          </pre>
-     * @deprecated Use {@link #builder()}. This constructor declares an {@code Optional} parameter and/or more than five parameters; the builder names every argument and accepts both plain values and {@code Optional}s. It is unchanged and remains the implementation the builder delegates to.
      */
-    @Deprecated(forRemoval = true, since = "0.40.x")
-    public DefaultEventStoreSubscriptionManager(EventStore eventStore,
+    DefaultEventStoreSubscriptionManager(EventStore eventStore,
                                                 int eventStorePollingBatchSize,
                                                 Duration eventStorePollingInterval,
                                                 FencedLockManager fencedLockManager,

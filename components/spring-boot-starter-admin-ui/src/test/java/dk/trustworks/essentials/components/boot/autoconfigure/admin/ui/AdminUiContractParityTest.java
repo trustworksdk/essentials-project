@@ -66,7 +66,11 @@ class AdminUiContractParityTest {
     /** Keeps the comparisons below from passing vacuously. */
     @Test
     void both_sides_are_discovered() {
-        assertThat(contractPaths).hasSize(38);
+        // 38 before the shard-owned queue engine was published; its paths bring it to 48 — nine, plus
+        // resurrecting a whole ordered key, which is how a key stopped behind a dead letter is
+        // recovered. A literal rather than a computed figure on purpose: it is a tripwire for the
+        // contract silently losing paths, which the two parity assertions below cannot see.
+        assertThat(contractPaths).hasSize(48);
         assertThat(calledPaths()).isNotEmpty();
     }
 

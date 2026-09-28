@@ -102,6 +102,9 @@ class CdcEventStoreAdaptiveLiveSourceTest {
 
         await().atMost(Duration.ofSeconds(2)).until(() -> received.size() >= 6);
         assertThat(globalOrders(received)).containsExactly(1L, 2L, 3L, 4L, 5L, 6L);
+        // A running subscription switching off the CDC bus is a fallback, just as starting on polling would be.
+        // It used to leave fallbackCount at zero, so an outage every subscription polled through went unrecorded.
+        assertThat(fx.availability.getFallbackCount()).isEqualTo(1);
     }
 
     @Test
@@ -160,6 +163,8 @@ class CdcEventStoreAdaptiveLiveSourceTest {
 
         await().atMost(Duration.ofSeconds(2)).until(() -> received.size() >= 3);
         assertThat(globalOrders(received)).containsExactly(1L, 2L, 3L);
+        // Starting on polling before CDC was ever active is warm-up, and the cut-over is not a fallback either
+        assertThat(fx.availability.getFallbackCount()).isZero();
     }
 
     @Test
@@ -190,6 +195,10 @@ class CdcEventStoreAdaptiveLiveSourceTest {
         fx.bus.publish(List.of(event(4), event(5)));
         await().atMost(Duration.ofSeconds(2)).until(() -> received.size() >= 5);
         assertThat(globalOrders(received)).containsExactly(1L, 2L, 3L, 4L, 5L);
+        // One fall to polling; the cutback to CDC is recovery, not a second fallback
+        assertThat(fx.availability.getFallbackCount()).isEqualTo(1);
+        assertThat(fx.availability.interruptions().count()).isEqualTo(1);
+        assertThat(fx.availability.interruptions().ongoing()).isFalse();
     }
 
     @Test

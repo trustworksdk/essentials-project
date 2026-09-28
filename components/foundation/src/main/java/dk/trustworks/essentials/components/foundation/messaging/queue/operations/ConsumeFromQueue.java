@@ -66,35 +66,6 @@ public final class ConsumeFromQueue {
      * Start an asynchronous message consumer.<br>
      * Note: There can only be one {@link DurableQueueConsumer} per {@link QueueName} per {@link DurableQueues} instance
      *
-     * @param consumerName        the name of the consumer (for logging purposes)
-     * @param queueName           the name of the queue that the consumer will be listening for queued messages ready to be delivered to the {@link QueuedMessageHandler} provided
-     * @param redeliveryPolicy    the redelivery policy in case the handling of a message fails
-     * @param parallelConsumers   the number of parallel consumers (if number > 1 then you will effectively have competing consumers on the current node)
-     * @param queueMessageHandler the message handler that will receive {@link QueuedMessage}'s. See {@link PatternMatchingQueuedMessageHandler}
-     * @param pollingInterval     the interval with which the consumer poll the queue db for new messages to process
-     * @deprecated Use {@link #builder()}. These overloads telescope over the same arguments and one of them takes an
-     *         {@code Optional} parameter; the builder names every argument and needs no overload per combination.
-     *         Behaviour is unchanged.
-     */
-    @Deprecated(forRemoval = true, since = "0.40.x")
-    public ConsumeFromQueue(String consumerName,
-                            QueueName queueName,
-                            RedeliveryPolicy redeliveryPolicy,
-                            int parallelConsumers,
-                            QueuedMessageHandler queueMessageHandler,
-                            Duration pollingInterval) {
-        this.consumerName = requireNonNull(consumerName, "No consumerName provided");
-        this.queueName = requireNonNull(queueName, "No queueName provided");
-        this.redeliveryPolicy = requireNonNull(redeliveryPolicy, "No redeliveryPolicy provided");
-        this.parallelConsumers = parallelConsumers;
-        this.queueMessageHandler = requireNonNull(queueMessageHandler, "No queueMessageHandler provided");
-        this.pollingInterval = requireNonNull(pollingInterval, "No pollingInterval provided");
-    }
-
-    /**
-     * Start an asynchronous message consumer.<br>
-     * Note: There can only be one {@link DurableQueueConsumer} per {@link QueueName} per {@link DurableQueues} instance
-     *
      * @param consumerName            the name of the consumer (for logging purposes)
      * @param queueName               the name of the queue that the consumer will be listening for queued messages ready to be delivered to the {@link QueuedMessageHandler} provided
      * @param redeliveryPolicy        the redelivery policy in case the handling of a message fails
@@ -102,44 +73,8 @@ public final class ConsumeFromQueue {
      * @param consumerExecutorService the optional {@link ScheduledExecutorService} that's responsible for scheduling the <code>parallelConsumers</code>. Also see {@link ThreadFactoryBuilder}
      * @param queueMessageHandler     the message handler that will receive {@link QueuedMessage}'s. See {@link PatternMatchingQueuedMessageHandler}
      * @param pollingInterval         the interval with which the consumer poll the queue db for new messages to process
-     * @deprecated Use {@link #builder()}. These overloads telescope over the same arguments and one of them takes an
-     *         {@code Optional} parameter; the builder names every argument and needs no overload per combination.
-     *         Behaviour is unchanged.
      */
-    @Deprecated(forRemoval = true, since = "0.40.x")
-    public ConsumeFromQueue(String consumerName,
-                            QueueName queueName,
-                            RedeliveryPolicy redeliveryPolicy,
-                            int parallelConsumers,
-                            ScheduledExecutorService consumerExecutorService,
-                            QueuedMessageHandler queueMessageHandler,
-                            Duration pollingInterval) {
-        this.consumerName = requireNonNull(consumerName, "No consumerName provided");
-        this.queueName = requireNonNull(queueName, "No queueName provided");
-        this.redeliveryPolicy = requireNonNull(redeliveryPolicy, "No redeliveryPolicy provided");
-        this.parallelConsumers = parallelConsumers;
-        this.consumerExecutorService = Optional.of(consumerExecutorService);
-        this.queueMessageHandler = requireNonNull(queueMessageHandler, "No queueMessageHandler provided");
-        this.pollingInterval = requireNonNull(pollingInterval, "No pollingInterval provided");
-    }
-
-    /**
-     * Start an asynchronous message consumer.<br>
-     * Note: There can only be one {@link DurableQueueConsumer} per {@link QueueName} per {@link DurableQueues} instance
-     *
-     * @param consumerName            the name of the consumer (for logging purposes)
-     * @param queueName               the name of the queue that the consumer will be listening for queued messages ready to be delivered to the {@link QueuedMessageHandler} provided
-     * @param redeliveryPolicy        the redelivery policy in case the handling of a message fails
-     * @param parallelConsumers       the number of parallel consumers (if number > 1 then you will effectively have competing consumers on the current node)
-     * @param consumerExecutorService the optional {@link ScheduledExecutorService} that's responsible for scheduling the <code>parallelConsumers</code>. Also see {@link ThreadFactoryBuilder}
-     * @param queueMessageHandler     the message handler that will receive {@link QueuedMessage}'s. See {@link PatternMatchingQueuedMessageHandler}
-     * @param pollingInterval         the interval with which the consumer poll the queue db for new messages to process
-     * @deprecated Use {@link #builder()}. These overloads telescope over the same arguments and one of them takes an
-     *         {@code Optional} parameter; the builder names every argument and needs no overload per combination.
-     *         Behaviour is unchanged.
-     */
-    @Deprecated(forRemoval = true, since = "0.40.x")
-    public ConsumeFromQueue(String consumerName,
+    ConsumeFromQueue(String consumerName,
                             QueueName queueName,
                             RedeliveryPolicy redeliveryPolicy,
                             int parallelConsumers,

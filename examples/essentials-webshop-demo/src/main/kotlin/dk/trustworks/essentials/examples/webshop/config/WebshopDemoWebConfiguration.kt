@@ -35,9 +35,6 @@ import org.springframework.context.annotation.Import
  *   as an *HTTP 500*, not a 400.
  * - **Request and response bodies** - the converter above is not consulted for JSON, so the web `ObjectMapper`
  *   needs [EssentialTypesJacksonModule] as well. The Essentials starters configure the *persistence* mapper only.
- *
- * The module bean is flavour-neutral on purpose: `types-jackson` and `types-jackson3` ship the same FQCN and both
- * extend `SimpleModule`, so this compiles and binds under the Jackson 3 default and under `-Pjackson2`.
  */
 @Configuration
 @Import(EssentialsWebMvcConfigurer::class)

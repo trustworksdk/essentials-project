@@ -69,23 +69,22 @@
         </dependency>
         <dependency>
             <groupId>dk.trustworks.essentials</groupId>
-            <artifactId>${essentials.immutable-jackson.artifactId}</artifactId>
+            <artifactId>immutable-jackson3</artifactId>
             <version>${project.version}</version>
             <scope>test</scope>
         </dependency>
-        <!-- The tests serialize events carrying Essentials value types, so the types module of the active Jackson
-             flavour has to be present. Without it the value types persist as {"value":"..."} nested objects instead
-             of JSON primitives, and the tests pass while writing a wire format nothing else can read back. -->
+        <!-- The tests serialize events carrying Essentials value types, so the types module has to be present.
+             Without it the value types persist as {"value":"..."} nested objects instead of JSON primitives, and the
+             tests pass while writing a wire format nothing else can read back. -->
         <dependency>
             <groupId>dk.trustworks.essentials</groupId>
-            <artifactId>${essentials.types-jackson.artifactId}</artifactId>
+            <artifactId>types-jackson3</artifactId>
             <version>${project.version}</version>
             <scope>test</scope>
         </dependency>
-        <!-- Both Jackson majors are compiled against, as in foundation: DefaultAggregateSnapshotStateAdapter converts
-             snapshot field values through whichever mapper the active JSONEventSerializer wraps. Optional, so a
-             consumer only pulls the flavour it actually uses. It is also what the flavour selected above needs at test
-             time, since it is declared optional upstream and therefore not transitive. -->
+        <!-- DefaultAggregateSnapshotStateAdapter converts snapshot field values through the mapper the
+             JSONEventSerializer wraps. Optional, as in foundation; also needed at test time by the types module
+             above, since it is declared optional upstream and therefore not transitive. -->
         <dependency>
             <groupId>tools.jackson.core</groupId>
             <artifactId>jackson-databind</artifactId>
@@ -119,21 +118,6 @@
             <groupId>org.jdbi</groupId>
             <artifactId>jdbi3-core</artifactId>
             <scope>provided</scope>
-        </dependency>
-        <dependency>
-            <groupId>com.fasterxml.jackson.core</groupId>
-            <artifactId>jackson-databind</artifactId>
-            <scope>provided</scope>
-        </dependency>
-        <dependency>
-            <groupId>com.fasterxml.jackson.datatype</groupId>
-            <artifactId>jackson-datatype-jdk8</artifactId>
-            <scope>test</scope>
-        </dependency>
-        <dependency>
-            <groupId>com.fasterxml.jackson.datatype</groupId>
-            <artifactId>jackson-datatype-jsr310</artifactId>
-            <scope>test</scope>
         </dependency>
         <dependency>
             <groupId>io.projectreactor</groupId>

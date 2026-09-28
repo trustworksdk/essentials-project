@@ -76,16 +76,14 @@ public class DefaultAggregateLifecycleConfigurationValidator implements Aggregat
      * @param nextGenerationFactories a list of typed factories responsible for creating the next-generation
      *                                implementations of aggregates; must not be null
      * @throws IllegalArgumentException if any of the provided parameters is null
-     * @deprecated Use {@link #builder()}. This constructor declares an {@code Optional} parameter and/or more than five parameters; the builder names every argument and accepts both plain values and {@code Optional}s. It is unchanged and remains the implementation the builder delegates to.
      */
-    @Deprecated(forRemoval = true, since = "0.40.x")
-    public DefaultAggregateLifecycleConfigurationValidator(AggregateSnapshotPolicyRegistry snapshotPolicyRegistry,
-                                                           AggregateClosingBooksPolicyRegistry closingBooksPolicyRegistry,
-                                                           AggregateSnapshotConfigurationResolver snapshotConfigurationResolver,
-                                                           AggregateClosingBooksConfigurationResolver closingBooksConfigurationResolver,
-                                                           EssentialsEventStoreProperties properties,
-                                                           Optional<FencedLockManager> fencedLockManagerOptional,
-                                                           List<TypedClosingBooksNextGenerationFactory<?, ?, ?, ?>> nextGenerationFactories) {
+    DefaultAggregateLifecycleConfigurationValidator(AggregateSnapshotPolicyRegistry snapshotPolicyRegistry,
+                                                    AggregateClosingBooksPolicyRegistry closingBooksPolicyRegistry,
+                                                    AggregateSnapshotConfigurationResolver snapshotConfigurationResolver,
+                                                    AggregateClosingBooksConfigurationResolver closingBooksConfigurationResolver,
+                                                    EssentialsEventStoreProperties properties,
+                                                    Optional<FencedLockManager> fencedLockManagerOptional,
+                                                    List<TypedClosingBooksNextGenerationFactory<?, ?, ?, ?>> nextGenerationFactories) {
         this.snapshotPolicyRegistry = requireNonNull(snapshotPolicyRegistry, "No snapshotPolicyRegistry provided");
         this.closingBooksPolicyRegistry = requireNonNull(closingBooksPolicyRegistry, "No closingBooksPolicyRegistry provided");
         this.snapshotConfigurationResolver = requireNonNull(snapshotConfigurationResolver, "No snapshotConfigurationResolver provided");

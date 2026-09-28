@@ -18,6 +18,7 @@ package dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.o
 
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.*;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.gap.GapReconciliation;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.observability.SubscriptionStatisticsRegistry.SubscriptionKey;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.subscription.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.types.GlobalEventOrder;
@@ -185,6 +186,20 @@ public class StatisticsCollectingEventStoreSubscriptionObserver implements Event
                                 persistedEvents,
                                 reconcileGapsDuration);
         record(subscriberId, aggregateType, MutableSubscriptionStatistics::recordGapsReconciled);
+    }
+
+    @Override
+    public void gapReconciliationOutcome(SubscriberId subscriberId,
+                                         AggregateType aggregateType,
+                                         GapReconciliation gapReconciliation) {
+        delegate.gapReconciliationOutcome(subscriberId, aggregateType, gapReconciliation);
+        if (gapReconciliation == null || gapReconciliation.isEmpty()) {
+            return;
+        }
+        record(subscriberId, aggregateType,
+               statistics -> statistics.recordGapReconciliation(gapReconciliation.newTransientGaps(),
+                                                                gapReconciliation.resolvedTransientGaps(),
+                                                                gapReconciliation.promotedToPermanentGaps()));
     }
 
     @Override

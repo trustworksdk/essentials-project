@@ -51,8 +51,8 @@ Consequences worth knowing before editing:
   `views/order_status`'s, the second had no callers at all, the third moved to the load harness.
 - **The Kafka DTOs carry a plain `String` id, not `OrderId`.** Converting happens in the two adapters of
   `external_systems/order_management`, and nowhere else. Typing the DTOs with `OrderId` means the ACL
-  stops translating — and it also drags the Essentials value-type serializer onto Kafka's `ObjectMapper`,
-  which is what used to break this module under `-Pjackson2`.
+  stops translating — and it also drags the Essentials value-type serializer onto Kafka's `ObjectMapper`
+  (under 0.50's since-removed `-Pjackson2` profile that is what broke this module).
 - **Neither `events/` nor `entities/` names a command type.** `ShippingOrderRegistered.from(cmd)` and
   `new ShippingOrder(cmd)` both existed and are both §R4 violations; the emitting slice unpacks its own
   command. `events/` is the BC's importable surface, which makes that the worse of the two.

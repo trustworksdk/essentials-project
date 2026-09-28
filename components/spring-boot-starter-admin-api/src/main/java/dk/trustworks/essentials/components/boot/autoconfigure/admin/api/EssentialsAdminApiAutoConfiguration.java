@@ -17,6 +17,7 @@
 package dk.trustworks.essentials.components.boot.autoconfigure.admin.api;
 
 import dk.trustworks.essentials.components.adminapi.rest.*;
+import dk.trustworks.essentials.components.queue.shardowned.api.ShardOwnedQueuesApi;
 import dk.trustworks.essentials.components.eventsourced.aggregates.api.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.api.*;
 import dk.trustworks.essentials.components.foundation.fencedlock.api.DBFencedLockApi;
@@ -121,6 +122,7 @@ public class EssentialsAdminApiAutoConfiguration {
         put(DurableQueuesController.class, "durable-queues");
         put(EventStoreController.class, "event-store");
         put(CdcController.class, "cdc");
+        put(ShardOwnedQueuesController.class, "shard-owned-queues");
         put(EventStoreStatisticsController.class, "event-store-statistics");
         put(AggregateLifecycleController.class, "aggregate-lifecycle");
         put(AggregateLifecycleStatisticsController.class, "aggregate-lifecycle-statistics");
@@ -186,6 +188,23 @@ public class EssentialsAdminApiAutoConfiguration {
     public EventStoreController essentialsEventStoreController(EventStoreApi eventStoreApi,
                                                                AdminApiPrincipalResolver principalResolver) {
         return new EventStoreController(eventStoreApi, principalResolver);
+    }
+
+    /**
+     * The shard-owned queue engine's endpoints. Conditional on its {@code ShardOwnedQueuesApi}, which
+     * its own starter declares, so this registers only where the engine is actually wired.
+     * <p>
+     * It lived in that starter until the engine was published — a controller here would have given a
+     * published artifact a dependency on one in no repository. Moving it back is what puts these
+     * endpoints under the same {@code @RestControllerAdvice} as every other admin operation; while
+     * they were outside its package scope a 404 reached the client as a 500.
+     */
+    @Bean
+    @ConditionalOnBean(ShardOwnedQueuesApi.class)
+    @ConditionalOnMissingBean
+    public ShardOwnedQueuesController essentialsShardOwnedQueuesController(ShardOwnedQueuesApi shardOwnedQueuesApi,
+                                                                          AdminApiPrincipalResolver principalResolver) {
+        return new ShardOwnedQueuesController(shardOwnedQueuesApi, principalResolver);
     }
 
     @Bean

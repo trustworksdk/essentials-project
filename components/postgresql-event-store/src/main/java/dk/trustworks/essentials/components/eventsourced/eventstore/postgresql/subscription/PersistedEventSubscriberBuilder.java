@@ -114,7 +114,6 @@ public final class PersistedEventSubscriberBuilder {
      *
      * @return the subscriber
      */
-    @SuppressWarnings("removal")
     public PersistedEventSubscriber build() {
         return new PersistedEventSubscriber(requireNonNull(eventHandler, "eventHandler cannot be null"),
                                             requireNonNull(eventStoreSubscription, "eventStoreSubscription cannot be null"),

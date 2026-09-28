@@ -16,7 +16,8 @@
 
 package dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.cdc;
 
-import dk.trustworks.essentials.components.foundation.postgresql.PostgresqlUtil;
+import dk.trustworks.essentials.components.foundation.postgresql.*;
+import dk.trustworks.essentials.components.foundation.schema.*;
 import dk.trustworks.essentials.components.foundation.transaction.jdbi.*;
 import dk.trustworks.essentials.components.foundation.ttl.TTLJob;
 import io.micrometer.core.instrument.*;
@@ -42,7 +43,7 @@ import static dk.trustworks.essentials.shared.MessageFormatter.bind;
         ttlDurationProperty = "essentials.eventstore.cdc.inbox-ttl-duration",
         defaultTtlDays = 90
 )
-public class CdcInboxRepository {
+public class CdcInboxRepository implements EssentialsSchemaContributor {
 
     private static final Logger log = LoggerFactory.getLogger(CdcInboxRepository.class);
 
@@ -77,29 +78,26 @@ public class CdcInboxRepository {
     /**
      * @param unitOfWorkFactory the {@link HandleAwareUnitOfWorkFactory} needed to access the database
      * @param meterRegistry     optional {@link MeterRegistry} — when empty, no metrics are recorded
-     * @deprecated Use {@link #builder()}. This constructor declares an {@code Optional} parameter and/or more than five parameters; the builder names every argument and accepts both plain values and {@code Optional}s. It is unchanged and remains the implementation the builder delegates to.
      */
-    @Deprecated(forRemoval = true, since = "0.40.x")
-    public CdcInboxRepository(HandleAwareUnitOfWorkFactory<? extends HandleAwareUnitOfWork> unitOfWorkFactory,
-                              Optional<MeterRegistry> meterRegistry) {
-        this(unitOfWorkFactory, meterRegistry, CdcSql.DEFAULT_CDC_TABLE_NAME);
+    CdcInboxRepository(HandleAwareUnitOfWorkFactory<? extends HandleAwareUnitOfWork> unitOfWorkFactory,
+                Optional<MeterRegistry> meterRegistry) {
+        this(unitOfWorkFactory, meterRegistry, CdcSql.DEFAULT_CDC_TABLE_NAME, SchemaOwnership.COMPONENT);
     }
 
     public CdcInboxRepository(HandleAwareUnitOfWorkFactory<? extends HandleAwareUnitOfWork> unitOfWorkFactory,
                               String cdcInboxTableName) {
-        this(unitOfWorkFactory, Optional.empty(), cdcInboxTableName);
+        this(unitOfWorkFactory, Optional.empty(), cdcInboxTableName, SchemaOwnership.COMPONENT);
     }
 
     /**
      * @param unitOfWorkFactory  the {@link HandleAwareUnitOfWorkFactory} needed to access the database
      * @param meterRegistry      optional {@link MeterRegistry} — when empty, no metrics are recorded
      * @param cdcInboxTableName  the name of the CDC inbox table
-     * @deprecated Use {@link #builder()}. This constructor declares an {@code Optional} parameter and/or more than five parameters; the builder names every argument and accepts both plain values and {@code Optional}s. It is unchanged and remains the implementation the builder delegates to.
      */
-    @Deprecated(forRemoval = true, since = "0.40.x")
-    public CdcInboxRepository(HandleAwareUnitOfWorkFactory<? extends HandleAwareUnitOfWork> unitOfWorkFactory,
+    CdcInboxRepository(HandleAwareUnitOfWorkFactory<? extends HandleAwareUnitOfWork> unitOfWorkFactory,
                               Optional<MeterRegistry> meterRegistry,
-                              String cdcInboxTableName) {
+                              String cdcInboxTableName,
+                              SchemaOwnership schemaOwnership) {
         this.unitOfWorkFactory = unitOfWorkFactory;
         this.meterRegistry = meterRegistry.orElse(null);
         // CdcSql validates the name via PostgresqlUtil.checkIsValidTableOrColumnName, so it is safe to
@@ -128,17 +126,37 @@ public class CdcInboxRepository {
             markDispatchedCounter = null;
             deleteDispatchedCounter = null;
         }
-        createTableAndIndexes();
+        if (requireNonNull(schemaOwnership, "schemaOwnership cannot be null") == SchemaOwnership.COMPONENT) {
+            createTableAndIndexes();
+        }
     }
 
+    /**
+     * Apply this repository's own schema now, with the create applier - what construction does in
+     * {@link SchemaOwnership#COMPONENT} mode.
+     */
     public void createTableAndIndexes() {
-        unitOfWorkFactory.usingUnitOfWork(uow -> {
-            PostgresqlUtil.acquireBootstrapLock(uow.handle());
-            uow.handle().execute(cdcSql.buildCreateCdcTableSql());
-            log.info("Ensured Table '{}' exists", cdcSql.getCdcTableName());
-            uow.handle().execute(cdcSql.getCreateCdcIndexSql());
-            log.info("Ensured Cdc indexes exists");
-        });
+        PostgresqlCreateSchemaApplier.applyOwnSchema(unitOfWorkFactory, this);
+        log.info("Ensured Table '{}' and its indexes exist", cdcSql.getCdcTableName());
+    }
+
+    @Override
+    public String moduleId() {
+        return "postgresql-event-store-cdc";
+    }
+
+    @Override
+    public int order() {
+        return SchemaOrder.ORDER_EVENT_STORE;
+    }
+
+    /**
+     * The CDC inbox table and its {@code (slot_name, status, inbox_id)} index.
+     */
+    @Override
+    public List<SchemaChange> contribute(SchemaContext context) {
+        return List.of(SchemaChange.repeatable("cdc-inbox-table", cdcSql.getCdcTableName(), cdcSql.buildCreateCdcTableSql()),
+                       SchemaChange.repeatable("cdc-inbox-status-index", cdcSql.getCdcTableName(), cdcSql.getCreateCdcIndexSql()));
     }
 
     /**

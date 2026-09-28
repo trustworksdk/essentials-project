@@ -25,8 +25,11 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 /**
  * Event-store polling statistics for a subscription, as observed in the queried instance.
  * <p>
- * Only the polling path updates these counters. A subscription that is served over Change Data Capture leaves them at
- * zero, which is expected and not a sign of a stalled subscription - read them together with the CDC status.
+ * Updated whenever the subscription reads events by polling the event store. With Change Data Capture enabled that
+ * still happens: a subscription polls when it is established while CDC is not yet active - common at start-up - and
+ * when CDC becomes unavailable and it falls back to polling, and stops once it switches to the CDC bus. Non-zero
+ * counters on a CDC-enabled store are therefore normal; read them together with the CDC status. The CDC catch-up
+ * (backfill) that runs before a subscription switches to live CDC delivery is not counted here.
  *
  * @param polls                                how many times the event store was queried for this subscriber
  * @param pollsWithoutEvents                   how many of those queries returned no events
@@ -34,7 +37,9 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
  * @param lastPollAt                           when the event store was last polled. Null if it was never polled in this instance
  * @param lastPollDurationMillis               how long the most recent poll took, in milliseconds. Null if it was never polled in this instance
  * @param consecutiveNoPersistedEventsReturned the most recently reported number of consecutive polls returning no events
- * @param gapReconciliations                   how many times transient global-event-order gaps were reconciled after a poll
+ * @param gapReconciliations                   how many polls ran gap reconciliation - one per poll that queried the event
+ *                                             store, whether or not there was a gap. What reconciliation found is in
+ *                                             {@link ApiSubscriptionStatistics#gaps()}
  */
 public record ApiSubscriptionPollingStatistics(
         long polls,

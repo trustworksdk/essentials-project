@@ -16,7 +16,6 @@
 
 package dk.trustworks.essentials.components.queue.postgresql;
 
-import dk.trustworks.essentials.components.foundation.messaging.queue.TransactionalMode;
 import dk.trustworks.essentials.components.foundation.test.reactive.command.AbstractDurableLocalCommandBusIT;
 import dk.trustworks.essentials.components.foundation.transaction.jdbi.*;
 import dk.trustworks.essentials.components.foundation.test.EssentialsTestContainers;
@@ -36,7 +35,6 @@ public class DurableLocalCommandBus_withSingleOperationTransactionIT extends Abs
         return PostgresqlDurableQueues.builder()
                                       .setUnitOfWorkFactory(unitOfWorkFactory)
                                       .setMessageHandlingTimeout(Duration.ofSeconds(1))
-                                      .setTransactionalMode(TransactionalMode.SingleOperationTransaction)
                                       .build();
     }
 

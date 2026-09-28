@@ -19,7 +19,6 @@ package dk.trustworks.essentials.types.spring.web;
 import dk.trustworks.essentials.types.spring.web.model.CustomerId;
 import dk.trustworks.essentials.types.spring.web.model.DueDate;
 import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.condition.EnabledIfSystemProperty;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
@@ -31,7 +30,6 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 
 @SpringBootTest(classes = WebMvcJackson3SpringWebApplication.class)
 @AutoConfigureMockMvc
-@EnabledIfSystemProperty(named = "essentials.jackson.flavor", matches = "jackson3")
 class WebMvcControllerJackson3Test {
     @Autowired
     private MockMvc mockMvc;

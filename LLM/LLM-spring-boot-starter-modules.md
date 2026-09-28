@@ -51,11 +51,12 @@ See [spring-boot-starter-postgresql README](../components/spring-boot-starter-po
 **Core Infrastructure:**
 - `Jdbi` - JDBI with PostgresPlugin + TransactionAwareDataSourceProxy
 - `SpringTransactionAwareJdbiUnitOfWorkFactory` - Spring transaction integration
+- `SchemaApplier` + `EssentialsSchemaHarnessRunner` - the schema harness, driven by `essentials.schema.mode` ([Database Schema](#database-schema))
 
 **Components:**
 - `PostgresqlFencedLockManager` - Distributed locks
 - `PostgresqlDurableQueues` - Durable message queuing
-- `PostgresqlDurableQueuesStatistics` - Queue statistics (when enabled)
+- `QueueStatisticsRegistry` + `StatisticsCollectingDurableQueueMessageObserver` - per-JVM delivery statistics
 - `Inboxes`, `Outboxes` - Store-and-forward patterns
 - `DurableLocalCommandBus` - Command bus with durable delivery
 - `MultiTableChangeListener` - PostgreSQL NOTIFY/LISTEN optimization
@@ -65,9 +66,9 @@ See [spring-boot-starter-postgresql README](../components/spring-boot-starter-po
 - `ReactiveHandlersBeanPostProcessor` - Auto-register handlers
 
 **Serialization:**
-- `EssentialTypesJacksonModule` - Jackson support for types
-- `EssentialsImmutableJacksonModule` - Immutable support (when enabled)
-- `JacksonJSONSerializer` - JSON serializer (when JSONEventSerializer not on classpath)
+- `EssentialTypesJacksonModule` - Jackson 3 support for types (bean, so Spring Boot also registers it on its **web** `JsonMapper`)
+- `EssentialsImmutableJacksonModule` - Immutable support (when enabled; also a bean for the web mapper)
+- `JSONSerializer` - `EssentialsObjectMappers.createJSONSerializer()` (Jackson 3; when JSONEventSerializer not on classpath). Deliberately does **not** collect `JacksonModule` beans from the context — those are usually web-layer modules and would silently change the persisted format. Need extra persistence modules? Define your own `JSONSerializer` bean; the starter backs off
 
 **Scheduler:**
 - `EssentialsScheduler` - Distributed scheduler (when enabled)
@@ -116,7 +117,7 @@ See [spring-boot-starter-postgresql-event-store README](../components/spring-boo
 - `PostgresqlEventStore` - Event persistence and loading
 - `SeparateTablePerAggregateTypePersistenceStrategy` - One table per AggregateType
 - `SpringTransactionAwareEventStoreUnitOfWorkFactory` - Spring transaction integration
-- `JacksonJSONEventSerializer` - Event JSON serialization
+- `JSONEventSerializer` - `EssentialsJSONEventSerializers.create()` (Jackson 3 `Jackson3JSONEventSerializer`); define your own bean to add persistence modules
 
 **Subscriptions & Processing:**
 - `EventStoreSubscriptionManager` - Coordinate subscriptions
@@ -185,16 +186,13 @@ Prefix: `essentials.durable-queues`
 | Property | Default | Notes |
 |----------|---------|-------|
 | `shared-queue-table-name` | `durable_queues` | Table name - see [Security](#security) |
-| `transactional-mode` | `single-operation-transaction` | **Use this**, not `fully-transactional` |
 | `message-handling-timeout` | `30s` | Single-op mode only |
 | `use-centralized-message-fetcher` | `true` | Recommended |
 | `centralized-message-fetcher-polling-interval` | `20ms` | Base interval |
 | `centralized-polling-delay-back-off-factor` | `1.5` | Backoff multiplier |
-| `use-ordered-unordered-query` | `true` | Optimize mixed ordering |
 | `polling-delay-interval-increment-factor` | `0.5` | Legacy (centralized=false) |
 | `max-polling-interval` | `2s` | Max backoff |
 | `verbose-tracing` | `false` | Include all ops in traces |
-| `enable-queue-statistics` | `false` | Collect statistics |
 | `shared-queue-statistics-table-name` | `durable_queues_statistics` | Stats table - see [Security](#security) |
 | `enable-queue-statistics-ttl` | `false` | Auto-cleanup stats |
 | `queue-statistics-ttl-duration` | `90` | Days |
@@ -282,6 +280,26 @@ Prefix: `essentials`
 | `reactive-bean-post-processor-enabled` | `true` | Auto-register handlers |
 | `immutable-jackson-module-enabled` | `true` | Enable immutable deserialization |
 
+#### Database Schema
+
+Prefix: `essentials.schema` - what happens to the schema every Essentials component describes. SPI and rules:
+[LLM-foundation.md](./LLM-foundation.md#database-schema-harness).
+
+| Property | Default | Effect |
+|----------|---------|--------|
+| `mode` | `create` | `create`: each component creates its own schema on construction (0.50 behaviour). `validate`: execute nothing, fail startup with `SchemaValidationException` unless `essentials_schema_history` records every change. `emit`: write the schema as one SQL script, start no Essentials lifecycle, exit 0. `external`: execute and verify nothing |
+| `history-table-name` | `essentials_schema_history` | The ledger table |
+| `emit.script-file` | `essentials-schema.sql` | Where `emit` writes the script |
+| `emit.exit` | `true` | Whether `emit` stops the application once the script is written |
+
+- Beans: `SchemaApplier` (selected by `mode`, `@ConditionalOnMissingBean`) and `EssentialsSchemaHarnessRunner`, which
+  applies every `EssentialsSchemaContributor` bean after all singletons exist and before lifecycles start. Your own
+  contributor beans are applied with them.
+- Outside `create`: registering an `AggregateType` whose table is not in the ledger throws in `validate`; a
+  `ClosingBooksSetup` bean needs `.setSchemaOwnership(essentialsComponentsProperties.getSchema().getMode().schemaOwnership())`;
+  the shard-owned engine creates each queue's sequences itself and so needs `CREATE` rights at runtime.
+- DBA flow: run once with `emit`, have the script run by a user with DDL rights, deploy with `validate`.
+
 ### MongoDB Starter
 
 See [spring-boot-starter-mongodb README](../components/spring-boot-starter-mongodb/README.md#configuration-properties) for complete documentation.
@@ -304,7 +322,6 @@ Prefix: `essentials.durable-queues`
 | Property | Default | Notes |
 |----------|---------|-------|
 | `shared-queue-collection-name` | `durable_queues` | Collection name - see [Security](#security) |
-| `transactional-mode` | `single-operation-transaction` | **Use this**, not `fully-transactional` |
 | `message-handling-timeout` | `30s` | Single-op mode only |
 | `polling-delay-interval-increment-factor` | `0.5` | Backoff factor |
 | `max-polling-interval` | `2s` | Max backoff |
@@ -586,7 +603,6 @@ While Essentials applies naming convention validation as an initial defense laye
 **Affected Properties:**
 - `fenced-locks-table-name` / `fenced-locks-collection-name`
 - `shared-queue-table-name` / `shared-queue-collection-name`
-- `shared-queue-statistics-table-name`
 - All custom table/column/function/index and collection names
 - All custom `AggregateType` values
 
@@ -668,7 +684,6 @@ public PostgresqlDurableQueues postgresqlDurableQueues(...) {
 - ⚠️ **Lifecycle Start**: Set `start-life-cycles=false` to manually control lifecycle
 - ⚠️ **MongoDB CharSequenceTypes**: Must register types using ObjectId values or used as Map keys
 - ⚠️ **Flush Publishing**: Enable only if sagas need per-event coordination (impacts transaction semantics)
-- ⚠️ **Queue Statistics**: Extra DB overhead when enabled, use TTL to prevent unbounded growth
 - ⚠️ **Admin UI**: Requires both `EssentialsAuthenticatedUser` implementation AND Spring Security config (not auto-configured)
 
 ---

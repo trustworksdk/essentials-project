@@ -19,7 +19,6 @@ package dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.s
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.bus.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.*;
-import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.observability.EventStoreSubscriptionObserver;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.types.GlobalEventOrder;
 import dk.trustworks.essentials.components.foundation.types.*;
 import dk.trustworks.essentials.shared.Exceptions;
@@ -50,25 +49,6 @@ public class NonExclusiveInTransactionSubscription extends AbstractEventStoreSub
     public NonExclusiveInTransactionSubscription(EventStoreSubscriptionContext context,
                                                  TransactionalPersistedEventHandler eventHandler) {
         super(context);
-        this.eventHandler = requireNonNull(eventHandler, "No eventHandler provided");
-    }
-
-    /**
-     * @deprecated Use {@link #NonExclusiveInTransactionSubscription(EventStoreSubscriptionContext, TransactionalPersistedEventHandler)}.
-     *         The six shared arguments are now one {@link EventStoreSubscriptionContext}. This constructor delegates and
-     *         behaves identically.
-     */
-    @Deprecated(forRemoval = true, since = "0.40.x")
-    @SuppressWarnings("OptionalUsedAsFieldOrParameterType")
-    public NonExclusiveInTransactionSubscription(EventStore eventStore,
-                                                 AggregateType aggregateType,
-                                                 SubscriberId subscriberId,
-                                                 Optional<Tenant> onlyIncludeEventsForTenant,
-                                                 TransactionalPersistedEventHandler eventHandler,
-                                                 EventStoreSubscriptionObserver eventStoreSubscriptionObserver,
-                                                 Consumer<EventStoreSubscription> unsubscribeCallback,
-                                                 Function<String, EventStorePollingOptimizer> eventStorePollingOptimizerFactory) {
-        super(eventStore, aggregateType, subscriberId, onlyIncludeEventsForTenant, eventStoreSubscriptionObserver, unsubscribeCallback, eventStorePollingOptimizerFactory);
         this.eventHandler = requireNonNull(eventHandler, "No eventHandler provided");
     }
 

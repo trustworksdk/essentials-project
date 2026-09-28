@@ -236,8 +236,7 @@ Step by step:
 
 > **The Kafka DTOs must keep their plain `String` ids.** `OrderEvent.id()` and
 > `ExternalOrderShippingEvent.orderId()` are deliberately not typed with `OrderId`. Typing them with the domain
-> type means the boundary stops translating: an upstream id-format change reaches the domain directly, and the
-> DTOs become sensitive to which Jackson flavour the application was built with. See
+> type means the boundary stops translating: an upstream id-format change reaches the domain directly. See
 > `shipping/external_systems/order_management/CLAUDE.md`.
 
 In parallel, `OrderStatusProjection` (a `ViewEventProcessor`) consumes the same two events into the
@@ -359,12 +358,10 @@ mvn verify -pl :postgresql-cqrs -Dit.test=TaskProcessorIT
 
 ```bash
 mvn verify -pl :postgresql-cqrs                    # unit + integration tests (needs Docker)
-mvn -Pjackson2 verify -pl :postgresql-cqrs -am     # the other Jackson flavour; -am is required
 docker compose up -d && mvn spring-boot:run -pl :postgresql-cqrs
 ```
 
-All commands are run from the `examples/essentials-spring-examples` folder. The `-am` is not optional on the
-non-default Jackson flavour — see [the aggregator README](../README.md#jackson-flavour).
+All commands are run from the `examples/essentials-spring-examples` folder.
 
 ### Integration tests
 
@@ -396,7 +393,7 @@ In short, the starters provide: `Jdbi` + `SpringTransactionAwareEventStoreUnitOf
 `EventStoreSubscriptionManager`, `EventProcessorDependencies`, `PostgresqlDurableQueues`, `Inboxes`/`Outboxes`,
 `DurableLocalCommandBus`, `PostgresqlFencedLockManager`, `MultiTableChangeListener`,
 `ReactiveHandlersBeanPostProcessor` (which is what auto-registers every `@CmdHandler` and `@Handler` bean in
-this module), `JacksonJSONEventSerializer`, the Micrometer interceptors, and the admin API beans.
+this module), `JSONEventSerializer` (Jackson 3, from `EssentialsJSONEventSerializers.create()`), the Micrometer interceptors, and the admin API beans.
 
 > ⚠️ **Security.** `essentials.durable-queues.shared-queue-table-name` and
 > `essentials.fenced-lock-manager.fenced-locks-table-name` are concatenated into SQL. Derive them from a
@@ -423,7 +420,6 @@ essentials.event-store.subscription-manager.event-store-polling-interval=200
 
 # DurableQueues (backs the command bus, every EventProcessor Inbox, and every Outbox)
 essentials.durable-queues.shared-queue-table-name=durable_queues
-essentials.durable-queues.transactional-mode=singleoperationtransaction
 essentials.durable-queues.use-centralized-message-fetcher=true
 essentials.durable-queues.centralized-message-fetcher-polling-interval=20ms
 essentials.durable-queues.polling-delay-interval-increment-factor=0.5
@@ -449,9 +445,6 @@ essentials.metrics.message-handler.enabled=true
 
 Notes on the values this example picks:
 
-- **`transactional-mode=singleoperationtransaction`** is the recommended mode and the starter default.
-  `fullytransactional` makes queue operations join the caller's transaction, which breaks retry counting and
-  dead-lettering, because a failure marks the whole transaction for rollback.
 - **CDC (logical replication) is left at its default**, i.e. enabled with `CdcMode.AUTO`. This example does not
   showcase CDC — [`essentials-performance-lab`](../../essentials-performance-lab/README.md) does — but leaving
   the default in place keeps it honest about what an application gets out of the box: `AUTO` falls back to

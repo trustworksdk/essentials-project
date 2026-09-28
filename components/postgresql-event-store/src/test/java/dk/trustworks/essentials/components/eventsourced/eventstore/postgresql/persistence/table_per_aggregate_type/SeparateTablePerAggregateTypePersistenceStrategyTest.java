@@ -31,7 +31,7 @@ class SeparateTablePerAggregateTypePersistenceStrategyTest {
     @Test
     void test_SeparateTablePerAggregateTypePersistenceStrategy_validates_eventStreamTableName_and_EventStreamTableColumnNames_validate_is_called() {
         try (var postgresqlUtilMock = mockStatic(PostgresqlUtil.class)) {
-            var eventStreamTableColumnNames = mock(EventStreamTableColumnNames.class);
+            var eventStreamTableColumnNames = spy(EventStreamTableColumnNames.defaultColumnNames());
             new SeparateTablePerAggregateTypePersistenceStrategy(mock(Jdbi.class),
                                                                  mock(EventStoreUnitOfWorkFactory.class),
                                                                  mock(PersistableEventMapper.class),
@@ -51,11 +51,12 @@ class SeparateTablePerAggregateTypePersistenceStrategyTest {
                                                                          mock(TenantSerializer.TenantIdSerializer.class)
                                                                  ));
 
-            // Verification happens 3 times:
+            // The name is validated 5 times, the column names 3 times:
             // SeparateTablePerAggregateEventStreamConfiguration.<init>
             // SeparateTablePerAggregateTypePersistenceStrategy.addAggregateEventStreamConfiguration
-            // SeparateTablePerAggregateTypePersistenceStrategy.initializeEventStorageFor
-            postgresqlUtilMock.verify(() -> PostgresqlUtil.checkIsValidTableOrColumnName("valid_name"), times(3));
+            // SeparateTablePerAggregateTypePersistenceStrategy.schemaChangesFor
+            // PostgresqlCreateSchemaApplier.apply - the name only, once per change (table and tenant index)
+            postgresqlUtilMock.verify(() -> PostgresqlUtil.checkIsValidTableOrColumnName("valid_name"), times(5));
             verify(eventStreamTableColumnNames, times(3)).validate();
         }
     }
@@ -63,7 +64,7 @@ class SeparateTablePerAggregateTypePersistenceStrategyTest {
     @Test
     void test_addAggregateEventStreamConfiguration_validates_eventStreamTableName_and_EventStreamTableColumnNames_validate_is_called() {
         try (var postgresqlUtilMock = mockStatic(PostgresqlUtil.class)) {
-            var eventStreamTableColumnNames = mock(EventStreamTableColumnNames.class);
+            var eventStreamTableColumnNames = spy(EventStreamTableColumnNames.defaultColumnNames());
             var strategy = new SeparateTablePerAggregateTypePersistenceStrategy(mock(Jdbi.class),
                                                                                 mock(EventStoreUnitOfWorkFactory.class),
                                                                                 mock(PersistableEventMapper.class),
@@ -85,11 +86,12 @@ class SeparateTablePerAggregateTypePersistenceStrategyTest {
                             mock(TenantSerializer.TenantIdSerializer.class)
                     ));
 
-            // Verification happens 3 times:
+            // The name is validated 5 times, the column names 3 times:
             // SeparateTablePerAggregateEventStreamConfiguration.<init>
             // SeparateTablePerAggregateTypePersistenceStrategy.addAggregateEventStreamConfiguration
-            // SeparateTablePerAggregateTypePersistenceStrategy.initializeEventStorageFor
-            postgresqlUtilMock.verify(() -> PostgresqlUtil.checkIsValidTableOrColumnName("valid_name"), times(3));
+            // SeparateTablePerAggregateTypePersistenceStrategy.schemaChangesFor
+            // PostgresqlCreateSchemaApplier.apply - the name only, once per change (table and tenant index)
+            postgresqlUtilMock.verify(() -> PostgresqlUtil.checkIsValidTableOrColumnName("valid_name"), times(5));
             verify(eventStreamTableColumnNames, times(3)).validate();
         }
     }
@@ -97,7 +99,7 @@ class SeparateTablePerAggregateTypePersistenceStrategyTest {
     @Test
     void test_resetEventStorageFor_validates_eventStreamTableName_and_EventStreamTableColumnNames_validate_is_called() {
         try (var postgresqlUtilMock = mockStatic(PostgresqlUtil.class)) {
-            var eventStreamTableColumnNames = mock(EventStreamTableColumnNames.class);
+            var eventStreamTableColumnNames = spy(EventStreamTableColumnNames.defaultColumnNames());
             var strategy = new SeparateTablePerAggregateTypePersistenceStrategy(mock(Jdbi.class),
                                                                                 mock(EventStoreUnitOfWorkFactory.class),
                                                                                 mock(PersistableEventMapper.class),
@@ -119,11 +121,12 @@ class SeparateTablePerAggregateTypePersistenceStrategyTest {
                             mock(TenantSerializer.TenantIdSerializer.class)
                     ));
 
-            // Verification happens 3 times:
+            // The name is validated 5 times, the column names 3 times:
             // SeparateTablePerAggregateEventStreamConfiguration.<init>
             // SeparateTablePerAggregateTypePersistenceStrategy.resetEventStorageFor
-            // SeparateTablePerAggregateTypePersistenceStrategy.initializeEventStorageFor
-            postgresqlUtilMock.verify(() -> PostgresqlUtil.checkIsValidTableOrColumnName("valid_name"), times(3));
+            // SeparateTablePerAggregateTypePersistenceStrategy.schemaChangesFor
+            // PostgresqlCreateSchemaApplier.apply - the name only, once per change (table and tenant index)
+            postgresqlUtilMock.verify(() -> PostgresqlUtil.checkIsValidTableOrColumnName("valid_name"), times(5));
             verify(eventStreamTableColumnNames, times(3)).validate();
         }
     }

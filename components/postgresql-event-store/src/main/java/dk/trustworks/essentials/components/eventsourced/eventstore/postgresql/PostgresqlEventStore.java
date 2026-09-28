@@ -140,10 +140,8 @@ public final class PostgresqlEventStore<CONFIG extends AggregateEventStreamConfi
      *                                                measure statistics related to {@link EventStoreSubscription}'s
      *                                                and calls to {@link #pollEvents(AggregateType, long, Optional, Optional, Optional, Optional, Optional)}
      * @param <STRATEGY>                              the persistence strategy type
-     * @deprecated Use {@link #builder()}. This constructor declares an {@code Optional} parameter and/or more than five parameters; the builder names every argument and accepts both plain values and {@code Optional}s. It is unchanged and remains the implementation the builder delegates to.
      */
-    @Deprecated(forRemoval = true, since = "0.40.x")
-    public <STRATEGY extends AggregateEventStreamPersistenceStrategy<CONFIG>> PostgresqlEventStore(EventStoreUnitOfWorkFactory unitOfWorkFactory,
+    <STRATEGY extends AggregateEventStreamPersistenceStrategy<CONFIG>> PostgresqlEventStore(EventStoreUnitOfWorkFactory unitOfWorkFactory,
                                                                                                    STRATEGY aggregateEventStreamPersistenceStrategy,
                                                                                                    Optional<EventStoreEventBus> eventStoreLocalEventBusOption,
                                                                                                    Function<PostgresqlEventStore<CONFIG>, EventStreamGapHandler<CONFIG>> eventStreamGapHandlerFactory,
@@ -196,7 +194,7 @@ public final class PostgresqlEventStore<CONFIG extends AggregateEventStreamConfi
         return new PostgresqlEventStore<>(unitOfWorkFactory,
                                           aggregateEventStreamPersistenceStrategy,
                                           Optional.empty(),
-                                          eventStore -> new PostgresqlEventStreamGapHandler<>(eventStore, unitOfWorkFactory),
+                                          eventStore -> new PostgresqlEventStreamGapHandler<>(unitOfWorkFactory),
                                           new NoOpEventStoreSubscriptionObserver());
     }
 
@@ -500,6 +498,9 @@ public final class PostgresqlEventStore<CONFIG extends AggregateEventStreamConfi
         var actualSubscriberId                   = subscriberId.orElse(NO_SUBSCRIBER_ID);
 
         var persistedEventsFlux = Flux.defer(() -> {
+            // The first poll runs on the subscribing thread, which may already be inside a UnitOfWork. The poll then
+            // joins it, and must leave ending it to its owner.
+            var                  startedUnitOfWork = unitOfWorkFactory.getCurrentUnitOfWork().isEmpty();
             EventStoreUnitOfWork unitOfWork;
             try {
                 unitOfWork = unitOfWorkFactory.getOrCreateNewUnitOfWork();
@@ -546,6 +547,8 @@ public final class PostgresqlEventStore<CONFIG extends AggregateEventStreamConfi
 
                     eventStoreStreamLog.debug("[{}] Skipping polling as no new events have been persisted since last poll",
                                               eventStreamLogName);
+                    commitIfStartedByThisPoll(unitOfWork, startedUnitOfWork);
+                    unitOfWork = null;
                     return Flux.empty();
                 } else {
                     lastBatchSizeForThisQuery.set(batchSizeForThisQuery);
@@ -567,20 +570,25 @@ public final class PostgresqlEventStore<CONFIG extends AggregateEventStreamConfi
                                                                 onlyIncludeEventIfItBelongsToTenant,
                                                                 persistedEvents,
                                                                 loadEventsByGlobalOrderTiming.stop().getDuration());
-                subscriptionGapHandler.ifPresent(gapHandler -> {
+                var gapReconciliation = subscriptionGapHandler.map(gapHandler -> {
                     var reconcileGapsTiming = StopWatch.start("reconcileGaps(" + actualSubscriberId + ", " + aggregateType + ")");
-                    gapHandler.reconcileGaps(aggregateType,
-                                             globalOrderRange,
-                                             persistedEvents,
-                                             transientGapsToIncludeInQuery);
+                    var outcome = gapHandler.reconcileGapsAndReport(aggregateType,
+                                                                    globalOrderRange,
+                                                                    persistedEvents,
+                                                                    transientGapsToIncludeInQuery);
                     eventStoreSubscriptionObserver.reconciledGaps(actualSubscriberId,
                                                                   aggregateType,
                                                                   globalOrderRange,
                                                                   transientGapsToIncludeInQuery, persistedEvents,
                                                                   reconcileGapsTiming.stop().getDuration());
-
-                });
-                unitOfWork.commit();
+                    return outcome;
+                }).orElse(GapReconciliation.NONE);
+                commitIfStartedByThisPoll(unitOfWork, startedUnitOfWork);
+                unitOfWork = null;
+                // After the commit, so a reconciliation that rolls back is not counted.
+                if (!gapReconciliation.isEmpty()) {
+                    eventStoreSubscriptionObserver.gapReconciliationOutcome(actualSubscriberId, aggregateType, gapReconciliation);
+                }
                 if (persistedEvents.size() > 0) {
                     consecutiveNoPersistedEventsReturned.set(0);
                     if (log.isTraceEnabled()) {
@@ -609,11 +617,8 @@ public final class PostgresqlEventStore<CONFIG extends AggregateEventStreamConfi
             } catch (RuntimeException e) {
                 log.error(msg("[{}] Polling failed", eventStreamLogName), e);
                 if (unitOfWork != null) {
-                    try {
-                        unitOfWork.rollback(e);
-                    } catch (Exception rollbackException) {
-                        log.error(msg("[{}] Failed to rollback unit of work", eventStreamLogName), rollbackException);
-                    }
+                    rollbackIfStartedByThisPoll(unitOfWork, startedUnitOfWork, e, eventStreamLogName);
+                    unitOfWork = null;
                 }
                 eventStoreStreamLog.error(msg("[{}] Returning Error for '{}' EventStream with nextFromInclusiveGlobalOrder {}",
                                               eventStreamLogName,
@@ -621,6 +626,13 @@ public final class PostgresqlEventStore<CONFIG extends AggregateEventStreamConfi
                                               nextFromInclusiveGlobalOrder.get()),
                                           e);
                 return Flux.error(e);
+            } finally {
+                // Safety net for any exit that ended neither way - an Error, or a future early return. A UnitOfWork
+                // left open here outlives the poll: if the subscription is disposed before the next poll picks it up,
+                // it holds its connection and a lock on the event table for the life of the process.
+                if (unitOfWork != null) {
+                    rollbackIfStartedByThisPoll(unitOfWork, startedUnitOfWork, null, eventStreamLogName);
+                }
             }
         }).doOnNext(event -> {
             final long nextGlobalOrder = event.globalEventOrder().longValue() + 1L;
@@ -644,6 +656,33 @@ public final class PostgresqlEventStore<CONFIG extends AggregateEventStreamConfi
                 .repeatWhen(longFlux -> Flux.interval(pollingInterval.orElse(Duration.ofMillis(DEFAULT_POLLING_INTERVAL_MILLISECONDS)))
                                             .onBackpressureDrop()
                                             .publishOn(Schedulers.newSingle("Publish-" + subscriberId.orElse(NO_SUBSCRIBER_ID) + "-" + aggregateType, true)));
+    }
+
+    /**
+     * Ends a poll's {@link EventStoreUnitOfWork} successfully - but only if the poll started it. A unit of work the poll
+     * joined belongs to whoever started it, and committing it here would end their transaction behind their back.
+     */
+    private static void commitIfStartedByThisPoll(EventStoreUnitOfWork unitOfWork, boolean startedByThisPoll) {
+        if (startedByThisPoll) {
+            unitOfWork.commit();
+        }
+    }
+
+    /**
+     * Ends a poll's {@link EventStoreUnitOfWork} unsuccessfully. A unit of work the poll started is rolled back; one it
+     * joined is only marked rollback-only, leaving the rollback to its owner - the same rule
+     * {@link dk.trustworks.essentials.components.foundation.transaction.UnitOfWorkFactory#usingUnitOfWork} follows.
+     */
+    private void rollbackIfStartedByThisPoll(EventStoreUnitOfWork unitOfWork, boolean startedByThisPoll, Throwable cause, String eventStreamLogName) {
+        try {
+            if (startedByThisPoll) {
+                unitOfWork.rollback(cause);
+            } else {
+                unitOfWork.markAsRollbackOnly(cause);
+            }
+        } catch (Exception rollbackException) {
+            log.error(msg("[{}] Failed to rollback unit of work", eventStreamLogName), rollbackException);
+        }
     }
 
     private long resolveBatchSizeForThisQuery(AggregateType aggregateType,
@@ -848,6 +887,7 @@ public final class PostgresqlEventStore<CONFIG extends AggregateEventStreamConfi
             eventStoreStreamLog.trace("[{}] Polling worker - Polling for {} events",
                                       eventStreamLogName,
                                       remainingDemandForEvents);
+            var                  startedUnitOfWork = unitOfWorkFactory.getCurrentUnitOfWork().isEmpty();
             EventStoreUnitOfWork unitOfWork;
             try {
                 unitOfWork = unitOfWorkFactory.getOrCreateNewUnitOfWork();
@@ -902,6 +942,8 @@ public final class PostgresqlEventStore<CONFIG extends AggregateEventStreamConfi
 
                     eventStoreStreamLog.debug("[{}] Polling worker - Skipping polling as no new events have been persisted since last poll",
                                               eventStreamLogName);
+                    commitIfStartedByThisPoll(unitOfWork, startedUnitOfWork);
+                    unitOfWork = null;
                     return 0;
                 } else {
                     lastBatchSizeForThisQuery.set(batchSizeForThisQuery);
@@ -928,20 +970,25 @@ public final class PostgresqlEventStore<CONFIG extends AggregateEventStreamConfi
                                                                 persistedEvents,
                                                                 loadEventsByGlobalOrderTiming.stop().getDuration());
 
-                subscriptionGapHandler.ifPresent(gapHandler -> {
+                var gapReconciliation = subscriptionGapHandler.map(gapHandler -> {
                     var reconcileGapsTiming = StopWatch.start("reconcileGaps(" + subscriberId + ", " + aggregateType + ")");
-                    gapHandler.reconcileGaps(aggregateType,
-                                             globalOrderRange,
-                                             persistedEvents,
-                                             transientGapsToIncludeInQuery);
+                    var outcome = gapHandler.reconcileGapsAndReport(aggregateType,
+                                                                    globalOrderRange,
+                                                                    persistedEvents,
+                                                                    transientGapsToIncludeInQuery);
                     eventStoreSubscriptionObserver.reconciledGaps(subscriberId,
                                                                   aggregateType,
                                                                   globalOrderRange,
                                                                   transientGapsToIncludeInQuery, persistedEvents,
                                                                   reconcileGapsTiming.stop().getDuration());
-                });
-                unitOfWork.commit();
+                    return outcome;
+                }).orElse(GapReconciliation.NONE);
+                commitIfStartedByThisPoll(unitOfWork, startedUnitOfWork);
                 unitOfWork = null;
+                // After the commit, so a reconciliation that rolls back is not counted.
+                if (!gapReconciliation.isEmpty()) {
+                    eventStoreSubscriptionObserver.gapReconciliationOutcome(subscriberId, aggregateType, gapReconciliation);
+                }
                 if (!persistedEvents.isEmpty()) {
                     consecutiveNoPersistedEventsReturned.set(0);
                     if (log.isTraceEnabled()) {
@@ -990,13 +1037,10 @@ public final class PostgresqlEventStore<CONFIG extends AggregateEventStreamConfi
             } catch (RuntimeException e) {
                 log.error(msg("[{}] Polling worker - Polling failed", eventStreamLogName), e);
                 if (unitOfWork != null) {
-                    try {
-                        eventStoreStreamLog.debug("[{}] Polling worker - rolling back UnitOfWork due to error during polling",
-                                                  eventStreamLogName);
-                        unitOfWork.rollback(e);
-                    } catch (Exception rollbackException) {
-                        log.error(msg("[{}] Polling worker - Failed to rollback unit of work", eventStreamLogName), rollbackException);
-                    }
+                    eventStoreStreamLog.debug("[{}] Polling worker - rolling back UnitOfWork due to error during polling",
+                                              eventStreamLogName);
+                    rollbackIfStartedByThisPoll(unitOfWork, startedUnitOfWork, e, eventStreamLogName);
+                    unitOfWork = null;
                 }
                 eventStoreStreamLog.error(msg("[{}] Polling worker - Returning Error for '{}' EventStream with nextFromInclusiveGlobalOrder {}",
                                               eventStreamLogName,
@@ -1004,6 +1048,13 @@ public final class PostgresqlEventStore<CONFIG extends AggregateEventStreamConfi
                                               nextFromInclusiveGlobalOrder.get()),
                                           e);
                 return 0;
+            } finally {
+                // Safety net for any exit that ended neither way - an Error, or a future early return. A UnitOfWork
+                // left open here outlives the poll: if the subscription is disposed before the next poll picks it up,
+                // it holds its connection and a lock on the event table for the life of the process.
+                if (unitOfWork != null) {
+                    rollbackIfStartedByThisPoll(unitOfWork, startedUnitOfWork, null, eventStreamLogName);
+                }
             }
         }
 

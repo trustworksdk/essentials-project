@@ -168,7 +168,6 @@ public final class MongoFencedLockManagerBuilder {
      *
      * @return the new {@link MongoFencedLockManager} instance
      */
-    @SuppressWarnings("removal")
     public MongoFencedLockManager build() {
         return new MongoFencedLockManager(mongoTemplate,
                                           unitOfWorkFactory,

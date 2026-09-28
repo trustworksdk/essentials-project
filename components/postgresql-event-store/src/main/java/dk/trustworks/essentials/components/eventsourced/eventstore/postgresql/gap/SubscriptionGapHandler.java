@@ -62,6 +62,28 @@ public interface SubscriptionGapHandler {
     void reconcileGaps(AggregateType aggregateType, LongRange globalOrderQueryRange, List<PersistedEvent> persistedEvents, List<GlobalEventOrder> transientGapsIncludedInQuery);
 
     /**
+     * {@link #reconcileGaps(AggregateType, LongRange, List, List)}, reporting what the reconciliation changed.
+     * <p>
+     * This is what the event store calls, so subscription statistics can say how many gaps a subscriber found, saw
+     * resolve and gave up on - rather than only how often it reconciled, which is once per poll whether or not there
+     * was a gap. The default performs the reconciliation and reports {@link GapReconciliation#NONE}, so an
+     * implementation that does not override it keeps working and contributes nothing to those counts.
+     *
+     * @param aggregateType                the aggregate type we want to reconcile gaps for
+     * @param globalOrderQueryRange        the globalOrderRange used in the call to {@link EventStore#loadEventsByGlobalOrder(AggregateType, LongRange, List, Tenant)}
+     * @param persistedEvents              the events returned from {@link EventStore#loadEventsByGlobalOrder(AggregateType, LongRange, List, Tenant)}
+     * @param transientGapsIncludedInQuery the gaps, returned by {@link #findTransientGapsToIncludeInQuery(AggregateType, LongRange)}, that were included in that query
+     * @return what the reconciliation changed for this subscriber
+     */
+    default GapReconciliation reconcileGapsAndReport(AggregateType aggregateType,
+                                                     LongRange globalOrderQueryRange,
+                                                     List<PersistedEvent> persistedEvents,
+                                                     List<GlobalEventOrder> transientGapsIncludedInQuery) {
+        reconcileGaps(aggregateType, globalOrderQueryRange, persistedEvents, transientGapsIncludedInQuery);
+        return GapReconciliation.NONE;
+    }
+
+    /**
      * Reset all transient gaps registered by this subscription handler for the given aggregate type
      *
      * @param aggregateType the aggregate type we want to reset transient gaps for

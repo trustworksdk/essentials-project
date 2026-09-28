@@ -22,6 +22,7 @@ import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.su
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.types.GlobalEventOrder;
 import dk.trustworks.essentials.components.foundation.Lifecycle;
 import dk.trustworks.essentials.components.foundation.fencedlock.*;
+import dk.trustworks.essentials.components.foundation.messaging.*;
 import dk.trustworks.essentials.components.foundation.messaging.eip.store_and_forward.*;
 import dk.trustworks.essentials.components.foundation.messaging.queue.*;
 import dk.trustworks.essentials.components.foundation.reactive.command.DurableLocalCommandBus;
@@ -31,6 +32,7 @@ import java.util.*;
 import java.util.function.Consumer;
 
 import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
+import static dk.trustworks.essentials.shared.MessageFormatter.msg;
 
 /**
  * Experimental: The {@code ViewEventProcessor} class is an abstraction for processing events that are projected into views (e.g. in a relational database).<br>
@@ -45,6 +47,24 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
  *  <li>The event's {@link PersistedEvent#eventOrder()} becomes the {@link OrderedMessage#getOrder()}</li>
  * </ul>
  * <p>
+ * <h3>Validation failures inside a {@code @MessageHandler} dead-letter the message immediately</h3>
+ * Once an event has been queued, the {@link DurableQueueConsumer} classifies a set of exception types as permanent
+ * errors and marks the message as a Poison-Message/Dead-Letter-Message on the <em>first</em> delivery attempt,
+ * bypassing the {@link RedeliveryPolicy}'s backoff entirely: {@code DurableQueueDeserializationException},
+ * {@code MismatchedInputException}, {@link NoClassDefFoundError}, {@link ClassCastException} and
+ * {@link IllegalArgumentException}. A match anywhere in the failure's cause chain counts.
+ * <p>
+ * {@link IllegalArgumentException} is the one that catches handler authors out.
+ * {@code FailFast.requireNonNull(...)} and {@code requireTrue(...)} — the validation idiom used throughout
+ * Essentials — both throw it, and so does Kotlin's {@code require(...)}. Opt out for a specific type with
+ * {@code MessageDeliveryErrorHandler.builder().alwaysRetryOn(IllegalArgumentException.class)}, which overrides the
+ * built-in list for {@link IllegalArgumentException} and {@link ClassCastException} but not for the three that can
+ * never succeed on a later attempt.
+ * <p>
+ * This matters more for a view projector than for most handlers: a projection routinely reads state that another
+ * subscription has not written yet. Throw a retryable exception for "not there yet" and reserve
+ * {@link IllegalArgumentException} for a message that can never be processed. See {@code LLM/LLM-foundation.md}
+ * for the full description.
  */
 public abstract class ViewEventProcessor extends AbstractEventProcessor {
     private final Logger                        logger = LoggerFactory.getLogger(this.getClass());
@@ -102,6 +122,14 @@ public abstract class ViewEventProcessor extends AbstractEventProcessor {
         started = true;
         var processorName              = requireNonNull(getProcessorName(), "getProcessorName() returned null");
         var subscribeToEventsRelatedTo = requireNonNull(reactsToEventsRelatedToAggregateTypes(), "reactsToEventsRelatedToAggregateTypes() returned null");
+        // A ViewEventProcessor deliberately handles each queued message inside a single UnitOfWork, so that the view
+        // update and the message acknowledgement commit together. There is therefore no UnitOfWork-free window to
+        // offer a UnitOfWorkMode.NONE handler - reject it instead of silently running the blocking call in a transaction.
+        if (patternMatchingMessageHandlerDelegate.hasNonTransactionalMessageHandlers()) {
+            throw new IllegalStateException(msg("ViewEventProcessor '{}' declares one or more @MessageHandler methods with UnitOfWorkMode.NONE, which a ViewEventProcessor doesn't support - " +
+                                                "it handles every message inside a single UnitOfWork. Use an EventProcessor for handlers that need to perform blocking I/O",
+                                                processorName));
+        }
         logger.info("🎑⚙️  [{}] Starting ViewEventProcessor - will subscribe to events related to these AggregatesType's: {}",
                     processorName,
                     subscribeToEventsRelatedTo);
@@ -211,10 +239,21 @@ public abstract class ViewEventProcessor extends AbstractEventProcessor {
     }
 
     private void handleQueuedMessage(QueuedMessage queuedMessage) {
-        if (queuedMessage instanceof EventReferenceOrderedMessage orderedMessage) {
-            logger.debug("[{}] Handling queued message '{}' for Aggregate '{}' with key '{}' and event-order '{}'", durableQueueName, queuedMessage.getId(), orderedMessage.getPayload(), orderedMessage.key, orderedMessage.order);
-        } else {
-            logger.debug("[{}] Handling queued message '{}'", durableQueueName, queuedMessage.getId());
+        // Per-message, so TRACE; and guarded, for a reason beyond the usual cost one.
+        //
+        // Log arguments are evaluated eagerly, so an unguarded getId() runs on EVERY delivery no
+        // matter the configured level. A DurableQueues implementation is entitled to not have a
+        // QueueEntryId available on its push delivery path — the shard-owned engine's handler
+        // receives (key, payload, payloadType), and its adapter throws rather than stub an id that
+        // by-id operations would then address the wrong message with. Calling it here therefore
+        // failed every message on that engine and dead-lettered it, from a log statement nobody
+        // had enabled.
+        if (logger.isTraceEnabled()) {
+            if (queuedMessage instanceof EventReferenceOrderedMessage orderedMessage) {
+                logger.trace("[{}] Handling queued message '{}' for Aggregate '{}' with key '{}' and event-order '{}'", durableQueueName, queuedMessage.getId(), orderedMessage.getPayload(), orderedMessage.key, orderedMessage.order);
+            } else {
+                logger.trace("[{}] Handling queued message '{}'", durableQueueName, queuedMessage.getId());
+            }
         }
         var msg = queuedMessage.getMessage();
         queuedMessageConsumer.accept(msg);

@@ -94,7 +94,7 @@ Do not add a `Money` type. `Quantity` is separate from `Amount` on purpose — m
 gross amount, and keeping them distinct is what stops the two being added.
 
 **`Quantity` needs only its value-typed `(BigDecimal)` constructor.** `NumberTypeJsonDeserializers` resolves a
-deserializer for every concrete `NumberType` on both flavours, reads the number at the width the type wraps, and
+deserializer for every concrete `NumberType`, reads the number at the width the type wraps, and
 constructs through `SingleValueType.from(...)`, so convenience overloads are never part of the wire contract. The
 `(long)` overload is there for call sites and nothing else.
 

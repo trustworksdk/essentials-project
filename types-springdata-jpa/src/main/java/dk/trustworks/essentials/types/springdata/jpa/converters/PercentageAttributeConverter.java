@@ -19,6 +19,15 @@ package dk.trustworks.essentials.types.springdata.jpa.converters;
 import dk.trustworks.essentials.types.Percentage;
 import jakarta.persistence.Converter;
 
+/**
+ * Auto-applied {@link Percentage} converter that maps to a <code>double precision</code> column.<br>
+ * <br>
+ * <b>⚠ Lossy</b> - the scale of the value written is not preserved and SQL arithmetic on the column is floating point, so a rate
+ * compounded in SQL drifts. Prefer {@link PercentageNumericAttributeConverter}, which maps to an exact <code>numeric</code>
+ * column; see {@link BaseBigDecimalTypeAttributeConverter} for the full explanation.
+ *
+ * @see PercentageNumericAttributeConverter
+ */
 @Converter(autoApply = true)
 public final class PercentageAttributeConverter extends BaseBigDecimalTypeAttributeConverter<Percentage> {
     @Override

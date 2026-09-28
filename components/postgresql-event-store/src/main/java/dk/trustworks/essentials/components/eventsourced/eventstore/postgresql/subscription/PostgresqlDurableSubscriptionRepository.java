@@ -21,7 +21,8 @@ import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.ev
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.subscription.jdbi.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.types.GlobalEventOrder;
 import dk.trustworks.essentials.components.foundation.IOExceptionUtil;
-import dk.trustworks.essentials.components.foundation.postgresql.PostgresqlUtil;
+import dk.trustworks.essentials.components.foundation.postgresql.*;
+import dk.trustworks.essentials.components.foundation.schema.*;
 import dk.trustworks.essentials.components.foundation.transaction.jdbi.HandleAwareUnitOfWorkFactory;
 import dk.trustworks.essentials.components.foundation.types.SubscriberId;
 import org.jdbi.v3.core.Jdbi;
@@ -59,7 +60,7 @@ import static dk.trustworks.essentials.shared.MessageFormatter.msg;
  * <b>Failure to adequately sanitize and validate this value could expose the application to SQL injection
  * vulnerabilities, compromising the security and integrity of the database.</b>
  */
-public final class PostgresqlDurableSubscriptionRepository implements DurableSubscriptionRepository {
+public final class PostgresqlDurableSubscriptionRepository implements DurableSubscriptionRepository, EssentialsSchemaContributor {
     private static final Logger                          log                                      = LoggerFactory.getLogger(PostgresqlDurableSubscriptionRepository.class);
     /**
      * The default name for the table name that will store the durable resume points
@@ -111,6 +112,22 @@ public final class PostgresqlDurableSubscriptionRepository implements DurableSub
     public PostgresqlDurableSubscriptionRepository(Jdbi jdbi,
                                                    EventStore eventStore,
                                                    String durableSubscriptionsTableName) {
+        this(jdbi, eventStore, durableSubscriptionsTableName, SchemaOwnership.COMPONENT);
+    }
+
+    /**
+     * @param jdbi                          the jdbi instance
+     * @param eventStore                    the event store
+     * @param durableSubscriptionsTableName the table name - see {@link #PostgresqlDurableSubscriptionRepository(Jdbi, EventStore, String)}
+     *                                      for the SQL injection caveat
+     * @param schemaOwnership               {@link SchemaOwnership#COMPONENT} creates the table now, as the other constructors do;
+     *                                      {@link SchemaOwnership#HARNESS} leaves it to an {@link EssentialsSchemaHarness}
+     */
+    public PostgresqlDurableSubscriptionRepository(Jdbi jdbi,
+                                                   EventStore eventStore,
+                                                   String durableSubscriptionsTableName,
+                                                   SchemaOwnership schemaOwnership) {
+        requireNonNull(schemaOwnership, "No schemaOwnership provided");
         this.eventStore = requireNonNull(eventStore, "No eventStore instance provided");
         this.jdbi = requireNonNull(jdbi, "No Jdbi instance provided");
         this.unitOfWorkFactory = eventStore.getUnitOfWorkFactory();
@@ -122,16 +139,35 @@ public final class PostgresqlDurableSubscriptionRepository implements DurableSub
         jdbi.registerColumnMapper(new AggregateTypeColumnMapper());
         jdbi.registerArgument(new SubscriberIdArgumentFactory());
         jdbi.registerColumnMapper(new SubscriberIdColumnMapper());
-        unitOfWorkFactory.usingUnitOfWork(uow -> {
-            PostgresqlUtil.acquireBootstrapLock(uow.handle());
-            uow.handle().execute("CREATE TABLE IF NOT EXISTS " + this.durableSubscriptionsTableName + " (\n" +
-                                         "subscriber_id TEXT NOT NULL,\n" +
-                                         "aggregate_type TEXT NOT NULL,\n" +
-                                         "resume_from_and_including_global_eventorder bigint,\n" +
-                                         "last_updated TIMESTAMP WITH TIME ZONE,\n" +
-                                         "PRIMARY KEY (subscriber_id, aggregate_type))");
+        if (schemaOwnership == SchemaOwnership.COMPONENT) {
+            PostgresqlCreateSchemaApplier.applyOwnSchema(unitOfWorkFactory, this);
             log.info("Ensured '{}' table exists", this.durableSubscriptionsTableName);
-        });
+        }
+    }
+
+    @Override
+    public String moduleId() {
+        return "postgresql-event-store-subscriptions";
+    }
+
+    @Override
+    public int order() {
+        return SchemaOrder.ORDER_EVENT_STORE;
+    }
+
+    /**
+     * The durable subscriptions table - one resume point per {@code (subscriber_id, aggregate_type)}.
+     */
+    @Override
+    public List<SchemaChange> contribute(SchemaContext context) {
+        return List.of(SchemaChange.repeatable("durable-subscriptions-table",
+                                               durableSubscriptionsTableName,
+                                               "CREATE TABLE IF NOT EXISTS " + this.durableSubscriptionsTableName + " (\n" +
+                                                       "subscriber_id TEXT NOT NULL,\n" +
+                                                       "aggregate_type TEXT NOT NULL,\n" +
+                                                       "resume_from_and_including_global_eventorder bigint,\n" +
+                                                       "last_updated TIMESTAMP WITH TIME ZONE,\n" +
+                                                       "PRIMARY KEY (subscriber_id, aggregate_type))"));
     }
 
     @Override

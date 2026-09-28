@@ -31,12 +31,10 @@ import tools.jackson.databind.ser.std.ToStringSerializerBase;
  * the contract's schemas say, this module decides what goes on the wire, and they have to agree:
  * {@link CharSequenceType} to string, {@link NumberType} to number.
  * <p>
- * This module deliberately does not reuse {@code EssentialTypesJacksonModule} from {@code types-jackson}/
- * {@code types-jackson3}. Those two artifacts publish the same class under the same package for different Jackson
- * majors, and a build selects exactly one of them via the {@code essentials.types-jackson.artifactId} property.
- * Depending on either would tie the HTTP layer's correctness to a choice made for the event store's serialization,
- * whereas Spring Boot's web message conversion is always Jackson 3. Only serializers are registered — no admin
- * request body carries a value type.
+ * This module deliberately does not reuse {@code EssentialTypesJacksonModule} from {@code types-jackson3}. That module
+ * defines the <em>persisted</em> format, and whether an application puts it on the web mapper is the application's
+ * choice; depending on it here would tie the admin API's wire format to that choice. Only serializers are registered —
+ * no admin request body carries a value type.
  */
 public class AdminApiJacksonModule extends SimpleModule {
 

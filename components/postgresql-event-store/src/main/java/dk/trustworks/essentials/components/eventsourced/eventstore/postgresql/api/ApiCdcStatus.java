@@ -16,11 +16,33 @@
 
 package dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.api;
 
+/**
+ * Change Data Capture status of the queried instance.
+ *
+ * @param availability  the current CDC state, and how subscriptions have fared against it
+ * @param configuration the effective CDC configuration
+ * @param slot          the replication slot's state
+ * @param tailer        the WAL replication tailer's state, or null if there is none in this instance
+ * @param dispatcher    the CDC dispatcher's state, or null if there is none in this instance
+ * @param interruptions times CDC stopped being active other than by a requested stop, kept after it recovers
+ */
 public record ApiCdcStatus(
         ApiCdcAvailability availability,
         ApiCdcConfiguration configuration,
         ApiCdcSlotStatus slot,
         ApiCdcTailerStatus tailer,
-        ApiCdcDispatcherStatus dispatcher
+        ApiCdcDispatcherStatus dispatcher,
+        ApiCdcInterruptions interruptions
 ) {
+    /**
+     * A status with no interruption recorded ({@link ApiCdcInterruptions#none()}) - the shape before
+     * {@link #interruptions()} existed, kept so code constructing a status, typically a test double, keeps compiling.
+     */
+    public ApiCdcStatus(ApiCdcAvailability availability,
+                        ApiCdcConfiguration configuration,
+                        ApiCdcSlotStatus slot,
+                        ApiCdcTailerStatus tailer,
+                        ApiCdcDispatcherStatus dispatcher) {
+        this(availability, configuration, slot, tailer, dispatcher, ApiCdcInterruptions.none());
+    }
 }

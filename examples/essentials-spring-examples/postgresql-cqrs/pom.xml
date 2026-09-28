@@ -109,24 +109,6 @@
             <artifactId>postgresql</artifactId>
             <version>${postgresql.version}</version>
         </dependency>
-        <!-- Spring Boot 4 auto-configures a Jackson 3 (tools.jackson) ObjectMapper, which is what this application
-             and the Jackson 3 flavour of the Essentials modules use. EssentialsComponentsConfiguration still declares
-             its Jackson 2 fallback @Bean method (taking List<com.fasterxml.jackson.databind.Module>), so the Jackson 2
-             databind + datatype artifacts have to be resolvable even when the Jackson 3 flavour is active. They are
-             `provided` scope in the starters and therefore not transitive. Versions come from the jackson-bom
-             managed in the Essentials parent POM. -->
-        <dependency>
-            <groupId>com.fasterxml.jackson.core</groupId>
-            <artifactId>jackson-databind</artifactId>
-        </dependency>
-        <dependency>
-            <groupId>com.fasterxml.jackson.datatype</groupId>
-            <artifactId>jackson-datatype-jdk8</artifactId>
-        </dependency>
-        <dependency>
-            <groupId>com.fasterxml.jackson.datatype</groupId>
-            <artifactId>jackson-datatype-jsr310</artifactId>
-        </dependency>
         <dependency>
             <groupId>io.projectreactor</groupId>
             <artifactId>reactor-core</artifactId>

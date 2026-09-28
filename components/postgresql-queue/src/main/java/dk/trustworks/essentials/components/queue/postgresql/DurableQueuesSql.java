@@ -129,64 +129,6 @@ public class DurableQueuesSql {
     }
 
     /**
-     * Builds an SQL statement for retrieving the next message ready for delivery.
-     *
-     * @param excludeOrderedMessagesWithKey Collection of keys to exclude from the query
-     * @return SQL statement for retrieving the next message ready for delivery
-     */
-    public String buildGetNextMessageReadyForDeliverySqlStatement(Collection<String> excludeOrderedMessagesWithKey) {
-        var excludeKeysLimitSql = "";
-        var excludedKeys        = excludeOrderedMessagesWithKey != null ? excludeOrderedMessagesWithKey : List.of();
-        if (!excludedKeys.isEmpty()) {
-            excludeKeysLimitSql = "        AND key NOT IN (<excludedKeys>)\n";
-        }
-
-        return bind("""
-                    WITH queued_message_ready_for_delivery AS (
-                        SELECT id FROM {:tableName} q1
-                        WHERE
-                            queue_name = :queueName AND
-                            is_dead_letter_message = FALSE AND
-                            is_being_delivered = FALSE AND
-                            next_delivery_ts <= :now AND
-                            NOT EXISTS (SELECT 1 FROM {:tableName} q2 WHERE q2.key = q1.key AND q2.queue_name = q1.queue_name AND q2.key_order < q1.key_order)
-                                {:excludeKeys}
-                        ORDER BY key_order ASC, next_delivery_ts ASC
-                        LIMIT :limit
-                        FOR UPDATE SKIP LOCKED
-                    )
-                            UPDATE {:tableName} queued_message SET
-                                total_attempts = queued_message.total_attempts + 1,
-                                next_delivery_ts = NULL,
-                                is_being_delivered = TRUE,
-                                delivery_ts = :now
-                            FROM queued_message_ready_for_delivery
-                            WHERE queued_message.id = queued_message_ready_for_delivery.id
-                            AND queued_message.queue_name = :queueName
-                            RETURNING
-                                queued_message.id,
-                                queued_message.queue_name,
-                                queued_message.message_payload,
-                                queued_message.message_payload_type,
-                                queued_message.added_ts,
-                                queued_message.next_delivery_ts,
-                                queued_message.delivery_ts,
-                                queued_message.last_delivery_error,
-                                queued_message.total_attempts,
-                                queued_message.redelivery_attempts,
-                                queued_message.is_dead_letter_message,
-                                queued_message.is_being_delivered,
-                                queued_message.meta_data,
-                                queued_message.delivery_mode,
-                                queued_message.key,
-                                queued_message.key_order
-                    """,
-                    arg("tableName", sharedQueueTableName),
-                    arg("excludeKeys", excludeKeysLimitSql));
-
-    }
-
-    /**
      * Result class for batched SQL statement containing both the SQL and parameter bindings
      */
     public static class BatchedSqlResult {
@@ -398,7 +340,11 @@ public class DurableQueuesSql {
         return bind("""
                     SELECT
                     COUNT(*) FILTER (WHERE is_dead_letter_message = FALSE) AS regular_count,
-                    COUNT(*) FILTER (WHERE is_dead_letter_message = TRUE) AS dead_letter_count
+                    COUNT(*) FILTER (WHERE is_dead_letter_message = TRUE) AS dead_letter_count,
+                    COUNT(*) FILTER (WHERE is_dead_letter_message = FALSE AND is_being_delivered = TRUE) AS being_delivered_count,
+                    MIN(next_delivery_ts) FILTER (WHERE is_dead_letter_message = FALSE
+                                                    AND is_being_delivered = FALSE
+                                                    AND next_delivery_ts <= :now) AS oldest_ready_ts
                     FROM {:tableName}
                     WHERE
                     queue_name = :queueName
@@ -505,53 +451,6 @@ public class DurableQueuesSql {
      */
     public String getCreateOrderedMessageIndexSql() {
         return bind("CREATE INDEX IF NOT EXISTS idx_{:tableName}_ordered_msg ON {:tableName} (queue_name, key, key_order)",
-                    arg("tableName", sharedQueueTableName));
-    }
-
-    /**
-     * SQL statement for creating the queue name, is dead letter message, is being delivered and the next delivery timestamp index.
-     *
-     * @return SQL statement for creating the queue name, is dead letter message, is being delivered and the next delivery timestamp index
-     */
-    public String getCreateNextMessageIndexSql() {
-        return bind("CREATE INDEX IF NOT EXISTS idx_{:tableName}_next_msg ON {:tableName} (queue_name, is_dead_letter_message, is_being_delivered, next_delivery_ts)",
-                    arg("tableName", sharedQueueTableName));
-    }
-
-    /**
-     * SQL statement for creating the queue name, next delivery timestamp, key and key order where is dead letter message and is being delivered is false index.
-     *
-     * @return SQL statement for creating the queue name, next delivery timestamp, key and key order where is dead letter message and is being delivered is false index
-     */
-    public String getCreateNextReadyMessageIndexSql() {
-        return bind("""
-                    CREATE INDEX IF NOT EXISTS idx_{:tableName}_ready ON {:tableName} (
-                        queue_name,
-                        next_delivery_ts,
-                        key,
-                        key_order
-                    )
-                    WHERE
-                        is_dead_letter_message = FALSE
-                        AND is_being_delivered = FALSE
-                    """,
-                    arg("tableName", sharedQueueTableName));
-    }
-
-    /**
-     * SQL statement for creating the queue name, next delivery timestamp, key and key order where key is not null and is dead letter message and is being delivered is false index.
-     *
-     * @return SQL statement for creating the queue name, next delivery timestamp, key and key order where key is not null and is dead letter message and is being delivered is false index
-     */
-    public String getCreateOrderedMessageReadyIndexSql() {
-        return bind("""
-                    CREATE INDEX IF NOT EXISTS idx_{:tableName}_ordered_ready
-                      ON {:tableName} (key, queue_name, key_order, next_delivery_ts)
-                      INCLUDE (id)
-                      WHERE key IS NOT NULL
-                        AND NOT is_dead_letter_message
-                        AND NOT is_being_delivered
-                    """,
                     arg("tableName", sharedQueueTableName));
     }
 

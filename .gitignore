@@ -45,6 +45,10 @@ CLAUDE.local.md
 docs/presentation/*.pptx
 
 # >>> devcontainer-stack (managed) >>>
+# scripts/perf-host.sh writes its runs here. Results are worth keeping, but somewhere durable
+# rather than in the repository — each run is logs plus raw JSON.
+perf-results/
+
 # graphify: ignore the rebuildable cache,  graph.json / wiki.
 graphify-out
 .claude/skills/graphify

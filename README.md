@@ -8,12 +8,12 @@
  ║     ███████╗███████║███████║███████╗██║ ╚████║   ██║   ██║██║  ██║███████╗███████║     ║
  ║     ╚══════╝╚══════╝╚══════╝╚══════╝╚═╝  ╚═══╝   ╚═╝   ╚═╝╚═╝  ╚═╝╚══════╝╚══════╝     ║
  ║                                                                                        ║
- ║                     Java 21+ Building Blocks for Strongly-Typed Code                   ║
+ ║                     Java 25+ Building Blocks for Strongly-Typed Code                   ║
  ║                                                                                        ║
  ╚════════════════════════════════════════════════════════════════════════════════════════╝
 ```
 
-> High-level, strongly-typed building blocks for Java 21+ applications—framework-independent core with seamless integrations
+> High-level, strongly-typed building blocks for Java 25+ applications—framework-independent core with seamless integrations
 
 📖 **LLM Context:** [LLM.md](LLM/LLM.md)
 
@@ -43,7 +43,7 @@
 
 ## What is Essentials?
 
-Essentials is a set of Java 21+ building blocks designed to help you write **strongly-typed, self-documenting code** without framework lock-in.
+Essentials is a set of Java 25+ building blocks designed to help you write **strongly-typed, self-documenting code** without framework lock-in.
 
 **Core Modules:** Zero-dependency utilities providing **semantic types**, immutable value objects, functional primitives, and reactive patterns.
 
@@ -99,8 +99,7 @@ Write your domain logic once. Integrate with your preferred frameworks through d
 
 | Framework | Module | Purpose                                                      |
 |-----------|--------|--------------------------------------------------------------|
-| Jackson 3 | `types-jackson3` | JSON serialization for **Semantic Types** (Jackson 3 — the default, matching Spring Boot 4) |
-| Jackson 2 | `types-jackson` | JSON serialization for **Semantic Types** (Jackson 2) |
+| Jackson 3 | `types-jackson3` | JSON serialization for **Semantic Types** (Jackson 3, matching Spring Boot 4) |
 | Spring Data MongoDB | `types-springdata-mongo` | MongoDB persistence for **Semantic Types**                    |
 | Spring Data JPA | `types-springdata-jpa` | JPA persistence for **Semantic Types**                        |
 | JDBI v3 | `types-jdbi` | `Jdbi` SQL argument and result mapping for **Semantic Types** |
@@ -128,41 +127,30 @@ You control which versions of Jackson, Spring, and other frameworks your applica
 
 ### ✅ Choosing the Jackson Major
 
-`types-jackson3`/`immutable-jackson3` (Jackson 3, group `tools.jackson.core`) are the default, matching Spring Boot 4.
-`types-jackson`/`immutable-jackson` (Jackson 2, group `com.fasterxml.jackson.core`) remain supported.
+From 0.60 Essentials supports **Jackson 3 only** (`tools.jackson.core`, matching Spring Boot 4). Depend on
+`types-jackson3` and `immutable-jackson3`; the Jackson 2 modules `types-jackson` and `immutable-jackson` no longer exist.
+The class names are unchanged (e.g. `dk.trustworks.essentials.jackson.types.EssentialTypesJacksonModule`), so a 0.50-era
+Jackson 2 jar left on the classpath would clash with them — `EssentialsJacksonModules` detects that and fails fast with an
+`IllegalStateException`.
 
-Both publish the **same class names**, so exactly one may be on the classpath. The components modules pull the Jackson 3
-flavour transitively; to stay on Jackson 2, exclude it and declare the Jackson 2 flavour yourself:
+The persisted JSON format did **not** change: Jackson 3 writes byte-identical JSON to what the 0.50 Jackson 2 mapper
+wrote, so data persisted by a 0.50 deployment stays readable. That equivalence is enforced by golden wire-format tests
+whose documents were written by the old Jackson 2 mapper. Build every mapper used for persistence through
+`EssentialsObjectMappers`; a hand-assembled one drifts from that contract.
 
-```xml
-<dependency>
-    <groupId>dk.trustworks.essentials.components</groupId>
-    <artifactId>postgresql-event-store</artifactId>
-    <version>${essentials.version}</version>
-    <exclusions>
-        <exclusion>
-            <groupId>dk.trustworks.essentials</groupId>
-            <artifactId>types-jackson3</artifactId>
-        </exclusion>
-    </exclusions>
-</dependency>
-<dependency>
-    <groupId>dk.trustworks.essentials</groupId>
-    <artifactId>types-jackson</artifactId>
-    <version>${essentials.version}</version>
-</dependency>
-```
+**Upgrading from 0.50 (Jackson 2):** swap the artifact ids to `types-jackson3`/`immutable-jackson3`, change
+`com.fasterxml.jackson.databind` imports to `tools.jackson.databind` (the annotations in `com.fasterxml.jackson.annotation`,
+such as `@JsonProperty`/`@JsonCreator`, are shared by Jackson 3 and stay as they are), and replace
+`JacksonJSONSerializer`/`JacksonJSONEventSerializer` with `Jackson3JSONSerializer`/`Jackson3JSONEventSerializer`
+(or simply `EssentialsObjectMappers.createJSONSerializer()` / `EssentialsJSONEventSerializers.create()`).
+See [MIGRATION-0.60.md](docs/MIGRATION-0.60.md).
 
-Both majors write **byte-identical JSON**, so data persisted by a Jackson 2 deployment stays readable after moving to
-Jackson 3 — that equivalence is enforced by golden wire-format tests that run under both flavours. Build every mapper
-used for persistence through `EssentialsObjectMappers`; a hand-assembled one drifts from that contract.
-
-#### Two things to check in your own event/payload classes when moving to Jackson 3
+#### Two things to check in your own event/payload classes when upgrading from Jackson 2
 
 Both are silent — the JSON keeps being *written* correctly and only fails on the way back in.
 
 1. **Constructor parameter names now matter.** Jackson 3 reads them from the bytecode and treats any constructor as an
-   implicit properties-based creator, even when a no-arg constructor exists; Jackson 2 populated fields instead. A
+   implicit properties-based creator, even when a no-arg constructor exists; the 0.50 Jackson 2 mapper populated fields instead. A
    parameter whose name differs from the JSON property it ends up in receives `null`, so the object fails its own
    validation or comes back half-populated:
 
@@ -174,7 +162,7 @@ Both are silent — the JSON keeps being *written* correctly and only fails on t
    ```
 
    Rename the parameter to match the property, or annotate it with `@JsonProperty("priceValidityPeriod")` — that
-   annotation lives in `com.fasterxml.jackson.annotation`, which both majors share. The same applies to classic
+   annotation lives in `com.fasterxml.jackson.annotation`, which Jackson 3 still uses. The same applies to classic
    `Event<ID>` subclasses that take an `orderId` and pass it to `aggregateId(...)`: the property is `aggregateId`.
 
 2. **`@JsonDeserialize(keyUsing = …)` stops applying.** It lives in Jackson 2's
@@ -218,7 +206,7 @@ All using your existing database—no Redis, Kafka, Axon-Server, or EventStoreDB
 | Use Case | Recommended Modules                                                                                                           |
 |----------|-------------------------------------------------------------------------------------------------------------------------------|
 | **Strongly-typed domain models** | `types` + framework integrations (including Kotlin support)                                                                   |
-| **Immutable value objects** | `immutable`, `immutable-jackson`                                                                                              |
+| **Immutable value objects** | `immutable`, `immutable-jackson3`                                                                                             |
 | **Event-driven architecture** | `reactive` (`EventBus`, `CommandBus`)                                                                                         |
 | **Event sourcing & CQRS** | Components: `postgresql-event-store`, `eventsourced-aggregates` and for Kotlin `kotlin-eventsourcing`, `kotlin-eventsourcing` |
 | **Distributed coordination** | Components: `postgresql-distributed-fenced-lock`, `postgresql-queue`, `springdata-mongo-queue`, `springdata-mongo-distributed-fenced-lock` |
@@ -245,7 +233,7 @@ All using your existing database—no Redis, Kafka, Axon-Server, or EventStoreDB
 </dependency>
 <dependency>
     <groupId>dk.trustworks.essentials</groupId>
-    <artifactId>types-jackson</artifactId>
+    <artifactId>types-jackson3</artifactId>
     <version>${essentials.version}</version>
 </dependency>
 ```
@@ -279,9 +267,11 @@ public class CreateOrder {
 }
 ```
 
-**4. Configure Jackson:**
+**4. Configure Jackson (Jackson 3):**
 ```java
-objectMapper.registerModule(new EssentialTypesJacksonModule());
+JsonMapper mapper = JsonMapper.builder()
+                              .addModule(new EssentialTypesJacksonModule())
+                              .build();
 ```
 
 ### Path 2: Event-Driven Components (Spring Boot)
@@ -377,8 +367,8 @@ See [Essentials Components](components/README.md) for complete documentation.
 ┌─────────────────────────────────────────────────────────────────────────────────────────────────┐
 │ TYPE INTEGRATIONS (provided scope - framework-specific)                                         │
 ├─────────────────────────────────────────────────────────────────────────────────────────────────┤
-│  types-jackson          types-springdata-mongo    types-springdata-jpa    types-jdbi            │
-│  types-avro             types-spring-web          immutable-jackson                             │
+│  types-jackson3         types-springdata-mongo    types-springdata-jpa    types-jdbi            │
+│  types-avro             types-spring-web          immutable-jackson3                            │
 └─────────────────────────────────────────────────────────────────────────────────────────────────┘
                                                    │
                                                    ▼
@@ -470,13 +460,13 @@ Framework-specific support for semantic types (all use `provided` scope):
 
 | Module | Framework | Purpose | LLM Documentation                        |
 |--------|-----------|---------|------------------------------------------|
-| [types-jackson](types-jackson/README.md) | Jackson | JSON serialization/deserialization | [LLM](LLM/LLM-types-jackson.md)          |
+| [types-jackson3](types-jackson3/README.md) | Jackson 3 | JSON serialization/deserialization | [LLM](LLM/LLM-types-jackson.md)          |
 | [types-springdata-mongo](types-springdata-mongo/README.md) | Spring Data MongoDB | MongoDB persistence + ID generation | [LLM](LLM/LLM-types-springdata-mongo.md) |
 | [types-springdata-jpa](types-springdata-jpa/README.md) | Spring Data JPA | JPA persistence (experimental) | [LLM](LLM/LLM-types-springdata-jpa.md)   |
 | [types-jdbi](types-jdbi/README.md) | JDBI v3 | SQL argument/column mapping | [LLM](LLM/LLM-types-jdbi.md)             |
 | [types-avro](types-avro/README.md) | Apache Avro | Binary serialization with logical types | [LLM](LLM/LLM-types-avro.md)             |
 | [types-spring-web](types-spring-web/README.md) | Spring WebMvc/WebFlux | `@PathVariable`/`@RequestParam` conversion | [LLM](LLM/LLM-types-spring-web.md)       |
-| [immutable-jackson](immutable-jackson/README.md) | Jackson | Deserialization for immutable classes | [LLM](LLM/LLM-immutable-jackson.md)      |
+| [immutable-jackson3](immutable-jackson3/README.md) | Jackson 3 | Deserialization for immutable classes | [LLM](LLM/LLM-immutable-jackson.md)      |
 
 ### Advanced Components
 
@@ -640,9 +630,10 @@ public record CreateOrder(
     CurrencyCode currency
 ) {}
 
-// 3. Configure Jackson
-ObjectMapper mapper = new ObjectMapper();
-mapper.registerModule(new EssentialTypesJacksonModule());
+// 3. Configure Jackson 3 (tools.jackson.databind.json.JsonMapper)
+JsonMapper mapper = JsonMapper.builder()
+                              .addModule(new EssentialTypesJacksonModule())
+                              .build();
 
 // 4. Serialize/deserialize automatically
 String json = mapper.writeValueAsString(new CreateOrder(
@@ -728,22 +719,26 @@ public class ImmutableOrder extends ImmutableValueObject {
 
 | Essentials Version                                                       | Java | Spring Boot | Jackson                | Kotlin                    | Notes                    |
 |--------------------------------------------------------------------------|------|-------------|------------------------|---------------------------|--------------------------|
-| [0.50.0+](https://github.com/trustworksdk/essentials-project/tree/main)  | 21+ | 4.0.x | 3 (default) / 2        | 2.2+                      | Under active development |
+| [0.60.0+](https://github.com/trustworksdk/essentials-project/tree/release/0.60) | 25+ | 4.1.x | 3 | 2.3+ | Under active development |
+| [0.50.0+](https://github.com/trustworksdk/essentials-project/tree/main)  | 21+ | 4.0.x | 3 (default) / 2        | 2.2+                      | Maintained               |
 | [0.40.24+](https://github.com/trustworksdk/essentials-project/tree/main) | 17+ | 3.3.x | 2 | 2.1+ | No longer maintained     |
 
-**Java 21 is a hard floor, not a recommendation.** Artifacts are compiled with `--release 21`, so the class files
-carry major version 65 and a Java 17 runtime rejects them with `UnsupportedClassVersionError`. Building the project
-itself requires JDK 21–25 (`maven-enforcer` pins `[21,26)`); CI builds on JDK 25.
+**Java 25 is a hard floor, not a recommendation.** Artifacts are compiled with `--release 25`, so the class files
+carry major version 69 and a Java 21 runtime rejects them with `UnsupportedClassVersionError`. Building the project
+itself requires JDK 25–27 (`maven-enforcer` pins `[25,28)`); CI runs the full build on JDK 25 and the unit tests on
+JDK 26 and 27.
 
-**Spring Boot 4.0.x.** The starters resolve `org.springframework.boot:spring-boot:4.0.7`. Spring Boot 3.x is no longer
+**Spring Boot 4.1.x.** The starters resolve `org.springframework.boot:spring-boot:4.1.1`. Spring Boot 3.x is not
 supported — 4.0 moved to Jackson 3 and Jakarta EE 11, so a 3.x application cannot consume these starters unchanged.
 
-**Jackson.** Jackson 3 (`tools.jackson.core`) is the default because that is what Spring Boot 4 ships. Jackson 2
-(`com.fasterxml.jackson.core`) is still supported — see [Choosing the Jackson Major](#-choosing-the-jackson-major),
-including the two payload-class changes that bite silently on the way in.
+**Jackson.** From 0.60 Jackson 3 (`tools.jackson.core`) is the only supported major, matching what Spring Boot 4 ships;
+Jackson 2 support (`types-jackson`/`immutable-jackson`) ended with 0.50. The persisted JSON format is unchanged — see
+[Choosing the Jackson Major](#-choosing-the-jackson-major), including the two payload-class changes that bite silently
+on the way in when upgrading from Jackson 2.
 
-**Kotlin.** Kotlin artifacts are compiled at language level 2.2, which sets the emitted `@Metadata` binary version —
-a Kotlin 2.1 compiler rejects them as an incompatible binary version. The stdlib API level is held one behind, at 2.1.
+**Kotlin.** Kotlin artifacts are compiled with Kotlin 2.4 at language and API level 2.3, matching the Kotlin that
+Spring Boot manages. The language level sets the emitted `@Metadata` binary version; the API level caps which stdlib
+functions the bytecode calls, so the artifacts run on the `kotlin-stdlib` Spring Boot puts on the classpath.
 
 ### Migration Note
 
@@ -752,19 +747,16 @@ a Kotlin 2.1 compiler rejects them as an incompatible binary version. The stdlib
 >
 > **Compatibility:** Trustworks' Essentials release version **0.40.24** remains API and functionally compatible with Cloud Create's version **0.40.24** (released May 5th 2025). Migration requires only updating module names and package references from `dk.cloudcreate` to `dk.trustworks`.
 
-### Construction ergonomics — deprecations ahead of the next major
+### Construction ergonomics — the 0.50 deprecations are removed in 0.60
 
-Wide constructors and `Optional` constructor parameters are being replaced by builders, cohesive parameter objects and
-neutral defaults. **Nothing has been removed**: every affected constructor still exists and still behaves identically,
-now marked `@Deprecated(forRemoval = true)` with a better path alongside it. Upgrading and changing nothing gives you
-deprecation warnings and no errors; the removals happen at the next major.
+0.50 replaced wide constructors and `Optional` constructor parameters with builders, cohesive parameter objects and
+neutral defaults, and marked the old constructors `@Deprecated(forRemoval = true)`. **0.60 removes them.** Where an old
+constructor was what its builder delegated to, it survives as package-private, so the builder is the only public way
+in. Code that still calls one no longer compiles; the replacement for each is listed in
+[docs/MIGRATION-NEXT_MAJOR.md](docs/MIGRATION-NEXT_MAJOR.md), and [docs/MIGRATION-0.60.md](docs/MIGRATION-0.60.md)
+covers what else 0.60 changes.
 
-There is one behaviour change in this release — `PostgresqlDurableQueues` constructors that do not name a
-`TransactionalMode` now default to `SingleOperationTransaction` rather than `FullyTransactional`, closing a
-long-standing divergence with its builder.
-
-See **[docs/MIGRATION-NEXT_MAJOR.md](docs/MIGRATION-NEXT_MAJOR.md)** for the per-class before-and-after tables, and
-`docs/constructor-ergonomics-and-optional-policy.md` for the rationale.
+The design rationale is in `docs/constructor-ergonomics-and-optional-policy.md`.
 
 ---
 

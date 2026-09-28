@@ -109,9 +109,6 @@ public class AdminUiDemoApplication {
                 QueueName.of("OrderEvents"), QueueName.of("ShipmentCommands"), QueueName.of("EmailOutbox"))));
         when(api.getTotalMessagesQueuedFor(any(), any())).thenReturn(128L);
         when(api.getTotalDeadLetterMessagesQueuedFor(any(), any())).thenReturn(3L);
-        when(api.getQueuedStatistics(any(), any())).thenReturn(Optional.of(new ApiQueuedStatistics(
-                QueueName.of("OrderEvents"), OffsetDateTime.parse("2026-07-24T00:00:00Z"),
-                184203L, 34, OffsetDateTime.parse("2026-07-24T00:00:11Z"), OffsetDateTime.parse("2026-07-31T12:04:28Z"))));
         when(api.getQueuedMessages(any(), any(), any(), anyLong(), anyLong())).thenReturn(List.of(
                 queued("018f2c11-9a1e-7c3d-b0f1-2a5c9e11aa01", "{\"orderId\":\"ORD-99213\",\"total\":149.95}", 0, 0, false, null),
                 queued("018f2c11-9a1e-7c3d-b0f1-2a5c9e11aa02", "{\"orderId\":\"ORD-99214\",\"total\":32.00}", 1, 0, true, null),
@@ -204,7 +201,10 @@ public class AdminUiDemoApplication {
                 new ApiSubscriptionPollingStatistics(41204, 38911, 12044,
                                                      OffsetDateTime.parse("2026-07-31T12:04:29Z"), 2L, 4, 18),
                 new ApiSubscriptionLockStatistics(1, 0, true, OffsetDateTime.parse("2026-07-31T09:12:05Z"), null),
-                new ApiSubscriptionResetStatistics(0, null, null));
+                new ApiSubscriptionResetStatistics(0, null, null),
+                new ApiSubscriptionGapStatistics(27, 24, 1,
+                                                 OffsetDateTime.parse("2026-07-31T12:03:51Z"),
+                                                 OffsetDateTime.parse("2026-07-31T10:40:12Z")));
         when(api.findAllSubscriptionStatistics(any())).thenReturn(List.of(orderProcessorStatistics));
         when(api.findSubscriptionStatistics(any(), any(), any())).thenReturn(Optional.of(orderProcessorStatistics));
         return api;
@@ -240,7 +240,12 @@ public class AdminUiDemoApplication {
                                      1073741824L, null, "f", null, false, false),
                 // tailer null: only the instance holding the slot lock runs it
                 null,
-                new ApiCdcDispatcherStatus("slot_orders_prod", true, false, 88412, 0, 0, 2, 0, 918204, 37, 1785488668000L)));
+                new ApiCdcDispatcherStatus("slot_orders_prod", true, false, 88412, 0, 0, 2, 0, 918204, 37, 1785488668000L),
+                // One recovered interruption: a dropped replication connection that reconnected on its own
+                new ApiCdcInterruptions(1, false,
+                                        OffsetDateTime.parse("2026-07-31T11:19:36Z"),
+                                        "Database connection failed when writing to copy",
+                                        OffsetDateTime.parse("2026-07-31T11:19:36.600Z"))));
         return api;
     }
 }
