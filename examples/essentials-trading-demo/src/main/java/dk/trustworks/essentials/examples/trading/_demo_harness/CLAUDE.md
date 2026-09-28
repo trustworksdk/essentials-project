@@ -107,9 +107,15 @@ misuse rather than engine defects — which is the point of an integration demo.
   so the second arrival at a position is refused — `duplicate key value violates unique constraint
   "shard_queue_ordered_pkey"` once per sustained tick, plus an ordering violation for every pair that
   interleaved. That reads as broken ordered delivery and is the constraint working. Each instance now
-  produces under its own `ACC-<instanceId>-` prefix (`keyPrefix`, from
+  produces under its own `ACC-<instanceId>-<runToken>-` prefix (`keyPrefix`, from
   `ShardOwnedQueueFactory.instanceId()`), chosen over electing a single producer so both instances
   still exercise the producing side as well as the consuming one.
+- **The same is true across restarts, which is why the prefix carries a run token.** With the
+  instance id alone, a restarted `demo-1` numbered its keys from 0 again while the previous run's rows
+  (numbered up to ~1 600) were still queued: the engine delivered 1 600, then 2, and logged an ordering
+  violation for every such key. Correctly — the producer really did number them that way. A token from
+  the start time gives each run fresh keys; the previous run's backlog drains under keys nothing
+  produces any more.
 
 Measured after those three were fixed, one instance, 4 unordered shards and 64 ordered units:
 

@@ -99,6 +99,13 @@ public class QueueLoadGenerator {
      * n processes has to arrange it, and the cheapest honest arrangement is to give each process a
      * key space of its own rather than to elect one producer — every instance then exercises both
      * the producing and the consuming side, which is the point of running two.
+     * <p>
+     * <b>A key space of its own per RUN, not only per instance.</b> The same holds across time: a
+     * restarted instance numbers {@code ACC-demo-1-14} from 0 again, while rows the previous run numbered
+     * up to 1 600 may still be queued. The engine then delivers 1 600 and afterwards 2, and reports an
+     * ordering violation per key - correctly, because this producer really did number them that way.
+     * A token from the start time makes each run's keys new, so no two runs ever number the same key.
+     * The previous run's backlog still drains; it simply belongs to keys nothing produces any more.
      */
     private final String keyPrefix;
 
@@ -115,7 +122,9 @@ public class QueueLoadGenerator {
     public QueueLoadGenerator(QueueLoadGeneratorProperties properties, ShardOwnedQueueFactory queues) {
         this.properties = properties;
         this.queues = queues;
-        this.keyPrefix = "ACC-" + queues.instanceId() + "-";
+        // The instance id separates concurrent producers; the run token separates this JVM from the ones
+        // before it. See keyPrefix.
+        this.keyPrefix = "ACC-" + queues.instanceId() + "-" + Long.toString(System.currentTimeMillis(), 36) + "-";
         if (properties.isEnabled()) {
             start();
         }
