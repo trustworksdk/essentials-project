@@ -534,7 +534,7 @@ svg .dgm-xm   { stroke: var(--cost); stroke-width: 2; }
   <p class="lede" lang="en">Thirteen concepts from event modeling, event sourcing and CQRS &mdash; and, next to each one, the code that implements it. One webshop, running.</p>
   <p class="lede" lang="da">Tretten begreber fra event modeling, event sourcing og CQRS &mdash; og ved siden af hvert af dem koden der implementerer det. Én webshop, der kører.</p>
   <div class="spread"></div>
-  <div class="kicker"><span lang="en">38 minutes, then questions</span><span lang="da">38 minutter, derefter spørgsmål</span></div>
+  <div class="kicker"><span lang="en">50 minutes, then questions</span><span lang="da">50 minutter, derefter spørgsmål</span></div>
 </section>
 
 <!-- =================================================================== 01 -->
@@ -589,6 +589,8 @@ svg .dgm-xm   { stroke: var(--cost); stroke-width: 2; }
             <ul class="steps">
               <li><span class="n">13</span><span lang="en">One screen assembled from many views &mdash; and work the system does without being asked</span><span lang="da">Én skærm sat sammen af mange views &mdash; og arbejde systemet udfører uden at være blevet bedt om det</span></li>
               <li class="bonus"><span class="n"><span lang="en">Bonus</span><span lang="da">Bonus</span></span><span lang="en">Saving to our own database <em>and</em> telling another system &mdash; without a transaction that covers both</span><span lang="da">At gemme i vores egen database <em>og</em> fortælle et andet system om det &mdash; uden en transaktion der dækker begge</span></li>
+              <li class="bonus"><span class="n"><span lang="en">Bonus</span><span lang="da">Bonus</span></span><span lang="en">Waiting on another system from inside a handler &mdash; without holding a transaction open while it answers</span><span lang="da">At vente på et andet system inde fra en handler &mdash; uden at holde en transaktion åben mens det svarer</span></li>
+              <li class="bonus"><span class="n"><span lang="en">Deeper</span><span lang="da">Dybere</span></span><span lang="en">Snapshots, closing the books, change data capture, and the admin console</span><span lang="da">Snapshots, at lukke bøgerne, change data capture, og admin-konsollen</span></li>
             </ul>
           </td>
         </tr>
@@ -1849,10 +1851,256 @@ class OrderShippedKafkaPublisher(…) : EventProcessor(dependencies) {
   </div>
 </section>
 
+<!-- =================================================================== 29a — blocking call concept -->
+<section class="slide" data-side="concept" data-act="Bonus &mdash; a blocking call in a handler" data-min="0.75"
+  data-note-en="Same family as the dual write: our database plus someone else's system, and no transaction that covers both. Packing an order charges the card. The rule from the payment context is: record the request, then call the gateway - a call made before the request is recorded is a charge nothing can reconcile. Then the trap: by default the whole handler is one transaction. The request is written first but committed last, after the gateway has answered. And the connection sits idle in transaction for the whole call."
+  data-note-da="Samme familie som dual write: vores database plus et andet system, og ingen transaktion der dækker begge. At pakke en ordre trækker kortet. Reglen i payment er: registrér anmodningen, kald derefter gatewayen - et kald før anmodningen er registreret er en betaling intet kan afstemme. Så fælden: som standard er hele handleren én transaktion. Anmodningen skrives først men committes sidst, efter gatewayen har svaret. Og forbindelsen står idle in transaction under hele kaldet.">
+  <div class="eyebrow concept"><span class="num">Bonus</span><span class="sep">&middot;</span><span lang="en">The concept</span><span lang="da">Begrebet</span></div>
+  <h2><span lang="en">&ldquo;Record, then call&rdquo; &mdash; <em>committed</em> is a transaction boundary</span><span lang="da">&ldquo;Registrér, kald så&rdquo; &mdash; <em>committet</em> er en transaktionsgrænse</span></h2>
+  <div class="col grow" style="justify-content:center; gap:3cqh">
+    <div>
+      <p class="small" lang="en"><strong>Default &mdash; one transaction around the whole handler</strong></p>
+      <p class="small" lang="da"><strong>Standard &mdash; én transaktion om hele handleren</strong></p>
+      <div class="chain">
+        <span class="node"><b>BEGIN</b>&nbsp;</span><span class="arrow">&rarr;</span>
+        <span class="node"><b>WRITE</b>FundsCaptureRequested</span><span class="arrow">&rarr;</span>
+        <span class="node"><b><span lang="en">GATEWAY &middot; 800 ms</span><span lang="da">GATEWAY &middot; 800 ms</span></b><span lang="en">connection idle in transaction</span><span lang="da">forbindelse idle in transaction</span></span><span class="arrow">&rarr;</span>
+        <span class="node"><b>COMMIT</b><span lang="en">the request, only now</span><span lang="da">anmodningen, først nu</span></span>
+      </div>
+    </div>
+    <div>
+      <p class="small" lang="en"><strong>What the rule means &mdash; the handler draws the boundary itself</strong></p>
+      <p class="small" lang="da"><strong>Hvad reglen betyder &mdash; handleren trækker selv grænsen</strong></p>
+      <div class="chain">
+        <span class="node"><b>BEGIN</b>&nbsp;</span><span class="arrow">&rarr;</span>
+        <span class="node"><b>WRITE</b>FundsCaptureRequested</span><span class="arrow">&rarr;</span>
+        <span class="node"><b>COMMIT</b><span lang="en">the request, first</span><span lang="da">anmodningen, først</span></span><span class="arrow">&rarr;</span>
+        <span class="node"><b><span lang="en">GATEWAY &middot; 800 ms</span><span lang="da">GATEWAY &middot; 800 ms</span></b><span lang="en">nothing held</span><span lang="da">intet holdt</span></span>
+      </div>
+    </div>
+    <p lang="en">In the first line the rule holds in the source code and not in the database &mdash; and every parallel consumer parks a pooled connection for as long as the other system takes to answer.</p>
+    <p lang="da">I første linje holder reglen i kildekoden og ikke i databasen &mdash; og hver parallel consumer parkerer en pool-forbindelse så længe det andet system er om at svare.</p>
+  </div>
+</section>
+
+<!-- =================================================================== 29b — blocking call answer -->
+<section class="slide" data-side="answer" data-act="Bonus &mdash; a blocking call in a handler" data-min="1.5"
+  data-note-en="One attribute on the annotation, per method - the two outcome handlers keep the default. withUnitOfWork is the short transaction; it commits when the block returns, and only then does the gateway run. Name the two obligations the mode hands you: the handler must be idempotent, because a failure after the commit redelivers the event - here the decider returns null for a request that already exists, so nothing calls twice. And the call must time out well inside the queue's 30 second handling timeout. If asked how we know: the integration test records what was true at the moment of the call, and fails if a handler is switched back."
+  data-note-da="Én attribut på annotationen, per metode - de to outcome-handlere beholder standarden. withUnitOfWork er den korte transaktion; den committer når blokken returnerer, og først derefter kører gatewayen. Nævn de to forpligtelser tilstanden giver dig: handleren skal være idempotent, fordi en fejl efter commit genudsender eventet - her returnerer decideren null for en anmodning der allerede findes, så intet kaldes to gange. Og kaldet skal time ud et godt stykke inden køens 30 sekunders timeout. Hvis nogen spørger hvordan vi ved det: integrationstesten registrerer hvad der var sandt i kaldsøjeblikket, og fejler hvis en handler sættes tilbage.">
+  <div class="eyebrow"><span lang="en">With Essentials</span><span lang="da">Med Essentials</span></div>
+  <h2><span lang="en"><code>UnitOfWorkMode.NONE</code> &mdash; <em>commit, then block</em></span><span lang="da"><code>UnitOfWorkMode.NONE</code> &mdash; <em>commit, bloker så</em></span></h2>
+  <div class="row grow" style="align-items:stretch">
+    <figure class="panel sm" style="flex:1.3 1 0">
+      <figcaption><span>the capture policy</span><span class="path">payment/automations/capture_funds_when_packaged/CaptureFundsWhenPackagedPolicy.kt</span></figcaption>
+      <pre><code class="kotlin">@MessageHandler(unitOfWork = UnitOfWorkMode.NONE)
+fun on(e: OrderPackagingRequested, m: OrderedMessage) =
+    updateThenCapture(e.id) { it.packaged = true }
+
+@MessageHandler                                   // REQUIRED, the default
+fun on(e: FundsCaptured, m: OrderedMessage) {
+    update(e.id) { it.outcome = "CAPTURED" }
+}
+
+private fun updateThenCapture(orderId: OrderId, change: (OrderAwaitingCapture) -&gt; Unit) {
+    val requested = withUnitOfWork&lt;FundsCaptureRequested?&gt; {
+        val row = update(orderId, change)
+        if (row.needsCapture()) requestCapture(orderId, row) else null
+    } ?: return                                   // committed here
+
+    callGateway(orderId, requested)               // blocking, nothing held
+}</code></pre>
+    </figure>
+    <div class="col" style="flex:0.7 1 0">
+      <p lang="en">The mode is chosen <strong>per method</strong>. Only the two handlers that can complete the work item block; the outcome handlers keep the default.</p>
+      <p lang="da">Tilstanden vælges <strong>per metode</strong>. Kun de to handlere der kan fuldende arbejdsopgaven blokerer; outcome-handlerne beholder standarden.</p>
+      <p lang="en">It hands the handler two obligations:</p>
+      <p lang="da">Den giver handleren to forpligtelser:</p>
+      <ul class="tight">
+        <li lang="en"><strong>Idempotent</strong> &mdash; a failure after the commit redelivers the event. The decider returns <code>null</code> for a request that exists, so nothing calls twice.</li>
+        <li lang="da"><strong>Idempotent</strong> &mdash; en fejl efter commit genudsender eventet. Decideren returnerer <code>null</code> for en anmodning der findes, så intet kaldes to gange.</li>
+        <li lang="en"><strong>Bounded</strong> &mdash; the call must return well inside the queue's 30&nbsp;s handling timeout, or the message is redelivered while this attempt is still blocked.</li>
+        <li lang="da"><strong>Begrænset</strong> &mdash; kaldet skal returnere et godt stykke inden køens 30&nbsp;s timeout, ellers genudsendes beskeden mens dette forsøg stadig blokerer.</li>
+      </ul>
+      <p class="small" lang="en"><strong>Verified in the demo:</strong> <code>WebshopFlowIT</code> records what was true at the moment of the call &mdash; no transaction open, request already committed &mdash; and fails if either handler goes back to the default.</p>
+      <p class="small" lang="da"><strong>Verificeret i demoen:</strong> <code>WebshopFlowIT</code> registrerer hvad der var sandt i kaldsøjeblikket &mdash; ingen åben transaktion, anmodningen allerede committet &mdash; og fejler hvis en af handlerne sættes tilbage til standarden.</p>
+    </div>
+  </div>
+</section>
+
+<!-- =================================================================== deeper 1 -->
+<section class="slide" data-side="answer" data-act="Going deeper &mdash; snapshots" data-min="2.5"
+  data-note-en="Callback to pair 8: state is read back by replaying the stream. That is cheap for a basket and expensive for an account with ten thousand events. A snapshot stores the folded state at event N, and loading becomes snapshot plus the events after N. Stress that the snapshot is a cache - the events stay the truth, and a broken snapshot is thrown away and rebuilt. Name the three modes by what a crash costs. And one callback to pair 1: the protected no-arg constructor on TradingAccount exists only so Jackson 3 can restore a snapshot."
+  data-note-da="Tilbage til par 8: tilstand læses ved at replaye streamen. Det er billigt for en kurv og dyrt for en konto med ti tusind events. Et snapshot gemmer den foldede tilstand ved event N, og indlæsning bliver snapshot plus eventene efter N. Understreg at snapshottet er en cache - eventene er stadig sandheden. Nævn de tre tilstande ud fra hvad et nedbrud koster.">
+  <div class="eyebrow"><span class="num">1 / 4</span><span class="sep">&middot;</span><span lang="en">Going deeper</span><span lang="da">Et spadestik dybere</span></div>
+  <h2><span lang="en">Snapshots &mdash; <em>load the state, not the whole history</em></span><span lang="da">Snapshots &mdash; <em>indlæs tilstanden, ikke hele historikken</em></span></h2>
+  <div class="row grow" style="align-items:stretch">
+    <div class="col" style="flex:0.8 1 0">
+      <p lang="en">Replaying a stream is cheap until the stream is long. A snapshot stores the folded state at event&nbsp;<em>N</em>; loading becomes <strong>snapshot + the events after&nbsp;<em>N</em></strong>.</p>
+      <p lang="da">At replaye en stream er billigt indtil streamen er lang. Et snapshot gemmer den foldede tilstand ved event&nbsp;<em>N</em>; indlæsning bliver <strong>snapshot + eventene efter&nbsp;<em>N</em></strong>.</p>
+      <ul class="tight">
+        <li lang="en"><code>SYNC</code> &mdash; written in the same transaction as the events</li>
+        <li lang="da"><code>SYNC</code> &mdash; skrives i samme transaktion som eventene</li>
+        <li lang="en"><code>ASYNC_IN_MEMORY</code> &mdash; a crash loses the snapshot, never an event</li>
+        <li lang="da"><code>ASYNC_IN_MEMORY</code> &mdash; et nedbrud mister snapshottet, aldrig et event</li>
+        <li lang="en"><code>ASYNC_DURABLE</code> &mdash; a job row that survives the crash</li>
+        <li lang="da"><code>ASYNC_DURABLE</code> &mdash; en job-række der overlever nedbruddet</li>
+      </ul>
+      <p class="small" lang="en">A snapshot is a <strong>cache</strong>: the events stay the truth. Off by default, and for the aggregate style &mdash; so the code is from <code>essentials-trading-demo</code>.</p>
+      <p class="small" lang="da">Et snapshot er en <strong>cache</strong>: eventene er stadig sandheden. Slået fra som standard, og til aggregate-stilen &mdash; så koden er fra <code>essentials-trading-demo</code>.</p>
+    </div>
+    <figure class="panel sm" style="flex:1.2 1 0">
+      <figcaption><span>the policy is an annotation</span><span class="path">essentials-trading-demo &middot; brokerage/aggregates/TradingAccount.java</span></figcaption>
+      <pre><code class="java">@AggregateSnapshotPolicy(aggregateType = "TradingAccounts",
+                         mode = SnapshotExecutionMode.SYNC,
+                         everyNEvents = 100)
+public class TradingAccount extends AggregateRoot&lt;…&gt; {
+
+    // Only for the JSON deserializer that restores an aggregate snapshot.
+    // Not the rehydration constructor and not a creating one.
+    protected TradingAccount() { }
+    …
+}
+
+@AggregateSnapshotPolicy(aggregateType = "InstrumentPrices",
+                         mode = SnapshotExecutionMode.ASYNC_DURABLE,
+                         everyNEvents = 100)
+public class InstrumentPrice extends AggregateRoot&lt;…&gt; { … }
+
+// application-compose.yml:  essentials.event-store.snapshots.enabled: true</code></pre>
+    </figure>
+  </div>
+</section>
+
+<!-- =================================================================== deeper 2 -->
+<section class="slide" data-side="answer" data-act="Going deeper &mdash; closing books" data-min="2.5"
+  data-note-en="Snapshots make a long stream cheaper to load; closing the books stops it growing. Accountants have done this for centuries: at period end the books are closed, a closing balance carried forward, and a new period opens. Here that is a new generation - a new stream for the same business id. The logical id stays acct-1; the streams are acct-1#1, acct-1#2. A closed generation never changes, which is what makes it archivable out of the hot tables. The trading demo rolls on access: loading the account is what notices the period is over, so no slice can forget. If you only have time for one of the two, this is the one to consider first."
+  data-note-da="Snapshots gør en lang stream billigere at indlæse; at lukke bøgerne stopper den i at vokse. Ved periodens slutning lukkes bøgerne, en slutsaldo føres frem, og en ny periode åbner. Her er det en ny generation - en ny stream for samme forretnings-id. Det logiske id er stadig acct-1; streamene er acct-1#1, acct-1#2. En lukket generation ændrer sig aldrig, og derfor kan den arkiveres ud af de varme tabeller.">
+  <div class="eyebrow"><span class="num">2 / 4</span><span class="sep">&middot;</span><span lang="en">Going deeper</span><span lang="da">Et spadestik dybere</span></div>
+  <h2><span lang="en">Closing the books &mdash; <em>stop the stream growing</em></span><span lang="da">Closing the books &mdash; <em>stop streamen i at vokse</em></span></h2>
+  <div class="row grow" style="align-items:stretch">
+    <div class="col" style="flex:0.8 1 0">
+      <p lang="en">At a boundary &mdash; a period ends, a threshold is crossed &mdash; the current stream is <strong>closed</strong> and a new <strong>generation</strong> opens for the same business id.</p>
+      <p lang="da">Ved en grænse &mdash; en periode slutter, en tærskel krydses &mdash; <strong>lukkes</strong> den aktuelle stream, og en ny <strong>generation</strong> åbner for samme forretnings-id.</p>
+      <div class="chain">
+        <span class="node"><b><span lang="en">LOGICAL ID</span><span lang="da">LOGISK ID</span></b>acct-1</span><span class="arrow">&rarr;</span>
+        <span class="node"><b><span lang="en">CLOSED</span><span lang="da">LUKKET</span></b>acct-1#1</span><span class="arrow">&rarr;</span>
+        <span class="node"><b>OPEN</b>acct-1#2</span>
+      </div>
+      <ul class="tight">
+        <li lang="en">Triggered <code>ON_ACCESS</code>, by <code>EXPLICIT_COMMAND</code>, or by a <code>SCHEDULED_SCAN</code> under a fenced lock</li>
+        <li lang="da">Udløst <code>ON_ACCESS</code>, via <code>EXPLICIT_COMMAND</code>, eller af et <code>SCHEDULED_SCAN</code> under en fenced lock</li>
+        <li lang="en">A closed generation never changes &mdash; so it can be <strong>archived</strong> out of the hot tables</li>
+        <li lang="da">En lukket generation ændrer sig aldrig &mdash; så den kan <strong>arkiveres</strong> ud af de varme tabeller</li>
+      </ul>
+    </div>
+    <figure class="panel sm" style="flex:1.2 1 0">
+      <figcaption><span>rollover is a property of loading</span><span class="path">essentials-trading-demo &middot; brokerage/aggregates/</span></figcaption>
+      <pre><code class="java">@AggregateClosingBooksPolicy(aggregateType = "TradingAccounts",
+    triggerMode   = ClosingBooksTriggerMode.ON_ACCESS,
+    defaultPolicy = ClosingBooksDefaultPolicyType.EVENT_COUNT_OR_TIME_BOUNDARY,
+    eventThreshold = 100,
+    timeBoundary  = ClosingBooksTimeBoundary.END_OF_MONTH,
+    zoneId        = "Europe/Copenhagen")
+public class TradingAccount extends AggregateRoot&lt;TradingAccountGenerationId, …&gt; { … }
+
+// TradingAccounts.java
+var account = getAccount(accountId);
+if (!closingBooksPolicy.shouldRolloverOnAccess(account)) {
+    return account;
+}
+var nextPeriodId = closingBooksPolicy.nextPeriodId(account);
+account.closeBooks(nextPeriodId);
+return closeAndOpenNextGeneration(accountId, account, nextPeriodId,
+                                  nextGenerationFactory);</code></pre>
+    </figure>
+  </div>
+</section>
+
+<!-- =================================================================== deeper 3 -->
+<section class="slide" data-side="answer" data-act="Going deeper &mdash; change data capture" data-min="2.5"
+  data-note-en="Every subscription in this talk polls: the webshop asks the event tables every couple of hundred milliseconds whether anything new arrived. Hybrid CDC lets PostgreSQL tell us instead - the subscription tails the write-ahead log through logical replication, and polling stays as the fallback. The word to stress is hybrid. In the default auto mode, a missing prerequisite keeps the application up on polling, so a broken CDC setup costs latency, not correctness - and is easy to miss. That is why it has a health check and a status view in the admin console. Honest note: the webshop's compose database has wal_level=logical, but the demo does not switch CDC on; the trading demo does."
+  data-note-da="Alle subscriptions i dette oplæg poller: webshoppen spørger event-tabellerne hvert par hundrede millisekunder om der er noget nyt. Hybrid CDC lader PostgreSQL fortælle os det i stedet - subscriptionen læser write-ahead-loggen via logisk replikering, og polling er fallback. Ordet at understrege er hybrid: i auto-tilstand holder en manglende forudsætning applikationen oppe på polling, så en fejlkonfigureret CDC koster latens, ikke korrekthed - og er let at overse.">
+  <div class="eyebrow"><span class="num">3 / 4</span><span class="sep">&middot;</span><span lang="en">Going deeper</span><span lang="da">Et spadestik dybere</span></div>
+  <h2><span lang="en">Change data capture &mdash; <em>subscriptions that are told, not polling</em></span><span lang="da">Change data capture &mdash; <em>subscriptions der får besked, i stedet for at polle</em></span></h2>
+  <div class="row grow" style="align-items:stretch">
+    <div class="col" style="flex:0.8 1 0">
+      <p lang="en">Every subscription in this talk <strong>polls</strong> the event tables. Hybrid CDC tails PostgreSQL's write-ahead log through logical replication, so a new event reaches its subscribers as it commits &mdash; with polling kept as the <strong>fallback</strong>.</p>
+      <p lang="da">Alle subscriptions i dette oplæg <strong>poller</strong> event-tabellerne. Hybrid CDC læser PostgreSQL's write-ahead-log via logisk replikering, så et nyt event når sine subscribers når det committes &mdash; med polling bevaret som <strong>fallback</strong>.</p>
+      <ul class="tight">
+        <li lang="en">Needs <code>wal_level=logical</code>, a replication role, and a publication the framework can own</li>
+        <li lang="da">Kræver <code>wal_level=logical</code>, en replikeringsrolle, og en publication frameworket kan eje</li>
+        <li lang="en"><code>mode: auto</code> degrades to polling &mdash; broken CDC costs <strong>latency, not correctness</strong>, which also makes it easy to miss</li>
+        <li lang="da"><code>mode: auto</code> falder tilbage til polling &mdash; fejlkonfigureret CDC koster <strong>latens, ikke korrekthed</strong>, og er derfor også let at overse</li>
+      </ul>
+      <p class="small" lang="en">So check it: <code>/actuator/health/cdc</code>, or the CDC view in the admin console. Off by default; the trading demo turns it on.</p>
+      <p class="small" lang="da">Så tjek det: <code>/actuator/health/cdc</code>, eller CDC-viewet i admin-konsollen. Slået fra som standard; trading-demoen slår det til.</p>
+    </div>
+    <figure class="panel sm" style="flex:1.2 1 0">
+      <figcaption><span>opting in</span><span class="path">essentials-trading-demo &middot; src/main/resources/application-compose.yml</span></figcaption>
+      <pre><code class="yaml">essentials:
+  event-store:
+    cdc:
+      # CDC is OFF by default (CdcProperties#enabled = false) — it needs
+      # database-side setup the framework won't assume. The demo opts in,
+      # and the compose Postgres is started with `wal_level=logical`, …
+      enabled: true
+      #
+      # … Without a pre-created publication the tailer logs
+      #   "pgoutput publication 'essentials_cdc_publication' does not exist"
+      # and mode=AUTO silently falls back to polling. …
+      pg-output:
+        publication:
+          auto-manage: true
+          mode: FOR_TABLE_LIST</code></pre>
+    </figure>
+  </div>
+</section>
+
+<!-- =================================================================== deeper 4 -->
+<section class="slide" data-side="answer" data-act="Going deeper &mdash; the admin console" data-min="2.5"
+  data-note-en="The close of the dual-write pair said somebody has to watch the dead-letter queue. This is where. Two dependencies give the webshop a console at /essentials/admin with no UI code of our own: subscriptions and their resume points, durable queues with dead letters you can resurrect or delete, fenced locks, event streams by aggregate, CDC status, the scheduler and PostgreSQL statistics. Underneath is an HTTP contract - forty operations in an OpenAPI spec - and this page is just one client of it. Say the security point plainly: the admin API authenticates nobody itself; you implement two small SPIs. The demo's all-access beans are demo-only, and that is written on them. If you demo, open it on the dead letters of the Kafka publisher after a broker outage."
+  data-note-da="Afslutningen på dual write-parret sagde at nogen skal holde øje med dead letter-køen. Det er her. To afhængigheder giver webshoppen en konsol på /essentials/admin uden egen UI-kode: subscriptions og deres resume-punkter, durable queues med dead letters der kan genoplives eller slettes, fenced locks, event streams per aggregate, CDC-status, scheduler og PostgreSQL-statistik. Under den ligger en HTTP-kontrakt - fyrre operationer i en OpenAPI-spec. Sig sikkerhedspunktet tydeligt: admin-API'et autentificerer ingen selv; du implementerer to små SPI'er.">
+  <div class="eyebrow"><span class="num">4 / 4</span><span class="sep">&middot;</span><span lang="en">Going deeper</span><span lang="da">Et spadestik dybere</span></div>
+  <h2><span lang="en">The admin console &mdash; <em>where somebody watches the dead letters</em></span><span lang="da">Admin-konsollen &mdash; <em>hvor nogen holder øje med dead letters</em></span></h2>
+  <div class="row grow" style="align-items:stretch">
+    <div class="col" style="flex:0.8 1 0">
+      <p lang="en">Two dependencies, and the webshop has a console at <code>/essentials/admin</code> &mdash; no UI code of our own:</p>
+      <p lang="da">To afhængigheder, og webshoppen har en konsol på <code>/essentials/admin</code> &mdash; ingen egen UI-kode:</p>
+      <ul class="tight">
+        <li lang="en"><strong>Subscriptions</strong> &mdash; resume points, lag, reset</li>
+        <li lang="da"><strong>Subscriptions</strong> &mdash; resume-punkter, efterslæb, reset</li>
+        <li lang="en"><strong>Durable queues</strong> &mdash; dead letters to resurrect or delete</li>
+        <li lang="da"><strong>Durable queues</strong> &mdash; dead letters der kan genoplives eller slettes</li>
+        <li lang="en"><strong>Aggregates</strong>, fenced locks, CDC status, scheduler, PostgreSQL statistics</li>
+        <li lang="da"><strong>Aggregates</strong>, fenced locks, CDC-status, scheduler, PostgreSQL-statistik</li>
+      </ul>
+      <p class="small" lang="en">Underneath is an HTTP contract &mdash; 40 operations in an OpenAPI spec &mdash; and this page is one client of it. It <strong>authenticates nobody itself</strong>: you answer two SPIs, who is calling and what they may do.</p>
+      <p class="small" lang="da">Under den ligger en HTTP-kontrakt &mdash; 40 operationer i en OpenAPI-spec &mdash; og denne side er én klient af den. Den <strong>autentificerer ingen selv</strong>: du svarer på to SPI'er, hvem der kalder og hvad de må.</p>
+    </div>
+    <figure class="panel sm" style="flex:1.2 1 0">
+      <figcaption><span>the whole integration</span><span class="path">examples/essentials-webshop-demo &middot; pom.xml, WebshopDemoApplication.kt</span></figcaption>
+      <pre><code class="kotlin">&lt;!-- pom.xml: the HTTP contract adapter plus the default UI that consumes it --&gt;
+&lt;artifactId&gt;spring-boot-starter-admin-api&lt;/artifactId&gt;
+&lt;artifactId&gt;spring-boot-starter-admin-ui&lt;/artifactId&gt;
+
+// WebshopDemoApplication.kt
+// Demo-only security: every caller is authenticated as the same principal
+// and authorized for everything. … Never do this in a real application.
+@Bean
+open fun essentialsAuthenticatedUser(): EssentialsAuthenticatedUser =
+    EssentialsAuthenticatedUser.AllAccessAuthenticatedUser()
+
+@Bean
+open fun essentialsSecurityProvider(): EssentialsSecurityProvider =
+    EssentialsSecurityProvider.AllAccessSecurityProvider()</code></pre>
+    </figure>
+  </div>
+</section>
+
 <!-- =================================================================== 30 — what we skipped -->
 <section class="slide" data-act="Close" data-min="0.5"
-  data-note-en="Name what was left out so nobody thinks it was forgotten. The first three are event-modeling practice rather than framework questions; the last three are framework features this webshop simply does not need. If a question lands on one of them, the sibling demo has the code."
-  data-note-da="Naevn hvad der blev udeladt, saa ingen tror det blev glemt. De foerste tre er event modeling-praksis frem for framework-spoergsmaal; de sidste tre er framework-features denne webshop ikke har brug for.">
+  data-note-en="Name what was left out so nobody thinks it was forgotten. All three are event-modeling practice rather than framework questions - the framework features the webshop does not use were the going-deeper slides just before this. If a question lands on one of them, it is a good follow-up session."
+  data-note-da="Naevn hvad der blev udeladt, saa ingen tror det blev glemt. Alle tre er event modeling-praksis frem for framework-spoergsmaal - framework-features webshoppen ikke bruger var slides lige foer denne.">
   <div class="eyebrow"><span lang="en">Left out, on purpose</span><span lang="da">Udeladt, med vilje</span></div>
   <h2><span lang="en">What an hour did not fit</span><span lang="da">Hvad en time ikke kunne rumme</span></h2>
   <div class="row grow" style="align-items:stretch">
@@ -1868,15 +2116,7 @@ class OrderShippedKafkaPublisher(…) : EventProcessor(dependencies) {
       </ul>
     </div>
     <div class="col" style="flex:1 1 0">
-      <h3><span lang="en">Framework, not needed here</span><span lang="da">Framework, ikke brugt her</span></h3>
-      <ul class="tight">
-        <li lang="en"><strong>Snapshots</strong> &mdash; for a stream long enough that replaying it costs real time.</li>
-        <li lang="da"><strong>Snapshots</strong> &mdash; til en stream så lang at et replay koster rigtig tid.</li>
-        <li lang="en"><strong>Closing books</strong> &mdash; for streams that must end and start again: a period, a year, a generation.</li>
-        <li lang="da"><strong>Closing books</strong> &mdash; til streams der skal slutte og starte forfra: en periode, et år, en generation.</li>
-        <li lang="en"><strong>Change data capture</strong> &mdash; when something outside has to learn about a write without polling for it.</li>
-        <li lang="da"><strong>Change data capture</strong> &mdash; når noget udenfor skal opdage en skrivning uden at polle efter den.</li>
-      </ul>
+      <h3><span lang="en">Everything shown today, in the repository</span><span lang="da">Alt vist i dag, i repositoriet</span></h3>
       <figure class="panel sm">
         <figcaption><span>all of it, in the repository</span><span class="path">essentials-project</span></figcaption>
         <pre><code class="plain">examples/essentials-webshop-demo    this app, Kotlin, 24 slices
@@ -2074,7 +2314,7 @@ LLM/LLM-kotlin-eventsourcing.md     Decider, Evolver, tests</code></pre>
     var secs = Math.floor((performance.now() - timerStart) / 1000);
     var mm = String(Math.floor(secs / 60)).padStart(2, "0");
     var ss = String(secs % 60).padStart(2, "0");
-    el.textContent = mm + ":" + ss + " / 38:00";
+    el.textContent = mm + ":" + ss + " / 50:15";
   }
   setInterval(tickTimer, 1000);
 

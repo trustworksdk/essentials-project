@@ -1,14 +1,14 @@
 # Speaker Notes — Module 6, Concepts And Answers
 
 The concepts of *Simplifying with Event Modeling, Event Sourcing and CQRS*, each followed by the
-Essentials code that implements it. 33 slides, 38 minutes, then questions.
+Essentials code that implements it. 39 slides, 50 minutes, then questions.
 
 Every slide carries its own note in the deck — press `N`. This file is the run of show, why the pairs are
 the pairs, and what was left out.
 
 ## The shape
 
-Fourteen pairs. A **grey** slide states the concept in the module's own terms, with its own diagrams where
+Fifteen pairs, then four going-deeper slides. A **grey** slide states the concept in the module's own terms, with its own diagrams where
 they exist; the **orange** slide that follows shows the Essentials answer as real code from
 `examples/essentials-webshop-demo`. The rail at the bottom of the deck shows `n/13`, so both you and the
 room always know where you are in the sequence.
@@ -37,7 +37,7 @@ the demo's slices change.
 | `N` | speaker note for this slide |
 | `L` | English / Dansk |
 | `H` | handout mode — light palette, for print and bright rooms |
-| `T` | start / reset the talk timer (counts against 38:00) |
+| `T` | start / reset the talk timer (counts against 50:15) |
 | `?` | the key list |
 
 The deck needs no server. It does need its `images/` directory beside it — six diagrams extracted from
@@ -61,19 +61,26 @@ the module's own pptx (see `images/README.md`). The two web fonts degrade to sys
 | 12 | CQRS and stale data | slides 42–58 — CQS, CQRS, collaborative domains, the 120 ms | the query never touches the domain, and the screen polls | 2.5 |
 | 13 | Composite UI and automations | slides 73–74 — one screen from many views, and a to-do list | one row from four streams; a policy that owns its state | 2.75 |
 | — | Bonus: the dual write | slides 86–88 — the problem, and the module's own diagram | one local transaction, then a subscription publishes | 2.5 |
+| — | Bonus: a blocking call in a handler | not in the module — "record, then call", and what *committed* means | `UnitOfWorkMode.NONE` on the capture policy | 2.25 |
+| D1 | Going deeper: snapshots | — | `@AggregateSnapshotPolicy`, three modes by what a crash costs | 2.5 |
+| D2 | Going deeper: closing the books | — | generations `acct-1#1` → `acct-1#2`, rollover on access | 2.5 |
+| D3 | Going deeper: change data capture | — | subscriptions told by the WAL, polling as fallback | 2.5 |
+| D4 | Going deeper: the admin console | — | two dependencies, `/essentials/admin`, two security SPIs | 2.5 |
 
 Before the pairs: the title, the roadmap ("four questions, in the order you hit them"), and **the map of
-the app** (2 min, see below). On the roadmap, read the four questions and nothing else — the fourteen
+the app** (2 min, see below). On the roadmap, read the four questions and nothing else — the fifteen
 numbered lines beside them are there so the room can read ahead, not so you can narrate them, and the
-numbers are the ones the rail shows all talk. After them: "left out on purpose" and the close. 3.5 minutes in total, and
-34.5 in the pairs.
+numbers are the ones the rail shows all talk. After them: "left out on purpose" and the close. 3.5 minutes in total, 36.75 in the pairs, and 10 in
+the going-deeper slides. 50:15 of content leaves about ten minutes of the 60-minute slot for questions.
 
-**If you are behind at pair 8**, drop pair 11 (order/delivery/idempotence) and pair 12's concept slide.
-Both are supporting material. Do not drop pair 13 or the dual write — they are where Essentials does the
+**If you are behind**, the going-deeper slides are the elastic end: each stands alone, so cut from them
+first — change data capture, then snapshots. Keep closing the books (it answers the replay question
+everyone asks) and the admin console (it pays off the dead-letter warning). Only then drop pair 11
+(order/delivery/idempotence) and pair 12's concept slide. Do not drop pair 13 or the dual write — they are where Essentials does the
 most work for you.
 
-**If you are ahead**, the two slides that reward extra time are pair 6's answer (the decider) and pair
-13's answer (the automation, and the mistake in its gloss).
+**If you are ahead**, the slides that reward extra time are pair 6's answer (the decider), pair 13's answer
+(the automation, and the mistake in its gloss), and the admin console — opened live on the webshop.
 
 ## Slide 3 — the map of the app
 
@@ -190,9 +197,40 @@ publisher. Point at `stopRedeliveryOn` — some failures are permanent — and c
 commitment: somebody has to watch the dead letter queue, because a dead letter is one log line and the
 business outcome simply never happens.
 
+**Bonus — a blocking call in a handler.** Not from the module; it is the dual write's sibling, and the one
+the demo actually hit. Packing charges the card, and the payment context's rule is *record the request, then
+call the gateway*. The concept slide sets the trap: a `@MessageHandler` runs in one transaction by default, so
+the request is written first and committed last, after the gateway has answered — the rule holds in the
+source and not in the database, and a pooled connection sits `idle in transaction` for the whole call. The
+answer is one attribute, `@MessageHandler(unitOfWork = UnitOfWorkMode.NONE)`, on the two handlers that can
+trigger the capture; the handler commits its own short `withUnitOfWork { }` and then blocks with nothing held.
+Name the two obligations the mode hands over: idempotent (the decider returns `null` on redelivery, so nothing
+calls twice) and bounded (well inside the queue's 30 s handling timeout). If the room asks how we know it
+works: `WebshopFlowIT` records what was true at the moment of the call and fails if a handler goes back to the
+default.
+
+**Going deeper — four features the webshop does not need, or does not show.** Change of rhythm: no grey
+concept slide, one slide each, text left and real code right. Say at the start that these are the answers
+to the questions people ask afterwards.
+
+- *Snapshots.* Call back to pair 8: replay is cheap until the stream is long. A snapshot is folded state at
+  event N, and it is a cache — the events stay the truth. Name the modes by what a crash costs. The
+  protected no-arg constructor is the pair-1 Jackson 3 lesson again. Aggregate style only, so the code is
+  the trading demo's.
+- *Closing the books.* Snapshots make a long stream cheaper; closing the books stops it growing. Same logical
+  id, a new generation per period (`acct-1#1`, `acct-1#2`); a closed generation never changes and can be
+  archived. The trading demo rolls over *on access*, so no slice can forget. Of the two, consider this one
+  first.
+- *Change data capture.* Every subscription in the talk polls. Hybrid CDC tails the WAL and keeps polling as
+  the fallback — which means a broken setup costs latency, not correctness, and nobody notices. Hence the
+  health check. Be honest that the webshop does not switch it on; the trading demo does.
+- *The admin console.* Pays off "somebody has to watch the dead letter queue": this is where. Two dependencies,
+  one page, a 40-operation HTTP contract under it. Say the security point plainly — the admin API
+  authenticates nobody itself, and the demo's all-access beans are labelled demo-only for a reason.
+
 ## No live demo, deliberately
 
-Fourteen pairs and the map fill the 38 minutes, so there is no demo segment on the deck. The close tells the room how
+Fifteen pairs, the map and the going-deeper slides fill the 50 minutes, so there is no demo segment on the deck. The close tells the room how
 to run it themselves, and `demo-script.md` is still the runbook if you get a longer slot or the room asks
 to see it — three beats, each with a fallback.
 
@@ -209,8 +247,8 @@ deleting the key makes the payload unreadable — or keeping personal data outsi
 referencing it. Both are decisions to take before the first line of code.
 
 **"Does replaying everything not get slow?"** Loading one stream is loading one small list of rows.
-Streams that grow forever are the real problem, and that is what snapshots and closing books are for — see
-`essentials-trading-demo`. Both are extra machinery, which is a cost worth naming.
+Streams that grow forever are the real problem, and that is what snapshots and closing books are for — the
+first two going-deeper slides. Both are extra machinery, which is a cost worth naming.
 
 **"How do we change an event's shape later?"** Additively, and carefully. Essentials stores the concrete
 class name and provides no upcasting, so renaming an event type makes existing data unreadable. New
@@ -234,9 +272,11 @@ consistency boundary, and that is the style the trading demo shows.
 
 - [ ] the code panels still match the app — the deck quotes `change_product_price`,
       `remove_item_from_shopping_basket`, `products_for_sale`, `order_summary`,
-      `hold_funds_on_order_placed`, `payment_gateway` and `order_management/outgoing`; skim those seven
-      directories after any refactor of the demo
-- [ ] `mvn verify -pl :essentials-webshop-demo` green, and once with `-Pjackson2 … -am`
+      `hold_funds_on_order_placed`, `capture_funds_when_packaged`, `payment_gateway` and
+      `order_management/outgoing`; skim those eight directories after any refactor of the demo. The
+      going-deeper slides also quote `essentials-trading-demo`'s `TradingAccount.java`, `TradingAccounts.java`
+      and `application-compose.yml`, and the webshop's `pom.xml` and `WebshopDemoApplication.kt`
+- [ ] `mvn verify -pl :essentials-webshop-demo` green
 - [ ] deck opened offline with `images/` beside it, both languages, handout mode checked on the projector
 - [ ] the six extracted diagrams still match the pptx, if the module itself has been edited
 - [ ] slide 3's map still matches `examples/essentials-webshop-demo/docs/ui-flow.md` — a slice added or

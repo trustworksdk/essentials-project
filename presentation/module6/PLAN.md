@@ -5,8 +5,8 @@
 
 **Audience:** colleagues and course attendees, mixed experience, mostly new to event sourcing.
 
-**Slot:** 45 minutes — 38 minutes of content across 33 slides (14 concept/answer pairs, plus one map of
-the application), then questions.
+**Slot:** 60 minutes (was 45) — 50 minutes of content across 39 slides (15 concept/answer pairs, one map of
+the application, and four going-deeper slides), then questions.
 
 **Relationship to the source deck:** this is not a one-to-one port. The pptx teaches the concepts; this deck
 follows its structure and shows, concept by concept, how Trustworks Essentials answers it in running code. Every
@@ -17,7 +17,7 @@ removed to fit a slide, nothing else changed, and nothing invented.
 
 | Path | What it is |
 |---|---|
-| `presentation/module6/deck.html` | Bilingual (EN/DA) HTML deck, 33 slides, needs `images/` beside it |
+| `presentation/module6/deck.html` | Bilingual (EN/DA) HTML deck, 39 slides, needs `images/` beside it |
 | `presentation/module6/images/` | Six diagrams extracted from the module's own pptx |
 | `presentation/module6/NOTES.md`, `NOTES.da.md` | Speaker notes, run of show, expected questions |
 | `presentation/module6/demo-script.md` | Live-demo runbook with exact commands and fallbacks |
@@ -30,10 +30,11 @@ vocabulary — so the two decks look like one family and the keyboard controls b
 
 ## Status — built
 
-All of it. 33 slides — 14 concept/answer pairs plus one map of the application — 38 minutes of budget,
+All of it. 39 slides — 15 concept/answer pairs, one map of the application, four going-deeper slides — 50 minutes of budget,
 bilingual; the application boots,
-passes 30 unit tests and 3 integration tests under **both** Jackson flavours, and has been driven end to
-end against real PostgreSQL and Kafka.
+passes 43 unit tests and 6 integration tests, and has been driven end to
+end against real PostgreSQL and Kafka. It was built and verified under **both** Jackson flavours; since the
+0.60 line Essentials is Jackson 3 only, so there is one build left to run.
 
 Five things came out differently from the plan, and each is recorded where it matters:
 
@@ -134,6 +135,7 @@ Taken from the pptx so the deck and the source material agree on names.
 | 73 | Composite UI | the shop page, composed from three separate view endpoints |
 | 75 | IT-Ops integration, request/response in memory | `payment/external_systems/payment_gateway/` |
 | 86–88 | Dual write, and publishing to Kafka from a subscription | `shipping/external_systems/order_management/outgoing/` |
+| — | Not in the module: a blocking call inside a handler, `UnitOfWorkMode.NONE` | `payment/automations/capture_funds_when_packaged/` |
 | 17–18, 20 | Slices, autonomous capabilities, Given/When/Then from the model | the directory layout itself, plus the unit tests |
 
 The pptx skips the wiring. The deck does not: `AggregateTypeConfiguration`,
@@ -147,7 +149,9 @@ slide in Act 2, because that is where "Essentials answers this" is most concrete
 - `WebshopFlowIT`: the end-to-end flow (add product → basket → checkout → details → place order → hold placed →
   packaged → shipped), plus the declined-card and invoice-order paths. One PostgreSQL container, no broker — the
   publisher's send fails and is retried, which is the point of publishing from a subscription.
-- Both Jackson flavours: `mvn verify -pl :essentials-webshop-demo` and `mvn -Pjackson2 verify -pl :essentials-webshop-demo -am`.
+- `mvn verify -pl :essentials-webshop-demo`. (Until 0.60 also `-Pjackson2`; that flavour is gone.)
+- The happy path also asserts, at the moment of the capture call, that no `UnitOfWork` or transaction is open and
+  `FundsCaptureRequested` is already committed — so the `UnitOfWorkMode.NONE` bonus pair is tested, not asserted.
 - 30 unit tests in 0.3 s; the IT class in about 9 s.
 
 ## Deck structure — rebuilt
@@ -158,7 +162,7 @@ the half they know. **Rebuilt as fourteen concept/answer pairs**, which is the s
 asked for — introduce each concept as the module teaches it, then show the Essentials code that implements
 it.
 
-33 slides, 38 minutes. Act and minute budgets live in `data-act` and `data-min` on each slide and the
+39 slides, 50 minutes. Act and minute budgets live in `data-act` and `data-min` on each slide and the
 on-screen timer reads them, so this table and the deck cannot drift.
 
 | Slides | Content | Min |
@@ -179,7 +183,9 @@ on-screen timer reads them, so this table and the deck cannot drift.
 | 26–27 | **12** CQRS and stale data → the query never touches the domain | 2.5 |
 | 28–29 | **13** Composite UI and automations → one row, four streams | 2.75 |
 | 30–31 | **Bonus** The dual write → one local transaction, then publish | 2.5 |
-| 32–33 | Left out on purpose, and the close | 1 |
+| 32–33 | **Bonus** A blocking call in a handler → `UnitOfWorkMode.NONE`, commit then block | 2.25 |
+| 34–37 | **Going deeper** Snapshots, closing the books, change data capture, the admin console — one slide each | 10 |
+| 38–39 | Left out on purpose, and the close | 1 |
 
 ### Two structural consequences
 
@@ -200,10 +206,10 @@ as plain descriptions rather than labels: the bonus is "saving to our own databa
 system, without a transaction that covers both" rather than "the dual write, and Kafka". A name on the
 roadmap that only makes sense after you have seen the slide it names is not a roadmap.
 
-**No live demo.** Fourteen pairs and the map fill 38 minutes. The close tells the room how to run the app themselves,
+**No live demo.** Fifteen pairs, the map and the going-deeper slides fill 50 minutes. The close tells the room how to run the app themselves,
 and `demo-script.md` remains the runbook for a longer slot. That is a real loss — watching the order
-summary fill in field by field is the one thing a slide cannot show — and it is the trade the 45-minute
-slot forces.
+summary fill in field by field is the one thing a slide cannot show — and it was the trade the original 45-minute
+slot forced.
 
 ### Visuals: what could and could not be reused
 

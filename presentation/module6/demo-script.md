@@ -1,6 +1,6 @@
 # Live Demo Runbook — Module 6, Concepts And Answers
 
-**Not part of the 36-minute deck.** Fourteen concept/answer pairs fill the slot, so there is no demo
+**Not part of the 50-minute deck.** Fifteen concept/answer pairs and four going-deeper slides fill the slot, so there is no demo
 segment on a slide. This is the runbook for a longer slot, for the room that asks to see it, and for
 rehearsing the app before the talk.
 
@@ -82,6 +82,9 @@ Scroll to the **Warehouse** panel at the bottom.
    awaiting outcome** panel gets a row. Say why: *a hold is a promise the bank can still break. Packing is
    what asks for the actual money, and the gateway answered `202 Accepted` — the outcome arrives on a webhook
    a second later. This is what every real card API does.*
+   If the server log is on the second screen, point at the ~800 ms between `Capturing …` and `Gateway
+   accepted …`: *that is the blocking call, and nothing is holding a database connection while it waits —
+   the request was committed before the gateway was called.* That is the second bonus pair, live.
 4. The webhook lands, twice — the gateway duplicates every callback on purpose. The summary goes `CAPTURED`,
    the pending row clears, and only now does **Ship** appear. Worth a sentence: *the second delivery recorded
    nothing. At-least-once is what webhook delivery is, so the decider that records the outcome is idempotent —

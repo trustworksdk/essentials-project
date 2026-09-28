@@ -1,14 +1,14 @@
 # Talernoter — Modul 6, Begreber Og Svar
 
 Begreberne fra *Simplifying with Event Modeling, Event Sourcing and CQRS*, hvert efterfulgt af den
-Essentials-kode der implementerer det. 33 slides, 38 minutter, derefter spørgsmål.
+Essentials-kode der implementerer det. 39 slides, 50 minutter, derefter spørgsmål.
 
 Hver slide har sin egen note i decket — tryk `N`. Denne fil er kørselsplanen, hvorfor parrene er parrene,
 og hvad der blev udeladt. Den engelske `NOTES.md` er den fulde version; denne er tættere.
 
 ## Formen
 
-Fjorten par. En **grå** slide siger begrebet med modulets egne ord og dets egne diagrammer hvor de findes;
+Femten par, derefter fire slides et spadestik dybere. En **grå** slide siger begrebet med modulets egne ord og dets egne diagrammer hvor de findes;
 den **orange** slide bagefter viser Essentials-svaret som rigtig kode fra `examples/essentials-webshop-demo`.
 Skinnen nederst viser `n/13`, så både du og rummet ved hvor I er.
 
@@ -35,7 +35,7 @@ slices ændrer sig.
 | `N` | talernote til denne slide |
 | `L` | English / Dansk |
 | `H` | handout-tilstand — lys palet, til print og lyse lokaler |
-| `T` | start / nulstil taler-uret (tæller mod 38:00) |
+| `T` | start / nulstil taler-uret (tæller mod 50:15) |
 | `?` | tastelisten |
 
 Decket kræver ingen server, men det kræver sin `images/`-mappe ved siden af — seks diagrammer hentet fra
@@ -59,14 +59,22 @@ modulets egen pptx (se `images/README.md`).
 | 12 | CQRS og gamle data | slides 42–58 — CQS, CQRS, kollaborative domæner, de 120 ms | forespørgslen rører aldrig domænet, og skærmen poller | 2,5 |
 | 13 | Composite UI og automatiseringer | slides 73–74 — én skærm fra mange views, og en to-do-liste | én række fra fire streams; en policy der ejer sin tilstand | 2,75 |
 | — | Bonus: dual write | slides 86–88 — problemet, og modulets eget diagram | én lokal transaktion, så publicerer et subscription | 2,5 |
+| — | Bonus: et blokerende kald i en handler | ikke i modulet — "registrér, kald så", og hvad *committet* betyder | `UnitOfWorkMode.NONE` på capture-policyen | 2,25 |
+| D1 | Dybere: snapshots | — | `@AggregateSnapshotPolicy`, tre tilstande efter hvad et nedbrud koster | 2,5 |
+| D2 | Dybere: at lukke bøgerne | — | generationer `acct-1#1` → `acct-1#2`, rollover ved indlæsning | 2,5 |
+| D3 | Dybere: change data capture | — | subscriptions får besked fra WAL'en, polling som fallback | 2,5 |
+| D4 | Dybere: admin-konsollen | — | to afhængigheder, `/essentials/admin`, to sikkerheds-SPI'er | 2,5 |
 
 Før parrene: titlen, kortet ("fire spørgsmål, i den rækkefølge man møder dem") og **kortet over appen**
-(2 min, se nedenfor). På kortet: læs de fire spørgsmål og intet andet — de fjorten nummererede linjer ved
+(2 min, se nedenfor). På kortet: læs de fire spørgsmål og intet andet — de femten nummererede linjer ved
 siden af står der så rummet kan læse forud, ikke så du kan referere dem, og tallene er dem skinnen viser
-hele oplægget igennem. Efter dem: "udeladt med vilje" og afslutningen. 3,5 minutter i alt, og 34,5 i parrene.
+hele oplægget igennem. Efter dem: "udeladt med vilje" og afslutningen. 3,5 minutter i alt, 36,75 i parrene, og 10 i
+de dybere slides. 50:15 indhold efterlader cirka ti minutter af det 60 minutters slot til spørgsmål.
 
-**Er du bagud ved par 8**, drop par 11 (rækkefølge/levering/idempotens) og par 12's begrebsslide. Begge er
-støttemateriale. Drop ikke par 13 eller dual write — dér gør Essentials mest arbejde for dig.
+**Er du bagud**, er de dybere slides den elastiske ende: hver står alene, så skær dér først — change data
+capture, derefter snapshots. Behold at lukke bøgerne (det besvarer replay-spørgsmålet alle stiller) og
+admin-konsollen (den indløser advarslen om dead letters). Først derefter par 11
+(rækkefølge/levering/idempotens) og par 12's begrebsslide. Drop ikke par 13 eller dual write — dér gør Essentials mest arbejde for dig.
 
 **Er du foran**, er de to slides der belønner ekstra tid par 6's svar (decideren) og par 13's svar
 (automatiseringen, og fejlen i dens gloss).
@@ -168,9 +176,37 @@ Modulets eget håndtegnede diagram navngiver allerede Essentials-komponenterne, 
 publisheren. Peg på `stopRedeliveryOn`, og afslut på driftsforpligtelsen: nogen skal holde øje med dead
 letter-køen.
 
+**Bonus — et blokerende kald i en handler.** Ikke fra modulet; det er dual writes søskende, og den demoen
+faktisk ramte. At pakke trækker kortet, og payment-kontekstens regel er *registrér anmodningen, kald så
+gatewayen*. Begrebsslidens fælde: en `@MessageHandler` kører som standard i én transaktion, så anmodningen
+skrives først og committes sidst, efter gatewayen har svaret — reglen holder i kildekoden og ikke i databasen,
+og en pool-forbindelse står `idle in transaction` under hele kaldet. Svaret er én attribut,
+`@MessageHandler(unitOfWork = UnitOfWorkMode.NONE)`, på de to handlere der kan udløse capture; handleren
+committer sin egen korte `withUnitOfWork { }` og blokerer derefter uden at holde noget. Nævn de to
+forpligtelser: idempotent (decideren returnerer `null` ved genudsendelse, så intet kaldes to gange) og
+begrænset (et godt stykke inden køens 30 s timeout). Spørger rummet hvordan vi ved det: `WebshopFlowIT`
+registrerer hvad der var sandt i kaldsøjeblikket og fejler hvis en handler sættes tilbage.
+
+**Et spadestik dybere — fire features webshoppen ikke har brug for, eller ikke viser.** Skift i rytmen:
+ingen grå begrebsslide, én slide hver, tekst til venstre og ægte kode til højre. Sig fra start at det er
+svarene på de spørgsmål folk stiller bagefter.
+
+- *Snapshots.* Tilbage til par 8: replay er billigt indtil streamen er lang. Et snapshot er foldet tilstand
+  ved event N, og det er en cache — eventene er stadig sandheden. Nævn tilstandene efter hvad et nedbrud
+  koster. Kun aggregate-stilen, så koden er trading-demoens.
+- *At lukke bøgerne.* Snapshots gør en lang stream billigere; at lukke bøgerne stopper den i at vokse. Samme
+  logiske id, en ny generation per periode (`acct-1#1`, `acct-1#2`); en lukket generation ændrer sig aldrig og
+  kan arkiveres. Af de to: overvej denne først.
+- *Change data capture.* Alle subscriptions i oplægget poller. Hybrid CDC læser WAL'en og beholder polling som
+  fallback — så en fejlkonfiguration koster latens, ikke korrekthed, og ingen opdager det. Derfor
+  health-checket. Vær ærlig om at webshoppen ikke slår det til; trading-demoen gør.
+- *Admin-konsollen.* Indløser "nogen skal holde øje med dead letter-køen": det er her. To afhængigheder, én
+  side, en HTTP-kontrakt med 40 operationer under den. Sig sikkerhedspunktet tydeligt — admin-API'et
+  autentificerer ingen selv, og demoens all-access-beans er mærket demo-only af en grund.
+
 ## Ingen live demo, med vilje
 
-Fjorten par og kortet fylder de 38 minutter, så der er intet demo-segment i decket. Afslutningen fortæller rummet
+Femten par, kortet og de dybere slides fylder de 50 minutter, så der er intet demo-segment i decket. Afslutningen fortæller rummet
 hvordan de selv kører den, og `demo-script.md` er stadig runbooken hvis du får et længere slot eller rummet
 beder om at se det.
 
@@ -186,7 +222,7 @@ kan være uenige. Her *er* eventene tilstanden.
 for streamen. Begge er beslutninger man tager før den første linje kode.
 
 **"Bliver det ikke langsomt at replaye alt?"** At loade én stream er at loade én lille liste rækker.
-Streams der vokser evigt er det egentlige problem — det er hvad snapshots og closing books er til.
+Streams der vokser evigt er det egentlige problem — det er hvad snapshots og closing books er til, de to første dybere slides.
 
 **"Hvordan ændrer vi et events form senere?"** Ved tilføjelse, og forsigtigt: Essentials gemmer det
 konkrete klassenavn og tilbyder ingen upcasting. Nye valgfrie felter er gratis; omdøbninger er en migrering.
@@ -208,8 +244,9 @@ invariant-tung konsistensgrænse — den stil viser trading-demoen.
 
 - [ ] kodepanelerne passer stadig til appen — decket citerer `change_product_price`,
       `remove_item_from_shopping_basket`, `products_for_sale`, `order_summary`,
-      `hold_funds_on_order_placed`, `payment_gateway` og `order_management/outgoing`
-- [ ] `mvn verify -pl :essentials-webshop-demo` grøn, og én gang med `-Pjackson2 … -am`
+      `hold_funds_on_order_placed`, `capture_funds_when_packaged`, `payment_gateway` og
+      `order_management/outgoing`
+- [ ] `mvn verify -pl :essentials-webshop-demo` grøn
 - [ ] decket åbnet offline med `images/` ved siden af, i begge sprog, handout-tilstand tjekket
 - [ ] de seks hentede diagrammer passer stadig til pptx'en, hvis modulet selv er blevet redigeret
 - [ ] slide 3's kort passer stadig til `examples/essentials-webshop-demo/docs/ui-flow.md` — en slice
