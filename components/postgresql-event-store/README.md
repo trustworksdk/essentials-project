@@ -1501,10 +1501,12 @@ public class ShippingEventKafkaPublisher extends EventProcessor {
 
     @Override
     protected RedeliveryPolicy getInboxRedeliveryPolicy() {
-        return RedeliveryPolicy.exponentialBackoff()
-            .setInitialRedeliveryDelay(Duration.ofMillis(200))
-            .setMaximumNumberOfRedeliveries(20)
-            .build();
+        return RedeliveryPolicy.exponentialBackoff(
+            Duration.ofMillis(200), // initialRedeliveryDelay
+            Duration.ofMillis(200), // followupRedeliveryDelay
+            1.1d,                   // followupRedeliveryDelayMultiplier
+            Duration.ofSeconds(3),  // maximumFollowupRedeliveryDelayThreshold
+            20);                    // maximumNumberOfRedeliveries
     }
 }
 ```

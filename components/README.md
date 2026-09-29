@@ -363,10 +363,12 @@ public class OrderFulfillmentProcessor extends EventProcessor {
 
     @Override
     protected RedeliveryPolicy getInboxRedeliveryPolicy() {
-        return RedeliveryPolicy.exponentialBackoff()
-            .setInitialRedeliveryDelay(Duration.ofSeconds(1))
-            .setMaximumNumberOfRedeliveries(10)
-            .build();
+        return RedeliveryPolicy.exponentialBackoff(
+            Duration.ofSeconds(1),  // initialRedeliveryDelay
+            Duration.ofSeconds(1),  // followupRedeliveryDelay
+            1.1d,                   // followupRedeliveryDelayMultiplier
+            Duration.ofSeconds(3),  // maximumFollowupRedeliveryDelayThreshold
+            10);                    // maximumNumberOfRedeliveries
     }
 }
 ```
@@ -462,16 +464,17 @@ public class EmailService {
     // Consume emails across multiple instances
     @PostConstruct
     public void startWorker() {
-        queues.consumeFromQueue(
-            QueueName.of("emails"),
-            RedeliveryPolicy.exponentialBackoff(
-                Duration.ofSeconds(1),
-                Duration.ofMinutes(5),
-                2.0,
-                10
-            ),
-            message -> sendEmail(message.getPayload(EmailMessage.class))
-        );
+        queues.consumeFromQueue(ConsumeFromQueue.builder()
+            .setQueueName(QueueName.of("emails"))
+            .setRedeliveryPolicy(RedeliveryPolicy.exponentialBackoff(
+                Duration.ofSeconds(1),  // initialRedeliveryDelay
+                Duration.ofSeconds(1),  // followupRedeliveryDelay
+                2.0,                    // followupRedeliveryDelayMultiplier
+                Duration.ofMinutes(5),  // maximumFollowupRedeliveryDelayThreshold
+                10))                    // maximumNumberOfRedeliveries
+            .setParallelConsumers(3)
+            .setQueueMessageHandler(message -> sendEmail((EmailMessage) message.getPayload()))
+            .build());
     }
 
     // Scheduled job - only ONE instance executes
@@ -658,10 +661,12 @@ public class OrderFulfillmentProcessor extends EventProcessor {
 
     @Override
     protected RedeliveryPolicy getInboxRedeliveryPolicy() {
-        return RedeliveryPolicy.exponentialBackoff()
-            .setInitialRedeliveryDelay(Duration.ofSeconds(1))
-            .setMaximumNumberOfRedeliveries(10)
-            .build();
+        return RedeliveryPolicy.exponentialBackoff(
+            Duration.ofSeconds(1),  // initialRedeliveryDelay
+            Duration.ofSeconds(1),  // followupRedeliveryDelay
+            1.1d,                   // followupRedeliveryDelayMultiplier
+            Duration.ofSeconds(3),  // maximumFollowupRedeliveryDelayThreshold
+            10);                    // maximumNumberOfRedeliveries
     }
 }
 ```

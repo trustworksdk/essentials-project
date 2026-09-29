@@ -490,7 +490,7 @@ Only supports exclusive processing.
 
 ```java
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.processor.EventProcessor;
-import dk.trustworks.essentials.components.foundation.messaging.queue.RedeliveryPolicy;
+import dk.trustworks.essentials.components.foundation.messaging.RedeliveryPolicy;
 
 public class ShippingKafkaPublisher extends EventProcessor {
     @Override
@@ -508,10 +508,12 @@ public class ShippingKafkaPublisher extends EventProcessor {
 
     @Override
     protected RedeliveryPolicy getInboxRedeliveryPolicy() {
-        return RedeliveryPolicy.exponentialBackoff()
-            .setInitialRedeliveryDelay(Duration.ofMillis(200))
-            .setMaximumNumberOfRedeliveries(20)
-            .build();
+        return RedeliveryPolicy.exponentialBackoff(
+            Duration.ofMillis(200), // initialRedeliveryDelay
+            Duration.ofMillis(200), // followupRedeliveryDelay
+            1.1d,                   // followupRedeliveryDelayMultiplier
+            Duration.ofSeconds(3),  // maximumFollowupRedeliveryDelayThreshold
+            20);                    // maximumNumberOfRedeliveries
     }
 }
 ```

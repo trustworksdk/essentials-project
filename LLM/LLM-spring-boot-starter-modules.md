@@ -641,7 +641,7 @@ public PostgresqlDurableQueues postgresqlDurableQueues(...) {
     <groupId>dk.trustworks.essentials.components</groupId>
     <artifactId>spring-boot-starter-postgresql</artifactId>
 </dependency>
-<!-- Required: spring-boot-starter-jdbc, jdbi3-core, jdbi3-postgres, postgresql, jackson-databind, reactor-core -->
+<!-- Required: spring-boot-starter-jdbc, jdbi3-core, jdbi3-postgres, postgresql, tools.jackson.core:jackson-databind (Jackson 3), reactor-core -->
 ```
 
 ### MongoDB Starter
@@ -650,7 +650,7 @@ public PostgresqlDurableQueues postgresqlDurableQueues(...) {
     <groupId>dk.trustworks.essentials.components</groupId>
     <artifactId>spring-boot-starter-mongodb</artifactId>
 </dependency>
-<!-- Required: spring-boot-starter-data-mongodb, jackson-databind, reactor-core -->
+<!-- Required: spring-boot-starter-data-mongodb, tools.jackson.core:jackson-databind (Jackson 3), reactor-core -->
 ```
 
 ### Event Store Starter
@@ -666,9 +666,9 @@ public PostgresqlDurableQueues postgresqlDurableQueues(...) {
 ```xml
 <dependency>
     <groupId>dk.trustworks.essentials.components</groupId>
-    <artifactId>spring-boot-starter-admin-api</artifactId>
+    <artifactId>spring-boot-starter-admin-ui</artifactId>
 </dependency>
-<!-- Required: spring-boot-starter-webmvc; authentication is the host's choice -->
+<!-- Brings in spring-boot-starter-admin-api. Required: spring-boot-starter-webmvc, spring-boot-starter-thymeleaf (the UI does not register without it); authentication is the host's choice -->
 ```
 
 ---
