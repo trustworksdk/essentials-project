@@ -9,6 +9,16 @@ logging:
     dk.trustworks.essentials: INFO
 
 management:
+  # spring-boot-starter-opentelemetry is on the classpath for the `observability` profile, which is the
+  # only place export is turned on. Off here, so a plain run and every test that boots the context do
+  # not spend each export step and each shutdown failing to reach a collector that is not running.
+  otlp:
+    metrics:
+      export:
+        enabled: false
+  tracing:
+    export:
+      enabled: false
   endpoints:
     web:
       exposure:

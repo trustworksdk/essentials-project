@@ -23,5 +23,30 @@
     <logger name="org.springframework" level="INFO"/>
     <logger name="dk.trustworks.essentials" level="INFO"/>
 
+    <!-- Logs go to Loki only under the `observability` profile, where compose.yml runs it. The labels
+         carry the instance id, so the two instances of run-instance.sh stay apart in Grafana, and the
+         trace id, which is what links a log line to its trace in Tempo. -->
+    <springProfile name="observability">
+        <springProperty scope="context" name="instanceId" source="essentials.shard-owned-queue.instance-id" defaultValue="${HOSTNAME}"/>
+        <appender name="LOKI" class="com.github.loki4j.logback.Loki4jAppender">
+            <http>
+                <url>http://localhost:3100/loki/api/v1/push</url>
+            </http>
+            <!-- One label per line: loki4j 2.x separates labels by newline only, and rejects the
+                 comma-separated form 1.x accepted, failing the whole logging configuration. -->
+            <labels>
+                app=${appName}
+                instance=${instanceId}
+                level=%level
+            </labels>
+            <message class="ch.qos.logback.classic.PatternLayout">
+                <pattern>${FILE_LOG_PATTERN}</pattern>
+            </message>
+        </appender>
+        <root level="INFO">
+            <appender-ref ref="LOKI"/>
+        </root>
+    </springProfile>
+
     <root level="INFO"/>
 </configuration>

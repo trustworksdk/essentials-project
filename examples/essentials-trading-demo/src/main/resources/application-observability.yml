@@ -1,0 +1,72 @@
+# Metrics, traces and logs for Grafana. Activate together with `compose`:
+#
+#   ./run-instance.sh 1 observability
+#
+# which starts the collector, Prometheus, Tempo, Loki and Grafana next to PostgreSQL - they are behind
+# the `observability` compose profile, so a run without this Spring profile starts PostgreSQL only.
+# Grafana: http://localhost:3000   Prometheus: http://localhost:9090
+spring:
+  docker:
+    compose:
+      profiles:
+        active: observability
+      # Spring Boot skips `docker compose up` whenever any service of the project is running - which
+      # PostgreSQL usually is, from an earlier run - so the observability services would never start.
+      # `up` is idempotent, so running it every time is safe, and a second instance just finds them up.
+      start:
+        skip: never
+
+management:
+  otlp:
+    metrics:
+      export:
+        enabled: true
+        url: http://localhost:4318/v1/metrics
+        step: 5s
+  tracing:
+    export:
+      enabled: true
+    # Every trace. Traces start at HTTP requests - the admin API, the console, the load-generator
+    # endpoints - not at the generators' own background work, so the volume stays small.
+    sampling:
+      probability: 1.0
+  opentelemetry:
+    tracing:
+      export:
+        otlp:
+          endpoint: http://localhost:4318/v1/traces
+    resource-attributes:
+      # Two instances share an application name; this is what tells their series apart.
+      service.instance.id: ${essentials.shard-owned-queue.instance-id:${HOSTNAME:local}}
+  metrics:
+    distribution:
+      percentiles-histogram:
+        http.server.requests: true
+
+essentials:
+  event-store:
+    metrics:
+      enabled: true
+      thresholds: { debug: 25ms, info: 200ms, warn: 500ms, error: 5000ms }
+    subscription-manager:
+      metrics:
+        enabled: true
+        thresholds: { debug: 25ms, info: 200ms, warn: 500ms, error: 5000ms }
+  metrics:
+    durable-queues:
+      enabled: true
+      thresholds: { debug: 25ms, info: 200ms, warn: 500ms, error: 5000ms }
+    command-bus:
+      enabled: true
+      thresholds: { debug: 25ms, info: 200ms, warn: 500ms, error: 5000ms }
+    message-handler:
+      enabled: true
+      thresholds: { debug: 25ms, info: 200ms, warn: 500ms, error: 5000ms }
+  shard-owned-queue:
+    metrics:
+      # The gauges that cost queries: depth per lane, blocked keys, parked dead letters, ownership and
+      # live instances, for every queue on the engine. Each refresh is a handful of COUNT queries per
+      # queue, reused for gauge-max-age.
+      depth-gauges: true
+      health-gauges: true
+      gauge-max-age: 10s

@@ -113,6 +113,24 @@ for; one instance exercises none of its ownership, rebalancing or fencing.
   `spring.docker.compose.lifecycle-management: start-only`; the database outlives the demo and
   `docker compose down` stops it.
 
+## Observability profile
+
+`run-instance.sh N observability` (or profile `compose,observability`): collector, Prometheus, Tempo, Loki,
+Grafana from `compose.yml`'s `observability` compose profile; config and dashboards in `observability/`.
+
+- **Two compose files, one config dir.** The classpath copy runs from `target/classes`, so it mounts
+  `../../observability/...`; the module-root copy mounts `./observability/...`. Keep both in step. Config
+  stays out of `src/main/resources` so it is not packaged.
+- **`spring.docker.compose.start.skip: never` is load-bearing.** Boot skips `docker compose up` when any
+  service of the project is running — PostgreSQL almost always is — so the profiled services never start.
+- **Export is off in `application.yml`** (`management.otlp.metrics.export.enabled`,
+  `management.tracing.export.enabled`) and on only in `application-observability.yml`; otherwise every test
+  and plain run spends each export step failing to reach a collector that is not there.
+- **loki4j 2.x labels are one per line.** The comma-separated form 1.x accepted fails the whole logging
+  configuration at start-up (`Unable to split ... to key-value pairs`).
+- **Dashboards query OTLP names** (`..._milliseconds_bucket`, `..._total`), not the Prometheus registry's
+  `_seconds`. Queue gauges are cluster-wide and reported by every instance: `max by (queue)`, never `sum`.
+
 ## Admin UI
 
 `src/main/resources/static/admin/index.html`, vanilla JS, no build step. Its select values are enum
