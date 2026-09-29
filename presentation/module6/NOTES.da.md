@@ -18,9 +18,10 @@ Timens værdi ligger i den anden slide i hvert par, så brug aldrig mere end cir
 Formatet forklares **ikke** på en slide ud over én linje på kortet. Det forklarer sig selv første gang en
 grå slide følges af en orange.
 
-Én slide står uden for rytmen: **slide 3, kortet over applikationen**. Hver orange slide efter den er et
-uddrag skåret ud af netop den webshop, og et rum der har set hele formen én gang holder op med at spørge
-"hvor hører det her til?" ved hver af de tretten. To minutter brugt for at spare tretten afbrydelser.
+To slides står uden for rytmen. **Slide 2, spørgsmålet** — hvorfor koster denne skærm 1.999,50? — åbner
+på et problem en almindelig tabel ikke kan svare på, før noget ordforråd. **Slide 11, kortet over
+applikationen**, afslutter åbningshistorien: efter par 2–4 betyder hver kasse noget, og hver orange slide
+efter den er et uddrag af netop den webshop.
 Diagrammet er samme billede som `examples/essentials-webshop-demo/docs/ui-flow.md` — den fil er Mermaid,
 som decket ikke kan rendere, så sliden bærer en håndtegnet SVG af det. **Hold de to i trit** når demoens
 slices ændrer sig.
@@ -35,7 +36,7 @@ slices ændrer sig.
 | `N` | talernote til denne slide |
 | `L` | English / Dansk |
 | `H` | handout-tilstand — lys palet, til print og lyse lokaler |
-| `T` | start / nulstil taler-uret (tæller mod 50:15) |
+| `T` | start / nulstil taler-uret (tæller mod 48:30) |
 | `?` | tastelisten |
 
 Decket kræver ingen server, men det kræver sin `images/`-mappe ved siden af — seks diagrammer hentet fra
@@ -46,10 +47,8 @@ modulets egen pptx (se `images/README.md`).
 | # | Par | Begrebet, fra modulet | Svaret | Min |
 |---|---|---|---|---|
 | 1 | Et event er et faktum | slide 2 — ikke-foreskrivende, datid, publisher kender ikke sine subscribers | `sealed interface ProductEvent`, `events/` som eksporteret kontrakt | 2,5 |
-| 2 | At opdage og modellere | slides 3–16 — storming finder dem, modeling sætter dem på en tidslinje | én slice = modellens fire kasser som fire filer | 2,75 |
-| 3 | De tre mønstre | slide 12 — command, view, automation | tre mappenavne, tre basistyper i frameworket | 2,5 |
-| 4 | Slices og capabilities | slides 17–18 — værdienheder, og de baner de bor i | de tre baner som øverste mapper; kun `events/` + `types/` krydser | 2,5 |
-| 5 | Test kommer fra modellen | slides 14, 20 — Given/When/Then, skrevet før koden | `GivenWhenThenScenario`; 30 tests, 0,3 s, ingen Docker | 2,25 |
+| 2–4 | At opdage og modellere → de tre mønstre → slices og capabilities | slides 3–18 — fortalt som én historie, tre grå slides i træk | ét svar for 2–3 (én slice = én mappe, mønster = basistype), ét for 4 (banerne) | 5,75 |
+| 5 | Test kommer fra modellen | slides 14, 20 — Given/When/Then, skrevet før koden | `GivenWhenThenScenario`; 43 tests, 0,3 s, ingen Docker | 2,25 |
 | 6 | Command + tilstand = event | slides 24–25 — formlen, og "aggregates bruges mindre og mindre" | formlen *er* `handle(cmd, events)`; hele decideren | 2,75 |
 | 7 | Decideren | slide 26 — mønstret, defineret, med modulets Kotlin | én bean pr. aggregate type, `@Service` på decideren, intet andet | 2,25 |
 | 8 | Event store og replay | slides 27–33 — kurven, animeret over seks slides | `fetchStream` / `appendToStream`, og de to ordninger | 2,5 |
@@ -65,11 +64,10 @@ modulets egen pptx (se `images/README.md`).
 | D3 | Dybere: change data capture | — | subscriptions får besked fra WAL'en, polling som fallback | 2,5 |
 | D4 | Dybere: admin-konsollen | — | to afhængigheder, `/essentials/admin`, to sikkerheds-SPI'er | 2,5 |
 
-Før parrene: titlen, kortet ("fire spørgsmål, i den rækkefølge man møder dem") og **kortet over appen**
-(2 min, se nedenfor). På kortet: læs de fire spørgsmål og intet andet — de femten nummererede linjer ved
-siden af står der så rummet kan læse forud, ikke så du kan referere dem, og tallene er dem skinnen viser
-hele oplægget igennem. Efter dem: "udeladt med vilje" og afslutningen. 3,5 minutter i alt, 36,75 i parrene, og 10 i
-de dybere slides. 50:15 indhold efterlader cirka ti minutter af det 60 minutters slot til spørgsmål.
+Omkring parrene: titlen, **spørgsmålet** (1 min), kortet ("fire spørgsmål, i den rækkefølge man møder dem"
+— læs de fire og intet andet), **kortet over appen** efter par 4 (1,5 min, se nedenfor), og til sidst
+"udeladt med vilje" og afslutningen. 4 minutter i alt, 34,5 i parrene, og 10 i de dybere slides. 48:30
+indhold efterlader cirka ti minutter af det 60 minutters slot til spørgsmål.
 
 **Er du bagud**, er de dybere slides den elastiske ende: hver står alene, så skær dér først — change data
 capture, derefter snapshots. Behold at lukke bøgerne (det besvarer replay-spørgsmålet alle stiller) og
@@ -79,9 +77,17 @@ admin-konsollen (den indløser advarslen om dead letters). Først derefter par 1
 **Er du foran**, er de to slides der belønner ekstra tid par 6's svar (decideren) og par 13's svar
 (automatiseringen, og fejlen i dens gloss).
 
-## Slide 3 — kortet over appen
+## Slide 2 — spørgsmålet
 
-Læs ikke kasserne op. Fire kolonner og en snes etiketter læser sig selv hurtigere end du kan sige dem.
+Spørg og vent: *hvorfor koster denne skærm 1.999,50?* Rækken til venstre kan ikke svare; de tre events til
+højre svarer på hvorfor, siden hvornår, og hvad kunden der bestilte den 20. marts betalte. Nævn ikke event
+sourcing endnu — sliden skal bare få rummet til at ville have det næste time forklarer.
+
+## Slide 11 — kortet over appen
+
+Den kommer efter par 4 med vilje: modellen, mønstrene, slices og banerne er lige introduceret, så dette er
+belønningen — det hele på én gang — frem for et ledningsdiagram over et system ingen har grund til at
+interessere sig for endnu. Læs ikke kasserne op. Fire kolonner og en snes etiketter læser sig selv hurtigere end du kan sige dem.
 
 Følg **én** vej med fingeren i stedet, og sig den som en sætning: *tryk Package i lageret — det er én
 kommando; den tilføjer ét event til én stream; en projektion gør den stream til en tabel; et panel viser
@@ -108,22 +114,22 @@ rød, shipping grøn.
 
 ## Parrene, og hvad du siger
 
-**1 — Et event er et faktum.** Læs modulets citat. Derefter svarsliden: den sealed familie gør en evolvers
+**1 — Et event er et faktum.** Begrebssliden er to regler og ingen kode — datid, ikke-foreskrivende — og
+den kan læne sig på slide 2. Derefter svarsliden: den sealed familie gør en evolvers
 `when` udtømmende, `events/` er én af kun to pakker en anden kontekst må importere, og — den ingen advarer
 om — under Jackson 3 er *konstruktør-parameterens navn* JSON-kontrakten, så at omdøbe et felt ødelægger
 hvert gemt event.
 
-**2 — At opdage og modellere.** Dette er modulets eget event model, med legende. Gennemgå legenden fra
-venstre: UI/API/job, blå command, orange event, grøn view, derefter de fire Given/When/Then-mønstre
-nederst. Storming finder de orange sedler; modeling sætter dem i tid. Svarsliden gør de fire kasser til
-fire filer i én mappe, og tallet der skal siges højt er fireogtyve.
+**2–4 — Én historie, derefter koden.** Tre grå slides i træk, fortalt som én udvikling: storming finder
+eventene og modeling sætter dem på en tidslinje (gennemgå modulets legende fra venstre); hver kasse i
+modellen er ét af tre mønstre; og en slice af modellen, i en capabilitys bane, er enheden man bygger. Stop
+ikke for kode imellem dem.
 
-**3 — De tre mønstre.** Sig "tre" og mén det: alt i systemet er ét af dem. Automation-mønstret er det
-ukendte. Svarslidens tabel er pointen — hvert mønster har sin egen basistype i frameworket, og typen
+Derefter to svar. **Fra modellen til koden** (par 2 og 3): én slice er én mappe hvis filer er modellens
+kasser — sig fireogtyve — og mønstret du tegnede bestemmer både mappen og basistypen du extender, og typen
 bringer præcis det maskineri mønstret har brug for.
 
-**4 — Slices og capabilities.** To idéer på to skalaer. De tre wireframes er modulets egen Web App-bane.
-Svarsliden er et diagram frem for en mappeliste, og tag den i denne rækkefølge: den fyldte blok i hvert
+**Banerne** (par 4) er et diagram frem for en mappeliste, og tag det i denne rækkefølge: den fyldte blok i hvert
 kort (`events/`, `types/` — de eneste to pakker en anden bane må importere), derefter den stiplede blok
 (privat, og compileren håndhæver det), derefter **de to røde kryds, som er hele sliden.** Der er ingen pil
 mellem kortene. Den eneste vej fra én bane til en anden går ned i store'en og op igen, og derfor ville
@@ -134,8 +140,7 @@ spørgsmål. Der sker to forskellige krydsninger: den *importerer* klassen på c
 *modtager* værdien på kørselstidspunktet fra store'en. Det den aldrig gør, er at **kalde** `sales`.
 
 **5 — Test kommer fra modellen.** Læs modulets Given/When/Then, derefter testen, og lad rummet bemærke at
-det er samme sætning. Tal: 30 tests, 0,3 sekunder, intet startet. Den fjerde test i glossen er den der
-tjener sig hjem — penge sammenlignet med `equals` er skala-sensitivt.
+det er samme sætning. Tal: 43 tests, 0,3 sekunder, intet startet.
 
 **6 — Command + tilstand = event.** Modulets formel, derefter metodesignaturen der *er* formlen. Gennemgå
 de tre udfald. Sig så hvad der mangler — ingen aggregate-klasse, ingen repository, ingen database, ingen
@@ -249,6 +254,6 @@ invariant-tung konsistensgrænse — den stil viser trading-demoen.
 - [ ] `mvn verify -pl :essentials-webshop-demo` grøn
 - [ ] decket åbnet offline med `images/` ved siden af, i begge sprog, handout-tilstand tjekket
 - [ ] de seks hentede diagrammer passer stadig til pptx'en, hvis modulet selv er blevet redigeret
-- [ ] slide 3's kort passer stadig til `examples/essentials-webshop-demo/docs/ui-flow.md` — en slice
+- [ ] slide 11's kort passer stadig til `examples/essentials-webshop-demo/docs/ui-flow.md` — en slice
       tilføjet eller flyttet i demoen ændrer begge, og deckets kopi er håndtegnet SVG som intet genererer
 - [ ] uret startet med `T` på titelsliden

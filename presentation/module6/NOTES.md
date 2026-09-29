@@ -20,9 +20,11 @@ on a grey one.
 The format is **not** explained on a slide beyond one line on the roadmap. It explains itself the first
 time a grey slide is followed by an orange one, and a slide spent describing a slide is a slide wasted.
 
-One slide sits outside the rhythm: **slide 3, the map of the application**. Every orange slide after it is
-an excerpt cut from that one webshop, and a room that has seen the whole shape once stops asking "where
-does this bit live?" on each of the thirteen. It is two minutes spent to save thirteen interruptions. The
+Two slides sit outside the rhythm. **Slide 2, the question** — why is this monitor 1,999.50? — opens the
+talk on a problem a normal table cannot answer, before any vocabulary. **Slide 11, the map of the
+application**, closes the opening story: after pairs 2–4 every box on it means something, and every orange
+slide after it is an excerpt cut from that one webshop, so the room stops asking "where does this bit
+live?". The
 diagram is the same picture as `examples/essentials-webshop-demo/docs/ui-flow.md` — that file is Mermaid,
 which the deck cannot render, so the slide carries a hand-drawn SVG of it. **Keep the two in step** when
 the demo's slices change.
@@ -37,7 +39,7 @@ the demo's slices change.
 | `N` | speaker note for this slide |
 | `L` | English / Dansk |
 | `H` | handout mode — light palette, for print and bright rooms |
-| `T` | start / reset the talk timer (counts against 50:15) |
+| `T` | start / reset the talk timer (counts against 48:30) |
 | `?` | the key list |
 
 The deck needs no server. It does need its `images/` directory beside it — six diagrams extracted from
@@ -48,10 +50,8 @@ the module's own pptx (see `images/README.md`). The two web fonts degrade to sys
 | # | Pair | Concept, from the module | The answer | Min |
 |---|---|---|---|---|
 | 1 | An event is a fact | slide 2 — non-prescriptive, past tense, publisher does not know its subscribers | `sealed interface ProductEvent`, `events/` as the exported contract | 2.5 |
-| 2 | Discovering and modeling | slides 3–16 — storming finds them, modeling puts them on a timeline | one slice = the model's four boxes as four files | 2.75 |
-| 3 | The three patterns | slide 12 — command, view, automation | three directory names, three framework base types | 2.5 |
-| 4 | Slices and capabilities | slides 17–18 — units of value, and the swimlanes they live in | the three lanes as top-level directories; `events/` + `types/` are all that cross | 2.5 |
-| 5 | Tests come from the model | slides 14, 20 — Given/When/Then, written before the code | `GivenWhenThenScenario`; 30 tests, 0.3 s, no Docker | 2.25 |
+| 2–4 | Discovering and modeling → the three patterns → slices and capabilities | slides 3–18 — told as one story, three grey slides back to back | one answer for 2–3 (one slice = one directory, pattern = base type), one for 4 (the lanes) | 5.75 |
+| 5 | Tests come from the model | slides 14, 20 — Given/When/Then, written before the code | `GivenWhenThenScenario`; 43 tests, 0.3 s, no Docker | 2.25 |
 | 6 | Command + state = event | slides 24–25 — the formula, and "aggregates used less and less" | the formula *is* `handle(cmd, events)`; the whole decider | 2.75 |
 | 7 | The decider | slide 26 — the pattern, defined, with the module's Kotlin | one bean per aggregate type, `@Service` on the decider, nothing else | 2.25 |
 | 8 | Event store and replay | slides 27–33 — the basket, animated over six slides | `fetchStream` / `appendToStream`, and the two orderings | 2.5 |
@@ -67,11 +67,10 @@ the module's own pptx (see `images/README.md`). The two web fonts degrade to sys
 | D3 | Going deeper: change data capture | — | subscriptions told by the WAL, polling as fallback | 2.5 |
 | D4 | Going deeper: the admin console | — | two dependencies, `/essentials/admin`, two security SPIs | 2.5 |
 
-Before the pairs: the title, the roadmap ("four questions, in the order you hit them"), and **the map of
-the app** (2 min, see below). On the roadmap, read the four questions and nothing else — the fifteen
-numbered lines beside them are there so the room can read ahead, not so you can narrate them, and the
-numbers are the ones the rail shows all talk. After them: "left out on purpose" and the close. 3.5 minutes in total, 36.75 in the pairs, and 10 in
-the going-deeper slides. 50:15 of content leaves about ten minutes of the 60-minute slot for questions.
+Around the pairs: the title, **the question** (1 min), the roadmap ("four questions, in the order you hit
+them" — read the four and nothing else), **the map of the app** after pair 4 (1.5 min, see below), and at
+the end "left out on purpose" and the close. 4 minutes in total, 34.5 in the pairs, and 10 in the
+going-deeper slides. 48:30 of content leaves about ten minutes of the 60-minute slot for questions.
 
 **If you are behind**, the going-deeper slides are the elastic end: each stands alone, so cut from them
 first — change data capture, then snapshots. Keep closing the books (it answers the replay question
@@ -82,9 +81,18 @@ most work for you.
 **If you are ahead**, the slides that reward extra time are pair 6's answer (the decider), pair 13's answer
 (the automation, and the mistake in its gloss), and the admin console — opened live on the webshop.
 
-## Slide 3 — the map of the app
+## Slide 2 — the question
 
-Do not read the boxes out. Four columns and twenty-odd labels read themselves faster than you can say
+Ask it and wait: *why is this monitor 1,999.50?* The row on the left cannot answer; the three events on
+the right answer why, since when, and what the customer who ordered on 20 March paid. Do not name event
+sourcing yet — the slide only has to make the room want what the next hour explains. Pair 1's concept
+slide then gives the definition, and can point back to these three events.
+
+## Slide 11 — the map of the app
+
+It comes after pair 4 on purpose: the model, the patterns, the slices and the lanes have just been
+introduced, so this is the payoff — all of it at once — rather than a wiring diagram of a system nobody
+has a reason to care about yet. Do not read the boxes out. Four columns and twenty-odd labels read themselves faster than you can say
 them, and a slide read aloud is a slide the room stops looking at.
 
 Trace **one** path with a finger instead, and say it as a sentence: *press Package in the warehouse — that
@@ -113,25 +121,26 @@ amber, payment red, shipping green.
 
 ## The pairs, and what to say
 
-**1 — An event is a fact.** Read the module's quote. Then the answer slide's three points: the sealed
-family makes an evolver's `when` exhaustive, `events/` is one of only two packages another context may
-import, and — the one nobody warns you about — under Jackson 3 the *constructor parameter name* is the
-JSON contract, so renaming a field breaks every stored event.
+**1 — An event is a fact.** The concept slide is two rules and no code — past tense, non-prescriptive —
+and it can lean on slide 2: that is why those three events could answer what the row could not. Then the
+answer slide's points: the sealed family makes an evolver's `when` exhaustive, `events/` is one of only
+two packages another context may import, and — the one nobody warns you about — under Jackson 3 the
+*constructor parameter name* is the JSON contract, so renaming a field breaks every stored event.
 
-**2 — Discovering and modeling.** This is the module's own event model, legend and all. Walk the legend
-left to right: UI/API/job, blue command, orange event, green view, then the four Given/When/Then patterns
-at the bottom. Storming finds the orange stickies; modeling puts them in time. The answer slide turns
-those four boxes into four files in one directory, and the number to say out loud is twenty-four —
-twenty-four slices, no `services/`, no `repositories/`.
+**2–4 — One story, then the code.** Three grey slides back to back, told as one progression: storming finds
+the events and modeling puts them on a timeline (walk the module's legend left to right); every box on
+that model is one of three patterns; and a slice of the model, living in a capability's lane, is the unit
+you build. Do not stop for code between them — that is what made the old version feel like a checklist.
 
-**3 — The three patterns.** Say "three" and mean it: everything in the system is one of these. The
-automation pattern is the unfamiliar one. The answer slide's table is the point — each pattern has its own
-framework base type, and the type brings exactly the machinery that pattern needs: a `Decider` is a pure
-function, a `ViewEventProcessor` brings an ordered replayable subscription, an `EventProcessor` adds an
-Inbox because an automation may call the outside world.
+Then two answers. **From the model to the code** (pairs 2 and 3): one slice is one directory whose files
+are the model's boxes — say twenty-four, and no `services/`, no `repositories/` — and the pattern you drew
+decides both the directory and the base type you extend.
 
-**4 — Slices and capabilities.** Two ideas at two scales. The three wireframes are the module's own Web
-App lane. The answer slide is a diagram rather than a directory listing, and it is worth working in this
+Each base type brings exactly the machinery its pattern needs: a `Decider` is a pure function, a
+`ViewEventProcessor` brings an ordered replayable subscription, an `EventProcessor` adds an Inbox because
+an automation may call the outside world.
+
+**The lanes** (pair 4) is a diagram rather than a directory listing, and it is worth working in this
 order: the solid block in each card (`events/`, `types/` — the only two packages another lane may import),
 then the dashed block (private, and the compiler is what enforces it), then **the two red crosses, which
 are the whole slide.** There is no arrow between the cards. The only route from one lane to another goes
@@ -144,9 +153,7 @@ value at runtime from the store. What it never does is **call** `sales`. The dia
 crossing and the dashed blocks imply the first.
 
 **5 — Tests come from the model.** Read the module's Given/When/Then, then the test, and let the room
-notice they are the same sentence. Numbers: 30 tests, 0.3 seconds, nothing started. The fourth test in the
-gloss is the one that earns its keep — money compared with `equals` is scale-sensitive, so `100.00` and
-`100.0` are different objects and the same price looks like a change.
+notice they are the same sentence. Numbers: 43 tests, 0.3 seconds, nothing started.
 
 **6 — Command + state = event.** The module's formula, then the method signature that *is* the formula.
 Walk the three outcomes: an event, no event, an exception. Then say what is missing — no aggregate class,
@@ -279,6 +286,6 @@ consistency boundary, and that is the style the trading demo shows.
 - [ ] `mvn verify -pl :essentials-webshop-demo` green
 - [ ] deck opened offline with `images/` beside it, both languages, handout mode checked on the projector
 - [ ] the six extracted diagrams still match the pptx, if the module itself has been edited
-- [ ] slide 3's map still matches `examples/essentials-webshop-demo/docs/ui-flow.md` — a slice added or
+- [ ] slide 11's map still matches `examples/essentials-webshop-demo/docs/ui-flow.md` — a slice added or
       moved in the demo changes both, and the deck's copy is hand-drawn SVG that nothing regenerates
 - [ ] timer started with `T` on the title slide

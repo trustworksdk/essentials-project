@@ -5,7 +5,7 @@
 
 **Audience:** colleagues and course attendees, mixed experience, mostly new to event sourcing.
 
-**Slot:** 60 minutes (was 45) — 50 minutes of content across 39 slides (15 concept/answer pairs, one map of
+**Slot:** 60 minutes (was 45) — 48.5 minutes of content across 39 slides (15 concept/answer pairs, one map of
 the application, and four going-deeper slides), then questions.
 
 **Relationship to the source deck:** this is not a one-to-one port. The pptx teaches the concepts; this deck
@@ -30,7 +30,7 @@ vocabulary — so the two decks look like one family and the keyboard controls b
 
 ## Status — built
 
-All of it. 39 slides — 15 concept/answer pairs, one map of the application, four going-deeper slides — 50 minutes of budget,
+All of it. 39 slides — 15 concept/answer pairs, one map of the application, four going-deeper slides — 48.5 minutes of budget,
 bilingual; the application boots,
 passes 43 unit tests and 6 integration tests, and has been driven end to
 end against real PostgreSQL and Kafka. It was built and verified under **both** Jackson flavours; since the
@@ -162,17 +162,19 @@ the half they know. **Rebuilt as fourteen concept/answer pairs**, which is the s
 asked for — introduce each concept as the module teaches it, then show the Essentials code that implements
 it.
 
-39 slides, 50 minutes. Act and minute budgets live in `data-act` and `data-min` on each slide and the
+39 slides, 48.5 minutes. Act and minute budgets live in `data-act` and `data-min` on each slide and the
 on-screen timer reads them, so this table and the deck cannot drift.
 
 | Slides | Content | Min |
 |---|---|---|
-| 1–2 | Title, and the roadmap: four questions in the order you hit them | 0.5 |
-| 3 | The map of the app: buttons → streams → read models → panels | 2 |
-| 4–5 | **1** An event is a fact → sealed family, `events/` as contract | 2.5 |
-| 6–7 | **2** Discovering and modeling → one slice = the model's four boxes | 2.75 |
-| 8–9 | **3** The three patterns → three directory names, three base types | 2.5 |
-| 10–11 | **4** Slices and capabilities → three lanes as directories | 2.5 |
+| 1 | Title | 0 |
+| 2 | The question: why is this monitor 1,999.50? — the row cannot say, the events can | 1 |
+| 3 | The roadmap: four questions in the order you hit them | 0.5 |
+| 4–5 | **1** An event is a fact → sealed family, `events/` as contract | 2.25 |
+| 6–8 | **2–4** Discovering and modeling, the three patterns, slices and capabilities — three concept slides as one story | 2.25 |
+| 9 | **2–3** answer: one slice = one directory, the pattern you drew = the base type you extend | 2 |
+| 10 | **4** answer: the lanes are the top-level directories; only `events/` and `types/` cross | 1.5 |
+| 11 | The map of the app, as the payoff of 2–4: buttons → streams → read models → panels | 1.5 |
 | 12–13 | **5** Tests come from the model → `GivenWhenThenScenario` | 2.25 |
 | 14–15 | **6** Command + state = event → the formula is the signature | 2.75 |
 | 16–17 | **7** The decider → one bean per aggregate type | 2.25 |
@@ -206,7 +208,7 @@ as plain descriptions rather than labels: the bonus is "saving to our own databa
 system, without a transaction that covers both" rather than "the dual write, and Kafka". A name on the
 roadmap that only makes sense after you have seen the slide it names is not a roadmap.
 
-**No live demo.** Fifteen pairs, the map and the going-deeper slides fill 50 minutes. The close tells the room how to run the app themselves,
+**No live demo.** Fifteen pairs, the map and the going-deeper slides fill 48.5 minutes. The close tells the room how to run the app themselves,
 and `demo-script.md` remains the runbook for a longer slot. That is a real loss — watching the order
 summary fill in field by field is the one thing a slide cannot show — and it was the trade the original 45-minute
 slot forced.
@@ -228,7 +230,16 @@ model itself — are drawn with PowerPoint shapes, not embedded images, so only 
 came out. No renderer is available in this container to rasterise the slides. Those timelines are
 therefore redrawn as inline SVG or restated as `.chain` node lists, using the module's own event names.
 
-**Added after the first rehearsal: the map of the app (slide 3).** The concept half of each pair was
+**Opening restructured for the 60-minute slot.** Slides 1–11 first ran title → roadmap → map → four
+concept/answer pairs. Two problems: the map was a two-minute wiring diagram of a system the room had no
+reason to care about yet, and pairs 2–4 produced three answers in a row that all said "the concept becomes
+a directory". Now the talk opens on a question a normal table cannot answer (the 1,999.50 row, lifted
+from pair 1's concept slide), the roadmap is four questions only, pairs 2–4 are three grey slides told as
+one story followed by two answers, and the map moves to slide 11 as the payoff. The same pass collapsed
+the deck's typography to one scale of six text sizes plus three code sizes, and two voices — Archivo for
+headings and labels, Newsreader for reading — with monospace kept for code and paths.
+
+**Added after the first rehearsal: the map of the app (then slide 3, now slide 11).** The concept half of each pair was
 landing, but the answer half kept having to re-establish where in the application its excerpt came from —
 thirteen small orientations instead of one. The slide is the first diagram from
 `examples/essentials-webshop-demo/docs/ui-flow.md`: buttons → event streams → read models → panels, with
