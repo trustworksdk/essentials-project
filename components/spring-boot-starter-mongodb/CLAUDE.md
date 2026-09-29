@@ -42,7 +42,7 @@ Beans wired (in order of dependency):
 
 ## Test Structure
 
-No tests in this module (pure auto-configuration glue). Integration tests live in consumer modules (`springdata-mongo-queue`, `springdata-mongo-distributed-fenced-lock`). Testcontainers MongoDB dependency is declared for downstream test use.
+Only a reflection check that no two `@Bean` methods return the same type (`EssentialsComponentsConfigurationBeanDefinitionsTest`); otherwise pure auto-configuration glue. Integration tests live in consumer modules (`springdata-mongo-queue`, `springdata-mongo-distributed-fenced-lock`). Testcontainers MongoDB dependency is declared for downstream test use.
 
 ## Extension Points
 
