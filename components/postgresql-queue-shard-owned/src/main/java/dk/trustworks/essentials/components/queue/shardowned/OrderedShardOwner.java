@@ -645,8 +645,19 @@ final class OrderedShardOwner implements BatchReadableOwner {
         metrics.observer().deliveryFailed(key, attempts, cause);
         try (var connection = storage.connection()) {
             if (redeliveryPolicy.isExhausted(attempts)) {
-                storage.moveToDeadLetter(connection, ShardOwnedSchema.ORDERED_TABLE, "ordered", shard, row.seq(),
-                                         cause.getClass().getName() + ": " + cause.getMessage());
+                var moved = storage.moveToDeadLetter(connection, ShardOwnedSchema.ORDERED_TABLE, "ordered", shard,
+                                                     row.seq(), cause.getClass().getName() + ": " + cause.getMessage());
+                if (!moved) {
+                    // Nothing was parked, so there is no dead letter for the key to wait behind: blocking
+                    // it here would hold the key on a block no later owner can see or clear.
+                    synchronized (stateLock) {
+                        attemptsBySeq.remove(row.seq());
+                        seen.remove(row.seq());
+                    }
+                    log.warn("Ordered shard {}: seq {} of key '{}' exhausted its attempts but was no longer in the "
+                             + "table, so it was not dead-lettered", shard, row.seq(), key);
+                    return;
+                }
                 synchronized (stateLock) {
                     attemptsBySeq.remove(row.seq());
                     seen.remove(row.seq());

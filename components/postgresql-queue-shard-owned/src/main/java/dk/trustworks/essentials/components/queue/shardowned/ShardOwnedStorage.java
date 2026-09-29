@@ -364,6 +364,12 @@ public final class ShardOwnedStorage {
                             // delete would remove it once its hole expired — undelivered, and while a
                             // session was still working on it.
                             + " AND (u.lease_until IS NULL OR u.lease_until <= now())"
+                            // Nor is a row that is not visible yet: a delayed message, or one waiting out
+                            // a backoff that a previous owner scheduled. Either sits below the cursor as a
+                            // hole, and once the hole expired nothing in memory protected it, so the next
+                            // contiguous ack deleted it undelivered. Nothing this owner handled can be
+                            // invisible — a retried message, whose row is, is acknowledged by exact seq.
+                            + " AND u.visible_at <= now()"
                             + stillOwnedClause())) {
                 statement.setShort(1, queueId);
                 statement.setInt(2, shard);
@@ -1366,8 +1372,11 @@ public final class ShardOwnedStorage {
      * <p>
      * Both statements share a transaction because the alternative failure modes are both bad: a
      * message in neither lane is lost, and a message in both is delivered again after being parked.
+     *
+     * @return false, with nothing changed, when the message was no longer in its lane. The move used to
+     *         succeed silently in that case, which let a caller report a dead letter that did not exist
      */
-    public void moveToDeadLetter(Connection connection, String table, String lane, int shard, long seq, String error) throws SQLException {
+    public boolean moveToDeadLetter(Connection connection, String table, String lane, int shard, long seq, String error) throws SQLException {
         var autoCommit = connection.getAutoCommit();
         connection.setAutoCommit(false);
         try {
@@ -1382,7 +1391,10 @@ public final class ShardOwnedStorage {
                 insert.setShort(3, queueId);
                 insert.setInt(4, shard);
                 insert.setLong(5, seq);
-                insert.executeUpdate();
+                if (insert.executeUpdate() == 0) {
+                    connection.rollback();
+                    return false;
+                }
             }
             try (var delete = connection.prepareStatement(
                     "DELETE FROM " + table + " WHERE queue_id = ? AND shard = ? AND seq = ?")) {
@@ -1392,6 +1404,7 @@ public final class ShardOwnedStorage {
                 delete.executeUpdate();
             }
             connection.commit();
+            return true;
         } catch (SQLException e) {
             connection.rollback();
             throw e;
@@ -1751,8 +1764,7 @@ public final class ShardOwnedStorage {
             if (findMessage(shard, seq, ordered).isEmpty()) {
                 return false;
             }
-            moveToDeadLetter(connection, table, ordered ? "ordered" : "unordered", shard, seq, reason);
-            return true;
+            return moveToDeadLetter(connection, table, ordered ? "ordered" : "unordered", shard, seq, reason);
         }
     }
 

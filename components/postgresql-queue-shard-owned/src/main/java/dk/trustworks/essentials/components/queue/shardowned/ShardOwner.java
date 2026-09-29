@@ -581,11 +581,19 @@ final class ShardOwner implements LeasedOwner {
         metrics.observer().deliveryFailed(null, attempts, cause);
         try (var connection = storage.connection()) {
             if (redeliveryPolicy.isExhausted(attempts)) {
-                storage.moveToDeadLetter(connection, ShardOwnedSchema.UNORDERED_TABLE, "unordered", shard, row.seq(),
-                                         cause.getClass().getName() + ": " + cause.getMessage());
+                var moved = storage.moveToDeadLetter(connection, ShardOwnedSchema.UNORDERED_TABLE, "unordered", shard,
+                                                     row.seq(), cause.getClass().getName() + ": " + cause.getMessage());
                 synchronized (stateLock) {
                     attemptsBySeq.remove(row.seq());
                     seenAcked(row.seq());
+                }
+                if (!moved) {
+                    // Deleted by an operator or acknowledged elsewhere while it was failing. Nothing was
+                    // parked, so reporting a dead letter would be a lie — and it is exactly the report
+                    // that hid a lost message for as long as it did.
+                    log.warn("Shard {}: seq {} exhausted its attempts but was no longer in the table, so it "
+                             + "was not dead-lettered", shard, row.seq());
+                    return;
                 }
                 metrics.observer().deadLettered(new MessageId(MessageId.Lane.UNORDERED, shard, row.seq()),
                                                 attempts, cause);
@@ -667,14 +675,31 @@ final class ShardOwner implements LeasedOwner {
             //
             // The floor is therefore the lowest sequence value that is either in flight or a known hole.
             // Nothing at or above it may be deleted, however contiguous the prefix looks.
+            //
+            // A message waiting out a retry backoff is outstanding too, and it is neither in flight
+            // nor a hole: the handler thread has let go of it and only the retry schedule remembers
+            // it. Leaving it out made the range delete take it along with the messages after it — the
+            // schedule still redelivered it from memory, but its row was gone, so a crash lost it and
+            // the dead-letter move on its last attempt found nothing to move. Every unordered poison
+            // message that had traffic acknowledged around it vanished that way.
             var inFlightFloor = inFlight.isEmpty() ? Long.MAX_VALUE : inFlight.first();
             var holeFloor     = pendingHoles.isEmpty() ? Long.MAX_VALUE : pendingHoles.firstKey();
-            var safeFloor     = Math.min(inFlightFloor, holeFloor);
+            var retryFloor    = Long.MAX_VALUE;
+            for (var retry : retrySchedule) {
+                retryFloor = Math.min(retryFloor, retry.row().seq());
+            }
+            var safeFloor     = Math.min(Math.min(inFlightFloor, holeFloor), retryFloor);
 
             contiguousThrough = 0L;
             var expected = pendingAcks.first();
             for (var seq : pendingAcks) {
-                if (seq != expected || seq >= safeFloor) {
+                // A message that has failed before is acknowledged by its exact seq, never by the
+                // range. The range delete skips rows that are not visible yet, so that it cannot take
+                // a delayed or backed-off row nobody here remembers; but a retry fires from the
+                // in-memory schedule on this JVM's clock, which can run ahead of the database's
+                // now() >= visible_at, and a retried message handled in that window would be left
+                // behind to be delivered a second time.
+                if (seq != expected || seq >= safeFloor || attemptsBySeq.containsKey(seq)) {
                     break;
                 }
                 contiguousThrough = seq;
@@ -721,6 +746,9 @@ final class ShardOwner implements LeasedOwner {
         var finalStragglers = stragglers;
         synchronized (stateLock) {
             pendingAcks.removeIf(seq -> seq <= finalContiguous || finalStragglers.contains(seq));
+            // A retried message's attempt count is done with once it is acknowledged; nothing removed
+            // it on success before, so the map grew by one entry per message that ever recovered.
+            attemptsBySeq.keySet().removeIf(seq -> seq <= finalContiguous || finalStragglers.contains(seq));
         }
     }
 
