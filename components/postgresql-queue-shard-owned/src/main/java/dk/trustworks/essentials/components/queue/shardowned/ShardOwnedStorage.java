@@ -1447,7 +1447,7 @@ public final class ShardOwnedStorage {
     /**
      * Move messages that are behind a dead letter on their key into the dead-letter table, unhandled.
      * <p>
-     * One transaction for the batch, and the reason it is a batch at all is that this runs on a
+     * One statement for the batch, and the reason it is a batch at all is that this runs on a
      * degraded key: while the block stands, everything that arrives for that key comes through here.
      * Doing it per row would be a transaction per message on a path that only ever sees a backlog.
      * <p>
@@ -1461,47 +1461,54 @@ public final class ShardOwnedStorage {
      * the row is the table's own answer at the moment of the write. It is the lowest {@code key_order}
      * for that key that is dead-lettered <em>and not itself blocked</em> — the message that actually
      * has to be dealt with, not the one immediately in front.
+     *
+     * @return the sequence values actually moved; a row whose key no longer has a dead letter below it
+     *         stays in its lane and is left out
      */
-    public int poisonOrderedBehindDeadLetter(Connection connection, int shard, Collection<Long> seqs,
-                                             String error) throws SQLException {
+    public Set<Long> poisonOrderedBehindDeadLetter(Connection connection, int shard, Collection<Long> seqs,
+                                                   String error) throws SQLException {
         if (seqs.isEmpty()) {
-            return 0;
+            return Set.of();
         }
-        var autoCommit = connection.getAutoCommit();
-        connection.setAutoCommit(false);
-        try {
-            int moved;
-            try (var insert = connection.prepareStatement(
-                    "INSERT INTO " + DLQ_TABLE + " (queue_id, shard, source_lane, msg_key, key_order, seq,"
-                            + " payload, payload_type, attempts, last_error, blocked_by_key_order)"
-                            + " SELECT queue_id, shard, 'ordered', msg_key, key_order, seq, payload, payload_type, attempts, ?,"
-                            + "        (SELECT min(d.key_order) FROM " + DLQ_TABLE + " d"
-                            + "          WHERE d.queue_id = " + ORDERED_TABLE + ".queue_id AND d.shard = " + ORDERED_TABLE + ".shard"
-                            + "            AND d.source_lane = 'ordered' AND d.msg_key = " + ORDERED_TABLE + ".msg_key"
-                            + "            AND d.blocked_by_key_order IS NULL)"
-                            + " FROM " + ORDERED_TABLE + " WHERE queue_id = ? AND shard = ? AND seq = ANY(?)")) {
-                insert.setString(1, error);
-                insert.setShort(2, queueId);
-                insert.setInt(3, shard);
-                insert.setArray(4, connection.createArrayOf("bigint", seqs.toArray(Long[]::new)));
-                moved = insert.executeUpdate();
+        // One statement, and only rows the TABLE says are blocked. The owner decides which rows to move
+        // from its in-memory blocks, which it re-reads only on the sweep cadence; a dead letter an
+        // operator deleted in the meantime still looks like a block there. Moving on that stale answer
+        // dead-lettered the key's next message with no dead letter left to block it - so it became the
+        // new block, and deleting a dead letter put the key straight back behind another one. The
+        // EXISTS asks the table instead, and the caller hands back whatever was not moved.
+        try (var statement = connection.prepareStatement(
+                "WITH moved AS ("
+                        + " DELETE FROM " + ORDERED_TABLE + " o"
+                        + "  WHERE o.queue_id = ? AND o.shard = ? AND o.seq = ANY(?)"
+                        + "    AND EXISTS (SELECT 1 FROM " + DLQ_TABLE + " d"
+                        + "                 WHERE d.queue_id = o.queue_id AND d.shard = o.shard"
+                        + "                   AND d.source_lane = 'ordered' AND d.msg_key = o.msg_key"
+                        + "                   AND d.blocked_by_key_order IS NULL AND d.key_order < o.key_order)"
+                        + "  RETURNING o.queue_id, o.shard, o.msg_key, o.key_order, o.seq, o.payload, o.payload_type, o.attempts)"
+                        + " INSERT INTO " + DLQ_TABLE + " (queue_id, shard, source_lane, msg_key, key_order, seq,"
+                        + " payload, payload_type, attempts, last_error, blocked_by_key_order)"
+                        + " SELECT m.queue_id, m.shard, 'ordered', m.msg_key, m.key_order, m.seq, m.payload, m.payload_type,"
+                        + "        m.attempts, ?,"
+                        + "        (SELECT min(d.key_order) FROM " + DLQ_TABLE + " d"
+                        + "          WHERE d.queue_id = m.queue_id AND d.shard = m.shard"
+                        + "            AND d.source_lane = 'ordered' AND d.msg_key = m.msg_key"
+                        + "            AND d.blocked_by_key_order IS NULL)"
+                        + "   FROM moved m"
+                        + " RETURNING seq")) {
+            statement.setShort(1, queueId);
+            statement.setInt(2, shard);
+            statement.setArray(3, connection.createArrayOf("bigint", seqs.toArray(Long[]::new)));
+            statement.setString(4, error);
+            var moved = new HashSet<Long>();
+            try (var resultSet = statement.executeQuery()) {
+                while (resultSet.next()) {
+                    moved.add(resultSet.getLong(1));
+                }
             }
-            try (var delete = connection.prepareStatement(
-                    "DELETE FROM " + ORDERED_TABLE + " WHERE queue_id = ? AND shard = ? AND seq = ANY(?)")) {
-                delete.setShort(1, queueId);
-                delete.setInt(2, shard);
-                delete.setArray(3, connection.createArrayOf("bigint", seqs.toArray(Long[]::new)));
-                delete.executeUpdate();
-            }
-            connection.commit();
             return moved;
-        } catch (SQLException e) {
-            connection.rollback();
-            throw e;
-        } finally {
-            connection.setAutoCommit(autoCommit);
         }
     }
+
 
     public long countDeadLetters() throws SQLException {
         try (var connection = dataSource.getConnection();
@@ -1669,6 +1676,27 @@ public final class ShardOwnedStorage {
     }
 
     /**
+     * Remove one dead letter without delivering it.
+     * <p>
+     * Addressed by lane as well as {@code (shard, seq)}, for the reason {@link #resurrect} is. Removing
+     * the dead letter that holds an ordered key releases the key: the owner derives its blocks from
+     * this table, and re-reads them on its sweep cadence.
+     *
+     * @return false if there was no such dead letter
+     */
+    public boolean deleteDeadLetter(int shard, long seq, boolean ordered) throws SQLException {
+        try (var connection = dataSource.getConnection();
+             var statement = connection.prepareStatement(
+                     "DELETE FROM " + DLQ_TABLE + " WHERE queue_id = ? AND shard = ? AND seq = ? AND source_lane = ?")) {
+            statement.setShort(1, queueId);
+            statement.setInt(2, shard);
+            statement.setLong(3, seq);
+            statement.setString(4, ordered ? "ordered" : "unordered");
+            return statement.executeUpdate() > 0;
+        }
+    }
+
+    /**
      * Put every dead letter of one ordered key back, in one transaction.
      * <p>
      * A key that stops behind a dead letter accumulates them: the message that failed, and then every
@@ -1802,10 +1830,16 @@ public final class ShardOwnedStorage {
                 int restored;
                 try (var insert = connection.prepareStatement(
                         "INSERT INTO " + table + " (" + columns + ") SELECT " + selected
-                                + " FROM " + DLQ_TABLE + " WHERE queue_id = ? AND shard = ? AND seq = ?")) {
+                                + " FROM " + DLQ_TABLE
+                                // source_lane is part of the address, not a filter of convenience: the
+                                // unordered lane numbers seq per shard and the ordered lane per queue, so
+                                // one (shard, seq) can be a dead letter in both. Matching without it
+                                // copied the other lane's row into this lane's table.
+                                + " WHERE queue_id = ? AND shard = ? AND seq = ? AND source_lane = ?")) {
                     insert.setShort(1, queueId);
                     insert.setInt(2, shard);
                     insert.setLong(3, seq);
+                    insert.setString(4, lane);
                     restored = insert.executeUpdate();
                 }
                 if (restored == 0) {
@@ -1813,10 +1847,11 @@ public final class ShardOwnedStorage {
                     return false;
                 }
                 try (var delete = connection.prepareStatement(
-                        "DELETE FROM " + DLQ_TABLE + " WHERE queue_id = ? AND shard = ? AND seq = ?")) {
+                        "DELETE FROM " + DLQ_TABLE + " WHERE queue_id = ? AND shard = ? AND seq = ? AND source_lane = ?")) {
                     delete.setShort(1, queueId);
                     delete.setInt(2, shard);
                     delete.setLong(3, seq);
+                    delete.setString(4, lane);
                     delete.executeUpdate();
                 }
                 ShardWakeupListener.notifyShard(connection, queueId, lane, shard);

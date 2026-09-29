@@ -151,6 +151,106 @@ class ShardOwnedAdminSurfaceIT {
         }
     }
 
+    /**
+     * Deleting a dead letter by its id. {@code deleteMessage} used to look only in the live lanes, so
+     * the call reported false and the dead letter stayed listed however often an operator retried it
+     * — the only way out of the dead-letter table was resurrecting or purging.
+     */
+    @Test
+    void a_dead_letter_can_be_deleted_by_its_id() throws Exception {
+        try (var queue = queue("admin-dl-1")) {
+            var ids = queue.enqueue(List.of(Message.of("park-me".getBytes(StandardCharsets.UTF_8), 1),
+                                            Message.ordered("park-me-too".getBytes(StandardCharsets.UTF_8), 1, "k", 0L)));
+            for (var id : ids) {
+                assertThat(queue.markAsDeadLetter(id, "parked")).isTrue();
+            }
+            var parked = queue.deadLetters(0, 10);
+            assertThat(parked).hasSize(2);
+
+            for (var deadLetter : parked) {
+                assertThat(queue.deleteMessage(deadLetter.id())).as("%s", deadLetter.id()).isTrue();
+            }
+            assertThat(queue.deadLetters(0, 10)).isEmpty();
+            assertThat(queue.depth().deadLettered()).isZero();
+            for (var deadLetter : parked) {
+                assertThat(queue.deleteMessage(deadLetter.id()))
+                        .describedAs("deleting a dead letter that is already gone reports false")
+                        .isFalse();
+            }
+        }
+    }
+
+    /**
+     * The README promises that deleting the dead letter holding an ordered key releases the key. The
+     * owner re-reads its blocks from the dead-letter table, so removing the row is all it takes.
+     */
+    @Test
+    void deleting_the_dead_letter_that_blocks_a_key_releases_the_key() throws Exception {
+        var delivered = ConcurrentHashMap.<String>newKeySet();
+        try (var queue = queue("admin-dl-2")) {
+            queue.consume((messageId, key, payload, payloadType) -> {
+                var body = new String(payload, StandardCharsets.UTF_8);
+                if (body.equals("poison")) {
+                    throw new IllegalStateException("always fails");
+                }
+                delivered.add(body);
+            }, new ConsumerOptions(8, Integer.MAX_VALUE, 2, Duration.ofMillis(20), 1.0d, Duration.ofMillis(20)));
+            Awaitility.await().atMost(Duration.ofSeconds(20)).until(queue::isStarted);
+
+            queue.enqueue(List.of(Message.ordered("poison".getBytes(StandardCharsets.UTF_8), 1, "k", 0L)));
+            Awaitility.await().atMost(Duration.ofSeconds(20)).until(() -> queue.deadLetters(0, 10).size() == 1);
+
+            assertThat(queue.deleteMessage(queue.deadLetters(0, 10).getFirst().id())).isTrue();
+            queue.enqueue(List.of(Message.ordered("after".getBytes(StandardCharsets.UTF_8), 1, "k", 1L)));
+
+            Awaitility.await().atMost(Duration.ofSeconds(30))
+                      .untilAsserted(() -> assertThat(delivered)
+                              .describedAs("the key moves on once its dead letter is gone")
+                              .contains("after"));
+            assertThat(queue.deadLetters(0, 10)).isEmpty();
+        }
+    }
+
+    /**
+     * The unordered lane numbers its sequence per shard and the ordered lane per queue, so one
+     * {@code (shard, seq)} can be a dead letter in both lanes at once. A by-id operation on one of them
+     * must not touch the other: resurrecting used to match on {@code (shard, seq)} alone, and would copy
+     * the other lane's row into this lane's table.
+     */
+    @Test
+    void by_id_dead_letter_operations_stay_within_their_lane() throws Exception {
+        try (var queue = queue("admin-dl-3")) {
+            var ids = queue.enqueue(List.of(Message.of("unordered".getBytes(StandardCharsets.UTF_8), 1),
+                                            Message.ordered("ordered".getBytes(StandardCharsets.UTF_8), 1, "k", 0L)));
+            for (var id : ids) {
+                assertThat(queue.markAsDeadLetter(id, "parked")).isTrue();
+            }
+            // Give the ordered dead letter the unordered one's (shard, seq), the collision the two
+            // independent sequences make possible.
+            var unordered = ids.get(0);
+            try (var connection = dataSource.getConnection();
+                 var statement = connection.prepareStatement(
+                         "UPDATE " + ShardOwnedSchema.DLQ_TABLE + " SET shard = ?, seq = ? WHERE source_lane = 'ordered'")) {
+                statement.setInt(1, unordered.shard());
+                statement.setLong(2, unordered.sequence());
+                assertThat(statement.executeUpdate()).isEqualTo(1);
+            }
+            var orderedId = new MessageId(MessageId.Lane.ORDERED, unordered.shard(), unordered.sequence());
+
+            assertThat(queue.resurrect(unordered)).isTrue();
+            assertThat(queue.deadLetters(0, 10))
+                    .describedAs("resurrecting the unordered dead letter leaves the ordered one parked")
+                    .singleElement()
+                    .satisfies(deadLetter -> assertThat(deadLetter.id()).isEqualTo(orderedId));
+            assertThat(queue.depth().unordered()).as("only the unordered message came back").isEqualTo(1L);
+            assertThat(queue.depth().ordered()).isZero();
+
+            assertThat(queue.deleteMessage(orderedId)).isTrue();
+            assertThat(queue.deadLetters(0, 10)).isEmpty();
+            assertThat(queue.depth().unordered()).as("deleting the ordered dead letter left the unordered message alone").isEqualTo(1L);
+        }
+    }
+
     // ---------------------------------------------------------------- psql readability
 
     /**

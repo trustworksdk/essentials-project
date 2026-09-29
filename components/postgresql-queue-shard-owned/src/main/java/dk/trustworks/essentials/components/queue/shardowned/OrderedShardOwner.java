@@ -561,17 +561,14 @@ final class OrderedShardOwner implements BatchReadableOwner {
                     metrics.keyHeadOfLineBlocks.increment();
                     continue;
                 }
-                if (activeKeys.get() >= settings.keyConcurrency()) {
-                    break;
-                }
-                // Per-shard cap first, then the process-wide budget the unordered lane also draws on.
-                if (!dispatch.tryAcquire()) {
-                    break;
-                }
                 // The guarantee itself, not an optimisation: a key never advances past a dead letter.
                 // accept() keeps these out of readyByKey, so reaching this is either a row held from
                 // before the block appeared or one the refresh has just learned about — both of which
                 // must be moved, not delivered.
+                //
+                // Tested BEFORE a permit is taken. It used to come after tryAcquire and `continue`
+                // without releasing, so every pass through here cost the consumer one of its
+                // parallelConsumers permits for good, and enough of them stopped it dispatching at all.
                 if (blockedAbove(key, byOrder.firstKey())) {
                     // The lowest value held is already above the block, so everything here is.
                     byOrder.values().forEach(row -> pendingPoison.add(
@@ -579,6 +576,13 @@ final class OrderedShardOwner implements BatchReadableOwner {
                     byOrder.clear();
                     exhaustedKeys.add(key);
                     continue;
+                }
+                if (activeKeys.get() >= settings.keyConcurrency()) {
+                    break;
+                }
+                // Per-shard cap first, then the process-wide budget the unordered lane also draws on.
+                if (!dispatch.tryAcquire()) {
+                    break;
                 }
                 var next     = byOrder.pollFirstEntry();
                 var previous = highestDeliveredOrder.get(key);
@@ -756,12 +760,24 @@ final class OrderedShardOwner implements BatchReadableOwner {
         var seqs = batch.stream().map(PoisonCandidate::seq).toList();
         var moved = storage.poisonOrderedBehindDeadLetter(connection, shard, seqs,
                                                           DeadLetter.BLOCKED_BEHIND_DEAD_LETTER);
-        metrics.messagesPoisonedBehindDeadLetter.add(moved);
+        metrics.messagesPoisonedBehindDeadLetter.add(moved.size());
+        var notMoved = batch.stream().filter(candidate -> !moved.contains(candidate.seq())).toList();
+        if (!notMoved.isEmpty()) {
+            // The table had no dead letter left below them: the block in memory is stale, typically
+            // because an operator deleted the dead letter since the last refresh. Re-read it now, so
+            // the rows handed back below are dispatched on this block's absence rather than queued
+            // for a move again.
+            refreshDeadLetterBlocks(connection);
+        }
         synchronized (stateLock) {
             pendingPoison.removeAll(batch);
             // The rows are gone from the lane, so remembering their sequence values would leak for as
             // long as this owner lives — the same reason flushAcks forgets what it acknowledged.
-            seqs.forEach(seen::remove);
+            moved.forEach(seen::remove);
+            // Still in the lane, so back where accept() would have put them had the block been known
+            // to be gone.
+            notMoved.forEach(candidate -> readyByKey.computeIfAbsent(candidate.key(), key -> new TreeMap<>())
+                                                    .put(candidate.keyOrder(), candidate.row()));
         }
     }
 
