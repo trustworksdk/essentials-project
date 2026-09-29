@@ -875,8 +875,8 @@ mvn clean install -P test-release
 ### Editing the LLM docs
 
 `LLM/` is the only place the framework's LLM docs are edited. The Claude Code plugin in `essentials-plugin/` ships a
-generated copy of them in `essentials-plugin/references/llm/`; never edit that copy. CI fails a change whose copy is out
-of step with `LLM/`.
+generated copy of them in `essentials-plugin/references/llm/`, with links that leave `LLM/` rewritten to GitHub URLs;
+never edit that copy. CI fails a change whose copy is out of step with `LLM/`.
 
 Once per clone, switch on the repository's git hooks (the devcontainer does this for you):
 

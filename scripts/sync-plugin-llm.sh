@@ -16,18 +16,32 @@
 #
 # Mirrors LLM/ into essentials-plugin/references/llm/, the plugin's generated copy of the framework docs.
 # LLM/ is the only place the docs are edited; files that no longer exist there are deleted from the copy.
+# Links that leave LLM/ (`](../components/…)`, `](../docs/…)`) are rewritten to GitHub URLs on the way: the installed
+# plugin holds only essentials-plugin/, so a relative link out of the copy would resolve to nothing.
 #
 # A copy rather than a symlink because Git for Windows checks a symlink out as a text file by default, which
 # would leave the installed plugin with no docs and no error.
 #
 # Usage:
-#   scripts/sync-plugin-llm.sh    # from anywhere inside the repository
+#   scripts/sync-plugin-llm.sh             # from anywhere inside the repository
+#   scripts/sync-plugin-llm.sh --filter    # stdin -> stdout, the per-file rewrite only (used by the hook)
 #
 # The pre-commit hook (.githooks/pre-commit) does the same from the index on every commit that touches LLM/,
 # and the CI drift gate in .github/workflows/maven.yml runs this script and fails on any difference.
 # POSIX sh on purpose: the build runs on a JVM alone, and this also has to run in Git Bash on Windows.
 
 set -eu
+
+repo_url=https://github.com/trustworksdk/essentials-project/blob/main
+
+rewrite_links() {
+    sed "s#](\.\./#]($repo_url/#g"
+}
+
+if [ "${1:-}" = "--filter" ]; then
+    rewrite_links
+    exit 0
+fi
 
 cd "$(git rev-parse --show-toplevel)"
 src=LLM
@@ -38,9 +52,12 @@ mkdir -p "$dst"
 
 find "$src" -type f | while IFS= read -r file; do
     target="$dst/${file#"$src"/}"
-    if ! cmp -s "$file" "$target"; then
-        mkdir -p "$(dirname "$target")"
-        cp "$file" "$target"
+    mkdir -p "$(dirname "$target")"
+    rewrite_links < "$file" > "$target.sync-tmp"
+    if cmp -s "$target.sync-tmp" "$target"; then
+        rm -f "$target.sync-tmp"
+    else
+        mv "$target.sync-tmp" "$target"
         echo "updated $target"
     fi
 done

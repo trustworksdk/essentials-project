@@ -14,7 +14,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 #
-# Keeps essentials-plugin/references/llm/ an exact copy of LLM/ in every commit.
+# Keeps essentials-plugin/references/llm/ the generated copy of LLM/ in every commit: each file is its LLM/ counterpart
+# passed through `scripts/sync-plugin-llm.sh --filter` (links out of LLM/ rewritten to GitHub URLs).
 #
 # - A commit that changes LLM/ gets the regenerated copy staged with it.
 # - A commit that edits the copy in a way LLM/ does not reflect is refused, naming the file. So is an unstaged
@@ -30,6 +31,14 @@ cd "$(git rev-parse --show-toplevel)"
 src=LLM
 dst=essentials-plugin/references/llm
 
+# Blob id the copy of index path $1 (under LLM/) must have; empty when LLM/ has no such path. With $2 = -w the
+# filtered blob is also written to the object store, ready to stage.
+expected_blob() {
+    llm_blob=$(git rev-parse -q --verify ":$1" || true)
+    [ -n "$llm_blob" ] || return 0
+    git cat-file blob "$llm_blob" | sh scripts/sync-plugin-llm.sh --filter | git hash-object ${2:-} --stdin
+}
+
 refuse() {
     echo "pre-commit: $1" >&2
     echo "pre-commit: LLM/ is the only place the framework docs are edited; $dst/ is generated from it." >&2
@@ -37,9 +46,9 @@ refuse() {
     exit 1
 }
 
-# A staged path in the copy must hold exactly what the same path in LLM/ holds in the index (both absent counts).
+# A staged path in the copy must hold exactly the generated form of the same path in LLM/ (both absent counts).
 bad=$(git diff --cached --name-only --no-renames -- "$dst" | while IFS= read -r copy; do
-    if [ "$(git rev-parse -q --verify ":$copy" || true)" != "$(git rev-parse -q --verify ":$src/${copy#"$dst"/}" || true)" ]; then
+    if [ "$(git rev-parse -q --verify ":$copy" || true)" != "$(expected_blob "$src/${copy#"$dst"/}")" ]; then
         echo "$copy"
     fi
 done)
@@ -53,7 +62,7 @@ unstaged=$(git diff --name-only -- "$dst")
 $unstaged"
 
 git ls-files -s -- "$src" | while read -r mode blob stage path; do
-    git update-index --add --cacheinfo "$mode,$blob,$dst/${path#"$src"/}"
+    git update-index --add --cacheinfo "$mode,$(expected_blob "$path" -w),$dst/${path#"$src"/}"
 done
 git ls-files -- "$dst" | while IFS= read -r copy; do
     if [ -z "$(git ls-files -- "$src/${copy#"$dst"/}")" ]; then
