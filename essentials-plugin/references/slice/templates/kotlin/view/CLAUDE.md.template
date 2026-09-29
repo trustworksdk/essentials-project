@@ -1,0 +1,38 @@
+# Slice: {{bc}}.{{view}}
+
+**Kind:** view
+**Status:** live
+**Owner:** {{owner}}
+**Purpose:** TODO one sentence, present tense.
+
+## Invariants
+- The projection is idempotent: an event whose `EventOrder` is not newer than the stored
+  `version` is a replay and is skipped.
+- This slice never produces events.
+
+## Boundaries
+**Reacts to / reads:** `{{Event}}` from `{{bc}}/events/` (TODO list every projected event)
+**Serves:** `GET {{apiPath}}`
+**Forbidden:**
+  - Never import another slice's internals — only `{{bc}}/events/` and `{{bc}}/types/`.
+  - Never write to the event store, call a Decider, or read another slice's repository.
+  - Never call `repository.update(entity)` without a `Version` — that is CRUD auto-increment and
+    breaks idempotency. Use `repository.update(entity, Version(message.order))`.
+
+## Data
+**Owns (writes):** the `{{bc}}_{{view}}` read model — no other slice reads or writes it
+**Reads:** its own read model only
+
+## Files
+- `{{View}}View.kt` — read model (`VersionedEntity`, `version` = EventOrder)
+- `{{View}}Repository.kt` — `DelegatingDocumentDbRepository` + this slice's queries
+- `{{View}}Projection.kt` — `ViewEventProcessor`; its `@MessageHandler` methods take `OrderedMessage`
+  because the projection needs `message.order` for idempotency
+- `{{View}}API.kt` — query API, `GET {{apiPath}}` (add further queries over this same read model
+  here rather than in a new slice; declare each in `serves` + `endpoints`)
+- test: `{{View}}ProjectionIT.kt`
+
+## Processor choice
+`ViewEventProcessor` — async, low latency, eventually consistent. Switch to
+`InTransactionEventProcessor` only if this read model must be current the moment the command API
+returns. Never a plain `EventProcessor` for a view.

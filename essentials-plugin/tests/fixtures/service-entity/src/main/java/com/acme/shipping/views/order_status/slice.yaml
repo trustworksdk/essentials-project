@@ -1,0 +1,26 @@
+schemaVersion: "1.2"
+slice: shipping.order_status
+kind: view
+bc: shipping
+owner: shipping-team
+status: live
+summary: Answer shipped/unshipped status queries over the shipping order table.
+generator: essentials
+language: java
+tier: service-entity
+lane: service-entity
+serves: [OrderStatusList, OrderStatusByStatus, OrderStatusById]
+endpoints:
+  - { method: GET, path: "/api/shipping/order-status", auth: user }
+  # Same route, selected by params = "status" — a distinct mapping, so a distinct entry (§R2).
+  - { method: GET, path: "/api/shipping/order-status?status=", auth: user }
+  - { method: GET, path: "/api/shipping/order-status/{orderId}", auth: user }
+reads:
+  - { name: ShippingOrder, via: OrderStatusQueries }
+projections: []
+forbidden:
+  - cross-slice-internal:shipping
+tests:
+  unit: { present: false }
+  integration: { present: false }
+  contract: { present: false }

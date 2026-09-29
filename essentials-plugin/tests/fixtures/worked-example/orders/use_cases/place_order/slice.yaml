@@ -1,0 +1,39 @@
+# Per-slice manifest. Schema: essentials references/slice/slice-yaml.schema.json
+# Field guide: references/slice/manifest-guide.md · Law: rules/slice-design.md
+schemaVersion: "1.2"
+slice: orders.place_order
+kind: command
+bc: orders
+owner: orders-team
+status: live
+summary: Place a new order for a SKU and quantity.
+generator: essentials
+language: kotlin
+tier: cqrs-es
+lane: decider
+
+# --- Contracts ---
+handles: [PlaceOrder]
+publishes: [OrderPlaced]
+endpoints:
+  - { method: POST, path: "/api/orders", auth: user }
+
+# --- Data ---
+writes: [Order]
+reads:
+  - { name: Order }            # from its own event stream; this Decider folds no state
+
+# --- Rules ---
+invariants:
+  - { id: INV-PO-1, text: "Quantity must be positive", enforcedBy: PlaceOrderDecider }
+
+# --- Boundaries (machine-checkable prohibitions — see rules/slice-design.md §R4) ---
+forbidden:
+  - cross-slice-internal:orders     # import only another slice's events/ + types/
+  - direct-decider:cancel_order     # never reconstruct state + call another slice's Decider
+
+# --- Testing ---
+tests:
+  unit: { present: true }
+  integration: { present: false }
+  contract: { present: false }

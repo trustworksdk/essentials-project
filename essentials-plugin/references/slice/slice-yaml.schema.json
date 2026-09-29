@@ -1,0 +1,197 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://trustworks.dk/slice-yaml.schema.json",
+  "title": "Per-slice manifest (slice.yaml)",
+  "description": "Canonical schema for the machine-readable per-slice manifest. Toolchain-neutral: a manifest written by an external generator (see `generator`) validates against it unchanged. essentials ships scripts/slice-lint.py, which parses and validates every slice.yaml against this schema and exits non-zero — wire it into CI or a pre-commit hook, because nothing in a JVM build reads a manifest and an unparseable one is invisible rather than loud.",
+  "type": "object",
+  "additionalProperties": false,
+  "patternProperties": {
+    "^x-": {
+      "$comment": "Escape hatch. A project may carry toolchain- or project-specific data under an x- prefixed key without inventing a bare key that this schema rejects. No toolchain reads these; they are inert to every gate. Prefer a real field where one fits — an x- key nothing reads is documentation, not a contract."
+    }
+  },
+  "required": ["schemaVersion", "slice", "kind", "bc", "owner", "status", "summary", "tests"],
+  "properties": {
+    "schemaVersion": { "type": "string", "description": "Manifest schema version, e.g. \"1.3\". Readers accept any 1.x, so a manifest stamped at an earlier 1.x stays valid and needs no restamp." },
+    "slice": { "type": "string", "pattern": "^[a-z0-9_-]+\\.[a-z0-9_-]+$", "description": "Globally unique id <bc>.<slice-id>. kebab-case or snake_case; snake_case is REQUIRED on JVM platforms, where package directories cannot contain hyphens (e.g. orders.place_order)." },
+    "generator": { "enum": ["sdd", "essentials", "manual"], "description": "Which toolchain owns this manifest: essentials, manual, or an external generator. Determines whether lastSyncedAt/arch are expected and which tool may rewrite the manifest's derived fields." },
+    "language": { "type": "string", "description": "Implementation language of the slice (open string: java | kotlin | typescript | python | go | ...). Lets tooling pick the right template family without sniffing file extensions in a mixed module." },
+    "kind": { "enum": ["command", "view", "automation", "translation"] },
+    "bc": { "type": "string", "description": "Owning bounded context." },
+    "owner": { "type": "string", "description": "Owning team." },
+    "status": { "enum": ["planned", "live", "deprecated", "shadowed"], "description": "Required lifecycle. 'shadowed' is the optional strangler-migration value, whose semantics belong to the external modernization tool that writes it." },
+    "summary": { "type": "string" },
+    "notes": { "type": "array", "items": { "type": "string" }, "description": "Deliberate limits and design constraints a reader would otherwise have to reconstruct from a comment — \"no total count, because counting a filtered append-only log is a second full query\". Human-owned prose, never derived and never overwritten. Not a changelog and not a TODO list: a note records a decision that is still true." },
+    "lastSyncedAt": { "type": "string", "format": "date-time", "description": "ISO-8601 UTC stamp of an external generator's last sync. Expected on manifests that generator owns; absent for generator: essentials, which has no periodic sync loop to stamp it." },
+    "sourceFingerprint": { "type": "string", "description": "Hash of slice source inputs at last sync." },
+    "stability": { "enum": ["experimental", "stable", "frozen"] },
+    "supersedes": { "type": "string", "pattern": "^[a-z0-9_-]+\\.[a-z0-9_-]+$", "description": "Id of the slice this one replaces during a side-by-side migration — e.g. a rebuilt view projecting additional events, standing up beside the original while it catches up. The two are ONE slice in two versions: the superseded slice moves to status: deprecated and is deleted once consumers have swapped over. Tooling reads this link to tell a deliberate migration twin apart from two slices accidentally sharing a read model, and to report an outstanding retirement while both exist." },
+    "tier": { "type": "string", "description": "The slice's EFFECTIVE architectureTier (open string: service-entity | cqrs | cqrs-es | layered-hexagonal | custom | future values). Consumers MUST NOT hard-fail on an unrecognised value — the required fallback is to behave as if it were `custom`. Note what that fallback costs, because it is silent: an unrecognised tier makes a tier-aware reader skip the slice's per-tier structure sections and its manifest generation entirely, so a WRONG value here is worse than an absent one. Write only tier vocabulary; the §R5 write style goes in `lane`. The owning BC's tier if the BC overrides it, else the project default; stamped so downstream consumers read the slice's tier directly rather than re-deriving it. When absent, consumers fall back to the project default. OWNERSHIP DIFFERS BY TOOLCHAIN, deliberately: an external generator with project data to derive it from may DERIVE it and overwrite it on every refresh. essentials has no such source, so it treats the field as human-owned and never overwrites one — /essentials:slice-check --adopt-tier backfills it only where ABSENT, and reports every slice it stamped." },
+    "lane": { "enum": ["decider", "aggregate", "service-entity"], "description": "The owning BC's WRITE STYLE — where decision logic lives. essentials rules/slice-design.md §R5 sanctions exactly three, and a BC picks one and stays with it, which is why this is a closed enum: a fourth value is a change to the law, not to a manifest. This is a DIFFERENT AXIS from `tier` and the two must not be conflated. `tier` answers 'how is the backend organised' (the architectureTier vocabulary); `lane` answers 'where does the decision live inside it'. An aggregate-lane BC is event-sourced, so its tier is cqrs-es and its lane is aggregate. The two axes coincide on exactly one value, `service-entity`, which is what made the conflation easy to miss. Optional and essentials-owned: absent on projects that do not use the §R5 lanes." },
+    "profile": { "enum": ["bff"], "description": "Set on integration-heavy / BFF bounded contexts." },
+
+    "handles": { "type": "array", "items": { "$ref": "#/$defs/namedContract" } },
+    "serves": { "type": "array", "items": { "$ref": "#/$defs/queryName" }, "description": "Query NAMES this view answers — ListOrders, not /api/orders. The route belongs in `endpoints`. The pattern rejects any value containing '/' because a route here is the single most common authoring mistake and is silently useless to every reader." },
+    "publishes": { "type": "array", "items": { "$ref": "#/$defs/event" } },
+    "consumes": { "type": "array", "items": { "$ref": "#/$defs/namedContract" } },
+    "dispatches": { "type": "array", "items": { "$ref": "#/$defs/namedContract" } },
+    "provides": { "type": "array", "items": { "$ref": "#/$defs/providedSeam" }, "description": "Published read seams: an interface this slice implements and registers so OTHER slices can ask it a question without touching its store. The interface is declared in the BC's public `types/` surface; the implementation stays slice-private. This is the sanctioned way a read-owning slice answers a neighbour — see essentials rules/slice-design.md § Sanctioned sharing. Read-only by construction: a seam that mutates or decides is not a seam." },
+    "endpoints": { "type": "array", "items": { "$ref": "#/$defs/endpoint" } },
+    "schedule": { "$ref": "#/$defs/schedule", "description": "For a schedule-triggered automation. An automation declares `consumes` (event-triggered) or `schedule` (time-triggered) — at least one, and both where a process is driven by each." },
+    "externalSystem": { "type": "string", "pattern": "^[a-z0-9_-]+$", "description": "External-system id; maps to external-systems/<id>/ (external_systems/<id>/ on JVM platforms). kebab-case or snake_case; snake_case is REQUIRED on JVM, where package directories cannot contain hyphens. Required for translation slices." },
+    "direction": { "enum": ["inbound", "outbound", "both"] },
+    "maps": { "type": "array", "items": { "$ref": "#/$defs/mapping" } },
+
+    "writes": { "type": "array", "items": { "$ref": "#/$defs/namedContract" } },
+    "reads": { "type": "array", "items": { "$ref": "#/$defs/readModel" } },
+    "owns": { "type": "array", "items": { "type": "string" } },
+    "projections": { "type": "array", "items": { "$ref": "#/$defs/projection" } },
+
+    "invariants": { "type": "array", "items": { "$ref": "#/$defs/invariant" } },
+    "forbidden": { "type": "array", "items": { "type": "string" } },
+
+    "statutory": { "type": "object" },
+    "featureFlag": { "type": "object" },
+    "sla": { "type": "object" },
+    "observability": { "type": "object" },
+    "characterization": { "type": "object", "description": "Optional strangler-migration metadata (parity oracle, etc.), owned by the external modernization tool that writes it." },
+
+    "tests": {
+      "type": "object",
+      "description": "Coverage by type. Contract tests are the floor for translation/BFF slices.",
+      "properties": {
+        "unit": { "$ref": "#/$defs/testEntry" },
+        "integration": { "$ref": "#/$defs/testEntry" },
+        "contract": { "$ref": "#/$defs/testEntry" },
+        "e2e": { "$ref": "#/$defs/testEntry" },
+        "characterization": { "$ref": "#/$defs/testEntry" }
+      }
+    },
+
+    "arch": {
+      "type": "object",
+      "description": "Optional event-model linkage, written by an external generator; essentials neither writes nor reads it. Ids take the form <boundedContext>/<sliceName>.",
+      "properties": {
+        "bc": { "type": "string" },
+        "command": { "type": "string" },
+        "view": { "type": "string" },
+        "translation": { "type": "string" },
+        "events": { "type": "array", "items": { "type": "string" } },
+        "externalSystem": { "type": "string" }
+      }
+    },
+    "code": { "type": "object", "description": "Optional, estate-level code-symbol-graph ids." },
+    "dependsOn": { "type": "array", "items": { "type": "string" } }
+  },
+  "allOf": [
+    { "if": { "properties": { "kind": { "const": "command" } } }, "then": { "required": ["handles", "writes"] } },
+    { "if": { "properties": { "kind": { "const": "view" } } }, "then": { "required": ["serves"] } },
+    {
+      "$comment": "An automation is triggered by an event or by a clock — rules/slice-design.md § The four slice kinds lists the trigger as 'event / schedule'. Requiring `consumes` alone forced a schedule-driven automation to carry an information-free `consumes: []`.",
+      "if": { "properties": { "kind": { "const": "automation" } } },
+      "then": { "anyOf": [{ "required": ["consumes"] }, { "required": ["schedule"] }] }
+    },
+    { "if": { "properties": { "kind": { "const": "translation" } } }, "then": { "required": ["externalSystem"] } },
+    {
+      "$comment": "A port-style ACL — the system calls out, nothing calls in — has no inbound message and therefore no mapping table, and is still unambiguously a translation slice. `consumes` and `maps` are required for every direction EXCEPT an explicit `direction: outbound`; with `direction` absent, both stay required.",
+      "if": { "properties": { "kind": { "const": "translation" }, "direction": { "not": { "const": "outbound" } } } },
+      "then": { "required": ["consumes", "maps"] }
+    }
+  ],
+  "$defs": {
+    "namedContract": {
+      "oneOf": [
+        { "type": "string" },
+        { "type": "object", "required": ["name"], "properties": { "name": { "type": "string" }, "idempotencyKey": { "type": "string" } } }
+      ]
+    },
+    "queryName": {
+      "oneOf": [
+        { "type": "string", "pattern": "^[^/]+$" },
+        { "type": "object", "required": ["name"], "properties": { "name": { "type": "string", "pattern": "^[^/]+$" }, "idempotencyKey": { "type": "string" } } }
+      ]
+    },
+    "event": {
+      "oneOf": [
+        { "type": "string" },
+        { "type": "object", "required": ["name"], "properties": { "name": { "type": "string" }, "version": { "type": "integer" }, "schema": { "type": "string" } } }
+      ]
+    },
+    "providedSeam": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name"],
+      "properties": {
+        "name": { "type": "string", "description": "The interface this slice implements, declared in the BC's `types/`." },
+        "note": { "type": "string", "description": "What question the seam answers, and why it is a seam rather than an event." },
+        "consumedBy": { "type": "array", "items": { "type": "string" }, "description": "Slice ids known to consume it. Advisory: a stale entry is drift to report, not a build failure." }
+      }
+    },
+    "endpoint": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["method", "path"],
+      "properties": {
+        "method": { "enum": ["GET", "POST", "PUT", "PATCH", "DELETE"] },
+        "path": { "type": "string", "description": "ALWAYS quote this value in YAML. Inside a flow mapping an unquoted scalar containing '{' opens a nested mapping and the whole file stops being YAML — see essentials references/slice/manifest-guide.md §3. A mapping selected by a query parameter is written \"<route>?<param>=\"." },
+        "auth": { "enum": ["anonymous", "user", "org-scoped", "service"], "description": "Coarse auth CLASS, deliberately closed so it stays comparable across projects and toolchains. It is not a permission model — a project with named permission bundles or per-resource scopes records those in `capability` alongside it." },
+        "capability": { "type": "array", "items": { "type": "string" }, "description": "Project-specific permissions this endpoint requires — named permission bundles, scopes, roles. Open strings, because no two capability models agree. This is the machine-readable record of who may call the endpoint; `auth` is the class it falls into." },
+        "maps": { "type": "string" }
+      }
+    },
+    "schedule": {
+      "type": "object",
+      "additionalProperties": false,
+      "anyOf": [{ "required": ["cron"] }, { "required": ["fixedDelay"] }],
+      "properties": {
+        "cron": { "type": "string", "description": "Cron expression, as written in the source (e.g. a Spring @Scheduled(cron = \"...\"))." },
+        "fixedDelay": { "type": "string", "description": "ISO-8601 duration between runs, e.g. PT15M." },
+        "initialDelay": { "type": "string", "description": "ISO-8601 duration before the first run." },
+        "timeZone": { "type": "string" },
+        "note": { "type": "string", "description": "Why this cadence — a schedule with no reason is the one nobody dares change." }
+      }
+    },
+    "mapping": {
+      "type": "object",
+      "required": ["from", "to"],
+      "properties": { "from": { "type": "string" }, "to": { "type": "string" } }
+    },
+    "readModel": {
+      "oneOf": [
+        { "type": "string" },
+        { "type": "object", "required": ["name"], "properties": { "name": { "type": "string" }, "via": { "type": "string", "description": "Reader interface for cross-BC reads (mandatory cross-BC)." } } }
+      ]
+    },
+    "projection": {
+      "$comment": "additionalProperties is false here for a reason: `kind`, `handles` and `table` are the three near-synonyms an author reaches for, and each one would carry the event list under a key no reader consults — a manifest that looks maintained and reports the view as reacting to nothing. `from` is required for the same reason. `subscribesTo` is the fourth key authors reach for, and it is a DIFFERENT mistake with the same cost: it names the stream rather than the events, and its home is `aggregateTypes` — never `from`, which it would corrupt.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "from"],
+      "properties": {
+        "name": { "type": "string" },
+        "aggregateTypes": { "type": "array", "items": { "type": "string" }, "description": "The event-store STREAM(s) this projector subscribes to — AggregateType names, PascalCase plural (e.g. Orders). This is a DIFFERENT AXIS from `from`, and conflating the two is the mistake this field exists to prevent: `aggregateTypes` is WHICH STREAM feeds the projector, `from` is WHICH EVENT TYPES its handler methods take. A stream name written into `from` silently corrupts the event list; an event type written here names a stream that does not exist. Optional: absent on service-entity-lane views, which have no projector at all, and on manifests authored before schema 1.3 — consumers MUST treat an absent value as unknown, never as none." },
+        "from": { "type": "array", "items": { "type": "string" }, "description": "COMPLETE list of the event types this projector handles — the parameter types of its @MessageHandler/@Handler methods. A view declares its inbound events here and never in `consumes`. Event types only: the stream they arrive on is `aggregateTypes`." },
+        "consistency": { "enum": ["strong", "eventual"] },
+        "store": { "type": "string" }
+      }
+    },
+    "invariant": {
+      "type": "object",
+      "required": ["text"],
+      "properties": {
+        "id": { "type": "string" },
+        "text": { "type": "string" },
+        "enforcedBy": { "type": "string" },
+        "statutory": { "type": "string" }
+      }
+    },
+    "testEntry": {
+      "type": "object",
+      "properties": {
+        "present": { "type": "boolean" },
+        "coveragePct": { "type": "number" },
+        "parityOracle": { "type": "string" }
+      }
+    }
+  }
+}

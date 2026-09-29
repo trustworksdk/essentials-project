@@ -1,0 +1,25 @@
+schemaVersion: "1.3"
+slice: orders.order_list
+kind: view
+bc: orders
+owner: orders-team
+status: live
+summary: List all orders with their current status.
+generator: essentials
+language: kotlin
+tier: cqrs-es
+lane: decider
+
+serves: [ListOrders]
+endpoints:
+  - { method: GET, path: "/api/orders", auth: user }
+projections:
+  - { name: OrderListView, aggregateTypes: [Orders], from: [OrderPlaced, OrderCancelled], consistency: eventual, store: in-memory }
+
+forbidden:
+  - cross-slice-internal:orders
+
+tests:
+  unit: { present: false }
+  integration: { present: false }
+  contract: { present: false }

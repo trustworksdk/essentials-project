@@ -1,0 +1,664 @@
+{
+  "meta": {
+    "root": "backend/src/main/kotlin/com/acme/shop",
+    "sha": "a1b2c3d",
+    "project": "shop",
+    "scope": "full",
+    "sliceCount": 7,
+    "bcCount": 2,
+    "skipped": [
+      "module payments (not analysed)"
+    ]
+  },
+  "contexts": [
+    {
+      "id": "orders",
+      "lane": "decider",
+      "language": "kotlin",
+      "tier": "cqrs-es",
+      "owners": [
+        "orders-team"
+      ],
+      "sliceIds": [
+        "orders.place_order",
+        "orders.cancel_order",
+        "orders.order_list"
+      ]
+    },
+    {
+      "id": "billing",
+      "lane": "service-entity",
+      "language": "java",
+      "tier": "service-entity",
+      "owners": [
+        "billing-team"
+      ],
+      "sliceIds": [
+        "billing.invoice_list",
+        "billing.acme_gateway",
+        "billing.payment_policy",
+        "billing.issue_invoice"
+      ]
+    }
+  ],
+  "slices": [
+    {
+      "id": "orders.place_order",
+      "bc": "orders",
+      "name": "place_order",
+      "kind": "command",
+      "status": "live",
+      "owner": "orders-team",
+      "summary": "Accept a new order",
+      "language": "kotlin",
+      "tier": "cqrs-es",
+      "package": "com.acme.shop.orders.use_cases.place_order",
+      "path": "orders/use_cases/place_order",
+      "files": [
+        "PlaceOrder.kt",
+        "PlaceOrderDecider.kt",
+        "PlaceOrderAPI.kt",
+        "OrderPlaced.kt"
+      ],
+      "handles": [
+        "PlaceOrder"
+      ],
+      "serves": [],
+      "publishes": [
+        "OrderPlaced"
+      ],
+      "consumes": [],
+      "dispatches": [],
+      "writes": [
+        "Order",
+        "Invoice"
+      ],
+      "owns": [],
+      "projections": [],
+      "reads": [],
+      "endpoints": [
+        {
+          "method": "POST",
+          "path": "/api/orders",
+          "auth": "user"
+        }
+      ],
+      "invariants": [
+        {
+          "id": "INV-1",
+          "text": "An order must have at least one line",
+          "enforcedBy": "PlaceOrderDecider"
+        },
+        {
+          "id": "INV-2",
+          "text": "Re-issuing a command with a known order id emits nothing",
+          "enforcedBy": "PlaceOrderDecider"
+        }
+      ],
+      "externalSystem": null,
+      "direction": null,
+      "supersedes": null,
+      "tests": [
+        "unit",
+        "integration"
+      ]
+    },
+    {
+      "id": "orders.cancel_order",
+      "bc": "orders",
+      "name": "cancel_order",
+      "kind": "command",
+      "status": "live",
+      "owner": "orders-team",
+      "summary": "Cancel an order before dispatch",
+      "language": "kotlin",
+      "tier": "cqrs-es",
+      "package": "com.acme.shop.orders.use_cases.cancel_order",
+      "path": "orders/use_cases/cancel_order",
+      "files": [
+        "CancelOrder.kt",
+        "CancelOrderDecider.kt",
+        "CancelOrderAPI.kt",
+        "OrderCancelled.kt",
+        "OrderState.kt",
+        "OrderStateEvolver.kt"
+      ],
+      "handles": [
+        "CancelOrder"
+      ],
+      "serves": [],
+      "publishes": [
+        "OrderCancelled"
+      ],
+      "consumes": [],
+      "dispatches": [],
+      "writes": [
+        "Order"
+      ],
+      "owns": [],
+      "projections": [],
+      "reads": [],
+      "endpoints": [
+        {
+          "method": "DELETE",
+          "path": "/api/orders/{orderId}",
+          "auth": "user"
+        }
+      ],
+      "invariants": [
+        {
+          "id": "INV-3",
+          "text": "A dispatched order cannot be cancelled",
+          "enforcedBy": "CancelOrderDecider"
+        }
+      ],
+      "externalSystem": null,
+      "direction": null,
+      "supersedes": null,
+      "tests": [
+        "unit"
+      ],
+      "flags": [
+        {
+          "level": "warn",
+          "text": "declared endpoint not found in source"
+        }
+      ]
+    },
+    {
+      "id": "orders.order_list",
+      "bc": "orders",
+      "name": "order_list",
+      "kind": "view",
+      "status": "live",
+      "owner": "orders-team",
+      "summary": "Orders by customer",
+      "language": "kotlin",
+      "tier": "cqrs-es",
+      "package": "com.acme.shop.orders.views.order_list",
+      "path": "orders/views/order_list",
+      "files": [
+        "OrderListProjector.kt",
+        "OrderListRepository.kt",
+        "OrderListAPI.kt",
+        "OrderListView.kt"
+      ],
+      "handles": [],
+      "serves": [
+        "listOrders",
+        "getOrder"
+      ],
+      "publishes": [],
+      "consumes": [],
+      "dispatches": [],
+      "writes": [],
+      "owns": [
+        "order_list_view"
+      ],
+      "projections": [
+        {
+          "name": "OrderListProjection",
+          "from": [
+            "OrderPlaced",
+            "OrderCancelled"
+          ],
+          "consistency": "eventual",
+          "store": "document-db"
+        }
+      ],
+      "reads": [
+        {
+          "name": "OrderListView",
+          "via": null,
+          "external": false
+        }
+      ],
+      "endpoints": [
+        {
+          "method": "GET",
+          "path": "/api/orders",
+          "auth": "user"
+        }
+      ],
+      "invariants": [],
+      "externalSystem": null,
+      "direction": null,
+      "supersedes": null,
+      "tests": [
+        "integration"
+      ],
+      "flags": [],
+      "readModels": [
+        {
+          "name": "order_list_view",
+          "store": "PostgreSQL \u00b7 document-db",
+          "columns": [
+            {
+              "name": "order_id",
+              "type": "OrderId",
+              "note": "primary key"
+            },
+            {
+              "name": "customer_id",
+              "type": "CustomerId",
+              "note": ""
+            },
+            {
+              "name": "status",
+              "type": "String",
+              "note": "placed | cancelled"
+            },
+            {
+              "name": "placed_at",
+              "type": "Instant",
+              "note": ""
+            },
+            {
+              "name": "event_order",
+              "type": "long",
+              "note": "projection idempotency"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "billing.invoice_list",
+      "bc": "billing",
+      "name": "invoice_list",
+      "kind": "view",
+      "status": "live",
+      "owner": "billing-team",
+      "summary": "Outstanding invoices",
+      "language": "java",
+      "tier": "service-entity",
+      "package": "com.acme.shop.billing.views.invoice_list",
+      "path": "billing/views/invoice_list",
+      "files": [
+        "InvoiceListAPI.java",
+        "InvoiceQueries.java",
+        "InvoiceSummary.java"
+      ],
+      "handles": [],
+      "serves": [
+        "listOverdue",
+        "listByStatus"
+      ],
+      "publishes": [],
+      "consumes": [],
+      "dispatches": [],
+      "writes": [],
+      "owns": [],
+      "projections": [],
+      "reads": [
+        {
+          "name": "OrderSummary",
+          "via": "OrderReader",
+          "external": true
+        }
+      ],
+      "endpoints": [
+        {
+          "method": "GET",
+          "path": "/api/invoices",
+          "auth": "org-scoped"
+        },
+        {
+          "method": "GET",
+          "path": "/api/invoices?status=",
+          "auth": "org-scoped"
+        }
+      ],
+      "invariants": [],
+      "externalSystem": null,
+      "direction": null,
+      "supersedes": null,
+      "tests": [
+        "integration"
+      ],
+      "flags": [],
+      "readModels": [
+        {
+          "name": "ShippingOrder (entity table)",
+          "store": "JPA \u00b7 service-entity lane",
+          "columns": [
+            {
+              "name": "invoice_id",
+              "type": "InvoiceId",
+              "note": "primary key"
+            },
+            {
+              "name": "status",
+              "type": "String",
+              "note": "queried via ?status="
+            },
+            {
+              "name": "due_at",
+              "type": "Instant",
+              "note": ""
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "billing.acme_gateway",
+      "bc": "billing",
+      "name": "acme_gateway",
+      "kind": "translation",
+      "status": "planned",
+      "owner": "billing-team",
+      "summary": "ACL to the ACME payment gateway",
+      "language": "java",
+      "tier": "service-entity",
+      "package": "com.acme.shop.billing.external_systems.acme_gateway",
+      "path": "billing/external_systems/acme_gateway",
+      "files": [
+        "AcmeGatewayTranslator.java",
+        "AcmeGatewayClient.java",
+        "AcmeInboundHandler.java"
+      ],
+      "handles": [],
+      "serves": [],
+      "publishes": [],
+      "consumes": [
+        "PaymentSettled"
+      ],
+      "dispatches": [],
+      "writes": [],
+      "owns": [],
+      "projections": [],
+      "reads": [],
+      "endpoints": [],
+      "invariants": [],
+      "externalSystem": "acme_gateway",
+      "direction": "both",
+      "supersedes": null,
+      "tests": [
+        "contract"
+      ],
+      "flags": []
+    },
+    {
+      "id": "billing.payment_policy",
+      "bc": "billing",
+      "name": "payment_policy",
+      "kind": "automation",
+      "status": "live",
+      "owner": "billing-team",
+      "summary": "Invoice an order once it is placed",
+      "language": "java",
+      "tier": "service-entity",
+      "package": "com.acme.shop.billing.automations.payment_policy",
+      "path": "billing/automations/payment_policy",
+      "files": [
+        "PaymentPolicy.java"
+      ],
+      "handles": [],
+      "serves": [],
+      "publishes": [],
+      "consumes": [
+        "OrderPlaced"
+      ],
+      "dispatches": [
+        "IssueInvoice"
+      ],
+      "writes": [],
+      "owns": [],
+      "projections": [],
+      "reads": [],
+      "endpoints": [],
+      "invariants": [
+        {
+          "id": "INV-4",
+          "text": "An order is invoiced at most once",
+          "enforcedBy": "PaymentPolicy (Inbox idempotency)"
+        }
+      ],
+      "externalSystem": null,
+      "direction": null,
+      "supersedes": null,
+      "tests": [
+        "integration"
+      ],
+      "flags": []
+    },
+    {
+      "id": "billing.issue_invoice",
+      "bc": "billing",
+      "name": "issue_invoice",
+      "kind": "command",
+      "status": "live",
+      "owner": "billing-team",
+      "summary": "Issue an invoice for a placed order",
+      "language": "java",
+      "tier": "service-entity",
+      "package": "com.acme.shop.billing.use_cases.issue_invoice",
+      "path": "billing/use_cases/issue_invoice",
+      "files": [
+        "IssueInvoice.java",
+        "IssueInvoiceHandler.java",
+        "InvoiceIssued.java"
+      ],
+      "handles": [
+        "IssueInvoice"
+      ],
+      "serves": [],
+      "publishes": [
+        "InvoiceIssued"
+      ],
+      "consumes": [],
+      "dispatches": [],
+      "writes": [
+        "Invoice"
+      ],
+      "owns": [],
+      "projections": [],
+      "reads": [],
+      "endpoints": [],
+      "invariants": [
+        {
+          "id": "INV-5",
+          "text": "Invoice total equals the sum of its order lines",
+          "enforcedBy": "Invoice entity"
+        }
+      ],
+      "externalSystem": null,
+      "direction": null,
+      "supersedes": null,
+      "tests": [
+        "unit",
+        "integration"
+      ]
+    }
+  ],
+  "flows": [
+    {
+      "event": "OrderPlaced",
+      "bc": "orders",
+      "from": [
+        "orders.place_order"
+      ],
+      "to": [
+        "orders.order_list",
+        "billing.payment_policy"
+      ],
+      "crossContext": true,
+      "dangling": false
+    },
+    {
+      "event": "OrderCancelled",
+      "bc": "orders",
+      "from": [
+        "orders.cancel_order"
+      ],
+      "to": [
+        "orders.order_list"
+      ],
+      "crossContext": false,
+      "dangling": false
+    },
+    {
+      "event": "InvoiceIssued",
+      "bc": "billing",
+      "from": [
+        "billing.issue_invoice"
+      ],
+      "to": [],
+      "crossContext": false,
+      "dangling": false
+    },
+    {
+      "event": "PaymentSettled",
+      "bc": "billing",
+      "from": [],
+      "to": [
+        "billing.acme_gateway"
+      ],
+      "crossContext": true,
+      "dangling": true
+    }
+  ],
+  "writers": [
+    {
+      "target": "Invoice",
+      "kind": "aggregate",
+      "bcs": [
+        "billing",
+        "orders"
+      ],
+      "slices": [
+        "billing.issue_invoice",
+        "orders.place_order"
+      ],
+      "flag": "crossBc"
+    },
+    {
+      "target": "Order",
+      "kind": "aggregate",
+      "bcs": [
+        "orders"
+      ],
+      "slices": [
+        "orders.cancel_order",
+        "orders.place_order"
+      ],
+      "flag": null
+    },
+    {
+      "target": "order_list_view",
+      "kind": "read-model",
+      "bcs": [
+        "orders"
+      ],
+      "slices": [
+        "orders.order_list"
+      ],
+      "flag": null
+    }
+  ],
+  "crossReads": [
+    {
+      "from": "billing.invoice_list",
+      "toBc": "orders",
+      "model": "OrderSummary",
+      "via": "OrderReader",
+      "declared": true
+    },
+    {
+      "from": "billing.acme_gateway",
+      "toBc": "orders",
+      "model": "Order",
+      "via": null,
+      "declared": false
+    }
+  ],
+  "notes": [
+    "orders/aggregates absent \u2014 decider lane"
+  ],
+  "messages": [
+    {
+      "name": "PlaceOrder",
+      "type": "command",
+      "identity": "orderId: OrderId",
+      "fields": [
+        "orderId: OrderId",
+        "customerId: CustomerId",
+        "sku: Sku",
+        "quantity: Int"
+      ],
+      "declaredIn": "orders/use_cases/place_order/PlaceOrder.kt",
+      "idempotencyKey": "orderId",
+      "summary": "Client-supplied order id makes a retry a no-op."
+    },
+    {
+      "name": "CancelOrder",
+      "type": "command",
+      "identity": "orderId: OrderId",
+      "fields": [
+        "orderId: OrderId",
+        "reason: String"
+      ],
+      "declaredIn": "orders/use_cases/cancel_order/CancelOrder.kt",
+      "idempotencyKey": "orderId"
+    },
+    {
+      "name": "IssueInvoice",
+      "type": "command",
+      "identity": "orderId: OrderId",
+      "fields": [
+        "orderId: OrderId",
+        "amount: Money"
+      ],
+      "declaredIn": "billing/use_cases/issue_invoice/IssueInvoice.java",
+      "idempotencyKey": "orderId"
+    },
+    {
+      "name": "OrderPlaced",
+      "type": "event",
+      "identity": "orderId: OrderId",
+      "fields": [
+        "orderId: OrderId",
+        "customerId: CustomerId",
+        "sku: Sku",
+        "quantity: Int",
+        "placedAt: Instant"
+      ],
+      "declaredIn": "orders/events/OrderPlaced.kt",
+      "version": 1
+    },
+    {
+      "name": "OrderCancelled",
+      "type": "event",
+      "identity": "orderId: OrderId",
+      "fields": [
+        "orderId: OrderId",
+        "reason: String",
+        "cancelledAt: Instant"
+      ],
+      "declaredIn": "orders/events/OrderCancelled.kt",
+      "version": 1
+    },
+    {
+      "name": "InvoiceIssued",
+      "type": "event",
+      "identity": "invoiceId: InvoiceId",
+      "fields": [
+        "invoiceId: InvoiceId",
+        "orderId: OrderId",
+        "amount: Money"
+      ],
+      "declaredIn": "billing/events/InvoiceIssued.java",
+      "version": 2,
+      "schema": "billing/InvoiceIssued.v2.avsc"
+    },
+    {
+      "name": "PaymentSettled",
+      "type": "event",
+      "identity": null,
+      "fields": [],
+      "declaredIn": null,
+      "summary": "Declared by acme_gateway consumes: \u2014 no producer in scope, so no declaration to read."
+    }
+  ]
+}

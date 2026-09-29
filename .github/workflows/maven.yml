@@ -40,6 +40,12 @@ jobs:
             exit 1
           fi
 
+      # Stack requirements (S1-S11) and version pins live in references/stack/; everything else in the plugin cites them.
+      - name: Plugin citation convention
+        run: |
+          python3 essentials-plugin/scripts/check-citations.py --self-test
+          python3 essentials-plugin/scripts/check-citations.py
+
       - name: Fail on symlinks under essentials-plugin/
         run: |
           links=$(git ls-files -s -- essentials-plugin | awk '$1 == "120000" { print $4 }')

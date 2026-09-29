@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Synthetic fixture. Never built, never shipped as user-facing content.
+  It exists so the service-entity lane's gates have an oracle — see TEST-GUIDE.md.
+-->
+<project xmlns="http://maven.apache.org/POM/4.0.0">
+    <modelVersion>4.0.0</modelVersion>
+
+    <groupId>com.acme</groupId>
+    <artifactId>shipping-service-entity-fixture</artifactId>
+    <version>0.0.1-SNAPSHOT</version>
+
+    <dependencies>
+        <!-- The Essentials command bus + EventBus. Their presence is what puts this
+             bounded context ON the service-entity lane rather than merely nearest it. -->
+        <dependency>
+            <groupId>dk.trustworks.essentials.components</groupId>
+            <artifactId>spring-boot-starter-postgresql</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-data-jpa</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-web</artifactId>
+        </dependency>
+        <!-- Deliberately absent: any event-store artifact. No EventStore, no AggregateType,
+             no EventOrder anywhere in this fixture. -->
+    </dependencies>
+</project>

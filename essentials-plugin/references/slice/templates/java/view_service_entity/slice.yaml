@@ -1,0 +1,41 @@
+# Per-slice manifest. Schema: essentials references/slice/slice-yaml.schema.json
+# Field guide: references/slice/manifest-guide.md · Law: rules/slice-design.md
+schemaVersion: "1.3"
+slice: {{bc}}.{{view}}
+kind: view
+bc: {{bc}}
+owner: {{owner}}
+status: live
+summary: TODO one sentence, present tense.
+generator: essentials
+language: java
+tier: {{tier}}                        # architectureTier vocabulary (cqrs-es | service-entity | …)
+lane: {{lane}}                        # the §R5 write style: decider | aggregate | service-entity
+
+# --- Contracts ---
+# `serves` takes QUERY NAMES, not routes. The route belongs in `endpoints`.
+serves: [{{View}}ByStatus, {{View}}By{{Aggregate}}Id]
+endpoints:
+  - { method: GET, path: "{{apiPath}}", auth: user }
+  - { method: GET, path: "{{apiPath}}/{{{aggregate}}Id}", auth: user }
+
+# --- Data ---
+# `via` names the slice-private query interface. This is the existing schema field for a reader
+# interface — do not invent a new one.
+reads:
+  - { name: {{Entity}}, via: {{View}}Queries }
+
+# `projections` is EMPTY on this lane and that is correct: there is no projector and no separate
+# read model, so slice-check gate 10 (projection idempotency) and gate 13's migration-twin
+# machinery do not apply. Do not delete the key — its emptiness is the signal.
+projections: []
+
+# --- Boundaries (rules/slice-design.md §R4) ---
+forbidden:
+  - cross-slice-internal:{{bc}}
+
+# --- Testing ---
+tests:
+  unit: { present: false }
+  integration: { present: true }
+  contract: { present: false }
