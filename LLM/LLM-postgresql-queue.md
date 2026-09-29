@@ -498,7 +498,7 @@ See [README Security](../components/postgresql-queue/README.md#security) for ful
 
 ### Spring Boot Starter
 
-See [LLM-spring-boot-starter-modules.md](./LLM-spring-boot-starter-modules.md#spring-boot-starter-postgresql).
+See [LLM-spring-boot-starter-modules.md](./LLM-spring-boot-starter-modules.md#postgresql-starter).
 
 ```yaml
 essentials.postgresql:

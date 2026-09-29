@@ -85,6 +85,10 @@ public class Application { }
 Both register `SingleValueTypeConverter` — and `KotlinValueTypeConverter` when `kotlin-reflect` is
 present — via `addFormatters`, and nothing else.
 
+**You never register `KotlinValueTypeConverter` yourself.** Both configurers register it behind a
+`ClassUtils.isPresent` guard, because `kotlin-reflect` is an `<optional>` dependency and a Java-only
+consumer must not be forced to carry it.
+
 ⚠️ **Do not override `configureHttpMessageCodecs` to register the Essentials Jackson module.** That
 *replaces* the application's JSON codecs. The commonly copied version of that override installs
 Jackson **2** codecs, which on Spring Boot 4 silently downgrades the whole application's body
@@ -121,6 +125,31 @@ The Jackson 2 artifact `types-jackson` was removed in 0.60; upgrading apps swap 
 **Kotlin bodies** are covered by neither converter *nor* `EssentialTypesJacksonModule`. Register
 `jackson-module-kotlin`'s `KotlinModule` on the web mapper. Skipping it fails silently rather than
 loudly: a value class serialises as `{"value":"order-4711"}` instead of `"order-4711"`.
+
+#### Validation runs — but watch the status code
+
+Spring **re-boxes** the bound `String` into the value class before invoking the handler
+(`InvocableHandlerMethod$KotlinDelegate.box` → `kotlin-reflect` → `constructor-impl`), so an
+`init { require(…) }` guard **does** fire. No invalid id reaches your handler. The catch is *where*
+it fires:
+
+| Shape | Invalid value → | Why |
+|---|---|---|
+| `@JvmInline value class` | **500** | guard fires during handler *invocation*, so it is not a binding failure |
+| `suspend fun` + value class (WebFlux) | **500** | same |
+| non-inline (e.g. `data class`) | **400** | guard fires inside `KotlinValueTypeConverter` → `MethodArgumentTypeMismatchException` |
+
+Ship `@ExceptionHandler(IllegalArgumentException::class)` returning 400 on endpoints that take a
+**validating value class**.
+
+A typed path variable that answers **500** therefore has two causes — tell them apart by the exception:
+`ConversionNotSupportedException` means **no converter** (the configurer was not `@Import`ed; Spring classes a
+missing converter as server misconfiguration, so a well-formed request looks like a server bug), while an
+`IllegalArgumentException` from your own type's `init` means the converter worked and **your validation fired**.
+
+> `dk.trustworks.essentials.kotlin.types.StringValueType` is a bare interface (`value` +
+> `compareTo`) and validates nothing itself. Validation lives in the concrete type — e.g.
+> `CountryCode` has `init { validate(value) }` — and in whatever you write.
 
 ---
 

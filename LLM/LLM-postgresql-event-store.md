@@ -668,6 +668,14 @@ void on(OrderConfirmed event, OrderedMessage message) {
 | `(Event)` | Event only |
 | `(Event, OrderedMessage)` | Event + metadata (aggregateId, messageOrder) |
 
+> ⚠️ **Two different requirements, often conflated.**
+> - `@MessageHandler` is **mandatory**: an un-annotated method is not a handler. A `ViewEventProcessor` allows unmatched
+>   messages, so the event is skipped silently — no exception, the handler just never runs.
+> - `OrderedMessage` is **optional to the dispatcher** (single-argument handlers are invoked normally) but **required for a
+>   versioned projection**: `message.getOrder()` is the `EventOrder` your update compares against the stored version (see
+>   *Version = EventOrder Pattern* above). Without it, a redelivered event is applied twice. A handler with no versioned
+>   state can drop it.
+
 Attributes:
 
 | Attribute | Values | Description |
@@ -1136,6 +1144,7 @@ was disposed right after an idle poll — the connection stayed `idle in transac
 - Use `EventProcessor` for projections - use `InTransactionEventProcessor` or `ViewEventProcessor`
 - Process events outside `UnitOfWork` when using in-transaction subscriptions
 - Perform blocking I/O in a default (`REQUIRED`) handler - it holds a pooled connection in `idle in transaction` for the whole call; use `UnitOfWorkMode.NONE` and wrap the tail
+- Use a non-exclusive `subscribeToAggregateEventsAsynchronously(...)` for a consumer that must run once per cluster - it runs on every instance that subscribes, so each instance handles the events and nothing orders the handling across instances; use `exclusivelySubscribeToAggregateEventsAsynchronously(...)`, which holds a `FencedLock` so only one subscriber per `SubscriberId` is active at a time
 
 ### Common Mistakes
 
@@ -1144,6 +1153,24 @@ was disposed right after an idle poll — the connection stayed `idle in transac
 | `appendToStream(orders, id, event)` | No concurrency control | Use `appendToStream(orders, id, EventOrder.of(n), event)` |
 | Using `eventStore.pollEvents()` | Transient, loses events on restart | Use `subscriptionManager.subscribeToAggregateEventsAsynchronously()` |
 | Using `EventProcessor` for projections | Eventual consistency | Use `InTransactionEventProcessor` (strong) or `ViewEventProcessor` (low-latency) |
+
+### Handlers without their annotation
+
+A handler method that lacks its `@MessageHandler` / `@EventHandler` annotation is never called. Whether anything
+notices depends on the dispatcher:
+
+| Dispatcher | Unmatched message/event |
+|---|---|
+| `EventProcessor`, `InTransactionEventProcessor`, `ViewEventProcessor` | Ignored — they call `allowUnmatchedMessages()` |
+| Aggregates (`AggregateRoot`, `FlexAggregate`, `AggregateState`), `AnnotationBasedInMemoryProjector` | Ignored — an aggregate need not handle every event |
+| `PatternMatchingMessageHandler`, `PatternMatchingQueuedMessageHandler`, `PatternMatchingPersistedEventHandler` | `IllegalArgumentException`, unless `allowUnmatchedMessages()` / `allowUnmatchedEvents()` was called |
+
+In the first two rows a forgotten annotation drops the event with no error: a projection simply never updates, an
+aggregate's state never changes. In the last row, on a durable queue, the `IllegalArgumentException` is a permanent
+error and dead-letters the message on its first delivery (see
+[LLM-foundation.md § The built-in permanent-error list](LLM-foundation.md#the-built-in-permanent-error-list)).
+Annotate every handler explicitly, and assert in a test that each event type the processor or aggregate is meant to
+handle actually changes something.
 
 ## Security
 
@@ -1182,7 +1209,7 @@ See [README Security](../components/postgresql-event-store/README.md#security) f
 |--------|---------|
 | [eventsourced-aggregates](./LLM-eventsourced-aggregates.md) | Aggregate patterns, `EventStreamEvolver`, `@EventHandler` |
 | [spring-postgresql-event-store](./LLM-spring-postgresql-event-store.md) | Spring transaction integration |
-| [spring-boot-starter-postgresql-event-store](./LLM-spring-boot-starter-modules.md#spring-boot-starter-postgresql-event-store) | Spring Boot auto-configuration |
+| [spring-boot-starter-postgresql-event-store](./LLM-spring-boot-starter-modules.md#event-store-starter) | Spring Boot auto-configuration |
 | [foundation](./LLM-foundation.md) | `UnitOfWork`, `FencedLock`, `DurableQueues`, `Inbox` |
 | [postgresql-distributed-fenced-lock](./LLM-postgresql-distributed-fenced-lock.md) | Distributed locking |
 | [postgresql-queue](./LLM-postgresql-queue.md) | Durable queues |

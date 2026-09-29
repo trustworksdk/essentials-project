@@ -197,10 +197,6 @@ Prefix: `essentials.durable-queues`
 | `enable-queue-statistics-ttl` | `false` | Auto-cleanup stats |
 | `queue-statistics-ttl-duration` | `90` | Days |
 
-**Transactional Modes:**
-- `single-operation-transaction`: Queue ops outside transaction, timeout-based ack (RECOMMENDED)
-- `fully-transactional`: Queue ops in transaction (breaks retries/DLQ - don't use)
-
 #### MultiTableChangeListener
 
 Prefix: `essentials.multi-table-change-listener`
@@ -679,12 +675,13 @@ public PostgresqlDurableQueues postgresqlDurableQueues(...) {
 
 ## Gotchas
 
-- ⚠️ **Transactional Mode**: Use `single-operation-transaction` for reliable retry/DLQ (fully-transactional breaks retries)
 - ⚠️ **Bean Conditionals**: Event Store provides own `UnitOfWorkFactory`, `EventBus`, `JSONSerializer` (PostgreSQL starter skips these when EventStore on classpath)
 - ⚠️ **Lifecycle Start**: Set `start-life-cycles=false` to manually control lifecycle
 - ⚠️ **MongoDB CharSequenceTypes**: Must register types using ObjectId values or used as Map keys
 - ⚠️ **Flush Publishing**: Enable only if sagas need per-event coordination (impacts transaction semantics)
 - ⚠️ **Admin UI**: Requires both `EssentialsAuthenticatedUser` implementation AND Spring Security config (not auto-configured)
+- ⚠️ **`essentials.reactive-bean-post-processor-enabled=false` silently unwires every `CommandHandler` and `EventHandler` bean.** `ReactiveHandlersBeanPostProcessor` is what registers them with the `CommandBus` and the `EventBus`es; nothing fails at compile time or in a unit test that calls the handler directly — `send(...)` fails only at runtime with no handler found. Leave it at its default `true`, and have each command's integration test send through the bus
+- ⚠️ **MongoDB connection properties are `spring.mongodb.*`**, not `spring.data.mongodb.*` (Spring Boot 4). The old names are no longer bound — no warning, no failure: Spring Boot falls back to its default `mongodb://localhost/test`, and every Mongo operation (queues, fenced locks) blocks until server selection times out with `MongoTimeoutException`. A Mongo timeout at startup is this until proven otherwise — grep the configuration for `spring.data.mongodb`
 
 ---
 

@@ -406,6 +406,7 @@ See [LLM-types-integrations.md](LLM-types-integrations.md) for overview.
 - **Percentage scale**: Enforces minimum scale of 2
 - **Identifier**: Optional marker interface for semantic searchability
 - **Kotlin package**: `dk.trustworks.essentials.kotlin.types` (not `types.kotlin`)
+- **Kotlin subclass of a Java `SingleValueType` — factory lookup**: `SingleValueType.fromObject()` (behind the Jackson, JDBI, Avro and Spring web integrations) resolves a value in this order: exactly one constructor whose parameter type is assignable from the value's class → a **static** `of(...)` → a **static** `from(...)`, each matched by assignability (so `of(CharSequence)` accepts a `String`). Two matching constructors (`(CharSequence)` and `(String)`) mean no single match, so the lookup falls through to `of`. A companion-object `fun of(...)` compiles to an instance method on `Companion` and is invisible to this lookup unless annotated `@JvmStatic`. Keep one assignable factory per name: `of(String)` plus `of(CharSequence)` both match a `String` and fail with `TooManyMatchingMethodsFoundException`.
 - **AssertJ with CharSequenceType**: Cast to `CharSequence` for proper equality assertions (see below)
 
 ### AssertJ Testing with CharSequenceType

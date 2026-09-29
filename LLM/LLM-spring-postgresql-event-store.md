@@ -349,5 +349,5 @@ Key test classes demonstrating usage patterns:
 |----------|---------|
 | [postgresql-event-store](./LLM-postgresql-event-store.md) | Core EventStore functionality |
 | [foundation](./LLM-foundation.md) | Base Spring transaction integration |
-| [spring-boot-starter-postgresql-event-store](./LLM-spring-boot-starter-modules.md#spring-boot-starter-postgresql-event-store) | Auto-configuration |
+| [spring-boot-starter-postgresql-event-store](./LLM-spring-boot-starter-modules.md#event-store-starter) | Auto-configuration |
 | [README](../components/spring-postgresql-event-store/README.md) | Full developer documentation |

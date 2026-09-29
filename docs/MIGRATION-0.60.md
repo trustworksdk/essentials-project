@@ -706,3 +706,31 @@ constructor overload (`PostgresqlDurableSubscriptionRepository`, `PostgresqlEven
 `DefaultEssentialsScheduler`, `PostgresqlTTLManager`, `ExecutorScheduledJobRepository`,
 `PostgresqlFencedLockStorage`). The default, `SchemaOwnership.COMPONENT`, is the 0.50 behaviour. Pass `HARNESS` and
 register the component with an `EssentialsSchemaHarness` - see [LLM-foundation.md](../LLM/LLM-foundation.md#database-schema-harness).
+
+---
+
+## Coming from before 0.50
+
+0.60 carries every 0.50 change. If you are skipping 0.50, read
+[RELEASE-NOTES-0.50.0.md](./RELEASE-NOTES-0.50.0.md) first; these are the 0.50 changes that start clean and
+compile clean, and so are easy to miss:
+
+- **Durable queues built with a constructor that named no `TransactionalMode` ran `FullyTransactional` before 0.50.**
+  0.60 has neither the constructors nor the mode. Such a deployment changes delivery semantics on upgrade exactly as
+  described under [`TransactionalMode` is retired](#transactionalmode-is-retired) for `fully-transactional` — read the
+  "your delivery semantics change" consequences there as applying to you.
+- **Testcontainers is 2.x, and the artifact names changed** (test scope only): `testcontainers-postgresql`,
+  `testcontainers-mongodb`, `testcontainers-kafka`. If you depend on `components/foundation-test`, rename your own
+  1.x coordinates to match.
+- **Spring Boot 4 moved packages and names that Essentials applications touch.** Health contributors are
+  `org.springframework.boot.health.contributor.*`, in the `spring-boot-health` module — which
+  `spring-boot-actuator-autoconfigure` does **not** depend on, so declare it. DataSource auto-configuration is
+  `org.springframework.boot.jdbc.autoconfigure.*`. `management.endpoint.<id>.enabled` is
+  `management.endpoint.<id>.access`. `spring-boot-starter-aop` is `spring-boot-starter-aspectj`. Mongo connection
+  properties are `spring.mongodb.*` and the old names are silently unbound — see
+  [LLM-spring-boot-starter-modules.md § Gotchas](../LLM/LLM-spring-boot-starter-modules.md#gotchas).
+- **The Vaadin admin UI is gone.** `components/vaadin-ui` was removed; `spring-boot-starter-admin-ui` keeps its
+  artifactId but is a Thymeleaf + vanilla-JS console at `/essentials/admin`, backed by the HTTP API in
+  `spring-boot-starter-admin-api`. Don't carry a Vaadin dependency across, and expect both to serve nothing until
+  you implement `EssentialsAuthenticatedUser` and `EssentialsSecurityProvider` — see
+  [LLM-admin-api.md § Security](../LLM/LLM-admin-api.md#security).

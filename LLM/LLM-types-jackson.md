@@ -32,6 +32,14 @@ mapper — fail with an `IllegalStateException`.
 `dk.trustworks.essentials.kotlin.types` — Kotlin semantic types need `jackson-module-kotlin`'s
 `KotlinModule` registered alongside it. See [Kotlin semantic types](#kotlin-semantic-types).
 
+⚠️ **Two mappers, registered independently.** With `spring-boot-starter-postgresql` or `spring-boot-starter-mongodb`,
+`EssentialTypesJacksonModule` is a `@Bean`, so Spring Boot adds it to its auto-configured **web** `JsonMapper`
+(`@RequestBody`/`@ResponseBody`). Two ways to silently lose that: no Essentials starter on the classpath (then expose the
+bean yourself — see [Spring Boot 4 (web mapper)](#spring-boot-4-web-mapper)), or replacing Boot's `JsonMapper` with your
+own bean. The **persistence** mapper (`JSONSerializer`/`JSONEventSerializer`) is built by `EssentialsObjectMappers` and
+deliberately ignores `JacksonModule` beans, so a module added for the web layer never changes the persisted format;
+extra persistence modules need your own `JSONSerializer` bean, which the starter backs off from.
+
 ## TOC
 - [Core API](#core-api)
 - [Serialization Behavior](#serialization-behavior)

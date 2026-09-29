@@ -849,6 +849,15 @@ commandBus.sendAndDontWait(new SendReminderCommand(customerId), Duration.ofHours
 OrderId result = commandBus.send(new CreateOrderCommand(...));
 ```
 
+### Commands are persisted
+
+A command sent with `sendAndDontWait` is stored as JSON in the durable-queue table (the command object is the queued
+message's payload) and deserialized again when a consumer picks it up — possibly after a deploy. The command type is
+therefore a persisted contract, exactly like an event or an Inbox message: the Jackson 3 rules apply to it —
+constructor parameter names ([JSONSerializer](#jsonserializer)) and value types in it registered with the
+persistence mapper. A renamed constructor parameter breaks the commands already queued, not the ones sent after the
+rename. `send(...)` does not persist the command.
+
 ## Database Schema Harness
 
 **Package**: `dk.trustworks.essentials.components.foundation.schema` (SPI), PostgreSQL appliers in `.postgresql`.
@@ -917,7 +926,9 @@ As a Spring bean it is applied with the Essentials ones. Rules that hold everywh
 Jackson 3 (`tools.jackson`) only. Build persistence serializers through `EssentialsObjectMappers`, which carries the
 canonical configuration the persisted wire format depends on (field access, ISO-8601 dates, final-field mutation
 re-enabled, Essentials value-type modules registered). That format is byte-identical to what the Jackson 2 mapper of
-0.50 wrote, so data persisted before 0.60 stays readable.
+0.50 wrote, so data persisted before 0.60 stays readable. A hand-assembled `ObjectMapper` used for persistence drifts
+from that format (for example, value types written as `{"value":"…"}`, or a `Duration` as `"PT30S"`), and the drift
+shows on replay, not on write.
 
 ```java
 // Canonical serializer (Jackson3JSONSerializer over the canonical mapper)
@@ -937,10 +948,20 @@ Object event = serializer.deserialize(json, "com.example.OrderCreatedEvent");
 0.50-era Jackson 2 `types-jackson` / `immutable-jackson` jar is on the classpath (same FQCNs, wrong Jackson major) —
 depend on `types-jackson3` / `immutable-jackson3`.
 
-⚠️ Under Jackson 3 a constructor parameter **name** is part of the JSON contract: Jackson 3 binds a class's constructor
-by parameter names read from the bytecode, so a parameter named differently from the JSON property receives `null`.
-Rename the parameter or annotate it with `@JsonProperty("…")` (`com.fasterxml.jackson.annotation`, shared by both
-Jackson majors).
+⚠️ Under Jackson 3 a constructor parameter **name** is part of the JSON contract. Jackson 3 reads parameter names from
+the bytecode (classes compiled with `-parameters`, and Kotlin) and uses a class's constructor as a properties-based
+creator — even when a no-arg constructor exists. The 0.50 Jackson 2 mapper registered no parameter-names module and
+populated fields instead, so types that worked then can break now. A parameter whose name does not match the JSON
+property it receives gets `null`, and the object fails its own `requireNonNull` or comes back half-populated. Two
+shapes bite:
+- a parameter named differently from the field it assigns (`priceValidity` → field `priceValidityPeriod`);
+- a parameter that is not a property at all because the value is routed elsewhere — the classic `Event<ID>`
+  subclass taking `orderId` and calling `aggregateId(orderId)`, which persists as `aggregateId`.
+
+Nothing fails on write: a service can append events for days and then fail on replay. Fix it on the type — rename
+the parameter, or annotate it `@JsonProperty("…")` (`com.fasterxml.jackson.annotation`, shared by both Jackson
+majors). `ConstructorDetector.EXPLICIT_ONLY` does **not** help: with no other way to construct the type, Jackson 3
+uses the sole constructor regardless.
 
 ⚠️ Upgrading from 0.50: `JacksonJSONSerializer` (Jackson 2) was removed — use `Jackson3JSONSerializer` or
 `EssentialsObjectMappers.createJSONSerializer()`.

@@ -31,7 +31,6 @@
 - [MongoDB-Specific Behavior](#mongodb-specific-behavior)
 - [Logging](#logging)
 - ⚠️ [Security](#security)
-- [Common Use Cases](#common-use-cases)
 - [Gotchas](#gotchas)
 - [Comparison with PostgreSQL](#comparison-with-postgresql)
 - [Dependencies & Tests](#dependencies--tests)
