@@ -42,6 +42,7 @@ public final class BatchedPersistedEventSubscriberBuilder {
     private EventStore                            eventStore;
     private int                                   maxBatchSize;
     private Duration                              maxLatency;
+    private SubscriptionErrorPolicy               subscriptionErrorPolicy               = SubscriptionErrorPolicy.skip();
 
     /**
      * @param eventHandler the handler that batches of {@link PersistedEvent}s are forwarded to. Required
@@ -117,6 +118,16 @@ public final class BatchedPersistedEventSubscriberBuilder {
     }
 
     /**
+     * @param subscriptionErrorPolicy what to do when handling a batch fails with an error the retry spec doesn't retry.
+     *                                Defaults to {@link SubscriptionErrorPolicy#skip()}: call the <code>onErrorHandler</code>
+     * @return this builder instance for fluent chaining
+     */
+    public BatchedPersistedEventSubscriberBuilder setSubscriptionErrorPolicy(SubscriptionErrorPolicy subscriptionErrorPolicy) {
+        this.subscriptionErrorPolicy = subscriptionErrorPolicy;
+        return this;
+    }
+
+    /**
      * Builds the subscriber.
      *
      * @return the subscriber
@@ -129,6 +140,7 @@ public final class BatchedPersistedEventSubscriberBuilder {
                                                    eventStorePollingBatchSize,
                                                    requireNonNull(eventStore, "eventStore cannot be null"),
                                                    maxBatchSize,
-                                                   requireNonNull(maxLatency, "maxLatency cannot be null"));
+                                                   requireNonNull(maxLatency, "maxLatency cannot be null"),
+                                                   requireNonNull(subscriptionErrorPolicy, "subscriptionErrorPolicy cannot be null"));
     }
 }

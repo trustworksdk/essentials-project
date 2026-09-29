@@ -199,6 +199,7 @@ public class EventStoreConfiguration {
                                             .setSnapshotResumePointsEvery(subscriptionManagerProps.getSnapshotResumePointsEvery())
                                             .setStartLifeCycles(essentialsComponentsProperties.getLifeCycles().isStartLifeCycles())
                                             .setEventStorePollingOptimizerFactory(optimizerFactory)
+                                            .setSubscriptionErrorPolicy(subscriptionManagerProps.getErrorPolicy().toSubscriptionErrorPolicy())
                                             .build();
     }
 

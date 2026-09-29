@@ -40,6 +40,7 @@ public final class PersistedEventSubscriberBuilder {
     private RetryBackoffSpec                      forwardToEventHandlerRetryBackoffSpec = defaultRetryBackoffSpec();
     private long                                  eventStorePollingBatchSize;
     private EventStore                            eventStore;
+    private SubscriptionErrorPolicy               subscriptionErrorPolicy               = SubscriptionErrorPolicy.skip();
 
     /**
      * Indefinite retries for exceptions where {@link IOExceptionUtil#isIOException(Throwable)} returns true.
@@ -110,6 +111,16 @@ public final class PersistedEventSubscriberBuilder {
     }
 
     /**
+     * @param subscriptionErrorPolicy what to do when the event handler fails with an error the retry spec doesn't retry.
+     *                                Defaults to {@link SubscriptionErrorPolicy#skip()}: call the <code>onErrorHandler</code>
+     * @return this builder instance for fluent chaining
+     */
+    public PersistedEventSubscriberBuilder setSubscriptionErrorPolicy(SubscriptionErrorPolicy subscriptionErrorPolicy) {
+        this.subscriptionErrorPolicy = subscriptionErrorPolicy;
+        return this;
+    }
+
+    /**
      * Builds the subscriber.
      *
      * @return the subscriber
@@ -120,6 +131,7 @@ public final class PersistedEventSubscriberBuilder {
                                             requireNonNull(onErrorHandler, "onErrorHandler cannot be null"),
                                             requireNonNull(forwardToEventHandlerRetryBackoffSpec, "forwardToEventHandlerRetryBackoffSpec cannot be null"),
                                             eventStorePollingBatchSize,
-                                            requireNonNull(eventStore, "eventStore cannot be null"));
+                                            requireNonNull(eventStore, "eventStore cannot be null"),
+                                            requireNonNull(subscriptionErrorPolicy, "subscriptionErrorPolicy cannot be null"));
     }
 }

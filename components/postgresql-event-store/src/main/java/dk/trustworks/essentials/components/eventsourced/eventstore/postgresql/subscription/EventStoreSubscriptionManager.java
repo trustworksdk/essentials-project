@@ -72,7 +72,11 @@ public interface EventStoreSubscriptionManager extends Lifecycle {
      *                                                                EventStream associated with the <code>aggregateType</code>
      * @param onlyIncludeEventsForTenant                              if {@link Optional#isPresent()} then only include events that belong to the specified {@link Tenant}, otherwise all Events matching the criteria are returned
      * @param eventHandler                                            the event handler that will receive the published {@link PersistedEvent}'s<br>
-     *                                                                Exceptions thrown from the eventHandler will cause the event to be skipped. If you need a retry capability
+     *                                                                Exceptions thrown from the eventHandler are handled according to the manager's {@link SubscriptionErrorPolicy} - by default
+     *                                                                ({@link SubscriptionErrorPolicy.Mode#SKIP}) the event is skipped: logged at ERROR and the resume point advances past it,
+     *                                                                so it is not redelivered. See {@link EventStoreSubscriptionManagerBuilder#setSubscriptionErrorPolicy(SubscriptionErrorPolicy)} for
+     *                                                                bounded retries ({@link SubscriptionErrorPolicy.Mode#RETRY_N_THEN_SKIP}) or stopping at the failed event ({@link SubscriptionErrorPolicy.Mode#STOP}).
+     *                                                                If you need a durable per-event retry capability
      *                                                                please use {@link #subscribeToAggregateEventsAsynchronously(SubscriberId, AggregateType, GlobalEventOrder, Optional, Inbox)}
      * @return the subscription handle
      */
@@ -105,7 +109,9 @@ public interface EventStoreSubscriptionManager extends Lifecycle {
      * @param maxBatchSize                                            the maximum batch size before processing
      * @param maxLatency                                              the maximum time to wait before processing a partial batch
      * @param eventHandler                                            the event handler that will receive the published {@link PersistedEvent}'s in batches<br>
-     *                                                                Exceptions thrown from the eventHandler will cause the events to be skipped.
+     *                                                                Exceptions thrown from the eventHandler are handled according to the manager's {@link SubscriptionErrorPolicy}, applied to the
+     *                                                                batch as a whole - by default ({@link SubscriptionErrorPolicy.Mode#SKIP}) the events are skipped: logged at ERROR and the resume
+     *                                                                point advances past the batch. See {@link EventStoreSubscriptionManagerBuilder#setSubscriptionErrorPolicy(SubscriptionErrorPolicy)}.
      * @return the subscription handle
      */
     EventStoreSubscription batchSubscribeToAggregateEventsAsynchronously(SubscriberId subscriberId,
@@ -182,7 +188,11 @@ public interface EventStoreSubscriptionManager extends Lifecycle {
      * @param onFirstSubscriptionSubscribeFromAndIncludingGlobalOrder If it's the first time the given <code>subscriberId</code> is subscribing then the subscription will be using this {@link GlobalEventOrder} as the starting point in the
      *                                                                EventStream associated with the <code>aggregateType</code>
      * @param eventHandler                                            the event handler that will receive the published {@link PersistedEvent}'s<br>
-     *                                                                Exceptions thrown from the eventHandler will cause the event to be skipped. If you need a retry capability
+     *                                                                Exceptions thrown from the eventHandler are handled according to the manager's {@link SubscriptionErrorPolicy} - by default
+     *                                                                ({@link SubscriptionErrorPolicy.Mode#SKIP}) the event is skipped: logged at ERROR and the resume point advances past it,
+     *                                                                so it is not redelivered. See {@link EventStoreSubscriptionManagerBuilder#setSubscriptionErrorPolicy(SubscriptionErrorPolicy)} for
+     *                                                                bounded retries ({@link SubscriptionErrorPolicy.Mode#RETRY_N_THEN_SKIP}) or stopping at the failed event ({@link SubscriptionErrorPolicy.Mode#STOP}).
+     *                                                                If you need a durable per-event retry capability
      *                                                                please use {@link #subscribeToAggregateEventsAsynchronously(SubscriberId, AggregateType, GlobalEventOrder, Inbox)}
      * @return the subscription handle
      */
@@ -206,7 +216,11 @@ public interface EventStoreSubscriptionManager extends Lifecycle {
      * @param onFirstSubscriptionSubscribeFromAndIncludingGlobalOrder A function that determines the global event order
      *                                                                to start subscribing from on the first subscription.
      * @param eventHandler                                            the event handler that will receive the published {@link PersistedEvent}'s<br>
-     *                                                                Exceptions thrown from the eventHandler will cause the event to be skipped. If you need a retry capability
+     *                                                                Exceptions thrown from the eventHandler are handled according to the manager's {@link SubscriptionErrorPolicy} - by default
+     *                                                                ({@link SubscriptionErrorPolicy.Mode#SKIP}) the event is skipped: logged at ERROR and the resume point advances past it,
+     *                                                                so it is not redelivered. See {@link EventStoreSubscriptionManagerBuilder#setSubscriptionErrorPolicy(SubscriptionErrorPolicy)} for
+     *                                                                bounded retries ({@link SubscriptionErrorPolicy.Mode#RETRY_N_THEN_SKIP}) or stopping at the failed event ({@link SubscriptionErrorPolicy.Mode#STOP}).
+     *                                                                If you need a durable per-event retry capability
      *                                                                please use {@link #subscribeToAggregateEventsAsynchronously(SubscriberId, AggregateType, GlobalEventOrder, Inbox)}
      * @return A subscription object that manages the lifecycle of the subscription.
      */
@@ -234,7 +248,11 @@ public interface EventStoreSubscriptionManager extends Lifecycle {
      * @param onlyIncludeEventsForTenant                              if {@link Optional#isPresent()} then only include events that belong to the specified {@link Tenant}, otherwise all Events matching the criteria are returned
      * @param fencedLockAwareSubscriber                               Callback interface that will be called when the exclusive/fenced lock is acquired or released
      * @param eventHandler                                            the event handler that will receive the published {@link PersistedEvent}'s<br>
-     *                                                                Exceptions thrown from the eventHandler will cause the event to be skipped. If you need a retry capability
+     *                                                                Exceptions thrown from the eventHandler are handled according to the manager's {@link SubscriptionErrorPolicy} - by default
+     *                                                                ({@link SubscriptionErrorPolicy.Mode#SKIP}) the event is skipped: logged at ERROR and the resume point advances past it,
+     *                                                                so it is not redelivered. See {@link EventStoreSubscriptionManagerBuilder#setSubscriptionErrorPolicy(SubscriptionErrorPolicy)} for
+     *                                                                bounded retries ({@link SubscriptionErrorPolicy.Mode#RETRY_N_THEN_SKIP}) or stopping at the failed event ({@link SubscriptionErrorPolicy.Mode#STOP}).
+     *                                                                If you need a durable per-event retry capability
      *                                                                please use {@link #exclusivelySubscribeToAggregateEventsAsynchronously(SubscriberId, AggregateType, GlobalEventOrder, Optional, FencedLockAwareSubscriber, Inbox)}
      * @return the subscription handle
      */
@@ -267,7 +285,11 @@ public interface EventStoreSubscriptionManager extends Lifecycle {
      * @param onlyIncludeEventsForTenant                              if {@link Optional#isPresent()} then only include events that belong to the specified {@link Tenant}, otherwise all Events matching the criteria are returned
      * @param fencedLockAwareSubscriber                               Callback interface that will be called when the exclusive/fenced lock is acquired or released
      * @param eventHandler                                            the event handler that will receive the published {@link PersistedEvent}'s<br>
-     *                                                                Exceptions thrown from the eventHandler will cause the event to be skipped. If you need a retry capability
+     *                                                                Exceptions thrown from the eventHandler are handled according to the manager's {@link SubscriptionErrorPolicy} - by default
+     *                                                                ({@link SubscriptionErrorPolicy.Mode#SKIP}) the event is skipped: logged at ERROR and the resume point advances past it,
+     *                                                                so it is not redelivered. See {@link EventStoreSubscriptionManagerBuilder#setSubscriptionErrorPolicy(SubscriptionErrorPolicy)} for
+     *                                                                bounded retries ({@link SubscriptionErrorPolicy.Mode#RETRY_N_THEN_SKIP}) or stopping at the failed event ({@link SubscriptionErrorPolicy.Mode#STOP}).
+     *                                                                If you need a durable per-event retry capability
      *                                                                please use {@link #exclusivelySubscribeToAggregateEventsAsynchronously(SubscriberId, AggregateType, GlobalEventOrder, Optional, FencedLockAwareSubscriber, Inbox)}
      * @return the subscription handle
      */
@@ -290,7 +312,11 @@ public interface EventStoreSubscriptionManager extends Lifecycle {
      *                                                                EventStream associated with the <code>aggregateType</code>
      * @param fencedLockAwareSubscriber                               Callback interface that will be called when the exclusive/fenced lock is acquired or released
      * @param eventHandler                                            the event handler that will receive the published {@link PersistedEvent}'s<br>
-     *                                                                Exceptions thrown from the eventHandler will cause the event to be skipped. If you need a retry capability
+     *                                                                Exceptions thrown from the eventHandler are handled according to the manager's {@link SubscriptionErrorPolicy} - by default
+     *                                                                ({@link SubscriptionErrorPolicy.Mode#SKIP}) the event is skipped: logged at ERROR and the resume point advances past it,
+     *                                                                so it is not redelivered. See {@link EventStoreSubscriptionManagerBuilder#setSubscriptionErrorPolicy(SubscriptionErrorPolicy)} for
+     *                                                                bounded retries ({@link SubscriptionErrorPolicy.Mode#RETRY_N_THEN_SKIP}) or stopping at the failed event ({@link SubscriptionErrorPolicy.Mode#STOP}).
+     *                                                                If you need a durable per-event retry capability
      *                                                                please use {@link #exclusivelySubscribeToAggregateEventsAsynchronously(SubscriberId, AggregateType, GlobalEventOrder, FencedLockAwareSubscriber, Inbox)}
      * @return the subscription handle
      */
@@ -384,7 +410,11 @@ public interface EventStoreSubscriptionManager extends Lifecycle {
      * @param onFirstSubscriptionSubscribeFromAndIncludingGlobalOrder If it's the first time the given <code>subscriberId</code> is subscribing then the subscription will be using this {@link GlobalEventOrder} as the starting point in the
      *                                                                EventStream associated with the <code>aggregateType</code>
      * @param handler                                                 the event handler that will receive the published {@link PersistedEvent}'s and the callback interface will be called when the exclusive/fenced lock is acquired or released<br>
-     *                                                                Exceptions thrown from the eventHandler will cause the event to be skipped. If you need a retry capability
+     *                                                                Exceptions thrown from the eventHandler are handled according to the manager's {@link SubscriptionErrorPolicy} - by default
+     *                                                                ({@link SubscriptionErrorPolicy.Mode#SKIP}) the event is skipped: logged at ERROR and the resume point advances past it,
+     *                                                                so it is not redelivered. See {@link EventStoreSubscriptionManagerBuilder#setSubscriptionErrorPolicy(SubscriptionErrorPolicy)} for
+     *                                                                bounded retries ({@link SubscriptionErrorPolicy.Mode#RETRY_N_THEN_SKIP}) or stopping at the failed event ({@link SubscriptionErrorPolicy.Mode#STOP}).
+     *                                                                If you need a durable per-event retry capability
      *                                                                please use {@link #exclusivelySubscribeToAggregateEventsAsynchronously(SubscriberId, AggregateType, GlobalEventOrder, FencedLockAwareSubscriber, Inbox)}
      * @return the subscription handle
      */
@@ -411,7 +441,11 @@ public interface EventStoreSubscriptionManager extends Lifecycle {
      *                                                                EventStream associated with the <code>aggregateType</code>
      * @param onlyIncludeEventsForTenant                              if {@link Optional#isPresent()} then only include events that belong to the specified {@link Tenant}, otherwise all Events matching the criteria are returned
      * @param handler                                                 the event handler that will receive the published {@link PersistedEvent}'s and the callback interface will be called when the exclusive/fenced lock is acquired or released<br>
-     *                                                                Exceptions thrown from the eventHandler will cause the event to be skipped. If you need a retry capability
+     *                                                                Exceptions thrown from the eventHandler are handled according to the manager's {@link SubscriptionErrorPolicy} - by default
+     *                                                                ({@link SubscriptionErrorPolicy.Mode#SKIP}) the event is skipped: logged at ERROR and the resume point advances past it,
+     *                                                                so it is not redelivered. See {@link EventStoreSubscriptionManagerBuilder#setSubscriptionErrorPolicy(SubscriptionErrorPolicy)} for
+     *                                                                bounded retries ({@link SubscriptionErrorPolicy.Mode#RETRY_N_THEN_SKIP}) or stopping at the failed event ({@link SubscriptionErrorPolicy.Mode#STOP}).
+     *                                                                If you need a durable per-event retry capability
      *                                                                please use {@link #exclusivelySubscribeToAggregateEventsAsynchronously(SubscriberId, AggregateType, GlobalEventOrder, Optional, FencedLockAwareSubscriber, Inbox)}
      * @return the subscription handle
      */

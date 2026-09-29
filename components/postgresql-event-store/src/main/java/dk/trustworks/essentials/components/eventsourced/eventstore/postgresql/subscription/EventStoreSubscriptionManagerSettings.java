@@ -19,6 +19,8 @@ package dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.s
 
 import java.time.Duration;
 
+import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
+
 /**
  * Represents settings for managing EventStore subscriptions.
  * This configuration allows customization of parameters related to how
@@ -28,8 +30,28 @@ import java.time.Duration;
  * @param eventStorePollingInterval Determines the interval between successive polling attempts to fetch events from the EventStore.
  * @param snapshotResumePointsEvery Specifies the duration after which the subscription's resume points are periodically saved to ensure that
  *                                  a subscription can resume from the last processed event in case of interruptions.
+ * @param subscriptionErrorPolicy   What the asynchronous subscriptions do when their handler throws a non-I/O exception - see {@link SubscriptionErrorPolicy}
  */
 public record EventStoreSubscriptionManagerSettings(int eventStorePollingBatchSize,
                                                     Duration eventStorePollingInterval,
-                                                    Duration snapshotResumePointsEvery) {
+                                                    Duration snapshotResumePointsEvery,
+                                                    SubscriptionErrorPolicy subscriptionErrorPolicy) {
+
+    public EventStoreSubscriptionManagerSettings {
+        requireNonNull(subscriptionErrorPolicy, "No subscriptionErrorPolicy provided");
+    }
+
+    /**
+     * Settings with the default {@link SubscriptionErrorPolicy#skip()} policy - the shape these settings had before the
+     * policy was added
+     *
+     * @param eventStorePollingBatchSize Specifies the number of events to retrieve in each batch when polling the EventStore.
+     * @param eventStorePollingInterval  Determines the interval between successive polling attempts to fetch events from the EventStore.
+     * @param snapshotResumePointsEvery  Specifies the duration after which the subscription's resume points are periodically saved
+     */
+    public EventStoreSubscriptionManagerSettings(int eventStorePollingBatchSize,
+                                                 Duration eventStorePollingInterval,
+                                                 Duration snapshotResumePointsEvery) {
+        this(eventStorePollingBatchSize, eventStorePollingInterval, snapshotResumePointsEvery, SubscriptionErrorPolicy.skip());
+    }
 }

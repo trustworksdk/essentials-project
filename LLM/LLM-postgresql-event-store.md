@@ -362,6 +362,7 @@ subscriptionManager.subscribeToAggregateEventsAsynchronously(
 
 - **Resume Points**: Tracks last processed `GlobalEventOrder`
 - **First Subscription**: `onFirstSubscriptionSubscribeFromAndIncluding` only applies when no resume point exists
+- **Handler failures**: skipped by default - see [Direct async subscribers skip a failing event by default](#direct-async-subscribers-skip-a-failing-event-by-default)
 
 ### Exclusive Async Subscription
 
@@ -1153,6 +1154,37 @@ was disposed right after an idle poll — the connection stayed `idle in transac
 | `appendToStream(orders, id, event)` | No concurrency control | Use `appendToStream(orders, id, EventOrder.of(n), event)` |
 | Using `eventStore.pollEvents()` | Transient, loses events on restart | Use `subscriptionManager.subscribeToAggregateEventsAsynchronously()` |
 | Using `EventProcessor` for projections | Eventual consistency | Use `InTransactionEventProcessor` (strong) or `ViewEventProcessor` (low-latency) |
+
+### Direct async subscribers skip a failing event by default
+
+A `PersistedEventHandler` or `BatchedPersistedEventHandler` subscribed with `subscribeToAggregateEventsAsynchronously`,
+`exclusivelySubscribeToAggregateEventsAsynchronously` or `batchSubscribeToAggregateEventsAsynchronously` runs in its own
+`UnitOfWork`. I/O errors are retried forever; **any other exception skips the event**: one ERROR line ("Skipping …
+event because of error"), the resume point moves past it, and it is never redelivered — not after a restart either.
+A projection silently misses the event.
+
+The manager's `SubscriptionErrorPolicy` decides this (`dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.subscription`):
+
+| Policy | On a non-I/O handler exception |
+|---|---|
+| `SubscriptionErrorPolicy.skip()` (default) | Log at ERROR, advance past the event, continue |
+| `SubscriptionErrorPolicy.retryThenSkip(n[, initialBackoff, maxBackoff])` | Call the handler again up to `n` times (new `UnitOfWork` each, exponential backoff, later events wait), then skip as above |
+| `SubscriptionErrorPolicy.stop()` | Log at ERROR and stop at the event without advancing the resume point; the subscription resumes *at* it when started again (restart, fenced-lock hand-over, `resetFrom`). A permanent failure stops it again - the subscription stalls rather than loses the event |
+
+```java
+EventStoreSubscriptionManager.builder()
+    // ...
+    .setSubscriptionErrorPolicy(SubscriptionErrorPolicy.retryThenSkip(5))
+    .build();
+```
+
+Spring Boot: `essentials.eventstore.subscription-manager.error-policy.mode=skip|retry-n-then-skip|stop` (default `skip`),
+plus `.max-retries`, `.initial-backoff`, `.max-backoff`. The policy is per manager, applies to a batch as a whole, and
+does not touch in-transaction subscriptions (the exception rolls back the caller) or Inbox-forwarding subscriptions
+(the Inbox's `RedeliveryPolicy` applies). Alert on the Micrometer counter
+`essentials.eventstore.subscription.handle_event_failed` (tags `subscriber_id`, `aggregate_type`, `event_handler`,
+`event_type`), which counts every event that exhausted the policy. For durable per-event retry with dead-lettering,
+forward to an `Inbox` (`EventProcessor`) instead.
 
 ### Handlers without their annotation
 

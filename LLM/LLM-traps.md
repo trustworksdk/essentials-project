@@ -117,6 +117,7 @@ auto-configuration at all. Confirm the registration; don't infer it from the art
 ### postgresql-event-store ([LLM-postgresql-event-store.md](LLM-postgresql-event-store.md))
 - Concurrent writers silently interleave — `appendToStream` without an expected `EventOrder` skips optimistic concurrency → [LLM-postgresql-event-store.md § Gotchas](LLM-postgresql-event-store.md#gotchas)
 - Every instance handles the same events — a non-exclusive async subscription runs on each node → [LLM-postgresql-event-store.md § Gotchas](LLM-postgresql-event-store.md#gotchas)
+- An event a projection never saw, one ERROR line and no retry — direct async subscribers skip a failing event by default (`SubscriptionErrorPolicy`) → [LLM-postgresql-event-store.md § Direct async subscribers skip a failing event by default](LLM-postgresql-event-store.md#direct-async-subscribers-skip-a-failing-event-by-default)
 
 ### eventsourced-aggregates ([LLM-eventsourced-aggregates.md](LLM-eventsourced-aggregates.md))
 - Emails/calls repeat on every load — `@EventHandler`s are replayed on rehydration; keep them pure → [LLM-eventsourced-aggregates.md § Event Handlers](LLM-eventsourced-aggregates.md#event-handlers)

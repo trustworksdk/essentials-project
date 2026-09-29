@@ -94,14 +94,16 @@ public class NonExclusiveBatchedAsynchronousSubscription extends AbstractEventSt
                     NonExclusiveBatchedAsynchronousSubscription.this,
                     resolveResumePointTiming.stop().getDuration());
 
-            subscription = new BatchedPersistedEventSubscriber(
-                    eventHandler,
-                    this,
-                    this::onErrorHandlingEvent,
-                    eventStoreSubscriptionManagerSettings.eventStorePollingBatchSize(),
-                    eventStore,
-                    maxBatchSize,
-                    maxLatency);
+            subscription = BatchedPersistedEventSubscriber.builder()
+                                                          .setEventHandler(eventHandler)
+                                                          .setEventStoreSubscription(this)
+                                                          .setOnErrorHandler(this::onErrorHandlingEvent)
+                                                          .setEventStorePollingBatchSize(eventStoreSubscriptionManagerSettings.eventStorePollingBatchSize())
+                                                          .setEventStore(eventStore)
+                                                          .setMaxBatchSize(maxBatchSize)
+                                                          .setMaxLatency(maxLatency)
+                                                          .setSubscriptionErrorPolicy(eventStoreSubscriptionManagerSettings.subscriptionErrorPolicy())
+                                                          .build();
             eventStore.pollEvents(aggregateType,
                             resumePoint.getResumeFromAndIncluding(),
                             Optional.of(eventStoreSubscriptionManagerSettings.eventStorePollingBatchSize()),

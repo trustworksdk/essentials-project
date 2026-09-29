@@ -340,6 +340,7 @@ public class EssentialsEventStoreProperties {
         private EssentialsComponentsProperties.MetricsProperties metrics                      = new EssentialsComponentsProperties.MetricsProperties();
         private final NotifyPollingProperties                    notifyPolling                = new NotifyPollingProperties();
         private final SubscriptionStatisticsProperties            statistics                   = new SubscriptionStatisticsProperties();
+        private final SubscriptionErrorPolicyProperties           errorPolicy                  = new SubscriptionErrorPolicyProperties();
 
         /**
          * How many events should The {@link EventStore} maximum return when polling for events
@@ -471,6 +472,135 @@ public class EssentialsEventStoreProperties {
          */
         public SubscriptionStatisticsProperties getStatistics() {
             return statistics;
+        }
+
+        /**
+         * What the asynchronous event store subscriptions do when their event handler throws an exception that
+         * isn't an I/O error (I/O errors are always retried). Default mode {@code SKIP}: the event is logged at ERROR
+         * and skipped - the resume point advances past it and it is not redelivered.
+         *
+         * @return the subscription error policy configuration
+         * @see SubscriptionErrorPolicy
+         */
+        public SubscriptionErrorPolicyProperties getErrorPolicy() {
+            return errorPolicy;
+        }
+    }
+
+    /**
+     * Properties for the {@link SubscriptionErrorPolicy} applied by the {@link EventStoreSubscriptionManager} to every
+     * asynchronous subscription it creates.
+     * <p>
+     * Properties example:
+     * <pre>{@code
+     * essentials.eventstore.subscription-manager.error-policy.mode=retry-n-then-skip
+     * essentials.eventstore.subscription-manager.error-policy.max-retries=5
+     * essentials.eventstore.subscription-manager.error-policy.initial-backoff=100ms
+     * essentials.eventstore.subscription-manager.error-policy.max-backoff=5s
+     * }</pre>
+     */
+    public static class SubscriptionErrorPolicyProperties {
+        /**
+         * What an asynchronous subscription does with an event whose handler failed with a non-I/O error (I/O errors are
+         * always retried). SKIP (default): log at ERROR, advance the resume point past the event and continue - the event
+         * is not redelivered. RETRY_N_THEN_SKIP: call the handler again up to max-retries times with backoff, then skip.
+         * STOP: log at ERROR and stop at the failed event without advancing the resume point past it; the subscription
+         * resumes at that event when it is started again.
+         */
+        private SubscriptionErrorPolicy.Mode mode           = SubscriptionErrorPolicy.Mode.SKIP;
+        /**
+         * How many times RETRY_N_THEN_SKIP calls the handler again after its first failure. Must be at least 1. Ignored by
+         * the other modes.
+         */
+        private int                          maxRetries     = 3;
+        /**
+         * The wait before the first RETRY_N_THEN_SKIP retry; each later retry doubles it, up to max-backoff.
+         */
+        private Duration                     initialBackoff = Duration.ofMillis(100);
+        /**
+         * The longest wait between two RETRY_N_THEN_SKIP retries.
+         */
+        private Duration                     maxBackoff     = Duration.ofSeconds(1);
+
+        /**
+         * What an asynchronous subscription does with an event whose handler failed with a non-I/O error. Default {@code SKIP}.
+         * <ul>
+         *     <li>{@code SKIP} - log at ERROR, advance the resume point past the event and continue. The event is not redelivered</li>
+         *     <li>{@code RETRY_N_THEN_SKIP} - call the handler again up to {@code max-retries} times with backoff, then skip as {@code SKIP}</li>
+         *     <li>{@code STOP} - log at ERROR and stop handling events at the failed event without advancing the resume point past it;
+         *     the subscription resumes at that event when it is started again (e.g. after a restart)</li>
+         * </ul>
+         *
+         * @return the error policy mode
+         */
+        public SubscriptionErrorPolicy.Mode getMode() {
+            return mode;
+        }
+
+        /**
+         * @param mode the error policy mode
+         */
+        public void setMode(SubscriptionErrorPolicy.Mode mode) {
+            this.mode = mode;
+        }
+
+        /**
+         * How many times {@code RETRY_N_THEN_SKIP} calls the handler again after its first failure. Must be {@code >= 1}. Default 3.
+         * Ignored by the other modes.
+         *
+         * @return the maximum number of retries
+         */
+        public int getMaxRetries() {
+            return maxRetries;
+        }
+
+        /**
+         * @param maxRetries how many times {@code RETRY_N_THEN_SKIP} calls the handler again after its first failure
+         */
+        public void setMaxRetries(int maxRetries) {
+            this.maxRetries = maxRetries;
+        }
+
+        /**
+         * The wait before the first {@code RETRY_N_THEN_SKIP} retry; each later retry doubles it, up to {@code max-backoff}. Default 100 ms.
+         *
+         * @return the wait before the first retry
+         */
+        public Duration getInitialBackoff() {
+            return initialBackoff;
+        }
+
+        /**
+         * @param initialBackoff the wait before the first {@code RETRY_N_THEN_SKIP} retry
+         */
+        public void setInitialBackoff(Duration initialBackoff) {
+            this.initialBackoff = initialBackoff;
+        }
+
+        /**
+         * The longest wait between two {@code RETRY_N_THEN_SKIP} retries. Default 1 s.
+         *
+         * @return the longest wait between two retries
+         */
+        public Duration getMaxBackoff() {
+            return maxBackoff;
+        }
+
+        /**
+         * @param maxBackoff the longest wait between two {@code RETRY_N_THEN_SKIP} retries
+         */
+        public void setMaxBackoff(Duration maxBackoff) {
+            this.maxBackoff = maxBackoff;
+        }
+
+        /**
+         * @return the {@link SubscriptionErrorPolicy} these properties describe
+         */
+        public SubscriptionErrorPolicy toSubscriptionErrorPolicy() {
+            return new SubscriptionErrorPolicy(mode,
+                                               mode == SubscriptionErrorPolicy.Mode.RETRY_N_THEN_SKIP ? maxRetries : 0,
+                                               initialBackoff,
+                                               maxBackoff);
         }
     }
 

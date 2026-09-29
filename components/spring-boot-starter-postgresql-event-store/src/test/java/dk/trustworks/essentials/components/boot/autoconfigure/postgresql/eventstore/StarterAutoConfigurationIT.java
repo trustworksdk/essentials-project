@@ -22,7 +22,7 @@ import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.cd
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.api.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.observability.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.observability.micrometer.MeasurementEventStoreSubscriptionObserver;
-import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.subscription.EventStoreSubscriptionManager;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.subscription.*;
 import dk.trustworks.essentials.shared.security.EssentialsSecurityProvider;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
@@ -35,6 +35,8 @@ import org.springframework.boot.test.util.TestPropertyValues;
 import org.springframework.test.context.*;
 import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.*;
+
+import java.time.Duration;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -172,6 +174,27 @@ public class StarterAutoConfigurationIT {
 
             assertThat(ctx.getBean(EventStoreApi.class).findAllSubscriptionStatistics("principal")).isNotNull();
         });
+    }
+
+    @Test
+    void the_subscription_manager_skips_failing_events_unless_configured_otherwise() {
+        contextRunner.run(ctx -> assertThat(ctx.getBean(DefaultEventStoreSubscriptionManager.class).getSubscriptionErrorPolicy())
+                .isEqualTo(SubscriptionErrorPolicy.skip()));
+    }
+
+    @Test
+    void the_subscription_error_policy_is_configurable() {
+        contextRunner
+                .withPropertyValues("essentials.eventstore.subscription-manager.error-policy.mode=retry-n-then-skip",
+                                    "essentials.eventstore.subscription-manager.error-policy.max-retries=5",
+                                    "essentials.eventstore.subscription-manager.error-policy.initial-backoff=50ms",
+                                    "essentials.eventstore.subscription-manager.error-policy.max-backoff=2s")
+                .run(ctx -> assertThat(ctx.getBean(DefaultEventStoreSubscriptionManager.class).getSubscriptionErrorPolicy())
+                        .isEqualTo(SubscriptionErrorPolicy.retryThenSkip(5, Duration.ofMillis(50), Duration.ofSeconds(2))));
+        contextRunner
+                .withPropertyValues("essentials.eventstore.subscription-manager.error-policy.mode=stop")
+                .run(ctx -> assertThat(ctx.getBean(DefaultEventStoreSubscriptionManager.class).getSubscriptionErrorPolicy().mode())
+                        .isEqualTo(SubscriptionErrorPolicy.Mode.STOP));
     }
 
     @Test

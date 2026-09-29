@@ -134,11 +134,14 @@ public class ExclusiveAsynchronousSubscription extends AbstractEventStoreSubscri
             log.error(msg("FencedLockAwareSubscriber#onLockAcquired failed for lock {} and resumePoint {}", fencedLock.getName(), resumePoint), e);
         }
 
-        subscription = new PersistedEventSubscriber(eventHandler,
-                ExclusiveAsynchronousSubscription.this,
-                ExclusiveAsynchronousSubscription.this::onErrorHandlingEvent,
-                eventStoreSubscriptionManagerSettings.eventStorePollingBatchSize(),
-                eventStore);
+        subscription = PersistedEventSubscriber.builder()
+                                               .setEventHandler(eventHandler)
+                                               .setEventStoreSubscription(ExclusiveAsynchronousSubscription.this)
+                                               .setOnErrorHandler(ExclusiveAsynchronousSubscription.this::onErrorHandlingEvent)
+                                               .setEventStorePollingBatchSize(eventStoreSubscriptionManagerSettings.eventStorePollingBatchSize())
+                                               .setEventStore(eventStore)
+                                               .setSubscriptionErrorPolicy(eventStoreSubscriptionManagerSettings.subscriptionErrorPolicy())
+                                               .build();
 
         eventStore.pollEvents(aggregateType,
                         resumePoint.getResumeFromAndIncluding(),
