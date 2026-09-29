@@ -1460,7 +1460,8 @@ public final class ShardOwnedStorage {
      * The blocking order is looked up per row inside the insert rather than passed in, so the value on
      * the row is the table's own answer at the moment of the write. It is the lowest {@code key_order}
      * for that key that is dead-lettered <em>and not itself blocked</em> — the message that actually
-     * has to be dealt with, not the one immediately in front.
+     * has to be dealt with, not the one immediately in front — or, once an operator has deleted that
+     * one, the lowest dead letter left for the key.
      *
      * @return the sequence values actually moved; a row whose key no longer has a dead letter below it
      *         stays in its lane and is left out
@@ -1480,19 +1481,28 @@ public final class ShardOwnedStorage {
                 "WITH moved AS ("
                         + " DELETE FROM " + ORDERED_TABLE + " o"
                         + "  WHERE o.queue_id = ? AND o.shard = ? AND o.seq = ANY(?)"
+                        // ANY dead letter below it, the same rule the owner blocks by
+                        // (orderedDeadLetterBlocks). Counting only one that had itself failed disagreed
+                        // with the owner once that one was deleted and rows parked behind it remained:
+                        // the owner kept handing the row over and this kept refusing it, every pass.
                         + "    AND EXISTS (SELECT 1 FROM " + DLQ_TABLE + " d"
                         + "                 WHERE d.queue_id = o.queue_id AND d.shard = o.shard"
                         + "                   AND d.source_lane = 'ordered' AND d.msg_key = o.msg_key"
-                        + "                   AND d.blocked_by_key_order IS NULL AND d.key_order < o.key_order)"
+                        + "                   AND d.key_order < o.key_order)"
                         + "  RETURNING o.queue_id, o.shard, o.msg_key, o.key_order, o.seq, o.payload, o.payload_type, o.attempts)"
                         + " INSERT INTO " + DLQ_TABLE + " (queue_id, shard, source_lane, msg_key, key_order, seq,"
                         + " payload, payload_type, attempts, last_error, blocked_by_key_order)"
                         + " SELECT m.queue_id, m.shard, 'ordered', m.msg_key, m.key_order, m.seq, m.payload, m.payload_type,"
                         + "        m.attempts, ?,"
-                        + "        (SELECT min(d.key_order) FROM " + DLQ_TABLE + " d"
-                        + "          WHERE d.queue_id = m.queue_id AND d.shard = m.shard"
-                        + "            AND d.source_lane = 'ordered' AND d.msg_key = m.msg_key"
-                        + "            AND d.blocked_by_key_order IS NULL)"
+                        // The message that has to be dealt with: the lowest one that failed, or, once
+                        // that has been deleted, the lowest dead letter still holding the key.
+                        + "        COALESCE((SELECT min(d.key_order) FROM " + DLQ_TABLE + " d"
+                        + "                   WHERE d.queue_id = m.queue_id AND d.shard = m.shard"
+                        + "                     AND d.source_lane = 'ordered' AND d.msg_key = m.msg_key"
+                        + "                     AND d.blocked_by_key_order IS NULL),"
+                        + "                 (SELECT min(d.key_order) FROM " + DLQ_TABLE + " d"
+                        + "                   WHERE d.queue_id = m.queue_id AND d.shard = m.shard"
+                        + "                     AND d.source_lane = 'ordered' AND d.msg_key = m.msg_key))"
                         + "   FROM moved m"
                         + " RETURNING seq")) {
             statement.setShort(1, queueId);

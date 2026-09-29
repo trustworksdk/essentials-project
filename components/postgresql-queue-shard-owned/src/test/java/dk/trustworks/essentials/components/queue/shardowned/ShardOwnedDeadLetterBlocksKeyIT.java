@@ -192,6 +192,53 @@ class ShardOwnedDeadLetterBlocksKeyIT {
         }
     }
 
+    /**
+     * Deleting the dead letter that failed does not skip the messages parked behind it. They are dead
+     * letters too — never delivered — so the key stays blocked at the lowest of them, and a message
+     * arriving meanwhile is parked behind them rather than overtaking. {@code resurrectKey} then
+     * replays what is left in key_order.
+     * <p>
+     * The poison move once disagreed with the block about this: the owner blocked at the lowest dead
+     * letter of any kind, while the move only counted one that had itself failed. With the failed one
+     * deleted, the move refused every row the owner handed it and the owner handed it straight back,
+     * so a message for the key was neither delivered nor parked, on every pass.
+     */
+    @Test
+    void deleting_the_failed_dead_letter_leaves_the_key_blocked_behind_the_rest_until_it_is_resurrected() throws Exception {
+        try (var queue = queue("blocked-7")) {
+            consume(queue);
+            enqueue(queue, 1, 2, 3, 4, 5);
+            Awaitility.await().atMost(Duration.ofSeconds(45))
+                      .untilAsserted(() -> assertThat(queue.depth().deadLettered()).isEqualTo(4L));
+
+            assertThat(queue.deleteMessage(byOrder(queue).get(2L).id())).isTrue();
+            orderTwoStillFails.set(false);
+
+            // Arrives after the delete. 3, 4 and 5 are still parked, so it must wait behind them.
+            enqueue(queue, 6);
+            Awaitility.await().atMost(Duration.ofSeconds(45))
+                      .untilAsserted(() -> assertThat(queue.depth().deadLettered())
+                              .describedAs("6 is parked behind the remaining dead letters, not delivered and not left looping in the lane")
+                              .isEqualTo(4L));
+            assertThat(queue.depth().ordered()).isZero();
+            assertThat(delivered).containsExactly(1L);
+            var parked = byOrder(queue);
+            assertThat(parked.keySet()).containsExactlyInAnyOrder(3L, 4L, 5L, 6L);
+            assertThat(parked.get(6L).neverDelivered()).isTrue();
+            assertThat(parked.get(6L).blockedByKeyOrder())
+                    .describedAs("names the lowest dead letter still holding the key")
+                    .isEqualTo(3L);
+
+            assertThat(queue.resurrectKey(KEY)).isEqualTo(4);
+            Awaitility.await().atMost(Duration.ofSeconds(45))
+                      .untilAsserted(() -> assertThat(delivered).hasSize(5));
+            assertThat(delivered).as("the deleted message is skipped; everything else in key_order")
+                                 .containsExactly(1L, 3L, 4L, 5L, 6L);
+            assertThat(queue.depth().deadLettered()).isZero();
+            assertThat(queue.statistics().orderViolations()).isZero();
+        }
+    }
+
     @Test
     void resurrecting_a_key_that_has_no_dead_letters_does_nothing() throws Exception {
         try (var queue = queue("blocked-6")) {
