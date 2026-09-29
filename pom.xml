@@ -113,6 +113,9 @@
         <testcontainers-bom.version>2.0.5</testcontainers-bom.version>
         <jdbi3-bom.version>3.54.0</jdbi3-bom.version>
         <jackson3-bom.version>3.1.5</jackson3-bom.version>
+        <!-- Held ahead of the Spring Boot BOM (5.8.1 at spring-boot 4.1.1) for CVE-2026-18710 / -88032 / -88033;
+             5.11.1 is the lowest release outside all three ranges. See the import in dependencyManagement. -->
+        <mongodb-driver-bom.version>5.11.1</mongodb-driver-bom.version>
         <!-- Newest release; the floor is assertj-core's own 1.18.3, which is what Spring Boot's management
              was pulling back down. Take the plain version, never the `-jdk5` line Central reports as
              <latest> — that is the legacy Java 5 build, not a newer release. -->
@@ -257,6 +260,27 @@
                 <groupId>org.jetbrains.kotlin</groupId>
                 <artifactId>kotlin-bom</artifactId>
                 <version>${kotlin.version}</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+            <!-- MongoDB Java driver, held ahead of the Spring Boot BOM for three CVEs, none of which Essentials'
+                 own code reaches - it uses only the sync driver, never GridFS, client-side encryption or a proxy:
+                   CVE-2026-18710 (JAVA-6266, fixed 5.9.2)  ProxySettings.toString() prints the SOCKS5 password,
+                                  and the driver logs MongoClientSettings at INFO when a client is created.
+                   CVE-2026-88032 (JAVA-6276, fixed 5.11.1) use-after-free in the reactive-streams driver's
+                                  client-side encryption when an operation is cancelled.
+                   CVE-2026-88033 (JAVA-6283, fixed 5.11.1) GridFS file ids not matched with $eq.
+                 The driver is provided scope everywhere, so a consumer's Boot picks the version they run; this is
+                 what we build and test against. spring-data-mongodb 5.1.x documents 5.6 as its minimum driver and
+                 5.2 moves to 5.11.1 itself, and the driver lists no breaking changes after 5.5.
+                 The whole BOM rather than direct entries, because the driver ships as a set (bson, core, sync,
+                 bson-record-codec, ...) and Spring Boot's BOM does not expose mongodb.version to us - it is a
+                 property of an import. Must sit above spring-boot-dependencies. Drop it once Spring Boot manages
+                 5.11.1 or later (4.2 does). -->
+            <dependency>
+                <groupId>org.mongodb</groupId>
+                <artifactId>mongodb-driver-bom</artifactId>
+                <version>${mongodb-driver-bom.version}</version>
                 <type>pom</type>
                 <scope>import</scope>
             </dependency>
