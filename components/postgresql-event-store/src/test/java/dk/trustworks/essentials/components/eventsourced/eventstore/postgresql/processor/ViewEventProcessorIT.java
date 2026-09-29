@@ -58,7 +58,12 @@ import static org.assertj.core.api.Assertions.assertThat;
 @Testcontainers
 public class ViewEventProcessorIT {
 
-    public static final EventMetaData META_DATA = EventMetaData.of("Key1", "Value1", "Key2", "Value2");
+    public static final EventMetaData META_DATA                  = EventMetaData.of("Key1", "Value1", "Key2", "Value2");
+    /**
+     * {@link EventProcessorIT.OrderPlacedEvent#orderDetails} that makes the test processor's view update fail with a
+     * primary key violation on its first attempt - after it already wrote a row - and succeed on later attempts
+     */
+    public static final String        SQL_FAILS_ON_FIRST_ATTEMPT = "SqlFailsOnFirstAttempt order details";
 
     private HikariConfig                                                            cfg;
     private HikariDataSource                                                        ds;
@@ -93,6 +98,7 @@ public class ViewEventProcessorIT {
         jdbi = Jdbi.create(ds);
         jdbi.installPlugin(new PostgresPlugin());
         jdbi.setSqlLogger(new SqlExecutionTimeLogger());
+        jdbi.useHandle(handle -> handle.execute("CREATE TABLE IF NOT EXISTS order_view (order_id TEXT NOT NULL, status TEXT NOT NULL, PRIMARY KEY (order_id, status))"));
 
         unitOfWorkFactory = new EventStoreManagedUnitOfWorkFactory(jdbi);
         eventMapper = new EventProcessorIT.TestPersistableEventMapper();
@@ -261,6 +267,64 @@ public class ViewEventProcessorIT {
         assertThat(((OrderedMessage) deadLetterMessages.get(0).getMessage()).getOrder()).isEqualTo(0);
     }
 
+    /**
+     * An event whose payload cannot be deserialized used to be deserialized before the failure handling started, so
+     * the exception reached the subscription, which skipped the event. It must be queued like any other failure - on
+     * the queue it cannot be deserialized either, so it ends up as a dead letter, where it is visible and can be dealt with.
+     */
+    @Test
+    public void verify_an_event_that_cannot_be_deserialized_gets_queued() {
+        var orderId = EventProcessorIT.OrderId.random();
+        unitOfWorkFactory.usingUnitOfWork(uow -> {
+            eventStore.appendToStream(TEST_ORDERS, orderId, List.of(new EventProcessorIT.OrderPlacedEvent(orderId, "Undeserializable order details")));
+            // Corrupt the payload in the same transaction, so the subscription never sees an intact version:
+            // Jackson refuses to bind a JSON object to the String orderDetails
+            var rowsUpdated = uow.handle().createUpdate("UPDATE TestOrders_events SET event_payload = jsonb_set(event_payload, '{orderDetails}', '{\"not\": \"a string\"}'::jsonb) " +
+                                                                "WHERE aggregate_id::text = :aggregateId")
+                                 .bind("aggregateId", orderId.toString())
+                                 .execute();
+            assertThat(rowsUpdated).isEqualTo(1);
+        });
+
+        var queueName = testProcessor.getDurableQueueName();
+        Awaitility.waitAtMost(Duration.ofSeconds(10))
+                  .untilAsserted(() -> assertThat(durableQueues.getTotalDeadLetterMessagesQueuedFor(queueName)).isEqualTo(1));
+
+        var deadLetterMessages = durableQueues.getDeadLetterMessages(queueName, DurableQueues.QueueingSortOrder.ASC, 0, 10);
+        assertThat(deadLetterMessages).hasSize(1);
+        assertThat(deadLetterMessages.get(0).getMessage()).isInstanceOf(OrderedMessage.class);
+        assertThat(((OrderedMessage) deadLetterMessages.get(0).getMessage()).getKey()).isEqualTo(orderId.toString());
+        assertThat(((OrderedMessage) deadLetterMessages.get(0).getMessage()).getOrder()).isEqualTo(0);
+    }
+
+    /**
+     * A handler whose SQL fails aborts the Postgres transaction it runs in - the subscription's. The fallback that
+     * queues the event runs in that same transaction, so it used to fail too, and the event was skipped. The direct
+     * handler now runs under a savepoint: its failure rolls back only its own writes, and the event is queued.
+     */
+    @Test
+    public void verify_an_event_whose_handler_sql_fails_gets_queued_and_the_handlers_partial_writes_are_rolled_back() {
+        var orderId = EventProcessorIT.OrderId.random();
+        unitOfWorkFactory.usingUnitOfWork(uow -> {
+            eventStore.appendToStream(TEST_ORDERS, orderId, List.of(new EventProcessorIT.OrderPlacedEvent(orderId, SQL_FAILS_ON_FIRST_ATTEMPT)));
+        });
+
+        // The first (direct) attempt writes a 'partial' row and then violates the primary key. The queued redelivery succeeds
+        var queueName = testProcessor.getDurableQueueName();
+        Awaitility.waitAtMost(Duration.ofSeconds(10))
+                  .untilAsserted(() -> assertThat(orderViewStatuses(orderId)).containsExactly("done"));
+        assertThat(testProcessor.getSqlFailureAttempts(orderId)).isEqualTo(2);
+        assertThat(durableQueues.getTotalMessagesQueuedFor(queueName)).isZero();
+        assertThat(durableQueues.getTotalDeadLetterMessagesQueuedFor(queueName)).isZero();
+    }
+
+    private List<String> orderViewStatuses(EventProcessorIT.OrderId orderId) {
+        return jdbi.withHandle(handle -> handle.createQuery("SELECT status FROM order_view WHERE order_id = :orderId ORDER BY status")
+                                               .bind("orderId", orderId.toString())
+                                               .mapTo(String.class)
+                                               .list());
+    }
+
     @Test
     public void verify_failed_event_handling_additional_event_gets_queued() {
         var orderId      = EventProcessorIT.OrderId.random();
@@ -380,6 +444,7 @@ public class ViewEventProcessorIT {
         private final ConcurrentMap<AggregateType, GlobalEventOrder> resetPoints = new ConcurrentHashMap<>();
         private Consumer<ConcurrentMap<AggregateType, GlobalEventOrder>> resetCallback;
         private final AtomicInteger orderPlacedEventCounter = new AtomicInteger(0);
+        private final ConcurrentMap<String, AtomicInteger> sqlFailureAttempts = new ConcurrentHashMap<>();
 
         public TestOrderViewEventProcessor(ViewEventProcessorDependencies eventProcessorDependencies,
                                            PostgresqlEventStore<?> eventStore) {
@@ -461,11 +526,21 @@ public class ViewEventProcessorIT {
          */
         @MessageHandler
         public void onOrderPlaced(EventProcessorIT.OrderPlacedEvent event) {
-            eventStore.getUnitOfWorkFactory().getRequiredUnitOfWork();
+            var unitOfWork = eventStore.getUnitOfWorkFactory().getRequiredUnitOfWork();
             if (event.orderDetails.startsWith("Load")) {
                 orderPlacedEventCounter.incrementAndGet();
             } else if (event.orderDetails.startsWith("Fail")) {
                 throw new RuntimeException(event.orderDetails);
+            } else if (event.orderDetails.equals(SQL_FAILS_ON_FIRST_ATTEMPT)) {
+                var orderId = event.orderId.toString();
+                var attempt = sqlFailureAttempts.computeIfAbsent(orderId, id -> new AtomicInteger()).incrementAndGet();
+                if (attempt == 1) {
+                    // A partial view update, followed by a statement that violates the primary key and aborts the transaction
+                    unitOfWork.handle().execute("INSERT INTO order_view (order_id, status) VALUES (?, 'partial')", orderId);
+                    unitOfWork.handle().execute("INSERT INTO order_view (order_id, status) VALUES (?, 'partial')", orderId);
+                } else {
+                    unitOfWork.handle().execute("INSERT INTO order_view (order_id, status) VALUES (?, 'done')", orderId);
+                }
             } else {
                 getCommandBus().send(new EventProcessorIT.ConfirmOrderCommand(event.orderId));
             }
@@ -473,6 +548,11 @@ public class ViewEventProcessorIT {
 
         public AtomicInteger getOrderPlacedEventCounter() {
             return orderPlacedEventCounter;
+        }
+
+        public int getSqlFailureAttempts(EventProcessorIT.OrderId orderId) {
+            var attempts = sqlFailureAttempts.get(orderId.toString());
+            return attempts != null ? attempts.get() : 0;
         }
     }
 }

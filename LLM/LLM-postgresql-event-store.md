@@ -629,6 +629,8 @@ Only supports exclusive processing.
 
 Rejects `@MessageHandler(unitOfWork = UnitOfWorkMode.NONE)` handlers at start-up: the view update and the acknowledgement commit in one `UnitOfWork` here, which a `NONE` handler would break. Blocking I/O belongs in an `EventProcessor`.
 
+The direct handler runs under a savepoint in the subscription's transaction, so a failed SQL statement (e.g. a constraint violation) rolls back only the handler's own writes and the event is still queued; an event whose payload cannot be deserialized is queued too (and dead-lettered there). A savepoint does not undo in-memory `UnitOfWork` state (events appended via the `EventStore` in the failed handler), and a handler that marks the `UnitOfWork` rollback-only - e.g. a failure inside a joined `usingUnitOfWork` - cannot be queued: that failure goes to the subscription's `SubscriptionErrorPolicy` instead.
+
 ```java
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.processor.ViewEventProcessor;
 
