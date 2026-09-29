@@ -159,7 +159,8 @@ public class ShardOwnedQueueAutoConfiguration {
                                                          ShardOwnedQueueProperties properties,
                                                          ShardOwnedQueueInitializer initializer,
                                                          ObjectProvider<MessageQueueInterceptor> interceptors,
-                                                         ObjectProvider<QueueObserver> observers) {
+                                                         ObjectProvider<QueueObserver> observers,
+                                                         ObjectProvider<ShardOwnedQueueMetrics> metrics) {
         var instanceId = properties.getInstanceId() != null && !properties.getInstanceId().isBlank()
                          ? properties.getInstanceId()
                          : defaultInstanceId();
@@ -169,7 +170,29 @@ public class ShardOwnedQueueAutoConfiguration {
         // need to declare an empty bean to satisfy the constructor.
         return new ShardOwnedQueueFactory(dataSource, runtime, settings, instanceId, initializer,
                                           interceptors.orderedStream().toList(),
-                                          observers.orderedStream().toList());
+                                          observers.orderedStream().toList(),
+                                          metrics.orderedStream().toList());
+    }
+
+    /**
+     * Micrometer meters for every queue the factory builds, whenever Micrometer is on the classpath.
+     * <p>
+     * A nested configuration guarded by class NAME, so that an application without Micrometer never
+     * loads a class whose signature mentions it. On by default, because the event meters are free;
+     * {@code essentials.shard-owned-queue.metrics.enabled=false} turns them off, and the gauges that
+     * cost queries have switches of their own.
+     */
+    @Configuration(proxyBeanMethods = false)
+    @ConditionalOnClass(name = "io.micrometer.core.instrument.MeterRegistry")
+    @ConditionalOnProperty(prefix = "essentials.shard-owned-queue.metrics", name = "enabled",
+                           havingValue = "true", matchIfMissing = true)
+    static class MicrometerMetricsConfiguration {
+        @Bean
+        @ConditionalOnMissingBean(name = "shardOwnedQueueMicrometerMetrics")
+        ShardOwnedQueueMetrics shardOwnedQueueMicrometerMetrics(ObjectProvider<io.micrometer.core.instrument.MeterRegistry> registries,
+                                                                ShardOwnedQueueProperties properties) {
+            return new MicrometerShardOwnedQueueMetrics(registries, properties.getMetrics());
+        }
     }
 
 

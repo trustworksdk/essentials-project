@@ -174,6 +174,81 @@ public class ShardOwnedQueueProperties {
         return new ShardOwnerSettings(readBatchSize, ackBatchSize, ackFlushInterval, chaseDelay,
                                       holeExpiry, sweepInterval, maxHolesPerChase, keyConcurrency,
                                       pollBackstop, maxSweepInterval, pumpThreads,
+    /**
+     * Micrometer meters per queue, under {@code essentials.shard-owned-queue.metrics}.
+     */
+    private Metrics metrics = new Metrics();
+
+    public Metrics getMetrics() {
+        return metrics;
+    }
+
+    public void setMetrics(Metrics metrics) {
+        this.metrics = metrics;
+    }
+
+    /**
+     * What is published for each queue when Micrometer is on the classpath and a {@code MeterRegistry}
+     * exists.
+     */
+    public static class Metrics {
+        /**
+         * Publish the per-queue event meters: enqueued, delivery time, failures, retries, dead letters
+         * and ownership changes. They cost an increment per event the engine already emits.
+         */
+        private boolean enabled = true;
+
+        /**
+         * Also publish depth gauges per lane, blocked keys and parked dead letters. Off by default:
+         * every refresh is a set of COUNT queries against the queue's tables.
+         */
+        private boolean depthGauges = false;
+
+        /**
+         * Also publish shard ownership and live-instance gauges - the ones that tell "nobody is
+         * consuming" from "busy". Off by default: every refresh queries the lease and membership tables.
+         */
+        private boolean healthGauges = false;
+
+        /**
+         * How long a gauge reading is reused before the next scrape queries again. Scrapes inside the
+         * window share one query round.
+         */
+        private Duration gaugeMaxAge = Duration.ofSeconds(10);
+
+        public boolean isEnabled() {
+            return enabled;
+        }
+
+        public void setEnabled(boolean enabled) {
+            this.enabled = enabled;
+        }
+
+        public boolean isDepthGauges() {
+            return depthGauges;
+        }
+
+        public void setDepthGauges(boolean depthGauges) {
+            this.depthGauges = depthGauges;
+        }
+
+        public boolean isHealthGauges() {
+            return healthGauges;
+        }
+
+        public void setHealthGauges(boolean healthGauges) {
+            this.healthGauges = healthGauges;
+        }
+
+        public Duration getGaugeMaxAge() {
+            return gaugeMaxAge;
+        }
+
+        public void setGaugeMaxAge(Duration gaugeMaxAge) {
+            this.gaugeMaxAge = gaugeMaxAge;
+        }
+    }
+
                                       shedGrace, leaseTtl, watermarkCap);
     }
 

@@ -70,6 +70,17 @@ public final class MicrometerQueueObserver implements QueueObserver {
      * Instances heartbeating for this queue. Below the number of running processes means colliding ids.
      */
     public static final String INSTANCES_GAUGE      = "essentials.queue.instances";
+    /**
+     * Ordered keys stopped behind a dead letter right now. A separate meter rather than a lane of
+     * {@link #DEPTH_GAUGE}, because it counts keys, not messages.
+     */
+    public static final String BLOCKED_KEYS_GAUGE   = "essentials.queue.keys.blocked";
+    /**
+     * Dead letters parked unhandled behind another on their key, right now. Separate from the
+     * {@code dead-letter} lane of {@link #DEPTH_GAUGE} because they are already counted in it: summing
+     * depth across lanes must not count them twice.
+     */
+    public static final String PARKED_GAUGE         = "essentials.queue.deadletters.parked";
 
     public static final String LANE_TAG   = "lane";
     public static final String CHANGE_TAG = "change";
@@ -181,6 +192,15 @@ public final class MicrometerQueueObserver implements QueueObserver {
         gauge("unordered", snapshot, depth -> depth.unordered());
         gauge("ordered", snapshot, depth -> depth.ordered());
         gauge("dead-letter", snapshot, depth -> depth.deadLettered());
+        // Same snapshot, so no extra query: the dead-letter breakdown comes back with the depth.
+        Gauge.builder(BLOCKED_KEYS_GAUGE, () -> snapshot.get().blockedKeys())
+             .description("ordered keys stopped behind a dead letter")
+             .tags(withCommonTags())
+             .register(registry);
+        Gauge.builder(PARKED_GAUGE, () -> snapshot.get().parkedBehindDeadLetter())
+             .description("dead letters parked unhandled behind another on their key")
+             .tags(withCommonTags())
+             .register(registry);
         return this;
     }
 
