@@ -211,17 +211,26 @@ var consumer = durableQueues.consumeFromQueue(
 
 **Class**: `dk.trustworks.essentials.components.foundation.messaging.RedeliveryPolicy`
 
-| Strategy | Formula | Use Case |
+`n` is the message's redelivery-attempt count, 0 when its first delivery failed.
+
+| Strategy | Delay before redelivery `n` | Use Case |
 |----------|---------|----------|
-| `fixedBackoff()` | Same delay every retry | Simple retries |
-| `linearBackoff()` | Delay increases linearly | Gradual backoff |
-| `exponentialBackoff()` | Delay doubles each retry | External service recovery |
+| `fixedBackoff(delay, …)` | `delay`, every time | Simple retries |
+| `linearBackoff(delay, max, …)` | `delay × (n+1)`, capped at `max` | Gradual backoff |
+| `exponentialBackoff(initial, followup, multiplier, max, …)` | `n = 0`: `initial`; `n ≥ 1`: `followup × multiplier^(n-1)`, capped at `max` | External service recovery |
+
+Before 0.60 neither `linearBackoff` nor `exponentialBackoff` grew: every redelivery after the first waited
+`initial + followup × multiplier`. A `multiplier` of `1.0` (or less, including an unset builder value) gives a constant
+`followup` delay.
 
 ```java
 // Fixed: 500ms delay, max 5 retries
 RedeliveryPolicy.fixedBackoff(Duration.ofMillis(500), 5)
 
-// Exponential: starts 500ms, doubles, max 1min delay, max 8 retries
+// Linear: 1s, 2s, 3s, … capped at 30s, max 10 retries
+RedeliveryPolicy.linearBackoff(Duration.ofSeconds(1), Duration.ofSeconds(30), 10)
+
+// Exponential: 500ms, 500ms, 1s, 2s, 4s, 8s, 16s, 32s (cap 1min never reached), then dead letter
 RedeliveryPolicy.exponentialBackoff(
     Duration.ofMillis(500),  // initialRedeliveryDelay
     Duration.ofMillis(500),  // followupRedeliveryDelay

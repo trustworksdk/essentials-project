@@ -268,6 +268,68 @@ Jackson's `MismatchedInputException` is now matched by class name rather than `i
 recognised under Jackson 3, where it previously matched nothing because the class moved to
 `tools.jackson.databind.exc`.
 
+### Redelivery delays now grow
+
+`RedeliveryPolicy.exponentialBackoff` did not back off, and neither did `linearBackoff`. After the first
+redelivery, which waited `initialRedeliveryDelay`, every later one waited the same
+`initialRedeliveryDelay + followupRedeliveryDelay × followupRedeliveryDelayMultiplier`, capped at the threshold.
+The redelivery-attempt count was never used. `calculateNextRedeliveryDelay(n)` now uses it:
+
+| Policy | Delay before redelivery `n` (0 = first) |
+|---|---|
+| `exponentialBackoff(initial, followup, multiplier, max, …)` | `n = 0`: `initial`; `n ≥ 1`: `followup × multiplier^(n-1)`, capped at `max` |
+| `linearBackoff(delay, max, …)` | `delay × (n+1)`, capped at `max` |
+| `fixedBackoff(delay, …)` | `delay` — unchanged |
+
+`exponentialBackoff(500ms, 500ms, 2.0, 1min, …)` used to wait 500ms, 1.5s, 1.5s, 1.5s, … It now waits 500ms,
+500ms, 1s, 2s, 4s, … up to 1min. `linearBackoff(1s, 30s, …)` used to wait 1s, 2s, 2s, 2s, … and now waits
+1s, 2s, 3s, … up to 30s. The same applies to `RedeliveryPolicy.builder()` and the `exponentialBackoff()` /
+`linearBackoff()` builders.
+
+**The number of redeliveries does not change, but the time they take does.** Later retries wait longer, up to the
+cap, so a message that keeps failing reaches the dead-letter queue later. Two framework defaults are affected
+even if you configured nothing:
+
+| Default policy | Old time to dead letter | New time to dead letter |
+|---|---|---|
+| `EventProcessor` / `ViewEventProcessor` queue and inbox: `exponentialBackoff(200ms, 200ms, 1.1, 3s, 20)` | ≈ 8.2 s (200 ms, then 420 ms × 19) | ≈ 10.4 s (200 ms, then 200 ms growing to ≈ 1.1 s) |
+| `DurableLocalCommandBus.DEFAULT_REDELIVERY_POLICY`: `linearBackoff(150ms, 1s, 20)` | ≈ 5.9 s (150 ms, then 300 ms × 19) | ≈ 17.2 s (150 ms, 300 ms, … 900 ms, then 1 s × 14) |
+
+Two smaller changes. A multiplier below `1.0` now means "no growth" rather than shrinking the delay; this includes
+the `0.0` that `RedeliveryPolicy.builder()` leaves when you never call `setFollowupRedeliveryDelayMultiplier`, so
+such a policy's follow-ups now wait `followupRedeliveryDelay` instead of `initialRedeliveryDelay`. And
+`linearBackoff` policies no longer compare `equals` to an `exponentialBackoff` built from the same field values.
+
+The shard-owned engine (`postgresql-queue-shard-owned-adapter`) computes its own backoff and is not affected.
+
+**What to do:** nothing, if you want the documented backoff. If you relied on the old timing — a test that waits a
+fixed time for a dead letter, or an alert tuned to how fast one arrives — recompute it, or keep the old timing
+with `fixedBackoff` and the old constant value, `min(initial + followup × multiplier, max)`:
+
+```java
+// Was: RedeliveryPolicy.exponentialBackoff(Duration.ofMillis(200), Duration.ofMillis(200), 1.1d, Duration.ofSeconds(3), 20)
+RedeliveryPolicy.fixedBackoff(Duration.ofMillis(420), 20)   // 200 + 200 × 1.1
+
+// Was: RedeliveryPolicy.linearBackoff(Duration.ofMillis(150), Duration.ofSeconds(1), 20)
+RedeliveryPolicy.fixedBackoff(Duration.ofMillis(300), 20)   // 150 + 150 × 1.0
+```
+
+That differs from the old timing only in the first redelivery, which waited `initial` and now waits the constant
+too. To reproduce it exactly, keep `initial` and make the follow-ups constant:
+
+```java
+RedeliveryPolicy.builder()
+                .setInitialRedeliveryDelay(Duration.ofMillis(200))
+                .setFollowupRedeliveryDelay(Duration.ofMillis(420))   // the old constant
+                .setFollowupRedeliveryDelayMultiplier(1.0d)
+                .setMaximumFollowupRedeliveryDelayThreshold(Duration.ofMillis(420))
+                .setMaximumNumberOfRedeliveries(20)
+                .build();
+```
+
+For an `EventProcessor`, override `getDurableQueueRedeliveryPolicy()` (or `getInboxRedeliveryPolicy()`); for the
+command bus, pass the policy to `DurableLocalCommandBusBuilder.setCommandQueueRedeliveryPolicy(...)`.
+
 
 ### Queue statistics are replaced, not restored
 

@@ -785,20 +785,26 @@ The `RedeliveryPolicy` determines how message redelivery is handled when a `Dura
 
 #### Backoff Strategies
 
-| Strategy | Description | Use Case |
+`n` is the message's redelivery-attempt count, 0 when its first delivery failed.
+
+| Strategy | Delay before redelivery `n` | Use Case |
 |----------|-------------|----------|
-| `fixedBackoff()` | Same delay between every retry | Simple retry scenarios |
-| `linearBackoff()` | Delay increases linearly with each retry | Gradual backoff for transient issues |
-| `exponentialBackoff()` | Delay increases exponentially with each retry | External service recovery, rate limiting |
+| `fixedBackoff()` | `redeliveryDelay`, every time | Simple retry scenarios |
+| `linearBackoff()` | `redeliveryDelay × (n+1)`, capped at `maximumFollowupRedeliveryDelayThreshold` | Gradual backoff for transient issues |
+| `exponentialBackoff()` | `n = 0`: `initialRedeliveryDelay`; `n ≥ 1`: `followupRedeliveryDelay × followupRedeliveryDelayMultiplier^(n-1)`, capped at `maximumFollowupRedeliveryDelayThreshold` | External service recovery, rate limiting |
+
+> Before 0.60 neither `linearBackoff` nor `exponentialBackoff` grew: every redelivery after the first waited
+> `initialRedeliveryDelay + followupRedeliveryDelay × followupRedeliveryDelayMultiplier`. To keep that timing, use
+> `fixedBackoff` with that value — see [MIGRATION-0.60](../../docs/MIGRATION-0.60.md#redelivery-delays-now-grow).
 
 #### Configuration Parameters
 
 | Parameter | Description |
 |-----------|-------------|
-| `initialRedeliveryDelay` | Delay before the first redelivery attempt |
-| `followupRedeliveryDelay` | Base delay for subsequent redelivery attempts |
-| `followupRedeliveryDelayMultiplier` | Multiplier applied to followup delay (1.0 = linear, >1.0 = exponential) |
-| `maximumFollowupRedeliveryDelayThreshold` | Cap on the maximum delay between retries |
+| `initialRedeliveryDelay` | Delay before the first redelivery attempt (`n = 0`). Not capped |
+| `followupRedeliveryDelay` | Delay before the second redelivery attempt (`n = 1`), and the base the multiplier grows from |
+| `followupRedeliveryDelayMultiplier` | Factor each follow-up delay grows by: `followupRedeliveryDelay × multiplier^(n-1)`. `1.0` (or less, including unset) = constant follow-up delay, `>1.0` = exponential. Linear growth comes only from `linearBackoff()` |
+| `maximumFollowupRedeliveryDelayThreshold` | Cap on every follow-up delay (`n ≥ 1`) |
 | `maximumNumberOfRedeliveries` | Maximum retry attempts before marking as Dead Letter |
 | `deliveryErrorHandler` | Strategy for determining permanent vs transient errors |
 
@@ -808,14 +814,14 @@ The `RedeliveryPolicy` determines how message redelivery is handled when a `Dura
 // Fixed backoff: 500ms delay, max 5 retries
 RedeliveryPolicy.fixedBackoff(Duration.ofMillis(500), 5)
 
-// Linear backoff: starts at 1s, increases by 1s each retry, max 30s delay, max 10 retries
+// Linear backoff: 1s, 2s, 3s, … 10s (the 30s cap is not reached within 10 retries)
 RedeliveryPolicy.linearBackoff(
     Duration.ofSeconds(1),    // redeliveryDelay
     Duration.ofSeconds(30),   // maximumFollowupRedeliveryDelayThreshold
     10                        // maximumNumberOfRedeliveries
 )
 
-// Exponential backoff: starts at 500ms, doubles each time, max 1 minute delay, max 8 retries
+// Exponential backoff: 500ms, 500ms, 1s, 2s, 4s, 8s, 16s, 32s, then dead letter (the 1 minute cap is not reached within 8 retries)
 RedeliveryPolicy.exponentialBackoff(
     Duration.ofMillis(500),   // initialRedeliveryDelay
     Duration.ofMillis(500),   // followupRedeliveryDelay

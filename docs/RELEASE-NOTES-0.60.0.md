@@ -136,6 +136,26 @@ The unified claim query and its flag are gone. If you set the flag to `false`, y
 ordered/unordered queries, which measured 5.4× faster. Setting it to `true`, the default, changes nothing.
 Delete the builder call, constructor argument or property.
 
+#### 1.1.7 `exponentialBackoff` and `linearBackoff` redelivery delays now grow
+
+Neither policy grew before. Every redelivery after the first waited the same
+`initialRedeliveryDelay + followupRedeliveryDelay × multiplier`. Now:
+
+- **`exponentialBackoff`:** redelivery `n ≥ 1` waits `followupRedeliveryDelay × multiplier^(n-1)`, capped at the
+  threshold. `(500ms, 500ms, 2.0, 1min)` now waits 500ms, 500ms, 1s, 2s, 4s, … up to 1min, where it used to wait
+  500ms and then 1.5s every time.
+- **`linearBackoff`:** now waits `delay × (n+1)`, capped at the threshold.
+- **`fixedBackoff`:** unchanged.
+
+**Later retries wait longer, so a message that keeps failing reaches the dead-letter queue later.** The number of
+redeliveries is unchanged. This applies to the framework's own defaults:
+
+- `EventProcessor`/`ViewEventProcessor`: ≈ 8.2 s → ≈ 10.4 s before a dead letter.
+- `DurableLocalCommandBus`: ≈ 5.9 s → ≈ 17.2 s.
+
+To keep the old timing, use `fixedBackoff` with the old constant value.
+→ [MIGRATION-0.60 § Redelivery delays now grow](MIGRATION-0.60.md#redelivery-delays-now-grow)
+
 ---
 
 ### 1.2 Platform: Java 25, Spring Boot 4.1, Kotlin 2.3
@@ -563,6 +583,7 @@ Two related corrections:
 | **`QueueMessage.builder().setMessage(…)` dropped ordering**, see [§1.1.3](#113-queuemessagebuildersetmessageorderedmessage-now-keeps-the-ordering) | Ordered-message producers |
 | **Jackson 3 `MismatchedInputException` was never classified as permanent.** It is now matched by class name, so it is recognised under Jackson 3 | Queue consumers |
 | **`alwaysRetryOn(...)` had no effect**, see [§1.1.2](#112-dead-letter-classification-changed-in-two-ways) | Custom redelivery policies |
+| **`RedeliveryPolicy.exponentialBackoff` and `linearBackoff` did not back off.** Every redelivery after the first waited the same delay. See [§1.1.7](#117-exponentialbackoff-and-linearbackoff-redelivery-delays-now-grow) | Durable queue consumers, `Inbox`, `EventProcessor`, `DurableLocalCommandBus` |
 | **Slow-query statistics were always empty, and `pg_cron` was never created by the framework.** The check before the best-effort `CREATE EXTENSION` read `pg_extension` (installed) instead of `pg_available_extensions` (installable), so the create only ran when the extension already existed. `pg_stat_statements` is now created at startup when the server preloads it and the role may create extensions, and `pg_cron` when the server offers it; a refusal is logged and treated as unavailable without failing the start | Admin API query statistics, the Essentials scheduler |
 | **The queue statistics trigger counted a purge as a delivery.** Fixed by the replacement in [§2.4](#24-durable-queue-observability) | Statistics consumers |
 
