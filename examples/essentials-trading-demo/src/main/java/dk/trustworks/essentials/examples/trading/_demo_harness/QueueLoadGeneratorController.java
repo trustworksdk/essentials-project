@@ -16,6 +16,7 @@
 
 package dk.trustworks.essentials.examples.trading._demo_harness;
 
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
@@ -85,6 +86,28 @@ public class QueueLoadGeneratorController {
                               @RequestParam(defaultValue = "1") int failures) {
         var enqueued = generator.injectFaults(retries, poison, failures);
         return new FaultResult(enqueued, generator.status());
+    }
+
+    /**
+     * One ordered key that stops at a dead letter, with {@code behind} messages parked after it; see
+     * {@link QueueLoadGenerator#injectBlockedKey}. The response names the admin API call that
+     * resurrects it.
+     */
+    @PostMapping("/faults/blocked-key")
+    public BlockedKeyResult blockedKey(@RequestParam(defaultValue = "5") int behind,
+                                       @Value("${essentials.admin-api.base-path:/api/essentials/admin/v1}") String adminBasePath) {
+        var key = generator.injectBlockedKey(behind);
+        var queueName = generator.status().queueName();
+        return new BlockedKeyResult(key, behind + 1,
+                                    "POST " + adminBasePath + "/shard-owned-queues/" + queueName + "/ordered-keys/"
+                                    + key + "/resurrect");
+    }
+
+    /**
+     * @param messages  the head plus the messages behind it
+     * @param resurrect the admin API call that puts the whole key back
+     */
+    public record BlockedKeyResult(String key, int messages, String resurrect) {
     }
 
     /** A fault request the generator refuses is the caller's mistake, not the server's. */

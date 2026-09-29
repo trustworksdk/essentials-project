@@ -80,6 +80,11 @@ public class QueueLoadGenerator {
     private static final int FAULT_RETRY      = 3;
     /** Fails on every attempt, so it is dead-lettered once the attempts run out. */
     private static final int FAULT_POISON     = 4;
+    /**
+     * A message on a blocked key: the head fails until it is resurrected, and the messages behind it
+     * are parked by the engine until then. See {@link #injectBlockedKey}.
+     */
+    private static final int FAULT_BLOCKED_KEY = 5;
 
     private final QueueLoadGeneratorProperties properties;
     private final ShardOwnedQueueFactory       queues;
@@ -98,6 +103,20 @@ public class QueueLoadGenerator {
     private final AtomicLong injectedFailures     = new AtomicLong();
     /** Numbers the single-use keys of ordered fault messages; see {@link #injectFaults}. */
     private final AtomicLong nextFaultKey         = new AtomicLong();
+    private final AtomicLong blockedKeysCreated          = new AtomicLong();
+    private final AtomicLong blockedKeyMessagesEnqueued  = new AtomicLong();
+    private final AtomicLong blockedKeyMessagesDelivered = new AtomicLong();
+    /**
+     * The ids blocked-key heads were enqueued under. A head fails while it still has one of these, and
+     * succeeds once resurrected, because resurrecting gives a message a fresh sequence value and so a
+     * fresh id. That is what makes a blocked key recoverable by {@code resurrectKey} without a switch
+     * anybody has to remember to flip.
+     * <p>
+     * In memory, so it is this instance's knowledge only. With several instances the key's unit may be
+     * owned by another one, which has never heard of the id and delivers the head first time — the key
+     * then never blocks. Run a single instance to exercise it.
+     */
+    private final Set<MessageId> blockedHeadIds = ConcurrentHashMap.newKeySet();
 
     /** Highest sequence handled per key, which is what makes an ordering violation observable here. */
     private final ConcurrentMap<String, Long> highestPerKey = new ConcurrentHashMap<>();
@@ -133,6 +152,7 @@ public class QueueLoadGenerator {
     private final String keyPrefix;
     /** Same instance id and run token as {@link #keyPrefix}, so fault keys can never collide with account keys. */
     private final String faultKeyPrefix;
+    private final String blockedKeyPrefix;
 
     /**
      * Its own scheduler, like {@code TradingLoadGeneratorManager}, rather than {@code @Scheduled}.
@@ -152,6 +172,7 @@ public class QueueLoadGenerator {
         var instanceAndRun = queues.instanceId() + "-" + Long.toString(System.currentTimeMillis(), 36) + "-";
         this.keyPrefix = "ACC-" + instanceAndRun;
         this.faultKeyPrefix = "FAULT-" + instanceAndRun;
+        this.blockedKeyPrefix = "BLOCKED-" + instanceAndRun;
         if (properties.isEnabled()) {
             start();
         }
@@ -186,6 +207,20 @@ public class QueueLoadGenerator {
                             orderedHandled.incrementAndGet();
                         } else if (payloadType == FAULT_RETRY) {
                             failUntilAttempt(messageId, payload);
+                        } else if (payloadType == FAULT_BLOCKED_KEY) {
+                            boolean head;
+                            // Under the lock injectBlockedKey holds across enqueue-and-register, so a
+                            // head delivered the instant its enqueue commits waits to be recognised.
+                            synchronized (blockedHeadIds) {
+                                head = blockedHeadIds.contains(messageId);
+                            }
+                            if (head) {
+                                injectedFailures.incrementAndGet();
+                                throw new InjectedFault("Blocked-key head " + messageId + " on '" + key
+                                                        + "' - fails until it is resurrected");
+                            }
+                            recordOrdering(key, payload);
+                            blockedKeyMessagesDelivered.incrementAndGet();
                         } else if (payloadType == FAULT_POISON) {
                             injectedFailures.incrementAndGet();
                             throw new InjectedFault("Poison message " + messageId + " - fails on every attempt");
@@ -377,6 +412,46 @@ public class QueueLoadGenerator {
         return messages.size();
     }
 
+    /**
+     * One ordered key that stops: its head ({@code key_order} 0) fails every attempt and is
+     * dead-lettered, and the {@code behind} messages after it are parked by the engine without being
+     * delivered — a key never advances past a dead letter. Resurrecting the key
+     * ({@code POST .../shard-owned-queues/{queue}/ordered-keys/{key}/resurrect}) puts all of them back;
+     * the head then succeeds, having a new id, and the key replays in {@code key_order}, which the
+     * ordering check verifies as it would for account activity.
+     *
+     * @return the key, so the caller can resurrect it
+     */
+    public String injectBlockedKey(int behind) {
+        if (!running.get()) {
+            throw new IllegalStateException("The queue load generator is not running");
+        }
+        if (behind < 0 || behind > 10_000) {
+            throw new IllegalArgumentException("behind must be between 0 and 10000");
+        }
+        var key = blockedKeyPrefix + nextFaultKey.getAndIncrement();
+        var messages = new ArrayList<Message>(behind + 1);
+        for (var order = 0; order <= behind; order++) {
+            messages.add(Message.ordered(payload(Long.toString(order)), FAULT_BLOCKED_KEY, key, order));
+        }
+        List<MessageId> ids;
+        try {
+            // The enqueue commits before its ids are returned, so a fast consumer can be handed the
+            // head before it is registered; the handler reads the set under this lock, so it waits.
+            synchronized (blockedHeadIds) {
+                ids = queue.enqueue(messages);
+                blockedHeadIds.add(ids.getFirst());
+            }
+        } catch (Exception e) {
+            throw new IllegalStateException("Blocked-key injection failed", e);
+        }
+        blockedKeysCreated.incrementAndGet();
+        blockedKeyMessagesEnqueued.addAndGet(messages.size());
+        log.info("Injected blocked key '{}': head {} fails until resurrected, {} message(s) behind it",
+                 key, ids.getFirst(), behind);
+        return key;
+    }
+
     private String nextFaultKey() {
         return faultKeyPrefix + nextFaultKey.getAndIncrement();
     }
@@ -464,6 +539,8 @@ public class QueueLoadGenerator {
                                    spikes.get(), lastSpikeAt.get(),
                                    retryFaultsEnqueued.get(), retryFaultsRecovered.get(),
                                    poisonFaultsEnqueued.get(), injectedFailures.get(),
+                                   blockedKeysCreated.get(), blockedKeyMessagesEnqueued.get(),
+                                   blockedKeyMessagesDelivered.get(),
                                    depth == null ? 0 : depth.unordered(),
                                    depth == null ? 0 : depth.ordered(),
                                    depth == null ? 0 : depth.deadLettered(),
@@ -494,6 +571,8 @@ public class QueueLoadGenerator {
      * @param poisonFaultsEnqueued poison messages enqueued across both lanes; each should end up in
      *                             {@code deadLetteredDepth}
      * @param injectedFailures     handler invocations that failed on purpose
+     * @param blockedKeyMessagesDelivered messages on blocked keys delivered after a resurrect; equals
+     *                             {@code blockedKeyMessagesEnqueued} once every blocked key is resurrected
      * @param unownedShards the number worth alerting on — depth cannot tell "nobody is consuming"
      *                      from "busy", and this can
      */
@@ -510,6 +589,9 @@ public class QueueLoadGenerator {
                                   long retryFaultsRecovered,
                                   long poisonFaultsEnqueued,
                                   long injectedFailures,
+                                  long blockedKeysCreated,
+                                  long blockedKeyMessagesEnqueued,
+                                  long blockedKeyMessagesDelivered,
                                   long unorderedDepth,
                                   long orderedDepth,
                                   long deadLetteredDepth,
