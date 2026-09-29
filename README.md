@@ -36,6 +36,7 @@
 - [Version Compatibility](#version-compatibility)
 - ⚠️ [Security](#security)
 - [Testing](#testing)
+  - [Editing the LLM docs](#editing-the-llm-docs)
 - [Resources](#resources)
 
 
@@ -870,6 +871,30 @@ mvn clean install -P test-release
 
 - **PostgreSQL modules**: Requires Docker for TestContainers
 - **MongoDB modules**: Requires Docker for TestContainers (replica set mode)
+
+### Editing the LLM docs
+
+`LLM/` is the only place the framework's LLM docs are edited. The Claude Code plugin in `essentials-plugin/` ships a
+generated copy of them in `essentials-plugin/references/llm/`; never edit that copy. CI fails a change whose copy is out
+of step with `LLM/`.
+
+Once per clone, switch on the repository's git hooks (the devcontainer does this for you):
+
+```bash
+scripts/install-git-hooks.sh
+```
+
+The pre-commit hook then regenerates the copy and stages it with every commit that touches `LLM/`, and refuses a commit
+that edits the copy directly. The installer adds a small `.git/hooks/pre-commit` and leaves any hook of that name it did
+not write alone, so if you already have one it tells you and you merge the two by hand. On Windows, run it from Git
+Bash.
+
+Without the hook, run the sync yourself before committing and commit both directories:
+
+```bash
+scripts/sync-plugin-llm.sh
+git add LLM essentials-plugin/references/llm
+```
 
 ---
 

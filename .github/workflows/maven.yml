@@ -19,6 +19,36 @@ on:
     branches: [ main, 'release/**' ]
 
 jobs:
+  # LLM/ is the only place the framework docs are edited; essentials-plugin/references/llm/ is a generated, committed
+  # copy (scripts/sync-plugin-llm.sh). The pre-commit hook keeps the two in step on a contributor's machine, but hooks
+  # are per clone and optional, so this gate is what enforces it. `git status` rather than `git diff`, so a doc added
+  # to LLM/ without its copy fails too. No symlinks under the plugin: Git for Windows checks them out as text files.
+  plugin-docs:
+    name: plugin LLM docs in sync
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Regenerate the plugin's copy of LLM/ and fail on any difference
+        run: |
+          sh scripts/sync-plugin-llm.sh
+          drift=$(git status --porcelain --untracked-files=all -- essentials-plugin/references/llm)
+          if [ -n "$drift" ]; then
+            echo "::error::essentials-plugin/references/llm/ is out of step with LLM/. Edit LLM/ only, run scripts/sync-plugin-llm.sh and commit both:"
+            echo "$drift"
+            exit 1
+          fi
+
+      - name: Fail on symlinks under essentials-plugin/
+        run: |
+          links=$(git ls-files -s -- essentials-plugin | awk '$1 == "120000" { print $4 }')
+          if [ -n "$links" ]; then
+            echo "::error::Symlinks are tracked under essentials-plugin/; commit a copy instead:"
+            echo "$links"
+            exit 1
+          fi
+
   # Full build including Testcontainers-backed integration tests.
   verify:
     name: verify (JDK ${{ matrix.java-version }})

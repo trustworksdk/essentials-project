@@ -273,6 +273,20 @@ if [ "${INSTALL_GRAPHIFY:-false}" = "true" ]; then
 fi
 
 # =============================================================================
+# Repository git hooks — always on, not an optional tool
+# .githooks/pre-commit keeps essentials-plugin/references/llm/ in step with LLM/.
+# The installer writes a small wrapper into .git/hooks rather than setting
+# core.hooksPath, so graphify's own git hooks (installed above) stay where they
+# are. Idempotent. Contributors outside the devcontainer run the same script once
+# (README "Editing the LLM docs").
+# =============================================================================
+if [ -e "/workspace/.git" ]; then
+    echo "Installing repository git hooks..."
+    ( cd /workspace && sh scripts/install-git-hooks.sh ) \
+        || echo "  WARNING: repository git hooks not installed. Retry with: scripts/install-git-hooks.sh"
+fi
+
+# =============================================================================
 # headroom (Conditional) — context-compression layer (MCP mode)
 # https://github.com/headroomlabs-ai/headroom (Apache-2.0). Compresses large
 # tool outputs / files before they reach the LLM. Installed as a uv tool with
