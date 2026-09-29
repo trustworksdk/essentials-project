@@ -116,6 +116,9 @@
         <!-- Held ahead of the Spring Boot BOM (5.8.1 at spring-boot 4.1.1) for CVE-2026-18710 / -88032 / -88033;
              5.11.1 is the lowest release outside all three ranges. See the import in dependencyManagement. -->
         <mongodb-driver-bom.version>5.11.1</mongodb-driver-bom.version>
+        <!-- Held ahead of the Spring Boot BOM (4.2.17 at spring-boot 4.1.1) for CVE-2026-89044; 4.2.18 is the
+             first release outside the range. See the import in dependencyManagement. -->
+        <netty-bom.version>4.2.18.Final</netty-bom.version>
         <!-- Newest release; the floor is assertj-core's own 1.18.3, which is what Spring Boot's management
              was pulling back down. Take the plain version, never the `-jdk5` line Central reports as
              <latest> — that is the legacy Java 5 build, not a newer release. -->
@@ -281,6 +284,13 @@
                 <groupId>org.mongodb</groupId>
                 <artifactId>mongodb-driver-bom</artifactId>
                 <version>${mongodb-driver-bom.version}</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+            <dependency>
+                <groupId>io.netty</groupId>
+                <artifactId>netty-bom</artifactId>
+                <version>${netty-bom.version}</version>
                 <type>pom</type>
                 <scope>import</scope>
             </dependency>
