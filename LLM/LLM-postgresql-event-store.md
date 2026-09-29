@@ -1007,12 +1007,18 @@ var observer = new MeasurementEventStoreSubscriptionObserver(
                                         LogThresholds.defaultThresholds())   // Log slow operations
                     .setMeterRegistry(meterRegistry)
                     .build(),
-    null);   // Optional module tag
+    null,            // Optional module tag
+    meterRegistry);  // Failure counters - null (or the 2-arg constructor) records none
 var eventStore = PostgresqlEventStore.<SeparateTablePerAggregateEventStreamConfiguration>builder()
                                      ...
                                      .setEventStoreSubscriptionObserver(observer)
                                      .build();
 ```
+
+The third argument enables the `essentials.eventstore.subscription.handle_event_failed` counter (async events given up
+on - skipped or stopped at, see [Direct async subscribers skip a failing event by default](#direct-async-subscribers-skip-a-failing-event-by-default))
+and `essentials.eventstore.subscription.handle_event_transactional_failed`. They count whether or not the
+`MeasurementTaker` records timings; the Spring Boot starter always passes its `MeterRegistry`.
 
 The SPI has a single slot, so collecting statistics **composes** with the metrics observer rather than replacing it:
 

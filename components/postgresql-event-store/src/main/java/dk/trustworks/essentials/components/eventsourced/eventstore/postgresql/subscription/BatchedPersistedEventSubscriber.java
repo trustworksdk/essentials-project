@@ -485,6 +485,10 @@ public class BatchedPersistedEventSubscriber extends BaseSubscriber<PersistedEve
                        error -> {
                            // Handle errors for the entire batch
                            var failure = SubscriptionErrorPolicyRetries.unwrapRetryExhausted(error);
+                           eventStore.getEventStoreSubscriptionObserver().handleEventBatchFailed(immutableBatch,
+                                                                                                 eventHandler,
+                                                                                                 failure,
+                                                                                                 eventStoreSubscription);
                            if (subscriptionErrorPolicy.stopsOnError()) {
                                stopAt(firstEvent, failure.getCause() != null ? failure.getCause() : failure);
                            } else {

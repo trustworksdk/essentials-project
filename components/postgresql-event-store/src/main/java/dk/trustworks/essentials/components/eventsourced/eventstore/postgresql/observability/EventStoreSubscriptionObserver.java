@@ -264,6 +264,23 @@ public interface EventStoreSubscriptionObserver {
                            EventStoreSubscription eventStoreSubscription
                           );
 
+    /**
+     * The handling of a batch of events by a batched asynchronous subscription failed, after the subscription's
+     * {@link SubscriptionErrorPolicy} gave up on it - the batch is about to be skipped, or the subscription stops at it.
+     * The counterpart of {@link #handleEventFailed(PersistedEvent, PersistedEventHandler, Throwable, EventStoreSubscription)}
+     * for {@link BatchedPersistedEventHandler}s. The default does nothing, so existing observers are unaffected.
+     *
+     * @param events                 the batch the <code>eventHandler</code> failed to handle, in {@link GlobalEventOrder} order
+     * @param eventHandler           the {@link BatchedPersistedEventHandler} that failed to handle the batch
+     * @param cause                  the exception thrown by {@link BatchedPersistedEventHandler#handleBatch(List)}
+     * @param eventStoreSubscription the {@link EventStoreSubscription} that subscribed to the events
+     */
+    default void handleEventBatchFailed(List<PersistedEvent> events,
+                                        BatchedPersistedEventHandler eventHandler,
+                                        Throwable cause,
+                                        EventStoreSubscription eventStoreSubscription) {
+    }
+
 
     /**
      * How long did it take for an asynchronous {@link EventStoreSubscription} to resolve the resume point while starting

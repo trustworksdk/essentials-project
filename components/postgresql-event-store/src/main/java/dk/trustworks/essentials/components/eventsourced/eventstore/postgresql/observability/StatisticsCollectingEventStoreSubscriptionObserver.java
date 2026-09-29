@@ -266,6 +266,15 @@ public class StatisticsCollectingEventStoreSubscriptionObserver implements Event
     }
 
     @Override
+    public void handleEventBatchFailed(List<PersistedEvent> events,
+                                       BatchedPersistedEventHandler eventHandler,
+                                       Throwable cause,
+                                       EventStoreSubscription eventStoreSubscription) {
+        delegate.handleEventBatchFailed(events, eventHandler, cause, eventStoreSubscription);
+        record(eventStoreSubscription, statistics -> statistics.recordEventHandlingFailed(cause));
+    }
+
+    @Override
     public void resolveResumePoint(SubscriptionResumePoint resumePoint,
                                    GlobalEventOrder onFirstSubscriptionSubscribeFromAndIncludingGlobalOrder,
                                    EventStoreSubscription eventStoreSubscription,

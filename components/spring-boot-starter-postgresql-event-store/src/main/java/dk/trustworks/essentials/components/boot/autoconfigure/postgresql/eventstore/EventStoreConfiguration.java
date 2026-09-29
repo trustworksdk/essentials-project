@@ -626,6 +626,10 @@ public class EventStoreConfiguration {
      * An application that defines its own {@link EventStoreSubscriptionObserver} bean replaces both. To keep the admin
      * API's subscription statistics, wrap the custom observer in a
      * {@link StatisticsCollectingEventStoreSubscriptionObserver} the same way this method does.
+     * <p>
+     * The {@value MeasurementEventStoreSubscriptionObserver#HANDLE_EVENT_FAILED_METRIC} counter is recorded whenever a
+     * {@link MeterRegistry} is present - it is not gated by {@code essentials.eventstore.subscription-manager.metrics.enabled},
+     * which only controls execution-time measurements.
      *
      * @param properties                     {@link EssentialsEventStoreProperties} configuration properties
      * @param meterRegistry                  the {@link MeterRegistry} to record metrics into, if any
@@ -644,7 +648,9 @@ public class EventStoreConfiguration {
                                                                                   properties.getSubscriptionManager().getMetrics().isEnabled(),
                                                                                   properties.getSubscriptionManager().getMetrics().toLogThresholds(),
                                                                                   MeasurementEventStoreSubscriptionObserver.class),
-                                                             essentialsProperties.getTracingProperties().getModuleTag());
+                                                             essentialsProperties.getTracingProperties().getModuleTag(),
+                                                             // The failure counters are an incident signal, so they are not gated by the execution-time metrics toggle
+                                                             meterRegistry.orElse(null));
         return subscriptionStatisticsRegistry.<EventStoreSubscriptionObserver>map(registry -> new StatisticsCollectingEventStoreSubscriptionObserver(observer, registry))
                                              .orElse(observer);
     }
