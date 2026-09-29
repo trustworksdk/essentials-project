@@ -24,15 +24,13 @@ import tools.jackson.databind.json.JsonMapper
 import tools.jackson.module.kotlin.KotlinModule
 
 /**
- * What `EssentialTypesJacksonModule` does and does not cover for **Kotlin** types, on the Jackson 3 flavour.
+ * What `EssentialTypesJacksonModule` (`types-jackson3`) does and does not cover for **Kotlin** types.
  *
  * This boundary was undocumented, and an agent working from the docs concluded the module covered
  * `dk.trustworks.essentials.kotlin.types.StringValueType` because nothing said otherwise. It does not: the module
  * registers serializers for the *Java* hierarchy - `CharSequenceType`, `NumberType`, `Money`,
  * `JSR310SingleValueType` - and Kotlin semantic types are not part of it. `jackson-module-kotlin` is what handles
  * them, and it is the consumer's job to register it.
- *
- * @see KotlinJacksonBodyJackson2Test the same assertions on the Jackson 2 flavour
  */
 class KotlinJacksonBodyJackson3Test {
 

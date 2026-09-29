@@ -167,7 +167,12 @@ public class EssentialsComponentsConfiguration {
 
 
     /**
-     * Essential Jackson module which adds support for serializing and deserializing any Essentials types (note: Map keys still needs to be explicitly defined - see doc)
+     * Essential Jackson module which adds support for serializing and deserializing any Essentials types, including
+     * {@code Map} keys of a {@code SingleValueType} (the module registers its own key deserializers, so no
+     * {@code keyUsing} annotation is needed).
+     * <p>
+     * Published as a bean so Spring Boot adds it to the application's auto-configured (web) {@code JsonMapper}. The
+     * Essentials persistence {@link JSONSerializer} does not pick it up from here - see {@link #jsonSerializer()}.
      *
      * @return the Essential Jackson module which adds support for serializing and deserializing any Essentials types
      */
