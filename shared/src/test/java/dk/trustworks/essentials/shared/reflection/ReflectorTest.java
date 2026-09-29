@@ -20,6 +20,7 @@ package dk.trustworks.essentials.shared.reflection;
 import org.junit.jupiter.api.Test;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 class ReflectorTest {
     @Test
@@ -161,6 +162,35 @@ class ReflectorTest {
         // No match test
         match = reflector.findFieldByAnnotation(Test.class);
         assertThat(match).isEmpty();
+    }
+
+    @Test
+    void findMatchingMethod_throws_TooManyMatchingMethodsFoundException_when_more_than_one_method_matches() {
+        var reflector = Reflector.reflectOn(AmbiguousStaticFactorySubject.class);
+
+        assertThatThrownBy(() -> reflector.findMatchingMethod("of", true, String.class))
+                .isExactlyInstanceOf(TooManyMatchingMethodsFoundException.class)
+                .hasMessage("Found 2 static methods within %s matching on name 'of' and argument-types [class java.lang.String]",
+                            AmbiguousStaticFactorySubject.class.getName());
+    }
+
+    @Test
+    void findMatchingMethod_returns_the_single_match_when_only_one_method_matches() {
+        var reflector = Reflector.reflectOn(AmbiguousStaticFactorySubject.class);
+
+        var match = reflector.findMatchingMethod("of", true, StringBuilder.class);
+        assertThat(match).isPresent();
+        assertThat(match.get().getParameterTypes()).containsExactly(CharSequence.class);
+    }
+
+    private static class AmbiguousStaticFactorySubject {
+        public static AmbiguousStaticFactorySubject of(String value) {
+            return new AmbiguousStaticFactorySubject();
+        }
+
+        public static AmbiguousStaticFactorySubject of(CharSequence value) {
+            return new AmbiguousStaticFactorySubject();
+        }
     }
 
     private static class TestSubject {
