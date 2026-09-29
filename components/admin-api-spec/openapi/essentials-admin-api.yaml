@@ -3352,6 +3352,7 @@ components:
           format: int64
     ApiShardOwnedQueueStatus:
       required:
+      - blockedKeys
       - deadLetteredDepth
       - fullyOwned
       - liveInstances
@@ -3359,6 +3360,7 @@ components:
       - orderedDepth
       - orderedShardsOwned
       - orderedUnits
+      - parkedBehindDeadLetterDepth
       - shardCount
       - unorderedDepth
       - unorderedShardsOwned
@@ -3399,6 +3401,12 @@ components:
         maxInstances:
           type: integer
           format: int32
+        parkedBehindDeadLetterDepth:
+          type: integer
+          format: int64
+        blockedKeys:
+          type: integer
+          format: int64
     ApiSubscription:
       required:
       - aggregateType

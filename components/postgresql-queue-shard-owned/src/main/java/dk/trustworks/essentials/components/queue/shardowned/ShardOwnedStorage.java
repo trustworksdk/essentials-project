@@ -1520,6 +1520,31 @@ public final class ShardOwnedStorage {
     }
 
 
+    /**
+     * What the dead-letter table holds for this queue right now, in one read.
+     *
+     * @param total       every dead letter
+     * @param parked      of those, the ones parked unhandled behind another dead letter on their key
+     * @param blockedKeys ordered keys with at least one dead letter, which is what stops a key
+     */
+    public record DeadLetterSummary(long total, long parked, long blockedKeys) {
+    }
+
+    public DeadLetterSummary deadLetterSummary() throws SQLException {
+        try (var connection = dataSource.getConnection();
+             var statement = connection.prepareStatement(
+                     "SELECT count(*),"
+                             + "       count(*) FILTER (WHERE blocked_by_key_order IS NOT NULL),"
+                             + "       count(DISTINCT msg_key) FILTER (WHERE source_lane = 'ordered')"
+                             + "  FROM " + DLQ_TABLE + " WHERE queue_id = ?")) {
+            statement.setShort(1, queueId);
+            try (var resultSet = statement.executeQuery()) {
+                resultSet.next();
+                return new DeadLetterSummary(resultSet.getLong(1), resultSet.getLong(2), resultSet.getLong(3));
+            }
+        }
+    }
+
     public long countDeadLetters() throws SQLException {
         try (var connection = dataSource.getConnection();
              var statement = connection.prepareStatement(

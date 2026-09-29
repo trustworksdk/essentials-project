@@ -56,11 +56,14 @@ package dk.trustworks.essentials.components.queue.shardowned.spi;
  *                                         advances past one, so non-zero means some key is waiting for a human to
  *                                         resurrect or delete the message holding it. Counted per recording, not as a
  *                                         current size — a takeover re-derives the blocks and legitimately counts
- *                                         them again under the new owner
+ *                                         them again under the new owner. For the keys stopped right now, read
+ *                                         {@code QueueDepth.blockedKeys}
  * @param messagesPoisonedBehindDeadLetter messages dead-lettered without ever reaching a handler,
  *                                         because their key was blocked. Read against {@code deadLettered}: a queue
  *                                         dominated by these means ONE message is broken and the rest are waiting on
- *                                         a decision about it, where the reverse means the handler is
+ *                                         a decision about it, where the reverse means the handler itself is
+ *                                         failing. A running total that never falls; for what is parked right now, read
+ *                                         {@code QueueDepth.parkedBehindDeadLetter}
  */
 public record QueueStatistics(long delivered,
                               long handlerFailures,

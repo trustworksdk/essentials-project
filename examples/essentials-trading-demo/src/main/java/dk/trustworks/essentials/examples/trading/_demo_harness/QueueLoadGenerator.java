@@ -544,6 +544,8 @@ public class QueueLoadGenerator {
                                    depth == null ? 0 : depth.unordered(),
                                    depth == null ? 0 : depth.ordered(),
                                    depth == null ? 0 : depth.deadLettered(),
+                                   depth == null ? 0 : depth.parkedBehindDeadLetter(),
+                                   depth == null ? 0 : depth.blockedKeys(),
                                    health == null ? 0 : health.unorderedOwned(),
                                    health == null ? 0 : health.orderedOwned(),
                                    health == null ? 0 : health.unownedShards(),
@@ -573,6 +575,11 @@ public class QueueLoadGenerator {
      * @param injectedFailures     handler invocations that failed on purpose
      * @param blockedKeyMessagesDelivered messages on blocked keys delivered after a resurrect; equals
      *                             {@code blockedKeyMessagesEnqueued} once every blocked key is resurrected
+     * @param parkedBehindDeadLetterDepth dead letters parked unhandled behind another on their key, right
+     *                             now; falls back to zero when the key is resurrected
+     * @param blockedKeys          ordered keys stopped behind a dead letter right now, across the queue -
+     *                             blocked keys from {@code /faults/blocked-key} and each poison
+     *                             message's single-use key alike
      * @param unownedShards the number worth alerting on — depth cannot tell "nobody is consuming"
      *                      from "busy", and this can
      */
@@ -595,6 +602,8 @@ public class QueueLoadGenerator {
                                   long unorderedDepth,
                                   long orderedDepth,
                                   long deadLetteredDepth,
+                                  long parkedBehindDeadLetterDepth,
+                                  long blockedKeys,
                                   int unorderedShardsOwned,
                                   int orderedUnitsOwned,
                                   int unownedShards,

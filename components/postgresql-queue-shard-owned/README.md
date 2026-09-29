@@ -320,7 +320,7 @@ owner as it reads it, so the ordered lane never holds rows it cannot deliver.
 | **Where the block comes from** | The dead-letter table, not memory. It survives a rebalance, a restart and a redeploy |
 | **What clears it** | Resurrecting or deleting the dead letter. Both are noticed, including when done from another process |
 | **Telling the two kinds apart** | `DeadLetter.neverDelivered()`, backed by the `blocked_by_key_order` column — which also names the message recovery has to start from. Do not use `attempts`; a takeover bumps it on rows that were never delivered |
-| **Noticing it** | One WARN per key when it blocks, plus `keysBlockedByDeadLetter` and `messagesPoisonedBehindDeadLetter` on `statistics()` and the admin API. **Not** queue depth: the backlog moves out of the lane, so depth falls |
+| **Noticing it** | One WARN per key when it blocks. For what is stopped **now**, `depth().blockedKeys()` and `depth().parkedBehindDeadLetter()`, read from the dead-letter table and served on the admin API's queue status as `blockedKeys` and `parkedBehindDeadLetterDepth` — both return to zero once the key is resurrected. `keysBlockedByDeadLetter` and `messagesPoisonedBehindDeadLetter` on `statistics()` are per-instance running totals that never fall; read them as history, not state. **Not** the lane depths: the backlog moves out of the lane, so they fall |
 | **What it costs** | 1.70x WAL per message and 75% of throughput while stalled, and **241 B per message in a dead-letter table shared by every queue on the database** — about 87 MB for an hour at 100 msg/s. Alert on it in minutes, not days ([measurements](../../docs/durable-queue-measurements.md) §3.11) |
 
 **Recovery is per key.** Restore the whole key in one call:

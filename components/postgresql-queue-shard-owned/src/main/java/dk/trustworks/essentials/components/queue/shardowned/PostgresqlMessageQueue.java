@@ -763,7 +763,9 @@ public final class PostgresqlMessageQueue implements MessageQueue {
             ordered += depth.count();
             oldestReady = earliest(oldestReady, depth.oldestReadyAt());
         }
-        return new QueueDepth(unordered, ordered, storage.countDeadLetters(), oldestReady);
+        var deadLetters = storage.deadLetterSummary();
+        return new QueueDepth(unordered, ordered, deadLetters.total(), oldestReady,
+                              deadLetters.parked(), deadLetters.blockedKeys());
     }
 
     private static Instant earliest(Instant a, Instant b) {

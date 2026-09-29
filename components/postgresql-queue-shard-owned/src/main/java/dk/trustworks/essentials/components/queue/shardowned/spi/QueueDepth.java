@@ -38,8 +38,25 @@ import java.time.Instant;
  *                      message waiting behind its key's head while that head is being handled. A key
  *                      stopped behind a dead letter does not count: the messages behind it are
  *                      dead-lettered too, so it shows in {@code deadLettered} instead
+ * @param parkedBehindDeadLetter dead letters, of {@code deadLettered}, that never reached a handler:
+ *                      ordered messages parked because their key was stopped behind another dead
+ *                      letter. The current count, read from the table - it falls as keys are
+ *                      resurrected or their dead letters deleted, unlike the per-instance
+ *                      {@code QueueStatistics.messagesPoisonedBehindDeadLetter}, which only ever rises
+ * @param blockedKeys   ordered keys stopped right now: keys with at least one dead letter, which is the
+ *                      rule an owner blocks a key by. Zero once every such key has been resurrected or
+ *                      its dead letters deleted - the current-size counterpart of
+ *                      {@code QueueStatistics.keysBlockedByDeadLetter}, which counts recordings
  */
-public record QueueDepth(long unordered, long ordered, long deadLettered, Instant oldestReadyAt) {
+public record QueueDepth(long unordered, long ordered, long deadLettered, Instant oldestReadyAt,
+                         long parkedBehindDeadLetter, long blockedKeys) {
+
+    /**
+     * Without the dead-letter breakdown, for a caller that only has lane depths - both counts zero.
+     */
+    public QueueDepth(long unordered, long ordered, long deadLettered, Instant oldestReadyAt) {
+        this(unordered, ordered, deadLettered, oldestReadyAt, 0L, 0L);
+    }
 
     public long total() {
         return unordered + ordered;

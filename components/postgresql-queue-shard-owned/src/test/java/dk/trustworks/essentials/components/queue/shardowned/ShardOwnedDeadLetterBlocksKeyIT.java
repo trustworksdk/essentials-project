@@ -178,6 +178,9 @@ class ShardOwnedDeadLetterBlocksKeyIT {
             Awaitility.await().atMost(Duration.ofSeconds(45))
                       .untilAsserted(() -> assertThat(queue.depth().deadLettered()).isEqualTo(4L));
             assertThat(delivered).containsExactly(1L);
+            // The current view, from the table: one key stopped, three messages parked behind it.
+            assertThat(queue.depth().blockedKeys()).isEqualTo(1L);
+            assertThat(queue.depth().parkedBehindDeadLetter()).isEqualTo(3L);
 
             orderTwoStillFails.set(false);
             // One call, and no ordering discipline required of the caller: the rows become visible
@@ -189,6 +192,10 @@ class ShardOwnedDeadLetterBlocksKeyIT {
             assertThat(delivered).as("the key resumes where it stopped, in key_order")
                                  .containsExactly(1L, 2L, 3L, 4L, 5L);
             assertThat(queue.depth().deadLettered()).isZero();
+            // Back to zero, unlike the running totals in the statistics, which still say 3 were parked.
+            assertThat(queue.depth().blockedKeys()).isZero();
+            assertThat(queue.depth().parkedBehindDeadLetter()).isZero();
+            assertThat(queue.statistics().messagesPoisonedBehindDeadLetter()).isEqualTo(3L);
         }
     }
 
@@ -228,6 +235,8 @@ class ShardOwnedDeadLetterBlocksKeyIT {
             assertThat(parked.get(6L).blockedByKeyOrder())
                     .describedAs("names the lowest dead letter still holding the key")
                     .isEqualTo(3L);
+            assertThat(queue.depth().blockedKeys()).as("the key is still stopped").isEqualTo(1L);
+            assertThat(queue.depth().parkedBehindDeadLetter()).isEqualTo(4L);
 
             assertThat(queue.resurrectKey(KEY)).isEqualTo(4);
             Awaitility.await().atMost(Duration.ofSeconds(45))
