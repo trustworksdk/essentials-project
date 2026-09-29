@@ -94,6 +94,11 @@ public class ShardOwnedQueueFactory implements MessageQueues, AutoCloseable {
                                               .setQueueName(name)
                                               .setInstanceId(instanceId)
                                               .setSettings(settings)
+                                              // The process's one runtime. Without it every queue's
+                                              // consumers borrowed a second, shared runtime, and the
+                                              // bean's pumps and listener held their connections for
+                                              // nothing.
+                                              .setRuntime(runtime)
                                               .build();
             // Before anything consumes: both are read when a subscription starts, so one attached
             // afterwards would silently see nothing.

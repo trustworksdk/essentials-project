@@ -18,10 +18,11 @@ spring:
     username: essentials
     password: password
     driver-class-name: org.postgresql.Driver
-    # Hikari's default of 10 is not enough here: the shard-owned queue runtime holds 6 connections
-    # permanently (pumps, listener and the other runtimes on this DataSource), which left 4 for
-    # event-store subscriptions, lease renewal and the application. A restart against a database the
-    # demo had already run on failed startup with the pool exhausted.
+    # Headroom over Hikari's default of 10. The shard-owned queue runtime holds 3 connections
+    # permanently (2 pumps + 1 listener) and logs its share of the pool at start-up; the rest is shared
+    # by event-store subscriptions, both load generators, lease renewal and the projections. Until the
+    # starter passed its runtime to its queues there were two runtimes holding 6, and a restart against
+    # a database the demo had already run on failed start-up with the pool exhausted.
     hikari:
       maximum-pool-size: 20
 

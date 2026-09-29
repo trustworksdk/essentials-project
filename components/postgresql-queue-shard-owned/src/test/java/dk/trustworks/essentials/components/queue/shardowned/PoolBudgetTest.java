@@ -78,6 +78,53 @@ class PoolBudgetTest {
     }
 
     @Test
+    void the_share_of_the_pool_is_logged_even_when_it_is_comfortable() {
+        // The quiet case used to log nothing, so nobody learnt the number until it was a problem.
+        var assessment = PoolBudget.assess(3, 3, OptionalInt.of(20));
+        assertThat(assessment.warn()).isFalse();
+        assertThat(assessment.message())
+                .contains("holding 3 of the connection pool's 20 connections permanently (15%; 2 pump(s) + 1 listener)")
+                .contains("leaving 17");
+    }
+
+    @Test
+    void more_than_half_the_pool_is_a_warning_that_says_how_large_to_make_it() {
+        // Two runtimes of three on a default Hikari pool: the trading demo's start-up failure.
+        var assessment = PoolBudget.assess(3, 6, OptionalInt.of(10));
+        assertThat(assessment.warn()).isTrue();
+        assertThat(assessment.message())
+                .contains("holding 6 of the connection pool's 10 connections permanently (60%")
+                .contains("plus 3 held by other shard-owned queue runtimes")
+                .contains("leaving 4")
+                .contains("at least 12")
+                .contains("spring.datasource.hikari.maximum-pool-size")
+                .contains("share one ShardRuntime");
+    }
+
+    @Test
+    void exactly_half_the_pool_is_not_yet_a_warning() {
+        assertThat(PoolBudget.assess(3, 5, OptionalInt.of(10)).warn()).isFalse();
+        assertThat(PoolBudget.assess(3, 3, OptionalInt.of(6)).warn()).isFalse();
+    }
+
+    @Test
+    void a_full_pool_is_a_warning_that_leaves_nothing() {
+        var assessment = PoolBudget.assess(3, 6, OptionalInt.of(5));
+        assertThat(assessment.warn()).isTrue();
+        assertThat(assessment.message()).contains("leaving nothing");
+    }
+
+    @Test
+    void an_unknown_pool_size_still_reports_what_is_held_and_what_to_size_for() {
+        var assessment = PoolBudget.assess(3, 3, OptionalInt.empty());
+        assertThat(assessment.warn()).isFalse();
+        assertThat(assessment.message())
+                .contains("holding 3 connection(s)")
+                .contains("not known")
+                .contains("at least 6");
+    }
+
+    @Test
     void runtimes_on_one_data_source_are_added_up_and_only_ever_warned_about() {
         // Two runtimes of three held connections each on a pool of five: each fits alone, together
         // they leave nothing. That is a warning — the refusal judges one runtime at a time, so a

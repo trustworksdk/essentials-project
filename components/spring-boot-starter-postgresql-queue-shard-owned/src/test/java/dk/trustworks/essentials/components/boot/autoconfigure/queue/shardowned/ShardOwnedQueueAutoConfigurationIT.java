@@ -152,6 +152,44 @@ class ShardOwnedQueueAutoConfigurationIT {
     }
 
     /**
+     * One runtime while queues are actually consuming, not just one runtime bean. The factory used to
+     * build its queues without the bean, so their consumers borrowed a second, shared runtime per
+     * DataSource: two sets of pumps and two listeners, six connections held for good instead of three
+     * — on a default pool of ten, enough to fail the trading demo's start-up. The bean's pumps are the
+     * only ones there should be.
+     */
+    @Test
+    void consuming_queues_run_on_the_runtime_bean_rather_than_a_second_one() {
+        runner().withPropertyValues("essentials.shard-owned-queue.queues.orders=2",
+                                    "essentials.shard-owned-queue.queues.shipments=2")
+                .run(context -> {
+                    var factory = context.getBean(ShardOwnedQueueFactory.class);
+                    var delivered = ConcurrentHashMap.<String>newKeySet();
+                    for (var name : List.of("orders", "shipments")) {
+                        var queue = factory.queue(name);
+                        queue.consume((messageId, key, payload, payloadType) -> delivered.add(new String(payload, StandardCharsets.UTF_8)),
+                                      ConsumerOptions.defaults());
+                        queue.enqueue(List.of(Message.of(name.getBytes(StandardCharsets.UTF_8), 1)));
+                    }
+                    Awaitility.await().atMost(Duration.ofSeconds(30))
+                              .untilAsserted(() -> assertThat(delivered).contains("orders", "shipments"));
+
+                    // Awaited, because pump threads of an earlier test's runtime may still be exiting.
+                    var pumps = context.getBean(ShardRuntime.class).pumpCount();
+                    Awaitility.await().atMost(Duration.ofSeconds(10))
+                              .untilAsserted(() -> assertThat(livePumpThreads())
+                                      .describedAs("pump threads in the process; one runtime has %s", pumps)
+                                      .isEqualTo(pumps));
+                });
+    }
+
+    private static long livePumpThreads() {
+        return Thread.getAllStackTraces().keySet().stream()
+                     .filter(thread -> thread.isAlive() && thread.getName().equals("shard-queue-pump"))
+                     .count();
+    }
+
+    /**
      * Two instances for one name would register as two competing consumers of the same queue in one
      * process, halve each other's fair share, and each serve half of it for no reason.
      */

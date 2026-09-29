@@ -45,7 +45,8 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
  *       remains is shared with the rest of the application and how much that needs is not knowable
  *       here.</li>
  * </ul>
- * Where the size is unknown, the requirement is logged instead.
+ * Otherwise the numbers are logged at INFO, whether the size is known or not, so the share of the
+ * pool the engine takes is visible on every start-up rather than only once it is a problem.
  * <p>
  * <b>Several runtimes on one {@code DataSource}.</b> The shared runtime is one per {@code DataSource},
  * but a caller can construct runtimes of their own on it. So the held connections of every running
@@ -115,31 +116,72 @@ final class PoolBudget {
             total = held + HELD.getOrDefault(dataSource, 0);
             HELD.put(dataSource, total);
         }
-        var others = total - held;
-        if (maximum.isEmpty()) {
-            log.info("The shard-owned queue runtime holds {} connections from this DataSource permanently "
-                             + "({} pumps + 1 listener{}). The pool's size is not known, so it is not checked: "
-                             + "size the pool for those plus lease renewal, enqueue and the rest of the "
-                             + "application.",
-                     total, held - 1, others > 0 ? ", plus " + others + " for other runtimes on it" : "");
-            return new Reservation(dataSource, held);
-        }
-        var size = maximum.getAsInt();
-        if (total >= size) {
-            log.warn("The shard-owned queue runtimes on this DataSource together hold {} of its pool's {} "
-                             + "connections permanently ({} for this one), leaving nothing for lease renewal, "
-                             + "enqueue or the rest of the application. Share one ShardRuntime across the "
-                             + "queues, raise the pool's maximum size, or lower pumpThreads.",
-                     total, size, held);
-        } else if (total * 2 > size) {
-            log.warn("The shard-owned queue {} {} of this pool's {} connections permanently ({} pumps + "
-                             + "1 listener{}), leaving {} for lease renewal, enqueue and the rest of the "
-                             + "application. If those wait on the pool, raise its maximum size or lower "
-                             + "pumpThreads.",
-                     others > 0 ? "runtimes on it hold" : "runtime holds", total, size, held - 1,
-                     others > 0 ? " for this runtime, " + others + " for the others" : "", size - total);
+        var assessment = assess(held, total, maximum);
+        if (assessment.warn()) {
+            log.warn(assessment.message());
+        } else {
+            log.info(assessment.message());
         }
         return new Reservation(dataSource, held);
+    }
+
+    /**
+     * What to tell the operator about a pool once a runtime has been counted against it.
+     *
+     * @param warn    whether it deserves a WARN rather than an INFO
+     * @param message the line to log
+     */
+    record Assessment(boolean warn, String message) {
+    }
+
+    /**
+     * The start-up line about the pool, logged every time rather than only when something is wrong.
+     * <p>
+     * It used to say nothing while held connections stayed at or below half the pool, which is the
+     * common case and also the one where nobody learns the number. The number is the point: an
+     * application on a default pool of 10 gives up three connections to a single runtime, and six to
+     * two — and two runtimes on one {@code DataSource} was a real misconfiguration that stayed
+     * invisible, because only the half-pool threshold could make it speak.
+     *
+     * @param held    connections this runtime holds permanently
+     * @param total   connections held by every running runtime on the same {@code DataSource},
+     *                this one included
+     * @param maximum the pool's maximum size, if known
+     */
+    static Assessment assess(int held, int total, OptionalInt maximum) {
+        var others = total - held;
+        var detail = (held - 1) + " pump(s) + 1 listener"
+                + (others > 0 ? ", plus " + others + " held by other shard-owned queue runtimes on this DataSource" : "");
+        if (maximum.isEmpty()) {
+            return new Assessment(false,
+                    "Shard-owned queue: holding " + total + " connection(s) from this DataSource permanently (" + detail
+                            + "). The pool's maximum size is not known, so it is not checked: size the pool for "
+                            + "these plus lease renewal, enqueue and the rest of the application - at least "
+                            + (total * 2) + " to keep them under half of it.");
+        }
+        var size    = maximum.getAsInt();
+        var percent = (int) Math.round(total * 100.0d / size);
+        var left    = Math.max(0, size - total);
+        var holding = "Shard-owned queue: holding " + total + " of the connection pool's " + size
+                + " connections permanently (" + percent + "%; " + detail + ")";
+        if (total >= size) {
+            return new Assessment(true,
+                    holding + ", leaving nothing for lease renewal, enqueue or the rest of the application. "
+                            + advice(total, others));
+        }
+        if (total * 2 > size) {
+            return new Assessment(true,
+                    holding + ", leaving " + left + " for lease renewal, enqueue, acknowledgement and the rest "
+                            + "of the application. " + advice(total, others));
+        }
+        return new Assessment(false, holding + ", leaving " + left + " for the rest of the application.");
+    }
+
+    private static String advice(int total, int others) {
+        return "Raise the pool's maximum size to at least " + (total * 2)
+                + " (Spring Boot with HikariCP: spring.datasource.hikari.maximum-pool-size; its default is 10)"
+                + (others > 0 ? ", share one ShardRuntime across the queues," : "")
+                + " or lower pumpThreads.";
     }
 
     /**

@@ -37,6 +37,7 @@ public final class PostgresqlMessageQueueBuilder {
     private String             instanceId;
     private QueueName          queueName;
     private ShardOwnerSettings settings = ShardOwnerSettings.defaults();
+    private ShardRuntime       runtime;
 
     public PostgresqlMessageQueueBuilder setDataSource(DataSource dataSource) {
         this.dataSource = dataSource;
@@ -79,6 +80,16 @@ public final class PostgresqlMessageQueueBuilder {
      * would mean guessing a shard count on a caller's behalf, and the wrong guess is exactly the
      * failure this is meant to prevent.
      */
+    /**
+     * The runtime the queue's consumers run on. Left unset, they borrow the runtime shared per
+     * {@code DataSource}. Set it whenever the caller already owns a runtime on that {@code DataSource},
+     * or the process ends up with two, each holding its own pump and listener connections.
+     */
+    public PostgresqlMessageQueueBuilder setRuntime(ShardRuntime runtime) {
+        this.runtime = runtime;
+        return this;
+    }
+
     public PostgresqlMessageQueueBuilder setQueueName(QueueName queueName) {
         this.queueName = requireNonNull(queueName, "No queueName provided");
         return this;
@@ -104,6 +115,6 @@ public final class PostgresqlMessageQueueBuilder {
 
     public PostgresqlMessageQueue build() {
         resolveQueueName();
-        return new PostgresqlMessageQueue(dataSource, queueId, shardCount, instanceId, settings);
+        return new PostgresqlMessageQueue(dataSource, queueId, shardCount, instanceId, settings, runtime);
     }
 }

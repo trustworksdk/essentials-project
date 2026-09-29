@@ -79,6 +79,14 @@ public final class PostgresqlMessageQueue implements MessageQueue {
     private final    String            instanceId;
 
     private final ShardOwnerSettings settings;
+    /**
+     * The runtime this queue's consumers run on, or null to borrow the one shared per
+     * {@code DataSource}. A caller that already owns a runtime must pass it: borrowing then stands up
+     * a SECOND runtime next to it, with its own pumps and listener, each holding a connection for
+     * good. The Spring starter did exactly that — its runtime bean held three connections and served
+     * nothing, while the queues ran on a shared one holding three more.
+     */
+    private final ShardRuntime       runtime;
 
     private final List<ShardOwnedQueue>         consumers          = new ArrayList<>();
     /**
@@ -118,6 +126,7 @@ public final class PostgresqlMessageQueue implements MessageQueue {
         this.shardCount = shardCount;
         this.instanceId = requireNonNull(instanceId, "No instanceId provided");
         this.settings = ShardOwnerSettings.defaults();
+        this.runtime = null;
         this.storage = new ShardOwnedStorage(dataSource, queueId);
     }
 
@@ -128,11 +137,21 @@ public final class PostgresqlMessageQueue implements MessageQueue {
      */
     PostgresqlMessageQueue(DataSource dataSource, short queueId, int shardCount, String instanceId,
                            ShardOwnerSettings settings) {
+        this(dataSource, queueId, shardCount, instanceId, settings, null);
+    }
+
+    /**
+     * @param runtime the runtime this queue's consumers run on, or null to borrow the one shared per
+     *                {@code DataSource}
+     */
+    PostgresqlMessageQueue(DataSource dataSource, short queueId, int shardCount, String instanceId,
+                           ShardOwnerSettings settings, ShardRuntime runtime) {
         this.dataSource = requireNonNull(dataSource, "No dataSource provided");
         this.queueId = queueId;
         this.shardCount = shardCount;
         this.instanceId = requireNonNull(instanceId, "No instanceId provided");
         this.settings = requireNonNull(settings, "No settings provided");
+        this.runtime = runtime;
         this.storage = new ShardOwnedStorage(dataSource, queueId);
     }
 
@@ -497,6 +516,7 @@ public final class PostgresqlMessageQueue implements MessageQueue {
                                                .setInstanceId(consumerInstanceId)
                                                .setMetrics(engineMetrics)
                                                .setParallelConsumers(options.parallelConsumers())
+                                               .setRuntime(runtime)
                                                .build();
         unorderedConsumer.configureUnordered((messageId, payload, payloadType) -> invoke(handler, messageId, null, payload, payloadType),
                                              settings, options.maxShards(), policy);
@@ -515,6 +535,7 @@ public final class PostgresqlMessageQueue implements MessageQueue {
                                              .setInstanceId(consumerInstanceId)
                                              .setMetrics(engineMetrics)
                                              .setParallelConsumers(options.parallelConsumers())
+                                             .setRuntime(runtime)
                                              .build();
         orderedConsumer.configureOrdered((messageId, key, payload, payloadType) -> invoke(handler, messageId, key, payload, payloadType),
                                          settings, options.maxShards(), policy);
