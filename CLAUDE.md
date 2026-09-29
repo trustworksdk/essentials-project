@@ -11,6 +11,7 @@ Multi-module Maven. GroupId: `dk.trustworks.essentials` / `dk.trustworks.essenti
 Consumer-facing module docs: `LLM/LLM.md` (entry point), `LLM/LLM-*.md` (per-module).
 Read before suggesting APIs — don't guess from class names.
 Each module has own `CLAUDE.md` with contributor/dev context.
+`LLM/LLM-traps.md` lines carry stable `ESS-NNN` ids — never renumber or reuse; retire under `## Retired ids`; `scripts/check-ess-ids.py` enforces it.
 Edit `LLM/` only: `essentials-plugin/references/llm/` is generated from it by `scripts/sync-plugin-llm.sh`, kept in step by the pre-commit hook (`scripts/install-git-hooks.sh`, once per clone) and enforced by CI. Setup outside the devcontainer: README "Editing the LLM docs".
 
 ## Commands
