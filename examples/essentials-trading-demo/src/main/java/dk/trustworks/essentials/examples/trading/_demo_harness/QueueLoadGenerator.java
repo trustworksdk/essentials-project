@@ -54,6 +54,19 @@ import java.util.concurrent.atomic.*;
  * Ordering is checked as messages arrive: each ordered message carries its key's sequence number, and
  * the handler asserts it is greater than the last one seen for that key. A violation is counted
  * rather than thrown, because the point is to observe the property under load, not to fail a demo.
+ *
+ * <h2>Injected faults</h2>
+ * {@link #injectFaults} puts messages on both lanes whose handler fails on purpose: <b>retry</b> messages
+ * fail a fixed number of times and then succeed, <b>poison</b> messages fail on every attempt and end up
+ * dead-lettered. They are built to leave the traffic above untouched:
+ * <ul>
+ *     <li>They carry their own payload types, so they are neither ordering-checked nor counted as
+ *         handled price ticks or account activity.</li>
+ *     <li>Every ordered fault message gets a key of its own that nothing else ever uses. A dead
+ *         letter blocks its key and dead-letters whatever arrives for it afterwards, so a poison
+ *         message on an {@code ACC-} key would take that account's activity down with it; and a
+ *         retrying message holds its key for the length of its backoff.</li>
+ * </ul>
  */
 @Component
 public class QueueLoadGenerator {
@@ -63,6 +76,10 @@ public class QueueLoadGenerator {
     /** Anything non-zero; the engine treats payload type as opaque application metadata. */
     private static final int PRICE_TICK      = 1;
     private static final int ACCOUNT_ACTIVITY = 2;
+    /** Fails the number of times its payload names, then succeeds. */
+    private static final int FAULT_RETRY      = 3;
+    /** Fails on every attempt, so it is dead-lettered once the attempts run out. */
+    private static final int FAULT_POISON     = 4;
 
     private final QueueLoadGeneratorProperties properties;
     private final ShardOwnedQueueFactory       queues;
@@ -75,6 +92,12 @@ public class QueueLoadGenerator {
     private final AtomicLong orderViolations   = new AtomicLong();
     private final AtomicLong spikes            = new AtomicLong();
     private final AtomicReference<Instant> lastSpikeAt = new AtomicReference<>();
+    private final AtomicLong retryFaultsEnqueued  = new AtomicLong();
+    private final AtomicLong retryFaultsRecovered = new AtomicLong();
+    private final AtomicLong poisonFaultsEnqueued = new AtomicLong();
+    private final AtomicLong injectedFailures     = new AtomicLong();
+    /** Numbers the single-use keys of ordered fault messages; see {@link #injectFaults}. */
+    private final AtomicLong nextFaultKey         = new AtomicLong();
 
     /** Highest sequence handled per key, which is what makes an ordering violation observable here. */
     private final ConcurrentMap<String, Long> highestPerKey = new ConcurrentHashMap<>();
@@ -108,6 +131,8 @@ public class QueueLoadGenerator {
      * The previous run's backlog still drains; it simply belongs to keys nothing produces any more.
      */
     private final String keyPrefix;
+    /** Same instance id and run token as {@link #keyPrefix}, so fault keys can never collide with account keys. */
+    private final String faultKeyPrefix;
 
     /**
      * Its own scheduler, like {@code TradingLoadGeneratorManager}, rather than {@code @Scheduled}.
@@ -124,7 +149,9 @@ public class QueueLoadGenerator {
         this.queues = queues;
         // The instance id separates concurrent producers; the run token separates this JVM from the ones
         // before it. See keyPrefix.
-        this.keyPrefix = "ACC-" + queues.instanceId() + "-" + Long.toString(System.currentTimeMillis(), 36) + "-";
+        var instanceAndRun = queues.instanceId() + "-" + Long.toString(System.currentTimeMillis(), 36) + "-";
+        this.keyPrefix = "ACC-" + instanceAndRun;
+        this.faultKeyPrefix = "FAULT-" + instanceAndRun;
         if (properties.isEnabled()) {
             start();
         }
@@ -157,6 +184,11 @@ public class QueueLoadGenerator {
                         if (payloadType == ACCOUNT_ACTIVITY) {
                             recordOrdering(key, payload);
                             orderedHandled.incrementAndGet();
+                        } else if (payloadType == FAULT_RETRY) {
+                            failUntilAttempt(messageId, payload);
+                        } else if (payloadType == FAULT_POISON) {
+                            injectedFailures.incrementAndGet();
+                            throw new InjectedFault("Poison message " + messageId + " - fails on every attempt");
                         } else {
                             unorderedHandled.incrementAndGet();
                         }
@@ -295,6 +327,88 @@ public class QueueLoadGenerator {
     }
 
     /**
+     * Enqueue fault messages on both lanes, alongside whatever the sustained arm and spikes are doing.
+     * <p>
+     * Each ordered fault message gets a key no other message has or will have, so a poison message
+     * blocks only a key nothing else is waiting on, and a retrying one delays nothing but itself.
+     * {@code key_order} is always 0: a key with one message has nothing to order.
+     *
+     * @param retriesPerLane   messages per lane that fail {@code failuresPerRetry} times, then succeed
+     * @param poisonPerLane    messages per lane that fail every attempt and are dead-lettered
+     * @param failuresPerRetry failures before a retry message succeeds; must stay below the consumer's
+     *                         {@code maxAttempts}, or it is a poison message by another name
+     * @return how many messages were enqueued across both lanes
+     */
+    public int injectFaults(int retriesPerLane, int poisonPerLane, int failuresPerRetry) {
+        if (!running.get()) {
+            throw new IllegalStateException("The queue load generator is not running");
+        }
+        var maxAttempts = consumerOptions().maxAttempts();
+        if (retriesPerLane < 0 || poisonPerLane < 0) {
+            throw new IllegalArgumentException("Fault counts cannot be negative");
+        }
+        if (retriesPerLane > 0 && (failuresPerRetry < 1 || failuresPerRetry >= maxAttempts)) {
+            throw new IllegalArgumentException("failuresPerRetry must be between 1 and " + (maxAttempts - 1)
+                                               + " - the consumer dead-letters after " + maxAttempts + " attempts");
+        }
+        var messages = new ArrayList<Message>((retriesPerLane + poisonPerLane) * 2);
+        var retryPayload = payload(Integer.toString(failuresPerRetry));
+        for (var index = 0; index < retriesPerLane; index++) {
+            messages.add(Message.of(retryPayload, FAULT_RETRY));
+            messages.add(Message.ordered(retryPayload, FAULT_RETRY, nextFaultKey(), 0));
+        }
+        var poisonPayload = payload("poison");
+        for (var index = 0; index < poisonPerLane; index++) {
+            messages.add(Message.of(poisonPayload, FAULT_POISON));
+            messages.add(Message.ordered(poisonPayload, FAULT_POISON, nextFaultKey(), 0));
+        }
+        if (messages.isEmpty()) {
+            return 0;
+        }
+        try {
+            queue.enqueue(messages);
+        } catch (Exception e) {
+            throw new IllegalStateException("Fault injection failed", e);
+        }
+        retryFaultsEnqueued.addAndGet(retriesPerLane * 2L);
+        poisonFaultsEnqueued.addAndGet(poisonPerLane * 2L);
+        log.info("Injected faults: {} retry (failing {} time(s) each) and {} poison message(s) per lane",
+                 retriesPerLane, failuresPerRetry, poisonPerLane);
+        return messages.size();
+    }
+
+    private String nextFaultKey() {
+        return faultKeyPrefix + nextFaultKey.getAndIncrement();
+    }
+
+    /**
+     * Fail until the message has been tried {@code failures} times, reading the count from the queue.
+     * <p>
+     * The handler is not given the attempt count, so it asks for the row by id — the lookup
+     * {@link MessageHandler} documents for exactly this, paid only by fault messages. The count comes
+     * from the database, not from memory here, so it holds when a rebalance hands the message to
+     * another instance between attempts. While a message is in flight, {@code attempts} is the number
+     * of failures recorded so far.
+     */
+    private void failUntilAttempt(MessageId messageId, byte[] payload) throws Exception {
+        var failures = Integer.parseInt(new String(payload, StandardCharsets.UTF_8));
+        var attemptsSoFar = queue.getMessage(messageId).map(QueuedMessage::attempts).orElse(failures);
+        if (attemptsSoFar < failures) {
+            injectedFailures.incrementAndGet();
+            throw new InjectedFault("Retry message " + messageId + " - injected failure "
+                                    + (attemptsSoFar + 1) + " of " + failures);
+        }
+        retryFaultsRecovered.incrementAndGet();
+    }
+
+    /** Thrown on purpose by fault messages, so a log reader can tell an injected failure from a real one. */
+    static final class InjectedFault extends RuntimeException {
+        InjectedFault(String message) {
+            super(message, null, false, false);
+        }
+    }
+
+    /**
      * The property the ordered lane sells, checked where it can actually be observed.
      * <p>
      * Counted rather than thrown: a violation is a finding to surface on the dashboard, and throwing
@@ -348,6 +462,8 @@ public class QueueLoadGenerator {
                                    orderedEnqueued.get(), orderedHandled.get(),
                                    orderViolations.get(),
                                    spikes.get(), lastSpikeAt.get(),
+                                   retryFaultsEnqueued.get(), retryFaultsRecovered.get(),
+                                   poisonFaultsEnqueued.get(), injectedFailures.get(),
                                    depth == null ? 0 : depth.unordered(),
                                    depth == null ? 0 : depth.ordered(),
                                    depth == null ? 0 : depth.deadLettered(),
@@ -373,6 +489,11 @@ public class QueueLoadGenerator {
     }
 
     /**
+     * @param retryFaultsEnqueued  retry messages enqueued across both lanes; each should end up in
+     *                             {@code retryFaultsRecovered}
+     * @param poisonFaultsEnqueued poison messages enqueued across both lanes; each should end up in
+     *                             {@code deadLetteredDepth}
+     * @param injectedFailures     handler invocations that failed on purpose
      * @param unownedShards the number worth alerting on — depth cannot tell "nobody is consuming"
      *                      from "busy", and this can
      */
@@ -385,6 +506,10 @@ public class QueueLoadGenerator {
                                   long orderViolations,
                                   long spikes,
                                   Instant lastSpikeAt,
+                                  long retryFaultsEnqueued,
+                                  long retryFaultsRecovered,
+                                  long poisonFaultsEnqueued,
+                                  long injectedFailures,
                                   long unorderedDepth,
                                   long orderedDepth,
                                   long deadLetteredDepth,
