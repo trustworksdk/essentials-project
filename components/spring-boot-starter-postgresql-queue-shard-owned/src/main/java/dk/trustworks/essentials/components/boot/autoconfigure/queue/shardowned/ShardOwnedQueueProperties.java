@@ -162,7 +162,11 @@ public class ShardOwnedQueueProperties {
     private Duration maxSweepInterval = Duration.ofSeconds(30);
     private Duration pollBackstop = Duration.ofMillis(500);
     private Duration shedGrace = Duration.ofSeconds(5);
-    /** How long a shard stays unserved if its owner dies without releasing it. */
+    /**
+     * How long a shard stays unserved if its owner dies without releasing it. Keep it well above the
+     * slowest handler: an instance that loses liveness while a handler runs longer than the rest of the
+     * lease has its units taken, and a successor starts the same key beside the handler still running.
+     */
     private Duration leaseTtl = Duration.ofSeconds(30);
     /**
      * Ordered lane only: how long the safe watermark waits for a write transaction to end before
@@ -170,10 +174,6 @@ public class ShardOwnedQueueProperties {
      */
     private Duration watermarkCap = Duration.ofSeconds(60);
 
-    public ShardOwnerSettings toSettings() {
-        return new ShardOwnerSettings(readBatchSize, ackBatchSize, ackFlushInterval, chaseDelay,
-                                      holeExpiry, sweepInterval, maxHolesPerChase, keyConcurrency,
-                                      pollBackstop, maxSweepInterval, pumpThreads,
     /**
      * Micrometer meters per queue, under {@code essentials.shard-owned-queue.metrics}.
      */
@@ -249,6 +249,10 @@ public class ShardOwnedQueueProperties {
         }
     }
 
+    public ShardOwnerSettings toSettings() {
+        return new ShardOwnerSettings(readBatchSize, ackBatchSize, ackFlushInterval, chaseDelay,
+                                      holeExpiry, sweepInterval, maxHolesPerChase, keyConcurrency,
+                                      pollBackstop, maxSweepInterval, pumpThreads,
                                       shedGrace, leaseTtl, watermarkCap);
     }
 

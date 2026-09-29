@@ -608,6 +608,7 @@ final class OrderedShardOwner implements BatchReadableOwner {
     }
 
     private void runHandler(String key, long keyOrder, ShardOwnedStorage.OrderedRow row) {
+        var startedNanos = System.nanoTime();
         try {
             handler.handle(new MessageId(MessageId.Lane.ORDERED, shard, row.seq()),
                            key, row.payload(), row.payloadType());
@@ -627,6 +628,7 @@ final class OrderedShardOwner implements BatchReadableOwner {
             // and, on a virtual thread before JDK 24, pins the carrier for its duration.
             onFailure(key, keyOrder, row, e);
         } finally {
+            LeaseOverrun.check(metrics, settings, "ordered", shard, startedNanos);
             synchronized (stateLock) {
                 keysInFlight.remove(key);
             }

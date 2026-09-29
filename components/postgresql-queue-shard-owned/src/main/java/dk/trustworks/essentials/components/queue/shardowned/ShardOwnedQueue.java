@@ -524,7 +524,7 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
      */
     private boolean evaluateLiveness() {
         var staleForMillis = (System.nanoTime() - lastLivenessConfirmedNanos) / 1_000_000L;
-        if (staleForMillis <= leaseTtlMillis) {
+        if (staleForMillis <= pauseAfterMillis()) {
             if (deliveryPaused.compareAndSet(true, false)) {
                 log.info("Instance {} has confirmed its liveness again; delivery resumes", instanceId);
             }
@@ -532,12 +532,31 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
         }
         if (deliveryPaused.compareAndSet(false, true)) {
             metrics.deliveryPauses.increment();
-            log.warn("Instance {} has not confirmed its liveness for {} ms, which is past the {} ms the rest of the "
-                             + "cluster waits before taking its units. Pausing delivery until it can: whatever it delivered "
-                             + "from here on would be work a successor is doing too",
+            log.warn("Instance {} has not confirmed its liveness for {} ms, close to the {} ms the rest of the "
+                             + "cluster waits before taking its units. Pausing delivery until it can: whatever it started "
+                             + "from here on could be work a successor is doing too",
                      instanceId, staleForMillis, leaseTtlMillis);
         }
         return false;
+    }
+
+    /**
+     * How stale this instance's own liveness may get before it stops starting work: four fifths of
+     * {@code leaseTtl}, not all of it.
+     * <p>
+     * Pausing at the full lease was pausing at the moment a successor may already take the units, and
+     * the two sides do not even measure the same thing. This instance counts from when its heartbeat
+     * <em>returned</em>; everyone else compares the row's {@code heartbeat_at} - written when the
+     * statement ran, earlier - with the database's {@code now()}. So the local view runs a round trip
+     * late, and a message dispatched just inside "the lease" by this clock could start after a
+     * successor already had the unit. The last fifth is the margin for that, and for the time between
+     * a dispatch decision and the handler actually running.
+     * <p>
+     * Still above two thirds, so one missed heartbeat - they run every third of the lease - does not
+     * pause anything; it takes two.
+     */
+    private long pauseAfterMillis() {
+        return leaseTtlMillis * 4 / 5;
     }
 
     /**

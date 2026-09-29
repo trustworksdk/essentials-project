@@ -522,7 +522,8 @@ final class ShardOwner implements LeasedOwner {
     }
 
     private void runHandler(ShardOwnedStorage.Row row) {
-        var handled = false;
+        var handled      = false;
+        var startedNanos = System.nanoTime();
         try {
             try {
                 handler.handle(new MessageId(MessageId.Lane.UNORDERED, shard, row.seq()),
@@ -547,6 +548,7 @@ final class ShardOwner implements LeasedOwner {
                 onFailure(row, e);
             }
         } finally {
+            LeaseOverrun.check(metrics, settings, "unordered", shard, startedNanos);
             // In the finally, not in the branches: a slot that is never released is a shard that
             // never reads again, because the pump refuses to read while this one is at capacity.
             // Anything the handler can throw — including an Error a catch of RuntimeException would

@@ -47,9 +47,13 @@ class ShardOwnedOrderedRebalanceIT {
 
     /** Short lease, so several heartbeat-and-rebalance ticks happen inside the test window. */
     private static ShardOwnerSettings fast(Duration shedGrace) {
+        return fast(shedGrace, Duration.ofMillis(1000));
+    }
+
+    private static ShardOwnerSettings fast(Duration shedGrace, Duration leaseTtl) {
         return new ShardOwnerSettings(500, 200, Duration.ofMillis(1), Duration.ofMillis(2),
                                       Duration.ofMillis(300), Duration.ofMillis(100), 1_000, 8,
-                                      Duration.ofMillis(50), Duration.ofSeconds(30), 2, shedGrace, Duration.ofMillis(1000), Duration.ofSeconds(60));
+                                      Duration.ofMillis(50), Duration.ofSeconds(30), 2, shedGrace, leaseTtl, Duration.ofSeconds(60));
     }
 
     @Container
@@ -167,12 +171,17 @@ class ShardOwnedOrderedRebalanceIT {
         try {
             // The grace must comfortably exceed the handler, or this test measures the abandon path
             // that `a_shed_that_cannot_drain_is_abandoned...` covers instead of the drain path.
-            first.startConsumingOrdered(handler, fast(Duration.ofSeconds(20)), SHARD_COUNT);
+            // And the lease must exceed the handler too. With the one-second lease the other tests use,
+            // a one-second heartbeat stall under a loaded build was enough for the joiner to take the
+            // incumbent's units as dead while its three-second handlers ran - two keys in two handlers,
+            // from a liveness lapse rather than from the rebalance this test is about. That is a real
+            // hazard, and a configuration the engine now warns about (LeaseOverrun); here it is noise.
+            first.startConsumingOrdered(handler, fast(Duration.ofSeconds(20), Duration.ofSeconds(10)), SHARD_COUNT);
             enqueueOrdered(first, keys, perKey);
             // Join while work is in flight, so the shed happens with handlers running rather than
             // against an idle shard — the case that would reorder if the drain were skipped.
             Awaitility.await().atMost(Duration.ofSeconds(20)).until(() -> deliveries.get() > 4);
-            second.startConsumingOrdered(handler, fast(Duration.ofSeconds(20)), SHARD_COUNT);
+            second.startConsumingOrdered(handler, fast(Duration.ofSeconds(20), Duration.ofSeconds(10)), SHARD_COUNT);
 
             // Wait for the shards to actually move, and record how much work was still outstanding
             // when they did. Both halves matter: a shed that happened after the queue emptied would
@@ -196,6 +205,9 @@ class ShardOwnedOrderedRebalanceIT {
 
             assertThat(overlaps.get())
                     .as("a key in two handlers at once is reordering, which no rebalance may cause")
+                    .isZero();
+            assertThat(first.metrics().handlersOutlastingLease.sum() + second.metrics().handlersOutlastingLease.sum())
+                    .as("the lease must outlast the handlers, or this measures a liveness lapse instead of a rebalance")
                     .isZero();
             assertThat(handled).as("every message must be handled at least once").hasSize(keys * perKey);
             assertThat(second.shardsHeld())

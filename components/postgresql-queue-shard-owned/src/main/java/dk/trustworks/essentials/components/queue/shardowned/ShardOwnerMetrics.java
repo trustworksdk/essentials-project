@@ -215,6 +215,19 @@ public final class ShardOwnerMetrics {
     public final LongAdder     deliveryPauses                   = new LongAdder();
 
     /**
+     * Handler invocations that ran longer than {@code leaseTtl}.
+     * <p>
+     * Non-zero means the lease is shorter than the work: should this instance lose its liveness while
+     * such a handler runs, a successor starts the same work alongside it - for the ordered lane, a key
+     * in two handlers at once. See {@code LeaseOverrun}.
+     */
+    public final LongAdder     handlersOutlastingLease          = new LongAdder();
+
+    /** Rate limit for the WARN that accompanies {@link #handlersOutlastingLease}. */
+    final java.util.concurrent.atomic.AtomicLong nextLeaseOverrunWarningNanos =
+            new java.util.concurrent.atomic.AtomicLong(System.nanoTime());
+
+    /**
      * The operator-facing subset, as a stable shape.
      * <p>
      * {@link #snapshot()} stays the full map for tests and debugging; this is what the admin API
@@ -254,6 +267,7 @@ public final class ShardOwnerMetrics {
         snapshot.put("abandonedOnInterrupt", abandonedOnInterrupt.sum());
         snapshot.put("orderViolations", orderViolations.sum());
         snapshot.put("keysBlockedByDeadLetter", keysBlockedByDeadLetter.sum());
+        snapshot.put("handlersOutlastingLease", handlersOutlastingLease.sum());
         snapshot.put("messagesPoisonedBehindDeadLetter", messagesPoisonedBehindDeadLetter.sum());
         snapshot.put("deadLetterBlockReads", deadLetterBlockReads.sum());
         snapshot.put("retriesScheduled", retriesScheduled.sum());

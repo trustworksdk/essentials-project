@@ -161,7 +161,7 @@ Full detail and the failure modes: [docs/durable-queue-shard-owned.md](../docs/d
 | `chaseDelay` | 2 ms | **UNORDERED lane only** as hole-resolution latency. On the ordered lane it only throttles the watermark probe | Rarely |
 | `maxHolesPerChase` | 1 000 | **UNORDERED lane only.** Holes resolved per chase query | Rarely |
 | `watermarkCap` | 60 s | **ORDERED lane only.** How long one long-running *write* transaction may pin the lane before the cursor is forced past it — which can skip that transaction's messages | Leave it. It is an escape hatch, not a tuning knob; if it fires, fix the long transaction |
-| `leaseTtl` | 30 s | How long a shard stays unserved if its owner dies without releasing. Heartbeat renews at a third of it | Lower for faster failover, but not below your worst stop-the-world pause |
+| `leaseTtl` | 30 s | How long a shard stays unserved if its owner dies without releasing. Heartbeat renews at a third of it | Lower for faster failover, but not below your worst stop-the-world pause, and **well above your slowest handler**: if an instance loses liveness while a handler runs longer than the rest of the lease, a successor starts the same key beside it. `ShardOwnerMetrics.handlersOutlastingLease` counts handlers that ran longer than `leaseTtl`, with a WARN at most once a minute |
 | `shedGrace` | 5 s | How long an ordered shard waits to drain before abandoning a hand-over, and how long `stop()` waits for handlers in flight | Raise if handlers are slow and rebalancing stalls, or if `stop()` keeps ordered units |
 
 `watermarkCap` and `holeExpiry` answer the same question for different lanes and are deliberately
@@ -401,7 +401,7 @@ essentials:
 The gauges read the database, so every instance reports the same cluster-wide value: aggregate them with `max by (queue)`, not `sum`. Event meters are per instance and do sum.
 
 **`ShardOwnerMetrics.deliveryPauses`** is the other one to watch. An instance that has not been able
-to confirm its own liveness within `leaseTtl` stops dispatching until it can — by then the rest of the
+to confirm its own liveness within four fifths of `leaseTtl` stops dispatching until it can — by then the rest of the
 cluster already considers its units takeable, so anything it delivered would be work a successor is
 doing too. Nothing is lost and it resumes on its own at the next successful heartbeat; a non-zero
 count says the database was unreachable or too slow for longer than the lease, which is the same
