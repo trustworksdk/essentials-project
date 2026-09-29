@@ -20,7 +20,7 @@ import dk.trustworks.essentials.components.foundation.fencedlock.TestFencedLockM
 import dk.trustworks.essentials.components.foundation.scheduler.pgcron.*;
 import dk.trustworks.essentials.components.foundation.transaction.jdbi.JdbiUnitOfWorkFactory;
 import org.junit.jupiter.api.Test;
-import org.testcontainers.containers.PostgreSQLContainer;
+import org.testcontainers.postgresql.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.*;
 
 import java.time.Duration;
@@ -36,7 +36,7 @@ import static org.awaitility.Awaitility.waitAtMost;
 public class EssentialsSchedulerIT_WithPgCron extends AbstractEssentialsSchedulerTest {
 
     @Container
-    PostgreSQLContainer<?> postgreSQLContainer = new PostgreSQLContainer<>(pgCronImage)
+    PostgreSQLContainer postgreSQLContainer = new PostgreSQLContainer(pgCronImage)
             .withCommand("postgres", "-c", "shared_preload_libraries=pg_cron", "-c", "cron.database_name=test-db")
             .withDatabaseName("test-db")
             .withUsername("postgres")
@@ -44,7 +44,7 @@ public class EssentialsSchedulerIT_WithPgCron extends AbstractEssentialsSchedule
             .withImagePullPolicy((ignored) -> false);
 
     @Override
-    protected PostgreSQLContainer<?> getPostgreSQLContainer() {
+    protected PostgreSQLContainer getPostgreSQLContainer() {
         return postgreSQLContainer;
     }
 

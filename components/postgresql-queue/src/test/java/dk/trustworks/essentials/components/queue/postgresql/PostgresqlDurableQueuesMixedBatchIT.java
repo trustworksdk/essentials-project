@@ -23,7 +23,7 @@ import dk.trustworks.essentials.components.foundation.transaction.jdbi.JdbiUnitO
 import dk.trustworks.essentials.components.queue.postgresql.test_data.*;
 import org.jdbi.v3.core.Jdbi;
 import org.junit.jupiter.api.*;
-import org.testcontainers.containers.PostgreSQLContainer;
+import org.testcontainers.postgresql.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.*;
 
 import java.util.*;
@@ -50,7 +50,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 class PostgresqlDurableQueuesMixedBatchIT {
 
     @Container
-    private static final PostgreSQLContainer<?> postgreSQLContainer = EssentialsTestContainers.postgres("mixed-batch-queue-db");
+    private static final PostgreSQLContainer postgreSQLContainer = EssentialsTestContainers.postgres("mixed-batch-queue-db");
 
     private JdbiUnitOfWorkFactory   unitOfWorkFactory;
     private PostgresqlDurableQueues durableQueues;

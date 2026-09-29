@@ -38,7 +38,7 @@ import dk.trustworks.essentials.shared.collections.Lists;
 import org.jdbi.v3.core.Jdbi;
 import org.jdbi.v3.postgres.PostgresPlugin;
 import org.junit.jupiter.api.*;
-import org.testcontainers.containers.PostgreSQLContainer;
+import org.testcontainers.postgresql.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.*;
 
 import java.time.OffsetDateTime;
@@ -52,7 +52,7 @@ class PostgresqlAggregateSnapshotRepository_keepALimitedNumberOfHistoricSnapshot
     public static final int           NUMBER_OF_HISTORIC_SNAPSHOTS_TO_KEEP = 3;
 
     @Container
-    private final PostgreSQLContainer<?> postgreSQLContainer = new PostgreSQLContainer<>("postgres:18.4").withDatabaseName("event-store")
+    private final PostgreSQLContainer postgreSQLContainer = new PostgreSQLContainer("postgres:18.4").withDatabaseName("event-store")
                                                                                                            .withUsername("test-user")
                                                                                                            .withPassword("secret-password");
 

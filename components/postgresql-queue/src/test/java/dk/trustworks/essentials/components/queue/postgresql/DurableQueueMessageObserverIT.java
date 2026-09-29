@@ -28,7 +28,7 @@ import dk.trustworks.essentials.shared.security.EssentialsSecurityProvider;
 import org.awaitility.Awaitility;
 import org.jdbi.v3.core.Jdbi;
 import org.junit.jupiter.api.*;
-import org.testcontainers.containers.PostgreSQLContainer;
+import org.testcontainers.postgresql.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.*;
 
 import java.time.*;
@@ -43,7 +43,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 @Testcontainers
 class DurableQueueMessageObserverIT {
     @Container
-    private static final PostgreSQLContainer<?> postgreSQLContainer = EssentialsTestContainers.postgres("observer-db");
+    private static final PostgreSQLContainer postgreSQLContainer = EssentialsTestContainers.postgres("observer-db");
 
     private JdbiUnitOfWorkFactory   unitOfWorkFactory;
     private PostgresqlDurableQueues durableQueues;

@@ -23,7 +23,7 @@ import org.springframework.boot.autoconfigure.AutoConfigurations;
 import org.springframework.boot.jdbc.autoconfigure.DataSourceAutoConfiguration;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
 import org.springframework.jdbc.datasource.DriverManagerDataSource;
-import org.testcontainers.containers.PostgreSQLContainer;
+import org.testcontainers.postgresql.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.*;
 
 import java.sql.SQLException;
@@ -37,7 +37,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 class ShardOwnedSchemaModeIT {
 
     @Container
-    static PostgreSQLContainer<?> postgres = new PostgreSQLContainer<>("postgres:17.5-bookworm");
+    static PostgreSQLContainer postgres = new PostgreSQLContainer("postgres:17.5-bookworm");
 
     private DriverManagerDataSource dataSource;
 

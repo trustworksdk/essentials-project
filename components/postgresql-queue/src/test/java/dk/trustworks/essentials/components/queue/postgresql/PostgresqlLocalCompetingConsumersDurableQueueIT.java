@@ -22,7 +22,7 @@ import dk.trustworks.essentials.components.foundation.transaction.jdbi.GenericHa
 import dk.trustworks.essentials.components.foundation.transaction.jdbi.JdbiUnitOfWorkFactory;
 import dk.trustworks.essentials.components.foundation.test.EssentialsTestContainers;
 import org.jdbi.v3.core.Jdbi;
-import org.testcontainers.containers.PostgreSQLContainer;
+import org.testcontainers.postgresql.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.*;
 
 /**
@@ -31,7 +31,7 @@ import org.testcontainers.junit.jupiter.*;
 @Testcontainers
 abstract class PostgresqlLocalCompetingConsumersDurableQueueIT extends LocalCompetingConsumersDurableQueueIT<PostgresqlDurableQueues, GenericHandleAwareUnitOfWork, JdbiUnitOfWorkFactory> {
     @Container
-    protected static final PostgreSQLContainer<?> postgreSQLContainer = EssentialsTestContainers.postgres("queue-db");
+    protected static final PostgreSQLContainer postgreSQLContainer = EssentialsTestContainers.postgres("queue-db");
 
     private HikariDataSource dataSource;
 

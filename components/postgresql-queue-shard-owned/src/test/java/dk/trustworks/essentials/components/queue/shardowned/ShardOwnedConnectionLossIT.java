@@ -19,7 +19,7 @@ package dk.trustworks.essentials.components.queue.shardowned;
 import com.zaxxer.hikari.*;
 import org.awaitility.Awaitility;
 import org.junit.jupiter.api.*;
-import org.testcontainers.containers.PostgreSQLContainer;
+import org.testcontainers.postgresql.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.*;
 
 import java.nio.charset.StandardCharsets;
@@ -48,7 +48,7 @@ class ShardOwnedConnectionLossIT {
     private static final int   SHARD_COUNT = 4;
 
     @Container
-    static PostgreSQLContainer<?> postgres = LabPostgres.create();
+    static PostgreSQLContainer postgres = LabPostgres.create();
 
     private HikariDataSource dataSource;
 

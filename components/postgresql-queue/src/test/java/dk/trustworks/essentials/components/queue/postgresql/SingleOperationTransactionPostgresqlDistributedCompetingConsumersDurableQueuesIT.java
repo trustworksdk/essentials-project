@@ -21,7 +21,7 @@ import dk.trustworks.essentials.components.foundation.test.messaging.queue.Distr
 import dk.trustworks.essentials.components.foundation.transaction.jdbi.*;
 import dk.trustworks.essentials.components.foundation.test.EssentialsTestContainers;
 import org.jdbi.v3.core.Jdbi;
-import org.testcontainers.containers.PostgreSQLContainer;
+import org.testcontainers.postgresql.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.*;
 
 import java.time.Duration;
@@ -32,7 +32,7 @@ import java.time.Duration;
 @Testcontainers
 abstract class SingleOperationTransactionPostgresqlDistributedCompetingConsumersDurableQueuesIT extends DistributedCompetingConsumersDurableQueuesIT<PostgresqlDurableQueues, GenericHandleAwareUnitOfWorkFactory.GenericHandleAwareUnitOfWork, JdbiUnitOfWorkFactory> {
     @Container
-    protected static final PostgreSQLContainer<?> postgreSQLContainer = EssentialsTestContainers.postgres("queue-db");
+    protected static final PostgreSQLContainer postgreSQLContainer = EssentialsTestContainers.postgres("queue-db");
 
     private HikariDataSource dataSource;
 

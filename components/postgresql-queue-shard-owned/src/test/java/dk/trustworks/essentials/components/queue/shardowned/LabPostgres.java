@@ -17,7 +17,7 @@
 package dk.trustworks.essentials.components.queue.shardowned;
 
 import org.slf4j.*;
-import org.testcontainers.containers.PostgreSQLContainer;
+import org.testcontainers.postgresql.PostgreSQLContainer;
 
 import java.util.*;
 
@@ -75,7 +75,7 @@ public final class LabPostgres {
      *
      * @param size a tmpfs size as {@code mount} spells it, e.g. {@code "192m"}
      */
-    public static PostgreSQLContainer<?> createWithSizedDataDirectory(String size, String... extraPostgresArgs) {
+    public static PostgreSQLContainer createWithSizedDataDirectory(String size, String... extraPostgresArgs) {
         var container = create(extraPostgresArgs);
         container.withTmpFs(Map.of(DATA_DIRECTORY, "rw,size=" + size));
         log.info("Lab PostgreSQL: data directory is a {} tmpfs", size);
@@ -85,7 +85,7 @@ public final class LabPostgres {
     /**
      * @param extraPostgresArgs appended to the {@code postgres} command, e.g. {@code wal_level=logical}
      */
-    public static PostgreSQLContainer<?> create(String... extraPostgresArgs) {
+    public static PostgreSQLContainer create(String... extraPostgresArgs) {
         var cpuset = System.getProperty("lab.pg.cpuset", "");
         var cpus = Double.parseDouble(System.getProperty("lab.pg.cpus", "0"));
         var memoryMb = Long.parseLong(System.getProperty("lab.pg.memory-mb", "0"));
@@ -103,7 +103,7 @@ public final class LabPostgres {
             command.add(arg);
         }
 
-        var container = new PostgreSQLContainer<>(IMAGE)
+        var container = new PostgreSQLContainer(IMAGE)
                 .withDatabaseName("essentials_lab")
                 .withUsername("essentials")
                 .withPassword("essentials");

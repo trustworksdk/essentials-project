@@ -22,7 +22,7 @@ import dk.trustworks.essentials.components.foundation.scheduler.DefaultEssential
 import dk.trustworks.essentials.components.foundation.scheduler.pgcron.CronExpression;
 import dk.trustworks.essentials.components.foundation.transaction.jdbi.JdbiUnitOfWorkFactory;
 import org.junit.jupiter.api.Test;
-import org.testcontainers.containers.PostgreSQLContainer;
+import org.testcontainers.postgresql.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.*;
 import org.testcontainers.utility.DockerImageName;
 
@@ -42,7 +42,7 @@ public class PostgresqlTTLManagerIT_WithPgCron extends AbstractTTLManagerTest {
     protected static     DockerImageName pgCronImage = DockerImageName.parse(IMAGE_PROP).asCompatibleSubstituteFor("postgres");
 
     @Container
-    private final PostgreSQLContainer<?> postgreSQLContainer = new PostgreSQLContainer<>(pgCronImage)
+    private final PostgreSQLContainer postgreSQLContainer = new PostgreSQLContainer(pgCronImage)
             .withCommand("postgres", "-c", "shared_preload_libraries=pg_cron", "-c", "cron.database_name=test-db")
             .withDatabaseName("test-db")
             .withUsername("postgres")
@@ -85,7 +85,7 @@ public class PostgresqlTTLManagerIT_WithPgCron extends AbstractTTLManagerTest {
         ttlManager.stop();
     }
 
-    public PostgreSQLContainer<?> getPostgreSQLContainer() {
+    public PostgreSQLContainer getPostgreSQLContainer() {
         return postgreSQLContainer;
     }
 

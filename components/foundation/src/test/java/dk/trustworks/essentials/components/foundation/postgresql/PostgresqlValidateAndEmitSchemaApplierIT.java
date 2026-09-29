@@ -20,7 +20,7 @@ import dk.trustworks.essentials.components.foundation.schema.*;
 import org.jdbi.v3.core.Jdbi;
 import org.junit.jupiter.api.*;
 import org.junit.jupiter.api.io.TempDir;
-import org.testcontainers.containers.PostgreSQLContainer;
+import org.testcontainers.postgresql.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.*;
 
 import java.nio.file.*;
@@ -31,7 +31,7 @@ import static org.assertj.core.api.Assertions.*;
 @Testcontainers
 class PostgresqlValidateAndEmitSchemaApplierIT {
     @Container
-    private static final PostgreSQLContainer<?> postgreSQLContainer = new PostgreSQLContainer<>("postgres:18.4")
+    private static final PostgreSQLContainer postgreSQLContainer = new PostgreSQLContainer("postgres:18.4")
             .withDatabaseName("schema-validate-emit-db")
             .withUsername("test-user")
             .withPassword("secret-password");

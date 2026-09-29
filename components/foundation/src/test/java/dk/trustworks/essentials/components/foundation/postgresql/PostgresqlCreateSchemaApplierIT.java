@@ -18,7 +18,7 @@ package dk.trustworks.essentials.components.foundation.postgresql;
 import dk.trustworks.essentials.components.foundation.schema.*;
 import org.jdbi.v3.core.Jdbi;
 import org.junit.jupiter.api.*;
-import org.testcontainers.containers.PostgreSQLContainer;
+import org.testcontainers.postgresql.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.*;
 
 import java.util.*;
@@ -29,7 +29,7 @@ import static org.assertj.core.api.Assertions.*;
 @Testcontainers
 class PostgresqlCreateSchemaApplierIT {
     @Container
-    private static final PostgreSQLContainer<?> postgreSQLContainer = new PostgreSQLContainer<>("postgres:18.4")
+    private static final PostgreSQLContainer postgreSQLContainer = new PostgreSQLContainer("postgres:18.4")
             .withDatabaseName("schema-harness-db")
             .withUsername("test-user")
             .withPassword("secret-password");

@@ -36,7 +36,7 @@ import org.jdbi.v3.core.Jdbi;
 import org.jdbi.v3.postgres.PostgresPlugin;
 import org.junit.jupiter.api.*;
 import org.junit.jupiter.api.io.TempDir;
-import org.testcontainers.containers.PostgreSQLContainer;
+import org.testcontainers.postgresql.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.*;
 
 import java.nio.file.*;
@@ -56,7 +56,7 @@ import static org.mockito.Mockito.mock;
 @Testcontainers
 class EssentialsSchemaScriptRoundTripIT {
     @Container
-    private final PostgreSQLContainer<?> postgres = new PostgreSQLContainer<>("postgres:18.4")
+    private final PostgreSQLContainer postgres = new PostgreSQLContainer("postgres:18.4")
             .withDatabaseName("schema-round-trip")
             .withUsername("test-user")
             .withPassword("secret-password");

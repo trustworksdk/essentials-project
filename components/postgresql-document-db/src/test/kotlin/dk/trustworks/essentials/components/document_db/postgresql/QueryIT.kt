@@ -27,7 +27,7 @@ import org.assertj.core.api.Assertions.assertThat
 import org.jdbi.v3.core.Jdbi
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
-import org.testcontainers.containers.PostgreSQLContainer
+import org.testcontainers.postgresql.PostgreSQLContainer
 import org.testcontainers.junit.jupiter.Container
 import org.testcontainers.junit.jupiter.Testcontainers
 import java.time.LocalDateTime
@@ -49,7 +49,7 @@ class QueryIT {
          */
         @Container
         @JvmStatic
-        val postgresContainer: PostgreSQLContainer<*> = PostgreSQLContainer("postgres:18.4")
+        val postgresContainer: PostgreSQLContainer = PostgreSQLContainer("postgres:18.4")
             .apply {
                 withDatabaseName("testdb")
                 withUsername("test")

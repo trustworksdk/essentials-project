@@ -22,7 +22,7 @@ import dk.trustworks.essentials.components.queue.shardowned.ShardOwnedSchema;
 import dk.trustworks.essentials.components.queue.shardowned.spi.QueueName;
 import org.jdbi.v3.core.Jdbi;
 import org.junit.jupiter.api.*;
-import org.testcontainers.containers.PostgreSQLContainer;
+import org.testcontainers.postgresql.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.*;
 
 import java.util.List;
@@ -37,7 +37,7 @@ class ShardOwnedSchemaContributorIT {
     private static final QueueName ORDERS = QueueName.of("orders");
 
     @Container
-    private final PostgreSQLContainer<?> postgres = new PostgreSQLContainer<>("postgres:17.5-bookworm");
+    private final PostgreSQLContainer postgres = new PostgreSQLContainer("postgres:17.5-bookworm");
 
     private HikariDataSource            dataSource;
     private Jdbi                        jdbi;

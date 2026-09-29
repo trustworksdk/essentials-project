@@ -28,7 +28,7 @@ import org.assertj.core.api.Fail;
 import org.jdbi.v3.core.Jdbi;
 import org.junit.jupiter.api.*;
 import org.slf4j.*;
-import org.testcontainers.containers.PostgreSQLContainer;
+import org.testcontainers.postgresql.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.*;
 import org.testcontainers.shaded.org.awaitility.Awaitility;
 
@@ -48,7 +48,7 @@ class MultiTableChangeListenerIT {
     public static final  String TABLE_3 = "table3";
 
     @Container
-    private static final PostgreSQLContainer<?> postgreSQLContainer = new PostgreSQLContainer<>("postgres:18.4")
+    private static final PostgreSQLContainer postgreSQLContainer = new PostgreSQLContainer("postgres:18.4")
             .withDatabaseName("listen-notify-db")
             .withUsername("test-user")
             .withPassword("secret-password");
@@ -76,7 +76,7 @@ class MultiTableChangeListenerIT {
         });
     }
 
-    protected PostgreSQLContainer<?> getPostgreSQLContainer() {
+    protected PostgreSQLContainer getPostgreSQLContainer() {
         return postgreSQLContainer;
     }
 

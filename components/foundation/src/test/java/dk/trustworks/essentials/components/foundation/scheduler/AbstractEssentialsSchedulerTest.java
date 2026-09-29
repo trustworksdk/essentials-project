@@ -19,7 +19,7 @@ package dk.trustworks.essentials.components.foundation.scheduler;
 import dk.trustworks.essentials.components.foundation.transaction.jdbi.*;
 import org.jdbi.v3.core.Jdbi;
 import org.junit.jupiter.api.BeforeEach;
-import org.testcontainers.containers.PostgreSQLContainer;
+import org.testcontainers.postgresql.PostgreSQLContainer;
 import org.testcontainers.utility.DockerImageName;
 
 import static dk.trustworks.essentials.shared.MessageFormatter.NamedArgumentBinding.arg;
@@ -43,7 +43,7 @@ public abstract class AbstractEssentialsSchedulerTest {
         jdbi.useHandle(handle -> handle.execute("DROP TABLE IF EXISTS " + TEST_TABLE_NAME));
     }
 
-    protected abstract PostgreSQLContainer<?> getPostgreSQLContainer();
+    protected abstract PostgreSQLContainer getPostgreSQLContainer();
 
     protected void setupTestData(String tableName, JdbiUnitOfWorkFactory unitOfWorkFactory) {
         String sql = bind("""

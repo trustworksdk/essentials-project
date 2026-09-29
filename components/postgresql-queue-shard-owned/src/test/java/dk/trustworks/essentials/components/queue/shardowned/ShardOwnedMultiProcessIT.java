@@ -22,7 +22,7 @@ import dk.trustworks.essentials.components.queue.shardowned.*;
 import org.awaitility.Awaitility;
 import org.junit.jupiter.api.*;
 import org.slf4j.*;
-import org.testcontainers.containers.PostgreSQLContainer;
+import org.testcontainers.postgresql.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.*;
 
 import java.io.*;
@@ -56,7 +56,7 @@ class ShardOwnedMultiProcessIT {
     private static final int   SHARD_COUNT = 8;
 
     @Container
-    static PostgreSQLContainer<?> postgres = LabPostgres.create();
+    static PostgreSQLContainer postgres = LabPostgres.create();
 
     private HikariDataSource dataSource;
     private final List<Process> nodes = new ArrayList<>();

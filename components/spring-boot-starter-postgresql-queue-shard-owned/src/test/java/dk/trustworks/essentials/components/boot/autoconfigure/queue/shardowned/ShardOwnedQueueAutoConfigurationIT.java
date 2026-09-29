@@ -31,7 +31,7 @@ import org.springframework.boot.autoconfigure.AutoConfigurations;
 import org.springframework.boot.jdbc.autoconfigure.DataSourceAutoConfiguration;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
 import org.springframework.jdbc.datasource.DriverManagerDataSource;
-import org.testcontainers.containers.PostgreSQLContainer;
+import org.testcontainers.postgresql.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.*;
 
 import java.nio.charset.StandardCharsets;
@@ -53,7 +53,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 class ShardOwnedQueueAutoConfigurationIT {
 
     @Container
-    static PostgreSQLContainer<?> postgres = new PostgreSQLContainer<>("postgres:17.5-bookworm");
+    static PostgreSQLContainer postgres = new PostgreSQLContainer("postgres:17.5-bookworm");
 
     /**
      * The container is static, so it is shared by every method in this class and the registry

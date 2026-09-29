@@ -25,7 +25,7 @@ import dk.trustworks.essentials.components.foundation.types.CorrelationId;
 import dk.trustworks.essentials.components.foundation.test.EssentialsTestContainers;
 import org.jdbi.v3.core.Jdbi;
 import org.junit.jupiter.api.Test;
-import org.testcontainers.containers.PostgreSQLContainer;
+import org.testcontainers.postgresql.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.*;
 
 import java.time.Duration;
@@ -39,7 +39,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 @Testcontainers
 abstract class SingleOperationTransactionPostgresqlDurableQueuesIT extends DurableQueuesIT<PostgresqlDurableQueues, GenericHandleAwareUnitOfWorkFactory.GenericHandleAwareUnitOfWork, JdbiUnitOfWorkFactory> {
     @Container
-    protected static final PostgreSQLContainer<?> postgreSQLContainer = EssentialsTestContainers.postgres("queue-db");
+    protected static final PostgreSQLContainer postgreSQLContainer = EssentialsTestContainers.postgres("queue-db");
 
     /**
      * Determine whether to use the centralized message fetcher

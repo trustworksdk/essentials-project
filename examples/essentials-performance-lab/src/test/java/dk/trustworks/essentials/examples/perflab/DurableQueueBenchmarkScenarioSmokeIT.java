@@ -20,7 +20,7 @@ import tools.jackson.databind.ObjectMapper;
 import com.zaxxer.hikari.*;
 import dk.trustworks.essentials.examples.perflab.scenario.DurableQueueBenchmarkScenario;
 import org.junit.jupiter.api.*;
-import org.testcontainers.containers.PostgreSQLContainer;
+import org.testcontainers.postgresql.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.*;
 
 import java.nio.file.*;
@@ -42,7 +42,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 class DurableQueueBenchmarkScenarioSmokeIT {
 
     @Container
-    static PostgreSQLContainer<?> postgres = new PostgreSQLContainer<>("postgres:17.5-bookworm")
+    static PostgreSQLContainer postgres = new PostgreSQLContainer("postgres:17.5-bookworm")
             .withDatabaseName("essentials_lab")
             .withUsername("essentials")
             .withPassword("essentials");

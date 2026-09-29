@@ -22,7 +22,7 @@ import dk.trustworks.essentials.components.foundation.scheduler.DefaultEssential
 import dk.trustworks.essentials.components.foundation.scheduler.executor.FixedDelay;
 import dk.trustworks.essentials.components.foundation.transaction.jdbi.JdbiUnitOfWorkFactory;
 import org.junit.jupiter.api.Test;
-import org.testcontainers.containers.PostgreSQLContainer;
+import org.testcontainers.postgresql.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.*;
 
 import java.time.Duration;
@@ -35,7 +35,7 @@ import static org.awaitility.Awaitility.waitAtMost;
 public class PostgresqlTTLManagerIT_WithExecutor extends AbstractTTLManagerTest {
 
     @Container
-    static final PostgreSQLContainer<?> postgreSQLContainer = new PostgreSQLContainer<>("postgres:18.4")
+    static final PostgreSQLContainer postgreSQLContainer = new PostgreSQLContainer("postgres:18.4")
             .withDatabaseName("test-db")
             .withUsername("postgres")
             .withPassword("postgres");
@@ -73,7 +73,7 @@ public class PostgresqlTTLManagerIT_WithExecutor extends AbstractTTLManagerTest 
         ttlManager.stop();
     }
 
-    public PostgreSQLContainer<?> getPostgreSQLContainer() {
+    public PostgreSQLContainer getPostgreSQLContainer() {
         return postgreSQLContainer;
     }
 }

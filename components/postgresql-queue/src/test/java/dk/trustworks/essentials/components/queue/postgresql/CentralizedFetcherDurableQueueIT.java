@@ -28,7 +28,7 @@ import org.assertj.core.api.SoftAssertions;
 import org.awaitility.Awaitility;
 import org.jdbi.v3.core.Jdbi;
 import org.junit.jupiter.api.*;
-import org.testcontainers.containers.PostgreSQLContainer;
+import org.testcontainers.postgresql.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.*;
 
 import java.time.Duration;
@@ -44,7 +44,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 @Testcontainers
 public class CentralizedFetcherDurableQueueIT {
     @Container
-    private static final PostgreSQLContainer<?> postgreSQLContainer = EssentialsTestContainers.postgres("queue-db");
+    private static final PostgreSQLContainer postgreSQLContainer = EssentialsTestContainers.postgres("queue-db");
 
     private static final int NUMBER_OF_MESSAGES     = 1000;
     private static final int MAX_PARALLEL_CONSUMERS = 20;

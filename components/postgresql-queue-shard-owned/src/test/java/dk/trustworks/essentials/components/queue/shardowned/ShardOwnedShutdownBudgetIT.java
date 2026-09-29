@@ -20,7 +20,7 @@ import com.zaxxer.hikari.*;
 import dk.trustworks.essentials.components.queue.shardowned.spi.ConsumerOptions;
 import org.awaitility.Awaitility;
 import org.junit.jupiter.api.*;
-import org.testcontainers.containers.PostgreSQLContainer;
+import org.testcontainers.postgresql.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.*;
 
 import java.time.Duration;
@@ -69,7 +69,7 @@ class ShardOwnedShutdownBudgetIT {
     private static final Duration ALLOWED_SHUTDOWN = Duration.ofSeconds(25);
 
     @Container
-    static PostgreSQLContainer<?> postgres = LabPostgres.create();
+    static PostgreSQLContainer postgres = LabPostgres.create();
 
     private PartitionableProxy proxy;
     private HikariDataSource   partitionable;

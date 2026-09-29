@@ -49,7 +49,7 @@ import org.jdbi.v3.postgres.PostgresPlugin;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import org.testcontainers.containers.PostgreSQLContainer;
+import org.testcontainers.postgresql.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 
@@ -90,7 +90,7 @@ class NotifyPollingIT {
     private static final EventMetaData META_DATA = EventMetaData.of("k", "v");
 
     @Container
-    private final PostgreSQLContainer<?> postgres = new PostgreSQLContainer<>("postgres:18.4")
+    private final PostgreSQLContainer postgres = new PostgreSQLContainer("postgres:18.4")
             .withDatabaseName("notify-polling-it")
             .withUsername("test-user")
             .withPassword("secret-password");

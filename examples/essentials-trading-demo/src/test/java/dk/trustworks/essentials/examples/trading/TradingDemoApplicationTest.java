@@ -88,7 +88,7 @@ import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
-import org.testcontainers.containers.PostgreSQLContainer;
+import org.testcontainers.postgresql.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 
@@ -133,7 +133,7 @@ class TradingDemoApplicationTest {
     private static final Duration PROJECTION_TIMEOUT = Duration.ofSeconds(60);
 
     @Container
-    static final PostgreSQLContainer<?> postgres = new PostgreSQLContainer<>("postgres:18.4")
+    static final PostgreSQLContainer postgres = new PostgreSQLContainer("postgres:18.4")
             .withDatabaseName("trading-demo-test-db")
             .withUsername("test")
             .withPassword("test");

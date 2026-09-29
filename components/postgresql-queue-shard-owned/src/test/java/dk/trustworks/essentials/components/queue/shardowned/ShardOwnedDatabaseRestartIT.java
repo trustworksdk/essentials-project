@@ -24,7 +24,7 @@ import com.github.dockerjava.api.model.Ports;
 import com.zaxxer.hikari.*;
 import org.awaitility.Awaitility;
 import org.junit.jupiter.api.*;
-import org.testcontainers.containers.PostgreSQLContainer;
+import org.testcontainers.postgresql.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.*;
 
 import java.io.*;
@@ -76,7 +76,7 @@ class ShardOwnedDatabaseRestartIT {
     private static final int HOST_PORT = freePort();
 
     @Container
-    static PostgreSQLContainer<?> postgres = LabPostgres.create()
+    static PostgreSQLContainer postgres = LabPostgres.create()
             .withCreateContainerCmdModifier(cmd -> cmd.getHostConfig()
                                                       .withPortBindings(new PortBinding(Ports.Binding.bindPort(HOST_PORT),
                                                                                         ExposedPort.tcp(PostgreSQLContainer.POSTGRESQL_PORT))));

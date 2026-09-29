@@ -25,6 +25,7 @@ import org.slf4j.*;
 import org.testcontainers.containers.*;
 import org.testcontainers.containers.wait.strategy.Wait;
 import org.testcontainers.junit.jupiter.Testcontainers;
+import org.testcontainers.postgresql.PostgreSQLContainer;
 
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
@@ -77,7 +78,7 @@ class ShardOwnedCrossHostPartitionIT {
     private static final Duration OBSERVATION_WINDOW = Duration.ofSeconds(90);
 
     private Network          network;
-    private PostgreSQLContainer<?> postgres;
+    private PostgreSQLContainer postgres;
     private HikariDataSource dataSource;
 
     @BeforeEach

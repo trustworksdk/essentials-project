@@ -19,7 +19,7 @@ package dk.trustworks.essentials.components.queue.shardowned;
 import com.zaxxer.hikari.*;
 import org.junit.jupiter.api.*;
 import org.slf4j.*;
-import org.testcontainers.containers.PostgreSQLContainer;
+import org.testcontainers.postgresql.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.*;
 
 import java.nio.charset.StandardCharsets;
@@ -67,7 +67,7 @@ class ShardOwnedMultiQueueCostIT {
      * and a server has to be sized for it or {@code pumpThreads} lowered.
      */
     @Container
-    static PostgreSQLContainer<?> postgres = LabPostgres.create("max_connections=500");
+    static PostgreSQLContainer postgres = LabPostgres.create("max_connections=500");
 
     private HikariDataSource dataSource;
 

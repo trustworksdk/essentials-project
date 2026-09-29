@@ -19,7 +19,7 @@ package dk.trustworks.essentials.components.foundation.ttl;
 import dk.trustworks.essentials.components.foundation.transaction.jdbi.JdbiUnitOfWorkFactory;
 import org.jdbi.v3.core.Jdbi;
 import org.junit.jupiter.api.BeforeEach;
-import org.testcontainers.containers.PostgreSQLContainer;
+import org.testcontainers.postgresql.PostgreSQLContainer;
 
 import static dk.trustworks.essentials.shared.MessageFormatter.NamedArgumentBinding.arg;
 import static dk.trustworks.essentials.shared.MessageFormatter.bind;
@@ -34,7 +34,7 @@ public abstract class AbstractTTLManagerTest {
         jdbi = Jdbi.create(getPostgreSQLContainer().getJdbcUrl(), getPostgreSQLContainer().getUsername(), getPostgreSQLContainer().getPassword());
     }
 
-    protected abstract PostgreSQLContainer<?> getPostgreSQLContainer();
+    protected abstract PostgreSQLContainer getPostgreSQLContainer();
 
     protected int getNumberOfRowsInTable(JdbiUnitOfWorkFactory unitOfWorkFactory) {
         return getNumberOfRowsInTable(TEST_TABLE_NAME, unitOfWorkFactory);

@@ -25,7 +25,7 @@ import dk.trustworks.essentials.components.foundation.test.EssentialsTestContain
 import org.awaitility.Awaitility;
 import org.jdbi.v3.core.Jdbi;
 import org.junit.jupiter.api.*;
-import org.testcontainers.containers.PostgreSQLContainer;
+import org.testcontainers.postgresql.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.*;
 
 import java.time.Duration;
@@ -77,7 +77,7 @@ class BatchedFetchStrategyIT {
     };
 
     @Container
-    private static final PostgreSQLContainer<?> postgreSQLContainer = EssentialsTestContainers.postgres("queue-db");
+    private static final PostgreSQLContainer postgreSQLContainer = EssentialsTestContainers.postgres("queue-db");
 
     private JdbiUnitOfWorkFactory         unitOfWorkFactory;
     private List<PostgresqlDurableQueues> createdDurableQueues;

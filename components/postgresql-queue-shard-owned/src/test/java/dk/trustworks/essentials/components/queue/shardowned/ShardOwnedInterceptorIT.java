@@ -22,7 +22,7 @@ import dk.trustworks.essentials.components.queue.shardowned.spi.operations.*;
 import dk.trustworks.essentials.shared.interceptor.*;
 import org.awaitility.Awaitility;
 import org.junit.jupiter.api.*;
-import org.testcontainers.containers.PostgreSQLContainer;
+import org.testcontainers.postgresql.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.*;
 
 import java.nio.charset.StandardCharsets;
@@ -46,7 +46,7 @@ class ShardOwnedInterceptorIT {
     private static final int   SHARD_COUNT = 2;
 
     @Container
-    static PostgreSQLContainer<?> postgres = LabPostgres.create();
+    static PostgreSQLContainer postgres = LabPostgres.create();
 
     private HikariDataSource dataSource;
 

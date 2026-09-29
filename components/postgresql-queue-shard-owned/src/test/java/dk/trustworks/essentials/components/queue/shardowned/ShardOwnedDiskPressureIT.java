@@ -20,7 +20,7 @@ import com.zaxxer.hikari.*;
 import org.awaitility.Awaitility;
 import org.junit.jupiter.api.*;
 import org.slf4j.*;
-import org.testcontainers.containers.PostgreSQLContainer;
+import org.testcontainers.postgresql.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.*;
 
 import java.nio.charset.StandardCharsets;
@@ -76,7 +76,7 @@ class ShardOwnedDiskPressureIT {
      * engine rather than of the test.
      */
     @Container
-    static PostgreSQLContainer<?> postgres = LabPostgres.createWithSizedDataDirectory("256m");
+    static PostgreSQLContainer postgres = LabPostgres.createWithSizedDataDirectory("256m");
 
     /** The emergency reserve, in megabytes: the thing deleted to give a full cluster room to move. */
     private static final int BALLAST_MB = 48;

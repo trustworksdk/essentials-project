@@ -25,7 +25,7 @@ import dk.trustworks.essentials.components.foundation.schema.*;
 import org.jdbi.v3.core.Jdbi;
 import org.jdbi.v3.postgres.PostgresPlugin;
 import org.junit.jupiter.api.*;
-import org.testcontainers.containers.PostgreSQLContainer;
+import org.testcontainers.postgresql.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.*;
 
 import java.util.List;
@@ -44,7 +44,7 @@ class SeparateTablePerAggregateTypeSchemaOwnershipIT {
     private static final AggregateType PRODUCTS = AggregateType.of("Products");
 
     @Container
-    private final PostgreSQLContainer<?> postgres = new PostgreSQLContainer<>("postgres:18.4")
+    private final PostgreSQLContainer postgres = new PostgreSQLContainer("postgres:18.4")
             .withDatabaseName("schema-ownership-it")
             .withUsername("test-user")
             .withPassword("secret-password");
