@@ -154,6 +154,7 @@ redeliveries is unchanged. This applies to the framework's own defaults:
 - `DurableLocalCommandBus`: ≈ 5.9 s → ≈ 17.2 s.
 
 To keep the old timing, use `fixedBackoff` with the old constant value.
+The shard-owned engine's adapter uses the same calculation (see [§2.1](#21-shard-owned-postgresql-queue-engine)).
 → [MIGRATION-0.60 § Redelivery delays now grow](MIGRATION-0.60.md#redelivery-delays-now-grow)
 
 ---
@@ -370,7 +371,9 @@ endpoints. This is deliberate for the engine's first release.
 - Dead letters with retry, resurrect and mark-as-dead-letter by id, plus `resurrectKey(key)` to replay a
   stalled ordered key in one transaction.
 - Pull sessions (unordered lane only).
-- Per-consumer redelivery policies.
+- Per-consumer redelivery policies. Through the `DurableQueues` adapter a `RedeliveryPolicy` waits exactly as it does
+  on `postgresql-queue`: the engine's `ConsumerOptions.retryBackoff` is a function, and the adapter passes the
+  policy's own `calculateNextRedeliveryDelay`.
 - A Micrometer observer.
 - The shard count can be grown at runtime (`ShardOwnedSchema.growShardCount(...)`), and running instances
   pick it up.

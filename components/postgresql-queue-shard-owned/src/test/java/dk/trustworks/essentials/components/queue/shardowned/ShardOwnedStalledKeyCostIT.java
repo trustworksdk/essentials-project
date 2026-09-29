@@ -133,7 +133,7 @@ class ShardOwnedStalledKeyCostIT {
                     throw new IllegalStateException("poison");
                 }
                 handled.incrementAndGet();
-            }, new ConsumerOptions(4, SHARD_COUNT, 1, Duration.ofMillis(10), 1.0d, Duration.ofMillis(10)));
+            }, new ConsumerOptions(4, SHARD_COUNT, 1, RetryBackoff.fixed(Duration.ofMillis(10))));
 
             if (stall) {
                 // Stall the key first, so every message that follows meets a block rather than a

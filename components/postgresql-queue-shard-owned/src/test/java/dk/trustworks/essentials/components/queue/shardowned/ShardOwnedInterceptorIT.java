@@ -172,7 +172,7 @@ class ShardOwnedInterceptorIT {
             });
             var handled = new CountDownLatch(1);
             queue.consume((messageId, key, payload, payloadType) -> handled.countDown(),
-                          new ConsumerOptions(8, Integer.MAX_VALUE, 5, Duration.ofMillis(50), 1.0d, Duration.ofMillis(50)));
+                          new ConsumerOptions(8, Integer.MAX_VALUE, 5, RetryBackoff.fixed(Duration.ofMillis(50))));
 
             queue.enqueue(List.of(Message.of("retried".getBytes(StandardCharsets.UTF_8), 1)));
 

@@ -210,7 +210,7 @@ class ShardOwnedDeadLetterBlocksKeyIT {
                 throw new IllegalStateException("cannot apply " + order);
             }
             delivered.add(order);
-        }, new ConsumerOptions(4, SHARD_COUNT, 2, Duration.ofMillis(20), 1.0d, Duration.ofMillis(20)));
+        }, new ConsumerOptions(4, SHARD_COUNT, 2, RetryBackoff.fixed(Duration.ofMillis(20))));
     }
 
     private void enqueue(MessageQueue queue, long... orders) throws Exception {

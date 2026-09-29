@@ -300,7 +300,8 @@ the `0.0` that `RedeliveryPolicy.builder()` leaves when you never call `setFollo
 such a policy's follow-ups now wait `followupRedeliveryDelay` instead of `initialRedeliveryDelay`. And
 `linearBackoff` policies no longer compare `equals` to an `exponentialBackoff` built from the same field values.
 
-The shard-owned engine (`postgresql-queue-shard-owned-adapter`) computes its own backoff and is not affected.
+The shard-owned engine's `DurableQueues` adapter (`postgresql-queue-shard-owned-adapter`, new in 0.60) delegates
+to the same `calculateNextRedeliveryDelay`, so a policy waits the same on every engine.
 
 **What to do:** nothing, if you want the documented backoff. If you relied on the old timing — a test that waits a
 fixed time for a dead letter, or an alert tuned to how fast one arrives — recompute it, or keep the old timing

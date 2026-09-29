@@ -725,6 +725,8 @@ The database row is durability backup, not the retry mechanism: if the owner cra
 
 Retry and dead-letter events are emitted **from the owners**, never from the SPI's delivery wrapper, because the owner is the only place that knows which attempt this was.
 
+**The backoff is a function, not a formula.** `ConsumerOptions.retryBackoff` is a `RetryBackoff` — `delayAfter(attemptsSoFar)`, the first retry passing 1 — and the owner asks it once per retry. `RetryBackoff.exponential(initial, multiplier, max)` is the engine's own shape (`initial × multiplier^(attempts-1)`, capped) and `RetryBackoff.fixed(delay)` its constant case. It used to be three numbers, `retryDelay` / `retryMultiplier` / `maxRetryDelay`, and the `DurableQueues` adapter mapped a `RedeliveryPolicy` onto them: that dropped `followupRedeliveryDelay` and ran a linear policy as a constant delay. The adapter now passes the policy's own `calculateNextRedeliveryDelay` as the backoff (shifted by one: the policy counts *re*deliveries), so every strategy waits the same on both engines — pinned by `ShardOwnedRedeliveryDelayParityTest` in the adapter.
+
 ### 9.1 A key never advances past a dead letter
 
 **The rule.** Once a message for key K is dead-lettered, K delivers nothing further. Messages behind it are dead-lettered too, so the ordered table never holds rows that cannot be delivered. `ShardOwnedDeadLetterBlocksKeyIT` pins it, and was verified to fail in all three of its tests against the engine with the block disabled.
@@ -1034,7 +1036,7 @@ time than the heartbeat took to renew them.
 |---|---|---|
 | `parallelConsumers` | 8 | handlers in flight for this consumer, and the **only** bound on handler concurrency. There is no process-wide ceiling — one was removed as unmeasured and too high to bind (see `HandlerDispatch`), so the sum across consumers is what your pool must absorb |
 | `maxShards` | unbounded | cap on shards this consumer holds |
-| `maxAttempts` / `retryDelay` / `retryMultiplier` / `maxRetryDelay` | 3 / 100 ms / 2.0 / 30 s | §9 |
+| `maxAttempts` / `retryBackoff` | 3 / `RetryBackoff.exponential(100 ms, 2.0, 30 s)` | §9 |
 
 `shardCount` is per queue and set at registration. Shards are the unit of parallelism **and** of
 ordering. Measured on the ordered lane (500 keys, 2 ms handler, `keyConcurrency` 8, interleaved arms):

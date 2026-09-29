@@ -105,7 +105,7 @@ class ShardOwnedMicrometerIT {
                     attempts.incrementAndGet();
                     throw new IllegalStateException("poison message");
                 }
-            }, new ConsumerOptions(8, Integer.MAX_VALUE, 2, Duration.ofMillis(20), 1.0d, Duration.ofSeconds(1)));
+            }, new ConsumerOptions(8, Integer.MAX_VALUE, 2, RetryBackoff.exponential(Duration.ofMillis(20), 1.0d, Duration.ofSeconds(1))));
 
             var messages = new ArrayList<Message>();
             for (var index = 0; index < 20; index++) {
