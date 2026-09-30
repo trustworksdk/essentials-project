@@ -232,12 +232,12 @@ Benefits: Auto-deserialization, type filtering, cleaner than manual `stream.even
 import dk.trustworks.essentials.components.kotlin.eventsourcing.AggregateTypeConfiguration
 import dk.trustworks.essentials.components.kotlin.eventsourcing.DeciderSupportsAggregateTypeChecker
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.AggregateType
-import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.serializer.AggregateIdSerializer
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.serializer.StringValueTypeAggregateIdSerializer
 
 AggregateTypeConfiguration(
     aggregateType = AggregateType.of("Orders"),
     aggregateIdType = OrderId::class.java,
-    aggregateIdSerializer = AggregateIdSerializer.serializerFor(OrderId::class.java),
+    aggregateIdSerializer = StringValueTypeAggregateIdSerializer(OrderId::class),
 
     // Which deciders handle this aggregate
     deciderSupportsAggregateTypeChecker = DeciderSupportsAggregateTypeChecker
@@ -257,10 +257,16 @@ AggregateTypeConfiguration(
 |-----------|---------|---------|
 | `aggregateType` | Aggregate identifier | `AggregateType.of("Orders")` |
 | `aggregateIdType` | ID type | `OrderId::class.java` |
-| `aggregateIdSerializer` | Serializer | `AggregateIdSerializer.serializerFor(...)` |
+| `aggregateIdSerializer` | Serializer | `StringValueTypeAggregateIdSerializer(OrderId::class)` |
 | `deciderSupportsAggregateTypeChecker` | Decider filter | Check if cmd inherits from `OrderCommand` |
 | `commandAggregateIdResolver` | Extract ID from cmd | `{ (it as OrderCommand).id }` |
 | `eventAggregateIdResolver` | Extract ID from event | `{ (it as OrderEvent).id }` |
+
+**Id serializer**: for a Kotlin `StringValueType` id (`@JvmInline value class OrderId(override val value: String) : StringValueType<OrderId>`)
+use `StringValueTypeAggregateIdSerializer(OrderId::class)` (package `…eventstore.postgresql.serializer`); it needs `kotlin-reflect` at runtime.
+`AggregateIdSerializer.serializerFor(OrderId::class.java)` returns the same serializer for such an id and covers `String`, `UUID` and
+Java `CharSequenceType` ids. Any other id type makes `serializerFor` throw `EventStoreException` when the configuration bean is created,
+so implement `AggregateIdSerializer` for it.
 
 ### Spring Boot Wiring
 
@@ -268,7 +274,7 @@ AggregateTypeConfiguration(
 
 **Dependencies from other modules**:
 - `dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.AggregateType` from [postgresql-event-store](./LLM-postgresql-event-store.md)
-- `dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.serializer.AggregateIdSerializer` from [postgresql-event-store](./LLM-postgresql-event-store.md)
+- `dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.serializer.StringValueTypeAggregateIdSerializer` from [postgresql-event-store](./LLM-postgresql-event-store.md)
 - `dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.ConfigurableEventStore` from [postgresql-event-store](./LLM-postgresql-event-store.md)
 - `dk.trustworks.essentials.reactive.command.CommandBus` from [reactive](./LLM-reactive.md)
 
@@ -279,7 +285,7 @@ import dk.trustworks.essentials.components.kotlin.eventsourcing.DeciderSupportsA
 import dk.trustworks.essentials.components.kotlin.eventsourcing.adapters.DeciderAndAggregateTypeConfigurator
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.ConfigurableEventStore
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.AggregateType
-import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.serializer.AggregateIdSerializer
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.serializer.StringValueTypeAggregateIdSerializer
 import dk.trustworks.essentials.reactive.command.CommandBus
 
 @Configuration
@@ -306,7 +312,7 @@ class OrdersConfiguration {
         return AggregateTypeConfiguration(
             aggregateType = AGGREGATE_TYPE,
             aggregateIdType = OrderId::class.java,
-            aggregateIdSerializer = AggregateIdSerializer.serializerFor(OrderId::class.java),
+            aggregateIdSerializer = StringValueTypeAggregateIdSerializer(OrderId::class),
             deciderSupportsAggregateTypeChecker = DeciderSupportsAggregateTypeChecker
                 .HandlesCommandsThatInheritsFromCommandType(OrderCommand::class),
             commandAggregateIdResolver = { cmd -> (cmd as OrderCommand).id },
