@@ -352,6 +352,11 @@ snapshots itself is affected, such as test fixtures and mocks of `EventStoreApi`
 `SubscriptionStatistics.Gaps.NONE`, or `ApiSubscriptionGapStatistics.from(SubscriptionStatistics.Gaps.NONE)`, where
 there is no gap activity to report. The admin API response only gains an optional `gaps` field.
 
+`ApiSubscription` likewise ends with a new nullable `stoppedByErrorPolicy` component (see
+[§2.10](#210-choose-what-an-async-subscription-does-with-a-failing-event)). Code that builds it, or deconstructs it with
+a record pattern, passes one more argument; `null` means "not known here". The admin API response only gains an
+optional `stoppedByErrorPolicy` field.
+
 ---
 
 ## 2. New features
@@ -690,8 +695,7 @@ as the polling path already did for a single event; the batch is handled again f
   place of "Active".
 
 `ApiSubscription` gains a nullable `stoppedByErrorPolicy` component (`null` when the subscription does not run in the
-instance that answers). Its previous 11-argument constructor is kept and passes `null`, so existing callers keep
-compiling and linking; only a record pattern that deconstructs `ApiSubscription` needs the extra component. The admin
+instance that answers), so its constructor takes one more argument — see [§1.7](#17-subscription-statistics-records-have-a-new-component). The admin
 API response only gains an optional field.
 
 → [`postgresql-event-store` README § Subscription Error Policy](../components/postgresql-event-store/README.md#subscription-error-policy),

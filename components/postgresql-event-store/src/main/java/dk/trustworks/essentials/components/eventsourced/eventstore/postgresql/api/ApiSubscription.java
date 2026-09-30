@@ -79,25 +79,6 @@ public record ApiSubscription(
 ) {
 
     /**
-     * The constructor released before {@link #stoppedByErrorPolicy()} was added, kept so existing callers keep compiling
-     * and linking. {@link #stoppedByErrorPolicy()} is null.
-     */
-    public ApiSubscription(SubscriberId subscriberId,
-                           AggregateType aggregateType,
-                           long currentGlobalOrder,
-                           OffsetDateTime lastUpdated,
-                           boolean durableResumePointPresent,
-                           boolean runningInThisInstance,
-                           Boolean active,
-                           Boolean exclusive,
-                           Boolean inTransaction,
-                           String tenant,
-                           Long inMemoryGlobalOrder) {
-        this(subscriberId, aggregateType, currentGlobalOrder, lastUpdated, durableResumePointPresent, runningInThisInstance,
-             active, exclusive, inTransaction, tenant, inMemoryGlobalOrder, null);
-    }
-
-    /**
      * Describe a subscription known only from its durable resume point, i.e. without any knowledge of whether it runs
      * in this instance.<br>
      * {@link DefaultEventStoreApi} adds the live state of the subscriptions running in the queried instance - this DTO
