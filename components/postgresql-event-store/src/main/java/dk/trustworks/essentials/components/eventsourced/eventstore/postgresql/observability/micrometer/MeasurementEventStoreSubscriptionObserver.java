@@ -59,6 +59,14 @@ public class MeasurementEventStoreSubscriptionObserver implements EventStoreSubs
      * {@code UnitOfWork} that appended the event. Same tags as {@link #HANDLE_EVENT_FAILED_METRIC}
      */
     public static final  String           HANDLE_EVENT_TRANSACTIONAL_FAILED_METRIC = "essentials.eventstore.subscription.handle_event_transactional_failed";
+    /**
+     * Counter of asynchronous subscriptions that stopped handling events because their {@link SubscriptionErrorPolicy} is
+     * {@link SubscriptionErrorPolicy.Mode#STOP} - one per stop. A stopped subscription stays stopped until it is started
+     * again, so any increase means a projection has halted. Tags: {@code subscriber_id}, {@code aggregate_type} and the
+     * optional {@value #MODULE_TAG_NAME}. Whether a subscription is stopped right now is
+     * {@link EventStoreSubscription#isStoppedByErrorPolicy()}
+     */
+    public static final  String           SUBSCRIPTION_STOPPED_BY_ERROR_POLICY_METRIC = "essentials.eventstore.subscription.stopped_by_error_policy";
 
     private final MeasurementTaker measurementTaker;
     private final boolean          recordExecutionTimeEnabled;
@@ -86,8 +94,8 @@ public class MeasurementEventStoreSubscriptionObserver implements EventStoreSubs
 
     /**
      * Constructs a new observer recording timings to the supplied {@link MeasurementTaker} and the
-     * {@value #HANDLE_EVENT_FAILED_METRIC} / {@value #HANDLE_EVENT_TRANSACTIONAL_FAILED_METRIC} counters to the
-     * supplied {@link MeterRegistry}.
+     * {@value #HANDLE_EVENT_FAILED_METRIC} / {@value #HANDLE_EVENT_TRANSACTIONAL_FAILED_METRIC} /
+     * {@value #SUBSCRIPTION_STOPPED_BY_ERROR_POLICY_METRIC} counters to the supplied {@link MeterRegistry}.
      * <p>
      * The counters do not depend on the {@link MeasurementTaker} recording: a failed event is an incident, not a
      * timing, so switching execution-time metrics off must not switch the alertable signal off with them.
@@ -336,6 +344,29 @@ public class MeasurementEventStoreSubscriptionObserver implements EventStoreSubs
     }
 
     private static final String HANDLE_EVENT_FAILED_DESCRIPTION = "Events an asynchronous subscription gave up handling - skipped, or the subscription stopped at them";
+
+    @Override
+    public void subscriptionStoppedByErrorPolicy(GlobalEventOrder stoppedAtGlobalEventOrder,
+                                                 Throwable cause,
+                                                 EventStoreSubscription eventStoreSubscription) {
+        if (meterRegistry == null) {
+            return;
+        }
+        // Never throws: this runs on the subscription's delivery thread, in its error path
+        try {
+            var builder = Counter.builder(SUBSCRIPTION_STOPPED_BY_ERROR_POLICY_METRIC)
+                                 .description("Asynchronous subscriptions that stopped handling events because their SubscriptionErrorPolicy is STOP")
+                                 .tag("subscriber_id", eventStoreSubscription.subscriberId().toString())
+                                 .tag("aggregate_type", eventStoreSubscription.aggregateType().toString());
+            if (moduleTag != null) {
+                builder.tag(MODULE_TAG_NAME, moduleTag);
+            }
+            builder.register(meterRegistry).increment();
+        } catch (RuntimeException e) {
+            log.warn(msg("Failed to count the stop of subscription '{}' at {} event #{} in '{}'",
+                         eventStoreSubscription.subscriberId(), eventStoreSubscription.aggregateType(), stoppedAtGlobalEventOrder, SUBSCRIPTION_STOPPED_BY_ERROR_POLICY_METRIC), e);
+        }
+    }
 
     /**
      * Never throws: this runs on the subscription's delivery thread, in its error path

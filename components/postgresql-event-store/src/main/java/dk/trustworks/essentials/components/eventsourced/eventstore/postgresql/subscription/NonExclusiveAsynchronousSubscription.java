@@ -21,7 +21,6 @@ import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.ev
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.types.GlobalEventOrder;
 import dk.trustworks.essentials.components.foundation.types.*;
 import dk.trustworks.essentials.shared.time.StopWatch;
-import reactor.core.publisher.BaseSubscriber;
 import reactor.util.retry.RetryBackoffSpec;
 
 import java.util.Optional;
@@ -45,7 +44,7 @@ public class NonExclusiveAsynchronousSubscription extends AbstractEventStoreSubs
     private final GlobalEventOrder onFirstSubscriptionSubscribeFromAndIncludingGlobalOrder;
     private final PersistedEventHandler eventHandler;
     private SubscriptionResumePoint resumePoint;
-    private BaseSubscriber<PersistedEvent> subscription;
+    private volatile PersistedEventSubscriber subscription;
     private final EventStoreSubscriptionManagerSettings eventStoreSubscriptionManagerSettings;
 
     /**
@@ -247,6 +246,15 @@ public class NonExclusiveAsynchronousSubscription extends AbstractEventStoreSubs
     @Override
     public Optional<SubscriptionResumePoint> currentResumePoint() {
         return Optional.ofNullable(resumePoint);
+    }
+
+    /**
+     * @return true if the {@link SubscriptionErrorPolicy} stopped the current subscriber - see {@link EventStoreSubscription#isStoppedByErrorPolicy()}
+     */
+    @Override
+    public boolean isStoppedByErrorPolicy() {
+        var subscriber = subscription;
+        return subscriber != null && subscriber.isStoppedByErrorPolicy();
     }
 
     @Override

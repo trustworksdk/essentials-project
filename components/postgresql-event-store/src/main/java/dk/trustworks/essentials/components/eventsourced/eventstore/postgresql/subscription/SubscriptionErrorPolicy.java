@@ -38,13 +38,20 @@ import static dk.trustworks.essentials.shared.FailFast.*;
  *     <li>{@link Mode#RETRY_N_THEN_SKIP} - the handler is called again up to {@link #maxRetries()} times, waiting
  *     {@link #backoffBeforeRetry(int)} between attempts, each attempt in a new {@code UnitOfWork}. If every retry fails
  *     the event is skipped exactly as with {@link Mode#SKIP}. The retries run on the subscription's delivery thread,
- *     so later events wait for them - that is what keeps the events in order.</li>
+ *     so later events wait for them - that is what keeps the events in order. That thread belongs to the one
+ *     subscription whether it is served by polling or by CDC, so a subscription in its backoff does not hold up the
+ *     others. If the subscription is stopped during the retries (restart, fenced-lock hand-over, {@code resetFrom},
+ *     unsubscribe) the retries are abandoned, not used up: the event is not skipped, and the restarted subscription
+ *     handles it again.</li>
  *     <li>{@link Mode#STOP} - the subscription stops handling events at the failed event: its resume point is not
  *     advanced past it, the failure is logged at ERROR, and no further events are handled until the subscription is
  *     started again (application restart, fenced-lock hand-over, {@code resetFrom}, or unsubscribe + subscribe). A
  *     restarted subscription resumes <i>at</i> the failed event, so nothing is skipped. If the failure is permanent the
  *     subscription stops at the same event again. The subscription keeps any fenced lock it holds while stopped, so an
- *     exclusive subscription does not flap to another node that would fail the same way.</li>
+ *     exclusive subscription does not flap to another node that would fail the same way. A stopped subscription reports
+ *     {@link EventStoreSubscription#isStoppedByErrorPolicy()} (its {@link EventStoreSubscription#isActive()} is unchanged)
+ *     and is reported to
+ *     {@link dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.observability.EventStoreSubscriptionObserver#subscriptionStoppedByErrorPolicy}.</li>
  * </ul>
  * The policy is configured per {@link EventStoreSubscriptionManager} with
  * {@link EventStoreSubscriptionManagerBuilder#setSubscriptionErrorPolicy(SubscriptionErrorPolicy)} and carried to every

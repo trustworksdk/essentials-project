@@ -1,0 +1,182 @@
+/*
+ * Copyright 2021-2026 the original author or authors.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *      https://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+package dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.cdc;
+
+import dk.trustworks.essentials.components.distributed.fencedlock.postgresql.PostgresqlFencedLockManager;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.PostgresqlEventStore;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.gap.PostgresqlEventStreamGapHandler;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.persistence.table_per_aggregate_type.*;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.processor.EventProcessorIT;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.serializer.json.EssentialsJSONEventSerializers;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.subscription.*;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.test_data.*;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.types.*;
+import dk.trustworks.essentials.components.foundation.transaction.UnitOfWork;
+import dk.trustworks.essentials.components.foundation.types.SubscriberId;
+import dk.trustworks.essentials.types.LongRange;
+import org.junit.jupiter.api.*;
+
+import java.time.Duration;
+import java.util.*;
+import java.util.concurrent.*;
+import java.util.concurrent.atomic.AtomicInteger;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.awaitility.Awaitility.await;
+
+/**
+ * A {@link SubscriptionErrorPolicy.Mode#RETRY_N_THEN_SKIP} backoff sleeps on the subscription's delivery thread. Under
+ * CDC the bus emits on the one {@code cdc-dispatcher-<slot>} thread shared by every CDC subscription, so
+ * {@link CdcEventStore} must hand each subscription over to a thread of its own - otherwise one subscription in its
+ * backoff stalls CDC delivery for all the others.
+ * <p>
+ * Two subscribers on the same aggregate type: one fails #2 under {@code retryThenSkip}, the other is healthy. While the
+ * failing one is backing off, the "dispatcher" must be free to publish the next event and the healthy subscriber must
+ * receive it. The bus is fed directly from a single-threaded executor standing in for the {@code CdcDispatcher}, and
+ * availability is forced ACTIVE, as in {@link CdcEventStoreLiveDrainStallRecoveryIT}.
+ */
+class CdcEventStoreSubscriptionErrorPolicyIsolationIT extends AbstractLogicalReplicationPostgresIT {
+    private static final long     FAILING_EVENT = 2;
+    private static final int      MAX_RETRIES   = 3;
+    private static final Duration BACKOFF       = Duration.ofSeconds(1);
+
+    private PostgresqlEventStore<SeparateTablePerAggregateEventStreamConfiguration> eventStore;
+    private CdcEventBus                                                             cdcBus;
+    private EventStoreSubscriptionManager                                           eventStoreSubscriptionManager;
+    private ExecutorService                                                         dispatcher;
+
+    @BeforeEach
+    void setup() {
+        var persistenceStrategy = new SeparateTablePerAggregateTypePersistenceStrategy(
+                jdbi,
+                unitOfWorkFactory,
+                new EventProcessorIT.TestPersistableEventMapper(),
+                SeparateTablePerAggregateTypeEventStreamConfigurationFactory.defaultConfiguration(EssentialsJSONEventSerializers.create())
+        );
+        persistenceStrategy.addAggregateEventStreamConfiguration(ORDERS, OrderId.class);
+        eventStore = new PostgresqlEventStore<>(unitOfWorkFactory, persistenceStrategy);
+
+        cdcBus = new CdcEventBus();
+        var availability = new CdcAvailability();
+        var cdcEventStore = new CdcEventStore<>(eventStore,
+                                                unitOfWorkFactory,
+                                                new PostgresqlEventStreamGapHandler<>(unitOfWorkFactory),
+                                                cdcBus,
+                                                new CdcProperties(),
+                                                availability,
+                                                Optional.empty());
+        // Force ACTIVE so pollEvents serves the live tail from the CDC bus
+        availability.active("it-error-policy-isolation-slot");
+
+        eventStoreSubscriptionManager = EventStoreSubscriptionManager.builder()
+                                                                     .setEventStore(cdcEventStore)
+                                                                     .setEventStorePollingBatchSize(50)
+                                                                     .setEventStorePollingInterval(Duration.ofMillis(50))
+                                                                     .setFencedLockManager(PostgresqlFencedLockManager.builder()
+                                                                                                                      .setJdbi(jdbi)
+                                                                                                                      .setUnitOfWorkFactory(unitOfWorkFactory)
+                                                                                                                      .setLockManagerInstanceId("node-1")
+                                                                                                                      .setLockTimeOut(Duration.ofSeconds(3))
+                                                                                                                      .setLockConfirmationInterval(Duration.ofMillis(500))
+                                                                                                                      .build())
+                                                                     .setSnapshotResumePointsEvery(Duration.ofSeconds(1))
+                                                                     .setDurableSubscriptionRepository(new PostgresqlDurableSubscriptionRepository(jdbi, cdcEventStore))
+                                                                     .setSubscriptionErrorPolicy(SubscriptionErrorPolicy.retryThenSkip(MAX_RETRIES, BACKOFF, BACKOFF))
+                                                                     .build();
+        eventStoreSubscriptionManager.start();
+        dispatcher = Executors.newSingleThreadExecutor(runnable -> new Thread(runnable, "test-cdc-dispatcher"));
+    }
+
+    @AfterEach
+    void cleanup() {
+        unitOfWorkFactory.getCurrentUnitOfWork().ifPresent(UnitOfWork::rollback);
+        if (eventStoreSubscriptionManager != null) {
+            eventStoreSubscriptionManager.stop();
+        }
+        if (dispatcher != null) {
+            dispatcher.shutdownNow();
+        }
+    }
+
+    @Test
+    void a_subscription_in_its_retry_backoff_does_not_hold_up_the_other_cdc_subscriptions() throws Exception {
+        var failingReceived = new CopyOnWriteArrayList<Long>();
+        var failingAttempts = new AtomicInteger();
+        var healthyReceived = new CopyOnWriteArrayList<Long>();
+        eventStoreSubscriptionManager.subscribeToAggregateEventsAsynchronously(SubscriberId.of("orders-failing"),
+                                                                               ORDERS,
+                                                                               GlobalEventOrder.FIRST_GLOBAL_EVENT_ORDER,
+                                                                               Optional.empty(),
+                                                                               (PersistedEventHandler) event -> {
+                                                                                   var globalOrder = event.globalEventOrder().longValue();
+                                                                                   if (globalOrder == FAILING_EVENT) {
+                                                                                       failingAttempts.incrementAndGet();
+                                                                                       throw new IllegalStateException("Intentional failure handling event #" + globalOrder);
+                                                                                   }
+                                                                                   failingReceived.add(globalOrder);
+                                                                               });
+        eventStoreSubscriptionManager.subscribeToAggregateEventsAsynchronously(SubscriberId.of("orders-healthy"),
+                                                                               ORDERS,
+                                                                               GlobalEventOrder.FIRST_GLOBAL_EVENT_ORDER,
+                                                                               Optional.empty(),
+                                                                               (PersistedEventHandler) event -> healthyReceived.add(event.globalEventOrder().longValue()));
+
+        // #1 proves both subscriptions are live (delivered by the bus, or by backfill if it beat the attach)
+        publishOnDispatcher(appendOrder()).get(10, TimeUnit.SECONDS);
+        await().atMost(Duration.ofSeconds(15)).untilAsserted(() -> {
+            assertThat(failingReceived).containsExactly(1L);
+            assertThat(healthyReceived).containsExactly(1L);
+        });
+
+        // Not awaited: before the fix this publish returned only once the failing subscription had given up on #2
+        var publishingTwo = publishOnDispatcher(appendOrder());
+        await().atMost(Duration.ofSeconds(10)).until(() -> failingAttempts.get() >= 1);
+
+        // The failing subscription now sleeps in its backoff for up to MAX_RETRIES x BACKOFF. The dispatcher must be
+        // free to publish, and the healthy subscription must receive, well within that
+        var publishingThree = publishOnDispatcher(appendOrder());
+        publishingTwo.get(BACKOFF.toMillis() / 2, TimeUnit.MILLISECONDS);
+        publishingThree.get(BACKOFF.toMillis() / 2, TimeUnit.MILLISECONDS);
+        await().atMost(BACKOFF).untilAsserted(() -> assertThat(healthyReceived).containsExactly(1L, 2L, 3L));
+        assertThat(failingAttempts.get()).as("still retrying #2").isLessThanOrEqualTo(MAX_RETRIES);
+        assertThat(failingReceived).as("still retrying #2").containsExactly(1L);
+
+        // Per-subscription order is kept: the failing subscription gives up on #2 and only then handles #3
+        await().atMost(Duration.ofSeconds(15)).untilAsserted(() -> assertThat(failingReceived).containsExactly(1L, 3L));
+        assertThat(failingAttempts.get()).isEqualTo(1 + MAX_RETRIES);
+    }
+
+    private Future<?> publishOnDispatcher(long globalOrder) {
+        var events = unitOfWorkFactory.withUnitOfWork(() -> eventStore.loadEventsByGlobalOrder(ORDERS, LongRange.between(globalOrder, globalOrder), List.of()).toList());
+        assertThat(events).hasSize(1);
+        return dispatcher.submit(() -> cdcBus.publish(events));
+    }
+
+    /**
+     * @return the global order of the appended event
+     */
+    private long appendOrder() {
+        var orderId = OrderId.random();
+        unitOfWorkFactory.usingUnitOfWork(() -> eventStore.appendToStream(ORDERS,
+                                                                          orderId,
+                                                                          EventOrder.NO_EVENTS_PREVIOUSLY_PERSISTED,
+                                                                          List.of(new OrderEvent.OrderAdded(orderId, CustomerId.random(), 1))));
+        return unitOfWorkFactory.withUnitOfWork(() -> eventStore.findHighestGlobalEventOrderPersisted(ORDERS))
+                                .orElseThrow()
+                                .longValue();
+    }
+}

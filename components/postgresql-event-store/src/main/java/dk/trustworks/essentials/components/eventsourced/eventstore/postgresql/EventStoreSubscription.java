@@ -105,6 +105,32 @@ public interface EventStoreSubscription extends Lifecycle, Subscription {
      * <li>For an Exclusive Subscription, {@link #isActive()} reflects whether the subscriber has acquired the underlying {@link FencedLock}</li>
      * <li>For a Non-Exclusive subscription, {@link #isActive()} reflects whether the subscriber {@link Lifecycle#isStarted()}</li>
      * </ul>
+     * A subscription that {@link #isStoppedByErrorPolicy()} stays active: see there for why
      */
     boolean isActive();
+
+    /**
+     * Has the {@link dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.subscription.SubscriptionErrorPolicy}
+     * stopped this subscription? True once an event's handler failed under
+     * {@link dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.subscription.SubscriptionErrorPolicy.Mode#STOP}:
+     * the subscription handles no further events and its resume point stays at the failed event until the subscription
+     * is started again (application restart, fenced-lock hand-over, {@link #resetFrom(GlobalEventOrder, Consumer)}, or
+     * unsubscribe + subscribe), which resets it to false.
+     * <p>
+     * This is the signal to alert on - a stopped subscription is otherwise indistinguishable from a healthy one with no
+     * new events. {@link #isActive()} deliberately stays unchanged by the stop: it answers "is the subscription running
+     * in this instance" (for an exclusive subscription "does it hold the fenced lock"), and a stopped subscription still
+     * is - it keeps its lock on purpose, so the event does not flap to another node that would fail the same way, and
+     * the subscription manager's periodic checkpoint saves the resume points of active subscriptions only - it is what
+     * persists the resume point the stop held at the failed event if the process later dies without a graceful stop.
+     * <p>
+     * The default returns false, for subscriptions that are not governed by a
+     * {@link dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.subscription.SubscriptionErrorPolicy}
+     * (the in-transaction subscriptions).
+     *
+     * @return true if the {@code SubscriptionErrorPolicy} stopped this subscription and it has not been started again since
+     */
+    default boolean isStoppedByErrorPolicy() {
+        return false;
+    }
 }

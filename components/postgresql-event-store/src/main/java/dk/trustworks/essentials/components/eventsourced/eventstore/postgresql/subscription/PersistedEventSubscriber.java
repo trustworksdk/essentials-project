@@ -47,6 +47,9 @@ import static dk.trustworks.essentials.shared.MessageFormatter.msg;
  *     <li>{@link SubscriptionErrorPolicy.Mode#STOP} - keeps the resume point at the failed event, logs at ERROR and stops handling events
  *     (see {@link #isStoppedByErrorPolicy()})</li>
  * </ul>
+ * A failure that surfaces after this subscriber was disposed (stop, fenced-lock release, {@code resetFrom}, unsubscribe) is none of these:
+ * the retries are abandoned, neither the <code>onErrorHandler</code> nor the observer is told, and the resume point stays at the event, so the
+ * restarted subscription handles it again (see {@link SubscriptionStoppedDuringRetryException}).
  */
 public class PersistedEventSubscriber extends BaseSubscriber<PersistedEvent> {
     private static final Logger log = LoggerFactory.getLogger(PersistedEventSubscriber.class);
@@ -59,11 +62,16 @@ public class PersistedEventSubscriber extends BaseSubscriber<PersistedEvent> {
     private final EventStore eventStore;
     private final SubscriptionErrorPolicy subscriptionErrorPolicy;
     /**
-     * Guards the resume point against an event completing concurrently with {@link #stopAt(PersistedEvent, Throwable)}:
+     * Guards the resume point against an event completing concurrently with {@link #holdResumePointAt(PersistedEvent)}:
      * I/O retries complete asynchronously, so a later event can finish while an earlier one is failing
      */
     private final Object resumePointLock = new Object();
     private volatile boolean stoppedByErrorPolicy;
+    /**
+     * Set once the resume point must stay where {@link #holdResumePointAt(PersistedEvent)} left it: by a
+     * {@link SubscriptionErrorPolicy.Mode#STOP}, or by a stop that interrupted the handling of an event
+     */
+    private volatile boolean resumePointHeld;
 
     /**
      * Create a {@link PersistedEventSubscriberBuilder} that names every argument.
@@ -212,19 +220,25 @@ public class PersistedEventSubscriber extends BaseSubscriber<PersistedEvent> {
 
     @Override
     protected void hookOnNext(PersistedEvent e) {
-        if (stoppedByErrorPolicy) {
+        if (resumePointHeld) {
             // Events already requested before the stop still arrive - they are left for the restarted subscription
-            log.debug("[{}-{}] (#{}) Ignoring {} event - the subscriber was stopped by the {} SubscriptionErrorPolicy",
+            log.debug("[{}-{}] (#{}) Ignoring {} event - the subscriber has stopped (stopped by the {} SubscriptionErrorPolicy: {})",
                       eventStoreSubscription.subscriberId(),
                       eventStoreSubscription.aggregateType(),
                       e.globalEventOrder(),
                       e.event().getEventTypeOrName().getValue(),
-                      SubscriptionErrorPolicy.Mode.STOP);
+                      SubscriptionErrorPolicy.Mode.STOP,
+                      stoppedByErrorPolicy);
             return;
         }
         // Outside the callable, so an I/O retry (which re-subscribes the callable) doesn't reset the policy's retry budget
         var policyRetriesPerformed = new AtomicInteger();
+        var attemptsStarted        = new AtomicInteger();
         Mono.fromCallable(() -> {
+                    if (attemptsStarted.getAndIncrement() > 0 && isDisposed()) {
+                        // An I/O retry must not outlive the subscriber - it would handle the event after the stop
+                        throw new SubscriptionStoppedDuringRetryException(null);
+                    }
                     log.trace("[{}-{}] (#{}) Forwarding {} event with eventId '{}', aggregateId: '{}', eventOrder: {} to EventHandler",
                             eventStoreSubscription.subscriberId(),
                             eventStoreSubscription.aggregateType(),
@@ -249,6 +263,7 @@ public class PersistedEventSubscriber extends BaseSubscriber<PersistedEvent> {
                             subscriptionErrorPolicy,
                             forwardToEventHandlerRetryBackoffSpec,
                             policyRetriesPerformed,
+                            this::isDisposed,
                             (retryNumber, backoff, failure) -> log.warn("[{}-{}] (#{}) Handling {} event failed - performing retry {} of {} in {} ms ({} SubscriptionErrorPolicy): {}",
                                                                         eventStoreSubscription.subscriberId(),
                                                                         eventStoreSubscription.aggregateType(),
@@ -289,9 +304,9 @@ public class PersistedEventSubscriber extends BaseSubscriber<PersistedEvent> {
                             );
                         }))
                 .doFinally(signalType -> {
-                    // Runs after the error consumer below, so a STOP has already been recorded when an event fails
+                    // Runs after the error consumer below, so a STOP (or a stop mid-retry) has already been recorded when an event fails
                     synchronized (resumePointLock) {
-                        if (!stoppedByErrorPolicy) {
+                        if (!resumePointHeld) {
                             // advance (not set): gap-filled events are delivered out of order, so an older
                             // event can complete last and must not rewind the resume point
                             eventStoreSubscription.currentResumePoint().get().advanceResumeFromAndIncluding(e.globalEventOrder().increment());
@@ -314,6 +329,11 @@ public class PersistedEventSubscriber extends BaseSubscriber<PersistedEvent> {
                         },
                         error -> {
                             var failure = SubscriptionErrorPolicyRetries.unwrapRetryExhausted(error);
+                            if (failure instanceof SubscriptionStoppedDuringRetryException || isDisposed()) {
+                                // Not a verdict on the event - the subscriber was stopped under it (see SubscriptionStoppedDuringRetryException)
+                                stoppedWhileHandling(e, failure);
+                                return;
+                            }
                             eventStore.getEventStoreSubscriptionObserver().handleEventFailed(e,
                                     eventHandler,
                                     failure,
@@ -327,25 +347,17 @@ public class PersistedEventSubscriber extends BaseSubscriber<PersistedEvent> {
     }
 
     /**
-     * {@link SubscriptionErrorPolicy.Mode#STOP}: keep the resume point at the failed event and stop handling events.
-     * <p>
-     * The resume point is moved <i>back</i> to the failed event if it is already past it - which happens when a later
-     * event completed first (an I/O retry of the failed event, or a gap-filled event arriving late). Redelivering
-     * events after it on restart is at-least-once and harmless; resuming past it would skip it.
+     * {@link SubscriptionErrorPolicy.Mode#STOP}: keep the resume point at the failed event (see {@link #holdResumePointAt(PersistedEvent)}),
+     * notify {@link dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.observability.EventStoreSubscriptionObserver#subscriptionStoppedByErrorPolicy}
+     * and stop handling events.
      * <p>
      * The upstream is cancelled asynchronously: this runs on the delivery thread, and cancelling a polling flux from its
      * own thread would interrupt the poll that is delivering to us.
      */
     private void stopAt(PersistedEvent e, Throwable cause) {
-        GlobalEventOrder resumeFrom;
-        synchronized (resumePointLock) {
-            stoppedByErrorPolicy = true;
-            var resumePoint = eventStoreSubscription.currentResumePoint().get();
-            if (resumePoint.getResumeFromAndIncluding().longValue() > e.globalEventOrder().longValue()) {
-                resumePoint.setResumeFromAndIncluding(e.globalEventOrder());
-            }
-            resumeFrom = resumePoint.getResumeFromAndIncluding();
-        }
+        // Set before the resume point is held, so the observer below already sees isStoppedByErrorPolicy() == true
+        stoppedByErrorPolicy = true;
+        var resumeFrom = holdResumePointAt(e);
         log.error(msg("[{}-{}] (#{}) Stopping the subscription because handling the {} event failed and the SubscriptionErrorPolicy is {}. " +
                               "The resume point stays at #{}, so no event is skipped: no further events are handled until the subscription is started again " +
                               "(restart, fenced lock hand-over, resetFrom or unsubscribe/subscribe), and it then resumes at this event",
@@ -355,7 +367,50 @@ public class PersistedEventSubscriber extends BaseSubscriber<PersistedEvent> {
                       e.event().getEventTypeOrName().getValue(),
                       SubscriptionErrorPolicy.Mode.STOP,
                       resumeFrom), cause);
+        try {
+            eventStore.getEventStoreSubscriptionObserver().subscriptionStoppedByErrorPolicy(e.globalEventOrder(), cause, eventStoreSubscription);
+        } catch (RuntimeException observerFailure) {
+            log.warn(msg("[{}-{}] EventStoreSubscriptionObserver#subscriptionStoppedByErrorPolicy failed",
+                         eventStoreSubscription.subscriberId(),
+                         eventStoreSubscription.aggregateType()), observerFailure);
+        }
         Schedulers.boundedElastic().schedule(this::dispose);
+    }
+
+    /**
+     * The subscriber was stopped (disposed) while <code>e</code> was being handled or retried: leave the resume point at
+     * <code>e</code>, so the restarted subscription handles it again, instead of skipping it.
+     */
+    private void stoppedWhileHandling(PersistedEvent e, Throwable failure) {
+        var resumeFrom = holdResumePointAt(e);
+        log.info("[{}-{}] (#{}) The subscriber was stopped while handling the {} event was being retried or was in progress ({}) - " +
+                         "the event is not skipped: the resume point stays at #{} and the event is handled again when the subscription is started again",
+                 eventStoreSubscription.subscriberId(),
+                 eventStoreSubscription.aggregateType(),
+                 e.globalEventOrder(),
+                 e.event().getEventTypeOrName().getValue(),
+                 rootCauseDescription(failure),
+                 resumeFrom);
+    }
+
+    /**
+     * Keep the resume point at <code>e</code> and stop later completions from advancing it.
+     * <p>
+     * The resume point is moved <i>back</i> to <code>e</code> if it is already past it - which happens when a later
+     * event completed first (an I/O retry of <code>e</code>, or a gap-filled event arriving late). Redelivering
+     * events after it on restart is at-least-once and harmless; resuming past it would skip it.
+     *
+     * @return the resume point after holding it
+     */
+    private GlobalEventOrder holdResumePointAt(PersistedEvent e) {
+        synchronized (resumePointLock) {
+            resumePointHeld = true;
+            var resumePoint = eventStoreSubscription.currentResumePoint().get();
+            if (resumePoint.getResumeFromAndIncluding().longValue() > e.globalEventOrder().longValue()) {
+                resumePoint.setResumeFromAndIncluding(e.globalEventOrder());
+            }
+            return resumePoint.getResumeFromAndIncluding();
+        }
     }
 
     private static String rootCauseDescription(Throwable failure) {

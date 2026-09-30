@@ -22,7 +22,6 @@ import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.ty
 import dk.trustworks.essentials.components.foundation.fencedlock.*;
 import dk.trustworks.essentials.components.foundation.types.*;
 import dk.trustworks.essentials.shared.time.StopWatch;
-import reactor.core.publisher.BaseSubscriber;
 import reactor.util.retry.RetryBackoffSpec;
 
 import java.util.Optional;
@@ -49,7 +48,7 @@ public class ExclusiveAsynchronousSubscription extends AbstractEventStoreSubscri
     private final EventStoreSubscriptionManagerSettings eventStoreSubscriptionManagerSettings;
 
     private SubscriptionResumePoint resumePoint;
-    private BaseSubscriber<PersistedEvent> subscription;
+    private volatile PersistedEventSubscriber subscription;
 
     private volatile boolean active;
 
@@ -345,6 +344,15 @@ public class ExclusiveAsynchronousSubscription extends AbstractEventStoreSubscri
 
         }
         return Optional.ofNullable(resumePoint);
+    }
+
+    /**
+     * @return true if the {@link SubscriptionErrorPolicy} stopped the current subscriber - see {@link EventStoreSubscription#isStoppedByErrorPolicy()}
+     */
+    @Override
+    public boolean isStoppedByErrorPolicy() {
+        var subscriber = subscription;
+        return subscriber != null && subscriber.isStoppedByErrorPolicy();
     }
 
     @Override

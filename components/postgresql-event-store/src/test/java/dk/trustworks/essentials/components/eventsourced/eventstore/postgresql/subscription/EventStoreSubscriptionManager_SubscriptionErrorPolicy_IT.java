@@ -19,6 +19,7 @@ package dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.s
 import dk.trustworks.essentials.components.distributed.fencedlock.postgresql.PostgresqlFencedLockManager;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.*;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.observability.micrometer.MeasurementEventStoreSubscriptionObserver;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.persistence.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.persistence.table_per_aggregate_type.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.serializer.json.EssentialsJSONEventSerializers;
@@ -27,6 +28,8 @@ import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.tr
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.types.*;
 import dk.trustworks.essentials.components.foundation.transaction.UnitOfWork;
 import dk.trustworks.essentials.components.foundation.types.*;
+import dk.trustworks.essentials.shared.measurement.MeasurementTaker;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.awaitility.Awaitility;
 import org.jdbi.v3.core.Jdbi;
 import org.jdbi.v3.postgres.PostgresPlugin;
@@ -44,7 +47,9 @@ import static org.assertj.core.api.Assertions.assertThat;
 /**
  * Pins what each {@link SubscriptionErrorPolicy} does with an event whose asynchronous handler throws: {@code SKIP}
  * keeps the pre-policy behaviour, {@code RETRY_N_THEN_SKIP} retries N times and then skips, {@code STOP} does not
- * advance past the failed event - including across a restart of the subscription manager.
+ * advance past the failed event - including across a restart of the subscription manager - and is visible through
+ * {@link EventStoreSubscription#isStoppedByErrorPolicy()} and the observer. Stopping the manager while a retry is backing
+ * off must not skip the event either.
  * <p>
  * Each test appends three events (global orders 1, 2 and 3) to its own aggregate type and fails the handler on #2.
  */
@@ -65,6 +70,7 @@ class EventStoreSubscriptionManager_SubscriptionErrorPolicy_IT {
     private DurableSubscriptionRepository                                           durableSubscriptionRepository;
     private EventStoreSubscriptionManager                                           eventStoreSubscriptionManager;
     private SubscriberId                                                            subscriberId;
+    private SimpleMeterRegistry                                                     meterRegistry;
 
     @BeforeEach
     void setup() {
@@ -83,7 +89,12 @@ class EventStoreSubscriptionManager_SubscriptionErrorPolicy_IT {
                                                                                        SeparateTablePerAggregateTypeEventStreamConfigurationFactory.standardSingleTenantConfiguration(EssentialsJSONEventSerializers.create(),
                                                                                                                                                                                       IdentifierColumnType.UUID,
                                                                                                                                                                                       JSONColumnType.JSONB));
-        eventStore = new PostgresqlEventStore<>(unitOfWorkFactory, persistenceStrategy);
+        meterRegistry = new SimpleMeterRegistry();
+        eventStore = PostgresqlEventStore.<SeparateTablePerAggregateEventStreamConfiguration>builder()
+                                         .setUnitOfWorkFactory(unitOfWorkFactory)
+                                         .setPersistenceStrategy(persistenceStrategy)
+                                         .setEventStoreSubscriptionObserver(new MeasurementEventStoreSubscriptionObserver(MeasurementTaker.none(), null, meterRegistry))
+                                         .build();
         eventStore.addAggregateEventStreamConfiguration(aggregateType, OrderId.class);
         durableSubscriptionRepository = new PostgresqlDurableSubscriptionRepository(jdbi, eventStore);
     }
@@ -103,7 +114,7 @@ class EventStoreSubscriptionManager_SubscriptionErrorPolicy_IT {
         eventStoreSubscriptionManager = startSubscriptionManager(null);
         var handled  = new CopyOnWriteArrayList<Long>();
         var attempts = new ConcurrentHashMap<Long, AtomicInteger>();
-        subscribe(handled, attempts, () -> true);
+        var subscription = subscribe(handled, attempts, () -> true);
 
         appendThreeEvents();
 
@@ -112,6 +123,8 @@ class EventStoreSubscriptionManager_SubscriptionErrorPolicy_IT {
         assertThat(attempts.get(FAILING_EVENT).get()).isEqualTo(1);
         // The resume point advances past the skipped event, so it is never redelivered
         awaitDurableResumePoint(4);
+        assertThat(subscription.isStoppedByErrorPolicy()).isFalse();
+        assertThat(stoppedByErrorPolicyCount()).isZero();
         assertThat(((DefaultEventStoreSubscriptionManager) eventStoreSubscriptionManager).getSubscriptionErrorPolicy()).isEqualTo(SubscriptionErrorPolicy.skip());
     }
 
@@ -165,6 +178,42 @@ class EventStoreSubscriptionManager_SubscriptionErrorPolicy_IT {
         awaitDurableResumePoint(4);
     }
 
+    @Test
+    void stopping_the_subscription_during_a_retry_backoff_does_not_skip_the_event() {
+        var failing = new AtomicBoolean(true);
+        // A retry budget of about 9 seconds, far more than the test takes to stop the manager in the middle of it
+        var policy = SubscriptionErrorPolicy.retryThenSkip(5, Duration.ofSeconds(1), Duration.ofSeconds(2));
+        eventStoreSubscriptionManager = startSubscriptionManager(policy);
+        var handled  = new CopyOnWriteArrayList<Long>();
+        var attempts = new ConcurrentHashMap<Long, AtomicInteger>();
+        subscribe(handled, attempts, failing::get);
+
+        appendThreeEvents();
+        Awaitility.waitAtMost(Duration.ofSeconds(10))
+                  .untilAsserted(() -> assertThat(attempts.get(FAILING_EVENT)).isNotNull());
+
+        // Stops (disposes) the subscription while #2 sleeps in its backoff - this interrupts the backoff
+        eventStoreSubscriptionManager.stop();
+        eventStoreSubscriptionManager = null;
+
+        // Abandoned, not given up on: not skipped, not counted as failed, and the durable resume point stays at #2
+        assertThat(attempts.get(FAILING_EVENT).get()).isLessThan(1 + policy.maxRetries());
+        assertThat(handled).containsExactly(1L);
+        assertThat(attempts).doesNotContainKey(3L);
+        assertThat(handleEventFailedCount()).isZero();
+        awaitDurableResumePoint(FAILING_EVENT);
+
+        // A restarted manager handles #2 again, and then continues
+        var attemptsBeforeRestart = attempts.get(FAILING_EVENT).get();
+        failing.set(false);
+        eventStoreSubscriptionManager = startSubscriptionManager(policy);
+        subscribe(handled, attempts, failing::get);
+        Awaitility.waitAtMost(Duration.ofSeconds(10))
+                  .untilAsserted(() -> assertThat(handled).containsExactly(1L, 2L, 3L));
+        assertThat(attempts.get(FAILING_EVENT).get()).isEqualTo(attemptsBeforeRestart + 1);
+        awaitDurableResumePoint(4);
+    }
+
     // ------------------------------------------------------------------------------------------------------------ STOP
 
     @Test
@@ -173,7 +222,8 @@ class EventStoreSubscriptionManager_SubscriptionErrorPolicy_IT {
         eventStoreSubscriptionManager = startSubscriptionManager(SubscriptionErrorPolicy.stop());
         var handled  = new CopyOnWriteArrayList<Long>();
         var attempts = new ConcurrentHashMap<Long, AtomicInteger>();
-        subscribe(handled, attempts, failing::get);
+        var subscription = subscribe(handled, attempts, failing::get);
+        assertThat(subscription.isStoppedByErrorPolicy()).isFalse();
 
         appendThreeEvents();
 
@@ -182,6 +232,10 @@ class EventStoreSubscriptionManager_SubscriptionErrorPolicy_IT {
                       assertThat(handled).containsExactly(1L);
                       assertThat(attempts.get(FAILING_EVENT)).isNotNull();
                   });
+        // The stop is visible outside the subscriber - while the subscription stays active, as it keeps running (and any lock)
+        Awaitility.waitAtMost(Duration.ofSeconds(10)).until(subscription::isStoppedByErrorPolicy);
+        assertThat(subscription.isActive()).isTrue();
+        awaitStoppedByErrorPolicyCount(1);
         // Give a skipping subscriber ample time to move on - this one must not
         Thread.sleep(1500);
         assertThat(handled).containsExactly(1L);
@@ -193,9 +247,11 @@ class EventStoreSubscriptionManager_SubscriptionErrorPolicy_IT {
         // Restart while the cause persists: the event is redelivered - not skipped - and the subscription stops at it again
         eventStoreSubscriptionManager.stop();
         eventStoreSubscriptionManager = startSubscriptionManager(SubscriptionErrorPolicy.stop());
-        subscribe(handled, attempts, failing::get);
+        var restartedSubscription = subscribe(handled, attempts, failing::get);
         Awaitility.waitAtMost(Duration.ofSeconds(10))
                   .untilAsserted(() -> assertThat(attempts.get(FAILING_EVENT).get()).isEqualTo(2));
+        Awaitility.waitAtMost(Duration.ofSeconds(10)).until(restartedSubscription::isStoppedByErrorPolicy);
+        awaitStoppedByErrorPolicyCount(2);
         Thread.sleep(1000);
         assertThat(handled).containsExactly(1L);
         assertThat(attempts).doesNotContainKey(3L);
@@ -205,10 +261,12 @@ class EventStoreSubscriptionManager_SubscriptionErrorPolicy_IT {
         failing.set(false);
         eventStoreSubscriptionManager.stop();
         eventStoreSubscriptionManager = startSubscriptionManager(SubscriptionErrorPolicy.stop());
-        subscribe(handled, attempts, failing::get);
+        var fixedSubscription = subscribe(handled, attempts, failing::get);
         Awaitility.waitAtMost(Duration.ofSeconds(10))
                   .untilAsserted(() -> assertThat(handled).containsExactly(1L, 2L, 3L));
         awaitDurableResumePoint(4);
+        assertThat(fixedSubscription.isStoppedByErrorPolicy()).isFalse();
+        awaitStoppedByErrorPolicyCount(2);
     }
 
     // ------------------------------------------------------------------------------------------------------- Batched
@@ -237,10 +295,13 @@ class EventStoreSubscriptionManager_SubscriptionErrorPolicy_IT {
         var handled       = new CopyOnWriteArrayList<Long>();
         appendThreeEvents();
 
-        batchSubscribe(batchAttempts, handled, failing::get);
+        var subscription = batchSubscribe(batchAttempts, handled, failing::get);
 
         Awaitility.waitAtMost(Duration.ofSeconds(10))
                   .untilAsserted(() -> assertThat(batchAttempts.get()).isEqualTo(1));
+        Awaitility.waitAtMost(Duration.ofSeconds(10)).until(subscription::isStoppedByErrorPolicy);
+        assertThat(subscription.isActive()).isTrue();
+        awaitStoppedByErrorPolicyCount(1);
         Thread.sleep(1500);
         assertThat(batchAttempts.get()).isEqualTo(1);
         assertThat(handled).isEmpty();
@@ -285,8 +346,8 @@ class EventStoreSubscriptionManager_SubscriptionErrorPolicy_IT {
      * @param attempts  handling attempts per global order
      * @param failEvent whether an attempt at #2 fails, asked after the attempt has been counted
      */
-    private void subscribe(List<Long> handled, Map<Long, AtomicInteger> attempts, java.util.function.BooleanSupplier failEvent) {
-        eventStoreSubscriptionManager.subscribeToAggregateEventsAsynchronously(subscriberId,
+    private EventStoreSubscription subscribe(List<Long> handled, Map<Long, AtomicInteger> attempts, java.util.function.BooleanSupplier failEvent) {
+        return eventStoreSubscriptionManager.subscribeToAggregateEventsAsynchronously(subscriberId,
                                                                                aggregateType,
                                                                                GlobalEventOrder.FIRST_GLOBAL_EVENT_ORDER,
                                                                                Optional.empty(),
@@ -300,8 +361,8 @@ class EventStoreSubscriptionManager_SubscriptionErrorPolicy_IT {
                                                                                });
     }
 
-    private void batchSubscribe(AtomicInteger batchAttempts, List<Long> handled, java.util.function.BooleanSupplier failBatchContainingFailingEvent) {
-        eventStoreSubscriptionManager.batchSubscribeToAggregateEventsAsynchronously(subscriberId,
+    private EventStoreSubscription batchSubscribe(AtomicInteger batchAttempts, List<Long> handled, java.util.function.BooleanSupplier failBatchContainingFailingEvent) {
+        return eventStoreSubscriptionManager.batchSubscribeToAggregateEventsAsynchronously(subscriberId,
                                                                                     aggregateType,
                                                                                     GlobalEventOrder.FIRST_GLOBAL_EVENT_ORDER,
                                                                                     Optional.empty(),
@@ -327,6 +388,25 @@ class EventStoreSubscriptionManager_SubscriptionErrorPolicy_IT {
                 eventStore.appendToStream(aggregateType, orderId, List.of(new OrderEvent.OrderAccepted(orderId)));
             }
         });
+    }
+
+    private double stoppedByErrorPolicyCount() {
+        var counter = meterRegistry.find(MeasurementEventStoreSubscriptionObserver.SUBSCRIPTION_STOPPED_BY_ERROR_POLICY_METRIC)
+                                   .tag("subscriber_id", subscriberId.toString())
+                                   .counter();
+        return counter == null ? 0 : counter.count();
+    }
+
+    private void awaitStoppedByErrorPolicyCount(double expected) {
+        Awaitility.waitAtMost(Duration.ofSeconds(10))
+                  .untilAsserted(() -> assertThat(stoppedByErrorPolicyCount()).isEqualTo(expected));
+    }
+
+    private double handleEventFailedCount() {
+        var counter = meterRegistry.find(MeasurementEventStoreSubscriptionObserver.HANDLE_EVENT_FAILED_METRIC)
+                                   .tag("subscriber_id", subscriberId.toString())
+                                   .counter();
+        return counter == null ? 0 : counter.count();
     }
 
     private void awaitDurableResumePoint(long expectedResumeFromAndIncluding) {

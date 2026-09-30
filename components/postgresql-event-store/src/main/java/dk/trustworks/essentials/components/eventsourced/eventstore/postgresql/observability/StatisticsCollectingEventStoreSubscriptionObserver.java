@@ -275,6 +275,14 @@ public class StatisticsCollectingEventStoreSubscriptionObserver implements Event
     }
 
     @Override
+    public void subscriptionStoppedByErrorPolicy(GlobalEventOrder stoppedAtGlobalEventOrder,
+                                                 Throwable cause,
+                                                 EventStoreSubscription eventStoreSubscription) {
+        // Forward only: the failure itself was already recorded by handleEventFailed/handleEventBatchFailed
+        delegate.subscriptionStoppedByErrorPolicy(stoppedAtGlobalEventOrder, cause, eventStoreSubscription);
+    }
+
+    @Override
     public void resolveResumePoint(SubscriptionResumePoint resumePoint,
                                    GlobalEventOrder onFirstSubscriptionSubscribeFromAndIncludingGlobalOrder,
                                    EventStoreSubscription eventStoreSubscription,

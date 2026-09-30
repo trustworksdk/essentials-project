@@ -281,6 +281,27 @@ public interface EventStoreSubscriptionObserver {
                                         EventStoreSubscription eventStoreSubscription) {
     }
 
+    /**
+     * An asynchronous {@link EventStoreSubscription} stopped handling events because its {@link SubscriptionErrorPolicy}
+     * is {@link SubscriptionErrorPolicy.Mode#STOP} and handling an event (or a batch) failed. Called once per stop,
+     * right after {@link #handleEventFailed(PersistedEvent, PersistedEventHandler, Throwable, EventStoreSubscription)} /
+     * {@link #handleEventBatchFailed(List, BatchedPersistedEventHandler, Throwable, EventStoreSubscription)} reported the
+     * failure, and after {@link EventStoreSubscription#isStoppedByErrorPolicy()} has turned true.
+     * <p>
+     * The subscription handles no further events until it is started again; its resume point stays at
+     * {@code stoppedAtGlobalEventOrder} (or before it, if an earlier event is still unhandled). Unlike the failure
+     * callbacks, which fire for every skipped event too, this marks a subscription that has halted for good - the signal
+     * to alert on. The default does nothing, so existing observers are unaffected.
+     *
+     * @param stoppedAtGlobalEventOrder the {@link GlobalEventOrder} of the failed event - for a batched subscription the first event of the failed batch
+     * @param cause                     the failure that made the subscription stop
+     * @param eventStoreSubscription    the {@link EventStoreSubscription} that stopped
+     */
+    default void subscriptionStoppedByErrorPolicy(GlobalEventOrder stoppedAtGlobalEventOrder,
+                                                  Throwable cause,
+                                                  EventStoreSubscription eventStoreSubscription) {
+    }
+
 
     /**
      * How long did it take for an asynchronous {@link EventStoreSubscription} to resolve the resume point while starting

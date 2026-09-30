@@ -395,6 +395,18 @@ public class CdcEventStore<CONFIG extends AggregateEventStreamConfiguration> imp
      * <p>
      * The {@code onlyIncludeEventIfItBelongsToTenant} and other downstream filters are applied
      * uniformly to whichever source is currently active — callers see one consistent stream.
+     * <p>
+     * Delivery thread: the CDC bus emits on the shared {@code cdc-dispatcher-<slot>} thread (or the tailer's, in
+     * {@code DIRECT} mode), and everything downstream of it runs synchronously — the
+     * {@link BackfillThenLiveOrdered} drain and the subscriber's handler, including the synchronous
+     * {@code SubscriptionErrorPolicy} retry backoff. Handing the bus leg over to a single thread per subscription
+     * ({@code Cdc-<subscriber>-<aggregateType>}) keeps one slow or retrying subscription from holding every other CDC
+     * subscription on the slot, just as polling delivers on a {@code Publish-<subscriber>-<aggregateType>} thread per
+     * subscription. A single thread, so events stay in order; it is disposed when the subscription is cancelled or
+     * terminates, and disposing it interrupts a handler in its backoff, as on the polling path. The hand-over queue
+     * holds up to {@code eventBus.backpressureBufferSize} events: once a stalled subscription is that far behind, the
+     * multicast bus (paced by its slowest subscriber) back-pressures the other subscriptions of the same aggregate type
+     * and ultimately the dispatcher, through the bus's existing overflow handling.
      */
     private Flux<PersistedEvent> buildAdaptiveLiveSource(
             AggregateType aggregateType,
@@ -424,48 +436,54 @@ public class CdcEventStore<CONFIG extends AggregateEventStreamConfiguration> imp
         // starting on polling after CDC had been active (pollEvents records that case): without recording it, a
         // running subscription that polled through a dropped replication connection left fallbackCount at zero.
         var previousState = new AtomicReference<CdcAvailability.State>(null);
-        return gatedStates
-                .switchMap(state -> {
-                    if (liveSourceSwitchCounter != null) liveSourceSwitchCounter.increment();
-                    if (previousState.getAndSet(state) == CdcAvailability.State.ACTIVE && state != CdcAvailability.State.ACTIVE) {
-                        availability.fallbackUsed();
-                        if (fallbackPollCounter != null) fallbackPollCounter.increment();
-                    }
-                    long resumeFrom = lastSeen.get() + 1;
-                    if (state == CdcAvailability.State.ACTIVE) {
-                        log.debug("[{}] Adaptive live source switching to CDC bus (resumeFrom={})",
-                                  aggregateType, resumeFrom);
-                        return cdcBus.fluxForAggregate(aggregateType)
-                                     .doOnNext(e -> {
-                                         if (liveEventsCounter != null) liveEventsCounter.increment();
-                                     });
-                    }
+        return Flux.using(() -> Schedulers.newSingle("Cdc-" + subscriptionId.map(Object::toString).orElse("NoSubscriberId") + "-" + aggregateType, true),
+                          cdcDeliveryScheduler -> gatedStates
+                                  .switchMap(state -> {
+                                      if (liveSourceSwitchCounter != null) liveSourceSwitchCounter.increment();
+                                      if (previousState.getAndSet(state) == CdcAvailability.State.ACTIVE && state != CdcAvailability.State.ACTIVE) {
+                                          availability.fallbackUsed();
+                                          if (fallbackPollCounter != null) fallbackPollCounter.increment();
+                                      }
+                                      long resumeFrom = lastSeen.get() + 1;
+                                      if (state == CdcAvailability.State.ACTIVE) {
+                                          log.debug("[{}] Adaptive live source switching to CDC bus (resumeFrom={})",
+                                                    aggregateType, resumeFrom);
+                                          return cdcBus.fluxForAggregate(aggregateType)
+                                                       .doOnNext(e -> {
+                                                           if (liveEventsCounter != null) liveEventsCounter.increment();
+                                                       })
+                                                       // Off the shared dispatcher thread - see "Delivery thread" above
+                                                       .publishOn(cdcDeliveryScheduler, eventBusProperties.getBackpressureBufferSize());
+                                      }
 
-                    log.debug("[{}] Adaptive live source switching to polling (resumeFrom={}, state={})",
-                              aggregateType, resumeFrom, state);
-                    return eventStore.pollEvents(aggregateType,
-                                                 resumeFrom,
-                                                 Optional.of(pageSize),
-                                                 pollingInterval,
-                                                 onlyIncludeEventIfItBelongsToTenant,
-                                                 subscriptionId,
-                                                 eventStorePollingOptimizerFactory);
-                })
-                // Drop anything at or below the high-water mark. Protects against:
-                //  - events already delivered via the previous source showing up in the new one
-                //    (CDC bus may still have buffered events after a cut-over)
-                //  - polling returning events ≤ headInclusive on the very first query
-                .filter(e -> e.globalEventOrder().longValue() > lastSeen.get())
-                .doOnNext(e -> {
-                    long go = e.globalEventOrder().longValue();
-                    lastSeen.updateAndGet(cur -> Math.max(cur, go));
-                })
-                // Tenant gate (see eventBelongsToTenant). Safe to apply in-line here only because the
-                // pollEvents ACTIVE path passes Optional.empty() when this source feeds the
-                // BackfillThenLiveOrdered drain (it filters the ordered OUTPUT instead). This gate
-                // therefore only ever fires on the polling-fallback return path, where dropping events
-                // cannot stall any downstream strict-contiguity ordering.
-                .filter(e -> eventBelongsToTenant(e, onlyIncludeEventIfItBelongsToTenant));
+                                      log.debug("[{}] Adaptive live source switching to polling (resumeFrom={}, state={})",
+                                                aggregateType, resumeFrom, state);
+                                      return eventStore.pollEvents(aggregateType,
+                                                                   resumeFrom,
+                                                                   Optional.of(pageSize),
+                                                                   pollingInterval,
+                                                                   onlyIncludeEventIfItBelongsToTenant,
+                                                                   subscriptionId,
+                                                                   eventStorePollingOptimizerFactory);
+                                  })
+                                  // Drop anything at or below the high-water mark. Protects against:
+                                  //  - events already delivered via the previous source showing up in the new one
+                                  //    (CDC bus may still have buffered events after a cut-over)
+                                  //  - polling returning events ≤ headInclusive on the very first query
+                                  .filter(e -> e.globalEventOrder().longValue() > lastSeen.get())
+                                  .doOnNext(e -> {
+                                      long go = e.globalEventOrder().longValue();
+                                      lastSeen.updateAndGet(cur -> Math.max(cur, go));
+                                  })
+                                  // Tenant gate (see eventBelongsToTenant). Safe to apply in-line here only because the
+                                  // pollEvents ACTIVE path passes Optional.empty() when this source feeds the
+                                  // BackfillThenLiveOrdered drain (it filters the ordered OUTPUT instead). This gate
+                                  // therefore only ever fires on the polling-fallback return path, where dropping events
+                                  // cannot stall any downstream strict-contiguity ordering.
+                                  .filter(e -> eventBelongsToTenant(e, onlyIncludeEventIfItBelongsToTenant)),
+                          Scheduler::dispose,
+                          // Dispose only after the terminal signal was delivered - it is delivered on the scheduler's own thread
+                          false);
     }
 
     /**
