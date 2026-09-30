@@ -69,6 +69,7 @@ the number they have where they are defined, never renumbered: `ESS-S<n>` for a 
 - <a id="ess-022"></a>`ESS-022` `Money` is a JSON object, not a scalar → [LLM-types-jackson.md § Gotchas](LLM-types-jackson.md#gotchas)
 - <a id="ess-023"></a>`ESS-023` `createObjectMapper()` ignores getters/setters (fields only) → [LLM-types-jackson.md § Gotchas](LLM-types-jackson.md#gotchas)
 - <a id="ess-024"></a>`ESS-024` Kotlin value-class id written as `{"value":…}` without `KotlinModule`, no error → [LLM-types-jackson.md § Kotlin semantic types](LLM-types-jackson.md#kotlin-semantic-types)
+- <a id="ess-112"></a>`ESS-112` Kotlin web body writes `"vOB4Bnc"` for `isExpedited`, and reading it back fails — a value-class property named `is…` loses its name on Boot's web mapper → [LLM-types-jackson.md § A value-class property named `is…` loses its name on the web mapper](LLM-types-jackson.md#a-value-class-property-named-is-loses-its-name-on-the-web-mapper)
 - <a id="ess-025"></a>`ESS-025` Value type serialized unexpectedly in a `@RequestBody`, or a module "registered" but not applied — web and persistence mappers are registered independently → [LLM-types-jackson.md § Quick Facts](LLM-types-jackson.md#quick-facts)
 
 ### types-jdbi ([LLM-types-jdbi.md](LLM-types-jdbi.md))
@@ -87,6 +88,8 @@ the number they have where they are defined, never renumbered: `ESS-S<n>` for a 
 - <a id="ess-034"></a>`ESS-034` Assuming a Kotlin value-class id needs this module — a `@JvmInline value class` binds with nothing from Essentials → [LLM-types-spring-web.md § Kotlin semantic types](LLM-types-spring-web.md#kotlin-semantic-types)
 - <a id="ess-035"></a>`ESS-035` Invalid Kotlin value-class id answers 500 instead of 400 — its `init` guard fires at handler invocation → [LLM-types-spring-web.md § Validation runs — but watch the status code](LLM-types-spring-web.md#validation-runs--but-watch-the-status-code)
 - <a id="ess-036"></a>`ESS-036` Expecting `StringValueType` to validate — it is a bare interface; validation lives in the concrete type → [LLM-types-spring-web.md § Validation runs — but watch the status code](LLM-types-spring-web.md#validation-runs--but-watch-the-status-code)
+- <a id="ess-111"></a>`ESS-111` Generated OpenAPI clients type every id as an object (`bytes`/`empty`/`value`), or name Kotlin value-class properties `orderId-nb-kci0` — springdoc needs `SingleValueTypeModelConverter` registered as a bean → [LLM-types-spring-web.md § OpenAPI with springdoc](LLM-types-spring-web.md#openapi-with-springdoc)
+- <a id="ess-113"></a>`ESS-113` Generated client hooks named like `useEcho40lU5Lw` — Kotlin mangles the JVM name of a handler that takes or returns a value class, and springdoc takes the operationId from it; set `@Operation(operationId = "…")` → [LLM-types-spring-web.md § Kotlin handler methods: set the operationId](LLM-types-spring-web.md#kotlin-handler-methods-set-the-operationid)
 
 ### types-springdata-mongo ([LLM-types-springdata-mongo.md](LLM-types-springdata-mongo.md))
 - <a id="ess-037"></a>`ESS-037` `OffsetDateTimeType`/`ZonedDateTimeType` unsupported; temporals UTC without nanoseconds → [LLM-types-springdata-mongo.md § Gotchas](LLM-types-springdata-mongo.md#gotchas)

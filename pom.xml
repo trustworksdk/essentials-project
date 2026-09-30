@@ -98,6 +98,11 @@
         <skipDependencyCheck>false</skipDependencyCheck>
 
         <spring-boot.version>4.1.1</spring-boot.version>
+        <!-- The springdoc that types-spring-web's SingleValueTypeModelConverter compiles and tests against. Provided
+             scope, so a consumer's own springdoc decides at runtime; the Spring Boot BOM does not manage springdoc.
+             Keep it on the springdoc.version row of essentials-plugin/references/stack/stack-pins.md, which is the
+             release a generated project starts on. -->
+        <springdoc.version>3.1.1</springdoc.version>
         <objenesis.version>3.6</objenesis.version>
         <postgresql.version>42.7.13</postgresql.version>
         <slf4j.version>2.0.18</slf4j.version>

@@ -72,6 +72,24 @@
             <scope>provided</scope>
         </dependency>
 
+        <!-- springdoc, for SingleValueTypeModelConverter. Provided: only an application that already runs springdoc
+             registers the converter, and it brings its own. swagger-core's model resolution is Jackson 2 underneath,
+             but the converter needs nothing of jackson-databind (jackson-core's ResolvedType is enough to read a
+             Jackson 2 JavaType), so databind is excluded and this module stays under the root ban-jackson-2 rule.
+             The tests put databind back at test scope, where swagger-core runs. -->
+        <dependency>
+            <groupId>org.springdoc</groupId>
+            <artifactId>springdoc-openapi-starter-common</artifactId>
+            <version>${springdoc.version}</version>
+            <scope>provided</scope>
+            <exclusions>
+                <exclusion>
+                    <groupId>com.fasterxml.jackson.core</groupId>
+                    <artifactId>jackson-databind</artifactId>
+                </exclusion>
+            </exclusions>
+        </dependency>
+
         <!-- Kotlin, for KotlinValueTypeConverter. Optional and non-transitive, exactly as in `types` and
              `types-jdbi`: a Java-only consumer must not be forced to carry kotlin-reflect, which is why both
              configurers register the Kotlin converter behind a ClassUtils.isPresent() guard. -->
@@ -148,6 +166,20 @@
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-webflux</artifactId>
             <version>${spring-boot.version}</version>
+            <scope>test</scope>
+        </dependency>
+
+        <!-- springdoc's WebMvc integration and the Jackson 2 databind swagger-core runs on, for the
+             SingleValueTypeModelConverter tests (/v3/api-docs from a running context, and ModelConverters directly). -->
+        <dependency>
+            <groupId>org.springdoc</groupId>
+            <artifactId>springdoc-openapi-starter-webmvc-api</artifactId>
+            <version>${springdoc.version}</version>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>com.fasterxml.jackson.core</groupId>
+            <artifactId>jackson-databind</artifactId>
             <scope>test</scope>
         </dependency>
 
