@@ -772,6 +772,71 @@ register the component with an `EssentialsSchemaHarness` - see [LLM-foundation.m
 
 ---
 
+## Event store subscriptions
+
+### Decide what a failing event should do: `SubscriptionErrorPolicy`
+
+Nothing changes unless you configure it: the default, `skip()`, is 0.50's behaviour, where an asynchronous
+subscription logs a non-I/O handler failure at ERROR and moves past the event for good. Choose `retryThenSkip(...)` or
+`stop()` per `EventStoreSubscriptionManager` (Spring Boot:
+`essentials.eventstore.subscription-manager.error-policy.mode=retry-n-then-skip|stop`) where a missed event matters.
+
+**What to do:** alert on `essentials.eventstore.subscription.handle_event_failed`, and with `stop()` on
+`essentials.eventstore.subscription.stopped_by_error_policy` or `EventStoreSubscription#isStoppedByErrorPolicy()`.
+Don't use `isActive()` to detect a stopped subscription: it stays `true`. If you construct
+`MeasurementEventStoreSubscriptionObserver` yourself, use the 3-argument constructor with your `MeterRegistry` to get
+the counters. Details: [README § Subscription Error Policy](../components/postgresql-event-store/README.md#subscription-error-policy).
+
+### Batched and CDC handlers run on a thread of their own
+
+- A `BatchedPersistedEventHandler` used to run on Reactor's JVM-wide `Schedulers.single()` thread; it now runs on a
+  `BatchedEventSubscriber-<subscriber>-<aggregateType>-Handler` thread owned by its subscriber.
+- Under CDC, a subscription's handler used to run on the shared `cdc-dispatcher-<slot>` thread (the tailer's thread in
+  `DIRECT` mode); it now runs on a `Cdc-<subscriber>-<aggregateType>` thread.
+
+Ordering per subscription is unchanged. This matters only to a handler that relied on the thread it ran on, e.g.
+through a `ThreadLocal`.
+
+### Stopping a batched subscription interrupts the batch in progress
+
+Stopping a batched subscription (shutdown, fenced-lock hand-over, `resetFrom`, unsubscribe) now interrupts a
+`handleBatch(...)` call that is under way, as the polling path already did for a single event. The batch is not
+skipped: the resume point stays at its first event and the batch is handled again when the subscription starts again.
+
+**What to do:** make batch handlers tolerate being interrupted and called again with a batch whose earlier attempt did
+not complete.
+
+### A failed `ViewEventProcessor` handler that changed state is no longer queued
+
+0.50's `ViewEventProcessor` queued every failed direct handling in the subscription's `UnitOfWork` and committed it,
+together with whatever the failed handler had left there: events it appended were persisted and published, and an
+aggregate it changed had its uncommitted events persisted. The queued retry then did it all again.
+
+0.60 runs the direct handler under a savepoint and still queues a failure that left nothing behind - a failed SQL
+statement included, and a handler that only loaded an aggregate. But when the failed handler appended events through
+the `EventStore`, left a `UnitOfWork` lifecycle resource with pending changes (an aggregate with uncommitted events),
+or marked the `UnitOfWork` rollback-only, the event is **not** queued: the whole `UnitOfWork` rolls back and the failure
+goes to the subscription's `SubscriptionErrorPolicy`. **Under the default `skip()` that event is skipped.**
+
+**What to do:**
+
+- For a `ViewEventProcessor` whose handlers append events or change aggregates, set
+  `essentials.eventstore.subscription-manager.error-policy.mode` to `retry-n-then-skip` or `stop` (or call
+  `setSubscriptionErrorPolicy(...)` on the `EventStoreSubscriptionManager` builder), or move that work to an
+  `EventProcessor`, whose Inbox retries and dead-letters durably.
+- If you register resources in a `UnitOfWork` with your own `UnitOfWorkLifecycleCallback`, override the new
+  `hasPendingChanges(resource)` to return `false` for a resource that committing would leave untouched. It defaults to
+  `true`, so without it any resource registered with your callback makes a failed `ViewEventProcessor` handler
+  escalate instead of being queued.
+- If you implement `UnitOfWork` or `EventStoreUnitOfWork` yourself, implement
+  `hasLifecycleCallbackResourcesWithPendingChanges()`, `getAllUnitOfWorkLifecycleCallbackResources()` and
+  `getNumberOfEventsPersisted()`. Their defaults throw `UnsupportedOperationException`, which the `ViewEventProcessor`
+  treats as "state present" and so always escalates.
+
+Details: [README § ViewEventProcessor](../components/postgresql-event-store/README.md#vieweventprocessor).
+
+---
+
 ## Coming from before 0.50
 
 0.60 carries every 0.50 change. If you are skipping 0.50, read

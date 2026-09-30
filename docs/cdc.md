@@ -143,6 +143,17 @@ In **DIRECT mode** the tailer decodes inline and pushes straight to the bus. Low
 latency, no inbox table, but no durable buffer between WAL ingestion and dispatch:
 backpressure on the bus directly throttles WAL acks.
 
+In both modes `CdcEventStore` hands each subscription's live events over from the bus
+to a single thread owned by that subscription (`Cdc-<subscriber>-<aggregateType>`),
+so the subscriber's handler - including a synchronous `SubscriptionErrorPolicy` retry
+backoff - never runs on the shared `cdc-dispatcher-<slot>` thread (or the tailer's
+thread in DIRECT mode) and a slow or retrying subscription does not hold up the other
+subscriptions on the slot. Events stay in order. The hand-over buffers up to
+`eventBus.backpressureBufferSize` events per subscription; once a stalled subscription
+is further behind than that, the multicast bus back-pressures the other subscriptions of
+the same aggregate type, and ultimately the dispatcher, through its normal overflow
+handling.
+
 ### Logical decoding plugins
 
 CDC abstracts the WAL plugin behind `LogicalDecodingPlugin`. Two implementations:

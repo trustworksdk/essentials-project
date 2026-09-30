@@ -81,6 +81,29 @@ public interface UnitOfWork {
     void markAsRollbackOnly();
     void markAsRollbackOnly(Exception cause);
     UnitOfWorkStatus status();
+
+    // Every resource registered via registerLifecycleCallbackForResource(...), across all callbacks - in-memory
+    // state the UnitOfWork may act on at commit, which rolling back to a savepoint does not undo.
+    // The default throws UnsupportedOperationException. All Essentials implementations override it.
+    List<Object> getAllUnitOfWorkLifecycleCallbackResources();
+
+    // Would committing persist or publish something for any registered resource? Asks each resource's
+    // UnitOfWorkLifecycleCallback.hasPendingChanges(resource): an aggregate that had an event applied has pending
+    // changes, one that was only loaded has none. False when nothing is registered. The default throws
+    // UnsupportedOperationException - callers must read that as "pending changes". All Essentials implementations
+    // override it. ViewEventProcessor uses it to decide whether a failed direct handler can be queued.
+    boolean hasLifecycleCallbackResourcesWithPendingChanges();
+}
+
+// dk.trustworks.essentials.components.foundation.transaction.UnitOfWorkLifecycleCallback<RESOURCE_TYPE>
+public interface UnitOfWorkLifecycleCallback<RESOURCE_TYPE> {
+    // ... beforeCommit / afterCommit / beforeRollback / afterRollback ...
+
+    // Would committing make this callback persist/publish something for the resource? Default true (the safe
+    // answer). Override it in a custom callback whose registered resources can be unchanged - otherwise every
+    // resource registered with it counts as pending, and e.g. a ViewEventProcessor escalates instead of queueing.
+    // The stateful, flex and decider repository callbacks answer true only while there are uncommitted events.
+    default boolean hasPendingChanges(RESOURCE_TYPE resource) { return true; }
 }
 ```
 

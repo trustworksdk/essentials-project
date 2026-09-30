@@ -631,7 +631,15 @@ Only supports exclusive processing.
 
 Rejects `@MessageHandler(unitOfWork = UnitOfWorkMode.NONE)` handlers at start-up: the view update and the acknowledgement commit in one `UnitOfWork` here, which a `NONE` handler would break. Blocking I/O belongs in an `EventProcessor`.
 
-The direct handler runs under a savepoint in the subscription's transaction, so a failed SQL statement (e.g. a constraint violation) rolls back only the handler's own writes and the event is still queued; an event whose payload cannot be deserialized is queued too (and dead-lettered there). A savepoint does not undo in-memory `UnitOfWork` state (events appended via the `EventStore` in the failed handler), and a handler that marks the `UnitOfWork` rollback-only - e.g. a failure inside a joined `usingUnitOfWork` - cannot be queued: that failure goes to the subscription's `SubscriptionErrorPolicy` instead.
+The direct handler runs under a savepoint in the subscription's transaction, so a failed SQL statement (e.g. a constraint violation) rolls back only the handler's own writes and the event is still queued; an event whose payload cannot be deserialized is queued too (and dead-lettered there).
+
+A savepoint only undoes SQL. When the failed handler left `UnitOfWork` state that a savepoint cannot undo, committing the `UnitOfWork` to queue the event would act on that state although the handler failed, so the event is **not** queued. That is the case when the handler:
+
+- appended events through the `EventStore` (committing would publish them although their rows were rolled back, and a queued retry would append them again)
+- left a resource registered for commit-time processing **with pending changes** - e.g. an aggregate it applied an event to, whose uncommitted events the repository's callback persists at commit. Every registered resource is asked (`UnitOfWorkLifecycleCallback.hasPendingChanges(resource)`), not only one the handler registered, since a repository hands out the instance already registered in the `UnitOfWork`. A handler that only **loaded** an aggregate leaves nothing pending and is queued as before. A custom callback that doesn't override `hasPendingChanges` answers `true` (the default), so any resource registered with it forces escalation
+- marked the `UnitOfWork` rollback-only - e.g. a failure inside a joined `usingUnitOfWork`/`withUnitOfWork`
+
+Instead the whole `UnitOfWork` rolls back and the failure reaches the subscription's `SubscriptionErrorPolicy` (see [Direct async subscribers skip a failing event by default](#direct-async-subscribers-skip-a-failing-event-by-default)). **Under the default `skip()` such an event is skipped, not queued** - one ERROR line, and the view never sees it. For a view processor whose handlers append events or change aggregates, configure `retryThenSkip(...)` or `stop()` on the `EventStoreSubscriptionManager`, or move that work to an `EventProcessor` (Inbox: durable retry and dead-lettering). A `UnitOfWork` implementation that cannot report this state (the `EventStoreUnitOfWork.getNumberOfEventsPersisted()` / `UnitOfWork.hasLifecycleCallbackResourcesWithPendingChanges()` defaults throw `UnsupportedOperationException`) is treated as having it; every Essentials implementation reports it. The stateful, flex and decider repository callbacks report pending changes only while there are uncommitted events.
 
 ```java
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.processor.ViewEventProcessor;
@@ -997,6 +1005,17 @@ Observability for `EventStore` operations and subscription lifecycle.
 | `MeasurementEventStoreSubscriptionObserver` | Micrometer metrics (production) |
 | `StatisticsCollectingEventStoreSubscriptionObserver` | Decorator - records per-subscription statistics for the admin API, then forwards to a delegate |
 
+**Failure and error-policy callbacks**:
+
+| Callback | Called when |
+|----------|-------------|
+| `handleEventFailed(PersistedEvent, PersistedEventHandler, Throwable, EventStoreSubscription)` | Async `PersistedEventHandler` failed and the `SubscriptionErrorPolicy` gave up (event about to be skipped, or stopped at) |
+| `handleEventBatchFailed(List<PersistedEvent>, BatchedPersistedEventHandler, Throwable, EventStoreSubscription)` | Same for a `BatchedPersistedEventHandler` - batch failures arrive **here, not** in `handleEventFailed`. Default no-op |
+| `handleEventFailed(PersistedEvent, TransactionalPersistedEventHandler, Throwable, EventStoreSubscription)` | In-transaction handler failed (the exception then rolls back the caller) |
+| `subscriptionStoppedByErrorPolicy(GlobalEventOrder stoppedAtGlobalEventOrder, Throwable cause, EventStoreSubscription)` | A `stop()` policy halted an async subscription. Once per stop, after the failure callback, with `isStoppedByErrorPolicy()` already `true`; for a batch, `stoppedAtGlobalEventOrder` is the batch's first event. Default no-op. The alertable signal - the failure callbacks also fire for skipped events |
+
+None of them fires for an event whose retries were abandoned because the subscription was being stopped - it is handled again on restart.
+
 ```java
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.observability.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.observability.micrometer.*;
@@ -1019,10 +1038,14 @@ var eventStore = PostgresqlEventStore.<SeparateTablePerAggregateEventStreamConfi
                                      .build();
 ```
 
-The third argument enables the `essentials.eventstore.subscription.handle_event_failed` counter (async events given up
-on - skipped or stopped at, see [Direct async subscribers skip a failing event by default](#direct-async-subscribers-skip-a-failing-event-by-default))
-and `essentials.eventstore.subscription.handle_event_transactional_failed`. They count whether or not the
-`MeasurementTaker` records timings; the Spring Boot starter always passes its `MeterRegistry`.
+The third argument enables the failure counters. They count whether or not the `MeasurementTaker` records timings;
+the Spring Boot starter always passes its `MeterRegistry`.
+
+| Counter | Counts | Tags |
+|---------|--------|------|
+| `essentials.eventstore.subscription.handle_event_failed` | Async events given up on - skipped or stopped at, see [Direct async subscribers skip a failing event by default](#direct-async-subscribers-skip-a-failing-event-by-default). A failed batch counts each event | `subscriber_id`, `aggregate_type`, `event_handler`, `event_type`, optional `Module` |
+| `essentials.eventstore.subscription.handle_event_transactional_failed` | In-transaction handler failures | same |
+| `essentials.eventstore.subscription.stopped_by_error_policy` | Async subscriptions halted by a `stop()` policy, one per stop | `subscriber_id`, `aggregate_type`, optional `Module` |
 
 The SPI has a single slot, so collecting statistics **composes** with the metrics observer rather than replacing it:
 
@@ -1189,12 +1212,45 @@ EventStoreSubscriptionManager.builder()
 ```
 
 Spring Boot: `essentials.eventstore.subscription-manager.error-policy.mode=skip|retry-n-then-skip|stop` (default `skip`),
-plus `.max-retries`, `.initial-backoff`, `.max-backoff`. The policy is per manager, applies to a batch as a whole, and
-does not touch in-transaction subscriptions (the exception rolls back the caller) or Inbox-forwarding subscriptions
-(the Inbox's `RedeliveryPolicy` applies). Alert on the Micrometer counter
+plus `.max-retries` (default 3), `.initial-backoff` (100ms), `.max-backoff` (1s). Built directly, `PersistedEventSubscriberBuilder`
+and `BatchedPersistedEventSubscriberBuilder` take the same `setSubscriptionErrorPolicy(...)`. The policy is per manager, applies
+to a batch as a whole, and does not touch in-transaction subscriptions (the exception rolls back the caller) or Inbox-forwarding
+subscriptions (the Inbox's `RedeliveryPolicy` applies). Alert on the Micrometer counter
 `essentials.eventstore.subscription.handle_event_failed` (tags `subscriber_id`, `aggregate_type`, `event_handler`,
 `event_type`), which counts every event that exhausted the policy. For durable per-event retry with dead-lettering,
-forward to an `Inbox` (`EventProcessor`) instead.
+forward to an `Inbox` (`EventProcessor`) instead. A `ViewEventProcessor` handler that appended events or changed an aggregate
+before failing is not queued but reaches this policy - see [ViewEventProcessor](#vieweventprocessor).
+
+**Retries block only their own subscription.** They are synchronous on the subscription's delivery thread (that is what keeps
+events in order), and every async subscription has its own: polling `Publish-<subscriber>-<aggregateType>`, CDC
+`Cdc-<subscriber>-<aggregateType>` (handed over from the shared `cdc-dispatcher` thread, which a handler never holds), batched
+`BatchedEventSubscriber-<subscriber>-<aggregateType>-Handler`. Under CDC the hand-over buffers
+`essentials.eventstore.cdc.event-bus.backpressure-buffer-size` events (default 8192); a subscription further behind than
+that back-pressures the other CDC subscriptions of its `AggregateType` through the CDC bus's overflow handling.
+
+**Stopping during retries does not skip.** A stop while a retry is under way (shutdown, fenced-lock hand-over, `resetFrom`,
+unsubscribe) abandons the retries: no failure callback, no ERROR, the resume point stays at the event, and the restarted
+subscription handles it again. Stopping also interrupts a handler in progress - a single event on the polling path, a whole
+batch for a batched subscription - and that event/batch is likewise handled again. Handlers must tolerate the repeat.
+
+**Detect a `stop()` explicitly** - a stopped subscription looks like a healthy one with no new events:
+`EventStoreSubscription#isStoppedByErrorPolicy()` (true until the subscription is started again), observer callback
+`subscriptionStoppedByErrorPolicy(...)`, counter `essentials.eventstore.subscription.stopped_by_error_policy`, and admin API
+`ApiSubscription.stoppedByErrorPolicy`. **`isActive()` stays `true` after a stop, on purpose**: it means "running here" ("holds
+the fenced lock" for exclusive subscriptions), the lock is kept so the event doesn't flap to a node that fails the same way,
+and the manager's periodic checkpoint only saves active subscriptions - which is what persists the held resume point if the
+process later dies without a graceful stop. Never use `isActive()` to detect a stop.
+
+### Flush-published events cannot be recalled
+
+With `FlushAndPublishPersistedEventsToEventBusRightAfterAppendToStream` configured (Spring Boot:
+`essentials.eventstore.auto-flush-and-publish-after-append-to-stream=true`), every `appendToStream` publishes the new events on
+the local `EventStoreEventBus` at `CommitStage.Flush`, **before** the transaction commits. Rolling the transaction back undoes
+the rows and the SQL of in-transaction subscribers, but not the publication: an async `EventBus` subscriber, or a sync
+subscriber's non-transactional side effect (in-memory state, a remote call), has already seen events that never commit. When
+the work that appended them is retried - a `SubscriptionErrorPolicy` retry, a durable-queue redelivery, your own retry - the
+events are appended and published at `Flush` again. Subscribe to `Flush` only for work that rolls back with the transaction,
+or make the subscriber tolerate uncommitted and repeated events.
 
 ### Handlers without their annotation
 

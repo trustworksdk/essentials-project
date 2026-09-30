@@ -195,6 +195,11 @@ void registerEventsPersisted(List<PersistedEvent> eventsPersistedInThisUnitOfWor
 // Remove flushed events
 void removeFlushedEventsPersisted(List<PersistedEvent> eventsPersistedToRemoveFromThisUnitOfWork)
 void removeFlushedEventPersisted(PersistedEvent eventPersistedToRemoveFromThisUnitOfWork)
+
+// Total events registered so far, including those removed after Flush publishing - never decreases, so two
+// readings that differ mean events were persisted in between (declared on EventStoreUnitOfWork; its default
+// throws UnsupportedOperationException, to be read as "events persisted")
+long getNumberOfEventsPersisted()
 ```
 
 ### PersistedEventsCommitLifecycleCallback

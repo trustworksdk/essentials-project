@@ -157,6 +157,40 @@ To keep the old timing, use `fixedBackoff` with the old constant value.
 The shard-owned engine's adapter uses the same calculation (see [§2.1](#21-shard-owned-postgresql-queue-engine)).
 → [MIGRATION-0.60 § Redelivery delays now grow](MIGRATION-0.60.md#redelivery-delays-now-grow)
 
+#### 1.1.8 A failed `ViewEventProcessor` handler that appended events or changed an aggregate is no longer queued
+
+In 0.50 a `ViewEventProcessor` caught any failure of its direct handler and queued the event in the same
+`UnitOfWork`, then committed it. **That commit also kept whatever the failed handler had done in the `UnitOfWork`**:
+events it appended through the `EventStore` were persisted and published, and an aggregate it applied an event to had
+its uncommitted events persisted - although the handler failed - and the queued retry did the same work again.
+
+The direct handler now runs under a savepoint (see [§3](#3-bug-fixes)), and a failure is still queued as long as the
+handler left nothing the savepoint cannot undo. It is **not** queued when the handler:
+
+- appended events through the `EventStore`,
+- left a `UnitOfWork` lifecycle resource with pending changes - typically an aggregate with uncommitted events, or
+  any resource whose `UnitOfWorkLifecycleCallback` does not override the new `hasPendingChanges(...)` (it defaults to
+  `true`), or
+- marked the `UnitOfWork` rollback-only (a failure inside a joined `usingUnitOfWork`/`withUnitOfWork`; in 0.50 that
+  queued message rolled back silently).
+
+Then the whole `UnitOfWork` rolls back and the failure goes to the subscription's `SubscriptionErrorPolicy`
+([§2.10](#210-choose-what-an-async-subscription-does-with-a-failing-event)). **Under the default `skip()` such an event is
+skipped** - one ERROR line and the `handle_event_failed` counter - where 0.50 queued it. A handler that only loaded an
+aggregate is queued as before. For view processors whose handlers append events or change aggregates, configure
+`retryThenSkip(...)` or `stop()`, or move that work to an `EventProcessor`.
+
+New, additive API that makes the distinction:
+
+- `UnitOfWorkLifecycleCallback#hasPendingChanges(resource)`, default `true`. The stateful, flex and decider repository
+  callbacks answer `true` only while the aggregate has uncommitted events.
+- `UnitOfWork#hasLifecycleCallbackResourcesWithPendingChanges()` and `UnitOfWork#getAllUnitOfWorkLifecycleCallbackResources()`.
+- `EventStoreUnitOfWork#getNumberOfEventsPersisted()`, a count that never decreases.
+
+The `UnitOfWork`/`EventStoreUnitOfWork` defaults throw `UnsupportedOperationException`, which the `ViewEventProcessor`
+reads as "state present"; every Essentials implementation overrides them.
+→ [MIGRATION-0.60 § A failed `ViewEventProcessor` handler that changed state is no longer queued](MIGRATION-0.60.md#a-failed-vieweventprocessor-handler-that-changed-state-is-no-longer-queued)
+
 ---
 
 ### 1.2 Platform: Java 25, Spring Boot 4.1, Kotlin 2.3
@@ -594,6 +628,75 @@ SingleValueTypeModelConverter singleValueTypeModelConverter() {
 
 → [`LLM/LLM-types-spring-web.md` § OpenAPI with springdoc](../LLM/LLM-types-spring-web.md#openapi-with-springdoc)
 
+### 2.10 Choose what an async subscription does with a failing event
+
+Before 0.60 a direct asynchronous subscriber (`subscribeToAggregateEventsAsynchronously`,
+`exclusivelySubscribeToAggregateEventsAsynchronously`, `batchSubscribeToAggregateEventsAsynchronously`) retried I/O
+errors forever, but **any other handler exception skipped the event**: one ERROR line, the resume point moved past it,
+and the event was never redelivered, not even after a restart. A projection just missed it, and there was nothing to
+alert on.
+
+`SubscriptionErrorPolicy` makes that a choice, set per manager with
+`EventStoreSubscriptionManagerBuilder.setSubscriptionErrorPolicy(...)` (or on `PersistedEventSubscriberBuilder` /
+`BatchedPersistedEventSubscriberBuilder`), and in Spring Boot with
+`essentials.eventstore.subscription-manager.error-policy.{mode,max-retries,initial-backoff,max-backoff}`:
+
+| Policy | On a non-I/O handler exception |
+|---|---|
+| `skip()` — **the default, unchanged from 0.50** | Log at ERROR, advance past the event, continue |
+| `retryThenSkip(n[, initialBackoff, maxBackoff])` | Call the handler again up to `n` times, each in a new `UnitOfWork`, with exponential backoff (default 100 ms doubling to 1 s), then skip |
+| `stop()` | Stop at the failed event without advancing the resume point; the subscription resumes *at* it when started again (restart, fenced-lock hand-over, `resetFrom`) |
+
+A batched subscription applies the policy to the batch as a whole. In-transaction subscriptions and subscriptions
+that forward to an `Inbox` are not affected. **Upgrading changes nothing until you configure a policy.**
+
+**Retries hold up only their own subscription.** They run synchronously on the subscription's delivery thread, which
+is what keeps events in order, and every asynchronous subscription now has a thread of its own on every path. Two of
+those paths used to share one:
+
+- **Batched subscriptions** handled their batches on Reactor's JVM-wide `Schedulers.single()` thread. Each
+  `BatchedPersistedEventSubscriber` now handles batches on its own
+  `BatchedEventSubscriber-<subscriber>-<aggregateType>-Handler` thread.
+- **Under CDC** the handlers ran on the shared `cdc-dispatcher-<slot>` thread (the tailer's thread in `DIRECT`
+  mode), so one slow handler held every CDC subscription on the slot. `CdcEventStore` now hands each subscription's
+  live events over to a `Cdc-<subscriber>-<aggregateType>` thread. Order is kept. A subscription more than
+  `essentials.eventstore.cdc.event-bus.backpressure-buffer-size` events (default 8192) behind still back-pressures
+  the other CDC subscriptions of its aggregate type, through the bus's existing overflow handling.
+
+**Stopping a subscription never skips an event.** A stop while a retry is under way (shutdown, fenced-lock hand-over,
+`resetFrom`, unsubscribe) abandons the retries without reporting a failure, and the resume point stays at the event, so
+the restarted subscription handles it again. Stopping a batched subscription now also interrupts a batch in progress,
+as the polling path already did for a single event; the batch is handled again from its first event. See
+[MIGRATION-0.60.md § Event store subscriptions](MIGRATION-0.60.md#event-store-subscriptions).
+
+**Signals to alert on** (all additive; nothing needs configuring beyond the policy itself):
+
+- **Failure counters.** `MeasurementEventStoreSubscriptionObserver` counts events an asynchronous subscription gave up
+  on in `essentials.eventstore.subscription.handle_event_failed` (tags `subscriber_id`, `aggregate_type`,
+  `event_handler`, `event_type`, optional `Module`), and in-transaction handler failures in
+  `essentials.eventstore.subscription.handle_event_transactional_failed`. Its `handleEventFailed` used to be a no-op.
+  The counters need the new 3-argument constructor that takes a `MeterRegistry`; the 2-argument constructor is kept
+  and records none. The Spring Boot starter always passes its registry, and the counters are not gated on the
+  execution-time metrics toggle.
+- **A batch failure callback.** `EventStoreSubscriptionObserver.handleEventBatchFailed(...)` (default no-op) reports a
+  failed `BatchedPersistedEventHandler` batch. Before, the batched subscriber did not notify the observer at all.
+- **A stopped subscription is visible.** A `stop()` leaves `EventStoreSubscription#isActive()` `true` on purpose: it
+  means "running here" (for an exclusive subscription "holds the fenced lock"), and the lock is kept so the event does
+  not flap to another node that would fail the same way. Tell a halted subscription apart with
+  `EventStoreSubscription#isStoppedByErrorPolicy()` (default `false`), the observer callback
+  `subscriptionStoppedByErrorPolicy(GlobalEventOrder, Throwable, EventStoreSubscription)` (default no-op), the counter
+  `essentials.eventstore.subscription.stopped_by_error_policy` (tags `subscriber_id`, `aggregate_type`, optional
+  `Module`), or the admin API field `stoppedByErrorPolicy`. The admin UI shows a "Stopped by error policy" badge in
+  place of "Active".
+
+`ApiSubscription` gains a nullable `stoppedByErrorPolicy` component (`null` when the subscription does not run in the
+instance that answers). Its previous 11-argument constructor is kept and passes `null`, so existing callers keep
+compiling and linking; only a record pattern that deconstructs `ApiSubscription` needs the extra component. The admin
+API response only gains an optional field.
+
+→ [`postgresql-event-store` README § Subscription Error Policy](../components/postgresql-event-store/README.md#subscription-error-policy),
+[`LLM/LLM-postgresql-event-store.md` § Direct async subscribers skip a failing event by default](../LLM/LLM-postgresql-event-store.md#direct-async-subscribers-skip-a-failing-event-by-default)
+
 ---
 
 ## 3. Bug fixes
@@ -610,6 +713,7 @@ SingleValueTypeModelConverter singleValueTypeModelConverter() {
 | **`RedeliveryPolicy.exponentialBackoff` and `linearBackoff` did not back off.** Every redelivery after the first waited the same delay. See [§1.1.7](#117-exponentialbackoff-and-linearbackoff-redelivery-delays-now-grow) | Durable queue consumers, `Inbox`, `EventProcessor`, `DurableLocalCommandBus` |
 | **`AggregateIdSerializer.serializerFor(…)` rejected a Kotlin `StringValueType` id** with `EventStoreException: Couldn't find a matching …AggregateIdSerializer`, so a Kotlin `AggregateTypeConfiguration` built that way failed at context start. It now returns `StringValueTypeAggregateIdSerializer` for such an id, the serializer you could already construct explicitly. The Kotlin type is matched by name, so Java-only classpaths are unaffected | Kotlin deciders on `kotlin-eventsourcing` |
 | **Slow-query statistics were always empty, and `pg_cron` was never created by the framework.** The check before the best-effort `CREATE EXTENSION` read `pg_extension` (installed) instead of `pg_available_extensions` (installable), so the create only ran when the extension already existed. `pg_stat_statements` is now created at startup when the server preloads it and the role may create extensions, and `pg_cron` when the server offers it; a refusal is logged and treated as unavailable without failing the start | Admin API query statistics, the Essentials scheduler |
+| **A `ViewEventProcessor` skipped an event whose direct handling failed on SQL or deserialization, instead of queueing it.** The handler runs in the subscription's transaction, so a failed SQL statement aborted it and the fallback `queueMessage` failed with "current transaction is aborted"; and a payload that could not be deserialized failed before the fallback was reached. The direct handler now runs under a savepoint, which rolls back only its own writes, and deserialization happens inside the failure handling, so both are queued - an undeserializable event ends up as a visible dead letter. A handler that appended events or changed an aggregate is escalated instead, see [§1.1.8](#118-a-failed-vieweventprocessor-handler-that-appended-events-or-changed-an-aggregate-is-no-longer-queued) | `ViewEventProcessor` users |
 | **The queue statistics trigger counted a purge as a delivery.** Fixed by the replacement in [§2.4](#24-durable-queue-observability) | Statistics consumers |
 
 **The 0.50.1 fixes are all in 0.60,** either merged directly or made unnecessary by other work. The polling
@@ -643,7 +747,8 @@ The following are deprecated in 0.60 and planned for removal in the next major:
 6. **Review dead-letter behaviour** ([§1.1.2](#112-dead-letter-classification-changed-in-two-ways)) and search for
    `new AppendToStream` with an `Optional` ([§1.1.4](#114-new-appendtostreamtype-id-optional-list-fails-at-runtime-not-at-compile-time)).
 7. **Back up, then deploy.** Schedule the first start of a large queue table like an index change ([§1.6](#16-database-objects-changed-on-first-startup)).
-8. **Afterwards, and optionally:** set a dead-letter alert on the new counter, and consider
+8. **Afterwards, and optionally:** set a dead-letter alert on the new counter, choose a `SubscriptionErrorPolicy`
+   and alert on the subscription counters ([§2.10](#210-choose-what-an-async-subscription-does-with-a-failing-event)), and consider
    `essentials.schema.mode=validate` or the shard-owned engine.
 
 ---

@@ -362,6 +362,10 @@ Prefix: `essentials.eventstore.subscription-manager`
 | `event-store-polling-interval` | `100ms` | When processing events |
 | `max-event-store-polling-interval` | `2000ms` | Max backoff when idle |
 | `snapshot-resume-points-every` | `10s` | Save position frequency |
+| `error-policy.mode` | `skip` | `skip` \| `retry-n-then-skip` \| `stop` - what an async subscription does with an event whose handler throws a non-I/O exception. See [SubscriptionErrorPolicy](LLM-postgresql-event-store.md#direct-async-subscribers-skip-a-failing-event-by-default) |
+| `error-policy.max-retries` | `3` | `retry-n-then-skip` only; must be ≥ 1 |
+| `error-policy.initial-backoff` | `100ms` | Wait before the first retry, doubled per retry |
+| `error-policy.max-backoff` | `1s` | Cap on the wait between retries |
 
 #### Subscription Monitor
 
