@@ -18,7 +18,8 @@ package dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.p
 
 import com.zaxxer.hikari.*;
 import dk.trustworks.essentials.components.distributed.fencedlock.postgresql.PostgresqlFencedLockManager;
-import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.PostgresqlEventStore;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.*;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.bus.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.gap.PostgresqlEventStreamGapHandler;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.observability.EventStoreSubscriptionObserver;
@@ -33,6 +34,8 @@ import dk.trustworks.essentials.components.foundation.messaging.*;
 import dk.trustworks.essentials.components.foundation.messaging.queue.*;
 import dk.trustworks.essentials.components.foundation.postgresql.SqlExecutionTimeLogger;
 import dk.trustworks.essentials.components.foundation.reactive.command.*;
+import dk.trustworks.essentials.components.foundation.transaction.*;
+import dk.trustworks.essentials.components.foundation.types.SubscriberId;
 import dk.trustworks.essentials.components.queue.postgresql.PostgresqlDurableQueues;
 import dk.trustworks.essentials.reactive.command.CmdHandler;
 import dk.trustworks.essentials.shared.collections.Lists;
@@ -43,6 +46,7 @@ import org.junit.jupiter.api.*;
 import org.testcontainers.postgresql.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.*;
 
+import java.lang.annotation.*;
 import java.time.Duration;
 import java.util.*;
 import java.util.concurrent.*;
@@ -58,12 +62,28 @@ import static org.assertj.core.api.Assertions.assertThat;
 @Testcontainers
 public class ViewEventProcessorIT {
 
-    public static final EventMetaData META_DATA                  = EventMetaData.of("Key1", "Value1", "Key2", "Value2");
+    public static final EventMetaData META_DATA                     = EventMetaData.of("Key1", "Value1", "Key2", "Value2");
     /**
      * {@link EventProcessorIT.OrderPlacedEvent#orderDetails} that makes the test processor's view update fail with a
      * primary key violation on its first attempt - after it already wrote a row - and succeed on later attempts
      */
-    public static final String        SQL_FAILS_ON_FIRST_ATTEMPT = "SqlFailsOnFirstAttempt order details";
+    public static final String        SQL_FAILS_ON_FIRST_ATTEMPT    = "SqlFailsOnFirstAttempt order details";
+    /**
+     * {@link EventProcessorIT.OrderPlacedEvent#orderDetails} that makes the test processor append an
+     * {@link EventProcessorIT.OrderConfirmedEvent} through the {@link PostgresqlEventStore} and then fail
+     */
+    public static final String        APPENDS_EVENT_THEN_FAILS      = "AppendsEventThenFails order details";
+    /**
+     * {@link EventProcessorIT.OrderPlacedEvent#orderDetails} that makes the test processor register a resource with the
+     * {@link UnitOfWork} whose callback appends an {@link EventProcessorIT.OrderConfirmedEvent} at commit time - as an
+     * aggregate repository does with the aggregate's uncommitted events - and then fail
+     */
+    public static final String        REGISTERS_RESOURCE_THEN_FAILS = "RegistersResourceThenFails order details";
+    /**
+     * {@link EventProcessorIT.OrderPlacedEvent#orderDetails} that makes the test processor join the {@link UnitOfWork}
+     * through {@code usingUnitOfWork} and fail inside it, which marks the {@link UnitOfWork} rollback-only
+     */
+    public static final String        JOINS_UNIT_OF_WORK_THEN_FAILS = "JoinsUnitOfWorkThenFails order details";
 
     private HikariConfig                                                            cfg;
     private HikariDataSource                                                        ds;
@@ -84,9 +104,27 @@ public class ViewEventProcessorIT {
     private PostgresqlFencedLockManager   fencedLockManager;
     private DurableLocalCommandBus        commandBus;
     private DurableSubscriptionRepository durableSubscriptionRepository;
+    /**
+     * The events whose handling failed after the {@link SubscriptionErrorPolicy} gave up, as reported to the
+     * {@link EventStoreSubscriptionObserver}
+     */
+    private final List<PersistedEvent>    handleEventFailedEvents = new CopyOnWriteArrayList<>();
+    private final List<Throwable>         handleEventFailedCauses = new CopyOnWriteArrayList<>();
+
+    /**
+     * Runs the annotated test with {@link SubscriptionErrorPolicy#stop()} instead of the default {@link SubscriptionErrorPolicy#skip()}
+     */
+    @Retention(RetentionPolicy.RUNTIME)
+    @Target(ElementType.METHOD)
+    private @interface WithSubscriptionErrorPolicyStop {
+    }
 
     @BeforeEach
-    void setup() {
+    void setup(TestInfo testInfo) {
+        var subscriptionErrorPolicy = testInfo.getTestMethod()
+                                              .filter(method -> method.isAnnotationPresent(WithSubscriptionErrorPolicyStop.class))
+                                              .map(method -> SubscriptionErrorPolicy.stop())
+                                              .orElseGet(SubscriptionErrorPolicy::skip);
         cfg = new HikariConfig();
         cfg.setJdbcUrl(postgreSQLContainer.getJdbcUrl());
         cfg.setUsername(postgreSQLContainer.getUsername());
@@ -114,7 +152,13 @@ public class ViewEventProcessorIT {
                                          .setUnitOfWorkFactory(unitOfWorkFactory)
                                          .setPersistenceStrategy(persistenceStrategy)
                                          .setEventStreamGapHandlerFactory(eventStore -> new PostgresqlEventStreamGapHandler<>(unitOfWorkFactory))
-                                         .setEventStoreSubscriptionObserver(new EventStoreSubscriptionObserver.NoOpEventStoreSubscriptionObserver())
+                                         .setEventStoreSubscriptionObserver(new EventStoreSubscriptionObserver.NoOpEventStoreSubscriptionObserver() {
+                                             @Override
+                                             public void handleEventFailed(PersistedEvent event, PersistedEventHandler eventHandler, Throwable cause, EventStoreSubscription eventStoreSubscription) {
+                                                 handleEventFailedEvents.add(event);
+                                                 handleEventFailedCauses.add(cause);
+                                             }
+                                         })
                                          .build();
 
         fencedLockManager = PostgresqlFencedLockManager.builder()
@@ -133,6 +177,7 @@ public class ViewEventProcessorIT {
                                                                      .setFencedLockManager(fencedLockManager)
                                                                      .setDurableSubscriptionRepository(durableSubscriptionRepository)
                                                                      .setSnapshotResumePointsEvery(Duration.ofSeconds(1))
+                                                                     .setSubscriptionErrorPolicy(subscriptionErrorPolicy)
                                                                      .build();
         eventStoreSubscriptionManager.start();
 
@@ -325,6 +370,122 @@ public class ViewEventProcessorIT {
                                                .list());
     }
 
+    /**
+     * A savepoint only undoes SQL. Events the failed handler appended through the event store are also registered in
+     * the {@link UnitOfWork}, and committing it to queue the event would hand them to the in-transaction subscriptions
+     * and publish them on the local event bus, although their rows were rolled back - and the queued retry would
+     * append them once more. So the event is not queued: the whole {@link UnitOfWork} is rolled back and the failure
+     * reaches the subscription's {@link SubscriptionErrorPolicy}.
+     */
+    @Test
+    public void verify_a_handler_that_appended_events_before_failing_is_not_queued_and_its_events_are_not_published() {
+        var eventsSeenInTransaction    = new CopyOnWriteArrayList<PersistedEvent>();
+        var eventsPublishedAfterCommit = new CopyOnWriteArrayList<PersistedEvent>();
+        eventStoreSubscriptionManager.subscribeToAggregateEventsInTransaction(SubscriberId.of("InTransactionOrderEventsRecorder"),
+                                                                              TEST_ORDERS,
+                                                                              (event, unitOfWork) -> eventsSeenInTransaction.add(event));
+        eventStore.localEventBus().addSyncSubscriber(event -> {
+            if (event instanceof PersistedEvents persistedEvents && persistedEvents.commitStage == CommitStage.AfterCommit) {
+                eventsPublishedAfterCommit.addAll(persistedEvents.events);
+            }
+        });
+
+        var orderId = EventProcessorIT.OrderId.random();
+        unitOfWorkFactory.usingUnitOfWork(uow -> {
+            eventStore.appendToStream(TEST_ORDERS, orderId, List.of(new EventProcessorIT.OrderPlacedEvent(orderId, APPENDS_EVENT_THEN_FAILS)));
+        });
+
+        assertFailureReachedTheSubscriptionErrorPolicy(orderId, APPENDS_EVENT_THEN_FAILS);
+        assertThat(testProcessor.getAppendedEventsBeforeFailing()).isEqualTo(1);
+        assertThat(orderConfirmedEventsIn(eventsSeenInTransaction)).isEmpty();
+        assertThat(orderConfirmedEventsIn(eventsPublishedAfterCommit)).isEmpty();
+        assertOnlyTheOrderPlacedEventIsPersisted(orderId);
+        assertNothingIsQueuedFor(orderId);
+    }
+
+    /**
+     * An aggregate the failed handler loaded and changed is registered in the {@link UnitOfWork}, and its
+     * {@link UnitOfWorkLifecycleCallback} persists the aggregate's uncommitted events when the {@link UnitOfWork}
+     * commits - which a savepoint does not prevent. So the event is not queued: the whole {@link UnitOfWork} is rolled
+     * back and the failure reaches the subscription's {@link SubscriptionErrorPolicy}.
+     */
+    @Test
+    public void verify_a_handler_that_registered_a_resource_before_failing_is_not_queued_and_the_resource_is_not_committed() {
+        var orderId = EventProcessorIT.OrderId.random();
+        unitOfWorkFactory.usingUnitOfWork(uow -> {
+            eventStore.appendToStream(TEST_ORDERS, orderId, List.of(new EventProcessorIT.OrderPlacedEvent(orderId, REGISTERS_RESOURCE_THEN_FAILS)));
+        });
+
+        assertFailureReachedTheSubscriptionErrorPolicy(orderId, REGISTERS_RESOURCE_THEN_FAILS);
+        assertOnlyTheOrderPlacedEventIsPersisted(orderId);
+        assertNothingIsQueuedFor(orderId);
+    }
+
+    /**
+     * A handler that joins the {@link UnitOfWork} through {@code usingUnitOfWork} and fails marks it rollback-only, so
+     * nothing written in it - the queued event included - can commit. The failure must reach the subscription's
+     * {@link SubscriptionErrorPolicy} instead of the queued event being rolled back silently; with
+     * {@link SubscriptionErrorPolicy#stop()} the subscription stays at the event.
+     */
+    @Test
+    @WithSubscriptionErrorPolicyStop
+    public void verify_a_handler_that_marks_the_unit_of_work_rollback_only_is_not_silently_queued() {
+        var orderId = EventProcessorIT.OrderId.random();
+        unitOfWorkFactory.usingUnitOfWork(uow -> {
+            eventStore.appendToStream(TEST_ORDERS, orderId, List.of(new EventProcessorIT.OrderPlacedEvent(orderId, JOINS_UNIT_OF_WORK_THEN_FAILS)));
+        });
+
+        assertFailureReachedTheSubscriptionErrorPolicy(orderId, JOINS_UNIT_OF_WORK_THEN_FAILS);
+        assertNothingIsQueuedFor(orderId);
+
+        // STOP: a later event is not handled, and the resume point stays at the failed event (global event order 1)
+        var laterOrderId = EventProcessorIT.OrderId.random();
+        unitOfWorkFactory.usingUnitOfWork(uow -> {
+            eventStore.appendToStream(TEST_ORDERS, laterOrderId, List.of(new EventProcessorIT.OrderPlacedEvent(laterOrderId, "Load order details")));
+        });
+        var subscriberId = AbstractEventProcessor.resolveSubscriberId(TEST_ORDERS, testProcessor.getProcessorName());
+        Awaitility.await()
+                  .during(Duration.ofSeconds(2))
+                  .atMost(Duration.ofSeconds(4))
+                  .untilAsserted(() -> {
+                      assertThat(testProcessor.getOrderPlacedEventCounter().get()).isZero();
+                      assertThat(eventStoreSubscriptionManager.getCurrentEventOrder(subscriberId, TEST_ORDERS))
+                              .hasValueSatisfying(order -> assertThat(order.longValue()).isEqualTo(1L));
+                  });
+        assertThat(durableSubscriptionRepository.getResumePoint(subscriberId, TEST_ORDERS))
+                .hasValueSatisfying(resumePoint -> assertThat(resumePoint.getResumeFromAndIncluding().longValue()).isEqualTo(1L));
+    }
+
+    private void assertFailureReachedTheSubscriptionErrorPolicy(EventProcessorIT.OrderId orderId, String handlerFailureMessage) {
+        Awaitility.waitAtMost(Duration.ofSeconds(10))
+                  .untilAsserted(() -> assertThat(handleEventFailedEvents).anySatisfy(event -> assertThat(event.aggregateId()).isEqualTo(orderId)));
+        assertThat(handleEventFailedEvents).hasSize(1);
+        assertThat(handleEventFailedCauses.get(0)).hasRootCauseMessage(handlerFailureMessage);
+    }
+
+    private void assertOnlyTheOrderPlacedEventIsPersisted(EventProcessorIT.OrderId orderId) {
+        // The event stream is read lazily, so it is resolved inside the UnitOfWork
+        var persistedEventTypes = unitOfWorkFactory.withUnitOfWork(uow -> eventStore.fetchStream(TEST_ORDERS, orderId)
+                                                                                    .map(eventStream -> eventStream.eventList()
+                                                                                                                   .stream()
+                                                                                                                   .map(event -> (Object) event.event().getEventTypeAsJavaClass().get())
+                                                                                                                   .toList()));
+        assertThat(persistedEventTypes).hasValueSatisfying(eventTypes -> assertThat(eventTypes).containsExactly(EventProcessorIT.OrderPlacedEvent.class));
+    }
+
+    private void assertNothingIsQueuedFor(EventProcessorIT.OrderId orderId) {
+        var queueName = testProcessor.getDurableQueueName();
+        assertThat(durableQueues.hasOrderedMessageQueuedForKey(queueName, orderId.toString())).isFalse();
+        assertThat(durableQueues.getTotalMessagesQueuedFor(queueName)).isZero();
+        assertThat(durableQueues.getTotalDeadLetterMessagesQueuedFor(queueName)).isZero();
+    }
+
+    private static List<PersistedEvent> orderConfirmedEventsIn(List<PersistedEvent> events) {
+        return events.stream()
+                     .filter(event -> event.event().getEventTypeAsJavaClass().get().equals(EventProcessorIT.OrderConfirmedEvent.class))
+                     .toList();
+    }
+
     @Test
     public void verify_failed_event_handling_additional_event_gets_queued() {
         var orderId      = EventProcessorIT.OrderId.random();
@@ -445,6 +606,30 @@ public class ViewEventProcessorIT {
         private Consumer<ConcurrentMap<AggregateType, GlobalEventOrder>> resetCallback;
         private final AtomicInteger orderPlacedEventCounter = new AtomicInteger(0);
         private final ConcurrentMap<String, AtomicInteger> sqlFailureAttempts = new ConcurrentHashMap<>();
+        private final AtomicInteger appendedEventsBeforeFailing = new AtomicInteger(0);
+        /**
+         * Appends the registered events when the {@link UnitOfWork} commits - the way an aggregate repository's
+         * {@link UnitOfWorkLifecycleCallback} persists an aggregate's uncommitted events
+         */
+        private final UnitOfWorkLifecycleCallback<EventProcessorIT.OrderConfirmedEvent> appendEventsWhenCommitting = new UnitOfWorkLifecycleCallback<>() {
+            @Override
+            public BeforeCommitProcessingStatus beforeCommit(UnitOfWork unitOfWork, List<EventProcessorIT.OrderConfirmedEvent> associatedResources) {
+                associatedResources.forEach(event -> eventStore.appendToStream(TEST_ORDERS, event.orderId, event));
+                return BeforeCommitProcessingStatus.COMPLETED;
+            }
+
+            @Override
+            public void afterCommit(UnitOfWork unitOfWork, List<EventProcessorIT.OrderConfirmedEvent> associatedResources) {
+            }
+
+            @Override
+            public void beforeRollback(UnitOfWork unitOfWork, List<EventProcessorIT.OrderConfirmedEvent> associatedResources, Throwable causeOfTheRollback) {
+            }
+
+            @Override
+            public void afterRollback(UnitOfWork unitOfWork, List<EventProcessorIT.OrderConfirmedEvent> associatedResources, Throwable causeOfTheRollback) {
+            }
+        };
 
         public TestOrderViewEventProcessor(ViewEventProcessorDependencies eventProcessorDependencies,
                                            PostgresqlEventStore<?> eventStore) {
@@ -531,6 +716,17 @@ public class ViewEventProcessorIT {
                 orderPlacedEventCounter.incrementAndGet();
             } else if (event.orderDetails.startsWith("Fail")) {
                 throw new RuntimeException(event.orderDetails);
+            } else if (event.orderDetails.equals(APPENDS_EVENT_THEN_FAILS)) {
+                eventStore.appendToStream(TEST_ORDERS, event.orderId, new EventProcessorIT.OrderConfirmedEvent(event.orderId));
+                appendedEventsBeforeFailing.incrementAndGet();
+                throw new RuntimeException(event.orderDetails);
+            } else if (event.orderDetails.equals(REGISTERS_RESOURCE_THEN_FAILS)) {
+                unitOfWork.registerLifecycleCallbackForResource(new EventProcessorIT.OrderConfirmedEvent(event.orderId), appendEventsWhenCommitting);
+                throw new RuntimeException(event.orderDetails);
+            } else if (event.orderDetails.equals(JOINS_UNIT_OF_WORK_THEN_FAILS)) {
+                eventStore.getUnitOfWorkFactory().usingUnitOfWork(joinedUnitOfWork -> {
+                    throw new RuntimeException(event.orderDetails);
+                });
             } else if (event.orderDetails.equals(SQL_FAILS_ON_FIRST_ATTEMPT)) {
                 var orderId = event.orderId.toString();
                 var attempt = sqlFailureAttempts.computeIfAbsent(orderId, id -> new AtomicInteger()).incrementAndGet();
@@ -548,6 +744,10 @@ public class ViewEventProcessorIT {
 
         public AtomicInteger getOrderPlacedEventCounter() {
             return orderPlacedEventCounter;
+        }
+
+        public int getAppendedEventsBeforeFailing() {
+            return appendedEventsBeforeFailing.get();
         }
 
         public int getSqlFailureAttempts(EventProcessorIT.OrderId orderId) {

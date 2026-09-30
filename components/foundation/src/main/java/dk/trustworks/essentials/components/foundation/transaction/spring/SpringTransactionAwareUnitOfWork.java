@@ -196,4 +196,11 @@ public class SpringTransactionAwareUnitOfWork<TRX_MGR extends PlatformTransactio
         requireNonNull(associatedUnitOfWorkCallback, "You must provide a UnitOfWorkLifecycleCallback");
         return (List<T>) Collections.unmodifiableList(unitOfWorkLifecycleCallbackResources.getOrDefault(associatedUnitOfWorkCallback, List.of()));
     }
+
+    @Override
+    public List<Object> getAllUnitOfWorkLifecycleCallbackResources() {
+        return unitOfWorkLifecycleCallbackResources.values().stream()
+                                                   .flatMap(List::stream)
+                                                   .toList();
+    }
 }

@@ -132,4 +132,24 @@ public interface UnitOfWork {
      * @throws IllegalArgumentException if the provided {@link UnitOfWorkLifecycleCallback} is {@code null}.
      */
     <T> List<T> getUnitOfWorkLifecycleCallbackResources(UnitOfWorkLifecycleCallback<T> associatedUnitOfWorkCallback);
+
+    /**
+     * Retrieves every resource registered through {@link #registerLifecycleCallbackForResource(Object, UnitOfWorkLifecycleCallback)},
+     * across all {@link UnitOfWorkLifecycleCallback}s.<br>
+     * A registered resource is state the {@link UnitOfWork} holds in memory and acts on when it commits (e.g. an Aggregate
+     * whose uncommitted events are persisted by its callback's {@code beforeCommit}), so it is not undone by rolling the
+     * underlying transaction back to a savepoint. A non-empty result therefore tells that committing this
+     * {@link UnitOfWork} will do more than commit the SQL written so far.
+     * <p>
+     * The default implementation throws {@link UnsupportedOperationException}, since a {@link UnitOfWork} that doesn't
+     * track its resources can't answer; callers must treat that as "unknown" and assume resources are registered.
+     * All {@link UnitOfWork} implementations provided by Essentials override it.
+     *
+     * @return an unmodifiable {@link List} of all registered resources, in no particular order;
+     * empty if no resources are registered
+     * @throws UnsupportedOperationException if this {@link UnitOfWork} doesn't expose its registered resources
+     */
+    default List<Object> getAllUnitOfWorkLifecycleCallbackResources() {
+        throw new UnsupportedOperationException(getClass().getName() + " doesn't expose its UnitOfWorkLifecycleCallback resources");
+    }
 }

@@ -19,6 +19,7 @@ package dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.p
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.subscription.EventStoreSubscriptionManager;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.transaction.EventStoreUnitOfWork;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.types.GlobalEventOrder;
 import dk.trustworks.essentials.components.foundation.Lifecycle;
 import dk.trustworks.essentials.components.foundation.fencedlock.*;
@@ -43,7 +44,9 @@ import static dk.trustworks.essentials.shared.MessageFormatter.msg;
  * <p>
  * The direct handling runs under a savepoint in the subscription's transaction: when it fails - a failed SQL statement
  * that aborts the transaction, or an event payload that cannot be deserialized, included - only the handler's own
- * writes are rolled back, and the event is queued in the same transaction.
+ * writes are rolled back, and the event is queued in the same transaction. A failed handler that had appended events
+ * through the {@link EventStore} or loaded/saved an aggregate (state the savepoint cannot undo) is not queued: the
+ * subscription's transaction is rolled back and the failure reaches the subscription's {@code SubscriptionErrorPolicy}.
  * <p>
  * <h3>Event Queuing</h3>
  * When events from the {@link EventStore} need to be queued for processing, they are converted to {@link OrderedMessage}s where:
@@ -257,29 +260,44 @@ public abstract class ViewEventProcessor extends AbstractEventProcessor {
         }
     }
 
-    private static final String DIRECT_HANDLING_SAVEPOINT = "essentials_view_event_processor_direct_handling";
+    private static final String DIRECT_HANDLING_SAVEPOINT     = "essentials_view_event_processor_direct_handling";
+    private static final String UNIT_OF_WORK_UNABLE_TO_COMMIT = "The direct handler's failure left the UnitOfWork unable to commit - the event cannot be queued in it";
 
     /**
      * Run the direct handler under a savepoint in the subscription's transaction, so a failing handler rolls back its
      * own writes - and only those - and leaves the transaction usable for queueing the event.
      * <p>
-     * A savepoint undoes SQL. It cannot undo state the handler left in the {@link UnitOfWork} itself (events appended
-     * through the {@link EventStore}, resources registered for commit-time processing); that is kept, as it was before
-     * the savepoint existed. And if the handler joined the {@link UnitOfWork} through
-     * {@code usingUnitOfWork}/{@code withUnitOfWork} and so marked it rollback-only, nothing written in it can commit
-     * any more: the failure is rethrown rather than queued, so it reaches the subscription's
-     * {@link dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.subscription.SubscriptionErrorPolicy}
-     * instead of the queued message being rolled back silently.
+     * A savepoint undoes SQL. It cannot undo state the handler left in the {@link UnitOfWork} itself, and committing
+     * the {@link UnitOfWork} to queue the event would act on that state although the handler failed:
+     * <ul>
+     *     <li>events the handler appended through the {@link EventStore} ({@link EventStoreUnitOfWork#getNumberOfEventsPersisted()})
+     *     would be handed to the in-transaction subscriptions and published on the local event bus, while their rows
+     *     were rolled back to the savepoint - and appended once more when the queued event is retried</li>
+     *     <li>resources registered for commit-time processing ({@link UnitOfWork#getAllUnitOfWorkLifecycleCallbackResources()}),
+     *     such as an aggregate the handler loaded and applied an event to, would have their callbacks persist the
+     *     aggregate's uncommitted events</li>
+     * </ul>
+     * So when the failed handler left either kind of state behind, the event is not queued: the failure is rethrown as
+     * {@link UnitOfWorkRequiresRollbackException}, the whole {@link UnitOfWork} is rolled back, and the failure reaches
+     * the subscription's {@link dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.subscription.SubscriptionErrorPolicy}.
+     * Any registered resource counts, not only one registered by the handler, because a repository hands out the
+     * instance already registered in the {@link UnitOfWork}, so the handler may have changed it without registering
+     * anything. A {@link UnitOfWork} that cannot report this state is treated as having it.
+     * The same applies if the handler joined the {@link UnitOfWork} through {@code usingUnitOfWork}/{@code withUnitOfWork}
+     * and so marked it rollback-only: nothing written in it can commit any more.
+     * Only a failure that left no such state behind is queued.
      *
      * @param msg the message to handle
      */
     private void handleDirectlyUnderSavepoint(OrderedMessage msg) {
-        var unitOfWork = eventStore.getUnitOfWorkFactory().getCurrentUnitOfWork();
-        if (unitOfWork.isEmpty() || !unitOfWork.get().handle().isInTransaction()) {
+        var currentUnitOfWork = eventStore.getUnitOfWorkFactory().getCurrentUnitOfWork();
+        if (currentUnitOfWork.isEmpty() || !currentUnitOfWork.get().handle().isInTransaction()) {
             patternMatchingMessageHandlerDelegate.accept(msg);
             return;
         }
-        var handle = unitOfWork.get().handle();
+        var unitOfWork                    = currentUnitOfWork.get();
+        var handle                        = unitOfWork.handle();
+        var numberOfEventsPersistedBefore = numberOfEventsPersisted(unitOfWork);
         handle.savepoint(DIRECT_HANDLING_SAVEPOINT);
         try {
             patternMatchingMessageHandlerDelegate.accept(msg);
@@ -290,10 +308,16 @@ public abstract class ViewEventProcessor extends AbstractEventProcessor {
             } catch (RuntimeException rollbackFailure) {
                 // The transaction is unusable (e.g. the connection is gone) - queueing in it would fail too
                 rollbackFailure.addSuppressed(handlerFailure);
-                throw new UnitOfWorkRequiresRollbackException(rollbackFailure);
+                throw new UnitOfWorkRequiresRollbackException(UNIT_OF_WORK_UNABLE_TO_COMMIT, rollbackFailure);
             }
-            if (unitOfWork.get().status() == UnitOfWorkStatus.MarkedForRollbackOnly) {
-                throw new UnitOfWorkRequiresRollbackException(handlerFailure);
+            if (unitOfWork.status() == UnitOfWorkStatus.MarkedForRollbackOnly) {
+                throw new UnitOfWorkRequiresRollbackException(UNIT_OF_WORK_UNABLE_TO_COMMIT, handlerFailure);
+            }
+            var eventsPersisted = numberOfEventsPersistedBefore.isEmpty() || !numberOfEventsPersistedBefore.equals(numberOfEventsPersisted(unitOfWork));
+            if (eventsPersisted || hasLifecycleCallbackResources(unitOfWork)) {
+                throw new UnitOfWorkRequiresRollbackException("The direct handler failed after persisting events or registering resources in the UnitOfWork, which a savepoint cannot undo - " +
+                                                              "the event cannot be queued in it, as committing it would persist or publish them",
+                                                              handlerFailure);
             }
             throw handlerFailure;
         }
@@ -301,12 +325,35 @@ public abstract class ViewEventProcessor extends AbstractEventProcessor {
     }
 
     /**
-     * The direct handler's failure left the {@link UnitOfWork} unable to commit, so the event cannot be queued in it.
+     * @return {@link EventStoreUnitOfWork#getNumberOfEventsPersisted()}, or empty if the {@link UnitOfWork} doesn't support it
+     */
+    private static OptionalLong numberOfEventsPersisted(EventStoreUnitOfWork unitOfWork) {
+        try {
+            return OptionalLong.of(unitOfWork.getNumberOfEventsPersisted());
+        } catch (UnsupportedOperationException e) {
+            return OptionalLong.empty();
+        }
+    }
+
+    /**
+     * @return whether the {@link UnitOfWork} has resources registered - {@code true} if it doesn't support telling
+     */
+    private static boolean hasLifecycleCallbackResources(UnitOfWork unitOfWork) {
+        try {
+            return !unitOfWork.getAllUnitOfWorkLifecycleCallbackResources().isEmpty();
+        } catch (UnsupportedOperationException e) {
+            return true;
+        }
+    }
+
+    /**
+     * The direct handler's failure left the {@link UnitOfWork} unable to commit, or in a state it must not be committed
+     * in, so the event cannot be queued in it.
      * Not caught by {@link #handlePersistedEvent(PersistedEvent)}: it propagates to the subscription.
      */
     private static final class UnitOfWorkRequiresRollbackException extends RuntimeException {
-        UnitOfWorkRequiresRollbackException(Throwable cause) {
-            super("The direct handler's failure left the UnitOfWork unable to commit - the event cannot be queued in it", cause);
+        UnitOfWorkRequiresRollbackException(String message, Throwable cause) {
+            super(message, cause);
         }
     }
 

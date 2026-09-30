@@ -284,6 +284,13 @@ public abstract class GenericHandleAwareUnitOfWorkFactory<UOW extends HandleAwar
         }
 
         @Override
+        public List<Object> getAllUnitOfWorkLifecycleCallbackResources() {
+            return unitOfWorkLifecycleCallbackResources.values().stream()
+                                                       .flatMap(List::stream)
+                                                       .toList();
+        }
+
+        @Override
         public String info() {
             return "TYPE:" + this.getClass().getSimpleName() + ":HASH:" + this.hashCode() + ":STATUS:" + this.status();
         }
