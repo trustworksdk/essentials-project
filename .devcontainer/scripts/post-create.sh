@@ -287,6 +287,22 @@ if [ -e "/workspace/.git" ]; then
 fi
 
 # =============================================================================
+# The in-repo essentials plugin — loaded from disk in every terminal session
+# `claude` started from a container shell gets `--plugin-dir` pointing at
+# essentials-plugin/, so the session runs the plugin as it is on disk and an
+# edit applies on /reload-plugins. Installing it from the repository's own
+# marketplace instead would run a cached copy of the last commit. Sessions an
+# IDE starts do not read ~/.bashrc and get no essentials plugin. ~/.bashrc is on
+# a persisted volume, so the line is replaced rather than appended again.
+# =============================================================================
+if [ -d "/workspace/essentials-plugin" ]; then
+    touch "$HOME/.bashrc"
+    sed -i '\|# essentials-plugin-dir$|d' "$HOME/.bashrc"
+    echo "alias claude='claude --plugin-dir /workspace/essentials-plugin' # essentials-plugin-dir" >> "$HOME/.bashrc"
+    echo "  claude in a container shell loads /workspace/essentials-plugin"
+fi
+
+# =============================================================================
 # headroom (Conditional) — context-compression layer (MCP mode)
 # https://github.com/headroomlabs-ai/headroom (Apache-2.0). Compresses large
 # tool outputs / files before they reach the LLM. Installed as a uv tool with

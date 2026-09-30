@@ -6,6 +6,10 @@ Essentials framework build and git hygiene; everything specific to the plugin li
 The plugin carries **no version** — `plugin.json` has none. Every commit that reaches the marketplace
 ref is a release, so land plugin changes on `main` in release-sized batches.
 
+Work on the plugin runs it from disk: `claude --plugin-dir essentials-plugin` from the repository root,
+then `/reload-plugins` after an edit. In the devcontainer `claude` is already aliased to that
+(`.devcontainer/scripts/post-create.sh`). A session an IDE starts does not get the alias.
+
 This file loads when Claude reads a file in this directory — but nested `CLAUDE.md` files are
 **not** re-injected after a `/compact`. If you are resuming a compacted session and about to edit
 anything here, read this file first.
