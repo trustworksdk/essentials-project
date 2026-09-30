@@ -1,6 +1,6 @@
 # Foundation - LLM Reference
 
-> Quick reference for LLMs. For detailed explanations, see [README](https://github.com/trustworksdk/essentials-project/blob/main/components/foundation/README.md).
+> Quick reference for LLMs. For detailed explanations, see [README](https://github.com/trustworksdk/essentials-project/blob/0.60.0/components/foundation/README.md).
 
 ## Quick Facts
 - **Package**: `dk.trustworks.essentials.components.foundation`
@@ -870,7 +870,7 @@ rename. `send(...)` does not persist the command.
 ## Database Schema Harness
 
 **Package**: `dk.trustworks.essentials.components.foundation.schema` (SPI), PostgreSQL appliers in `.postgresql`.
-Design and rationale: [docs/database-schema-harness.md](https://github.com/trustworksdk/essentials-project/blob/main/docs/database-schema-harness.md).
+Design and rationale: [docs/database-schema-harness.md](https://github.com/trustworksdk/essentials-project/blob/0.60.0/docs/database-schema-harness.md).
 
 Every Essentials component that owns tables *describes* its schema as `SchemaChange`s; an applier decides what
 happens to them. In Spring, `essentials.schema.mode` selects the applier - see
@@ -1282,7 +1282,7 @@ QueueName.of(userInput);
 
 **Bottom line:** Validation is a defense layer, not a security guarantee. Always use hardcoded names or thoroughly validated configuration.
 
-See [README Security](https://github.com/trustworksdk/essentials-project/blob/main/components/foundation/README.md#security) for full details.
+See [README Security](https://github.com/trustworksdk/essentials-project/blob/0.60.0/components/foundation/README.md#security) for full details.
 
 ## Admin APIs
 
@@ -1326,11 +1326,11 @@ public class MessagingConfig {
 3. `@KafkaListener` → `inbox.addMessageReceived(command)`
 4. Handler: `unitOfWorkFactory.usingUnitOfWork()` → process → `outbox.sendMessage()`
 
-See [README](https://github.com/trustworksdk/essentials-project/blob/main/components/foundation/README.md) for full examples.
+See [README](https://github.com/trustworksdk/essentials-project/blob/0.60.0/components/foundation/README.md) for full examples.
 
 ## See Also
 
-- [README](https://github.com/trustworksdk/essentials-project/blob/main/components/foundation/README.md) - full documentation
+- [README](https://github.com/trustworksdk/essentials-project/blob/0.60.0/components/foundation/README.md) - full documentation
 - [postgresql-queue](./LLM-postgresql-queue.md) - PostgreSQL DurableQueues
 - [springdata-mongo-queue](./LLM-springdata-mongo-queue.md) - MongoDB DurableQueues
 - [postgresql-distributed-fenced-lock](./LLM-postgresql-distributed-fenced-lock.md) - PostgreSQL FencedLock

@@ -15,9 +15,10 @@
 # limitations under the License.
 #
 # Keeps essentials-plugin/references/llm/ the generated copy of LLM/ in every commit: each file is its LLM/ counterpart
-# passed through `scripts/sync-plugin-llm.sh --filter` (links out of LLM/ rewritten to GitHub URLs).
+# passed through `scripts/sync-plugin-llm.sh --filter` (links out of LLM/ rewritten to GitHub URLs at the release tag,
+# taken from the `essentials.version` pin in the staged stack-pins.md).
 #
-# - A commit that changes LLM/ gets the regenerated copy staged with it.
+# - A commit that changes LLM/ or that pin gets the regenerated copy staged with it.
 # - A commit that edits the copy in a way LLM/ does not reflect is refused, naming the file. So is an unstaged
 #   edit in the copy, which regenerating would otherwise overwrite without a word.
 #
@@ -30,6 +31,10 @@ set -eu
 cd "$(git rev-parse --show-toplevel)"
 src=LLM
 dst=essentials-plugin/references/llm
+pins=essentials-plugin/references/stack/stack-pins.md
+
+# The filter runs inside pipelines below, where its failure would be hashed as an empty file; let it fail here instead.
+sh scripts/sync-plugin-llm.sh --filter < /dev/null > /dev/null
 
 # Blob id the copy of index path $1 (under LLM/) must have; empty when LLM/ has no such path. With $2 = -w the
 # filtered blob is also written to the object store, ready to stage.
@@ -55,7 +60,7 @@ done)
 [ -z "$bad" ] || refuse "these files in the plugin's copy were edited directly:
 $bad"
 
-git diff --cached --quiet --no-renames -- "$src" && exit 0
+git diff --cached --quiet --no-renames -- "$src" "$pins" && exit 0
 
 unstaged=$(git diff --name-only -- "$dst")
 [ -z "$unstaged" ] || refuse "regenerating the copy would overwrite these unstaged edits:

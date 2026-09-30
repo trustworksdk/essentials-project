@@ -1,6 +1,6 @@
 # Foundation Types - LLM Reference
 
-> Quick reference for LLMs. For detailed explanations, see [README](https://github.com/trustworksdk/essentials-project/blob/main/components/foundation-types/README.md).
+> Quick reference for LLMs. For detailed explanations, see [README](https://github.com/trustworksdk/essentials-project/blob/0.60.0/components/foundation-types/README.md).
 
 ## Quick Facts
 - **Package**: `dk.trustworks.essentials.components.foundation.types` + `dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.types`
@@ -466,7 +466,7 @@ public void append(@PathVariable String aggregateType, @RequestBody Event event)
 }
 ```
 
-See [postgresql-event-store README Security](https://github.com/trustworksdk/essentials-project/blob/main/components/postgresql-event-store/README.md#security) for full details.
+See [postgresql-event-store README Security](https://github.com/trustworksdk/essentials-project/blob/0.60.0/components/postgresql-event-store/README.md#security) for full details.
 
 ### What Validation Does NOT Protect Against
 
@@ -544,7 +544,7 @@ EventRevision extends IntegerType<EventRevision>
 
 ## See Also
 
-- [README](https://github.com/trustworksdk/essentials-project/blob/main/components/foundation-types/README.md) - Full documentation with examples
+- [README](https://github.com/trustworksdk/essentials-project/blob/0.60.0/components/foundation-types/README.md) - Full documentation with examples
 - [LLM-types.md](./LLM-types.md) - Base `SingleValueType` patterns
 - [LLM-foundation.md](./LLM-foundation.md) - Foundation components using these types
 - [LLM-postgresql-event-store.md](./LLM-postgresql-event-store.md) - Event Store implementation

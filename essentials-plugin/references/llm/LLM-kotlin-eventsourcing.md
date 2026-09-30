@@ -1,6 +1,6 @@
 # Kotlin EventSourcing - LLM Reference
 
-> LLM-optimized reference. For detailed explanations, see [README](https://github.com/trustworksdk/essentials-project/blob/main/components/kotlin-eventsourcing/README.md).
+> LLM-optimized reference. For detailed explanations, see [README](https://github.com/trustworksdk/essentials-project/blob/0.60.0/components/kotlin-eventsourcing/README.md).
 
 ## Quick Facts
 
@@ -431,7 +431,7 @@ fun `Custom assertions`() {
 | `ExpectToFailWithAnExceptionButNoneWasThrown` | Expected exception, none thrown |
 | `ActualExceptionIsNotEqualToExpectedException` | Wrong exception |
 
-**Test reference**: [`GivenWhenThenScenarioTest.kt`](https://github.com/trustworksdk/essentials-project/blob/main/components/kotlin-eventsourcing/src/test/kotlin/dk/trustworks/essentials/components/kotlin/eventsourcing/test/GivenWhenThenScenarioTest.kt)
+**Test reference**: [`GivenWhenThenScenarioTest.kt`](https://github.com/trustworksdk/essentials-project/blob/0.60.0/components/kotlin-eventsourcing/src/test/kotlin/dk/trustworks/essentials/components/kotlin/eventsourcing/test/GivenWhenThenScenarioTest.kt)
 
 ## Query State from EventStore
 
@@ -627,7 +627,7 @@ Components allow customization of table/column/index/function names used with **
 
 ⚠️ **Sanitize input**: `AggregateType` used in SQL string concatenation.
 
-See [README Security](https://github.com/trustworksdk/essentials-project/blob/main/components/kotlin-eventsourcing/README.md#security) for full details.
+See [README Security](https://github.com/trustworksdk/essentials-project/blob/0.60.0/components/kotlin-eventsourcing/README.md#security) for full details.
 
 **Required actions**:
 - Generate aggregate IDs with `RandomIdGenerator.generate()` or `UUID.randomUUID()`

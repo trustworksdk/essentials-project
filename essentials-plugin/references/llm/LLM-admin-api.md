@@ -1,6 +1,6 @@
 # Admin API - LLM Reference
 
-> Token-efficient reference for LLMs. For the contract and roadmap, see [docs/openapi/README.md](https://github.com/trustworksdk/essentials-project/blob/main/docs/openapi/README.md).
+> Token-efficient reference for LLMs. For the contract and roadmap, see [docs/openapi/README.md](https://github.com/trustworksdk/essentials-project/blob/0.60.0/docs/openapi/README.md).
 
 ## Quick Facts
 - **Base Package**: `dk.trustworks.essentials.components.adminapi.rest`

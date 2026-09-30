@@ -1,6 +1,6 @@
 # Types-SpringData-JPA - LLM Reference
 
-> Quick reference for LLMs. For detailed explanations, see [README.md](https://github.com/trustworksdk/essentials-project/blob/main/types-springdata-jpa/README.md).
+> Quick reference for LLMs. For detailed explanations, see [README.md](https://github.com/trustworksdk/essentials-project/blob/0.60.0/types-springdata-jpa/README.md).
 
 ## Quick Facts
 - Base package: `dk.trustworks.essentials.types.springdata.jpa.converters`
@@ -275,7 +275,7 @@ Package: `dk.trustworks.essentials.types.springdata.jpa.converters`
 All types from: `dk.trustworks.essentials.types`
 
 The `Double`-backed `Amount`/`Percentage` converters remain the auto-applied default so existing schemas keep working,
-and because a generated `numeric(38,2)` would round silently. See [MIGRATION-0.60.md](https://github.com/trustworksdk/essentials-project/blob/main/docs/MIGRATION-0.60.md).
+and because a generated `numeric(38,2)` would round silently. See [MIGRATION-0.60.md](https://github.com/trustworksdk/essentials-project/blob/0.60.0/docs/MIGRATION-0.60.md).
 
 ## Integration Points
 
@@ -319,6 +319,6 @@ Test package: `dk.trustworks.essentials.types.springdata.jpa`
 | `converters/CustomerIdAttributeConverter.java` | Custom converter example |
 
 ## See Also
-- [README.md](https://github.com/trustworksdk/essentials-project/blob/main/types-springdata-jpa/README.md) - Full documentation
+- [README.md](https://github.com/trustworksdk/essentials-project/blob/0.60.0/types-springdata-jpa/README.md) - Full documentation
 - [LLM-types.md](LLM-types.md) - Core types module
 - [LLM-types-jdbi.md](LLM-types-jdbi.md) - JDBI persistence (recommended alternative)

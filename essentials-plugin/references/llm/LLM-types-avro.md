@@ -1,6 +1,6 @@
 # Types-Avro - LLM Reference
 
-> Token-efficient reference for Avro serialization of Essentials types. For explanations see [README.md](https://github.com/trustworksdk/essentials-project/blob/main/types-avro/README.md).
+> Token-efficient reference for Avro serialization of Essentials types. For explanations see [README.md](https://github.com/trustworksdk/essentials-project/blob/0.60.0/types-avro/README.md).
 
 ## Quick Facts
 - Package: `dk.trustworks.essentials.types.avro`
@@ -227,7 +227,7 @@ public class LastUpdatedConversion extends BaseInstantTypeConversion<LastUpdated
 </plugin>
 ```
 
-See [README Maven Configuration](https://github.com/trustworksdk/essentials-project/blob/main/types-avro/README.md#maven-plugin-configuration) for full example.
+See [README Maven Configuration](https://github.com/trustworksdk/essentials-project/blob/0.60.0/types-avro/README.md#maven-plugin-configuration) for full example.
 
 ---
 
@@ -248,6 +248,6 @@ See [README Maven Configuration](https://github.com/trustworksdk/essentials-proj
 
 ## See Also
 
-- [README.md](https://github.com/trustworksdk/essentials-project/blob/main/types-avro/README.md) - Full documentation with detailed examples
+- [README.md](https://github.com/trustworksdk/essentials-project/blob/0.60.0/types-avro/README.md) - Full documentation with detailed examples
 - [LLM-types.md](LLM-types.md) - Core types module (`SingleValueType` hierarchy)
-- [CustomConversionsTest.java](https://github.com/trustworksdk/essentials-project/blob/main/types-avro/src/test/java/dk/trustworks/essentials/types/avro/CustomConversionsTest.java) - Usage examples
+- [CustomConversionsTest.java](https://github.com/trustworksdk/essentials-project/blob/0.60.0/types-avro/src/test/java/dk/trustworks/essentials/types/avro/CustomConversionsTest.java) - Usage examples

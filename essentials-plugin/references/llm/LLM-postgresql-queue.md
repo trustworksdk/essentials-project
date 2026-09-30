@@ -1,6 +1,6 @@
 # PostgreSQL Queue - LLM Reference
 
-> Quick reference for LLMs. For detailed explanations, see [README](https://github.com/trustworksdk/essentials-project/blob/main/components/postgresql-queue/README.md). For DurableQueues API patterns, see [LLM-foundation.md](./LLM-foundation.md#durablequeues-messaging).
+> Quick reference for LLMs. For detailed explanations, see [README](https://github.com/trustworksdk/essentials-project/blob/0.60.0/components/postgresql-queue/README.md). For DurableQueues API patterns, see [LLM-foundation.md](./LLM-foundation.md#durablequeues-messaging).
 
 ## Quick Facts
 - **Package**: `dk.trustworks.essentials.components.queue.postgresql`
@@ -473,7 +473,7 @@ PostgresqlUtil.checkIsValidTableOrColumnName(tableName);  // Basic validation
 - Never derive from external/untrusted input
 - Validate all config values at startup
 
-See [README Security](https://github.com/trustworksdk/essentials-project/blob/main/components/postgresql-queue/README.md#security) for full details.
+See [README Security](https://github.com/trustworksdk/essentials-project/blob/0.60.0/components/postgresql-queue/README.md#security) for full details.
 
 ### What Validation Does NOT Protect Against
 
@@ -549,6 +549,6 @@ public DurableQueues testDurableQueues(Jdbi jdbi) {
 
 ## See Also
 
-- [README.md](https://github.com/trustworksdk/essentials-project/blob/main/components/postgresql-queue/README.md) - Full documentation with examples
+- [README.md](https://github.com/trustworksdk/essentials-project/blob/0.60.0/components/postgresql-queue/README.md) - Full documentation with examples
 - [LLM-foundation.md](./LLM-foundation.md#durablequeues-messaging) - DurableQueues API patterns
 - [LLM-springdata-mongo-queue.md](./LLM-springdata-mongo-queue.md) - MongoDB implementation

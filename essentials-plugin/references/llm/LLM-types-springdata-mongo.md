@@ -1,6 +1,6 @@
 # Types-SpringData-Mongo - LLM Reference
 
-> Token-efficient reference for LLMs. For detailed explanations, see [README.md](https://github.com/trustworksdk/essentials-project/blob/main/types-springdata-mongo/README.md).
+> Token-efficient reference for LLMs. For detailed explanations, see [README.md](https://github.com/trustworksdk/essentials-project/blob/0.60.0/types-springdata-mongo/README.md).
 
 ## Quick Facts
 - Package: `dk.trustworks.essentials.types.springdata.mongo`
@@ -224,7 +224,7 @@ public class Created extends LocalDateTimeType<Created> {
 
 ## See Also
 
-- [README.md](https://github.com/trustworksdk/essentials-project/blob/main/types-springdata-mongo/README.md) - Full documentation
+- [README.md](https://github.com/trustworksdk/essentials-project/blob/0.60.0/types-springdata-mongo/README.md) - Full documentation
 - [LLM-types.md](LLM-types.md) - Core types module
 - [LLM-types-jackson.md](LLM-types-jackson.md) - Jackson 3 serialization (`types-jackson3`)
-- [OrderRepositoryIT.java](https://github.com/trustworksdk/essentials-project/blob/main/types-springdata-mongo/src/test/java/dk/trustworks/essentials/types/springdata/mongo/OrderRepositoryIT.java) - Integration test examples
+- [OrderRepositoryIT.java](https://github.com/trustworksdk/essentials-project/blob/0.60.0/types-springdata-mongo/src/test/java/dk/trustworks/essentials/types/springdata/mongo/OrderRepositoryIT.java) - Integration test examples

@@ -6,6 +6,7 @@
 #   search.sh -l <query>        # list matching files only (no context lines)
 #   search.sh -t <topic> <query>  # restrict to LLM-<topic>.md (e.g., -t foundation, -t types),
 #                                 # or to the design guide with -t design
+#   search.sh -- <query>        # a query that starts with - (e.g., -parameters)
 #
 # Prefers ripgrep; falls back to grep -R. Exits 1 if no matches.
 
@@ -68,14 +69,14 @@ fi
 
 if command -v rg >/dev/null 2>&1; then
   if [[ $list_only -eq 1 ]]; then
-    rg --files-with-matches --no-ignore-vcs --color=never -i "$query" "${paths[@]}"
+    rg --files-with-matches --no-ignore-vcs --color=never -i -e "$query" "${paths[@]}"
   else
-    rg --no-heading --line-number --color=never --max-count=10 -i -C 2 "$query" "${paths[@]}"
+    rg --no-heading --line-number --color=never --max-count=10 -i -C 2 -e "$query" "${paths[@]}"
   fi
 else
   if [[ $list_only -eq 1 ]]; then
-    grep -RIl --color=never -i "$query" "${paths[@]}"
+    grep -RIl --color=never -i -e "$query" "${paths[@]}"
   else
-    grep -RIn --color=never -i -C 2 "$query" "${paths[@]}" | sed -n '1,200p'
+    grep -RIn --color=never -i -C 2 -e "$query" "${paths[@]}" | sed -n '1,200p'
   fi
 fi

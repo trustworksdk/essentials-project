@@ -1,6 +1,6 @@
 # MongoDB Queue - LLM Reference
 
-> **Foundation**: [LLM-foundation.md](./LLM-foundation.md#durablequeues-messaging) | **Developer docs**: [README](https://github.com/trustworksdk/essentials-project/blob/main/components/springdata-mongo-queue/README.md)
+> **Foundation**: [LLM-foundation.md](./LLM-foundation.md#durablequeues-messaging) | **Developer docs**: [README](https://github.com/trustworksdk/essentials-project/blob/0.60.0/components/springdata-mongo-queue/README.md)
 
 ## TOC
 - [Quick Facts](#quick-facts)
@@ -366,7 +366,7 @@ See [LLM-spring-boot-starter-modules.md](./LLM-spring-boot-starter-modules.md#mo
 
 `sharedQueueCollectionName` used directly in MongoDB operations.
 
-See [README Security](https://github.com/trustworksdk/essentials-project/blob/main/components/springdata-mongo-queue/README.md#security) for full details.
+See [README Security](https://github.com/trustworksdk/essentials-project/blob/0.60.0/components/springdata-mongo-queue/README.md#security) for full details.
 
 **Quick rules**:
 ```java
@@ -420,7 +420,7 @@ public DurableQueues testDurableQueues(MongoTemplate mongoTemplate) {
 
 ## Performance Tuning
 
-See [README](https://github.com/trustworksdk/essentials-project/blob/main/components/springdata-mongo-queue/README.md) for:
+See [README](https://github.com/trustworksdk/essentials-project/blob/0.60.0/components/springdata-mongo-queue/README.md) for:
 - Connection pool configuration
 - Parallel consumer tuning
 - Polling optimization strategies

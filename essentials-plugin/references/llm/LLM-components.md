@@ -1,6 +1,6 @@
 # Components - LLM Reference
 
-> Quick reference for LLMs. For detailed explanations, see [components/README.md](https://github.com/trustworksdk/essentials-project/blob/main/components/README.md).
+> Quick reference for LLMs. For detailed explanations, see [components/README.md](https://github.com/trustworksdk/essentials-project/blob/0.60.0/components/README.md).
 
 ## TOC
 - [Quick Facts](#quick-facts)
@@ -657,7 +657,7 @@ Package: `dk.trustworks.essentials.components.adminapi.rest`
 - [LLM-admin-api.md](LLM-admin-api.md) - Admin API
 
 ### README Files
-- [components/README.md](https://github.com/trustworksdk/essentials-project/blob/main/components/README.md) - Complete overview
+- [components/README.md](https://github.com/trustworksdk/essentials-project/blob/0.60.0/components/README.md) - Complete overview
 - Module READMEs: `components/<module>/README.md`
 
 ### Core

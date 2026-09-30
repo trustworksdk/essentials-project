@@ -1,6 +1,6 @@
 # Types-Spring-Web - LLM Reference
 
-> Quick reference for LLMs. For detailed explanations, see [README.md](https://github.com/trustworksdk/essentials-project/blob/main/types-spring-web/README.md).
+> Quick reference for LLMs. For detailed explanations, see [README.md](https://github.com/trustworksdk/essentials-project/blob/0.60.0/types-spring-web/README.md).
 
 ## Quick Facts
 - Package: `dk.trustworks.essentials.types.spring.web`
@@ -400,7 +400,7 @@ Converter auto-decodes via `URLDecoder.decode(source, UTF_8)`
 
 ## See Also
 
-- [README.md](https://github.com/trustworksdk/essentials-project/blob/main/types-spring-web/README.md) - Complete documentation with examples
+- [README.md](https://github.com/trustworksdk/essentials-project/blob/0.60.0/types-spring-web/README.md) - Complete documentation with examples
 - [LLM-types.md](LLM-types.md) - Core `SingleValueType` reference
 - [LLM-types-jackson.md](LLM-types-jackson.md) - JSON body serialization
 - Test references: `dk.trustworks.essentials.types.spring.web.WebMvcControllerTest`, `dk.trustworks.essentials.types.spring.web.SingleValueTypeModelConverterTest`

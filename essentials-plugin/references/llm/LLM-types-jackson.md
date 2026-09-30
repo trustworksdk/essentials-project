@@ -1,6 +1,6 @@
 # Types-Jackson3 - LLM Reference
 
-> Token-efficient reference for Jackson serialization of Essentials types. For explanations see [README.md](https://github.com/trustworksdk/essentials-project/blob/main/types-jackson3/README.md).
+> Token-efficient reference for Jackson serialization of Essentials types. For explanations see [README.md](https://github.com/trustworksdk/essentials-project/blob/0.60.0/types-jackson3/README.md).
 
 ## Quick Facts
 - Package: `dk.trustworks.essentials.jackson.types`
@@ -429,7 +429,7 @@ No issue was found for this exact combination.
 
 ## See Also
 
-- [README.md](https://github.com/trustworksdk/essentials-project/blob/main/types-jackson3/README.md) - Full documentation
+- [README.md](https://github.com/trustworksdk/essentials-project/blob/0.60.0/types-jackson3/README.md) - Full documentation
 - [LLM-types.md](LLM-types.md) - Core types module
 - [LLM-immutable-jackson.md](LLM-immutable-jackson.md) - Immutable object Jackson support
-- [EssentialTypesJacksonModuleTest.java](https://github.com/trustworksdk/essentials-project/blob/main/types-jackson3/src/test/java/dk/trustworks/essentials/jackson/EssentialTypesJacksonModuleTest.java) - Usage examples
+- [EssentialTypesJacksonModuleTest.java](https://github.com/trustworksdk/essentials-project/blob/0.60.0/types-jackson3/src/test/java/dk/trustworks/essentials/jackson/EssentialTypesJacksonModuleTest.java) - Usage examples

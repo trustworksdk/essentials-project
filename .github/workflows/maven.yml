@@ -137,6 +137,10 @@ jobs:
           uv run --script scripts/review-scan.py --self-test
           uv run python -m unittest discover -s tests/scripts -p 'test_review_scan.py'
 
+      - name: Docs search (search.sh)
+        working-directory: essentials-plugin
+        run: uv run python -m unittest discover -s tests/scripts -p 'test_search.py'
+
       - name: Review judgement cases, deterministic half (check-patches.py)
         working-directory: essentials-plugin
         run: uv run --script tests/review/judgement/check-patches.py

@@ -1,6 +1,6 @@
 # Types-JDBI - LLM Reference
 
-> Quick reference for LLMs. For detailed explanations, see [types-jdbi/README.md](https://github.com/trustworksdk/essentials-project/blob/main/types-jdbi/README.md).
+> Quick reference for LLMs. For detailed explanations, see [types-jdbi/README.md](https://github.com/trustworksdk/essentials-project/blob/0.60.0/types-jdbi/README.md).
 
 ## TOC
 - [Quick Facts](#quick-facts)
@@ -351,6 +351,6 @@ jdbi.useHandle(h ->
 
 ## See Also
 
-- [types-jdbi/README.md](https://github.com/trustworksdk/essentials-project/blob/main/types-jdbi/README.md) - Examples and detailed explanations
+- [types-jdbi/README.md](https://github.com/trustworksdk/essentials-project/blob/0.60.0/types-jdbi/README.md) - Examples and detailed explanations
 - [LLM-types.md](LLM-types.md) - `SingleValueType` and base types
 - [LLM-foundation.md](LLM-foundation.md) - Uses JDBI for UnitOfWork and persistence

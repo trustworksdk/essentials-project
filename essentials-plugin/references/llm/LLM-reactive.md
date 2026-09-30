@@ -1,6 +1,6 @@
 # Reactive - LLM Reference
 
-> Token-efficient reference for LLMs. For detailed explanations, see [README.md](https://github.com/trustworksdk/essentials-project/blob/main/reactive/README.md).
+> Token-efficient reference for LLMs. For detailed explanations, see [README.md](https://github.com/trustworksdk/essentials-project/blob/0.60.0/reactive/README.md).
 
 ## Quick Facts
 - **Package**: `dk.trustworks.essentials.reactive`
@@ -561,7 +561,7 @@ public class OrderCommandHandler extends AnnotatedCommandHandler {
 
 ## See Also
 
-- [README.md](https://github.com/trustworksdk/essentials-project/blob/main/reactive/README.md) - Full documentation with motivation, examples, best practices
+- [README.md](https://github.com/trustworksdk/essentials-project/blob/0.60.0/reactive/README.md) - Full documentation with motivation, examples, best practices
 - [LLM-shared.md](./LLM-shared.md) - `InterceptorChain`, `PatternMatchingMethodInvoker`, `Lifecycle`
 - [LLM-foundation.md](./LLM-foundation.md) - `DurableLocalCommandBus`, `UnitOfWork`, `DurableQueues`
 

@@ -643,9 +643,9 @@ public class OrderController {
 - [LLM-types-springdata-jpa.md](LLM-types-springdata-jpa.md) - JPA integration
 
 ### README Files
-- [types-jackson3 README](https://github.com/trustworksdk/essentials-project/blob/main/types-jackson3/README.md)
-- [types-jdbi README](https://github.com/trustworksdk/essentials-project/blob/main/types-jdbi/README.md)
-- [types-avro README](https://github.com/trustworksdk/essentials-project/blob/main/types-avro/README.md)
-- [types-spring-web README](https://github.com/trustworksdk/essentials-project/blob/main/types-spring-web/README.md)
-- [types-springdata-mongo README](https://github.com/trustworksdk/essentials-project/blob/main/types-springdata-mongo/README.md)
-- [types-springdata-jpa README](https://github.com/trustworksdk/essentials-project/blob/main/types-springdata-jpa/README.md)
+- [types-jackson3 README](https://github.com/trustworksdk/essentials-project/blob/0.60.0/types-jackson3/README.md)
+- [types-jdbi README](https://github.com/trustworksdk/essentials-project/blob/0.60.0/types-jdbi/README.md)
+- [types-avro README](https://github.com/trustworksdk/essentials-project/blob/0.60.0/types-avro/README.md)
+- [types-spring-web README](https://github.com/trustworksdk/essentials-project/blob/0.60.0/types-spring-web/README.md)
+- [types-springdata-mongo README](https://github.com/trustworksdk/essentials-project/blob/0.60.0/types-springdata-mongo/README.md)
+- [types-springdata-jpa README](https://github.com/trustworksdk/essentials-project/blob/0.60.0/types-springdata-jpa/README.md)

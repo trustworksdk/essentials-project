@@ -1,6 +1,6 @@
 # SpringData MongoDB Distributed Fenced Lock - LLM Reference
 
-> Quick reference for LLMs. For detailed explanations, see [README](https://github.com/trustworksdk/essentials-project/blob/main/components/springdata-mongo-distributed-fenced-lock/README.md).
+> Quick reference for LLMs. For detailed explanations, see [README](https://github.com/trustworksdk/essentials-project/blob/0.60.0/components/springdata-mongo-distributed-fenced-lock/README.md).
 
 > For core FencedLock concepts (why, when, how), see [LLM-foundation.md](./LLM-foundation.md#fencedlock-distributed-locking).
 
@@ -346,7 +346,7 @@ logging.level:
 
 `fencedLocksCollectionName` is used directly as MongoDB collection name with **String concatenation** → NoSQL injection risk. While `MongoFencedLockStorage` calls `MongoUtil.checkIsValidCollectionName()` for basic validation, **this is NOT exhaustive protection**.
 
-See [README Security](https://github.com/trustworksdk/essentials-project/blob/main/components/springdata-mongo-distributed-fenced-lock/README.md#security) for full details.
+See [README Security](https://github.com/trustworksdk/essentials-project/blob/0.60.0/components/springdata-mongo-distributed-fenced-lock/README.md#security) for full details.
 
 **Required practices:**
 
@@ -490,4 +490,4 @@ See: [LLM-postgresql-distributed-fenced-lock.md](./LLM-postgresql-distributed-fe
 - [LLM-foundation.md#fencedlock-distributed-locking](./LLM-foundation.md#fencedlock-distributed-locking) - Core FencedLock concepts
 - [LLM-postgresql-distributed-fenced-lock.md](./LLM-postgresql-distributed-fenced-lock.md) - PostgreSQL implementation
 - [LLM-springdata-mongo-queue.md](./LLM-springdata-mongo-queue.md) - Queue consumer coordination use case
-- [README](https://github.com/trustworksdk/essentials-project/blob/main/components/springdata-mongo-distributed-fenced-lock/README.md) - Full documentation
+- [README](https://github.com/trustworksdk/essentials-project/blob/0.60.0/components/springdata-mongo-distributed-fenced-lock/README.md) - Full documentation

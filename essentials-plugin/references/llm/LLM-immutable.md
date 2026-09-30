@@ -1,6 +1,6 @@
 # Immutable - LLM Reference
 
-> Quick reference for LLMs. For detailed explanations, see [README.md](https://github.com/trustworksdk/essentials-project/blob/main/immutable/README.md).
+> Quick reference for LLMs. For detailed explanations, see [README.md](https://github.com/trustworksdk/essentials-project/blob/0.60.0/immutable/README.md).
 
 ## Quick Facts
 - **Package**: `dk.trustworks.essentials.immutable`
@@ -331,8 +331,8 @@ void toStringFormat() {
 
 ## See Also
 
-- [README.md](https://github.com/trustworksdk/essentials-project/blob/main/immutable/README.md) - Full documentation
+- [README.md](https://github.com/trustworksdk/essentials-project/blob/0.60.0/immutable/README.md) - Full documentation
 - [LLM-shared.md](./LLM-shared.md) - Reflection utilities (`Reflector`, `FailFast`)
 - [LLM-types.md](./LLM-types.md) - `SingleValueType` alternative
 - [LLM-immutable-jackson.md](./LLM-immutable-jackson.md) - Jackson integration
-- [ImmutableValueObjectTest.java](https://github.com/trustworksdk/essentials-project/blob/main/immutable/src/test/java/dk/trustworks/essentials/immutable/ImmutableValueObjectTest.java) - Test examples
+- [ImmutableValueObjectTest.java](https://github.com/trustworksdk/essentials-project/blob/0.60.0/immutable/src/test/java/dk/trustworks/essentials/immutable/ImmutableValueObjectTest.java) - Test examples

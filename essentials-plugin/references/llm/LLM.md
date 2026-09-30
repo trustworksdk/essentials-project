@@ -530,6 +530,6 @@ public void processOrder(OrderId orderId, long fenceToken) {
 ### README Files
 
 For detailed explanations and design rationale:
-- [README.md](https://github.com/trustworksdk/essentials-project/blob/main/README.md) - Project overview
-- [components/README.md](https://github.com/trustworksdk/essentials-project/blob/main/components/README.md) - Components overview
+- [README.md](https://github.com/trustworksdk/essentials-project/blob/0.60.0/README.md) - Project overview
+- [components/README.md](https://github.com/trustworksdk/essentials-project/blob/0.60.0/components/README.md) - Components overview
 - Individual module READMEs in respective directories

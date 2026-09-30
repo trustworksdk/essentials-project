@@ -1,6 +1,6 @@
 # Types - LLM Reference
 
-> Quick reference for LLMs. For detailed explanations, see [README.md](https://github.com/trustworksdk/essentials-project/blob/main/types/README.md).
+> Quick reference for LLMs. For detailed explanations, see [README.md](https://github.com/trustworksdk/essentials-project/blob/0.60.0/types/README.md).
 
 ## Quick Facts
 - Package: `dk.trustworks.essentials.types`
@@ -435,6 +435,6 @@ assertThat(CustomerId.of("Test").value()).isEqualTo("Test");
 
 ## See Also
 
-- [README.md](https://github.com/trustworksdk/essentials-project/blob/main/types/README.md) - Full documentation with motivation
+- [README.md](https://github.com/trustworksdk/essentials-project/blob/0.60.0/types/README.md) - Full documentation with motivation
 - [LLM-types-integrations.md](LLM-types-integrations.md) - Integration overview
 - Tests: `types/src/test/java/dk/trustworks/essentials/types/`

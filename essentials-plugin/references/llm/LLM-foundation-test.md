@@ -1,6 +1,6 @@
 # Foundation Test - LLM Reference
 
-> Token-efficient reference for LLMs. See [README](https://github.com/trustworksdk/essentials-project/blob/main/components/foundation-test/README.md) for detailed documentation.
+> Token-efficient reference for LLMs. See [README](https://github.com/trustworksdk/essentials-project/blob/0.60.0/components/foundation-test/README.md) for detailed documentation.
 
 ## Quick Facts
 - **Base package**: `dk.trustworks.essentials.components.foundation.test`
@@ -842,7 +842,7 @@ between ITs that never disrupt it.
 
 ## See Also
 
-- [README.md](https://github.com/trustworksdk/essentials-project/blob/main/components/foundation-test/README.md) - Full documentation
+- [README.md](https://github.com/trustworksdk/essentials-project/blob/0.60.0/components/foundation-test/README.md) - Full documentation
 - [LLM-foundation.md](./LLM-foundation.md) - `FencedLockManager`, `DurableQueues` interfaces
 - [LLM-postgresql-distributed-fenced-lock.md](./LLM-postgresql-distributed-fenced-lock.md) - PostgreSQL FencedLock
 - [LLM-postgresql-queue.md](./LLM-postgresql-queue.md) - PostgreSQL DurableQueues

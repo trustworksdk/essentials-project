@@ -1,6 +1,6 @@
 # Immutable-Jackson3 - LLM Reference
 
-> Token-efficient reference for Jackson deserialization of immutable classes. See [README.md](https://github.com/trustworksdk/essentials-project/blob/main/immutable-jackson3/README.md) for detailed explanations.
+> Token-efficient reference for Jackson deserialization of immutable classes. See [README.md](https://github.com/trustworksdk/essentials-project/blob/0.60.0/immutable-jackson3/README.md) for detailed explanations.
 
 ## Quick Facts
 - Package: `dk.trustworks.essentials.jackson.immutable`
@@ -169,7 +169,7 @@ public class ValidatedOrder {
 
 ## Configuration
 
-`createObjectMapper()` applies these defaults. See [README Configuration](https://github.com/trustworksdk/essentials-project/blob/main/immutable-jackson3/README.md#objectmapper-factory) for full details.
+`createObjectMapper()` applies these defaults. See [README Configuration](https://github.com/trustworksdk/essentials-project/blob/0.60.0/immutable-jackson3/README.md#objectmapper-factory) for full details.
 
 | Setting | Value | Purpose |
 |---------|-------|---------|
@@ -224,7 +224,7 @@ public class Config {
 
 ## Gotchas
 
-See [README Gotchas](https://github.com/trustworksdk/essentials-project/blob/main/immutable-jackson3/README.md#gotchas) for detailed explanations.
+See [README Gotchas](https://github.com/trustworksdk/essentials-project/blob/0.60.0/immutable-jackson3/README.md#gotchas) for detailed explanations.
 
 - ⚠️ **Objenesis bypasses constructors** → validation logic won't run
 - ⚠️ **Field defaults not applied** → `int timeout = 30` becomes `0` if not in JSON
@@ -263,6 +263,6 @@ Test model classes (in `src/test`):
 
 ## See Also
 
-- [README.md](https://github.com/trustworksdk/essentials-project/blob/main/immutable-jackson3/README.md) - Full documentation with detailed explanations
+- [README.md](https://github.com/trustworksdk/essentials-project/blob/0.60.0/immutable-jackson3/README.md) - Full documentation with detailed explanations
 - [LLM-types-jackson.md](LLM-types-jackson.md) - `SingleValueType` Jackson support
 - [LLM-immutable.md](LLM-immutable.md) - Core immutable patterns

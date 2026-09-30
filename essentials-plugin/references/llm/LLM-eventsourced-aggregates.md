@@ -1,6 +1,6 @@
 # EventSourced Aggregates - LLM Reference
 
-> Quick reference for LLMs. For detailed explanations, see [README](https://github.com/trustworksdk/essentials-project/blob/main/components/eventsourced-aggregates/README.md).
+> Quick reference for LLMs. For detailed explanations, see [README](https://github.com/trustworksdk/essentials-project/blob/0.60.0/components/eventsourced-aggregates/README.md).
 
 ## Quick Facts
 - **Base package**: `dk.trustworks.essentials.components.eventsourced.aggregates`
@@ -1126,7 +1126,7 @@ Components allow customization of table/column/index/function names via **String
 - Never use unsanitized user input for table names, columns, `AggregateType`, or IDs
 - Validate all configuration at startup
 
-See [README Security](https://github.com/trustworksdk/essentials-project/blob/main/components/eventsourced-aggregates/README.md#security) for details.
+See [README Security](https://github.com/trustworksdk/essentials-project/blob/0.60.0/components/eventsourced-aggregates/README.md#security) for details.
 
 ### What Validation Does NOT Protect Against
 

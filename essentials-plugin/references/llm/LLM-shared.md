@@ -1,6 +1,6 @@
 # Shared - LLM Reference
 
-> Zero-dependency utilities and functional primitives for Java 25+. See [README.md](https://github.com/trustworksdk/essentials-project/blob/main/shared/README.md) for detailed explanations.
+> Zero-dependency utilities and functional primitives for Java 25+. See [README.md](https://github.com/trustworksdk/essentials-project/blob/0.60.0/shared/README.md) for detailed explanations.
 
 ## TOC
 - [Quick Facts](#quick-facts)
@@ -980,7 +980,7 @@ static String hostName()  // Get local hostname
 
 ## See Also
 
-- [README.md](https://github.com/trustworksdk/essentials-project/blob/main/shared/README.md) - Full human-friendly documentation
+- [README.md](https://github.com/trustworksdk/essentials-project/blob/0.60.0/shared/README.md) - Full human-friendly documentation
 - [LLM-types.md](./LLM-types.md) - Semantic types built on shared utilities
 - [LLM-reactive.md](./LLM-reactive.md) - LocalEventBus and LocalCommandBus
 - [LLM-foundation.md](./LLM-foundation.md) - UnitOfWork, FencedLock, DurableQueues

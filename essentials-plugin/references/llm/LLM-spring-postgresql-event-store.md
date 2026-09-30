@@ -1,6 +1,6 @@
 # Spring PostgreSQL Event Store - LLM Reference
 
-> Quick reference for LLMs. For detailed explanations, see [README](https://github.com/trustworksdk/essentials-project/blob/main/components/spring-postgresql-event-store/README.md).
+> Quick reference for LLMs. For detailed explanations, see [README](https://github.com/trustworksdk/essentials-project/blob/0.60.0/components/spring-postgresql-event-store/README.md).
 
 ## Quick Facts
 - **Package**: `dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.spring`
@@ -350,4 +350,4 @@ Key test classes demonstrating usage patterns:
 | [postgresql-event-store](./LLM-postgresql-event-store.md) | Core EventStore functionality |
 | [foundation](./LLM-foundation.md) | Base Spring transaction integration |
 | [spring-boot-starter-postgresql-event-store](./LLM-spring-boot-starter-modules.md#event-store-starter) | Auto-configuration |
-| [README](https://github.com/trustworksdk/essentials-project/blob/main/components/spring-postgresql-event-store/README.md) | Full developer documentation |
+| [README](https://github.com/trustworksdk/essentials-project/blob/0.60.0/components/spring-postgresql-event-store/README.md) | Full developer documentation |

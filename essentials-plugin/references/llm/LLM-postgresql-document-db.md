@@ -1,6 +1,6 @@
 # postgresql-document-db - LLM Reference
 
-> WORK-IN-PROGRESS - Kotlin-first document database using PostgreSQL JSONB with type-safe queries, optimistic locking, and automatic schema management. A dedicated Java interop surface is available - see [Java Interop](#java-interop). For detailed explanations, see [README](https://github.com/trustworksdk/essentials-project/blob/main/components/postgresql-document-db/README.md).
+> WORK-IN-PROGRESS - Kotlin-first document database using PostgreSQL JSONB with type-safe queries, optimistic locking, and automatic schema management. A dedicated Java interop surface is available - see [Java Interop](#java-interop). For detailed explanations, see [README](https://github.com/trustworksdk/essentials-project/blob/0.60.0/components/postgresql-document-db/README.md).
 
 Base package: `dk.trustworks.essentials.components.document_db`
 
@@ -705,7 +705,7 @@ Table names (`@DocumentEntity`), property names, and index names are used in SQL
 - NEVER derive from external/untrusted input
 - Validate all entity definitions during development
 
-See [README Security](https://github.com/trustworksdk/essentials-project/blob/main/components/postgresql-document-db/README.md#security) for details.
+See [README Security](https://github.com/trustworksdk/essentials-project/blob/0.60.0/components/postgresql-document-db/README.md#security) for details.
 
 ### What Validation Does NOT Protect Against
 
@@ -727,7 +727,7 @@ See [README Security](https://github.com/trustworksdk/essentials-project/blob/ma
 
 ## See Also
 
-- [README](https://github.com/trustworksdk/essentials-project/blob/main/components/postgresql-document-db/README.md) - Full documentation with motivation and deep dives
+- [README](https://github.com/trustworksdk/essentials-project/blob/0.60.0/components/postgresql-document-db/README.md) - Full documentation with motivation and deep dives
 - [LLM-foundation](./LLM-foundation.md) - UnitOfWork, PostgresqlUtil
 - [LLM-types](./LLM-types.md) - SingleValueType pattern
 - [LLM-types-jdbi](./LLM-types-jdbi.md) - JDBI type registration
