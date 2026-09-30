@@ -1,0 +1,38 @@
+# Per-slice manifest. Schema: essentials references/slice/slice-yaml.schema.json
+# Field guide: references/slice/manifest-guide.md · Law: rules/slice-design.md
+schemaVersion: "1.3"
+slice: orders.place_order
+kind: command
+bc: orders
+owner: orders-team
+status: live
+summary: TODO one sentence, present tense.
+generator: essentials
+language: kotlin
+tier: cqrs-es                        # architectureTier vocabulary (cqrs-es | service-entity | …)
+lane: decider                        # the §R5 write style: decider | aggregate | service-entity
+
+# --- Contracts ---
+handles: [PlaceOrder]
+publishes: [OrderPlaced]
+endpoints:
+  - { method: POST, path: "/api/orders", auth: user }
+
+# --- Data ---
+writes: [Order]
+reads:
+  - { name: Order }            # via the Evolver in use_cases/_shared/
+
+# --- Rules ---
+invariants:
+  - { id: INV-1, text: "TODO the rule this slice enforces", enforcedBy: PlaceOrderDecider }
+
+# --- Boundaries (machine-checkable prohibitions — rules/slice-design.md §R4) ---
+forbidden:
+  - cross-slice-internal:orders     # import only another slice's events/ + types/
+
+# --- Testing ---
+tests:
+  unit: { present: true }
+  integration: { present: false }
+  contract: { present: false }

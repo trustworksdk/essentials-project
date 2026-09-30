@@ -23,9 +23,8 @@ package {{packagePath}}.{{bc}}.views.{{view}};
  */
 public interface {{View}}View {
 
-    String get{{Aggregate}}Id();
+    String getId();
 
-    // TODO: replace with the fields this view actually serves. Name them exactly as the entity's
-    //       properties, or Spring Data cannot resolve them.
-    String getStatus();
+    // TODO: add the fields this view actually serves, e.g. String getStatus(). Name them exactly as the
+    //       entity's properties, or Spring Data cannot resolve them and the context does not start.
 }

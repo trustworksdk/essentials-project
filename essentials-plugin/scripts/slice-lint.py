@@ -1,4 +1,8 @@
-#!/usr/bin/env python3
+#!/usr/bin/env -S uv run --script
+# /// script
+# requires-python = ">=3.11"
+# dependencies = ["pyyaml==6.0.3", "jsonschema==4.26.0"]
+# ///
 """slice-lint — deterministic validation of every slice.yaml in a project.
 
 Why this exists
@@ -10,18 +14,22 @@ that makes it loud.
 
 It is deterministic by design: parsing and schema validation are mechanical, and a
 language model has no business guessing at either. `/essentials:slice-check` runs this
-script for its gates 1, 3 and 4 rather than eyeballing the files.
+script for its gates 1, 3 and 4, and for the one manifest-only clause of gate 14 (a
+write style written into `tier`), rather than eyeballing the files. It reads manifests only;
+the syntactic source facts are `slice-source.py`'s.
 
 Usage
 -----
     slice-lint.py [ROOT] [options]
 
     ROOT                 directory to scan (default: the current directory)
-    --schema PATH        JSON Schema to validate against
-                         (default: ../references/slice/slice-yaml.schema.json,
-                          resolved relative to this script)
+    --schema PATH        JSON Schema to validate against (default, resolved relative
+                         to this script: ../references/slice/slice-yaml.schema.json in
+                         the plugin, else slice-yaml.schema.json beside it, which is
+                         where a project's installed copy keeps it)
     --require-schema     fail if schema validation could not run (use this in CI)
-    --json               emit findings as JSON on stdout
+    --json               emit findings as JSON on stdout; each finding carries its
+                         `ESS-G<gate><clause>` id beside the gate label
     --quiet              print only findings, no summary
 
 Exit codes
@@ -32,13 +40,15 @@ Exit codes
 
 Dependencies
 ------------
-`pyyaml` is required for parsing; `jsonschema` is required for schema validation. When
+`pyyaml` is required for parsing; `jsonschema` is required for schema validation. Both are
+pinned in the inline script metadata above, so `uv run --script slice-lint.py` brings them
+(this works from a project's installed copy too). When
 `jsonschema` is absent the parse gate still runs and the script says loudly that
 validation was skipped — silence is never allowed to read as a pass. When `pyyaml` is
 absent nothing can be parsed, so the script falls back to scanning for the known-lethal
 authoring mistakes it can find with a regex and exits 2.
 
-    pip install pyyaml jsonschema
+    uv run --script slice-lint.py …        (or: pip install pyyaml jsonschema)
 """
 
 from __future__ import annotations
@@ -56,6 +66,18 @@ from pathlib import Path
 UNQUOTED_BRACED_PATH = re.compile(r"""^\s*-?\s*.*?\bpath:\s*(?!["'])[^"'\n]*\{""")
 
 SEVERITY_ORDER = {"Blocking": 0, "Should-fix": 1, "Advisory": 2}
+
+# The write styles of §R5. They belong in `lane`; in `tier` they are an unrecognised value, which
+# a reader must treat as `custom` — silently dropping the slice's tier-specific handling.
+LANE_ONLY_TIERS = {"aggregate": "cqrs-es", "decider": "cqrs-es"}
+
+GATE_ID = re.compile(r"^(\d+)(?:\(([a-z])\))?")
+
+
+def finding_id(gate):
+    """`4(b) sole owner` → `ESS-G4b`; `14 tier` → `ESS-G14` (the review finding ids)."""
+    m = GATE_ID.match(gate)
+    return f"ESS-G{m.group(1)}{m.group(2) or ''}" if m else None
 
 
 class Finding:
@@ -77,6 +99,7 @@ class Finding:
         return {
             "severity": self.severity,
             "gate": self.gate,
+            "id": finding_id(self.gate),
             "file": str(self.path),
             "line": self.line,
             "message": self.message,
@@ -247,12 +270,15 @@ def cross_manifest_checks(parsed, findings):
     handled = {}
     owned = {}
     written = {}
+    twin_pairs = []
 
     for path, doc in parsed.items():
         sid = doc.get("slice")
         bc = doc.get("bc")
         if isinstance(sid, str):
             slice_ids.setdefault(sid, []).append(path)
+            if isinstance(doc.get("supersedes"), str):
+                twin_pairs.append((sid, doc["supersedes"]))
         for name in _names(doc.get("handles")):
             handled.setdefault(name, []).append((path, sid))
         for name in _names(doc.get("owns")):
@@ -279,7 +305,9 @@ def cross_manifest_checks(parsed, findings):
     for name, owners in sorted(handled.items()):
         if len(owners) > 1:
             for path, sid in owners:
-                others = ", ".join(str(s) for _, s in owners if s != sid)
+                # By path, not by id: two manifests sharing an id (gate 3) would otherwise
+                # list nobody.
+                others = ", ".join(str(s) for p, s in owners if p != path)
                 findings.append(
                     Finding(
                         "Blocking",
@@ -291,11 +319,12 @@ def cross_manifest_checks(parsed, findings):
                     )
                 )
 
-    # Gate 4(b) — a read model has exactly one writing slice (§R4 ownership).
+    # Gate 4(b) — a read model has exactly one writing slice (§R4 ownership). Owners that are
+    # all one `supersedes` family are a declared migration twin: gate 13's Should-fix, not this.
     for name, owners in sorted(owned.items()):
-        if len(owners) > 1:
+        if len(owners) > 1 and not one_twin_family([s for _, s in owners], twin_pairs):
             for path, sid in owners:
-                others = ", ".join(str(s) for _, s in owners if s != sid)
+                others = ", ".join(str(s) for p, s in owners if p != path)
                 findings.append(
                     Finding(
                         "Blocking",
@@ -325,6 +354,55 @@ def cross_manifest_checks(parsed, findings):
                             f"An aggregate belongs to one consistency boundary",
                         )
                     )
+
+
+def one_twin_family(ids, twin_pairs):
+    """True when every id is linked to the others through `supersedes`."""
+    if any(not isinstance(i, str) for i in ids):
+        return False
+    wanted = set(ids)
+    start = min(wanted)
+    seen, todo = {start}, [start]
+    while todo:
+        cur = todo.pop()
+        for pair in twin_pairs:
+            if cur in pair:
+                for other in pair:
+                    if other in wanted and other not in seen:
+                        seen.add(other)
+                        todo.append(other)
+    return seen == wanted
+
+
+def tier_checks(parsed, findings):
+    """Gate 14, its one manifest-only clause — a write style written into `tier`.
+
+    `lane` and `tier` are different axes that coincide on one value (`service-entity`). The
+    other two lanes are not tier vocabulary, so a reader falls back to `custom` without a word.
+    """
+    for path, doc in sorted(parsed.items(), key=lambda kv: str(kv[0])):
+        tier = doc.get("tier")
+        if not isinstance(tier, str) or tier not in LANE_ONLY_TIERS:
+            continue
+        line = None
+        try:
+            for i, text in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+                if re.match(r"^tier:\s*[\"']?" + re.escape(tier) + r"\b", text):
+                    line = i
+                    break
+        except OSError:
+            pass
+        findings.append(
+            Finding(
+                "Should-fix",
+                "14 tier",
+                path,
+                f"tier: {tier} is a write style (§R5 lane), not an architectureTier value; a reader "
+                f"treats it as `custom` and silently drops the slice's tier-specific handling",
+                line=line,
+                hint=f"tier: {LANE_ONLY_TIERS[tier]} + lane: {tier}",
+            )
+        )
 
 
 def _projections(doc):
@@ -407,7 +485,7 @@ def report(findings, manifests, parsed, schema_ran, quiet):
             print(
                 "SCHEMA VALIDATION SKIPPED — `jsonschema` is not installed, so only the parse "
                 "gate ran. This is NOT a clean bill of health.\n"
-                "  pip install jsonschema",
+                "  uv run --script slice-lint.py …   (or: pip install jsonschema)",
                 file=out,
             )
         if not findings and schema_ran:
@@ -435,11 +513,13 @@ def main(argv=None):
         print(f"slice-lint: not a directory: {root}", file=sys.stderr)
         return 2
 
-    schema_path = (
-        Path(args.schema).resolve()
-        if args.schema
-        else Path(__file__).resolve().parent.parent / "references" / "slice" / "slice-yaml.schema.json"
-    )
+    if args.schema:
+        schema_path = Path(args.schema).resolve()
+    else:
+        here = Path(__file__).resolve().parent
+        schema_path = here.parent / "references" / "slice" / "slice-yaml.schema.json"
+        if not schema_path.is_file():
+            schema_path = here / "slice-yaml.schema.json"
     try:
         schema = json.loads(schema_path.read_text(encoding="utf-8"))
     except (OSError, ValueError) as exc:
@@ -448,7 +528,11 @@ def main(argv=None):
 
     manifests = find_manifests(root)
     if not manifests:
-        if not args.quiet:
+        if args.json:
+            json.dump({"root": str(root), "manifests": 0, "parsed": 0, "schemaValidated": False,
+                       "findings": []}, sys.stdout, indent=2)
+            sys.stdout.write("\n")
+        elif not args.quiet:
             print(f"slice-lint: no slice.yaml found under {root}", file=sys.stderr)
         return 0
 
@@ -457,7 +541,7 @@ def main(argv=None):
     except ImportError:
         print(
             "slice-lint: `pyyaml` is not installed, so no manifest can be parsed.\n"
-            "  pip install pyyaml jsonschema\n"
+            "  uv run --script slice-lint.py …   (or: pip install pyyaml jsonschema)\n"
             "Scanning for the one mistake a regex can find instead:",
             file=sys.stderr,
         )
@@ -479,6 +563,7 @@ def main(argv=None):
     schema_ran = validate_schema(parsed, schema, findings)
     stream_vs_event_checks(parsed, findings)
     cross_manifest_checks(parsed, findings)
+    tier_checks(parsed, findings)
 
     if args.json:
         json.dump(

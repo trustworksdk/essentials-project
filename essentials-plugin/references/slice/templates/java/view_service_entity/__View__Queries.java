@@ -38,8 +38,12 @@ import java.util.Optional;
  * match</strong>. So {@code findById} is captured by the base rather than derived as a query: it
  * returns the {@link {{Entity}}} entity, the declared projection type is ignored, and the mismatch
  * surfaces as a {@code ClassCastException} at the call site — not as a wiring error and not at
- * startup. {@code find{{Aggregate}}By{{Aggregate}}Id} below derives the same {@code id = ?} query and
- * does project, which is the only reason it is named that way.
+ * startup. {@code find{{Aggregate}}ById} below derives the same {@code id = ?} query and does project,
+ * which is the only reason it is named that way.
+ *
+ * <p>The scaffold queries only {@code id} — the one property the entity contract guarantees
+ * ({@code entities/CLAUDE.md}) — so a freshly scaffolded context starts. Every other derived query names
+ * an entity property and fails at startup if the entity has no such property.
  *
  * <p>The same applies to every other base method: {@code findAll}, {@code findAllById},
  * {@code existsById}, {@code count}, {@code getById}, {@code getReferenceById}. See
@@ -47,10 +51,11 @@ import java.util.Optional;
  */
 public interface {{View}}Queries extends Repository<{{Entity}}, String> {
 
-    // TODO: the queries this slice actually serves. Several are fine — a view slice is scoped by the
-    //       read model it owns, not by method count (§R2). Declare each in slice.yaml `serves`.
-    List<{{View}}View> findByStatus(String status);
+    // TODO: the queries this slice actually serves, e.g. findByStatus(String status). Several are fine —
+    //       a view slice is scoped by the read model it owns, not by method count (§R2). Declare each in
+    //       slice.yaml `serves`. NOT findAll — `findAllBy` derives the same query and projects.
+    List<{{View}}View> findAllBy();
 
     // NOT findById — see the reserved-name note above. This name derives the same query and projects.
-    Optional<{{View}}View> find{{Aggregate}}By{{Aggregate}}Id(String {{aggregate}}Id);
+    Optional<{{View}}View> find{{Aggregate}}ById(String id);
 }

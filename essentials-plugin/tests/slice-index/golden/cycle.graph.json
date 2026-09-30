@@ -1,0 +1,214 @@
+{
+  "nodes": [
+    {
+      "id": "s:orders.place_order",
+      "type": "slice",
+      "label": "orders.place_order",
+      "bc": "orders",
+      "kind": "command",
+      "rank": 1
+    },
+    {
+      "id": "c:PlaceOrder",
+      "type": "command",
+      "label": "PlaceOrder",
+      "bc": "orders",
+      "kind": null,
+      "rank": 0
+    },
+    {
+      "id": "e:OrderPlaced",
+      "type": "event",
+      "label": "OrderPlaced",
+      "bc": "orders",
+      "kind": null,
+      "rank": 2
+    },
+    {
+      "id": "s:payments.retry_payment",
+      "type": "slice",
+      "label": "payments.retry_payment",
+      "bc": "payments",
+      "kind": "automation",
+      "rank": 7
+    },
+    {
+      "id": "e:PaymentFailed",
+      "type": "event",
+      "label": "PaymentFailed",
+      "bc": "payments",
+      "kind": null,
+      "rank": 6
+    },
+    {
+      "id": "c:ChargePayment",
+      "type": "command",
+      "label": "ChargePayment",
+      "bc": "payments",
+      "kind": null,
+      "rank": 4
+    },
+    {
+      "id": "s:payments.start_payment",
+      "type": "slice",
+      "label": "payments.start_payment",
+      "bc": "payments",
+      "kind": "automation",
+      "rank": 3
+    },
+    {
+      "id": "s:payments.charge_payment",
+      "type": "slice",
+      "label": "payments.charge_payment",
+      "bc": "payments",
+      "kind": "command",
+      "rank": 5
+    },
+    {
+      "id": "e:PaymentCharged",
+      "type": "event",
+      "label": "PaymentCharged",
+      "bc": "payments",
+      "kind": null,
+      "rank": 6
+    },
+    {
+      "id": "s:payments.payment_list",
+      "type": "slice",
+      "label": "payments.payment_list",
+      "bc": "payments",
+      "kind": "view",
+      "rank": 7
+    },
+    {
+      "id": "s:reminders.schedule_next",
+      "type": "slice",
+      "label": "reminders.schedule_next",
+      "bc": "reminders",
+      "kind": "automation",
+      "rank": 4
+    },
+    {
+      "id": "e:ReminderSent",
+      "type": "event",
+      "label": "ReminderSent",
+      "bc": "reminders",
+      "kind": null,
+      "rank": 3
+    },
+    {
+      "id": "c:SendReminder",
+      "type": "command",
+      "label": "SendReminder",
+      "bc": "reminders",
+      "kind": null,
+      "rank": 1
+    },
+    {
+      "id": "s:reminders.send_reminder",
+      "type": "slice",
+      "label": "reminders.send_reminder",
+      "bc": "reminders",
+      "kind": "command",
+      "rank": 2
+    }
+  ],
+  "edges": [
+    {
+      "from": "c:PlaceOrder",
+      "to": "s:orders.place_order",
+      "kind": "command"
+    },
+    {
+      "from": "s:orders.place_order",
+      "to": "e:OrderPlaced",
+      "kind": "event"
+    },
+    {
+      "from": "e:PaymentFailed",
+      "to": "s:payments.retry_payment",
+      "kind": "event"
+    },
+    {
+      "from": "s:payments.retry_payment",
+      "to": "c:ChargePayment",
+      "kind": "command"
+    },
+    {
+      "from": "e:OrderPlaced",
+      "to": "s:payments.start_payment",
+      "kind": "event"
+    },
+    {
+      "from": "s:payments.start_payment",
+      "to": "c:ChargePayment",
+      "kind": "command"
+    },
+    {
+      "from": "c:ChargePayment",
+      "to": "s:payments.charge_payment",
+      "kind": "command"
+    },
+    {
+      "from": "s:payments.charge_payment",
+      "to": "e:PaymentCharged",
+      "kind": "event"
+    },
+    {
+      "from": "s:payments.charge_payment",
+      "to": "e:PaymentFailed",
+      "kind": "event"
+    },
+    {
+      "from": "e:PaymentCharged",
+      "to": "s:payments.payment_list",
+      "kind": "event"
+    },
+    {
+      "from": "e:PaymentFailed",
+      "to": "s:payments.payment_list",
+      "kind": "event"
+    },
+    {
+      "from": "e:ReminderSent",
+      "to": "s:reminders.schedule_next",
+      "kind": "event"
+    },
+    {
+      "from": "s:reminders.schedule_next",
+      "to": "c:SendReminder",
+      "kind": "command"
+    },
+    {
+      "from": "c:SendReminder",
+      "to": "s:reminders.send_reminder",
+      "kind": "command"
+    },
+    {
+      "from": "s:reminders.send_reminder",
+      "to": "e:ReminderSent",
+      "kind": "event"
+    }
+  ],
+  "entries": [
+    "PlaceOrder"
+  ],
+  "cycles": [
+    [
+      "ChargePayment",
+      "payments.charge_payment",
+      "PaymentFailed",
+      "payments.retry_payment",
+      "ChargePayment"
+    ],
+    [
+      "SendReminder",
+      "reminders.send_reminder",
+      "ReminderSent",
+      "reminders.schedule_next",
+      "SendReminder"
+    ]
+  ],
+  "unconnected": [],
+  "notMapped": []
+}

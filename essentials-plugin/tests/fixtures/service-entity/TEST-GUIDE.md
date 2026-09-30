@@ -1,13 +1,33 @@
 # Test guide — `service-entity`
 
+A **synthetic** Essentials bounded context (`com.acme.shipping`) on the service-entity write-style lane
+(`rules/slice-design.md` §R5). Never shipped, not a template — to copy something, copy
+`references/slice/templates/` instead. `brownfield-layered/` is the `slice-discover` counterpart.
+
+**What makes it on-lane rather than merely entity-shaped:** the Essentials command bus and `EventBus`
+are on the classpath and the write path goes through them, `entities/` holds the state-stored entity,
+and nothing references an `EventStore`, an `AggregateType` or an `EventOrder` (the pom declares no
+event-store artifact). Strip the Essentials dependency and this becomes the `brownfield-layered` case
+— *nearest* to the lane, not on it.
+
+It carries nine planted findings and fifteen traps. One planted finding is a **misplaced** write
+repository (`persistence/ShippingOrders`, which the law puts in `entities/`): it forces gate 15 to
+identify a write repository by type rather than by path, so a path-keyed implementation fails the
+fixture loudly instead of passing it silently.
+
+The sources carry no oracle labels: the findings and traps live only here and in `expected.yaml`
+(machine-readable, `path:line` + anchor per entry). When the two disagree, fix both.
+`uv run --script tests/fixtures/check-expected.py` (from `essentials-plugin/`) checks `expected.yaml` against the tree and that no source carries an oracle label.
+
+Eval: `evals/slice-check-service-entity/`, and change-router's `gate-service-entity` case — graders generated from `expected.yaml`; how to run and read it: `evals/README.md`.
+
 Run:
 
 ```
 /essentials:slice-check essentials-plugin/tests/fixtures/service-entity
 ```
 
-Then diff the report against the ground truth below. There is no assertion runner; this file **is**
-the oracle.
+Then compare the report with the ground truth below.
 
 Unlike `brownfield-layered/`, this tree **has opted into the law** — four manifests, four per-slice
 `CLAUDE.md`s — so `slice-check`'s Blocking / Should-fix / Advisory severities apply in full.

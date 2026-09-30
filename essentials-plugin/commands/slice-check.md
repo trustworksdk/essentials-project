@@ -3,7 +3,8 @@ name: slice-check
 description: >-
   Audit an existing Trustworks Essentials project against the slice-design law — layout, manifests,
   anti-god-class rules, wiring, processor handler shapes and boundary violations; manifest parsing,
-  schema and sole-ownership checks run deterministically in scripts/slice-lint.py. Read-only by
+  schema and sole-ownership checks run deterministically in scripts/slice-lint.py, and the syntactic
+  source facts behind gates 6, 11(b) and 14 in scripts/slice-source.py. Read-only by
   default: --fix-manifests regenerates orientation artifacts, --adopt-tier backfills the one field
   reconciliation will not write, --fix-source proposes source fixes one at a time.
 user-invocable: true
@@ -40,26 +41,67 @@ Read ${CLAUDE_PLUGIN_ROOT}/references/slice/manifest-guide.md
 
 Detect the language per `references/slice/slice-authoring.md` §1.
 
-## Step 1.5 — Run the linter, before reading a single source file
+## Step 1.2 — Is the project on the law at all?
+
+**No `slice.yaml` anywhere under the root, and no role directory (`use_cases/`, `views/`,
+`automations/`, `external_systems/`) either:** the project has not opted into the slice law. Say so,
+point at `/essentials:slice-discover`, which infers structure for exactly that case, and stop. Run no
+gates, report no severities (no "missing manifest" finding), and write nothing, even under
+`--fix-manifests`, `--adopt-tier` or `--fix-source`: an audit of a law the code never adopted is
+noise. This agrees with `scripts/slice-lint.py`, which prints "no slice.yaml found" and exits 0 on such
+a tree, and it mirrors `slice-discover`'s pass-0 redirect the other way round.
+
+Role directories without manifests are a different case. The project is on the law with its index
+missing, so the audit runs, each slice without a manifest is a **Should-fix** (Step 3), and
+`--fix-manifests` creates the manifests.
+
+## Step 1.5 — Run the two scripts, before reading a single source file
 
 ```bash
-python3 ${CLAUDE_PLUGIN_ROOT}/scripts/slice-lint.py <project-root> --require-schema --json
+uv run --script ${CLAUDE_PLUGIN_ROOT}/scripts/slice-lint.py <project-root> --require-schema --json
+uv run --script ${CLAUDE_PLUGIN_ROOT}/scripts/slice-source.py <project-root> --check --json
 ```
 
-This is gates **1, 3 and 4** in their entirety, and they are **not yours to re-derive.** Parsing YAML,
-validating against a JSON Schema, and intersecting id sets across manifests are mechanical; a model
-eyeballing them produces confident wrong answers, and this command has no business guessing where a
-parser gives a exact answer. Take the script's findings verbatim into the report.
+Both carry their pinned dependencies (`pyyaml`, and `jsonschema` for slice-lint) in inline script
+metadata, which `uv run --script` installs. Without `uv`, `python3 <script>` works where those packages
+are already installed. Pass `--bc <name>` to `slice-source.py` when the audit is scoped to one bounded
+context. Run slice-lint over the whole project even then, because ids and ownership are
+project-wide sets.
 
-Two consequences to honour:
+**`slice-lint.py` is gates 1, 3 and 4 in their entirety, plus gate 14's one manifest-only clause**
+(`14 tier`, a write style written into `tier`). **`slice-source.py` is the syntactic half of gates 6,
+11(b) and 14**: the findings whose `gate` starts `6 `, `11(b)` or `14 `. It reads the Java and Kotlin
+sources with comments and strings stripped, resolves types through imports, Kotlin `import … as`
+aliases, typealiases and fully-qualified names, and reports under `unparsed` what it could not read.
+None of this is yours to re-derive. Parsing YAML, validating against a JSON Schema, intersecting id
+sets, and reading which type a handler takes or which route a mapping carries are mechanical, and a
+model doing them by eye produces confident wrong answers. Take both scripts' findings verbatim into
+the report, with their `id` (`ESS-G4b`, `ESS-G11b`, …). The judgement those gates still need is
+listed in their rows below. It is yours, and it starts from the scripts' facts.
 
-- **If the script cannot run** — no `pyyaml`, no `jsonschema`, exit code 2 — say so at the top of the
-  report, name the missing dependency and its `pip install` line, and mark gates 1, 3 and 4 **not
-  run**. Do not fall back to reading the manifests yourself and do not report them as passing. An
-  unvalidated manifest set reported as clean is the exact failure this whole gate exists to prevent.
-- **Every unparseable manifest listed by the script excludes its slice from gates 2, 5–18 as well**,
-  because there is nothing to compare the code against. Say which slices those are, once, at the top.
-  A slice that silently vanishes from an audit reads as compliant.
+Exit codes decide what the report may claim:
+
+| Script | Exit | Meaning | Report |
+|---|---|---|---|
+| either | 0 | ran, nothing found | the gates it covers passed |
+| either | 1 | findings | take them verbatim |
+| slice-lint | 2 | could not run (no `pyyaml`/`jsonschema`, unreadable schema) | gates 1, 3, 4 and `14 tier` **not run**, at the top, with the install line |
+| slice-source | 2 | could not run (no `pyyaml`, bad root) | the script's halves of gates 6, 11(b) and 14 **not run**, at the top |
+| slice-source | 3 | incomplete: nothing found, but `unparsed` or `unverified` is non-empty | list every `unparsed` file and every `unverified` check as **not checked**, never as passed |
+
+Consequences to honour:
+
+- **Never fall back to doing a script's job yourself** when it cannot run, and never report its gates
+  as passing. An unvalidated manifest set or an unread handler reported as clean is the exact failure
+  these scripts exist to prevent.
+- **Every unparseable manifest listed by slice-lint excludes its slice from gates 2, 5–18 as well**,
+  because there is nothing to compare the code against. `slice-source.py` lists the same files under
+  `skippedManifests`. Say which slices those are, once, at the top. A slice that silently vanishes
+  from an audit reads as compliant.
+- **A `slice-source.py` `unverified` entry is a check that had nothing to run against**, for example a
+  view that declares BC events and carries no handler the reader found, or a handler inside an
+  anonymous class, or endpoints served by a WebFlux `RouterFunction`. Report it as not checked, or read
+  that source by hand and say in the report that you did.
 
 ## Step 2 — Gates
 
@@ -80,28 +122,30 @@ on three separate gates in one real audit:
 | 6 | count `@(Get\|Post\|Put\|Patch\|Delete\|Request)Mapping` per API file | A class-level `@RequestMapping` for the base route is standard and counts as a second mapping, so **every** command slice reports 2. Count **method-level** mappings only |
 
 The general rule: a finding derived from a token that also appears in a comment is not a finding until
-the comment is gone.
+the comment is gone. `slice-source.py` applies it for the counts behind gates 6, 11(b) and 14, since its
+lexer drops comments and string contents before anything is counted. It binds every gate you count by
+hand, gates 10 and 17 included.
 
 | # | Gate | How |
 |---|---|---|
-| 1 | **Parseable, then schema-valid** | **Run by `scripts/slice-lint.py` (Step 1.5), not by you.** Two steps, in order. (a) **Every `slice.yaml` parses as YAML.** A file that does not parse is **Blocking** and is reported by name — never skipped, because a manifest no tool can read is invisible to gates 3, 4, 11 and to `/essentials:slice-map`, and "invisible" reads as "compliant". The dominant cause is an **unquoted path containing a brace** inside a flow mapping — `- { method: POST, path: /api/orders/{id}/cancel, auth: user }` — where the `{` opens a nested mapping and the parse dies there. See `manifest-guide.md` §3. (b) The parsed document validates against the schema; required-by-kind fields present. The script also reports a braced path that is unquoted but currently *legal* because it sits in block form — **Should-fix**, because reflowing that entry is a routine edit that turns it into (a). (c) **A projection's `aggregateTypes` value that is used as an event type anywhere else in the project** — **Should-fix**. `aggregateTypes` is the `AggregateType` STREAM a projector subscribes to and `from` is the event types it handles; both are arrays of strings, so a swap validates cleanly and the schema cannot see it. The corpus can: a name that appears in any manifest's `publishes`, `consumes` or `projections[].from` is an event, not a stream. See `manifest-guide.md` §3 |
-| 2 | **Layout** | Role directory matches `kind`; no layer directory inside a BC — `controllers/`, `services/`, `repositories/`, `adapters/`, `ports/`, `infrastructure/`, `dto/`, `mappers/`; `use_cases/_shared/` holds only `*State`/`*Evolver`, **and has three or more decider consumers** — see the promotion-bar note below. A `_`-prefixed directory is not a slice: skip it, and report it as **Advisory** if it carries no one-line `CLAUDE.md` saying what it is |
-| 3 | **Uniqueness** | `slice:` ids unique across the repo. **Run by `scripts/slice-lint.py`** |
-| 4 | **Sole ownership** | Three checks, all **run by `scripts/slice-lint.py`**, all **Blocking**. (a) **One handler per command type** — a name in `handles` appearing in two slices. The command bus permits exactly one handler per command type and throws `MultipleCommandHandlersFoundException` at startup, so this is a boot failure, not a style note. (b) **One writer per read model** — a name in `owns` appearing in two slices (§R4); a deliberate migration twin declares `supersedes` and is gate 13's business. (c) **One bounded context per aggregate** — a name in `writes` written from two BCs; an aggregate is one consistency boundary. **The non-finding matters as much as the findings: several command slices writing the same aggregate inside one BC is the design on every lane and is never reported** — see the note below |
-| 5 | **§R1** | A decider file with `when (cmd` / `switch (cmd` over ≥2 command types, or ≥2 `decide[A-Z]` methods |
-| 6 | **§R2** | A **command** slice's API file with more than one **method-level** request mapping. A class-level `@RequestMapping` declaring the base route is standard and is **not** one of them — counting it reports every command slice as having two. For a **view** slice, several mappings are legitimate (queries over its own read model) — flag instead: a mapping whose handler reads a repository the slice does not own, and any mapping absent from the manifest's `serves`/`endpoints`. **Compare mappings to endpoints on the route, not on the literal string.** A manifest path may carry query discriminators after a `?` (`"/api/shipping/order-status?status="` for `@GetMapping(params = "status")`, `manifest-guide.md` §3): split there, match the route, then confirm each named parameter is bound in that handler via `params = "…"`, `@RequestParam`, or `queryParam("…")`. Two mappings sharing a route and differing only by `params` are two endpoints and two `serves` names in **one** slice — §R2 working, not an §R2 violation. An optional filter with a default is not a discriminator and needs no entry of its own |
-| 7 | **§R3** | An `events/*.{kt,java}` file declaring ≥2 concrete event types |
-| 8 | **§R4** | Four checks. (a) An import matching `\.use_cases\.(?!_[a-z0-9_]+)[a-z0-9_]+\.` or `\.views\.[a-z0-9_]+\.` from outside that slice's directory — **except** a command type whose only use is constructing a command passed to `commandBus.send`/`sendAndDontWait`, which §R4 explicitly sanctions. (b) An import matching `\.automations\.[a-z0-9_]+\.` or `\.external_systems\.[a-z0-9_]+\.` from outside that slice. (c) An import of `<bc>.routing.` or `<bc>.config.` from a **different** bounded context — those are BC-private; only `events/` and `types/` are importable across BCs. (d) **Command-type leakage:** any file under `<bc>/events/`, `<bc>/entities/`, or `<bc>/aggregates/` importing a type from `<bc>.use_cases.<slice>.` — **Blocking**, and worst in `events/`, which is importable across BCs |
-| 9 | **Wiring** | Every `*Decider` has a matching `@Bean` in its BC's `config/` |
-| 10 | **Projection idempotency** | A `@MessageHandler` that writes a versioned read model (`save`/`update` on a `DocumentDbRepository`) takes `OrderedMessage` as its 2nd parameter and passes its order to the write. The parameter is **optional** to the dispatcher — a single-argument handler is invoked normally — so flag it **only** where the handler mutates versioned state, never on handlers with no versioned state (a translation publisher, a stateless automation step) |
-| 11 | **Manifest ↔ code** | Both directions. (a) `handles` / `publishes` / `serves` names resolve to types in or adjacent to the slice. (b) **Every event type the slice's handlers actually handle is declared** — the parameter types of its `@MessageHandler` / `@Handler` methods on an `EventProcessor`, `ViewEventProcessor` or `InTransactionEventProcessor`. Look for them in the field that kind uses: **`projections[].from` for a view**, `consumes` for an automation or translation (`manifest-guide.md` §3). An undeclared handled event is **Should-fix** — the code is right and the manifest is stale, so the repair is `--fix-manifests`, never a source edit. This is the most common drift in a mature project: a projector gains one more `@MessageHandler` and the manifest is not touched, so the slice silently reads as reacting to fewer events than it does |
-| 12 | **Project-copy freshness** | Two files, and only these two ever leave the plugin. (a) `.claude/rules/essentials-slices.md` exists and its `<!-- essentials-slices-rules: vN -->` stamp is not older than the plugin's — compare the integer after `v` numerically, never as strings (`v10` is newer than `v9`). (b) If the project installed the lint gate (`scripts/slice-lint.py` + `scripts/slice-yaml.schema.json`, `/essentials:init` Step 12.5), neither differs from the plugin's current copy — **Advisory**, and `diff` says it in one line. A project running a stale schema validates against yesterday's contract and reports a clean pass it has not earned. (c) If the gate is **absent entirely** — the case for every project scaffolded before it shipped — say so once as **Advisory** and name `/essentials:upgrade`, which offers the install. Do not offer it here: this is a slice audit, and clause (b) staying silent on a project that never had the gate is exactly how a shipped capability never reaches an existing project. **Offer** a refresh for (a) and (b); never overwrite silently |
-| 13 | **View duplication / migration twins** | Two view slices whose `projections.from` sets and read-model shapes coincide. Resolve against `supersedes` + `status` — see the table below. Also flag a `supersedes` pointing at a slice that no longer exists (stale link — drop the field) |
-| 14 | **Write-style lane (§R5)** | Per BC, detect one of three lanes — see the detection table below. Report a BC holding **any two** of per-slice deciders, `<bc>/aggregates/`, and `<bc>/entities/` as **Blocking** — two write designs over one consistency boundary. The detected lane selects which of gates 2, 4, 5, 9, 10, 13, 15 and 17 apply and how |
-| 15 | **Write-repository purity and placement** (service-entity lane only) | Identify the BC's write repositories **by mutation surface, not by path and not by base interface**: any type through which an entity declared in `<bc>/entities/` is persisted — it declares or inherits `save`/`delete`/`update`/`saveAll`. Spring Data is one vehicle (`CrudRepository`/`JpaRepository`/`MongoRepository`, or a bare `Repository` declaring the methods itself); Essentials' own document repository, a JDBI DAO, and any other store are others, and **the gate must find all of them** (§R5, "identify the write repository by its mutation surface"). Two ways this gate silently stops working: keying on the CRUD-family interfaces alone misses every repository that took gate 18's advice, and keying on Spring Data at all misses every project that uses none — the purity rules below are framework-agnostic and were the valuable part all along. For each: (a) a mutating call (`save`, `delete`, `saveAll`) on it from outside `use_cases/*` — **Blocking**; (b) a finder on it whose only callers are view slices or API handlers — **Should-fix**, the read side served from the write model (§ The read side on this lane); (c) **its file is not in `<bc>/entities/`** — **Should-fix**, it must sit beside the entity it persists (§R5, the `<bc>/entities/` tree). A `repositories/`, `persistence/`, `dao/` or `store/` folder is the common form and gate 2 catches only the first; a repository at the BC root or beside one slice is the same violation and only this check sees it. The fix is a file move, never a rewrite |
-| 16 | **Lane hygiene** (service-entity lane only) | A `@RestController` returning an `@Entity`/`@Document` type — **Should-fix**. A public setter writing a field that an invariant method also guards — **Should-fix**, the guard is bypassable. A `use_cases/_shared/` in a service-entity BC — **Should-fix**, there are no evolvers to promote |
-| 17 | **Routing ↔ lane** | `<bc>/routing/` is decider-lane-only and **required** there (§ Directory vocabulary). Check **both** directions — see the routing table below. Gate 14 owns lane detection: `routing/` is evidence *about* a BC, never an input to deciding its lane, or the two gates reason in a circle |
-| 18 | **Spring Data repository surface** (all lanes) | **Scope check first: if the project declares no Spring Data repository at all, this gate is 100% out of scope — report it as skipped, with the reason, and move on.** Silence here must never read as a pass; a project persisting through Essentials' `DocumentDbRepository` or JDBI legitimately has nothing for this gate to see. Otherwise: every Spring Data repository interface in the project — write repository, view query interface, or a Spring Data-backed read model. (a) It extends anything other than the bare `org.springframework.data.repository.Repository` — `CrudRepository`, `ListCrudRepository`, `PagingAndSortingRepository`, `ListPagingAndSortingRepository`, `JpaRepository`, `MongoRepository`, `ReactiveCrudRepository`, `ReactiveMongoRepository`, `R2dbcRepository` — **Should-fix**; the surface is now everything the framework offers rather than what the slice declared. (b) A method returning the mapped `@Entity`/`@Document` where a closed interface projection belongs — **Should-fix**. (c) A method declaring a **projection** return type but **named after a CRUD base method** — **Blocking**; see the reserved-name list below. Essentials' `DocumentDbRepository`/`DelegatingDocumentDbRepository` is **not** a Spring Data repository and is out of scope for all three (§ Spring Data repository surface) |
+| <a id="g1"></a>1 | **Parseable, then schema-valid** | **Run by `scripts/slice-lint.py` (Step 1.5), not by you.** Two steps, in order. (a) **Every `slice.yaml` parses as YAML.** A file that does not parse is **Blocking** and is reported by name — never skipped, because a manifest no tool can read is invisible to gates 3, 4, 11 and to `/essentials:slice-map`, and "invisible" reads as "compliant". The dominant cause is an **unquoted path containing a brace** inside a flow mapping — `- { method: POST, path: /api/orders/{id}/cancel, auth: user }` — where the `{` opens a nested mapping and the parse dies there. See `manifest-guide.md` §3. (b) The parsed document validates against the schema; required-by-kind fields present. The script also reports a braced path that is unquoted but currently *legal* because it sits in block form — **Should-fix**, because reflowing that entry is a routine edit that turns it into (a). (c) **A projection's `aggregateTypes` value that is used as an event type anywhere else in the project** — **Should-fix**. `aggregateTypes` is the `AggregateType` STREAM a projector subscribes to and `from` is the event types it handles; both are arrays of strings, so a swap validates cleanly and the schema cannot see it. The corpus can: a name that appears in any manifest's `publishes`, `consumes` or `projections[].from` is an event, not a stream. See `manifest-guide.md` §3 |
+| <a id="g2"></a>2 | **Layout** | Role directory matches `kind`; no layer directory inside a BC — `controllers/`, `services/`, `repositories/`, `adapters/`, `ports/`, `infrastructure/`, `dto/`, `mappers/`; `use_cases/_shared/` holds only `*State`/`*Evolver`, **and has three or more decider consumers** — see the promotion-bar note below. A `_`-prefixed directory is not a slice: skip it, and report it as **Advisory** if it carries no one-line `CLAUDE.md` saying what it is |
+| <a id="g3"></a>3 | **Uniqueness** | `slice:` ids unique across the repo. **Run by `scripts/slice-lint.py`** |
+| <a id="g4"></a>4 | **Sole ownership** | Three checks, all **run by `scripts/slice-lint.py`**, all **Blocking**. (a) **One handler per command type** — a name in `handles` appearing in two slices. The command bus permits exactly one handler per command type and throws `MultipleCommandHandlersFoundException` at startup, so this is a boot failure, not a style note. (b) **One writer per read model** — a name in `owns` appearing in two slices (§R4). Owners that are all linked to each other through `supersedes` are a declared migration twin: the script does not report them here, because they are gate 13's **Should-fix**, not a Blocking ownership clash. (c) **One bounded context per aggregate** — a name in `writes` written from two BCs; an aggregate is one consistency boundary. **The non-finding matters as much as the findings: several command slices writing the same aggregate inside one BC is the design on every lane and is never reported** — see the note below |
+| <a id="g5"></a>5 | **§R1** | A decider file with `when (cmd` / `switch (cmd` over ≥2 command types, or ≥2 `decide[A-Z]` methods |
+| <a id="g6"></a>6 | **§R2** | **The syntactic half is `slice-source.py`'s** (Step 1.5), and you take it verbatim. `6 command mappings` (Blocking): a command slice file with more than one method-level mapping. `6 endpoint route`: a manifest endpoint whose method and route match no mapping in the slice. `6 discriminator`: the route matches, but no single handler binds every discriminator. `6 undeclared mapping`: a mapping in a view or command slice that no endpoint describes. **An inbound translation webhook is the external system's ingress and needs no `endpoints` entry**, so the script never reports one. What stays yours: a view mapping whose handler reads a repository the slice does not own, a mapping missing from `serves`, and the no-adapter rule below. The rule the script implements, for reading its findings: a **command** slice's API file with more than one **method-level** request mapping. A class-level `@RequestMapping` declaring the base route is standard and is **not** one of them — counting it reports every command slice as having two. For a **view** slice, several mappings are legitimate (queries over its own read model) — flag instead: a mapping whose handler reads a repository the slice does not own, and any mapping absent from the manifest's `serves`/`endpoints`. **Compare mappings to endpoints on the route, not on the literal string.** A manifest path may carry query discriminators after a `?` (`"/api/shipping/order-status?status="` for `@GetMapping(params = "status")`, `manifest-guide.md` §3): split there, match the route, then confirm each named parameter is bound in that handler via `params = "…"`, `@RequestParam`, or `queryParam("…")`. Two mappings sharing a route and differing only by `params` are two endpoints and two `serves` names in **one** slice — §R2 working, not an §R2 violation. An optional filter with a default is not a discriminator and needs no entry of its own |
+| <a id="g7"></a>7 | **§R3** | An `events/*.{kt,java}` file declaring ≥2 concrete event types |
+| <a id="g8"></a>8 | **§R4** | Four checks. (a) An import matching `\.use_cases\.(?!_[a-z0-9_]+)[a-z0-9_]+\.` or `\.views\.[a-z0-9_]+\.` from outside that slice's directory — **except** a command type whose only use is constructing a command passed to `commandBus.send`/`sendAndDontWait`, which §R4 explicitly sanctions. (b) An import matching `\.automations\.[a-z0-9_]+\.` or `\.external_systems\.[a-z0-9_]+\.` from outside that slice. (c) An import of `<bc>.routing.` or `<bc>.config.` from a **different** bounded context — those are BC-private; only `events/` and `types/` are importable across BCs. (d) **Command-type leakage:** any file under `<bc>/events/`, `<bc>/entities/`, or `<bc>/aggregates/` importing a type from `<bc>.use_cases.<slice>.` — **Blocking**, and worst in `events/`, which is importable across BCs. **Not a finding:** on the aggregate lane, a view or automation importing `<bc>.aggregates.<Aggregate>` only to name its `AggregateType` constant, the stream it subscribes to (§R4). A call from a read-side slice to a method of the aggregate or of its repository wrapper is an §R4 violation, **Blocking** like the rest of this gate |
+| <a id="g9"></a>9 | **Wiring** | Every `*Decider` has a matching `@Bean` in its BC's `config/` |
+| <a id="g10"></a>10 | **Projection idempotency** | A `@MessageHandler` that writes a versioned read model (`save`/`update` on a `DocumentDbRepository`) takes `OrderedMessage` as its 2nd parameter and passes its order to the write. The parameter is **optional** to the dispatcher — a single-argument handler is invoked normally — so flag it **only** where the handler mutates versioned state, never on handlers with no versioned state (a translation publisher, a stateless automation step) |
+| <a id="g11"></a>11 | **Manifest ↔ code** | Both directions. (a) `handles` / `publishes` / `serves` names resolve to types in or adjacent to the slice. This half is yours. (b) **Every event type the slice's handlers actually handle is declared.** This half is **`slice-source.py`'s** (`11(b) handled events`, Step 1.5), taken verbatim. The rule it implements: take the parameter types of the slice's `@MessageHandler` / `@Handler` methods on an `EventProcessor`, `ViewEventProcessor` or `InTransactionEventProcessor`, and of its Spring `@EventListener` methods, which service-entity-lane automations use (`@EventListener` on an `org.springframework.*` or `java.*` type is framework plumbing and is ignored). Resolve each to the declared type through imports, Kotlin `import … as` aliases, typealiases and fully-qualified names, so a handler taking `Placed` under `import …OrderPlaced as Placed` handles `OrderPlaced`. A handler typed as a sealed parent declared in the project stands for its concrete subtypes. A `@Handler` method on an `AnnotatedCommandHandler` is a command handler, not an event handler. Look for them in the field that kind uses: **`projections[].from` for a view**, `consumes` for an automation or translation (`manifest-guide.md` §3). An undeclared handled event is **Should-fix** — the code is right and the manifest is stale, so the repair is `--fix-manifests`, never a source edit. This is the most common drift in a mature project: a projector gains one more `@MessageHandler` and the manifest is not touched, so the slice silently reads as reacting to fewer events than it does |
+| <a id="g12"></a>12 | **Project-copy freshness** | Two files, and only these two ever leave the plugin. (a) `.claude/rules/essentials-slices.md` exists and its `<!-- essentials-slices-rules: vN -->` stamp is not older than the plugin's — compare the integer after `v` numerically, never as strings (`v10` is newer than `v9`). (b) If the project installed the lint gate (`scripts/slice-lint.py` + `scripts/slice-yaml.schema.json`, `/essentials:init` Step 9), neither differs from the plugin's current copy — **Advisory**, and `diff` says it in one line. A project running a stale schema validates against yesterday's contract and reports a clean pass it has not earned. (c) If the gate is **absent entirely** — the case for every project scaffolded before it shipped — say so once as **Advisory** and name `/essentials:upgrade`, which offers the install. Do not offer it here: this is a slice audit, and clause (b) staying silent on a project that never had the gate is exactly how a shipped capability never reaches an existing project. **Offer** a refresh for (a) and (b); never overwrite silently |
+| <a id="g13"></a>13 | **View duplication / migration twins** | Two view slices whose `projections.from` sets and read-model shapes coincide. Resolve against `supersedes` + `status` — see the table below. Also flag a `supersedes` pointing at a slice that no longer exists (stale link — drop the field) |
+| <a id="g14"></a>14 | **Write-style lane (§R5)** | Per BC, detect one of three lanes — see the detection table below. Report a BC holding **any two** of per-slice deciders, `<bc>/aggregates/`, and `<bc>/entities/` as **Blocking** — two write designs over one consistency boundary. The detected lane selects which of gates 2, 4, 5, 9, 10, 13, 15 and 17 apply and how. **The signal-count rows are `slice-source.py`'s** (Step 1.5), taken verbatim: `14 two write styles` and `14 entities with event store` (Blocking), `14 declared lanes` (Blocking), and `14 stale lane` (Should-fix). Its `lanes[]` lists each BC's signals with `path:line`. `14 tier` is **slice-lint's**. What stays yours: the service-entity criterion "state loaded, mutated and saved in place" (the script says `service-entity?` and stops), the bus-deviation table, and deciding whether an undetermined BC is simply new |
+| <a id="g15"></a>15 | **Write-repository purity and placement** (service-entity lane only) | Identify the BC's write repositories **by mutation surface, not by path and not by base interface**: any type through which an entity declared in `<bc>/entities/` is persisted — it declares or inherits `save`/`delete`/`update`/`saveAll`. Spring Data is one vehicle (`CrudRepository`/`JpaRepository`/`MongoRepository`, or a bare `Repository` declaring the methods itself); Essentials' own document repository, a JDBI DAO, and any other store are others, and **the gate must find all of them** (§R5, "identify the write repository by its mutation surface"). Two ways this gate silently stops working: keying on the CRUD-family interfaces alone misses every repository that took gate 18's advice, and keying on Spring Data at all misses every project that uses none — the purity rules below are framework-agnostic and were the valuable part all along. For each: (a) a mutating call (`save`, `delete`, `saveAll`) on it from outside `use_cases/*` — **Blocking**; (b) a finder on it whose only callers are view slices or API handlers — **Should-fix**, the read side served from the write model (§ The read side on this lane); (c) **its file is not in `<bc>/entities/`** — **Should-fix**, it must sit beside the entity it persists (§R5, the `<bc>/entities/` tree). A `repositories/`, `persistence/`, `dao/` or `store/` folder is the common form and gate 2 catches only the first; a repository at the BC root or beside one slice is the same violation and only this check sees it. The fix is a file move, never a rewrite |
+| <a id="g16"></a>16 | **Lane hygiene** (service-entity lane only) | A `@RestController` returning an `@Entity`/`@Document` type — **Should-fix**. A public setter writing a field that an invariant method also guards — **Should-fix**, the guard is bypassable. A `use_cases/_shared/` in a service-entity BC — **Should-fix**, there are no evolvers to promote |
+| <a id="g17"></a>17 | **Routing ↔ lane** | `<bc>/routing/` is decider-lane-only and **required** there (§ Directory vocabulary). Check **both** directions — see the routing table below. Gate 14 owns lane detection: `routing/` is evidence *about* a BC, never an input to deciding its lane, or the two gates reason in a circle |
+| <a id="g18"></a>18 | **Spring Data repository surface** (all lanes) | **Scope check first: if the project declares no Spring Data repository at all, this gate is 100% out of scope — report it as skipped, with the reason, and move on.** Silence here must never read as a pass; a project persisting through Essentials' `DocumentDbRepository` or JDBI legitimately has nothing for this gate to see. Otherwise: every Spring Data repository interface in the project — write repository, view query interface, or a Spring Data-backed read model. (a) It extends anything other than the bare `org.springframework.data.repository.Repository` — `CrudRepository`, `ListCrudRepository`, `PagingAndSortingRepository`, `ListPagingAndSortingRepository`, `JpaRepository`, `MongoRepository`, `ReactiveCrudRepository`, `ReactiveMongoRepository`, `R2dbcRepository` — **Should-fix**; the surface is now everything the framework offers rather than what the slice declared. (b) A method returning the mapped `@Entity`/`@Document` where a closed interface projection belongs — **Should-fix**. (c) A method declaring a **projection** return type but **named after a CRUD base method** — **Blocking**; see the reserved-name list below. Essentials' `DocumentDbRepository`/`DelegatingDocumentDbRepository` is **not** a Spring Data repository and is out of scope for all three (§ Spring Data repository surface) |
 
 **Gate 4 never reads "each aggregate in a `writes:` has exactly one command slice" — that rule is
 wrong on every lane.** The decider lane's premise is N command slices per aggregate type, each with
@@ -148,7 +192,7 @@ view slice). Read the manifests before reporting:
 |---|---|
 | `v2` declares `supersedes: <v1 id>` and `v1` is `status: deprecated` | **Should-fix** — retirement outstanding; name the directory to delete |
 | `v2` declares `supersedes` but `v1` is still `status: live` | **Should-fix** — swap the consumers over or drop the twin |
-| No `supersedes` link between them | **Blocking** — two slices sharing a read model (§R4) |
+| No `supersedes` link between them | **Blocking** — two slices sharing a read model (§R4). When both `owns` the same read model, this is slice-lint's `4(b)`; report it once, there |
 
 Gate 14 exists because **most of this law is lane-independent and a few gates are not.** Never report
 the absence of deciders as a violation on a lane that has none — that is the style working as
@@ -161,8 +205,8 @@ intended.
 | `Decider` / `EventStreamDecider` implementations | decider |
 | `<bc>/aggregates/` exists | aggregate |
 | `<bc>/entities/` exists **and** state is loaded, mutated and saved in place **and** no `EventStore` / `AggregateType` / `EventOrder` is referenced in the BC | service-entity |
-| Any two of the above | **Blocking** — report both signals, name the files, and stop. Do not pick one |
-| `<bc>/entities/` but an `EventStore`/`AggregateType` is referenced | **Blocking** — the BC is drifting off the lane; name both signals |
+| Any two of the above | **Blocking** — report both signals, name the files, and stop. Do not pick one (`14 two write styles`) |
+| `<bc>/entities/` but an `EventStore`/`AggregateType` is referenced | **Blocking** — the BC is drifting off the lane; name both signals (`14 entities with event store`) |
 
 Detection is deliberately **not** a bare filesystem predicate for the service-entity lane. An
 `entities/` directory alone is just a package name; the lane is the two decisive criteria in §R5 —
@@ -192,8 +236,8 @@ because the code is what runs, but a disagreement is a finding in its own right:
 | Observation | Verdict |
 |---|---|
 | Every manifest in the BC declares the detected lane | Fine — say so in one line |
-| A manifest declares a lane the BC no longer has | **Should-fix** — the BC migrated write styles and the manifests were not reconciled. `--fix-manifests` repairs it (`lane` is machine-derived) |
-| Manifests in one BC declare **two different** lanes | **Blocking** — corroborates gate 14's two-designs-over-one-boundary finding, and names which slices sit on which side. This is the cheapest signal there is for a half-finished migration |
+| A manifest declares a lane the BC no longer has | **Should-fix** (`14 stale lane`) — the BC migrated write styles and the manifests were not reconciled. `--fix-manifests` repairs it (`lane` is machine-derived) |
+| Manifests in one BC declare **two different** lanes | **Blocking** (`14 declared lanes`) — corroborates gate 14's two-designs-over-one-boundary finding, and names which slices sit on which side. This is the cheapest signal there is for a half-finished migration |
 | No manifest declares `lane` | Not a finding — the manifests predate the field. Detection stands alone |
 
 **Do not read `lane` as an input to detection**, for the same reason gate 17 must not read `routing/`:
@@ -204,7 +248,8 @@ whatever the manifest claims, including when the manifest is the thing that is w
 carrying `tier: aggregate` is a **Should-fix**: `aggregate` is a write style, not an `architectureTier`
 value, and the schema requires a reader to treat an unrecognised tier as `custom`, which silently
 drops the slice's tier-specific handling.
-The repair is `tier: cqrs-es` + `lane: aggregate`.
+The repair is `tier: cqrs-es` + `lane: aggregate`. `tier: decider` is the same mistake, repaired to
+`tier: cqrs-es` + `lane: decider`. slice-lint reports both as `14 tier`, from the manifest alone.
 
 **Also do not require Spring Data to classify.** Criterion 1 is *state is stored and mutated in
 place*, whatever persists it. A BC using Essentials' own document repository or JDBI is on this lane;
@@ -305,9 +350,9 @@ Step 4.
 
 ## Step 3 — Report
 
-**Open with the linter's result and any manifest it could not parse** — those slices are absent from
-every other gate, and an absent slice reads as a compliant one. If the linter could not run at all,
-say that first and mark gates 1, 3 and 4 **not run**.
+**Open with both scripts' results and any manifest they could not parse** — those slices are absent
+from every other gate, and an absent slice reads as a compliant one. If a script could not run at all,
+say that first and mark its gates **not run** (Step 1.5).
 
 **Then the detected lane, one line per bounded context** — `orders: decider`,
 `shipping: service-entity`. Without it a reader cannot tell a gate that passed from one that was
@@ -320,7 +365,7 @@ reasons and all three must be named, because silence is indistinguishable from a
 |---|---|
 | **Lane** | gate 10 on the service-entity lane — no versioned read model exists to double-apply into |
 | **Subject absent** | gate 18 on a project with no Spring Data repository anywhere. This is a 100% skip and, unreported, looks exactly like a clean pass |
-| **Input missing** | gates 2, 5–18 for a slice whose manifest did not parse; gates 1, 3, 4 when the linter could not run |
+| **Input missing** | gates 2, 5–18 for a slice whose manifest did not parse; gates 1, 3, 4 when the linter could not run; the script halves of 6, 11(b) and 14 when `slice-source.py` could not run, and each `unparsed` file and `unverified` check it lists |
 
 A gate that never ran is not a finding *or* a pass, and collapsing it into either is the one
 reporting error that costs a reader their trust in the whole report.

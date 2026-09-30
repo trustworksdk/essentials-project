@@ -1,0 +1,24 @@
+schemaVersion: "1.3"
+slice: ledger.post_entry
+kind: command
+bc: ledger
+owner: ledger-team
+status: live
+summary: Post a money-moving entry to an open account.
+generator: essentials
+language: java
+tier: aggregate
+lane: aggregate
+handles: [PostEntry]
+publishes: [EntryPosted]
+endpoints:
+  - { method: POST, path: "/api/ledger/accounts/{accountId}/entries", auth: user }
+writes: [Account]
+invariants:
+  - { id: INV-PE-1, text: "Only an open account takes entries", enforcedBy: Account }
+forbidden:
+  - cross-slice-internal:ledger
+tests:
+  unit: { present: false }
+  integration: { present: false }
+  contract: { present: false }

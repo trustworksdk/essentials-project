@@ -1,0 +1,16 @@
+package {{packagePath}}.config;
+
+import org.springframework.boot.context.properties.ConfigurationProperties;
+
+import java.util.List;
+
+/**
+ * The standalone frontend's origins, bound with @ConfigurationProperties: {@code @Value} cannot bind a YAML sequence
+ * to a List.
+ */
+@ConfigurationProperties("app.cors")
+public record CorsProperties(List<String> allowedOrigins) {
+    public CorsProperties {
+        allowedOrigins = allowedOrigins == null ? List.of() : List.copyOf(allowedOrigins);
+    }
+}

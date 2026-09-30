@@ -1,0 +1,99 @@
+{
+  "tool": "slice-source",
+  "format": 1,
+  "mode": "check",
+  "root": "tests/fixtures/aggregate-lane",
+  "manifests": 4,
+  "parsed": 4,
+  "skippedManifests": [],
+  "slicesWithoutManifest": [],
+  "lanes": [
+    {
+      "bc": "billing",
+      "path": "src/main/*/com/acme/billing",
+      "detected": "aggregate",
+      "signals": {
+        "decider": 0,
+        "aggregates": true,
+        "entities": false,
+        "eventStore": 5
+      },
+      "declared": {
+        "aggregate": [
+          "billing.recurring_billing",
+          "billing.issue_invoice",
+          "billing.pay_invoice",
+          "billing.invoice_list"
+        ]
+      }
+    }
+  ],
+  "endpoints": [
+    {
+      "slice": "billing.issue_invoice",
+      "method": "POST",
+      "path": "/api/billing",
+      "status": "ok",
+      "boundBy": [
+        "IssueInvoiceAPI.issueInvoice"
+      ]
+    },
+    {
+      "slice": "billing.pay_invoice",
+      "method": "POST",
+      "path": "/api/billing/{invoiceId}/payment",
+      "status": "ok",
+      "boundBy": [
+        "PayInvoiceAPI.payInvoice"
+      ]
+    },
+    {
+      "slice": "billing.invoice_list",
+      "method": "GET",
+      "path": "/api/billing/invoices",
+      "status": "ok",
+      "boundBy": [
+        "InvoiceListAPI.list"
+      ]
+    },
+    {
+      "slice": "billing.invoice_list",
+      "method": "GET",
+      "path": "/api/billing/invoices?paid=true",
+      "status": "ok",
+      "boundBy": [
+        "InvoiceListAPI.paidInvoices"
+      ]
+    },
+    {
+      "slice": "billing.invoice_list",
+      "method": "GET",
+      "path": "/api/billing/invoices?minAmount=&maxAmount=",
+      "status": "ok",
+      "boundBy": [
+        "InvoiceListAPI.byAmount"
+      ]
+    },
+    {
+      "slice": "billing.invoice_list",
+      "method": "GET",
+      "path": "/api/billing/invoices?paid=true&minAmount=",
+      "status": "discriminator-unbound",
+      "boundBy": null
+    }
+  ],
+  "findings": [
+    {
+      "severity": "Should-fix",
+      "gate": "6 discriminator",
+      "id": "ESS-G6",
+      "slice": "billing.invoice_list",
+      "file": "src/main/java/com/acme/billing/views/invoice_list/slice.yaml",
+      "line": 17,
+      "message": "declared endpoint GET /api/billing/invoices?paid=true&minAmount=: InvoiceListAPI.paidInvoices (src/main/java/com/acme/billing/views/invoice_list/InvoiceListAPI.java:29) does not bind minAmount; InvoiceListAPI.byAmount (src/main/java/com/acme/billing/views/invoice_list/InvoiceListAPI.java:36) does not bind paid=true and requires params maxAmount the endpoint does not declare",
+      "hint": "each discriminator after `?` must be bound in the handler that serves the route (manifest-guide.md \u00a73)"
+    }
+  ],
+  "unverified": [],
+  "unparsed": []
+}

@@ -1,0 +1,364 @@
+{
+  "$comment": "slice-index.py query goldens. who-reacts must list views (projections[].from) as well as consumers — the consumes-only grep change-procedure.md §3 used to give missed every view. Regenerate: uv run --script tests/scripts/test_slice_index.py --update-golden",
+  "queries": [
+    {
+      "root": "tests/slice-index/twin",
+      "what": "who-reacts",
+      "name": "OrderPlaced",
+      "hits": [
+        {
+          "slice": "orders.customer_summary",
+          "bc": "orders",
+          "kind": "view",
+          "status": "live",
+          "path": "orders/views/customer_summary",
+          "field": "projections[].from"
+        },
+        {
+          "slice": "orders.customer_summary_v2",
+          "bc": "orders",
+          "kind": "view",
+          "status": "live",
+          "path": "orders/views/customer_summary_v2",
+          "field": "projections[].from"
+        },
+        {
+          "slice": "orders.order_list",
+          "bc": "orders",
+          "kind": "view",
+          "status": "deprecated",
+          "path": "orders/views/order_list",
+          "field": "projections[].from"
+        },
+        {
+          "slice": "orders.order_list_v2",
+          "bc": "orders",
+          "kind": "view",
+          "status": "live",
+          "path": "orders/views/order_list_v2",
+          "field": "projections[].from"
+        },
+        {
+          "slice": "orders.order_stats",
+          "bc": "orders",
+          "kind": "view",
+          "status": "live",
+          "path": "orders/views/order_stats",
+          "field": "projections[].from"
+        },
+        {
+          "slice": "orders.order_totals",
+          "bc": "orders",
+          "kind": "view",
+          "status": "live",
+          "path": "orders/views/order_totals",
+          "field": "projections[].from"
+        },
+        {
+          "slice": "orders.shipment_board_v2",
+          "bc": "orders",
+          "kind": "view",
+          "status": "live",
+          "path": "orders/views/shipment_board_v2",
+          "field": "projections[].from"
+        }
+      ]
+    },
+    {
+      "root": "tests/slice-index/twin",
+      "what": "who-reacts",
+      "name": "OrderCancelled",
+      "hits": [
+        {
+          "slice": "orders.customer_summary_v2",
+          "bc": "orders",
+          "kind": "view",
+          "status": "live",
+          "path": "orders/views/customer_summary_v2",
+          "field": "projections[].from"
+        },
+        {
+          "slice": "orders.order_list_v2",
+          "bc": "orders",
+          "kind": "view",
+          "status": "live",
+          "path": "orders/views/order_list_v2",
+          "field": "projections[].from"
+        }
+      ]
+    },
+    {
+      "root": "tests/slice-index/twin",
+      "what": "who-publishes",
+      "name": "OrderPlaced",
+      "hits": [
+        {
+          "slice": "orders.place_order",
+          "bc": "orders",
+          "kind": "command",
+          "status": "live",
+          "path": "orders/use_cases/place_order",
+          "field": "publishes"
+        }
+      ]
+    },
+    {
+      "root": "tests/slice-index/twin",
+      "what": "who-writes",
+      "name": "Order",
+      "hits": [
+        {
+          "slice": "billing.refund_order",
+          "bc": "billing",
+          "kind": "command",
+          "status": "live",
+          "path": "billing/use_cases/refund_order",
+          "field": "writes"
+        },
+        {
+          "slice": "orders.cancel_order",
+          "bc": "orders",
+          "kind": "command",
+          "status": "live",
+          "path": "orders/use_cases/cancel_order",
+          "field": "writes"
+        },
+        {
+          "slice": "orders.place_order",
+          "bc": "orders",
+          "kind": "command",
+          "status": "live",
+          "path": "orders/use_cases/place_order",
+          "field": "writes"
+        }
+      ]
+    },
+    {
+      "root": "tests/slice-index/twin",
+      "what": "who-writes",
+      "name": "order_list_view",
+      "hits": [
+        {
+          "slice": "orders.order_list",
+          "bc": "orders",
+          "kind": "view",
+          "status": "deprecated",
+          "path": "orders/views/order_list",
+          "field": "owns"
+        },
+        {
+          "slice": "orders.order_list_v2",
+          "bc": "orders",
+          "kind": "view",
+          "status": "live",
+          "path": "orders/views/order_list_v2",
+          "field": "owns"
+        }
+      ]
+    },
+    {
+      "root": "tests/slice-index/twin",
+      "what": "who-reads",
+      "name": "order_list_view",
+      "hits": [
+        {
+          "slice": "billing.refund_order",
+          "bc": "billing",
+          "kind": "command",
+          "status": "live",
+          "path": "billing/use_cases/refund_order",
+          "field": "reads",
+          "via": "OrderListReader"
+        }
+      ]
+    },
+    {
+      "root": "tests/slice-index/twin",
+      "what": "who-owns-endpoint",
+      "name": "/api/orders/{orderId}/cancel",
+      "hits": [
+        {
+          "slice": "orders.cancel_order",
+          "bc": "orders",
+          "kind": "command",
+          "status": "live",
+          "path": "orders/use_cases/cancel_order",
+          "field": "endpoints",
+          "match": "exact",
+          "method": "POST",
+          "endpoint": "/api/orders/{orderId}/cancel",
+          "auth": "user"
+        }
+      ]
+    },
+    {
+      "root": "tests/slice-index/cycle",
+      "what": "who-dispatches",
+      "name": "ChargePayment",
+      "hits": [
+        {
+          "slice": "payments.retry_payment",
+          "bc": "payments",
+          "kind": "automation",
+          "status": "live",
+          "path": "payments/automations/retry_payment",
+          "field": "dispatches"
+        },
+        {
+          "slice": "payments.start_payment",
+          "bc": "payments",
+          "kind": "automation",
+          "status": "live",
+          "path": "payments/automations/start_payment",
+          "field": "dispatches"
+        }
+      ]
+    },
+    {
+      "root": "tests/slice-index/cycle",
+      "what": "who-handles",
+      "name": "chargepayment",
+      "hits": [
+        {
+          "slice": "payments.charge_payment",
+          "bc": "payments",
+          "kind": "command",
+          "status": "live",
+          "path": "payments/use_cases/charge_payment",
+          "field": "handles"
+        }
+      ]
+    },
+    {
+      "root": "tests/slice-index/cycle",
+      "what": "who-serves",
+      "name": "ListPayments",
+      "hits": [
+        {
+          "slice": "payments.payment_list",
+          "bc": "payments",
+          "kind": "view",
+          "status": "live",
+          "path": "payments/views/payment_list",
+          "field": "serves"
+        }
+      ]
+    },
+    {
+      "root": "tests/fixtures/service-entity",
+      "what": "who-reacts",
+      "name": "ShippingOrderRegistered",
+      "hits": [
+        {
+          "slice": "shipping.auto_ship",
+          "bc": "shipping",
+          "kind": "automation",
+          "status": "live",
+          "path": "src/main/java/com/acme/shipping/automations/auto_ship",
+          "field": "consumes"
+        }
+      ]
+    },
+    {
+      "root": "tests/fixtures/service-entity",
+      "what": "who-owns-endpoint",
+      "name": "/api/shipping/order-status",
+      "method": "GET",
+      "hits": [
+        {
+          "slice": "shipping.order_status",
+          "bc": "shipping",
+          "kind": "view",
+          "status": "live",
+          "path": "src/main/java/com/acme/shipping/views/order_status",
+          "field": "endpoints",
+          "match": "exact",
+          "method": "GET",
+          "endpoint": "/api/shipping/order-status",
+          "auth": "user"
+        },
+        {
+          "slice": "shipping.order_status",
+          "bc": "shipping",
+          "kind": "view",
+          "status": "live",
+          "path": "src/main/java/com/acme/shipping/views/order_status",
+          "field": "endpoints",
+          "match": "exact",
+          "method": "GET",
+          "endpoint": "/api/shipping/order-status?status=",
+          "auth": "user"
+        }
+      ]
+    },
+    {
+      "root": "tests/fixtures/worked-example",
+      "what": "who-reacts",
+      "name": "OrderPlaced",
+      "hits": [
+        {
+          "slice": "orders.order_list",
+          "bc": "orders",
+          "kind": "view",
+          "status": "live",
+          "path": "orders/views/order_list",
+          "field": "projections[].from"
+        },
+        {
+          "slice": "orders.screen_order",
+          "bc": "orders",
+          "kind": "automation",
+          "status": "live",
+          "path": "orders/automations/screen_order",
+          "field": "consumes"
+        },
+        {
+          "slice": "orders.warehouse",
+          "bc": "orders",
+          "kind": "translation",
+          "status": "live",
+          "path": "orders/external_systems/warehouse",
+          "field": "consumes"
+        }
+      ]
+    },
+    {
+      "root": "tests/fixtures/worked-example",
+      "what": "who-reacts",
+      "name": "OrderCancelled",
+      "hits": [
+        {
+          "slice": "orders.order_list",
+          "bc": "orders",
+          "kind": "view",
+          "status": "live",
+          "path": "orders/views/order_list",
+          "field": "projections[].from"
+        },
+        {
+          "slice": "orders.screen_order",
+          "bc": "orders",
+          "kind": "automation",
+          "status": "live",
+          "path": "orders/automations/screen_order",
+          "field": "consumes"
+        }
+      ]
+    },
+    {
+      "root": "tests/fixtures/worked-example",
+      "what": "who-handles",
+      "name": "CancelOrder",
+      "hits": [
+        {
+          "slice": "orders.cancel_order",
+          "bc": "orders",
+          "kind": "command",
+          "status": "live",
+          "path": "orders/use_cases/cancel_order",
+          "field": "handles"
+        }
+      ]
+    }
+  ]
+}

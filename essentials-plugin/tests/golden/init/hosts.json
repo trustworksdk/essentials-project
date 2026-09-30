@@ -1,0 +1,20 @@
+{
+  "defaults": {
+    "projectName": "Shop",
+    "groupId": "com.acme",
+    "artifactId": "shop",
+    "packagePath": "com.acme.shop",
+    "web": "webflux",
+    "frontend": "none",
+    "compose": false,
+    "lintGate": "none"
+  },
+  "hosts": {
+    "java-pg-event-sourced":   {"language": "java",   "db": "pg-event-sourced"},
+    "java-pg-crud":            {"language": "java",   "db": "pg-crud"},
+    "java-mongo":              {"language": "java",   "db": "mongo"},
+    "kotlin-pg-event-sourced": {"language": "kotlin", "db": "pg-event-sourced"},
+    "kotlin-pg-crud":          {"language": "kotlin", "db": "pg-crud"},
+    "kotlin-mongo":            {"language": "kotlin", "db": "mongo"}
+  }
+}

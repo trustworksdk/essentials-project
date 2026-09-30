@@ -1,0 +1,91 @@
+{
+  "tool": "slice-source",
+  "format": 1,
+  "mode": "check",
+  "root": "tests/slice-source/cases/kotlin-clean",
+  "manifests": 5,
+  "parsed": 5,
+  "skippedManifests": [],
+  "slicesWithoutManifest": [],
+  "lanes": [
+    {
+      "bc": "orders",
+      "path": "src/main/*/com/acme/shop/orders",
+      "detected": "decider",
+      "signals": {
+        "decider": 2,
+        "aggregates": false,
+        "entities": false,
+        "eventStore": 4
+      },
+      "declared": {
+        "decider": [
+          "orders.auto_cancel",
+          "orders.warehouse",
+          "orders.cancel_order",
+          "orders.place_order",
+          "orders.order_list"
+        ]
+      }
+    }
+  ],
+  "endpoints": [
+    {
+      "slice": "orders.cancel_order",
+      "method": "POST",
+      "path": "/api/orders/{id}/cancel",
+      "status": "ok",
+      "boundBy": [
+        "CancelOrderAPI.cancel"
+      ]
+    },
+    {
+      "slice": "orders.place_order",
+      "method": "POST",
+      "path": "/api/orders",
+      "status": "ok",
+      "boundBy": [
+        "PlaceOrderAPI.placeOrder"
+      ]
+    },
+    {
+      "slice": "orders.order_list",
+      "method": "GET",
+      "path": "/api/orders/list",
+      "status": "ok",
+      "boundBy": [
+        "OrderListAPI.list"
+      ]
+    },
+    {
+      "slice": "orders.order_list",
+      "method": "GET",
+      "path": "/api/orders/list?from=&to=",
+      "status": "ok",
+      "boundBy": [
+        "OrderListAPI.between"
+      ]
+    },
+    {
+      "slice": "orders.order_list",
+      "method": "GET",
+      "path": "/api/orders/list?status=shipped",
+      "status": "ok",
+      "boundBy": [
+        "OrderListAPI.shipped"
+      ]
+    },
+    {
+      "slice": "orders.order_list",
+      "method": "GET",
+      "path": "/api/orders/list/search?q",
+      "status": "ok",
+      "boundBy": [
+        "OrderListAPI.search"
+      ]
+    }
+  ],
+  "findings": [],
+  "unverified": [],
+  "unparsed": []
+}

@@ -1,0 +1,25 @@
+schemaVersion: "1.3"
+slice: orders.screen_order
+kind: automation
+bc: orders
+owner: orders-team
+status: live
+summary: Cancel a placed order whose quantity is over the screening limit.
+generator: essentials
+language: kotlin
+tier: cqrs-es
+lane: decider
+
+consumes: [OrderPlaced, OrderCancelled]
+dispatches: [CancelOrder]
+
+invariants:
+  - { id: INV-SO-1, text: "An order is cancelled by screening at most once", enforcedBy: ScreenOrderTodo }
+
+forbidden:
+  - cross-slice-internal:orders
+
+tests:
+  unit: { present: false }
+  integration: { present: false }
+  contract: { present: false }

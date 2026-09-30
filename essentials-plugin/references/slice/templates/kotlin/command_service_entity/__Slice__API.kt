@@ -31,7 +31,7 @@ class {{Slice}}API(private val commandBus: CommandBus) {
     @PostMapping
     fun {{sliceCamel}}(@RequestBody body: {{Slice}}Request): {{Slice}}Response {
         val id = {{Aggregate}}Id.random()
-        commandBus.send({{Command}}(id, body.placeholder))
+        commandBus.send<Any?, {{Command}}>({{Command}}(id, body.placeholder))
         return {{Slice}}Response(id.value)
     }
 }

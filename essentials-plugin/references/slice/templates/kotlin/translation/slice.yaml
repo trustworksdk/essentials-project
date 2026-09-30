@@ -17,11 +17,14 @@ lane: {{lane}}                        # the §R5 write style: decider | aggregat
 # system's, not the bounded context's.
 externalSystem: {{externalSystem}}
 direction: both                       # inbound | outbound | both — delete the half you do not use
-# `direction: outbound` is a port-style ACL: the system calls out and nothing calls in, so
-# there is no inbound message and no mapping table. Set it and DELETE `consumes` and `maps`
-# rather than leaving them empty — the schema stops requiring them, and `consumes: []`
-# records nothing. It is still a translation slice.
-consumes: [{{ExternalEvent}}]
+# `consumes` lists every message that triggers this slice: the external message its ingress
+# receives (inbound) AND every internal event its publisher's @MessageHandler methods handle
+# (outbound). slice-check gate 11(b) reads those handlers' parameter types against this list.
+# On `direction: outbound` drop the external message and its `maps` entry, but KEEP the internal
+# events the publisher handles. Delete `consumes` (and `maps`) only for a port-style ACL with no
+# publisher — nothing in the slice handles an event, other code calls the client — where the
+# schema stops requiring them and `consumes: []` would record nothing.
+consumes: [{{ExternalEvent}}, {{Event}}]
 maps:
   - { from: {{ExternalEvent}}, to: TODOInternalCommand }
   - { from: {{Event}}, to: {{ExternalSystem}}Request }

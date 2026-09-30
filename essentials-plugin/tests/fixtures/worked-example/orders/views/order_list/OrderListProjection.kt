@@ -1,34 +1,59 @@
 package {{packagePath}}.orders.views.order_list
 
 import {{packagePath}}.orders.events.OrderCancelled
-import {{packagePath}}.orders.events.OrderEvent
 import {{packagePath}}.orders.events.OrderPlaced
-import org.springframework.stereotype.Component
-import java.util.concurrent.ConcurrentHashMap
+import {{packagePath}}.orders.types.OrderStatus
+import dk.trustworks.essentials.components.document_db.Version
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.AggregateType
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.processor.ViewEventProcessor
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.processor.ViewEventProcessorDependencies
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.types.GlobalEventOrder
+import dk.trustworks.essentials.components.foundation.messaging.MessageHandler
+import dk.trustworks.essentials.components.foundation.messaging.queue.OrderedMessage
+import org.springframework.stereotype.Service
 
 /**
- * VIEW slice — projects `OrderEvent`s into the [OrderListView] read model.
+ * VIEW slice — projects the Orders stream into the [OrderListView] read model. A view never
+ * produces events.
  *
- * `project(event)` below is the pure projection logic for this slice. The
- * SUBSCRIPTION wiring (how events reach it) is intentionally illustrative here:
- * in a real Essentials project register this as an `InTransactionEventProcessor`
- * (synchronous read model) or a `ViewEventProcessor` (async, polling) and persist
- * to PostgreSQL DocumentDb / JDBI rather than this in-memory map. Consult the
- * `essentials-docs` skill (`LLM-kotlin-eventsourcing.md`, `LLM-postgresql-document-db.md`)
- * for the processor + store wiring. The in-memory store keeps this teaching example
- * self-contained and compilable.
+ * `ViewEventProcessor`: asynchronous and eventually consistent, which is right for a list screen.
+ * Each handler takes [OrderedMessage] because `message.order` is the event's `EventOrder`: it is
+ * stored as the row's `version`, and an event whose order is not newer than that is a replay.
  */
-@Component
-class OrderListProjection {
-    private val rows = ConcurrentHashMap<String, OrderListView>()
+@Service
+class OrderListProjection(
+    dependencies: ViewEventProcessorDependencies,
+    private val repository: OrderListRepository
+) : ViewEventProcessor(dependencies) {
 
-    fun project(event: OrderEvent) {
-        when (event) {
-            is OrderPlaced -> rows[event.id.value] =
-                OrderListView(event.id.value, event.sku, event.quantity, "PLACED")
-            is OrderCancelled -> rows.computeIfPresent(event.id.value) { _, v -> v.copy(status = "CANCELLED") }
-        }
+    override fun getProcessorName(): String = "OrderListProjection"
+
+    override fun reactsToEventsRelatedToAggregateTypes(): List<AggregateType> =
+        listOf(AggregateType.of("Orders"))
+
+    @MessageHandler
+    fun on(event: OrderPlaced, message: OrderedMessage) {
+        if (repository.existsById(event.id)) return          // replay — the row already exists
+        repository.save(
+            OrderListView(event.id, event.sku, event.quantity, OrderStatus.PLACED),
+            Version(message.order)
+        )
     }
 
-    fun all(): List<OrderListView> = rows.values.sortedBy { it.orderId }
+    @MessageHandler
+    fun on(event: OrderCancelled, message: OrderedMessage) {
+        val row = repository.findById(event.id) ?: return
+        if (row.version.value >= message.order) return         // replay — already applied
+        row.status = OrderStatus.CANCELLED
+        row.cancelReason = event.reason
+        repository.update(row, Version(message.order))
+    }
+
+    /** Called once per subscribed aggregate type; this view subscribes to one, so wipe it all. */
+    override fun onSubscriptionsReset(
+        aggregateType: AggregateType,
+        resubscribeFromAndIncluding: GlobalEventOrder
+    ) {
+        repository.deleteAll()
+    }
 }

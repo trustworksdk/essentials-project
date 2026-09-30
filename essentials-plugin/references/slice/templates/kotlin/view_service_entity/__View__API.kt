@@ -3,7 +3,6 @@ package {{packagePath}}.{{bc}}.views.{{view}}
 import org.springframework.web.bind.annotation.GetMapping
 import org.springframework.web.bind.annotation.PathVariable
 import org.springframework.web.bind.annotation.RequestMapping
-import org.springframework.web.bind.annotation.RequestParam
 import org.springframework.web.bind.annotation.RestController
 
 /**
@@ -24,11 +23,10 @@ import org.springframework.web.bind.annotation.RestController
 class {{View}}API(private val queries: {{View}}Queries) {
 
     @GetMapping
-    fun {{viewCamel}}(@RequestParam(required = false) status: String): List<{{View}}View> =
-        queries.findByStatus(status)
+    fun {{viewCamel}}(): List<{{View}}View> = queries.findAllBy()
 
     @GetMapping("/{{{aggregate}}Id}")
     fun by{{Aggregate}}Id(@PathVariable {{aggregate}}Id: String): {{View}}View =
-        queries.find{{Aggregate}}By{{Aggregate}}Id({{aggregate}}Id)
+        queries.find{{Aggregate}}ById({{aggregate}}Id)
             ?: throw NoSuchElementException({{aggregate}}Id)
 }

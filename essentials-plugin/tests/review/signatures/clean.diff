@@ -1,0 +1,46 @@
+# review-scan signature fixture: A realistic change with no trap signature: nothing may fire
+# Current keys, Jackson 3 imports, docs naming the traps, removed lines and context lines.
+# expect-not: backend/src/main/resources/application.yml:3 ess-088-mongo-key
+# expect-not: backend/src/main/resources/application.yml:6 ess-088-mongo-key
+# expect-not: docs/upgrade-notes.md:3 ess-088-mongo-key
+# expect-not: docs/upgrade-notes.md:4 ess-089-reactive-bpp-disabled
+# expect-not: backend/src/main/kotlin/com/acme/shop/orders/PlaceOrderAPI.kt:4 ess-021-j2-databind-annotation
+# expect-not: backend/src/main/kotlin/com/acme/shop/orders/PlaceOrderAPI.kt:7 ess-016-local-command-bus
+diff --git a/backend/src/main/resources/application.yml b/backend/src/main/resources/application.yml
+--- a/backend/src/main/resources/application.yml
++++ b/backend/src/main/resources/application.yml
+@@ -1,8 +1,9 @@
+ spring:
++  mongodb:
++    uri: mongodb://localhost/orders
+   data:
+     mongodb:
+       auto-index-creation: true
+ essentials:
+   durable-queues:
+-    transactional-mode: single-operation-transaction
+     max-polling-interval: 2s
+diff --git a/docs/upgrade-notes.md b/docs/upgrade-notes.md
+new file mode 100644
+--- /dev/null
++++ b/docs/upgrade-notes.md
+@@ -0,0 +1,4 @@
++# Upgrade notes
++
++We renamed `spring.data.mongodb.uri` to `spring.mongodb.uri`.
++`essentials.reactive-bean-post-processor-enabled=false` must never be set.
+diff --git a/backend/src/main/kotlin/com/acme/shop/orders/PlaceOrderAPI.kt b/backend/src/main/kotlin/com/acme/shop/orders/PlaceOrderAPI.kt
+new file mode 100644
+--- /dev/null
++++ b/backend/src/main/kotlin/com/acme/shop/orders/PlaceOrderAPI.kt
+@@ -0,0 +1,10 @@
++package com.acme.shop.orders
++
++import dk.trustworks.essentials.components.foundation.reactive.command.DurableLocalCommandBus
++import tools.jackson.databind.annotation.JsonSerialize
++
++@RestController
++class PlaceOrderAPI(private val commandBus: DurableLocalCommandBus) {
++    @PostMapping("/api/orders")
++    fun place(@RequestBody body: PlaceOrderRequest) = commandBus.send<OrderEvent, PlaceOrder>(body.toCommand())
++}

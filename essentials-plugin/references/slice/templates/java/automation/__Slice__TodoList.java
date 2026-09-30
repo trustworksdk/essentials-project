@@ -23,7 +23,7 @@ import java.time.ZoneOffset;
 public class {{Slice}}TodoList extends JavaVersionedEntity<String, {{Slice}}TodoList> {
 
     @Id
-    private String id;
+    public String id;   // MUST be public — DocumentDB reads @Id by field access; a private one fails the first save
 
     private boolean started;
     private boolean dispatched;

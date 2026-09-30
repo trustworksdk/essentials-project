@@ -32,9 +32,8 @@ class {{Slice}}Handler(
     @CmdHandler
     @Transactional
     fun handle(cmd: {{Command}}) {
-        val {{entity}} = {{entity}}s.findById(cmd.id.value).orElseThrow {
-            IllegalArgumentException("No {{Entity}} ${cmd.id.value}")
-        }
+        val {{entity}} = {{entity}}s.findById(cmd.id.value)
+            ?: throw IllegalArgumentException("No {{Entity}} ${cmd.id.value}")
 
         // TODO: call the ONE invariant method this slice's intent maps to. The Boolean-returning
         //       shape is the idempotent form — false means the state was already reached, so a
@@ -42,6 +41,6 @@ class {{Slice}}Handler(
         if (!{{entity}}.applyPlaceholder(cmd.placeholder)) return
 
         {{entity}}s.save({{entity}})
-        eventBus.publish({{Event}}(cmd.id.value, cmd.placeholder))
+        eventBus.publish({{Event}}(cmd.id, cmd.placeholder))
     }
 }

@@ -6,23 +6,19 @@ import {{packagePath}}.orders.types.OrderId
 import {{packagePath}}.orders.use_cases.place_order.PlaceOrderDecider
 import {{packagePath}}.orders.use_cases.cancel_order.CancelOrderDecider
 import dk.trustworks.essentials.components.kotlin.eventsourcing.AggregateTypeConfiguration
-import dk.trustworks.essentials.components.kotlin.eventsourcing.Decider
 import dk.trustworks.essentials.components.kotlin.eventsourcing.DeciderSupportsAggregateTypeChecker
-import dk.trustworks.essentials.components.kotlin.eventsourcing.adapters.DeciderAndAggregateTypeConfigurator
-import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.ConfigurableEventStore
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.AggregateType
-import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.serializer.AggregateIdSerializer
-import dk.trustworks.essentials.reactive.command.CommandBus
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.serializer.StringValueTypeAggregateIdSerializer
 import org.springframework.context.annotation.Bean
 import org.springframework.context.annotation.Configuration
 
 /**
- * Wires the Orders bounded context. Each command slice's Decider is registered as its
- * OWN `@Bean`; the `DeciderAndAggregateTypeConfigurator` collects them via `List<Decider<*,*>>`
- * and routes commands by aggregate type. Adding a command slice = adding one `@Bean` line —
- * never touching another slice. This explicit wiring is part of each slice's Definition of
- * Done (the slice's integration test must be able to bootstrap) — the CRM lesson was that
- * un-registered Deciders silently broke every `@SpringBootTest`.
+ * Wires the Orders bounded context: its `AggregateTypeConfiguration` and each command slice's Decider
+ * as its OWN `@Bean`. The application's single `DeciderAndAggregateTypeConfigurator` lives in
+ * `{{packagePath}}.DeciderWiring`, never here; it collects these beans from every bounded context and
+ * routes commands by aggregate type. Adding a command slice = adding one `@Bean` line — never touching
+ * another slice. This explicit wiring is part of each slice's Definition of Done: an unregistered
+ * Decider compiles, passes its unit tests, and silently breaks every `@SpringBootTest`.
  */
 @Configuration
 class OrdersConfiguration {
@@ -32,18 +28,10 @@ class OrdersConfiguration {
     }
 
     @Bean
-    fun deciderAndAggregateTypeConfigurator(
-        eventStore: ConfigurableEventStore<*>,
-        commandBus: CommandBus,
-        aggregateTypeConfigurations: List<AggregateTypeConfiguration>,
-        deciders: List<Decider<*, *>>
-    ) = DeciderAndAggregateTypeConfigurator(eventStore, commandBus, aggregateTypeConfigurations, deciders)
-
-    @Bean
     fun orderAggregateTypeConfiguration() = AggregateTypeConfiguration(
         aggregateType = AGGREGATE_TYPE,
         aggregateIdType = OrderId::class.java,
-        aggregateIdSerializer = AggregateIdSerializer.serializerFor(OrderId::class.java),
+        aggregateIdSerializer = StringValueTypeAggregateIdSerializer(OrderId::class),
         deciderSupportsAggregateTypeChecker =
             DeciderSupportsAggregateTypeChecker.HandlesCommandsThatInheritsFromCommandType(OrderCommand::class),
         commandAggregateIdResolver = { cmd -> (cmd as OrderCommand).id },

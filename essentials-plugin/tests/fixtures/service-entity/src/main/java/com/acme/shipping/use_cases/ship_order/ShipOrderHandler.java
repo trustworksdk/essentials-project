@@ -8,7 +8,6 @@ import dk.trustworks.essentials.reactive.command.CmdHandler;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Transactional;
 
-/** Clean, and the model for this lane: load, call the ONE invariant method, save, publish. */
 @Component
 public class ShipOrderHandler extends AnnotatedCommandHandler {
 

@@ -4,7 +4,7 @@
 
 The structural law is `rules/slice-design.md`. This document is the *anatomy reference*: what each
 slice kind is made of, what each part is called in Java and in Kotlin, and where each file lands.
-Skills read this to decide **shape**; they read `references/slice/templates/` to emit **code**.
+Skills read this to decide **shape**; `scripts/render-slice.py` renders `references/slice/templates/` to emit **code**.
 
 Self-contained — no other plugin required.
 

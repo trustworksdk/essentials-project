@@ -1,0 +1,15 @@
+schemaVersion: "1.3"
+slice: payments.start_payment
+kind: automation
+bc: payments
+owner: payments-team
+status: live
+summary: Charge the customer once an order is placed.
+language: java
+tier: cqrs-es
+lane: decider
+consumes: [OrderPlaced]
+dispatches: [ChargePayment]
+tests:
+  unit: { present: true }
+  integration: { present: false }

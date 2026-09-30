@@ -2,6 +2,7 @@ package {{packagePath}}.orders.use_cases.cancel_order
 
 import {{packagePath}}.orders.types.OrderId
 import dk.trustworks.essentials.reactive.command.CommandBus
+import io.swagger.v3.oas.annotations.Operation
 import org.springframework.http.HttpStatus
 import org.springframework.web.bind.annotation.PathVariable
 import org.springframework.web.bind.annotation.PostMapping
@@ -22,6 +23,9 @@ import org.springframework.web.bind.annotation.RestController
  * the single-arg constructor; over anything else it needs `KotlinValueTypeConverter` from
  * `types-spring-web`, which is registered by the @Import in config/EssentialsWebConfig.kt.
  *
+ * The same mangling reaches the OpenAPI spec: springdoc names the operation after the JVM method
+ * (`cancelOrder-<hash>`), so `@Operation(operationId = "cancelOrder")` pins the name clients generate from.
+ *
  * The body carries only `reason` — the id arrives by path, so this is assembly, not an adapter
  * (rules/slice-design.md §R2).
  */
@@ -31,9 +35,10 @@ class CancelOrderAPI(private val commandBus: CommandBus) {
 
     data class CancelOrderRequest(val reason: String)
 
+    @Operation(operationId = "cancelOrder")
     @PostMapping("/{orderId}/cancel")
     @ResponseStatus(HttpStatus.ACCEPTED)
     fun cancelOrder(@PathVariable orderId: OrderId, @RequestBody body: CancelOrderRequest) {
-        commandBus.send(CancelOrder(orderId, body.reason))
+        commandBus.send<Any?, CancelOrder>(CancelOrder(orderId, body.reason))
     }
 }

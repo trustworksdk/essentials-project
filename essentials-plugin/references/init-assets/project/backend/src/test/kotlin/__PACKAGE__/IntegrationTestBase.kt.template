@@ -1,0 +1,89 @@
+package {{packagePath}}
+
+<!-- IF db!=mongo -->
+import org.jdbi.v3.core.Jdbi
+<!-- END db -->
+<!-- IF db=mongo -->
+import org.bson.Document
+<!-- END db -->
+import org.junit.jupiter.api.BeforeEach
+import org.springframework.beans.factory.annotation.Autowired
+import org.springframework.boot.test.context.SpringBootTest
+import org.springframework.boot.test.web.server.LocalServerPort
+import org.springframework.boot.testcontainers.service.connection.ServiceConnection
+<!-- IF db=mongo -->
+import org.springframework.data.mongodb.core.MongoTemplate
+import org.testcontainers.mongodb.MongoDBContainer
+<!-- END db -->
+<!-- IF db!=mongo -->
+import org.testcontainers.postgresql.PostgreSQLContainer
+<!-- END db -->
+
+/**
+ * The base for this project's integration tests: one database container per test JVM, shared by every test class,
+ * and one cached Spring context. The recipe and what keeps it safe with Essentials (never truncate an *_events table,
+ * rebuild read models through their subscriptions) are in the essentials-docs skill: LLM-foundation-test.md,
+ * "Fast integration tests".
+ *
+ * Container reuse across builds is opt-in: `-Dit.containers.reuse=true` with a single Failsafe fork, plus
+ * `testcontainers.reuse.enable=true` in `~/.testcontainers.properties`.
+ */
+@SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
+abstract class IntegrationTestBase {
+
+    @LocalServerPort
+    protected var port: Int = 0
+
+<!-- IF db!=mongo -->
+    @Autowired
+    protected lateinit var jdbi: Jdbi
+
+    /**
+     * Read-model tables only. Never an *_events table: truncating one with RESTART IDENTITY rewinds the global order
+     * while every subscription keeps its resume point, and the next test hangs instead of failing.
+     */
+    protected open fun readModelTablesToTruncate(): List<String> = emptyList()
+
+    @BeforeEach
+    fun truncateReadModels() {
+        val tables = readModelTablesToTruncate()
+        if (tables.isNotEmpty()) {
+            jdbi.useHandle<RuntimeException> { it.execute("TRUNCATE TABLE " + tables.joinToString(", ")) }
+        }
+    }
+<!-- END db -->
+<!-- IF db=mongo -->
+    @Autowired
+    protected lateinit var mongoTemplate: MongoTemplate
+
+    /** Read-model collections only; never the collections Essentials' queues and locks keep their state in. */
+    protected open fun readModelCollectionsToClear(): List<String> = emptyList()
+
+    @BeforeEach
+    fun clearReadModels() {
+        readModelCollectionsToClear().forEach { mongoTemplate.getCollection(it).deleteMany(Document()) }
+    }
+<!-- END db -->
+
+    protected fun baseUrl(): String = "http://localhost:$port"
+
+    companion object {
+<!-- IF db!=mongo -->
+        @JvmField
+        @ServiceConnection
+        val postgres: PostgreSQLContainer = PostgreSQLContainer("{{pin:PostgreSQL image}}")   // not generic in Testcontainers 2
+            .withReuse(System.getProperty("it.containers.reuse").toBoolean())
+            .withTmpFs(mapOf("/var/lib/postgresql" to "rw"))   // data in RAM; PGDATA sits inside this mount from Postgres 18
+            .withCommand("postgres", "-c", "fsync=off", "-c", "synchronous_commit=off", "-c", "full_page_writes=off")
+            .also { it.start() }
+<!-- END db -->
+<!-- IF db=mongo -->
+        @JvmField
+        @ServiceConnection
+        val mongo: MongoDBContainer = MongoDBContainer("{{pin:MongoDB image}}")
+            .withReplicaSet()   // Essentials' Mongo transactions need a replica set; this container is standalone without it
+            .withReuse(System.getProperty("it.containers.reuse").toBoolean())
+            .also { it.start() }
+<!-- END db -->
+    }
+}

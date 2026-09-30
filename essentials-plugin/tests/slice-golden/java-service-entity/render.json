@@ -1,0 +1,173 @@
+[
+  {
+    "language": "java",
+    "kind": "command",
+    "lane": "service-entity",
+    "families": [
+      "bc-scaffold-service-entity",
+      "command_service_entity"
+    ],
+    "inputs": {
+      "Aggregate": "Order",
+      "Bc": "Orders",
+      "Command": "PlaceOrder",
+      "Entity": "Order",
+      "Event": "OrderPlaced",
+      "Slice": "PlaceOrder",
+      "aggregate": "order",
+      "apiPath": "/api/orders",
+      "bc": "orders",
+      "entity": "order",
+      "lane": "service-entity",
+      "owner": "orders-team",
+      "packagePath": "com.acme.shop",
+      "slice": "place_order",
+      "sliceCamel": "placeOrder",
+      "tier": "service-entity"
+    },
+    "written": [
+      "src/main/java/com/acme/shop/orders/CLAUDE.md",
+      "src/main/java/com/acme/shop/orders/config/OrdersConfiguration.java",
+      "src/main/java/com/acme/shop/orders/entities/CLAUDE.md",
+      "src/main/java/com/acme/shop/orders/events/OrderEvent.java",
+      "src/main/java/com/acme/shop/orders/events/OrderPlaced.java",
+      "src/main/java/com/acme/shop/orders/types/OrderId.java",
+      "src/main/java/com/acme/shop/orders/use_cases/place_order/CLAUDE.md",
+      "src/main/java/com/acme/shop/orders/use_cases/place_order/PlaceOrder.java",
+      "src/main/java/com/acme/shop/orders/use_cases/place_order/PlaceOrderAPI.java",
+      "src/main/java/com/acme/shop/orders/use_cases/place_order/PlaceOrderHandler.java",
+      "src/main/java/com/acme/shop/orders/use_cases/place_order/slice.yaml",
+      "src/test/java/com/acme/shop/orders/entities/PlaceOrderTest.java",
+      "src/test/java/com/acme/shop/orders/use_cases/place_order/PlaceOrderIT.java"
+    ],
+    "wiring": [
+      {
+        "path": "src/main/java/com/acme/shop/orders/events/OrderEvent.java",
+        "edit": "permits += OrderPlaced",
+        "status": "present"
+      }
+    ],
+    "todos": [
+      "src/main/java/com/acme/shop/orders/CLAUDE.md:7: **Purpose:** TODO one sentence — what this context is responsible for.",
+      "src/main/java/com/acme/shop/orders/CLAUDE.md:11: TODO — **state the reason, do not delete this heading.** Service-entity style is chosen because this",
+      "src/main/java/com/acme/shop/orders/events/OrderPlaced.java:28: // TODO: replace with the facts this event carries",
+      "src/main/java/com/acme/shop/orders/use_cases/place_order/CLAUDE.md:7: **Purpose:** TODO one sentence, present tense.",
+      "src/main/java/com/acme/shop/orders/use_cases/place_order/CLAUDE.md:10: - TODO the rule this slice enforces. It lives on `Order`, not in the handler — the entity is the",
+      "src/main/java/com/acme/shop/orders/use_cases/place_order/PlaceOrder.java:27: // TODO: replace with this command's real payload",
+      "src/main/java/com/acme/shop/orders/use_cases/place_order/PlaceOrderHandler.java:53: // TODO: call the ONE invariant method this slice's intent maps to. The boolean-returning",
+      "src/main/java/com/acme/shop/orders/use_cases/place_order/slice.yaml:9: summary: TODO one sentence, present tense.",
+      "src/main/java/com/acme/shop/orders/use_cases/place_order/slice.yaml:28: - { id: INV-1, text: \"TODO the rule this slice enforces\", enforcedBy: \"Order.applyPlaceholder\" }",
+      "src/test/java/com/acme/shop/orders/entities/PlaceOrderTest.java:25: // TODO: assert the resulting state through the entity's own read path",
+      "src/test/java/com/acme/shop/orders/entities/PlaceOrderTest.java:39: // TODO: assert there is no public setter for the field applyPlaceholder() guards.",
+      "src/test/java/com/acme/shop/orders/use_cases/place_order/PlaceOrderIT.java:26: // TODO: seed a Order, send PlaceOrder on the bus, assert the row changed.",
+      "src/test/java/com/acme/shop/orders/use_cases/place_order/PlaceOrderIT.java:31: // TODO: subscribe to the EventBus (or use a test recorder bean) and assert OrderPlaced arrived.",
+      "src/test/java/com/acme/shop/orders/use_cases/place_order/PlaceOrderIT.java:37: // TODO: send the same command twice; assert one change and one event."
+    ]
+  },
+  {
+    "seed": "_seeds/java-service-entity",
+    "written": [
+      "src/main/java/com/acme/shop/orders/entities/Order.java",
+      "src/main/java/com/acme/shop/orders/entities/OrderRepository.java"
+    ]
+  },
+  {
+    "language": "java",
+    "kind": "command",
+    "lane": "service-entity",
+    "families": [
+      "command_service_entity"
+    ],
+    "inputs": {
+      "Aggregate": "Order",
+      "Bc": "Orders",
+      "Command": "CancelOrder",
+      "Entity": "Order",
+      "Event": "OrderCancelled",
+      "Slice": "CancelOrder",
+      "aggregate": "order",
+      "apiPath": "/api/orders/cancel",
+      "bc": "orders",
+      "entity": "order",
+      "lane": "service-entity",
+      "owner": "orders-team",
+      "packagePath": "com.acme.shop",
+      "slice": "cancel_order",
+      "sliceCamel": "cancelOrder",
+      "tier": "service-entity"
+    },
+    "written": [
+      "src/main/java/com/acme/shop/orders/events/OrderCancelled.java",
+      "src/main/java/com/acme/shop/orders/use_cases/cancel_order/CLAUDE.md",
+      "src/main/java/com/acme/shop/orders/use_cases/cancel_order/CancelOrder.java",
+      "src/main/java/com/acme/shop/orders/use_cases/cancel_order/CancelOrderAPI.java",
+      "src/main/java/com/acme/shop/orders/use_cases/cancel_order/CancelOrderHandler.java",
+      "src/main/java/com/acme/shop/orders/use_cases/cancel_order/slice.yaml",
+      "src/test/java/com/acme/shop/orders/entities/CancelOrderTest.java",
+      "src/test/java/com/acme/shop/orders/use_cases/cancel_order/CancelOrderIT.java"
+    ],
+    "wiring": [
+      {
+        "path": "src/main/java/com/acme/shop/orders/events/OrderEvent.java",
+        "edit": "permits += OrderCancelled",
+        "status": "applied"
+      }
+    ],
+    "todos": [
+      "src/main/java/com/acme/shop/orders/events/OrderCancelled.java:28: // TODO: replace with the facts this event carries",
+      "src/main/java/com/acme/shop/orders/use_cases/cancel_order/CLAUDE.md:7: **Purpose:** TODO one sentence, present tense.",
+      "src/main/java/com/acme/shop/orders/use_cases/cancel_order/CLAUDE.md:10: - TODO the rule this slice enforces. It lives on `Order`, not in the handler — the entity is the",
+      "src/main/java/com/acme/shop/orders/use_cases/cancel_order/CancelOrder.java:27: // TODO: replace with this command's real payload",
+      "src/main/java/com/acme/shop/orders/use_cases/cancel_order/CancelOrderHandler.java:53: // TODO: call the ONE invariant method this slice's intent maps to. The boolean-returning",
+      "src/main/java/com/acme/shop/orders/use_cases/cancel_order/slice.yaml:9: summary: TODO one sentence, present tense.",
+      "src/main/java/com/acme/shop/orders/use_cases/cancel_order/slice.yaml:28: - { id: INV-1, text: \"TODO the rule this slice enforces\", enforcedBy: \"Order.applyPlaceholder\" }",
+      "src/test/java/com/acme/shop/orders/entities/CancelOrderTest.java:25: // TODO: assert the resulting state through the entity's own read path",
+      "src/test/java/com/acme/shop/orders/entities/CancelOrderTest.java:39: // TODO: assert there is no public setter for the field applyPlaceholder() guards.",
+      "src/test/java/com/acme/shop/orders/use_cases/cancel_order/CancelOrderIT.java:26: // TODO: seed a Order, send CancelOrder on the bus, assert the row changed.",
+      "src/test/java/com/acme/shop/orders/use_cases/cancel_order/CancelOrderIT.java:31: // TODO: subscribe to the EventBus (or use a test recorder bean) and assert OrderCancelled arrived.",
+      "src/test/java/com/acme/shop/orders/use_cases/cancel_order/CancelOrderIT.java:37: // TODO: send the same command twice; assert one change and one event."
+    ]
+  },
+  {
+    "language": "java",
+    "kind": "view",
+    "lane": "service-entity",
+    "families": [
+      "view_service_entity"
+    ],
+    "inputs": {
+      "Aggregate": "Order",
+      "Bc": "Orders",
+      "Entity": "Order",
+      "View": "OrderList",
+      "aggregate": "order",
+      "apiPath": "/api/orders",
+      "bc": "orders",
+      "entity": "order",
+      "lane": "service-entity",
+      "owner": "orders-team",
+      "packagePath": "com.acme.shop",
+      "tier": "service-entity",
+      "view": "order_list",
+      "viewCamel": "orderList"
+    },
+    "written": [
+      "src/main/java/com/acme/shop/orders/views/order_list/CLAUDE.md",
+      "src/main/java/com/acme/shop/orders/views/order_list/OrderListAPI.java",
+      "src/main/java/com/acme/shop/orders/views/order_list/OrderListQueries.java",
+      "src/main/java/com/acme/shop/orders/views/order_list/OrderListView.java",
+      "src/main/java/com/acme/shop/orders/views/order_list/slice.yaml",
+      "src/test/java/com/acme/shop/orders/views/order_list/OrderListIT.java"
+    ],
+    "wiring": [],
+    "todos": [
+      "src/main/java/com/acme/shop/orders/views/order_list/CLAUDE.md:7: **Purpose:** TODO one sentence, present tense.",
+      "src/main/java/com/acme/shop/orders/views/order_list/OrderListQueries.java:54: // TODO: the queries this slice actually serves, e.g. findByStatus(String status). Several are fine —",
+      "src/main/java/com/acme/shop/orders/views/order_list/OrderListView.java:28: // TODO: add the fields this view actually serves, e.g. String getStatus(). Name them exactly as the",
+      "src/main/java/com/acme/shop/orders/views/order_list/slice.yaml:9: summary: TODO one sentence, present tense.",
+      "src/test/java/com/acme/shop/orders/views/order_list/OrderListIT.java:26: // TODO: seed one Order row, query it, assert every getter on OrderListView returns the",
+      "src/test/java/com/acme/shop/orders/views/order_list/OrderListIT.java:32: // TODO: once the slice has a filtering query (findByStatus, …), seed rows that differ on it and",
+      "src/test/java/com/acme/shop/orders/views/order_list/OrderListIT.java:38: // TODO: send the command that changes the row, then query without waiting."
+    ]
+  }
+]

@@ -27,14 +27,13 @@ import java.util.List;
 @Service
 public class {{ExternalSystem}}Publisher extends EventProcessor {
 
-    private final {{ExternalSystem}}Translator translator;
+    // The translator is pure (no Spring), so it is constructed here rather than injected.
+    private final {{ExternalSystem}}Translator translator = new {{ExternalSystem}}Translator();
     private final {{ExternalSystem}}Client client;
 
     public {{ExternalSystem}}Publisher(EventProcessorDependencies dependencies,
-                                       {{ExternalSystem}}Translator translator,
                                        {{ExternalSystem}}Client client) {
         super(dependencies);
-        this.translator = translator;
         this.client = client;
     }
 

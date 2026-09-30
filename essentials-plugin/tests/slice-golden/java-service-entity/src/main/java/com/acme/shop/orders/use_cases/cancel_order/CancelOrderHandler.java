@@ -1,0 +1,63 @@
+package com.acme.shop.orders.use_cases.cancel_order;
+
+import com.acme.shop.orders.entities.Order;
+import com.acme.shop.orders.entities.OrderRepository;
+import com.acme.shop.orders.events.OrderCancelled;
+import dk.trustworks.essentials.reactive.EventBus;
+import dk.trustworks.essentials.reactive.command.AnnotatedCommandHandler;
+import dk.trustworks.essentials.reactive.command.CmdHandler;
+import org.springframework.stereotype.Component;
+import org.springframework.transaction.annotation.Transactional;
+
+/**
+ * The decision component for THIS slice (rules/slice-design.md §R1).
+ *
+ * ONE {@code @CmdHandler} METHOD, ONE COMMAND TYPE. A handler class carrying methods for two or more
+ * command types is R1's router wearing a handler's clothes — it splits into that many slices. Adding
+ * a command means adding a directory, never a method here.
+ *
+ * The shape is always the same four steps: **load, call the one invariant method, save, publish.**
+ * The decision itself belongs on the entity, not here — this class holds no business rule. If you
+ * find yourself writing an {@code if} about domain state in this file, it belongs on {@link Order}
+ * (§ The entity's own bar).
+ *
+ * WIRING — there is normally nothing to write. {@code ReactiveHandlersBeanPostProcessor}
+ * auto-registers any {@code CommandHandler} bean with the single {@code CommandBus} bean, so
+ * {@code @Component} plus a scanned package is the whole of it. The obligation is a *check*, not an
+ * edit: confirm {@code reactive-bean-post-processor-enabled} (default {@code true}) has not been
+ * switched off, because disabling it silently unwires every handler in the application
+ * (§ Wiring is part of done).
+ *
+ * TRANSACTION — {@code @Transactional} spans the load, the mutation and the save, so the entity's
+ * invariant is enforced against a row the transaction owns. Publish inside it too: on this lane the
+ * event is an integration fact about a change that has committed, and an {@code EventBus} publish is
+ * in-process.
+ */
+@Component
+public class CancelOrderHandler extends AnnotatedCommandHandler {
+
+    private final OrderRepository orders;
+    private final EventBus eventBus;
+
+    public CancelOrderHandler(OrderRepository orders, EventBus eventBus) {
+        this.orders = orders;
+        this.eventBus = eventBus;
+    }
+
+    @CmdHandler
+    @Transactional
+    public void handle(CancelOrder cmd) {
+        var order = orders.findById(cmd.id().toString())
+                .orElseThrow(() -> new IllegalArgumentException("No Order " + cmd.id().toString()));
+
+        // TODO: call the ONE invariant method this slice's intent maps to. The boolean-returning
+        //       shape below is the idempotent form — it returns false when the state was already
+        //       reached, so a redelivered command is a no-op rather than a duplicate event.
+        if (!order.applyPlaceholder(cmd.placeholder())) {
+            return;
+        }
+
+        orders.save(order);
+        eventBus.publish(new OrderCancelled(cmd.id(), cmd.placeholder()));
+    }
+}

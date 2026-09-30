@@ -1,13 +1,54 @@
 # Test guide — `brownfield-layered`
 
+A synthetic Maven/Spring/JPA service organised **by technical layer**, used to exercise
+`/essentials:slice-discover`. It is *not* an Essentials project and does not follow
+`rules/slice-design.md` — that is the point. Never shipped to a user.
+
+```
+pom.xml                                  Spring Boot 3 + web + data-jpa
+src/main/java/com/acme/shop/
+  controller/   OrderController          5 mappings — the god controller
+                InvoiceController        2 mappings
+                ReportController         1 mapping — the trap
+  service/      OrderService             writes Order
+                BillingService           writes Invoice AND Order
+                PaymentReminderJob       @Scheduled, writes
+  repository/   OrderRepository, InvoiceRepository
+  model/        Order, OrderLine, Invoice
+  integration/  PaymentGatewayClient + dto/ (foreign snake_case schema)
+```
+
+Fourteen Java files. Every package name is a **layer**, so nothing in the tree names a domain
+boundary — a package-name-driven analyser finds exactly one context here and is wrong. The fixture
+holds one instance of everything the heuristics claim to find, **plus traps**: a fixture containing
+only findings proves nothing about false positives, which are the failure mode that discredits an
+inference tool.
+
+The sources carry no oracle labels: the ground truth lives only here and in `expected.yaml`. Its ids: `P1`–`P6` for the ranked findings (Pass 3 order), `N1`–`N7` for the must-nots.
+`uv run --script tests/fixtures/check-expected.py` (from `essentials-plugin/`) checks `expected.yaml` against the tree and that no source carries an oracle label.
+
+Eval: `evals/slice-discover-brownfield-layered/` and `evals/slice-check-brownfield-layered/`; change-router's `gate-not-essentials` case — graders generated from `expected.yaml`; how to run and read it: `evals/README.md`.
+
+Editing rules:
+
+- Keep files short — these are signal carriers, not realistic code.
+- **If you add a heuristic to `references/slice/discovery-heuristics.md`, add a fixture element that
+  exercises it, a row here, and an entry in `expected.yaml`.** A heuristic with no fixture element is
+  unexercised.
+- Never put a finding or trap label in a source comment; the model under test reads the sources.
+
 Run:
 
 ```
 /essentials:slice-discover essentials-plugin/tests/fixtures/brownfield-layered
 ```
 
-Then diff the report against the ground truth below. There is no assertion runner; this file **is**
-the oracle.
+Then compare the report with the ground truth below.
+
+`/essentials:slice-check` on this tree must decline at its Step 1.2: no `slice.yaml` and no role directory (`use_cases/`,
+`views/`, `automations/`, `external_systems/`) means the project never opted into the law. It points at
+`/essentials:slice-discover`, stops, runs no gates, reports no finding (not even "missing manifest"), and writes nothing
+(`expected.yaml` `runs[1]`).
 
 ## Pass 0 — terrain
 

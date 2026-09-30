@@ -23,12 +23,28 @@ jobs:
   # copy (scripts/sync-plugin-llm.sh). The pre-commit hook keeps the two in step on a contributor's machine, but hooks
   # are per clone and optional, so this gate is what enforces it. `git status` rather than `git diff`, so a doc added
   # to LLM/ without its copy fails too. No symlinks under the plugin: Git for Windows checks them out as text files.
+  # Every other deterministic check of the plugin runs here as well, one step per script so a failure names its oracle.
+  # None needs a JDK, Docker or Node: stdlib Python, plus uv for the scripts whose PEP 723 header pins pyyaml/jsonschema,
+  # plus a headless Chrome for the slice-map page. The whole job takes about a minute.
   plugin-docs:
     name: plugin LLM docs in sync
     runs-on: ubuntu-latest
+    # Every Python in this job runs on the oldest version the scripts declare (`requires-python = ">=3.11"`), so CI proves
+    # the minimum rather than whatever the runner ships. uv reads UV_PYTHON (and fetches that interpreter); the stdlib
+    # scripts go through `uv run` as well, and the scripts' own child processes use sys.executable. Locally:
+    # `export UV_PYTHON=3.11`, then the same commands.
+    env:
+      UV_PYTHON: '3.11'
 
     steps:
+      # Two commits deep, so check-ess-ids can hold the catalogue to HEAD^1: the base side of a pull request's merge
+      # commit, or the previous commit on a push.
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+
+      # v7 is the last setup-uv major with a moving tag; from v8 on the action publishes exact versions only.
+      - uses: astral-sh/setup-uv@v7
 
       - name: Regenerate the plugin's copy of LLM/ and fail on any difference
         run: |
@@ -43,8 +59,14 @@ jobs:
       # Stack requirements (S1-S11) and version pins live in references/stack/; everything else in the plugin cites them.
       - name: Plugin citation convention
         run: |
-          python3 essentials-plugin/scripts/check-citations.py --self-test
-          python3 essentials-plugin/scripts/check-citations.py
+          uv run --script essentials-plugin/scripts/check-citations.py --self-test
+          uv run --script essentials-plugin/scripts/check-citations.py
+
+      # ESS-NNN ids on LLM/LLM-traps.md are what /essentials:review reports: unique, contiguous, never reused.
+      - name: ESS id catalogue (LLM/LLM-traps.md)
+        run: |
+          uv run --script scripts/check-ess-ids.py --self-test
+          uv run --script scripts/check-ess-ids.py --baseline HEAD^1
 
       - name: Fail on symlinks under essentials-plugin/
         run: |
@@ -54,6 +76,88 @@ jobs:
             echo "$links"
             exit 1
           fi
+
+      # Every fixture, slice golden and slice-source case, the project-installed copy, and multi-lane's one intended finding.
+      - name: Slice manifest lint (slice-lint.py)
+        working-directory: essentials-plugin
+        run: uv run --script tests/scripts/test_slice_lint.py
+
+      - name: Slice templates render to the committed goldens (render-slice.py)
+        working-directory: essentials-plugin
+        run: |
+          uv run --script scripts/render-slice.py check
+          uv run python -m unittest discover -s tests/scripts -p 'test_render_slice.py'
+
+      - name: Slice source facts (slice-source.py)
+        working-directory: essentials-plugin
+        run: uv run --script tests/scripts/test_slice_source.py
+
+      - name: Slice index and graph (slice-index.py)
+        working-directory: essentials-plugin
+        run: uv run --script tests/scripts/test_slice_index.py
+
+      - name: Stack contract lint (stack-lint.py)
+        working-directory: essentials-plugin
+        run: |
+          uv run --script scripts/stack-lint.py --self-test
+          uv run python -m unittest tests/stack-lint/test_stack_lint.py
+
+      # Every answer combination renders and passes stack-lint; the nine golden cells match their committed .tree files.
+      - name: /essentials:init renders to the committed goldens (init-render.py)
+        working-directory: essentials-plugin
+        run: |
+          uv run --script scripts/init-render.py --self-test
+          uv run --script scripts/init-render.py --all-combinations
+          uv run --script scripts/init-render.py --check
+
+      - name: Review signatures (review-scan.py)
+        working-directory: essentials-plugin
+        run: |
+          uv run --script scripts/review-scan.py --self-test
+          uv run python -m unittest discover -s tests/scripts -p 'test_review_scan.py'
+
+      - name: Review judgement cases, deterministic half (check-patches.py)
+        working-directory: essentials-plugin
+        run: uv run --script tests/review/judgement/check-patches.py
+
+      - name: Fixture expectations match their sources (check-expected.py)
+        working-directory: essentials-plugin
+        run: |
+          uv run --script tests/fixtures/check-expected.py --self-test
+          uv run --script tests/fixtures/check-expected.py
+
+      # The eval suite itself is maintainer-run before a release; this only proves its graders are regenerated, not edited.
+      - name: Eval graders generated from their sources (evals/build.py)
+        working-directory: essentials-plugin
+        run: uv run --script evals/build.py --check
+
+      - name: Slice-compile case table (overlay.py)
+        working-directory: essentials-plugin
+        run: uv run --script tests/slice-compile/overlay.py check
+
+      # chrome-headless-shell from Chrome for Testing, as a zip: no Node, no apt. Its libraries come with the runner's
+      # own Chrome install.
+      - name: Install chrome-headless-shell (Chrome for Testing, Stable)
+        id: chrome
+        run: |
+          read -r version url < <(curl -fsSL https://googlechromelabs.github.io/chrome-for-testing/last-known-good-versions-with-downloads.json |
+            uv run python -c 'import json, sys; s = json.load(sys.stdin)["channels"]["Stable"]; print(s["version"], next(d["url"] for d in s["downloads"]["chrome-headless-shell"] if d["platform"] == "linux64"))')
+          curl -fsSL -o "$RUNNER_TEMP/chrome-headless-shell.zip" "$url"
+          unzip -q "$RUNNER_TEMP/chrome-headless-shell.zip" -d "$RUNNER_TEMP"
+          echo "chrome-headless-shell $version"
+          echo "path=$RUNNER_TEMP/chrome-headless-shell-linux64/chrome-headless-shell" >> "$GITHUB_OUTPUT"
+
+      # The slice-map page's layout is JavaScript; the check runs it in the browser and parses the DOM it leaves.
+      # Exit 3 means "no Chrome, skipped", which locally is a notice and here is a failure.
+      - name: slice-map page renders (render-check.py)
+        working-directory: essentials-plugin
+        run: |
+          status=0
+          uv run --script tests/fixtures/slice-map/render-check.py --chrome "${{ steps.chrome.outputs.path }}" || status=$?
+          if [ "$status" -eq 3 ]; then
+            echo "::error::render-check.py skipped: it found no Chrome. In CI a skip is a failure."
+          fi
+          exit "$status"
 
   # Full build including Testcontainers-backed integration tests.
   verify:
@@ -147,3 +251,275 @@ jobs:
           paths: '**/target/surefire-reports/TEST-*.xml'
         env:
           NODE_OPTIONS: --max-old-space-size=4096
+
+  # What the essentials plugin generates, built the way users get it (scripts/plugin-scaffold.sh): the /essentials:init
+  # cells and the slice templates and fixtures on rendered host projects. In parallel with `verify`, whose wall clock
+  # stays untouched. The generated projects depend on DEV-SNAPSHOT artifacts, which are not on Central, so this job
+  # installs the reactor subset they name once and hands it on as an artifact. The subset is read from the init pom
+  # templates, so a template that starts using another module installs it without a workflow edit. Each scaffold job
+  # keeps its own Maven cache (key: its job id), so none of them replaces the one `verify` restores.
+  scaffold-install:
+    name: scaffold · install the reactor subset
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up JDK 25
+        uses: actions/setup-java@v4
+        with:
+          java-version: '25'
+          distribution: 'temurin'
+      - uses: actions/cache@v4
+        with:
+          path: ~/.m2/repository
+          key: scaffold-m2-${{ github.job }}-${{ hashFiles('**/pom.xml') }}
+          restore-keys: scaffold-m2-${{ github.job }}-
+
+      - name: Install the modules the generated projects depend on
+        run: |
+          modules=$(python3 - <<'PY'
+          import re
+          ids = set()
+          for f in ("pom.xml.template", "backend/pom.xml.template"):
+              text = open("essentials-plugin/references/init-assets/project/" + f).read()
+              for block in re.findall(r"<dependency>(.*?)</dependency>", text, re.S):
+                  if "<groupId>dk.trustworks.essentials" in block:
+                      ids.update(re.findall(r"<artifactId>([\w.-]+)</artifactId>", block))
+          print(",".join(":" + a for a in sorted(ids)))
+          PY
+          )
+          echo "modules: $modules (and what they need, -am)"
+          mvn -B -ntp install -DskipTests -DskipDependencyCheck=true -am -pl "$modules"
+          tar -C ~/.m2/repository -cf "$RUNNER_TEMP/essentials-reactor.tar" dk/trustworks/essentials
+          # Not cached: the next run installs fresh ones.
+          rm -rf ~/.m2/repository/dk/trustworks/essentials
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: essentials-reactor
+          path: ${{ runner.temp }}/essentials-reactor.tar
+          retention-days: 1
+
+  # The nine /essentials:init cells (tests/golden/init/cells.json): render, CI overlay, stack-lint, `verify` with its
+  # Testcontainers context ITs, then the regenerated contracts/openapi.json is checked. One job, not nine legs: a warm
+  # cell takes 10-15 s, so the whole set is about 1.5 min and a leg per cell would pay the runner's cold start nine times.
+  scaffold-matrix:
+    name: scaffold · init matrix (9 cells)
+    needs: scaffold-install
+    runs-on: ubuntu-latest
+    outputs:
+      frontend-cells: ${{ steps.cells.outputs.frontend }}
+
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up JDK 25
+        uses: actions/setup-java@v4
+        with:
+          java-version: '25'
+          distribution: 'temurin'
+      - uses: actions/cache@v4
+        with:
+          path: ~/.m2/repository
+          key: scaffold-m2-${{ github.job }}-${{ hashFiles('**/pom.xml', 'essentials-plugin/references/stack/stack-pins.md') }}
+          restore-keys: scaffold-m2-${{ github.job }}-
+      - uses: actions/download-artifact@v4
+        with:
+          name: essentials-reactor
+          path: ${{ runner.temp }}
+      - name: Restore the installed reactor subset
+        run: |
+          mkdir -p ~/.m2/repository
+          tar -C ~/.m2/repository -xf "$RUNNER_TEMP/essentials-reactor.tar"
+
+      # Image tags from stack-pins.md (the renderer's own reading of it), pulled outside any test's startup timeout.
+      - name: Pre-pull the database images the generated projects use
+        run: |
+          python3 essentials-plugin/scripts/init-render.py --list-names |
+            awk -F '\t' '$1 == "{{pin:PostgreSQL image}}" || $1 == "{{pin:MongoDB image}}" { print $2 }' |
+            xargs -n 1 docker pull
+
+      - name: Cells with a frontend, for the frontend job
+        id: cells
+        run: |
+          echo "frontend=$(python3 -c 'import json; c = json.load(open("essentials-plugin/tests/golden/init/cells.json"))["cells"]; print(json.dumps([n for n in c if c[n]["frontend"] != "none"]))')" >> "$GITHUB_OUTPUT"
+
+      - name: Build every cell (plugin-scaffold.sh matrix)
+        run: scripts/plugin-scaffold.sh matrix --work "$RUNNER_TEMP/scaffold"
+
+      - name: Upload the regenerated contracts/openapi.json of every cell
+        uses: actions/upload-artifact@v4
+        with:
+          name: scaffold-specs
+          path: ${{ runner.temp }}/scaffold/*/project/contracts/openapi.json
+          retention-days: 1
+
+      - name: Upload the logs of a failed cell
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: scaffold-matrix-logs
+          path: |
+            ${{ runner.temp }}/scaffold/*/*.log
+            ${{ runner.temp }}/scaffold/*/result
+            ${{ runner.temp }}/scaffold/*/project/backend/target/*-reports/
+          retention-days: 7
+      - name: Drop the reactor subset from the cache
+        if: always()
+        run: rm -rf ~/.m2/repository/dk/trustworks/essentials
+
+  # The ten slice-compile cases (tests/slice-compile/overlay.py): the seven slice-golden compositions, incl. the Java and
+  # Kotlin two-BC boot checks, and three fixtures, each on its rendered host. One job for the same reason as the matrix.
+  scaffold-slices:
+    name: scaffold · slice templates and fixtures (10 cases)
+    needs: scaffold-install
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up JDK 25
+        uses: actions/setup-java@v4
+        with:
+          java-version: '25'
+          distribution: 'temurin'
+      - uses: actions/cache@v4
+        with:
+          path: ~/.m2/repository
+          key: scaffold-m2-${{ github.job }}-${{ hashFiles('**/pom.xml', 'essentials-plugin/references/stack/stack-pins.md') }}
+          restore-keys: scaffold-m2-${{ github.job }}-
+      - uses: actions/download-artifact@v4
+        with:
+          name: essentials-reactor
+          path: ${{ runner.temp }}
+      - name: Restore the installed reactor subset
+        run: |
+          mkdir -p ~/.m2/repository
+          tar -C ~/.m2/repository -xf "$RUNNER_TEMP/essentials-reactor.tar"
+
+      - name: Pre-pull the database images the generated projects use
+        run: |
+          python3 essentials-plugin/scripts/init-render.py --list-names |
+            awk -F '\t' '$1 == "{{pin:PostgreSQL image}}" || $1 == "{{pin:MongoDB image}}" { print $2 }' |
+            xargs -n 1 docker pull
+
+      - name: Build every case (plugin-scaffold.sh slices)
+        run: scripts/plugin-scaffold.sh slices --work "$RUNNER_TEMP/scaffold"
+
+      - name: Upload the logs of a failed case
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: scaffold-slices-logs
+          path: |
+            ${{ runner.temp }}/scaffold/*/*.log
+            ${{ runner.temp }}/scaffold/*/result
+            ${{ runner.temp }}/scaffold/*/project/backend/target/*-reports/
+          retention-days: 7
+      - name: Drop the reactor subset from the cache
+        if: always()
+        run: rm -rf ~/.m2/repository/dk/trustworks/essentials
+
+  # The generated frontend of each cell that has one, against the spec its `verify` regenerated in scaffold-matrix:
+  # lockfile hook, npm ci, Orval client, type check, the custom-fetch vitest, lint and the production build. The only job
+  # with Node, at the stack-pins pin, and it is the generated project's toolchain: the Essentials build stays Node-free.
+  # Embedded cells also run the project's own `mvn package`, which is what puts the SPA into the JAR. One leg per cell,
+  # unlike the matrix: a leg needs no JDK or Docker unless embedded, so its cold start is a Node setup, and its work
+  # (15-30 s measured) is mostly npm, which the cells cannot share. A red leg names its cell.
+  scaffold-frontend:
+    name: scaffold · frontend (${{ matrix.cell }})
+    needs: [ scaffold-install, scaffold-matrix ]
+    strategy:
+      fail-fast: false
+      matrix:
+        cell: ${{ fromJSON(needs.scaffold-matrix.outputs.frontend-cells) }}
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Render the cell with the spec its build regenerated
+        id: cell
+        env:
+          CELL: ${{ matrix.cell }}
+        run: |
+          python3 - "$CELL" "$RUNNER_TEMP/answers.json" <<'PY'
+          import json, sys
+          cells = json.load(open("essentials-plugin/tests/golden/init/cells.json"))
+          json.dump({**cells["defaults"], **cells["cells"][sys.argv[1]]}, open(sys.argv[2], "w"))
+          PY
+          python3 essentials-plugin/scripts/init-render.py --answers "$RUNNER_TEMP/answers.json" --out "$RUNNER_TEMP/project"
+          pins=$(python3 essentials-plugin/scripts/init-render.py --list-names)
+          {
+            echo "frontend=$(python3 -c 'import json, sys; print(json.load(open(sys.argv[1]))["frontend"])' "$RUNNER_TEMP/answers.json")"
+            echo "node=$(awk -F '\t' '$1 == "{{pin:Node}}" { sub(/^v/, "", $2); print $2 }' <<<"$pins")"
+            echo "essentials=$(sed -n 's:.*<revision>\(.*\)</revision>.*:\1:p' pom.xml | head -n 1)"
+          } >> "$GITHUB_OUTPUT"
+      - uses: actions/download-artifact@v4
+        with:
+          name: scaffold-specs
+          path: ${{ runner.temp }}/specs
+      - name: Use the regenerated spec
+        env:
+          CELL: ${{ matrix.cell }}
+        run: cp "$RUNNER_TEMP/specs/$CELL/project/contracts/openapi.json" "$RUNNER_TEMP/project/contracts/openapi.json"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ steps.cell.outputs.node }}
+
+      - name: Lockfile hook, as /essentials:init runs it
+        run: |
+          python3 essentials-plugin/scripts/init-render.py --answers "$RUNNER_TEMP/answers.json" --hooks |
+            python3 -c 'import json, sys; print(next(h["run"] for h in json.load(sys.stdin) if h["id"] == "frontend-lockfile"))' > "$RUNNER_TEMP/lockfile-hook.sh"
+          cd "$RUNNER_TEMP/project/frontend" && bash -e "$RUNNER_TEMP/lockfile-hook.sh"
+      - name: npm ci
+        working-directory: ${{ runner.temp }}/project/frontend
+        run: npm ci
+      - name: Orval client from contracts/openapi.json
+        working-directory: ${{ runner.temp }}/project/frontend
+        run: npx orval
+      - name: Type check
+        working-directory: ${{ runner.temp }}/project/frontend
+        run: npx tsc --noEmit
+      - name: custom-fetch test (vitest)
+        working-directory: ${{ runner.temp }}/project/frontend
+        run: npx vitest run
+      - name: Lint
+        working-directory: ${{ runner.temp }}/project/frontend
+        run: npx eslint .
+      - name: Production build
+        working-directory: ${{ runner.temp }}/project/frontend
+        run: npm run build
+
+      - name: Set up JDK 25
+        if: steps.cell.outputs.frontend == 'embedded'
+        uses: actions/setup-java@v4
+        with:
+          java-version: '25'
+          distribution: 'temurin'
+      - if: steps.cell.outputs.frontend == 'embedded'
+        uses: actions/cache@v4
+        with:
+          path: ~/.m2/repository
+          key: scaffold-m2-${{ github.job }}-${{ hashFiles('**/pom.xml', 'essentials-plugin/references/stack/stack-pins.md') }}
+          restore-keys: scaffold-m2-${{ github.job }}-
+      - if: steps.cell.outputs.frontend == 'embedded'
+        uses: actions/download-artifact@v4
+        with:
+          name: essentials-reactor
+          path: ${{ runner.temp }}
+      - name: Embedded SPA into the JAR (the project's own mvn package, frontend profile on)
+        if: steps.cell.outputs.frontend == 'embedded'
+        working-directory: ${{ runner.temp }}/project
+        env:
+          ESSENTIALS_VERSION: ${{ steps.cell.outputs.essentials }}
+        run: |
+          mkdir -p ~/.m2/repository
+          tar -C ~/.m2/repository -xf "$RUNNER_TEMP/essentials-reactor.tar"
+          mvn -B -ntp -Dessentials.version="$ESSENTIALS_VERSION" package -DskipTests
+          for jar in backend/target/*.jar; do
+            unzip -l "$jar" | grep -Eq ' (BOOT-INF/classes/)?static/index\.html$' ||
+              { echo "::error::$jar has no static/index.html: the embedded SPA did not reach the JAR"; exit 1; }
+          done
+      - name: Drop the reactor subset from the cache
+        if: always() && steps.cell.outputs.frontend == 'embedded'
+        run: rm -rf ~/.m2/repository/dk/trustworks/essentials

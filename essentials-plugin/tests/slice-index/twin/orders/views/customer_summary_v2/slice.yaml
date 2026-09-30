@@ -1,0 +1,19 @@
+schemaVersion: "1.3"
+slice: orders.customer_summary_v2
+kind: view
+bc: orders
+owner: orders-team
+status: live
+summary: Totals per customer, net of cancellations.
+language: kotlin
+tier: cqrs-es
+lane: decider
+
+supersedes: orders.customer_summary
+serves: [CustomerSummaryV2]
+owns: [customer_summary_view]
+projections:
+  - { name: CustomerSummaryProjectionV2, from: [OrderPlaced, OrderCancelled] }
+tests:
+  unit: { present: true }
+  integration: { present: false }

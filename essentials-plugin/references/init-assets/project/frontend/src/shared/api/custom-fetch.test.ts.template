@@ -1,0 +1,56 @@
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import { customFetch } from './custom-fetch'
+
+const stubFetch = (response: () => Response) => {
+  const fetchMock = vi.fn<typeof fetch>(async () => response())
+  vi.stubGlobal('fetch', fetchMock)
+  return fetchMock
+}
+
+const requestedUrl = (fetchMock: ReturnType<typeof stubFetch>) => fetchMock.mock.calls[0][0]
+
+describe('customFetch', () => {
+  afterEach(() => {
+    vi.unstubAllEnvs()
+    vi.unstubAllGlobals()
+  })
+
+<!-- IF frontend=standalone -->
+  it('prefixes VITE_API_BASE_URL onto the request, so the generated relative paths reach the API origin', async () => {
+    vi.stubEnv('VITE_API_BASE_URL', 'https://api.example')
+    const fetchMock = stubFetch(() => new Response('{}'))
+
+    await customFetch('/api/x')
+
+    expect(requestedUrl(fetchMock)).toBe('https://api.example/api/x')
+  })
+
+  it('keeps the request relative when VITE_API_BASE_URL is unset', async () => {
+    vi.stubEnv('VITE_API_BASE_URL', undefined)
+    const fetchMock = stubFetch(() => new Response('{}'))
+
+    await customFetch('/api/x')
+
+    expect(requestedUrl(fetchMock)).toBe('/api/x')
+  })
+<!-- END frontend -->
+<!-- IF frontend=embedded -->
+  it('keeps requests relative: the SPA and the API share an origin, so no base URL is read', async () => {
+    vi.stubEnv('VITE_API_BASE_URL', 'https://api.example')
+    const fetchMock = stubFetch(() => new Response('{}'))
+
+    await customFetch('/api/x')
+
+    expect(requestedUrl(fetchMock)).toBe('/api/x')
+  })
+<!-- END frontend -->
+
+  it('returns data, status and headers, and tolerates the empty body of a void endpoint', async () => {
+    stubFetch(() => new Response(null, { status: 204 }))
+
+    const result = await customFetch<{ data: unknown; status: number }>('/api/x', { method: 'POST' })
+
+    expect(result.status).toBe(204)
+    expect(result.data).toBeUndefined()
+  })
+})

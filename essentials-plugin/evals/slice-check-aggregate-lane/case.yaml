@@ -1,0 +1,11 @@
+schema_version: "1.1"
+name: slice-check-aggregate-lane
+description: "slice-check on the aggregate-lane fixture (Java, billing BC on the aggregate lane)"
+tags: [slice-check]
+context:
+  scaffold_script: scaffold.sh
+execution:
+  max_turns: 80
+  timeout_seconds: 1800
+  allowed_tools: [Read, Glob, Grep, Skill, Bash]
+  prompt: "/essentials:slice-check"

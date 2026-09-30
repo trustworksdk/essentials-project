@@ -1,5 +1,7 @@
 package {{packagePath}}.{{bc}}.events;
 
+import {{packagePath}}.{{bc}}.types.{{Aggregate}}Id;
+
 /**
  * Event variant emitted by the {{slice}} slice. One variant per file (rules/slice-design.md §R3) —
  * §R3 applies on this lane unchanged; what differs is where the event *goes*.
@@ -22,7 +24,7 @@ package {{packagePath}}.{{bc}}.events;
  * wire contract into every foreign consumer (§R4).
  */
 public record {{Event}}(
-        String {{aggregate}}Id,
+        {{Aggregate}}Id id,
         // TODO: replace with the facts this event carries
         String placeholder
 ) implements {{Aggregate}}Event {

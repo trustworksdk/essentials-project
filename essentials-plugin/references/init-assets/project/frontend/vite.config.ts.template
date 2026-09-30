@@ -1,0 +1,21 @@
+/// <reference types="vitest/config" />
+import { defineConfig } from 'vite'
+import react from '@vitejs/plugin-react'
+
+export default defineConfig({
+  plugins: [react()],
+  server: {
+    port: 5173,
+    // Development only: makes /api same-origin while developing. It also hides a standalone deployment's CORS and
+    // base-URL problems, so test a standalone build against a non-proxied origin (npm run preview) before trusting it.
+    proxy: {
+      '/api': { target: 'http://localhost:8080', changeOrigin: true },
+    },
+  },
+  preview: {
+    port: 4173,
+  },
+  test: {
+    environment: 'node',
+  },
+})

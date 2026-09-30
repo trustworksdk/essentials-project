@@ -1,0 +1,15 @@
+{
+  "tool": "slice-source",
+  "format": 1,
+  "mode": "check",
+  "root": "tests/fixtures/brownfield-layered",
+  "manifests": 0,
+  "parsed": 0,
+  "skippedManifests": [],
+  "slicesWithoutManifest": [],
+  "lanes": [],
+  "endpoints": [],
+  "findings": [],
+  "unverified": [],
+  "unparsed": []
+}

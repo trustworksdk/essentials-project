@@ -1,0 +1,25 @@
+graph — 18 nodes · 16 edges · 4 entry points
+
+CancelOrder  (command)
+└─ orders.cancel_order  [command]
+   └─ OrderCancelled  (event)
+      ├─ orders.customer_summary_v2  [view]
+      └─ orders.order_list_v2  [view]
+
+PlaceOrder  (command)
+└─ orders.place_order  [command]
+   └─ OrderPlaced  (event)
+      ├─ orders.customer_summary  [view]
+      ├─ orders.customer_summary_v2  [view]
+      ├─ orders.order_list  [view]
+      ├─ orders.order_list_v2  [view]
+      ├─ orders.order_stats  [view]
+      ├─ orders.order_totals  [view]
+      └─ orders.shipment_board_v2  [view]
+
+RefundOrder  (command)
+└─ billing.refund_order  [command]
+   └─ OrderRefunded  (event)
+
+PaymentSettled  (event)
+└─ billing.settle_refund  [automation]

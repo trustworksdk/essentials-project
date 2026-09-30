@@ -20,9 +20,10 @@ thing that closes that gap.
 
 It is an **audit that offers repairs**, not a regeneration. Everything it reports is derived from the
 project's own files plus the plugin's current `references/stack/stack-contract.md` — never from a
-diff against a template tree, because **this plugin ships no project tree** and `/essentials:init`
-generates rather than copies (its own preamble warns that two runs may differ in incidental ways).
-There is nothing to diff against, so nothing here pretends there is.
+diff against the template tree `/essentials:init` renders from. A project diverges from its render
+the day work on it starts, and an older project was never rendered from this tree at all, so a diff
+would report the application itself as drift. The contract is what a project must satisfy; the
+template is one way of satisfying it.
 
 ## Separation of concerns
 
@@ -123,10 +124,12 @@ diff "${CLAUDE_PLUGIN_ROOT}/references/slice/slice-yaml.schema.json" \
 
 - **Not installed at all** ⇒ **Should-fix**, and offer the install. This is the case
   `/essentials:slice-check` gate 12 cannot see: its clause is conditional on the gate already
-  existing, so a project scaffolded before `/essentials:init` Step 12.5 shipped is never told the
-  gate exists. Offer the same three options Step 12.5 offers — pre-commit hook, script only, or
-  neither — with the same fail-open hook body, and copy the schema beside the script (**required**,
-  not optional: installed into a project the script has no plugin root to walk up to).
+  existing, so a project scaffolded before `/essentials:init` offered it is never told the gate
+  exists. Offer the same three options init's Step 9 offers — pre-commit hook, script only, or
+  neither. The hook body is `${CLAUDE_PLUGIN_ROOT}/references/init-assets/project/.githooks/pre-commit.template`
+  (it has no placeholders; copy it as `.githooks/pre-commit`, executable, and set `core.hooksPath`
+  when unset); copy the schema beside the script (**required**, not optional: installed into a
+  project the script has no plugin root to walk up to).
 - **Installed but differing** ⇒ **Advisory**. A project running a stale schema validates against
   yesterday's contract and reports a clean pass it has not earned. Offer to refresh both files
   together — the script and the schema are one contract and must not drift apart.
@@ -140,15 +143,18 @@ itself, that is a design decision to raise with the user, not one to take here.
 **B1 — Project `CLAUDE.md` framework-knowledge block.** Grep for `Trustworks Essentials framework
 knowledge`. Absent ⇒ **Should-fix**: the `essentials-docs` skill still auto-loads on code signals,
 but the project has no explicit instruction to prefer it over web search or recall. Offer to insert
-the block from `${CLAUDE_PLUGIN_ROOT}/references/init-assets/CLAUDE.md.template` **near the top,
+the `## Trustworks Essentials framework knowledge` section of
+`${CLAUDE_PLUGIN_ROOT}/references/init-assets/project/CLAUDE.md.template` (with
+`{{essentialsVersion}}` replaced by `ESSENTIALS_VERSION`) **near the top,
 preserving everything already in the file** — this is an insertion, never a re-render of the
 template over the user's file.
 
 **B2 — Workspace pointer.** Only when the project is in a subdirectory of the invocation root: if
 `../CLAUDE.md` exists but carries no Essentials pointer block, that is **Advisory** — planners
 launched at the workspace root have no signal that the project lives in `<artifactId>/` and may
-scaffold at the wrong root or invent their own pins. Offer the pointer block from
-`/essentials:init` Step 13.5.
+scaffold at the wrong root or invent their own pins. Offer the pointer from
+`${CLAUDE_PLUGIN_ROOT}/references/init-assets/project/WORKSPACE-CLAUDE.md.template`, rendered for this
+project (Step 6, "A scratch render").
 
 **B3 — Version stamp.** Absent, or in the older `essentials-init: v<semver>` form ⇒ **Advisory**, and
 repairing it is free: set `<!-- essentials-init: essentials <ESSENTIALS_VERSION> -->` under the
@@ -158,27 +164,48 @@ what the plugin ships (Step 8).
 
 ## Step 4 — Group C: conformance with the current stack contract
 
-Read `${CLAUDE_PLUGIN_ROOT}/references/stack/stack-contract.md` and the language binding
-(`<LANGUAGE>-spring-boot.md`). **Work from the contract, not from memory or from this list** — the
-table below names what to check; the contract states what each requirement is and why.
+This group exists because of the failure class that produced S2.1: **most of these compile cleanly
+and kill context startup**, several under a message that names nothing relevant. A project that
+predates a requirement has no way to discover it except by booting and reading a misleading stack
+trace.
 
-This group exists because of the failure class that produced S2.1: **every one of these compiles
-cleanly and kills context startup**, several under a message that names nothing relevant. A project
-that predates a requirement has no way to discover it except by booting and reading a misleading
-stack trace.
+**The decidable half is a script, and its output is taken verbatim.** Whether a POM declares an
+artifact, a config file carries a key, or a source file imports a class is a fact, and a model
+reading a POM confidently gets such facts wrong. Run:
 
-| # | Requirement | Check | Severity |
+```bash
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/stack-lint.py" . --json
+```
+
+It detects `LANGUAGE`, the profile, the web stack and the frontend mode itself (`facts` in the
+output; pass `--language`/`--db`/`--web`/`--frontend` only when Step 1 had to ask the user). Report
+every finding as it comes — `id` (`ESS-S<n>`), severity, `file:line`, `message`, `fix.text` — and
+list `notRun` under "not run" with its reason. **Do not re-derive, re-grade or drop a finding**, and
+do not add a finding for a row the script covers because the file "looks" wrong to you: that is the
+second, weaker audit this split exists to prevent. Exit 2 means the script could not run (no
+`pom.xml`, a POM that does not parse, a Gradle-only build): report "Group C: not run" with its
+stderr line and run the judgement rows only. Never fall back to checking the decidable rows by hand.
+
+What the rows cover, so the report can say what was checked and what was clean:
+
+| # | Requirement | `stack-lint.py` checks | Judgement (yours, reading the contract live) |
 |---|---|---|---|
-| C1 | **S2.1** | Every row of S2.1's table for `DB_PROFILE` is declared in `backend/pom.xml` at compile scope. On both Postgres profiles that is `spring-boot-starter-jdbc`, the `postgresql` driver, `jdbi3-core`, `jdbi3-postgres`, `kotlin-stdlib-jdk8` and `kotlin-reflect` — **the Kotlin two on the Java lane as well**, because `postgresql-document-db` is a Kotlin module. On `mongo`, `spring-boot-starter-data-mongodb`. On a WebMvc stack, `reactor-core` | **Blocking** |
-| C2 | **S3.1 / S3.2** | No Jackson 2 Essentials module (`types-jackson` / `immutable-jackson`) resolved — a leftover one makes every persistence serializer throw at startup. On Kotlin: `jackson-module-kotlin` (Jackson 3) declared, and `KotlinModule` reaches the **persistence** mapper through the project's own `JSONEventSerializer` / `JSONSerializer` bean built on `EssentialsObjectMappers`; a `KotlinModule` `@Bean` alone reaches the web mapper only | **Blocking** |
-| C3 | **S3.3** | `EssentialTypesJacksonModule` reaches the **web** mapper: it does through a starter's bean, and is lost silently when the project defines its own `JsonMapper` bean without registering the module on it | **Blocking** |
-| C4 | **S4** | Exactly one `Essentials*WebConfigurer` is `@Import`ed. The dependency alone is inert — a typed path variable returns 500 with the dependency present and the import missing. Not optional on Java, where an id extends `CharSequenceType` and cannot bind without the converter | **Blocking** |
-| C5 | **S3.5 / compiler** | Java: `-parameters` on `maven-compiler-plugin`. Kotlin: the all-open `spring` plugin, `-Xjsr305=strict`, `-Xannotation-default-target=param-property`, `-parameters` | **Blocking** |
-| C6 | **S5** | Postgres profiles only: a `DocumentDbRepositoryFactory` bean. Absent on `mongo` by design — do not report it there | **Should-fix** |
-| C7 | **S2 (mongo)** | Connection properties are `spring.mongodb.*`. `spring.data.mongodb.*` is unbound in Boot 4 and falls back to `mongodb://localhost/test` with no warning | **Blocking** |
-| C8 | **S9** | A `SecurityConfig` exists and someone has decided what it says. A permit-all left exactly as `/essentials:init` emitted it is **Should-fix** — the contract's word is that security is decided, never inherited | **Should-fix** |
-| C9 | **S7** | The contract-first pipeline: `springdoc-openapi-maven-plugin`, the two `spring-boot-maven-plugin` start/stop executions, and `application-openapi.yml`. SHOULD, so | **Advisory** |
-| C10 | **S10** | Testcontainers **2.x** names and S10's import paths. `@AutoConfigureWebTestClient` moved package in Boot 4 and is no longer implied by `@SpringBootTest`; `PostgreSQLContainer` moved package in Testcontainers 2.x while keeping its coordinate. Both read as "this class does not exist" | **Advisory** |
+| C1 | **S2.1** | `s2.1-*` — every row of S2.1's table for the profile and web stack, at compile scope | — |
+| C2 | **S3.1 / S3.2 / S3.4** | `s3.1-*`, `s3.4-*` — no Jackson 2 Essentials module; on Kotlin, Jackson 3 `jackson-module-kotlin` and an own persistence serializer bean of the type the starter backs off from | Whether that bean really builds on `EssentialsObjectMappers` (S3.2) |
+| C3 | **S3.3** | `s3.3-own-json-mapper` | — |
+| C4 | **S4** | `s4-*` — exactly one `Essentials*WebConfigurer` `@Import`ed, matching the web stack | — |
+| C5 | **S3.5 / compiler** | `s3.5-*` | Constructor parameter names that differ from their JSON properties |
+| C6 | **S5** | `s5-*` — the `DocumentDbRepositoryFactory` bean, no document store on `mongo`, no `transactional-mode` key, aggregates declared | Writes outside the `UnitOfWork`; handler idempotency |
+| C7 | **S2** | `s2-*` — one starter; `spring.mongodb.*` connection keys; the modules the starters do not bring (`eventsourced-aggregates`, `kotlin-eventsourcing` on Kotlin, `postgresql-document-db`) | — |
+| C8 | **S9** | `s9-admin-spi` | A `SecurityConfig` exists and someone has **decided** what it says. A permit-all left exactly as `/essentials:init` emitted it is **Should-fix** — the contract's word is that security is decided, never inherited |
+| C9 | **S7** | `s7-*` — the spec is regenerated by an integration test, the committed spec exists, the frontend builds from it, and `SingleValueTypeModelConverter` is registered wherever springdoc runs (without it every generated client types the semantic ids as objects). A project still on the forked-app pipeline (`springdoc-openapi-maven-plugin` with start/stop executions and `application-openapi.yml`) is reported under `s7-spec-generation`: it serves a stale spec silently once an endpoint needs the database | — |
+| C10 | **S10** | `s10-*` — Testcontainers 2.x coordinates and packages, S10's `@AutoConfigureWebTestClient` package, Failsafe bound | Context caching and fork reuse |
+| C11 | **S8** | `s8-*` — both half-choices: embedded without CORS, base URL or dead pieces and with its SPA fallback and static copy; standalone with a consumed `VITE_API_BASE_URL`, a `CorsConfigurationSource` bound through `@ConfigurationProperties`, no wildcard with credentials; the generated client git-ignored | Whether the chosen mode is the one the deployment needs |
+| C12 | **S1 / S11** | `s1-*`, `s11-*` — the Boot line and Java baseline, one `essentials.version`, the Kotlin `jvmTarget`, the `skip-frontend` profile, `spring-boot-starter-parent` | — |
+
+Severities are the script's; the judgement rows carry the severity in their text. **A judgement
+finding needs a reason that names the file and the contract line**, the same standard the script
+meets.
 
 **Version pins are out of scope, deliberately.** Do not compare the project's pins against
 `stack-pins.md`, do not report a lag, and do not offer a bump. A pin move is an upgrade decision
@@ -211,11 +238,14 @@ ESSENTIALS UPGRADE — <project name>
   B · Orientation
     [ok]         Framework-knowledge block present
     [Advisory]   No version stamp in CLAUDE.md
-  C · Stack contract
-    [Blocking]   S2.1 — jdbi3-core, jdbi3-postgres not declared
-                 → NoClassDefFoundError: org/jdbi/v3/postgres/PostgresPlugin at startup
-    [ok]         S3.1, S3.2, S3.3, S4, S3.5, S5, S9
-    [Advisory]   S10 — PostgreSQLContainer imported from the Testcontainers 1.x package
+  C · Stack contract (stack-lint: 3 findings)
+    [Blocking]   ESS-S2.1 s2.1-jdbi  backend/pom.xml:41
+                 org.jdbi:jdbi3-core is not declared — the starter declares it `provided`, so nothing
+                 brings it; compiles, then fails at context startup
+    [Blocking]   ESS-S2 s2-eventsourced-aggregates  backend/pom.xml:41
+    [Advisory]   ESS-S10 s10-tc-package  backend/src/test/kotlin/…/IntegrationTestBase.kt:7
+    [ok]         S1, S3.x, S4, S5, S7, S8, S9, S11
+    [Should-fix] S9 (judgement) — config/SecurityConfig is the permit-all init emitted, unchanged
 
   3 fixes offered · 1 Blocking
 ```
@@ -228,15 +258,36 @@ Blocking first, then Should-fix, then Advisory. For each, `AskUserQuestion` with
 Show me the change first**. Never bundle unrelated fixes behind one confirmation, and never apply an
 Advisory without asking because it "seemed safe".
 
+**A `stack-lint` finding carries its own fix.** `fix.text` is what to show; `fix.ops` is the edit.
+Apply the ops exactly as `commands/review.md` § Applying a fix descriptor specifies — the one
+applier spec `/essentials:review --fix` uses too: one op at a time, the location re-read and its
+signature confirmed first, skip and re-run the lint on a mismatch, and `mechanical: false` shown
+and confirmed rather than applied.
+
+**A scratch render** supplies whole files the contract describes and a fix needs — the
+`OpenApiContractIT` of C9, a `config/` class, the workspace pointer of B2. Write an answers file from
+the project's facts (language, profile, web stack, frontend mode, whether `backend/compose.yml`
+exists, `lintGate: none`, the name and coordinates from the POM, and the package of the
+`@SpringBootApplication` class), render it into an empty scratch directory with
+`python3 "${CLAUDE_PLUGIN_ROOT}/scripts/init-render.py" --answers F --out /tmp/essentials-upgrade/render`
+(plus `--workspace-out /tmp/essentials-upgrade/workspace` for the B2 pointer), and offer the file the finding needs (`OpenApiContractIT` extends the rendered `IntegrationTestBase`;
+offer that too when the project has no base of its own). Never copy more than the finding needs, and
+never over a file the project already has — the project's version wins, and the difference is a
+conversation.
+
 What a fix may touch: `backend/pom.xml` dependencies and build-plugin configuration, the `config/`
-classes S1–S11 names, `application.yml` / `application-openapi.yml` keys, `.claude/rules/`,
-`scripts/`, `.githooks/`, and the project `CLAUDE.md`.
+classes S1–S11 names, `application.yml` keys, the test sources S7 and S10 name
+(`OpenApiContractIT`, `IntegrationTestBase`), `.claude/rules/`, `scripts/`, `.githooks/`, and the
+project `CLAUDE.md`. Moving a project off the forked-app spec pipeline (C9) also removes its
+`springdoc-openapi-maven-plugin`, the two `spring-boot-maven-plugin` start/stop executions and
+`application-openapi.yml` — offer that as one fix, after the replacing test has passed.
 
 What a fix may **never** touch — these are not defaults to weigh, they are the boundary:
 
 - **Slice source.** Anything under a bounded context is `/essentials:slice-check`'s business, and
   its repairs are opt-in there for the same reason.
-- **The skeleton.** No Initializr call, no regenerated `Application.kt`, no parent POM rewrite.
+- **The skeleton.** No re-render over the project, no regenerated `Application.kt`, no parent POM
+  rewrite.
 - **Version pins**, per Step 4.
 - **Elicitation.** Never re-ask the init questions. Language, profile, frontend mode and coordinates
   are facts of the project now; read them, do not re-choose them.
@@ -249,12 +300,15 @@ If a dependency, a compiler flag, a config class or a config key changed, the ch
 the class of edits that compiles and then fails at context startup — so compiling is not enough:
 
 ```bash
-cd backend
-./mvnw -q -B test-compile 2>&1 | tail -30
-./mvnw -B test -Dtest='*ApplicationTests' -DfailIfNoTests=false 2>&1 | tail -40
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/stack-lint.py" . --json   # the applied findings are gone
+./mvnw -B verify 2>&1 | tail -60                                   # from the reactor root; needs Docker
 ```
 
-Use `mvn` when there is no wrapper, and say which you used. `/essentials:init` Step 13.7's symptom →
+`verify` is what starts the context — through the project's `*IT` tests (a project `/essentials:init`
+rendered has `ApplicationContextIT`); a project with no integration test that starts the context has
+no check here, so say so rather than calling a compile a pass. Add `-Pskip-frontend` when the
+project has that profile. Without Docker, run `test-compile` and report the context start as
+unverified. Use `mvn` when there is no wrapper, and say which you used. `/essentials:init` Step 13.7's symptom →
 requirement table applies verbatim to reading the output — map a failure back to the requirement
 rather than improvising dependencies until it boots.
 

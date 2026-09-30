@@ -47,8 +47,8 @@ public class {{Slice}}Handler extends AnnotatedCommandHandler {
     @CmdHandler
     @Transactional
     public void handle({{Command}} cmd) {
-        var {{entity}} = {{entity}}s.findById(cmd.id().value())
-                .orElseThrow(() -> new IllegalArgumentException("No {{Entity}} " + cmd.id().value()));
+        var {{entity}} = {{entity}}s.findById(cmd.id().toString())
+                .orElseThrow(() -> new IllegalArgumentException("No {{Entity}} " + cmd.id().toString()));
 
         // TODO: call the ONE invariant method this slice's intent maps to. The boolean-returning
         //       shape below is the idempotent form — it returns false when the state was already
@@ -58,6 +58,6 @@ public class {{Slice}}Handler extends AnnotatedCommandHandler {
         }
 
         {{entity}}s.save({{entity}});
-        eventBus.publish(new {{Event}}(cmd.id().value(), cmd.placeholder()));
+        eventBus.publish(new {{Event}}(cmd.id(), cmd.placeholder()));
     }
 }

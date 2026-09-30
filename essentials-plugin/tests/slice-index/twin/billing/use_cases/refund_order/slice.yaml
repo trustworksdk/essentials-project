@@ -1,0 +1,19 @@
+schemaVersion: "1.3"
+slice: billing.refund_order
+kind: command
+bc: billing
+owner: billing-team
+status: live
+summary: Refund a cancelled order.
+language: java
+tier: service-entity
+lane: service-entity
+
+handles: [RefundOrder]
+publishes: [OrderRefunded]
+writes: [Order]
+reads:
+  - { name: order_list_view, via: OrderListReader }
+tests:
+  unit: { present: true }
+  integration: { present: false }

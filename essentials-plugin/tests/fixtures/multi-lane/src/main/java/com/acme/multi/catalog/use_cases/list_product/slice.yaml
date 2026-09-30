@@ -1,0 +1,24 @@
+schemaVersion: "1.3"
+slice: catalog.list_product
+kind: command
+bc: catalog
+owner: catalog-team
+status: live
+summary: List a new product at a price.
+generator: essentials
+language: java
+tier: service-entity
+lane: service-entity
+handles: [ListProduct]
+publishes: [ProductListed]
+endpoints:
+  - { method: POST, path: "/api/catalog/products", auth: user }
+writes: [Product]
+invariants:
+  - { id: INV-LP-1, text: "A price must be positive", enforcedBy: Product }
+forbidden:
+  - cross-slice-internal:catalog
+tests:
+  unit: { present: false }
+  integration: { present: false }
+  contract: { present: false }

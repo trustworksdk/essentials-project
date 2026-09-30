@@ -7,7 +7,6 @@ import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
-/** Clean: one mapping, no entity on the wire. */
 @RestController
 @RequestMapping("/api/shipping/orders")
 public class ShipOrderAPI {

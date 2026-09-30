@@ -18,7 +18,7 @@
 
 ## Data
 **Owns (writes):** Order aggregate stream (shared aggregate; this slice writes `OrderPlaced`)
-**Reads:** Order event stream via the shared `OrderStateEvolver`
+**Reads:** Order event stream (no folded state)
 
 ## Files
 - `PlaceOrder.kt` — command (implements `OrderCommand`)

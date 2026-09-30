@@ -53,10 +53,10 @@ The drift that motivated this file. A view's events are **not** in `consumes`:
 
 | Kind | Field | Read it from |
 |---|---|---|
-| view (event-sourced lanes) | `projections[].from` | Every event type handled by the slice's `ViewEventProcessor` / `InTransactionEventProcessor` — the parameter types of its `@MessageHandler` / `@Handler` methods |
+| view (event-sourced lanes) | `projections[].from` | Every event type handled by the slice's `ViewEventProcessor` / `InTransactionEventProcessor` — the parameter types of its `@MessageHandler` / `@Handler` methods, resolved to the declared type through imports, Kotlin `import … as` aliases, typealiases and fully-qualified names. A `@Handler` method on an `AnnotatedCommandHandler` is a command handler, not an event handler (`reactive/…/AnnotatedCommandHandler.java:91-92`) |
 | view (service-entity lane) | — | No projector exists; `projections: []` is correct and complete |
-| automation | `consumes` | The `EventProcessor`'s handler parameter types |
-| translation | `consumes` | The inbound handler's external message types |
+| automation | `consumes` | The `EventProcessor`'s handler parameter types, resolved the same way; on the service-entity lane, the Spring `@EventListener` methods' parameter types |
+| translation | `consumes` | The inbound handler's external message types, and every internal event the outbound publisher's `@MessageHandler` methods handle (gate 11(b)) |
 | command | `handles` (in) / `publishes` (out) | The decider's command parameter and returned event types |
 
 **Union the two when reading, write only the one that belongs to the kind.** A view carrying both has
@@ -73,9 +73,15 @@ edge for an event type that does not exist.
 
 1. **Parse the manifest.** If it does not parse, fix that first — quoting repairs are a raw-text edit
    (`manifest-guide.md` §3), because there is no parsed side to merge until it does.
-2. **Read the slice directory.** Types, annotations, handler signatures, API mappings, repository
-   methods. Nothing outside the slice, except the BC's `events/` for resolving an event type name.
-3. **Derive each machine-derived field** per §2 and the extraction rules below.
+2. **Read the slice directory's facts from the script, not by eye.**
+   `uv run --script ${CLAUDE_PLUGIN_ROOT}/scripts/slice-source.py <root> --json` gives, per slice:
+   handler methods with their resolved message types, `handles`, `dispatches`, `publishes`,
+   `subscriptions`, request `mappings` (routes, `params`, required `@RequestParam`s), `schedules`
+   (ISO-8601 durations), `package`, `files` and a view's `readModels`. Everything it could not read is
+   listed under `unparsed` and `notAnalysed`. Read exactly those files by hand, and read repository
+   methods and anything a judgement field needs. Nothing outside the slice, except the BC's `events/` for
+   resolving an event type name.
+3. **Derive each machine-derived field** per §2 and the extraction rules below, from those facts.
 4. **Three-way merge**: derived value, current value, and human-owned text. Machine-derived fields take
    the derived value; human-owned fields keep theirs; anything in class three is proposed and confirmed.
 5. **Report every field that changed**, with the old and new value. A silent rewrite of a manifest is
@@ -83,6 +89,13 @@ edge for an event type that does not exist.
 6. **Then the `CLAUDE.md`** — §4.
 
 ### Extraction rules
+
+The syntactic rules below (`handles`, `publishes`, `consumes`, `dispatches`, `schedule`,
+`projections[].from`, `projections[].aggregateTypes` from a literal or constant, `endpoints`) are what
+`slice-source.py` computes. Take its facts and do not recount them. The column says what it reads, so a
+fact it marks `unresolved` can be finished by hand. `publishes` is partial by design: on the aggregate
+lane the events are applied inside the aggregate and are not attributed to the slice, so read them there.
+The judgement fields (§1, third row) stay yours.
 
 | Field | Derived from |
 |---|---|
@@ -92,7 +105,7 @@ edge for an event type that does not exist.
 | `dispatches` | Command types passed to `commandBus.send` / `sendAsync` / `sendAndDontWait` |
 | `schedule` | The automation's `@Scheduled` (or equivalent) — `cron` verbatim, `fixedDelay`/`initialDelay` as ISO-8601 durations. Carry the `note` over from a comment if one explains the cadence; never invent one |
 | `provides` | Interfaces declared in the BC's `types/` that this slice implements **and** registers as a bean. `consumedBy` is derived by finding the slices that inject the interface — advisory, so a stale entry is reported rather than trusted |
-| `projections[].from` | Handler parameter types on the view's projector |
+| `projections[].from` | Handler parameter types on the view's projector, resolved to the declared type through imports, Kotlin `import … as` aliases, typealiases and fully-qualified names |
 | `projections[].aggregateTypes` | The `AggregateType` the projector's subscription is opened against — the argument to the `EventStoreSubscriptionManager` subscribe call, or the `AggregateType` constant the BC's `config/` declares. **Do not derive it from `from`**: an event type is not a stream, and guessing one from the other is how the two axes got conflated in the first place. Where the subscription is wired outside the slice and the stream is genuinely ambiguous, leave the field absent and report it — absent means *unknown* |
 | `projections[].consistency` | `ViewEventProcessor` → `eventual`; `InTransactionEventProcessor` → `strong` |
 | `serves` | The query methods on the view's API file — names, not routes |
@@ -126,7 +139,9 @@ Order matters, because early steps make later ones cheaper and each is separatel
 
 1. **Parse gate.** Run `scripts/slice-lint.py` and fix every manifest it reports as unparseable. Commit
    that alone — it is mechanical and a reviewer should not have to read it alongside semantic changes.
-   Re-run the linter afterwards: it is the oracle for this step, not your reading of the diff.
+   Re-run the linter afterwards: it is the oracle for this step, not your reading of the diff. After the
+   kind-by-kind pass below, `scripts/slice-source.py <root> --check` is the same kind of oracle for the
+   derived fields: a manifest still reported under `11(b)` or `6 endpoint route` was not reconciled.
 2. **Kind-by-kind, not slice-by-slice.** Do all views, then all automations, then translations, then
    commands. One extraction rule at a time is far easier to review than one slice at a time, and a
    mistake in a rule shows up as a consistent pattern rather than as scattered noise.

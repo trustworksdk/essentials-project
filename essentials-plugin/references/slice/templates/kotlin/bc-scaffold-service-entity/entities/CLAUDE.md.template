@@ -36,6 +36,10 @@ structural rather than conventional:
 - **Mongo** — field mapping (the default), same discipline.
 - **Kotlin** — declare the guarded property `var … private set`.
 
+**Name its identifier property `id`** (`val id: String`), and type it `String`: the write repository below is
+`Repository<{{Entity}}, String>`, and every view slice's scaffolded query derives from `id`, the one
+property a view may assume. A different name makes those derived queries fail at context start.
+
 ## `{{Entity}}Repository` — the contract
 
 **Extend the bare `Repository` marker, never `JpaRepository` / `MongoRepository` / `CrudRepository`**

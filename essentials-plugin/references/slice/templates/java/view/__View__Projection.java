@@ -56,7 +56,7 @@ public class {{View}}Projection extends ViewEventProcessor {
     void on({{Event}} event, OrderedMessage message) {
         // version = EventOrder. The `long` overloads of save/update exist precisely so Java never
         // constructs the Kotlin Version value class.
-        var id = event.id().value();
+        var id = event.id().toString();
         var existing = repository.findById(id);
 
         if (existing == null) {

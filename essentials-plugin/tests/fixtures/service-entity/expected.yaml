@@ -1,0 +1,338 @@
+# expected.yaml — the machine-readable oracle for this fixture (format 1). TEST-GUIDE.md is the
+# human description of the same expectations; when they disagree, fix both.
+#
+# Paths are relative to this fixture's directory. `line` is 1-based and `anchor` is text that must
+# appear on that line, so a stale line number is detectable. `gate` is the /essentials:slice-check
+# gate as written in commands/slice-check.md ("14", "8a", "6"); `ess` is the review id derived from
+# it (ESS-G<gate><clause>); both are null where the oracle is a law section rather than a numbered
+# gate. Severities: Blocking | Should-fix | Advisory.
+#
+#   runs          which command runs against this fixture, with which argument
+#   lanes         gate 14 per bounded context: code signals, declared lanes, verdict
+#   must_find     every entry must appear in the report (matched on file, plus symbol when given)
+#   must_not_find a finding under any listed gate at that file/symbol fails the run ("*" = any gate)
+#   skipped       gates the report must name as skipped or out of scope, never silently omit
+#   tolerated     findings that may appear or not; neither counts for or against the run
+#   reader        syntactic facts a source reader must extract (handlers, mappings, endpoint bindings)
+#   slice_map     what /essentials:slice-map must draw: slice count, event/command edges, cycles
+#   manifests     facts about the manifests themselves (service-entity)
+#   terrain, contexts, slices, ladder
+#                 /essentials:slice-discover's passes 0-4 (brownfield-layered); must_find there carries
+#                 `rank` (payoff order) and `kind` instead of a gate, and severity is null by design
+#
+# `tests/fixtures/check-expected.py` checks this file against the tree (paths, line anchors, ess ids)
+# and that no fixture source carries an oracle hint.
+#
+# Entry fields beyond file/line/anchor: `symbol` narrows the match to a type or method; `also_names`
+# lists other files the same finding must cite; `may_merge_with` names a finding this one may be
+# reported inside of; `law` names the rules/slice-design.md section when `gate` is null.
+
+fixture: service-entity
+language: java
+runs:
+- command: /essentials:slice-check
+  args: essentials-plugin/tests/fixtures/service-entity
+lanes:
+  shipping:
+    detected: service-entity
+    signals:
+    - kind: entities-dir
+      file: src/main/java/com/acme/shipping/entities/ShippingOrder.java
+      line: 11
+      anchor: public class ShippingOrder {
+    declared:
+      shipping.register_shipping_order: service-entity
+      shipping.ship_order: service-entity
+      shipping.order_status: service-entity
+      shipping.auto_ship: service-entity
+    verdict: fine
+    report_before_findings: true
+must_find:
+- id: '1'
+  gate: 8d
+  ess: ESS-G8d
+  severity: Blocking
+  file: src/main/java/com/acme/shipping/events/ShippingOrderRegistered.java
+  line: 7
+  anchor: public static ShippingOrderRegistered from(RegisterShippingOrder cmd) {
+  symbol: ShippingOrderRegistered.from
+  what: >-
+    Command-type leakage into events/, the BC's importable surface: a slice-private wire contract becomes part of
+    every foreign consumer's compile surface.
+- id: '2'
+  gate: 8d
+  ess: ESS-G8d
+  severity: Blocking
+  file: src/main/java/com/acme/shipping/entities/ShippingOrder.java
+  line: 18
+  anchor: public ShippingOrder(RegisterShippingOrder cmd) {
+  symbol: ShippingOrder.<init>(RegisterShippingOrder)
+  what: Command-type leakage into the consistency boundary.
+- id: '3'
+  gate: 15b
+  ess: ESS-G15b
+  severity: Should-fix
+  file: src/main/java/com/acme/shipping/persistence/ShippingOrders.java
+  line: 16
+  anchor: List<ShippingOrder> findByShipped(boolean shipped);
+  symbol: ShippingOrders.findByShipped
+  what: A finder on the write repository whose only caller is a read path; it belongs to views/order_status.
+- id: '4'
+  gate: 15c
+  ess: ESS-G15c
+  severity: Should-fix
+  file: src/main/java/com/acme/shipping/persistence/ShippingOrders.java
+  line: 10
+  anchor: public interface ShippingOrders extends JpaRepository<ShippingOrder, String> {
+  what: >-
+    The write repository is not in entities/, beside its entity. persistence/ is not on gate 2's list: if gate 2
+    reports this instead, the wrong gate fired.
+- id: '5'
+  gate: '16'
+  ess: ESS-G16
+  severity: Should-fix
+  file: src/main/java/com/acme/shipping/entities/ShippingOrder.java
+  line: 36
+  anchor: public void setShipped(boolean shipped) {
+  symbol: ShippingOrder.setShipped
+  what: A public setter writing the field markOrderAsShipped() guards; the invariant is bypassable.
+- id: '6'
+  gate: '16'
+  ess: ESS-G16
+  severity: Should-fix
+  file: src/main/java/com/acme/shipping/use_cases/register_shipping_order/RegisterShippingOrderAPI.java
+  line: 25
+  anchor: public ShippingOrder register(@RequestBody Body body) {
+  symbol: RegisterShippingOrderAPI.register
+  what: '@RestController returning the @Entity directly.'
+- id: '7'
+  gate: '17'
+  ess: ESS-G17
+  severity: Should-fix
+  file: src/main/java/com/acme/shipping/routing/ShippingCommand.java
+  line: 5
+  anchor: public interface ShippingCommand {
+  what: A routing marker on a lane with no decider to filter and no stream to select; nothing implements it.
+- id: '8'
+  gate: 18c
+  ess: ESS-G18c
+  severity: Blocking
+  file: src/main/java/com/acme/shipping/views/order_status/OrderStatusQueries.java
+  line: 18
+  anchor: Optional<OrderStatusView> findById(String orderId);
+  symbol: OrderStatusQueries.findById
+  what: >-
+    A projection return type on a method named after a CRUD base method: the base captures it and the caller gets
+    a ClassCastException. It has no caller, so it must be found from the declaration. Fix: rename to findOrderStatusById.
+- id: '9'
+  gate: 18a
+  ess: ESS-G18a
+  severity: Should-fix
+  file: src/main/java/com/acme/shipping/persistence/ShippingOrders.java
+  line: 10
+  anchor: public interface ShippingOrders extends JpaRepository<ShippingOrder, String> {
+  what: The write repository extends JpaRepository rather than the bare Repository marker.
+must_not_find:
+- id: T1
+  not_gates:
+  - '5'
+  - 15b
+  - '16'
+  file: src/main/java/com/acme/shipping/entities/ShippingOrder.java
+  line: 40
+  anchor: public String getOrderId() {
+  symbol: ShippingOrder.getOrderId
+  why: >-
+    Read by the ORM and toString() only; the entity bar distinguishes by caller, not shape. Same for getDestination().
+- id: T2
+  not_gates:
+  - '5'
+  - '16'
+  file: src/main/java/com/acme/shipping/entities/ShippingOrder.java
+  line: 24
+  anchor: protected ShippingOrder() {
+  why: Persistence-mandated no-arg constructor, not a method that only assigns fields.
+- id: T3
+  not_gates:
+  - 15b
+  file: src/main/java/com/acme/shipping/persistence/ShippingOrders.java
+  line: 14
+  anchor: List<ShippingOrder> findByIdIn(List<String> ids);
+  symbol: ShippingOrders.findByIdIn
+  why: 'Its only caller, AutoShipProcessor.shipBatch, loads the batch to mutate it: the write path.'
+- id: T3b
+  not_gates:
+  - 15c
+  - '15'
+  file: src/main/java/com/acme/shipping/views/order_status/OrderStatusQueries.java
+  line: 10
+  anchor: public interface OrderStatusQueries extends Repository<ShippingOrder, String> {
+  why: >-
+    A Repository over the entity outside entities/, but it exposes no mutation; gate 15 keys on mutation.
+- id: T4
+  not_gates:
+  - '8'
+  - 8a
+  file: src/main/java/com/acme/shipping/automations/auto_ship/AutoShipProcessor.java
+  line: 6
+  anchor: import com.acme.shipping.use_cases.ship_order.ShipOrder;
+  why: 'The §R4 carve-out: ShipOrder is only constructed and handed to commandBus.sendAndDontWait.'
+- id: T5
+  not_gates:
+  - '2'
+  - '15'
+  - 18a
+  file: src/main/java/com/acme/shipping/views/order_status/OrderStatusQueries.java
+  line: 10
+  anchor: public interface OrderStatusQueries extends Repository<ShippingOrder, String> {
+  why: >-
+    The sanctioned read shape: slice-private, read-only, bare marker, read-shape returns. Its one defect is finding
+    8, a method name.
+- id: T6
+  not_gates:
+  - '6'
+  file: src/main/java/com/acme/shipping/views/order_status/OrderStatusAPI.java
+  line: 13
+  anchor: public class OrderStatusAPI {
+  why: Three @GetMapping methods on a view API over its own read model; all declared in slice.yaml.
+- id: T6b
+  not_gates:
+  - '6'
+  - 11a
+  file: src/main/java/com/acme/shipping/views/order_status/OrderStatusAPI.java
+  line: 26
+  anchor: '@GetMapping(params = "status")'
+  why: >-
+    ?status= in the manifest, params = "status" in code: match the route before '?', then the parameter in that
+    handler.
+- id: T6c
+  not_gates:
+  - '6'
+  - 11a
+  file: src/main/java/com/acme/shipping/views/order_status/OrderStatusAPI.java
+  line: 22
+  anchor: '@RequestParam(defaultValue = "false") boolean shipped'
+  why: An optional filter with a default is not a discriminator and needs no endpoint entry.
+- id: T7
+  not_gates:
+  - '*'
+  file: src/main/java/com/acme/shipping/_loadtest/LoadHarness.java
+  line: 7
+  anchor: public class LoadHarness {
+  why: _-prefixed directories are not slices; it carries the required one-line CLAUDE.md.
+- id: T8
+  not_gates:
+  - '10'
+  file: src/main/java/com/acme/shipping/views/order_status/slice.yaml
+  line: 19
+  anchor: 'projections: []'
+  why: No versioned read model on this lane.
+- id: T9
+  not_gates:
+  - '1'
+  - '11'
+  - '13'
+  file: src/main/java/com/acme/shipping/views/order_status/slice.yaml
+  line: 19
+  anchor: 'projections: []'
+  why: An empty projections list is correct on this lane; the view owns a query, not a projector.
+- id: T10
+  not_gates:
+  - '2'
+  - '16'
+  file: src/main/java/com/acme/shipping/use_cases/
+  why: There is no use_cases/_shared/ here.
+- id: T11
+  not_gates:
+  - 8c
+  - '2'
+  - '14'
+  file: src/main/java/com/acme/shipping/routing/ShippingCommand.java
+  line: 5
+  anchor: public interface ShippingCommand {
+  why: >-
+    BC-internal (not 8c), a legal directory name (not gate 2), and never a lane signal (gate 14 would report a bogus
+    multi-lane Blocking). Its only finding is 7, under gate 17.
+- id: T12
+  not_gates:
+  - 18c
+  file: src/main/java/com/acme/shipping/persistence/ShippingOrders.java
+  line: 12
+  anchor: Optional<ShippingOrder> findById(String id);
+  symbol: ShippingOrders.findById
+  why: 'A reserved name returning the entity: the base implementation doing what a write repository wants.'
+- id: T13
+  not_gates:
+  - 18c
+  file: src/main/java/com/acme/shipping/views/order_status/OrderStatusQueries.java
+  line: 16
+  anchor: Optional<OrderStatusView> findByOrderId(String orderId);
+  symbol: OrderStatusQueries.findByOrderId
+  why: Not a reserved name; it derives a query on orderId and the projection applies.
+- id: T14
+  not_gates:
+  - 18a
+  file: src/main/java/com/acme/shipping/views/order_status/OrderStatusQueries.java
+  line: 10
+  anchor: public interface OrderStatusQueries extends Repository<ShippingOrder, String> {
+  why: It already extends the bare Repository marker; finding 9 is on ShippingOrders.
+- id: T15
+  not_gates:
+  - 18b
+  file: src/main/java/com/acme/shipping/persistence/ShippingOrders.java
+  line: 16
+  anchor: List<ShippingOrder> findByShipped(boolean shipped);
+  why: 'Findings 3 and 6 must not be re-reported under 18(b): one defect, one finding, most specific gate.'
+skipped:
+- gate: '10'
+  why: 'Service-entity lane: no versioned read model. Named as skipped, not silently absent.'
+tolerated: []
+manifests:
+  valid: 4
+  tier: service-entity
+  reads_via:
+    file: src/main/java/com/acme/shipping/views/order_status/slice.yaml
+    line: 18
+    anchor: '- { name: ShippingOrder, via: OrderStatusQueries }'
+    why: reads[].via is the existing property for a reader interface; suggesting a new readsVia is wrong
+reader:
+  conventions: mapping lines are the method-name line
+  handlers:
+  - slice: shipping.auto_ship
+    file: src/main/java/com/acme/shipping/automations/auto_ship/AutoShipProcessor.java
+    line: 25
+    anchor: public void on(ShippingOrderRegistered event) {
+    event: ShippingOrderRegistered
+    annotation: '@EventListener'
+    ordered_message: false
+  dispatches:
+  - slice: shipping.auto_ship
+    command: ShipOrder
+    file: src/main/java/com/acme/shipping/automations/auto_ship/AutoShipProcessor.java
+    line: 26
+    anchor: commandBus.sendAndDontWait(new ShipOrder(OrderId.of(event.orderId())));
+  mappings:
+  - slice: shipping.order_status
+    method: GET
+    route: /api/shipping/order-status
+    params: []
+    optional_params:
+    - shipped
+    file: src/main/java/com/acme/shipping/views/order_status/OrderStatusAPI.java
+    line: 22
+    anchor: public List<OrderStatusView> list(
+  - slice: shipping.order_status
+    method: GET
+    route: /api/shipping/order-status
+    params:
+    - status
+    file: src/main/java/com/acme/shipping/views/order_status/OrderStatusAPI.java
+    line: 27
+    anchor: public List<OrderStatusView> byStatus(
+  - slice: shipping.order_status
+    method: GET
+    route: /api/shipping/order-status/{orderId}
+    params: []
+    file: src/main/java/com/acme/shipping/views/order_status/OrderStatusAPI.java
+    line: 32
+    anchor: public OrderStatusView get(

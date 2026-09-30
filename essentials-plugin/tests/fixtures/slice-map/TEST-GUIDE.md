@@ -1,12 +1,31 @@
 # `slice-map` fixture — expected output
 
 Oracle for `references/slice/slice-map-template.html` and for the data contract in
-`commands/slice-map.md` §6. There is no test runner in this repo, so the ground truth is written out
-here and a run is diffed by eye — the same convention as `brownfield-layered/` and `service-entity/`.
+`commands/slice-map.md` §6. The ground truth is written out here. Every row a DOM can show is also
+checked by `render-check.py`, which renders each data file in headless Chrome and asserts on the dumped
+DOM; its per-file values live in `expected.json`, next to this file. The rows marked **by eye** — pan,
+zoom, hover, click, double-click, maximise — need a real pointer, so check them in a browser.
+
+```bash
+python3 tests/fixtures/slice-map/render-check.py      # 0 ok · 1 failed · 2 harness error · 3 SKIPPED (no Chrome)
+```
+
+Exit 3 means nothing was checked; it is never a pass. `--chrome PATH` or `$CHROME_BIN` names the
+browser; `chrome-headless-shell` is preferred where both exist.
 
 `sample-data.json` is a **synthetic** two-context map. It is not a project, it is never built, and it
 must stay obviously fake. Like the other fixtures it carries **traps** as well as findings: a template
 that renders only the happy path proves nothing.
+
+Three more data files are **generated** by `scripts/slice-index.py` from manifests, so they are also
+what the command really emits. `tests/scripts/test_slice_index.py` fails when one of them drifts from
+the script's output:
+
+| File | Built from | What it adds |
+|---|---|---|
+| `sample-data-cycle.json` | `tests/slice-index/cycle/` | G10: a saga loop (`PaymentFailed → retry_payment → ChargePayment → charge_payment → PaymentFailed`), and a second loop with no entry point at all |
+| `sample-data-twin.json` | `tests/slice-index/twin/` | `supersedes` twins: retiring, still live, and pointing at a missing slice; a real two-owner read model; a cross-context aggregate write |
+| `sample-data-scale.json` | `tests/slice-index/gen-scale.py --bcs 12` | 53 slices and 107 graph nodes in 20 columns, with chains that cross five contexts |
 
 ## How to render it
 
@@ -21,8 +40,9 @@ pathlib.Path('/tmp/slice-map.html').write_text(tpl.replace(old, 'const SLICE_MAP
 EOF
 ```
 
-Then open `/tmp/slice-map.html` in a browser. Run this after **any** change to the template or to the
-data contract.
+Then open `/tmp/slice-map.html` in a browser. Run this and `render-check.py` after **any** change to
+the template or to the data contract. `render-check.py --keep DIR` also writes each rendered page, so
+the by-eye rows can be checked on exactly the pages it checked.
 
 ## What the page must show
 
@@ -62,7 +82,7 @@ data contract.
 | G7b | Clicking `InvoiceIssued` — the far end of the same chain — dims the identical 4 nodes | Focus selects a *component*, so any node in it produces the same picture. If the two differ, the walk is following edge direction instead of connectivity |
 | G8 | Double-clicking a slice node opens the same detail modal as the Contexts tab | One detail surface, reachable from anywhere |
 | G9 | Typing `billing` dims every `orders` node and keeps the four `billing` slices plus `InvoiceIssued` | An event is attributed to the context that **publishes** it, not the one that first mentions it |
-| G10 | A graph with a cycle (a saga reacting to an event it ultimately causes) lays out and does not hang | Not exercised by this fixture — see the coverage gaps |
+| G10 | A graph with a cycle (a saga reacting to an event it ultimately causes) lays out and does not hang | `sample-data-cycle.json`. `render-check.py` fails when the page does not return, when a script error is thrown, or when no edge closes the loop. The cycle guard in `layoutGraph` is the line that makes this pass: remove it and the page throws `Maximum call stack size exceeded` |
 | G11 | `billing.invoice_list` is an isolated node — no edges at all | **Trap** — a view that only `reads` publishes and consumes nothing, so it legitimately has no message edges. A layout that drops unconnected nodes loses a real slice |
 | G12 | Columns read as the message-flow grammar: commands · command slices · events + external systems · reactor slices · the dispatched command · its slice · its event | The **role floor** under the rank. Longest-path alone puts every node with no inbound edge in column 0, so `billing.invoice_list` (a view with no `consumes`) and `PaymentSettled` (a dangling event) both sat *left of the commands*, reading as entry points. The floor only lifts, so the seven-node chain is unmoved |
 | G13 | `IssueInvoice` sits in a column to the **right** of the reactor slices, not back in column 0 | The grammar is not a straight line: an automation dispatches a command, so the chain **loops back** into the command role further right. This is why the role is a *floor* and not a fixed column assignment — a fixed mapping would have to fold this edge backwards |
@@ -117,19 +137,29 @@ The template's bootstrap call sits at the **bottom** of its `<script>`, after th
 `ReferenceError: Cannot access 'NW' before initialization` and renders a blank page. Expectation 1
 failing with an empty body is the symptom; check the call site before anything else.
 
+## What `render-check.py` asserts, and what it cannot
+
+For every data file: every declared node is drawn exactly once and nothing else is (G1); every declared
+edge is drawn with the right ends (G4, G4b, G5); every node sits on the column grid; no two node boxes
+intersect (scale); no node sits left of its role column (G12); every edge points right unless it closes
+a cycle (G3, G13, G10); the Flow, Endpoint, write-target, cross-read and slice-button counts match the
+data, and every slice flag is on the page (items 6–11). `expected.json` adds the exact columns of G3,
+G12 and G13, the isolated node of G11, the first Flow rows of item 7, the flagged write targets of
+items 9–9b, and the unrendered-template trap.
+
+It cannot click. G6–G9, G14, G15, H1–H15, item 13–16 interaction and the pointer-capture trap stay **by
+eye**: a DOM dump never exercises the browser's click-target resolution.
+
 ## Coverage gaps, stated rather than papered over
 
-- **No cycle.** G10 has no fixture. The layout is cycle-guarded (longest-path ranking with a visited
-  set), but nothing here proves it. A saga consuming an event its own dispatched command ultimately
-  causes would close it, and would be the first fixture element that is a *behaviour* of the layout
-  rather than a shape in the data.
-- **No `supersedes` twin.** The versioned-view pair (`_v2` + `status: deprecated`) renders through the
-  same code path as any other slice, but the pairing flag from `commands/slice-map.md` §4 has no fixture.
-- **Scale is untested.** Fifteen nodes lay out legibly by construction. Nothing here says what a
-  two-hundred-node estate looks like, and the barycentre ordering is two passes, not a real crossing
-  minimisation — expect a denser graph to read worse, and treat that as known rather than as a bug.
+- **Scale reads worse than it lays out.** `render-check.py` proves the 107-node map places every node
+  with no overlap. It does not prove the result is legible: the barycentre ordering is two passes, not
+  a real crossing minimisation, so a dense graph has crossings. Treat that as known, not as a bug.
 - **`package` and `files` are not manifest fields**, so nothing here proves the command reads them
-  correctly off a real slice directory — only that the renderer shows them. Same split as below.
-- **The divergence checks themselves are not exercised here.** This fixture is *data*, so it tests the
-  renderer, not the manifest-reading that produces the data. `tests/fixtures/service-entity/` carries
-  real manifests and is the oracle for that half.
+  correctly off a real slice directory — only that the renderer shows them. `scripts/slice-source.py`
+  reads them from source and its goldens are the oracle for that half; `slice-index.py map
+  --source-facts` merges them into this data.
+- **The divergence checks that need source are not exercised here.** The generated data files carry
+  the manifest-only ones (id uniqueness, kind vs. directory, twin pairing, dangling consume) because
+  `slice-index.py` computes them; "handled events declared" and "endpoint appears in source" come from
+  `slice-source.py`.

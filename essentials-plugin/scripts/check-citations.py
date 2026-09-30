@@ -56,6 +56,13 @@ CHANGELOG.md                         a release record: the version a release tar
 tests/fixtures/**                    sample projects the slice tooling reads; their build files pin
                                      what a user's project pinned, not what this plugin pins
 tests/citations/**                   this script's own self-test samples, which must violate
+tests/golden/**                      renderer output (scripts/init-render.py --update-golden): it
+                                     carries every pin it rendered by design, and init-render.py
+                                     --check fails it the moment it differs from a fresh render
+references/init-assets/project/contracts/openapi.json.template, the `"openapi"` line only
+                                     the OpenAPI document-format version springdoc writes, which
+                                     equals the springdoc pin by coincidence; JSON has no comment
+                                     for a cite-ok marker. Every other line of the file is scanned
 
 Usage
 -----
@@ -103,7 +110,12 @@ BINDINGS = {
 # Not scanned at all: the two sources (S1 names the baseline on purpose) and the files the module
 # docstring justifies.
 EXEMPT_FILES = {PINS, CONTRACT, "CHANGELOG.md"}
-EXEMPT_DIRS = ("references/llm/", "tests/fixtures/", "tests/citations/")
+EXEMPT_DIRS = ("references/llm/", "tests/fixtures/", "tests/citations/", "tests/golden/")
+# Single lines that hold a version which is not a pin, by file (see the module docstring).
+NOT_A_PIN = {
+    "references/init-assets/project/contracts/openapi.json.template":
+        re.compile(r'^\s*"openapi"\s*:\s*"[\d.]+"\s*,?\s*$'),
+}
 
 SCANNED_SUFFIXES = {
     ".md", ".template", ".java", ".kt", ".kts", ".yaml", ".yml", ".json", ".html",
@@ -345,7 +357,10 @@ def check_text(rel, text, patterns, contract, prose, restatement_rule=True):
             findings.append(Finding(rel, bare, "allow-marker", "cite-ok marker without a reason"))
         findings.append(Finding(rel, first + 1, rule, message))
 
+    not_a_pin = NOT_A_PIN.get(rel)
     for i, line in enumerate(lines):
+        if not_a_pin and not_a_pin.match(line):
+            continue
         for name, value, pattern in patterns:
             if pattern.search(line):
                 report(i, i, "pinned-version",
@@ -467,8 +482,9 @@ rules:
 output:  path:line: rule: message   (path relative to ROOT)
 allow:   <!-- cite-ok: reason --> on the flagged line or the line above it
 exempt:  stack-pins.md, stack-contract.md, CHANGELOG.md, references/llm/**,
-         tests/fixtures/**, tests/citations/**; the three binding docs in
-         references/stack/ are exempt from restated-requirement only
+         tests/fixtures/**, tests/citations/**, tests/golden/**, the seed spec's
+         "openapi" line; the three binding docs in references/stack/ are exempt
+         from restated-requirement only
 exit:    0 clean, 1 findings, 2 usage error (bad arguments, unreadable pins/contract)
          with --self-test: 0 every expectation met, 1 one was not""",
     )

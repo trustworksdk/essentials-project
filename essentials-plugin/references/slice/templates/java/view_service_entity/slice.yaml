@@ -14,7 +14,7 @@ lane: {{lane}}                        # the §R5 write style: decider | aggregat
 
 # --- Contracts ---
 # `serves` takes QUERY NAMES, not routes. The route belongs in `endpoints`.
-serves: [{{View}}ByStatus, {{View}}By{{Aggregate}}Id]
+serves: [{{View}}, {{View}}By{{Aggregate}}Id]
 endpoints:
   - { method: GET, path: "{{apiPath}}", auth: user }
   - { method: GET, path: "{{apiPath}}/{{{aggregate}}Id}", auth: user }

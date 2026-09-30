@@ -25,9 +25,11 @@ import java.time.Duration
 @Service
 class {{ExternalSystem}}Publisher(
     dependencies: EventProcessorDependencies,
-    private val translator: {{ExternalSystem}}Translator,
     private val client: {{ExternalSystem}}Client
 ) : EventProcessor(dependencies) {
+
+    // The translator is pure (no Spring), so it is constructed here rather than injected.
+    private val translator = {{ExternalSystem}}Translator()
 
     override fun getProcessorName(): String = "{{ExternalSystem}}Publisher"
 

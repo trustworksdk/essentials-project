@@ -9,7 +9,6 @@ import dk.trustworks.essentials.reactive.command.CmdHandler;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Transactional;
 
-/** Clean: one @CmdHandler, one command type. Auto-registered with the CommandBus. */
 @Component
 public class RegisterShippingOrderHandler extends AnnotatedCommandHandler {
 

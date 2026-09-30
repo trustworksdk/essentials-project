@@ -29,6 +29,7 @@
 ## Files
 - `{{ExternalSystem}}Translator.java` — the pure mapping (both directions)
 - `{{ExternalSystem}}Client.java` — typed outbound port
+- `{{ExternalSystem}}ClientAdapter.java` — the transport behind the port; its `send` throws until you implement it; delete if `direction: inbound`
 - `On{{ExternalEvent}}.java` — inbound ingress → CommandBus (Inbox); delete if `direction: outbound`
 - `{{ExternalSystem}}Publisher.java` — outbound `EventProcessor` (Outbox); delete if `direction: inbound`
 - test: `{{ExternalSystem}}TranslatorTest.java`

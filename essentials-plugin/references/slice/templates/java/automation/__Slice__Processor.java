@@ -50,7 +50,7 @@ public class {{Slice}}Processor extends EventProcessor {
 
     @MessageHandler
     void on({{Event}} event, OrderedMessage message) {
-        var id = event.id().value();
+        var id = event.id().toString();
         var todo = todos.findById(id);
         if (todo == null) {
             todo = new {{Slice}}TodoList(id);

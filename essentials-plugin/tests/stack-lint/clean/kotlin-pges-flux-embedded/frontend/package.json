@@ -1,0 +1,1 @@
+{ "name": "golden-frontend", "private": true, "scripts": { "build": "vite build" } }

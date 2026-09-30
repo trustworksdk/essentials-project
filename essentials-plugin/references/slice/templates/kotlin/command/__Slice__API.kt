@@ -52,6 +52,6 @@ class {{Slice}}API(private val commandBus: CommandBus) {
     @PostMapping
     @ResponseStatus(HttpStatus.ACCEPTED)
     fun {{sliceCamel}}(@RequestBody command: {{Command}}) {
-        commandBus.send(command)
+        commandBus.send<Any?, {{Command}}>(command)
     }
 }

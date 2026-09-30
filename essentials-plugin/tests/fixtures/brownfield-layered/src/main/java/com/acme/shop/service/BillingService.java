@@ -20,9 +20,6 @@ public class BillingService {
         this.gateway = gateway;
     }
 
-    // NOTE (fixture ground truth): this method writes BOTH Invoice and Order.
-    // It is the sole-writer violation AND the counter-evidence against a clean
-    // orders/billing split. Both must appear in the report.
     @Transactional
     public void payInvoice(String invoiceId, String cardToken) {
         Invoice invoice = invoices.findById(invoiceId).orElseThrow();

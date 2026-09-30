@@ -1,0 +1,278 @@
+# expected.yaml — the machine-readable oracle for this fixture (format 1). TEST-GUIDE.md is the
+# human description of the same expectations; when they disagree, fix both.
+#
+# Paths are relative to this fixture's directory. `line` is 1-based and `anchor` is text that must
+# appear on that line, so a stale line number is detectable. `gate` is the /essentials:slice-check
+# gate as written in commands/slice-check.md ("14", "8a", "6"); `ess` is the review id derived from
+# it (ESS-G<gate><clause>); both are null where the oracle is a law section rather than a numbered
+# gate. Severities: Blocking | Should-fix | Advisory.
+#
+#   runs          which command runs against this fixture, with which argument
+#   lanes         gate 14 per bounded context: code signals, declared lanes, verdict
+#   must_find     every entry must appear in the report (matched on file, plus symbol when given)
+#   must_not_find a finding under any listed gate at that file/symbol fails the run ("*" = any gate)
+#   skipped       gates the report must name as skipped or out of scope, never silently omit
+#   tolerated     findings that may appear or not; neither counts for or against the run
+#   reader        syntactic facts a source reader must extract (handlers, mappings, endpoint bindings)
+#   slice_map     what /essentials:slice-map must draw: slice count, event/command edges, cycles
+#   manifests     facts about the manifests themselves (service-entity)
+#   terrain, contexts, slices, ladder
+#                 /essentials:slice-discover's passes 0-4 (brownfield-layered); must_find there carries
+#                 `rank` (payoff order) and `kind` instead of a gate, and severity is null by design
+#
+# `tests/fixtures/check-expected.py` checks this file against the tree (paths, line anchors, ess ids)
+# and that no fixture source carries an oracle hint.
+#
+# Entry fields beyond file/line/anchor: `symbol` narrows the match to a type or method; `also_names`
+# lists other files the same finding must cite; `may_merge_with` names a finding this one may be
+# reported inside of; `law` names the rules/slice-design.md section when `gate` is null.
+
+fixture: multi-lane
+language: java
+runs:
+- command: /essentials:slice-check
+  args: essentials-plugin/tests/fixtures/multi-lane
+- command: scripts/slice-lint.py
+  args: tests/fixtures/multi-lane --require-schema
+  expect: 'exit 1 with exactly one finding: ML-5 (gate 14 tier, Should-fix) at post_entry/slice.yaml:10'
+lanes:
+  ledger:
+    detected: blocking
+    signals:
+    - kind: decider
+      file: src/main/java/com/acme/multi/ledger/use_cases/open_account/OpenAccountDecider.java
+      line: 10
+      anchor: implements EventStreamDecider<OpenAccount, AccountEvent>
+    - kind: aggregates-dir
+      file: src/main/java/com/acme/multi/ledger/aggregates/Account.java
+      line: 10
+      anchor: extends AggregateRoot<AccountId, AccountEvent, Account>
+    declared:
+      ledger.open_account: decider
+      ledger.post_entry: aggregate
+    verdict: Blocking
+  catalog:
+    detected: blocking
+    signals:
+    - kind: entities-dir
+      file: src/main/java/com/acme/multi/catalog/entities/Product.java
+      line: 12
+      anchor: public class Product extends JavaVersionedEntity<String, Product>
+    - kind: event-store-reference
+      file: src/main/java/com/acme/multi/catalog/use_cases/reprice_product/RepriceProductHandler.java
+      line: 34
+      anchor: eventStore.appendToStream(PRICE_HISTORY, cmd.id(), List.of(event));
+    declared:
+      catalog.list_product: service-entity
+      catalog.reprice_product: service-entity
+    verdict: Blocking
+  payments:
+    detected: decider
+    signals:
+    - kind: decider
+      file: src/main/java/com/acme/multi/payments/use_cases/request_payment/RequestPaymentDecider.java
+      line: 10
+      anchor: implements EventStreamDecider<RequestPayment, PaymentEvent>
+    - kind: decider
+      file: src/main/java/com/acme/multi/payments/use_cases/capture_payment/CapturePaymentDecider.java
+      line: 11
+      anchor: implements EventStreamDecider<CapturePayment, PaymentEvent>
+    declared:
+      payments.request_payment: decider
+      payments.capture_payment: aggregate
+    verdict: Blocking
+  inventory:
+    detected: service-entity
+    signals:
+    - kind: entities-dir
+      file: src/main/java/com/acme/multi/inventory/entities/StockItem.java
+      line: 12
+      anchor: public class StockItem extends JavaVersionedEntity<String, StockItem>
+    declared:
+      inventory.adjust_stock: service-entity
+    verdict: fine
+must_find:
+- id: ML-1
+  gate: '14'
+  ess: ESS-G14
+  severity: Blocking
+  file: src/main/java/com/acme/multi/ledger/use_cases/open_account/OpenAccountDecider.java
+  line: 10
+  anchor: implements EventStreamDecider<OpenAccount, AccountEvent>
+  also_names:
+  - src/main/java/com/acme/multi/ledger/aggregates/
+  what: >-
+    ledger holds two write designs over one stream: a per-slice decider (open_account) and an aggregate (aggregates/Account.java,
+    loaded by post_entry). Both signals named, no lane picked.
+- id: ML-2
+  gate: '14'
+  ess: ESS-G14
+  severity: Blocking
+  file: src/main/java/com/acme/multi/catalog/use_cases/reprice_product/RepriceProductHandler.java
+  line: 34
+  anchor: eventStore.appendToStream(PRICE_HISTORY, cmd.id(), List.of(event));
+  also_names:
+  - src/main/java/com/acme/multi/catalog/entities/
+  what: >-
+    catalog has entities/ and also appends to the event store (an EventStore and an AggregateType in reprice_product):
+    the BC is drifting off the service-entity lane.
+- id: ML-3
+  gate: '14'
+  ess: ESS-G14
+  severity: Blocking
+  file: src/main/java/com/acme/multi/payments/use_cases/capture_payment/slice.yaml
+  line: 11
+  anchor: 'lane: aggregate'
+  also_names:
+  - src/main/java/com/acme/multi/payments/use_cases/request_payment/slice.yaml
+  what: >-
+    payments' manifests declare two lanes (request_payment: decider, capture_payment: aggregate). The declared-lane
+    cross-check is Blocking and must name which slice sits on which side, even though the code has a single lane
+    (decider).
+- id: ML-4
+  gate: '14'
+  ess: ESS-G14
+  severity: Blocking
+  file: src/main/java/com/acme/multi/ledger/use_cases/post_entry/slice.yaml
+  line: 11
+  anchor: 'lane: aggregate'
+  also_names:
+  - src/main/java/com/acme/multi/ledger/use_cases/open_account/slice.yaml
+  may_merge_with: ML-1
+  what: ledger's manifests also declare two lanes. It corroborates ML-1; reporting it inside ML-1 counts.
+- id: ML-5
+  gate: '14'
+  ess: ESS-G14
+  severity: Should-fix
+  file: src/main/java/com/acme/multi/ledger/use_cases/post_entry/slice.yaml
+  line: 10
+  anchor: 'tier: aggregate'
+  deterministic: scripts/slice-lint.py reports it (gate 14, tier)
+  what: >-
+    tier: aggregate is a write style, not an architectureTier value. Repair: tier: cqrs-es and lane: aggregate.
+must_not_find:
+- id: ML-T1
+  not_gates:
+  - '14'
+  file: src/main/java/com/acme/multi/inventory/
+  why: >-
+    inventory is a clean service-entity BC. Lanes are detected per BC; catalog's drift and ledger's conflict in
+    the same project say nothing about it.
+- id: ML-T2
+  not_gates:
+  - '14'
+  - '17'
+  file: src/main/java/com/acme/multi/payments/routing/PaymentCommand.java
+  line: 6
+  anchor: public interface PaymentCommand {
+  why: >-
+    routing/ is evidence about a BC, never a lane signal, and on the decider lane it is required. Its marker is
+    not sealed and declares only the id.
+- id: ML-T3
+  not_gates:
+  - '14'
+  file: src/main/java/com/acme/multi/ledger/use_cases/post_entry/slice.yaml
+  line: 10
+  anchor: 'tier: aggregate'
+  why: >-
+    The tier: aggregate value is ML-5 (a tier finding). It must not be read as a lane signal, and no lane finding
+    may cite a manifest field as its evidence: detection reads code.
+- id: ML-T4
+  not_gates:
+  - '17'
+  file: src/main/java/com/acme/multi/ledger/use_cases/post_entry/PostEntry.java
+  line: 5
+  anchor: public record PostEntry(AccountId id, long amountMinor) {
+  why: >-
+    ledger's lane is Blocking, so no lane is picked and the decider-lane routing rules are not applied: reporting
+    'PostEntry does not implement AccountCommand' means gate 14 chose decider.
+- id: ML-T5
+  not_gates:
+  - '17'
+  file: src/main/java/com/acme/multi/ledger/routing/AccountCommand.java
+  line: 6
+  anchor: public interface AccountCommand {
+  why: 'Same reason: ''routing/ on the aggregate lane'' also presumes a lane was picked.'
+- id: ML-T6
+  not_gates:
+  - 4c
+  - '4'
+  file: src/main/java/com/acme/multi/ledger/use_cases/post_entry/slice.yaml
+  line: 16
+  anchor: 'writes: [Account]'
+  why: Two command slices in one BC writing the same aggregate is the design on every lane.
+- id: ML-T7
+  not_gates:
+  - '9'
+  - '2'
+  file: src/main/java/com/acme/multi/DeciderWiring.java
+  line: 19
+  anchor: public class DeciderWiring {
+  why: >-
+    One EventStreamDeciderAndAggregateTypeConfigurator for the application, outside every BC. Each BC's config/
+    contributes its EventStreamAggregateTypeConfiguration and one @Bean per decider, which is what gate 9 checks;
+    a configurator per BC would register every decider twice.
+- id: ML-T8
+  not_gates:
+  - '15'
+  - '18'
+  file: src/main/java/com/acme/multi/catalog/entities/Products.java
+  line: 8
+  anchor: public class Products extends DelegatingDocumentDbRepository<Product, String> {
+  why: >-
+    The write repository sits beside its entity (15c holds). It is Essentials' DocumentDB repository, not Spring
+    Data, so gate 18 is out of scope.
+- id: ML-T9
+  not_gates:
+  - '5'
+  - '16'
+  file: src/main/java/com/acme/multi/inventory/entities/StockItem.java
+  line: 39
+  anchor: '@Override public void setVersionValue(long version)'
+  why: >-
+    setVersionValue/setLastUpdated are the JavaVersionedEntity persistence contract, not a public setter bypassing
+    StockItem.adjust()'s guard.
+- id: ML-T10
+  not_gates:
+  - '14'
+  file: src/main/java/com/acme/multi/payments/use_cases/request_payment/slice.yaml
+  line: 11
+  anchor: 'lane: decider'
+  why: request_payment declares the lane the code has; the wrong side of ML-3 is capture_payment.
+skipped:
+- gate: '18'
+  why: No Spring Data repository anywhere in the project.
+- gate: '10'
+  bc: inventory
+  why: 'Service-entity lane: no versioned read model to double-apply.'
+tolerated:
+- id: TOL-tests
+  gates:
+  - '*'
+  what: >-
+    A 'no test' finding on any slice. Every manifest here says tests.*.present: false and the fixture has no test
+    tree; the law rates a view slice with no test Should-fix, so such a finding is correct but not what this fixture
+    grades.
+- id: TOL-stale-lane
+  gates:
+  - '14'
+  file: src/main/java/com/acme/multi/payments/use_cases/capture_payment/slice.yaml
+  what: Also rating capture_payment's lane as stale (Should-fix, repaired by --fix-manifests) beside ML-3.
+- id: TOL-history
+  gates:
+  - '*'
+  file: src/main/java/com/acme/multi/catalog/CLAUDE.md
+  what: >-
+    Pointing out that catalog's CLAUDE.md says 'no history' while reprice_product keeps one; it corroborates ML-2.
+reader:
+  conventions: >-
+    mapping lines are the method-name line; an event-store reference is the first use site per symbol per file (the
+    import only when unused)
+  lane_signals: see lanes.*.signals
+  event_store_references:
+  - file: src/main/java/com/acme/multi/catalog/use_cases/reprice_product/RepriceProductHandler.java
+    line: 20
+    anchor: private final EventStore eventStore;
+  - file: src/main/java/com/acme/multi/catalog/use_cases/reprice_product/RepriceProductHandler.java
+    line: 16
+    anchor: private static final AggregateType PRICE_HISTORY = AggregateType.of("ProductPrices");

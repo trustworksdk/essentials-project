@@ -6,7 +6,6 @@ import org.springframework.stereotype.Component;
 import org.springframework.web.client.RestClient;
 import java.math.BigDecimal;
 
-// Translation candidate: outbound call to a third-party system, foreign schema.
 @Component
 public class PaymentGatewayClient {
     private final RestClient client;

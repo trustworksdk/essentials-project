@@ -3,7 +3,6 @@ package {{packagePath}}.{{bc}}.views.{{view}};
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.RequestMapping;
-import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.util.List;
@@ -33,12 +32,12 @@ public class {{View}}API {
     }
 
     @GetMapping
-    public List<{{View}}View> {{viewCamel}}(@RequestParam(required = false) String status) {
-        return queries.findByStatus(status);
+    public List<{{View}}View> {{viewCamel}}() {
+        return queries.findAllBy();
     }
 
     @GetMapping("/{{{aggregate}}Id}")
     public {{View}}View by{{Aggregate}}Id(@PathVariable String {{aggregate}}Id) {
-        return queries.find{{Aggregate}}By{{Aggregate}}Id({{aggregate}}Id).orElseThrow();
+        return queries.find{{Aggregate}}ById({{aggregate}}Id).orElseThrow();
     }
 }

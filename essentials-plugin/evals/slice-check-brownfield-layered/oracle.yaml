@@ -1,0 +1,5 @@
+expected: tests/fixtures/brownfield-layered/expected.yaml
+command: /essentials:slice-check
+sections: [runs_expect]
+read_only: true
+runs_scripts: []

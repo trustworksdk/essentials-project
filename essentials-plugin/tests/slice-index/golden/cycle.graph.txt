@@ -1,0 +1,20 @@
+graph — 14 nodes · 15 edges · 1 entry points · 2 cycle(s)
+
+PlaceOrder  (command)
+└─ orders.place_order  [command]
+   └─ OrderPlaced  (event)
+      └─ payments.start_payment  [automation]  ⇢ crosses orders → payments
+         └─ ChargePayment  (command)
+            └─ payments.charge_payment  [command]
+               ├─ PaymentFailed  (event)
+               │  ├─ payments.retry_payment  [automation]
+               │  │  └─ ChargePayment  (command)  ↺ cycle
+               │  └─ payments.payment_list  [view]
+               └─ PaymentCharged  (event)
+                  └─ payments.payment_list  [view]
+
+SendReminder  (command)
+└─ reminders.send_reminder  [command]
+   └─ ReminderSent  (event)
+      └─ reminders.schedule_next  [automation]
+         └─ SendReminder  (command)  ↺ cycle

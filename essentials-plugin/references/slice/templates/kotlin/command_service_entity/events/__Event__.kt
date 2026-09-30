@@ -1,5 +1,7 @@
 package {{packagePath}}.{{bc}}.events
 
+import {{packagePath}}.{{bc}}.types.{{Aggregate}}Id
+
 /**
  * Event variant emitted by the {{slice}} slice. One variant per file (rules/slice-design.md §R3) —
  * §R3 applies on this lane unchanged; what differs is where the event *goes*.
@@ -18,7 +20,7 @@ package {{packagePath}}.{{bc}}.events
  * wire contract into every foreign consumer (§R4).
  */
 data class {{Event}}(
-    override val {{aggregate}}Id: String,
+    override val {{aggregate}}Id: {{Aggregate}}Id,
     // TODO: replace with the facts this event carries
     val placeholder: String
 ) : {{Aggregate}}Event

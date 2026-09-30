@@ -38,6 +38,9 @@ Read ${CLAUDE_PLUGIN_ROOT}/rules/slice-design.md
 Read ${CLAUDE_PLUGIN_ROOT}/references/slice/slice-authoring.md
 ```
 
+The files are written by `scripts/render-slice.py` (`slice-authoring.md` §4b). This skill decides the
+shape, runs the script, then fills the TODOs and reports.
+
 ## Step 2 — Decide the shape
 
 **Branch on the lane first.** A view slice looks fundamentally different on the service-entity lane,
@@ -105,6 +108,17 @@ change, not a follow-up.
 Return the **view entity** from the query method. Do not emit a `…Response` type mirroring it, and do
 not add a mapper, assembler, or `toDto()`. The templates already do this — keep it that way when you
 extend them. §R2, "The command and the view *are* the contract".
+
+**Kotlin: a value class in a handler signature needs an explicit operationId** (trap ESS-113). Kotlin
+mangles the JVM name of a handler that takes a value class as a parameter (nullable or `suspend`
+included) or returns one (`placeOrder-40lU5Lw`); springdoc uses that name as the `operationId`, and the
+generated frontend client inherits it. A value class only inside a generic (`List<OrderId>`) or a DTO
+does not mangle. Give exactly the mangling handlers
+`@Operation(operationId = "<viewCamel>…")` (`io.swagger.v3.oas.annotations.Operation`), named after the
+slice so it stays stable and unique; `@JvmName` is not an option on Spring's open methods. See
+`references/llm/LLM-types-spring-web.md` § Kotlin handler methods: set the operationId. The shipped
+templates keep value classes inside the request and response types, so no emitted handler mangles;
+the first edit that moves one into the signature — a typed `@PathVariable` id, say — does.
 
 ### 2c. Processor selection
 
@@ -184,24 +198,48 @@ Java entity gotchas:
   `postgresql-document-db` declares both in `provided` scope, so they are not transitive, and a pure-Java
   consumer still needs them at compile time — `createForStringId` and the `Condition` DSL expose
   `KClass`/`KProperty1` overloads javac must resolve. Missing them fails with
-  `cannot access kotlin.reflect.KClass`. Adding a view slice is what pulls this module in, so say so in
-  the report if the module does not already have them.
+  `cannot access kotlin.reflect.KClass`. Adding a view slice is what pulls this module in; Step 4's
+  `requires` names whichever of the three the build file lacks.
 
 ## Step 3 — Check or scaffold the bounded context
 
-`Glob <sourceRoot>/<packageDir>/<bc>/`. If absent, emit the BC scaffold first — `bc-scaffold/` on the
-decider lane, `bc-scaffold-service-entity/` on the service-entity lane — but **omit `events/`** on
-either: a view slice supplies no event variant, and in Java an empty `permits` clause does not
-compile. The event parent arrives with the BC's first command slice.
+`Glob <sourceRoot>/<packageDir>/<bc>/`. **If absent, stop:** a bounded context starts with its first
+command slice (`slice-authoring.md` §3). The projection imports `<bc>/events/<Event>`, which only a
+command slice supplies, so a BC scaffolded by a view cannot compile — the script refuses `--new-bc` for
+this kind. Tell the user, and offer `/essentials:add-command-slice` for the BC's first command.
 
 **If the BC exists, confirm its lane before emitting** (`slice-authoring.md` §1b). A BC showing two
 lanes is Blocking under §R5 — stop and report rather than emitting into it.
 
 On the service-entity lane the view slice reads `<bc>/entities/<Entity>`, so that entity must already
 exist. If `entities/` is empty, say so and stop: the read shape is checked against the write model at
-startup, and there is nothing to check it against yet.
+startup, and there is nothing to check it against yet. The script refuses in that case too.
 
 ## Step 4 — Emit
+
+First the module preconditions; exit 1 names each module the build file lacks — report it and offer
+to add it before going on:
+
+```bash
+python3 ${CLAUDE_PLUGIN_ROOT}/scripts/render-slice.py requires --lang <language> --kind view \
+    --lane <lane> --build <the build file from add-slice Step 0>
+```
+
+Then render. Pass the inputs you were given; the script derives the rest (`slice-authoring.md` §4b):
+
+```bash
+python3 ${CLAUDE_PLUGIN_ROOT}/scripts/render-slice.py render --lang <language> --kind view \
+    --lane <lane> --json \
+    --project-root <projectRoot> --main-root <sourceRoot> --test-root <testRoot> \
+    --set packagePath=<packagePath> --set bc=<bc> --set view=<view> --set Aggregate=<Aggregate> \
+    --set AggregateType=<AggregateType> --set owner=<owner> \
+    [--set Event=<Event>]             # decider / aggregate lane
+    [--set Entity=<Entity>]           # service-entity lane, when entities/ already names one
+    [--set apiPath=<apiPath>]         # only when it is not /api/<bc>
+```
+
+Exit 2 means nothing was written: relay the message and stop. The tables below are what it writes;
+then fill the TODOs the JSON lists under `todos`.
 
 **Decider / aggregate lane — `templates/<language>/view/`:**
 
@@ -235,7 +273,7 @@ The repository file differs by language because the two shapes differ: Kotlin sh
 `@Configuration` that *produces* a `DocumentDbRepository` `@Bean` — and a `@Configuration` class must
 not be named for the bean it declares (see the naming gotcha in 2f).
 
-Abort if the slice directory exists, or if a rendered file still contains `{{` or `__`.
+The script refuses an existing slice directory and any file it would overwrite.
 
 ## Step 5 — Wire it
 

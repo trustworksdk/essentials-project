@@ -17,7 +17,6 @@ writes: [Invoice]
 reads:
   - { name: Invoice }
 invariants:
-  # Deliberately names the HANDLER — the manifest itself records the leak this fixture models.
   - { id: INV-PI-1, text: "An invoice may only be paid once", enforcedBy: "PayInvoiceHandler" }
 forbidden:
   - cross-slice-internal:billing

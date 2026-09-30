@@ -10,12 +10,6 @@ import org.springframework.stereotype.Component;
 
 import java.util.List;
 
-/**
- * TRAP, and the important one: the import of ShipOrder from another slice's use_cases/ package is
- * SANCTIONED (R4) because its only use is constructing a command handed to the command bus. Gate
- * 8(a) must NOT flag it. Flagging it means the carve-out was not implemented, and the law would be
- * contradicting itself — R4 prescribes exactly this collaboration.
- */
 @Component
 public class AutoShipProcessor {
 
@@ -32,7 +26,6 @@ public class AutoShipProcessor {
         commandBus.sendAndDontWait(new ShipOrder(OrderId.of(event.orderId())));
     }
 
-    /** TRAP: the write-path-only use of findByIdIn — loads a batch in order to mutate it. */
     public void shipBatch(List<String> orderIds) {
         for (var order : shippingOrders.findByIdIn(orderIds)) {
             commandBus.sendAndDontWait(new ShipOrder(OrderId.of(order.getOrderId())));

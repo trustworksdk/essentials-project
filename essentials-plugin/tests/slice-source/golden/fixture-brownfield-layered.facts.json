@@ -1,0 +1,13 @@
+{
+  "tool": "slice-source",
+  "format": 1,
+  "mode": "facts",
+  "root": "tests/fixtures/brownfield-layered",
+  "manifestsRead": true,
+  "sourceFiles": 14,
+  "bcs": [],
+  "slices": [],
+  "messages": [],
+  "unparsed": [],
+  "unresolved": []
+}

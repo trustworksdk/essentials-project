@@ -1,0 +1,16 @@
+schemaVersion: "1.2"
+slice: orders.warehouse
+kind: translation
+bc: orders
+owner: orders-team
+status: live
+summary: Forward orders to the warehouse.
+generator: essentials
+language: kotlin
+tier: cqrs-es
+lane: decider
+externalSystem: warehouse
+direction: outbound
+consumes: [OrderPlaced, OrderCancelled]
+tests:
+  unit: { present: false }

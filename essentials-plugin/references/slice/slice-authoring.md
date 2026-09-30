@@ -51,7 +51,7 @@ why — `AggregateRoot` / `StatefulAggregateRepository` are a Java-native family
 supported shape.
 
 **A new bounded context has no lane to detect**, so the dispatching command elicits it (see
-`commands/add-slice.md` Step 2b) and passes it in as the `lane` input. Never re-elicit it in a skill.
+`commands/add-slice.md` Step 3b) and passes it in as the `lane` input. Never re-elicit it in a skill.
 
 ## 2. Project resolution
 
@@ -70,10 +70,17 @@ supported shape.
 Discover candidates: directories directly under `<sourceRoot>/<packageDir>/` that contain a
 `use_cases/` or `views/` child. Offer those plus "new bounded context".
 
-If the bounded context does not exist, emit the BC scaffold **first**, then the slice. Which scaffold
-depends on the lane (§1b):
+If the bounded context does not exist, emit the BC scaffold **first**, then the slice — and only with a
+**command** slice. Every view, automation and translation template imports `<bc>/events/<Event>`, and
+only a command slice supplies an event variant, so a new BC started by any other kind cannot compile;
+`render-slice.py` refuses `--new-bc` for those kinds. Which scaffold depends on the lane (§1b):
 
-- **decider** — `bc-scaffold/`: sealed event parent, routing interface, id type, config class.
+- **decider** — `bc-scaffold/`: sealed event parent, routing interface, id type, and a config class
+  holding only this BC's aggregate-type configuration and its decider beans. The command routing
+  itself — the one `…DeciderAndAggregateTypeConfigurator` — is **application-level**, in
+  `<packagePath>.DeciderWiring` (`app-wiring/`), written by the first decider BC and never again: a
+  second configurator registers every decider twice and the first command sent fails with
+  `MultipleCommandHandlersFoundException`.
 - **service-entity** — `bc-scaffold-service-entity/`: sealed event parent, id type, a near-empty
   config class, and `entities/CLAUDE.md`. **No `routing/` and no `use_cases/_shared/`** — both are
   absent by construction on that lane (§R5), so do not create them "for symmetry".
@@ -83,13 +90,10 @@ only files on that lane that must name a persistence flavour, and no template sh
 (`slice-model.md` §3.5). Emit `entities/CLAUDE.md`, which states the contract, and tell the user in
 the report that those two files are theirs to write. Do not invent an entity from the placeholders.
 
-**Java exception:** a `permits` clause may not be empty, so `events/<Aggregate>Event.java` is emitted
-only when the BC's first **command** slice supplies the first variant. A bounded context created by a
-view, automation, or translation slice gets no `events/` directory until its first command slice
-lands. Kotlin has no such constraint, but the scaffold is kept symmetric for the same reason: an
-event hierarchy with no variants is not worth generating. This applies on **both** scaffolded lanes:
-a service-entity command slice still supplies an event variant, because its events are declared
-exactly as §R3 prescribes and merely delivered on the `EventBus` rather than stored.
+**Java:** a `permits` clause may not be empty, so `events/<Aggregate>Event.java` is emitted with the
+BC's first command slice, whose event is the first entry. This applies on **every** scaffolded lane: a
+service-entity command slice still supplies an event variant, because its events are declared exactly
+as §R3 prescribes and merely delivered on the `EventBus` rather than stored.
 
 ## 4. Placeholders
 
@@ -146,7 +150,42 @@ better apart than as one file full of branches.
 is a drift bug, and the fail-loud check below catches it.
 
 **Fail loudly:** after substitution, a rendered file containing `{{` or `__` means the template has
-drifted from this table. Abort and name the file — do not write it.
+drifted from this table. Abort and name the file — do not write it. `render-slice.py` enforces this in
+code (§4b), together with an unknown placeholder name and a placeholder with no value.
+
+## 4b. Rendering is a script
+
+Everything in §3–§6 that is substitution, placement or an anchored edit is done by
+`${CLAUDE_PLUGIN_ROOT}/scripts/render-slice.py` (standard library only). The skill resolves the inputs
+and makes the judgements; the script writes the files; the skill then fills the TODOs, prunes what the
+slice does not need, and reports. Never substitute a template by hand — the committed goldens under
+`tests/slice-golden/` prove what the script writes, and a hand render is not what they prove.
+
+```bash
+python3 ${CLAUDE_PLUGIN_ROOT}/scripts/render-slice.py requires --lang <language> --kind <kind> \
+    --lane <lane> [--new-bc] --build <projectRoot>/<pom.xml|backend/pom.xml|build.gradle.kts>
+python3 ${CLAUDE_PLUGIN_ROOT}/scripts/render-slice.py render --lang <language> --kind <kind> \
+    --lane <lane> [--new-bc] [--with-state] --wire --json \
+    --project-root <projectRoot> --main-root <sourceRoot> --test-root <testRoot> \
+    --set packagePath=… --set bc=… --set Aggregate=… …
+```
+
+- Pass the elicited inputs only; the script derives `Bc`, `Slice`/`sliceCamel`, `View`/`viewCamel`,
+  `ExternalSystem`, `aggregate`, `entity`/`Entity`, `apiPath`, `owner` and `tier` (the §4 table).
+  `AggregateType` and `Aggregates` are plurals and are always passed. A derived value may be
+  overridden with `--set` (an existing BC's entity name, a non-default `apiPath`).
+- **`requires`** exits 1 and names each module the slice needs that the build file does not declare
+  (`eventsourced-aggregates` is optional in the event-store starter, and no starter brings
+  `postgresql-document-db`). Report it and offer to add it before rendering; a slice rendered into a
+  project without it does not compile.
+- **`render` exits 2 and writes nothing** on a bad input, a template drift, an existing slice
+  directory or file, a lane that does not match the BC's directories (§1b), a service-entity view whose
+  entity does not exist yet, or a refused combination (§1b Kotlin aggregate lane; automation and
+  translation on the service-entity lane; `--new-bc` on a non-command kind). Relay the message.
+- **`--json`** returns `written` (every file), `wiring` (each edit as `applied`, `present` or
+  `manual` with a reason — `manual` means the anchor comment is gone and the edit is yours to make by
+  hand; on the decider lane the first entry counts the application's decider configurators, and
+  `manual` there means none or more than one, which you report) and `todos` (`path:line: text` of every TODO the templates left).
 
 **`slice.yaml` is the one rendered file that must also be *parsed* before it is written**, and it has
 a rule that no other template has: **every `path:` value is quoted**, in the template and in anything
@@ -168,8 +207,11 @@ into a tree that already exists**. Consequences:
    *into* one. Check before every write. An existing slice directory is an abort, never a merge.
 3. **Some emissions are edits, not writes** — the `@Bean` registration, and in Java the `permits`
    clause. The project template never edits.
-4. **Files land in up to four trees**: the slice directory, the BC's `events/`, the test tree, and
-   (Java views and automations) `src/main/resources/db/migration/`.
+4. **Files land in up to three trees**: the slice directory, the BC's `events/`, and the test tree —
+   each at the package its `package` line declares, which is how the service-entity entity test lands
+   in `<bc>/entities/`. **No template emits a migration.** The event-sourced view and automation
+   templates persist through DocumentDB, which creates its own table; a JDBI read model, and the
+   service-entity lane's write table, need a migration the user writes.
 
 ## 6. Emission order
 
@@ -178,20 +220,21 @@ into a tree that already exists**. Consequences:
 3. The event variant into `<bc>/events/` (command slices, **both** scaffolded lanes).
 4. The test into the matching test tree — on the service-entity lane a command slice emits **two**
    (the pure entity unit test and the through-the-bus IT).
-5. The Flyway migration (Java view and automation slices only).
-6. `slice.yaml` and `CLAUDE.md` into the slice directory.
-7. **Wiring** — add the `@Bean` to `<bc>/config/<Bc>Configuration`, and in Java append the new event
-   to the sealed parent's `permits` clause.
+5. `slice.yaml` and `CLAUDE.md` into the slice directory.
+6. **Wiring** — add the `@Bean` to `<bc>/config/<Bc>Configuration` (decider lane), confirm the
+   application has exactly one decider configurator (decider lane), and in Java append the new event to
+   the sealed parent's `permits` clause. `render-slice.py --wire` makes both edits at
+   the anchor comments the BC scaffold carries.
 
-Wiring is step 7 and not optional: `rules/slice-design.md` § Wiring is part of done.
+Steps 1–5 are one `render-slice.py render` call. Wiring is step 6 and not optional:
+`rules/slice-design.md` § Wiring is part of done.
 
-**Steps 5 and 7 differ on the service-entity lane:**
+**The service-entity lane differs in two ways:**
 
-- **Step 5 inverts.** There is no read-model migration, because there is no separate read model — a
+- **No migration.** There is no read-model migration, because there is no separate read model — a
   view slice queries the entity's own table. What *does* need a migration is the **write** table, in
-  both languages, and that belongs to `entities/` rather than to any slice. Emit none here; say so in
-  the report.
-- **Step 7 becomes a check, not an edit.** There is no `@Bean` to add: handlers are auto-registered by
+  both languages, and that belongs to `entities/` rather than to any slice. Say so in the report.
+- **Step 6 becomes a check, not an edit.** There is no `@Bean` to add: handlers are auto-registered by
   `ReactiveHandlersBeanPostProcessor` and Spring Data repositories by scanning. Confirm the handler is
   a `@Component` in a scanned package and that `reactive-bean-post-processor-enabled` (default `true`)
   is not switched off — disabling it silently unwires every handler in the application. The Java

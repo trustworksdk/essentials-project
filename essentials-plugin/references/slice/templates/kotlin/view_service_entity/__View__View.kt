@@ -16,13 +16,13 @@ package {{packagePath}}.{{bc}}.views.{{view}}
  * invariant that has nothing to do with this screen.
  *
  * Use JavaBean-style getter names: Spring Data resolves `getStatus()` against the entity's `status`
- * property. In Kotlin, `val status: String` on the interface generates exactly that.
+ * property. In Kotlin, `val status: String` on the interface generates exactly that. The scaffold names
+ * only `id`, the one property the entity contract guarantees, so a fresh context starts.
  */
 interface {{View}}View {
 
-    val {{aggregate}}Id: String
+    val id: String
 
-    // TODO: replace with the fields this view actually serves. Name them exactly as the entity's
-    //       properties, or Spring Data cannot resolve them.
-    val status: String
+    // TODO: add the fields this view actually serves, e.g. `val status: String`. Name them exactly as the
+    //       entity's properties, or Spring Data cannot resolve them and the context does not start.
 }

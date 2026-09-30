@@ -1,0 +1,73 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <!-- The reactor parent: owns every version property and BOM import (S11). Versions come from the
+         essentials plugin's stack pins; moving one is an upgrade decision, not an implementation choice. -->
+    <parent>
+        <groupId>org.springframework.boot</groupId>
+        <artifactId>spring-boot-starter-parent</artifactId>
+        <version>{{pin:spring-boot-starter-parent}}</version>
+        <relativePath/>
+    </parent>
+
+    <groupId>{{groupId}}</groupId>
+    <artifactId>{{artifactId}}-parent</artifactId>
+    <version>0.0.1-SNAPSHOT</version>
+    <packaging>pom</packaging>
+    <name>{{projectName}}</name>
+
+    <modules>
+        <module>backend</module>
+    </modules>
+
+    <properties>
+        <java.version>{{pin:java.version}}</java.version>
+        <!-- Spring Boot manages Kotlin too; this property is what overrides it. Load-bearing on a Java
+             project as well: postgresql-document-db is written in Kotlin (S2.1). -->
+        <kotlin.version>{{pin:kotlin.version}}</kotlin.version>
+        <!-- One property drives every Essentials artifact (S1). -->
+        <essentials.version>{{pin:essentials.version}}</essentials.version>
+        <springdoc.version>{{pin:springdoc.version}}</springdoc.version>
+<!-- IF frontend=embedded -->
+        <frontend-maven-plugin.version>{{pin:frontend-maven-plugin}}</frontend-maven-plugin.version>
+        <node.version>{{pin:Node (via frontend-maven-plugin)}}</node.version>
+<!-- END frontend -->
+        <!-- Spring Boot's parent already manages Testcontainers, Mockito, AssertJ, Awaitility and the MongoDB
+             driver. A BOM imported below would be inert for them (the parent's management wins), so their
+             versions are set through the properties Spring Boot reads (S11). -->
+        <testcontainers.version>{{pin:testcontainers-bom.version}}</testcontainers.version>
+        <mockito.version>{{pin:mockito-bom.version}}</mockito.version>
+        <assertj.version>{{pin:assertj.version}}</assertj.version>
+        <awaitility.version>{{pin:awaitility.version}}</awaitility.version>
+<!-- IF db=mongo -->
+        <!-- The MongoDB driver, held above Spring Boot's managed release as Essentials itself is built and
+             tested; Spring Boot imports the driver BOM at this property. -->
+        <mongodb.version>{{pin:mongodb.version}}</mongodb.version>
+<!-- END db -->
+        <!-- Not managed by Spring Boot: imported as BOMs below. -->
+        <jdbi3-bom.version>{{pin:jdbi3-bom.version}}</jdbi3-bom.version>
+        <spring-modulith.version>{{pin:spring-modulith.version}}</spring-modulith.version>
+        <jqwik.version>{{pin:jqwik}}</jqwik.version>
+    </properties>
+
+    <dependencyManagement>
+        <dependencies>
+            <dependency>
+                <groupId>org.jdbi</groupId>
+                <artifactId>jdbi3-bom</artifactId>
+                <version>${jdbi3-bom.version}</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+            <dependency>
+                <groupId>org.springframework.modulith</groupId>
+                <artifactId>spring-modulith-bom</artifactId>
+                <version>${spring-modulith.version}</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+        </dependencies>
+    </dependencyManagement>
+</project>

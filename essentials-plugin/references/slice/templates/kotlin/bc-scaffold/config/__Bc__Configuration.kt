@@ -4,23 +4,21 @@ import {{packagePath}}.{{bc}}.events.{{Aggregate}}Event
 import {{packagePath}}.{{bc}}.routing.{{Aggregate}}Command
 import {{packagePath}}.{{bc}}.types.{{Aggregate}}Id
 import dk.trustworks.essentials.components.kotlin.eventsourcing.AggregateTypeConfiguration
-import dk.trustworks.essentials.components.kotlin.eventsourcing.Decider
 import dk.trustworks.essentials.components.kotlin.eventsourcing.DeciderSupportsAggregateTypeChecker
-import dk.trustworks.essentials.components.kotlin.eventsourcing.adapters.DeciderAndAggregateTypeConfigurator
-import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.ConfigurableEventStore
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.AggregateType
-import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.serializer.AggregateIdSerializer
-import dk.trustworks.essentials.reactive.command.CommandBus
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.serializer.StringValueTypeAggregateIdSerializer
 import org.springframework.context.annotation.Bean
 import org.springframework.context.annotation.Configuration
 
 /**
  * Wires the {{Bc}} bounded context.
  *
- * Each command slice's Decider is registered as its OWN `@Bean`; the
- * `DeciderAndAggregateTypeConfigurator` collects them via `List<Decider<*, *>>` and routes commands
- * by aggregate type. Adding a command slice is adding one `@Bean` line — never touching another
- * slice's files.
+ * Each command slice's Decider is registered as its OWN `@Bean`, next to this BC's
+ * `AggregateTypeConfiguration`. The application's single `DeciderAndAggregateTypeConfigurator` — in
+ * `{{packagePath}}.DeciderWiring`, never here — collects both from every bounded context and routes
+ * commands by aggregate type. A configurator per BC is a duplicate bean (same method name) or, renamed,
+ * registers every decider once per BC. Adding a command slice is adding one `@Bean` line — never
+ * touching another slice's files.
  *
  * This wiring is part of every slice's definition of done: an unregistered Decider compiles, passes
  * every unit test, and silently breaks every `@SpringBootTest`.
@@ -33,18 +31,12 @@ class {{Bc}}Configuration {
     }
 
     @Bean
-    fun deciderAndAggregateTypeConfigurator(
-        eventStore: ConfigurableEventStore<*>,
-        commandBus: CommandBus,
-        aggregateTypeConfigurations: List<AggregateTypeConfiguration>,
-        deciders: List<Decider<*, *>>
-    ) = DeciderAndAggregateTypeConfigurator(eventStore, commandBus, aggregateTypeConfigurations, deciders)
-
-    @Bean
     fun {{aggregate}}AggregateTypeConfiguration() = AggregateTypeConfiguration(
         aggregateType = AGGREGATE_TYPE,
         aggregateIdType = {{Aggregate}}Id::class.java,
-        aggregateIdSerializer = AggregateIdSerializer.serializerFor({{Aggregate}}Id::class.java),
+        // A Kotlin StringValueType id needs this serializer; AggregateIdSerializer.serializerFor(...) only knows
+        // Java CharSequenceType / String / UUID and throws at context start.
+        aggregateIdSerializer = StringValueTypeAggregateIdSerializer({{Aggregate}}Id::class),
         deciderSupportsAggregateTypeChecker =
             DeciderSupportsAggregateTypeChecker.HandlesCommandsThatInheritsFromCommandType({{Aggregate}}Command::class),
         commandAggregateIdResolver = { cmd -> (cmd as {{Aggregate}}Command).id },

@@ -1,0 +1,19 @@
+schemaVersion: "1.3"
+slice: payments.payment_list
+kind: view
+bc: payments
+owner: payments-team
+status: live
+summary: Payments with their latest outcome.
+language: java
+tier: cqrs-es
+lane: decider
+serves: [ListPayments]
+owns: [payment_list_view]
+projections:
+  - { name: PaymentListProjection, aggregateTypes: [Payments], from: [PaymentCharged, PaymentFailed] }
+endpoints:
+  - { method: GET, path: "/api/payments", auth: user }
+tests:
+  unit: { present: true }
+  integration: { present: false }

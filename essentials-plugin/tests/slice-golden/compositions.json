@@ -1,0 +1,312 @@
+{
+  "compositions": {
+    "java-decider": {
+      "language": "java",
+      "lane": "decider",
+      "host": "java-pg-event-sourced",
+      "inputs": {
+        "packagePath": "com.acme.shop",
+        "bc": "orders",
+        "Aggregate": "Order",
+        "AggregateType": "Orders"
+      },
+      "steps": [
+        {
+          "kind": "command",
+          "newBc": true,
+          "inputs": {
+            "slice": "place_order",
+            "Command": "PlaceOrder",
+            "Event": "OrderPlaced"
+          }
+        },
+        {
+          "kind": "command",
+          "withState": true,
+          "inputs": {
+            "slice": "cancel_order",
+            "Command": "CancelOrder",
+            "Event": "OrderCancelled",
+            "apiPath": "/api/orders/cancel"
+          }
+        },
+        {
+          "kind": "view",
+          "inputs": {
+            "view": "order_list",
+            "Event": "OrderPlaced"
+          }
+        },
+        {
+          "kind": "automation",
+          "inputs": {
+            "slice": "fulfillment",
+            "Event": "OrderPlaced"
+          }
+        },
+        {
+          "kind": "translation",
+          "inputs": {
+            "externalSystem": "billing",
+            "ExternalEvent": "InvoiceIssued",
+            "Event": "OrderPlaced"
+          }
+        }
+      ]
+    },
+    "java-decider-two-bc": {
+      "language": "java",
+      "lane": "decider",
+      "host": "java-pg-event-sourced",
+      "inputs": {
+        "packagePath": "com.acme.shop"
+      },
+      "steps": [
+        {
+          "kind": "command",
+          "newBc": true,
+          "inputs": {
+            "bc": "orders",
+            "Aggregate": "Order",
+            "AggregateType": "Orders",
+            "slice": "place_order",
+            "Command": "PlaceOrder",
+            "Event": "OrderPlaced"
+          }
+        },
+        {
+          "kind": "command",
+          "newBc": true,
+          "inputs": {
+            "bc": "payments",
+            "Aggregate": "Payment",
+            "AggregateType": "Payments",
+            "slice": "request_payment",
+            "Command": "RequestPayment",
+            "Event": "PaymentRequested"
+          }
+        }
+      ]
+    },
+    "java-aggregate": {
+      "language": "java",
+      "lane": "aggregate",
+      "host": "java-pg-event-sourced",
+      "inputs": {
+        "packagePath": "com.acme.shop",
+        "bc": "orders",
+        "Aggregate": "Order",
+        "Aggregates": "Orders",
+        "AggregateType": "Orders"
+      },
+      "steps": [
+        {
+          "kind": "command",
+          "newBc": true,
+          "inputs": {
+            "slice": "place_order",
+            "Command": "PlaceOrder",
+            "Event": "OrderPlaced"
+          }
+        },
+        {
+          "kind": "command",
+          "inputs": {
+            "slice": "cancel_order",
+            "Command": "CancelOrder",
+            "Event": "OrderCancelled",
+            "apiPath": "/api/orders/cancel"
+          }
+        },
+        {
+          "kind": "view",
+          "inputs": {
+            "view": "order_list",
+            "Event": "OrderPlaced"
+          }
+        },
+        {
+          "kind": "automation",
+          "inputs": {
+            "slice": "fulfillment",
+            "Event": "OrderPlaced"
+          }
+        },
+        {
+          "kind": "translation",
+          "inputs": {
+            "externalSystem": "billing",
+            "ExternalEvent": "InvoiceIssued",
+            "Event": "OrderPlaced"
+          }
+        }
+      ]
+    },
+    "java-service-entity": {
+      "language": "java",
+      "lane": "service-entity",
+      "host": "java-mongo",
+      "inputs": {
+        "packagePath": "com.acme.shop",
+        "bc": "orders",
+        "Aggregate": "Order"
+      },
+      "steps": [
+        {
+          "kind": "command",
+          "newBc": true,
+          "inputs": {
+            "slice": "place_order",
+            "Command": "PlaceOrder",
+            "Event": "OrderPlaced"
+          }
+        },
+        {
+          "seed": "_seeds/java-service-entity"
+        },
+        {
+          "kind": "command",
+          "inputs": {
+            "slice": "cancel_order",
+            "Command": "CancelOrder",
+            "Event": "OrderCancelled",
+            "apiPath": "/api/orders/cancel"
+          }
+        },
+        {
+          "kind": "view",
+          "inputs": {
+            "view": "order_list"
+          }
+        }
+      ]
+    },
+    "kotlin-decider": {
+      "language": "kotlin",
+      "lane": "decider",
+      "host": "kotlin-pg-event-sourced",
+      "inputs": {
+        "packagePath": "com.acme.shop",
+        "bc": "orders",
+        "Aggregate": "Order",
+        "AggregateType": "Orders"
+      },
+      "steps": [
+        {
+          "kind": "command",
+          "newBc": true,
+          "inputs": {
+            "slice": "place_order",
+            "Command": "PlaceOrder",
+            "Event": "OrderPlaced"
+          }
+        },
+        {
+          "kind": "command",
+          "withState": true,
+          "inputs": {
+            "slice": "cancel_order",
+            "Command": "CancelOrder",
+            "Event": "OrderCancelled",
+            "apiPath": "/api/orders/cancel"
+          }
+        },
+        {
+          "kind": "view",
+          "inputs": {
+            "view": "order_list",
+            "Event": "OrderPlaced"
+          }
+        },
+        {
+          "kind": "automation",
+          "inputs": {
+            "slice": "fulfillment",
+            "Event": "OrderPlaced"
+          }
+        },
+        {
+          "kind": "translation",
+          "inputs": {
+            "externalSystem": "billing",
+            "ExternalEvent": "InvoiceIssued",
+            "Event": "OrderPlaced"
+          }
+        }
+      ]
+    },
+    "kotlin-decider-two-bc": {
+      "language": "kotlin",
+      "lane": "decider",
+      "host": "kotlin-pg-event-sourced",
+      "inputs": {
+        "packagePath": "com.acme.shop"
+      },
+      "steps": [
+        {
+          "kind": "command",
+          "newBc": true,
+          "inputs": {
+            "bc": "orders",
+            "Aggregate": "Order",
+            "AggregateType": "Orders",
+            "slice": "place_order",
+            "Command": "PlaceOrder",
+            "Event": "OrderPlaced"
+          }
+        },
+        {
+          "kind": "command",
+          "newBc": true,
+          "inputs": {
+            "bc": "payments",
+            "Aggregate": "Payment",
+            "AggregateType": "Payments",
+            "slice": "request_payment",
+            "Command": "RequestPayment",
+            "Event": "PaymentRequested"
+          }
+        }
+      ]
+    },
+    "kotlin-service-entity": {
+      "language": "kotlin",
+      "lane": "service-entity",
+      "host": "kotlin-mongo",
+      "inputs": {
+        "packagePath": "com.acme.shop",
+        "bc": "orders",
+        "Aggregate": "Order"
+      },
+      "steps": [
+        {
+          "kind": "command",
+          "newBc": true,
+          "inputs": {
+            "slice": "place_order",
+            "Command": "PlaceOrder",
+            "Event": "OrderPlaced"
+          }
+        },
+        {
+          "seed": "_seeds/kotlin-service-entity"
+        },
+        {
+          "kind": "command",
+          "inputs": {
+            "slice": "cancel_order",
+            "Command": "CancelOrder",
+            "Event": "OrderCancelled",
+            "apiPath": "/api/orders/cancel"
+          }
+        },
+        {
+          "kind": "view",
+          "inputs": {
+            "view": "order_list"
+          }
+        }
+      ]
+    }
+  }
+}

@@ -6,9 +6,6 @@ import dk.trustworks.essentials.reactive.command.AnnotatedCommandHandler;
 import dk.trustworks.essentials.reactive.command.CmdHandler;
 import org.springframework.stereotype.Component;
 
-/**
- * CLEAN. Creation slice: the existence check is idempotency, not a domain rule, so it belongs here.
- */
 @Component
 public class IssueInvoiceHandler extends AnnotatedCommandHandler {
     private final Invoices invoices;

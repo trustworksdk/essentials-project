@@ -1,0 +1,391 @@
+{
+  "tool": "slice-source",
+  "format": 1,
+  "mode": "facts",
+  "root": "tests/slice-source/cases/kotlin-drift",
+  "manifestsRead": true,
+  "sourceFiles": 8,
+  "bcs": [
+    {
+      "name": "orders",
+      "path": "src/main/*/com/acme/shop/orders",
+      "dirs": [
+        "src/main/kotlin/com/acme/shop/orders"
+      ],
+      "languages": [
+        "kotlin"
+      ],
+      "slices": [
+        "orders.notify_customer",
+        "orders.order_board",
+        "orders.order_feed"
+      ],
+      "lane": {
+        "signals": {
+          "decider": [],
+          "aggregates": null,
+          "entities": null,
+          "eventStore": []
+        },
+        "declared": [
+          {
+            "slice": "orders.notify_customer",
+            "lane": "decider",
+            "file": "src/main/kotlin/com/acme/shop/orders/automations/notify_customer/slice.yaml"
+          },
+          {
+            "slice": "orders.order_board",
+            "lane": "decider",
+            "file": "src/main/kotlin/com/acme/shop/orders/views/order_board/slice.yaml"
+          },
+          {
+            "slice": "orders.order_feed",
+            "lane": "decider",
+            "file": "src/main/kotlin/com/acme/shop/orders/views/order_feed/slice.yaml"
+          }
+        ],
+        "detected": "undetermined"
+      }
+    }
+  ],
+  "slices": [
+    {
+      "id": "orders.notify_customer",
+      "idSource": "manifest",
+      "bc": "orders",
+      "bcPath": "src/main/*/com/acme/shop/orders",
+      "dir": "src/main/kotlin/com/acme/shop/orders/automations/notify_customer",
+      "role": "automations",
+      "kind": "automation",
+      "manifest": "src/main/kotlin/com/acme/shop/orders/automations/notify_customer/slice.yaml",
+      "language": "kotlin",
+      "package": "com.acme.shop.orders.automations.notify_customer",
+      "files": [
+        "NotifyCustomerProcessor.kt"
+      ],
+      "processors": [
+        {
+          "class": "NotifyCustomerProcessor",
+          "base": "EventProcessor",
+          "file": "src/main/kotlin/com/acme/shop/orders/automations/notify_customer/NotifyCustomerProcessor.kt",
+          "line": 8
+        }
+      ],
+      "handlers": [
+        {
+          "class": "NotifyCustomerProcessor",
+          "method": "on",
+          "annotation": "MessageHandler",
+          "annotationFqn": "dk.trustworks.essentials.components.foundation.messaging.MessageHandler",
+          "role": "event",
+          "file": "src/main/kotlin/com/acme/shop/orders/automations/notify_customer/NotifyCustomerProcessor.kt",
+          "line": 15,
+          "annotationLine": 14,
+          "message": {
+            "written": "Placed",
+            "name": "OrderPlaced",
+            "fqn": "com.acme.shop.orders.events.OrderPlaced",
+            "resolvedBy": "alias"
+          },
+          "params": [
+            {
+              "name": "event",
+              "type": "Placed"
+            }
+          ],
+          "envelope": false
+        },
+        {
+          "class": "NotifyCustomerProcessor",
+          "method": "on",
+          "annotation": "MessageHandler",
+          "annotationFqn": "dk.trustworks.essentials.components.foundation.messaging.MessageHandler",
+          "role": "event",
+          "file": "src/main/kotlin/com/acme/shop/orders/automations/notify_customer/NotifyCustomerProcessor.kt",
+          "line": 20,
+          "annotationLine": 19,
+          "message": {
+            "written": "com.acme.shop.orders.events.OrderCancelled",
+            "name": "OrderCancelled",
+            "fqn": "com.acme.shop.orders.events.OrderCancelled",
+            "resolvedBy": "fqn"
+          },
+          "params": [
+            {
+              "name": "event",
+              "type": "com.acme.shop.orders.events.OrderCancelled"
+            }
+          ],
+          "envelope": false
+        }
+      ],
+      "handles": [],
+      "dispatches": [],
+      "publishes": [],
+      "subscriptions": [],
+      "mappings": [],
+      "schedules": [],
+      "notAnalysed": []
+    },
+    {
+      "id": "orders.order_board",
+      "idSource": "manifest",
+      "bc": "orders",
+      "bcPath": "src/main/*/com/acme/shop/orders",
+      "dir": "src/main/kotlin/com/acme/shop/orders/views/order_board",
+      "role": "views",
+      "kind": "view",
+      "manifest": "src/main/kotlin/com/acme/shop/orders/views/order_board/slice.yaml",
+      "language": "kotlin",
+      "package": "com.acme.shop.orders.views.order_board",
+      "files": [
+        "OrderBoardAPI.kt",
+        "OrderBoardProjection.kt"
+      ],
+      "processors": [
+        {
+          "class": "OrderBoardProjection",
+          "base": "ViewEventProcessor",
+          "file": "src/main/kotlin/com/acme/shop/orders/views/order_board/OrderBoardProjection.kt",
+          "line": 8
+        }
+      ],
+      "handlers": [
+        {
+          "class": "OrderBoardProjection",
+          "method": "on",
+          "annotation": "MessageHandler",
+          "annotationFqn": "dk.trustworks.essentials.components.foundation.messaging.MessageHandler",
+          "role": "event",
+          "file": "src/main/kotlin/com/acme/shop/orders/views/order_board/OrderBoardProjection.kt",
+          "line": 12,
+          "annotationLine": 11,
+          "message": {
+            "written": "Placed",
+            "name": "OrderPlaced",
+            "fqn": "com.acme.shop.orders.events.OrderPlaced",
+            "resolvedBy": "alias"
+          },
+          "params": [
+            {
+              "name": "event",
+              "type": "Placed"
+            }
+          ],
+          "envelope": false
+        },
+        {
+          "class": "OrderBoardProjection",
+          "method": "on",
+          "annotation": "MessageHandler",
+          "annotationFqn": "dk.trustworks.essentials.components.foundation.messaging.MessageHandler",
+          "role": "event",
+          "file": "src/main/kotlin/com/acme/shop/orders/views/order_board/OrderBoardProjection.kt",
+          "line": 17,
+          "annotationLine": 16,
+          "message": {
+            "written": "Shipped",
+            "name": "OrderShipped",
+            "fqn": "com.acme.shop.orders.events.OrderShipped",
+            "resolvedBy": "alias"
+          },
+          "params": [
+            {
+              "name": "event",
+              "type": "Shipped"
+            }
+          ],
+          "envelope": false
+        }
+      ],
+      "handles": [],
+      "dispatches": [],
+      "publishes": [],
+      "subscriptions": [],
+      "mappings": [
+        {
+          "class": "OrderBoardAPI",
+          "method": "board",
+          "file": "src/main/kotlin/com/acme/shop/orders/views/order_board/OrderBoardAPI.kt",
+          "line": 13,
+          "annotationLine": 12,
+          "annotation": "GetMapping",
+          "httpMethods": [
+            "GET"
+          ],
+          "routes": [
+            "/api/orders/board"
+          ],
+          "params": [],
+          "requestParams": [],
+          "queryParams": [],
+          "requestBody": null
+        },
+        {
+          "class": "OrderBoardAPI",
+          "method": "filtered",
+          "file": "src/main/kotlin/com/acme/shop/orders/views/order_board/OrderBoardAPI.kt",
+          "line": 17,
+          "annotationLine": 16,
+          "annotation": "GetMapping",
+          "httpMethods": [
+            "GET"
+          ],
+          "routes": [
+            "/api/orders/board/filtered"
+          ],
+          "params": [
+            "status"
+          ],
+          "requestParams": [
+            {
+              "name": "status",
+              "required": true
+            }
+          ],
+          "queryParams": [],
+          "requestBody": null
+        },
+        {
+          "class": "OrderBoardAPI",
+          "method": "open",
+          "file": "src/main/kotlin/com/acme/shop/orders/views/order_board/OrderBoardAPI.kt",
+          "line": 21,
+          "annotationLine": 20,
+          "annotation": "GetMapping",
+          "httpMethods": [
+            "GET"
+          ],
+          "routes": [
+            "/api/orders/board"
+          ],
+          "params": [
+            "state=open"
+          ],
+          "requestParams": [],
+          "queryParams": [],
+          "requestBody": null
+        },
+        {
+          "class": "OrderBoardAPI",
+          "method": "between",
+          "file": "src/main/kotlin/com/acme/shop/orders/views/order_board/OrderBoardAPI.kt",
+          "line": 25,
+          "annotationLine": 24,
+          "annotation": "GetMapping",
+          "httpMethods": [
+            "GET"
+          ],
+          "routes": [
+            "/api/orders/board"
+          ],
+          "params": [
+            "from",
+            "to"
+          ],
+          "requestParams": [
+            {
+              "name": "from",
+              "required": true
+            },
+            {
+              "name": "to",
+              "required": true
+            }
+          ],
+          "queryParams": [],
+          "requestBody": null
+        }
+      ],
+      "schedules": [],
+      "notAnalysed": [],
+      "readModels": []
+    },
+    {
+      "id": "orders.order_feed",
+      "idSource": "manifest",
+      "bc": "orders",
+      "bcPath": "src/main/*/com/acme/shop/orders",
+      "dir": "src/main/kotlin/com/acme/shop/orders/views/order_feed",
+      "role": "views",
+      "kind": "view",
+      "manifest": "src/main/kotlin/com/acme/shop/orders/views/order_feed/slice.yaml",
+      "language": "kotlin",
+      "package": "com.acme.shop.orders.views.order_feed",
+      "files": [
+        "OrderFeedRoutes.kt"
+      ],
+      "processors": [],
+      "handlers": [],
+      "handles": [],
+      "dispatches": [],
+      "publishes": [],
+      "subscriptions": [],
+      "mappings": [],
+      "schedules": [],
+      "notAnalysed": [
+        {
+          "file": "src/main/kotlin/com/acme/shop/orders/views/order_feed/OrderFeedRoutes.kt",
+          "line": 5,
+          "kind": "routes",
+          "reason": "WebFlux RouterFunction routes are not analysed"
+        }
+      ],
+      "readModels": []
+    }
+  ],
+  "messages": [
+    {
+      "name": "OrderCancelled",
+      "type": "event",
+      "bc": "orders",
+      "found": true,
+      "identity": "orderId: OrderId",
+      "fields": [
+        "orderId: OrderId"
+      ],
+      "declaredIn": "src/main/kotlin/com/acme/shop/orders/events/OrderCancelled.kt",
+      "line": 5,
+      "alsoDeclaredIn": []
+    },
+    {
+      "name": "OrderPlaced",
+      "type": "event",
+      "bc": "orders",
+      "found": true,
+      "identity": "orderId: OrderId",
+      "fields": [
+        "orderId: OrderId"
+      ],
+      "declaredIn": "src/main/kotlin/com/acme/shop/orders/events/OrderPlaced.kt",
+      "line": 5,
+      "alsoDeclaredIn": []
+    },
+    {
+      "name": "OrderShipped",
+      "type": "event",
+      "bc": "orders",
+      "found": true,
+      "identity": "orderId: OrderId",
+      "fields": [
+        "orderId: OrderId"
+      ],
+      "declaredIn": "src/main/kotlin/com/acme/shop/orders/events/OrderShipped.kt",
+      "line": 5,
+      "alsoDeclaredIn": []
+    },
+    {
+      "name": "Placed",
+      "type": "event",
+      "bc": "orders",
+      "found": false,
+      "identity": null,
+      "fields": [],
+      "declaredIn": null,
+      "line": null,
+      "alsoDeclaredIn": []
+    }
+  ],
+  "unparsed": [],
+  "unresolved": []
+}

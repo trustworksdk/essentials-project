@@ -41,6 +41,9 @@ Read ${CLAUDE_PLUGIN_ROOT}/references/slice/slice-authoring.md
 
 §R1, §R2, §R3, §R4, §R5 and § Wiring is part of done all bind here. Cite them; do not restate them.
 
+The files are written by `scripts/render-slice.py` (`slice-authoring.md` §4b). This skill decides the
+shape, runs the script, then fills the TODOs, wires what the script could not, and reports.
+
 ## Step 2 — Decide the shape
 
 This is the judgement a template cannot carry.
@@ -111,6 +114,17 @@ than binding, the default status is 500. See `references/llm/LLM-types-spring-we
 § Validation runs — but watch the status code, and `references/llm/LLM-types-jackson.md`
 § Kotlin semantic types.
 
+**Kotlin: a value class in a handler signature needs an explicit operationId** (trap ESS-113). Kotlin
+mangles the JVM name of a handler that takes a value class as a parameter (nullable or `suspend`
+included) or returns one (`placeOrder-40lU5Lw`); springdoc uses that name as the `operationId`, and the
+generated frontend client inherits it. A value class only inside a generic (`List<OrderId>`) or a DTO
+does not mangle. Give exactly the mangling handlers
+`@Operation(operationId = "<sliceCamel>")` (`io.swagger.v3.oas.annotations.Operation`), named after the
+slice so it stays stable and unique; `@JvmName` is not an option on Spring's open methods. See
+`references/llm/LLM-types-spring-web.md` § Kotlin handler methods: set the operationId. The shipped
+templates keep value classes inside the request and response types, so no emitted handler mangles;
+the first edit that moves one into the signature — a typed `@PathVariable` id, say — does.
+
 **Language split (§R5) — never mix these:**
 
 | | Kotlin | Java |
@@ -126,11 +140,11 @@ than binding, the default status is 500. See `references/llm/LLM-types-spring-we
 Glob <sourceRoot>/<packageDir>/<bc>/
 ```
 
-If absent, emit the BC scaffold first, choosing the family by `lane`:
+If absent, pass `--new-bc`: the script emits the BC scaffold first, choosing the family by `lane`:
 
 | `lane` | Scaffold | Contents |
 |---|---|---|
-| `decider` | `templates/<language>/bc-scaffold/` | id type, sealed event parent, routing interface, `<Bc>Configuration`, BC `CLAUDE.md` |
+| `decider` | `templates/<language>/bc-scaffold/` | id type, sealed event parent, routing interface, `<Bc>Configuration` (aggregate-type configuration + decider beans only), BC `CLAUDE.md` — plus `templates/<language>/app-wiring/DeciderWiring` into the application package **only if the project has no decider configurator yet**: there is exactly one per application |
 | `service-entity` | `templates/<language>/bc-scaffold-service-entity/` | id type, sealed event parent, near-empty `<Bc>Configuration`, BC `CLAUDE.md`, and `entities/CLAUDE.md`. **No `routing/`** — there is no stream to select |
 | `aggregate` | `templates/java/bc-scaffold-aggregate/` | id type, sealed event parent, **the aggregate and its repository wrapper** (`aggregates/<Aggregate>.java`, `aggregates/<Aggregates>.java`), near-empty `<Bc>Configuration`, BC `CLAUDE.md`. **No `routing/`** — each handler loads by id, so there is no command-type-to-stream mapping. **Java only** — see below |
 
@@ -173,10 +187,32 @@ entry — an empty `permits` does not compile.
 
 ## Step 4 — Emit
 
-Read each file from
-`${CLAUDE_PLUGIN_ROOT}/references/slice/templates/<language>/<family>/` and substitute per the
-placeholder table in `slice-authoring.md` §4. The `<family>` is `command` on the decider lane,
-`command_service_entity` on the service-entity lane, and `command_aggregate` on the aggregate lane.
+First the module preconditions. Exit 1 names each module the build file lacks; report it and offer to
+add it before going on — the slice does not compile without it:
+
+```bash
+python3 ${CLAUDE_PLUGIN_ROOT}/scripts/render-slice.py requires --lang <language> --kind command \
+    --lane <lane> [--new-bc] --build <the build file from add-slice Step 0>
+```
+
+Then render and wire in one call. Pass the inputs you were given; the script derives the rest
+(`slice-authoring.md` §4b). Add `--with-state` only when Step 2 decided this Decider folds state:
+
+```bash
+python3 ${CLAUDE_PLUGIN_ROOT}/scripts/render-slice.py render --lang <language> --kind command \
+    --lane <lane> [--new-bc] [--with-state] --wire --json \
+    --project-root <projectRoot> --main-root <sourceRoot> --test-root <testRoot> \
+    --set packagePath=<packagePath> --set bc=<bc> --set slice=<slice> --set Aggregate=<Aggregate> \
+    --set AggregateType=<AggregateType> --set Command=<Command> --set Event=<Event> --set owner=<owner> \
+    [--set Aggregates=<Aggregates>]   # aggregate lane
+    [--set Entity=<Entity>]           # service-entity lane, when entities/ already names one
+    [--set apiPath=<apiPath>]         # only when it is not /api/<bc>
+```
+
+Exit 2 means nothing was written: relay the message (an existing slice directory, a lane that does
+not match the BC's directories, the Kotlin aggregate lane, a template drift) and stop. The family is
+`command` on the decider lane, `command_service_entity` on the service-entity lane and
+`command_aggregate` on the aggregate lane; the tables below are what it writes.
 
 **Decider lane — `templates/<language>/command/`:**
 
@@ -219,30 +255,39 @@ handler names it; the user writes it.
 No decider, no evolver, no `GivenWhenThenScenario` on that lane — all three presuppose a stream. The
 conditional `State`/`Evolver` block below applies to the **decider lane only**.
 
-**Conditional — only if this Decider must fold state to decide** (Step 2, Evolver placement):
+**Conditional — `--with-state`, only if this Decider must fold state to decide** (Step 2, Evolver placement):
 
 | Template | Destination |
 |---|---|
 | `__Aggregate__State.<ext>` | `<bc>/use_cases/<slice>/<Aggregate>State.<ext>` |
 | `__Aggregate__StateEvolver.<ext>` | `<bc>/use_cases/<slice>/<Aggregate>StateEvolver.<ext>` |
 
-Emit these **into the slice**, never into `use_cases/_shared/`. Skip them entirely when an
-idempotency check over the raw event list suffices — the shipped `place_order` example needs no
-state at all. If a `_shared/<Aggregate>State` already exists **and** this would be its third
-consumer with no new field required, import that instead of emitting; say so in the report.
+They land **in the slice**, never in `use_cases/_shared/`. Leave the flag off when an idempotency
+check over the raw event list suffices — the shipped `place_order` example needs no state at all. If a
+`_shared/<Aggregate>State` already exists **and** this would be its third consumer with no new field
+required, leave the flag off and import that instead; say so in the report.
 
-Abort if the slice directory already exists — never merge. Abort if any rendered file still
-contains `{{` or `__`.
+Then fill the TODOs the JSON lists under `todos` — the command's payload, the event's facts, the
+invariants — and replace the `placeholder` field the templates carry.
 
 ## Step 5 — Wire it
 
+`--wire` makes the edits below at the anchor comments the BC scaffold carries, and the JSON reports each
+under `wiring` as `applied`, `present` or `manual`. **`manual` means the anchor comment is gone** — make
+that edit by hand at the place named, never skip it.
+
 **Decider lane:**
 
-1. Add `@Bean fun <sliceCamel>Decider() = <Slice>Decider()` (Kotlin) or the `@Bean` method (Java) to
-   `<bc>/config/<Bc>Configuration.<ext>`.
-2. **Java only:** append `<Event>` to the `permits` clause of `<bc>/events/<Aggregate>Event.java`.
+1. `@Bean fun <sliceCamel>Decider() = <Slice>Decider()` (Kotlin) or the `@Bean` method (Java) in
+   `<bc>/config/<Bc>Configuration.<ext>`, plus its import.
+2. **Java only:** `<Event>` appended to the `permits` clause of `<bc>/events/<Aggregate>Event.java`.
+3. A check, listed first in `wiring`: the application has **exactly one** decider configurator
+   (`<packagePath>.DeciderWiring` in a project this plugin scaffolded). `manual` means none — no
+   decider reaches the `CommandBus` — or several, each of which registers every decider again so the
+   first command fails with `MultipleCommandHandlersFoundException`. Report it; merging configurators
+   is the user's edit.
 
-Both are edits to existing files. The `permits` append is the one cross-slice edit the law
+Items 1 and 2 are edits to existing files. The `permits` append is the one cross-slice edit the law
 sanctions (§R3); the `@Bean` is this BC's wiring, not another slice's logic.
 
 An unregistered Decider compiles, passes every unit test, and breaks every `@SpringBootTest`.
@@ -255,7 +300,7 @@ An unregistered Decider compiles, passes every unit test, and breaks every `@Spr
    `reactive-bean-post-processor-enabled` (default `true`) is not switched off in any profile —
    disabling it silently unwires every handler in the application. Name it in the report either way.
 2. **Java only:** the `permits` append is unchanged — a service-entity command slice still supplies
-   an event variant.
+   an event variant, and `--wire` makes it. The aggregate lane has the same single edit.
 
 Do **not** name `EssentialsComponentsConfiguration` or `EssentialsComponentsProperties`: neither
 appears in any bundled doc, and the plugin never names an unproven symbol.

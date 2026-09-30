@@ -31,8 +31,12 @@ import org.springframework.data.repository.Repository
  * the return type is not part of the match**. So `findById` is captured by the base rather than
  * derived as a query: it returns the [{{Entity}}] entity, the declared projection type is ignored,
  * and the mismatch surfaces as a `ClassCastException` at the call site — not as a wiring error and
- * not at startup. `find{{Aggregate}}By{{Aggregate}}Id` below derives the same `id = ?` query and does
- * project, which is the only reason it is named that way.
+ * not at startup. `find{{Aggregate}}ById` below derives the same `id = ?` query and does project,
+ * which is the only reason it is named that way.
+ *
+ * The scaffold queries only `id` — the one property the entity contract guarantees
+ * (`entities/CLAUDE.md`) — so a freshly scaffolded context starts. Every other derived query names an
+ * entity property and fails at startup if the entity has no such property.
  *
  * The same applies to every other base method: `findAll`, `findAllById`, `existsById`, `count`,
  * `getById`, `getReferenceById`. See `rules/slice-design.md` § Spring Data repository surface for the
@@ -40,10 +44,11 @@ import org.springframework.data.repository.Repository
  */
 interface {{View}}Queries : Repository<{{Entity}}, String> {
 
-    // TODO: the queries this slice actually serves. Several are fine — a view slice is scoped by the
-    //       read model it owns, not by method count (§R2). Declare each in slice.yaml `serves`.
-    fun findByStatus(status: String): List<{{View}}View>
+    // TODO: the queries this slice actually serves, e.g. findByStatus(status: String). Several are fine —
+    //       a view slice is scoped by the read model it owns, not by method count (§R2). Declare each in
+    //       slice.yaml `serves`. NOT findAll — `findAllBy` derives the same query and projects.
+    fun findAllBy(): List<{{View}}View>
 
     // NOT findById — see the reserved-name note above. This name derives the same query and projects.
-    fun find{{Aggregate}}By{{Aggregate}}Id({{aggregate}}Id: String): {{View}}View?
+    fun find{{Aggregate}}ById(id: String): {{View}}View?
 }

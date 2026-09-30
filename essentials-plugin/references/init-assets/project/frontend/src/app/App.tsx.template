@@ -1,0 +1,26 @@
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import { BrowserRouter, Route, Routes } from 'react-router-dom'
+
+const queryClient = new QueryClient()
+
+// The app shell. One component per use-case lives under src/domains/<bc>/; pages here stay thin and compose them.
+export function App() {
+  return (
+    <QueryClientProvider client={queryClient}>
+      <BrowserRouter>
+        <Routes>
+          <Route path="*" element={<Home />} />
+        </Routes>
+      </BrowserRouter>
+    </QueryClientProvider>
+  )
+}
+
+function Home() {
+  return (
+    <main className="p-8">
+      <h1 className="text-2xl font-semibold">{{projectName}}</h1>
+      <p className="mt-2">No slices yet. Add one with /essentials:add-slice.</p>
+    </main>
+  )
+}

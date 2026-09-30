@@ -29,4 +29,9 @@ Read ${CLAUDE_PLUGIN_ROOT}/skills/essentials-automation-slice/SKILL.md
 
 The skill owns emission, wiring, and the report. This command writes no source file itself.
 
+**New bounded context** is not offered: a BC starts with its first command slice (`add-slice.md` Step 3).
+
+On a **service-entity** bounded context there is no automation template (the lane has no event store);
+the flow stops at Step 3b and the skill says why.
+
 Error handling is `add-slice.md` § Errors — it is not restated here.

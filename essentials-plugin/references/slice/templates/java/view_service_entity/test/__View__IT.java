@@ -29,7 +29,8 @@ class {{View}}IT {
 
     @Test
     void theQueryFilters() {
-        // TODO: seed rows with two different statuses; assert findByStatus returns only one.
+        // TODO: once the slice has a filtering query (findByStatus, …), seed rows that differ on it and
+        //       assert it returns only the matching ones.
     }
 
     @Test

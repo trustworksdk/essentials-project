@@ -1,0 +1,262 @@
+[
+  {
+    "language": "java",
+    "kind": "command",
+    "lane": "aggregate",
+    "families": [
+      "bc-scaffold-aggregate",
+      "command_aggregate"
+    ],
+    "inputs": {
+      "Aggregate": "Order",
+      "AggregateType": "Orders",
+      "Aggregates": "Orders",
+      "Bc": "Orders",
+      "Command": "PlaceOrder",
+      "Event": "OrderPlaced",
+      "Slice": "PlaceOrder",
+      "aggregate": "order",
+      "apiPath": "/api/orders",
+      "bc": "orders",
+      "lane": "aggregate",
+      "owner": "orders-team",
+      "packagePath": "com.acme.shop",
+      "slice": "place_order",
+      "sliceCamel": "placeOrder",
+      "tier": "cqrs-es"
+    },
+    "written": [
+      "src/main/java/com/acme/shop/orders/CLAUDE.md",
+      "src/main/java/com/acme/shop/orders/aggregates/Order.java",
+      "src/main/java/com/acme/shop/orders/aggregates/Orders.java",
+      "src/main/java/com/acme/shop/orders/config/OrdersConfiguration.java",
+      "src/main/java/com/acme/shop/orders/events/OrderEvent.java",
+      "src/main/java/com/acme/shop/orders/events/OrderPlaced.java",
+      "src/main/java/com/acme/shop/orders/types/OrderId.java",
+      "src/main/java/com/acme/shop/orders/use_cases/place_order/CLAUDE.md",
+      "src/main/java/com/acme/shop/orders/use_cases/place_order/PlaceOrder.java",
+      "src/main/java/com/acme/shop/orders/use_cases/place_order/PlaceOrderAPI.java",
+      "src/main/java/com/acme/shop/orders/use_cases/place_order/PlaceOrderHandler.java",
+      "src/main/java/com/acme/shop/orders/use_cases/place_order/slice.yaml",
+      "src/test/java/com/acme/shop/orders/use_cases/place_order/PlaceOrderIT.java",
+      "src/test/java/com/acme/shop/orders/use_cases/place_order/PlaceOrderTest.java"
+    ],
+    "wiring": [
+      {
+        "path": "src/main/java/com/acme/shop/orders/events/OrderEvent.java",
+        "edit": "permits += OrderPlaced",
+        "status": "present"
+      }
+    ],
+    "todos": [
+      "src/main/java/com/acme/shop/orders/CLAUDE.md:8: TODO — **state the reason, do not delete this heading.** Decider style is the default; this lane is a",
+      "src/main/java/com/acme/shop/orders/aggregates/Order.java:45: // TODO: replace with this aggregate's real state. Only @EventHandler methods may write it.",
+      "src/main/java/com/acme/shop/orders/aggregates/Order.java:65: * TODO: the ONE invariant method this bounded context's first command slice maps to.",
+      "src/main/java/com/acme/shop/orders/aggregates/Order.java:76: // TODO: guard the real invariant HERE, before apply(), so a rejection leaves no event behind.",
+      "src/main/java/com/acme/shop/orders/events/OrderPlaced.java:22: // TODO: replace with the facts this event records",
+      "src/main/java/com/acme/shop/orders/use_cases/place_order/CLAUDE.md:3: One intent: **TODO, one sentence.**",
+      "src/main/java/com/acme/shop/orders/use_cases/place_order/PlaceOrder.java:23: // TODO: replace with this command's real payload",
+      "src/main/java/com/acme/shop/orders/use_cases/place_order/PlaceOrderHandler.java:58: // TODO: call the ONE invariant method this slice's intent maps to. The aggregate decides;",
+      "src/main/java/com/acme/shop/orders/use_cases/place_order/slice.yaml:9: summary: TODO one sentence, present tense.",
+      "src/main/java/com/acme/shop/orders/use_cases/place_order/slice.yaml:32: - { id: INV-1, text: \"TODO the rule this slice enforces\", enforcedBy: \"Order.applyPlaceholder\" }",
+      "src/test/java/com/acme/shop/orders/use_cases/place_order/PlaceOrderIT.java:33: // TODO: extend the project's IntegrationTestBase (until then nothing is injected), then:",
+      "src/test/java/com/acme/shop/orders/use_cases/place_order/PlaceOrderTest.java:44: // TODO: replace with this slice's real invariant. The point of the assertion is that the"
+    ]
+  },
+  {
+    "language": "java",
+    "kind": "command",
+    "lane": "aggregate",
+    "families": [
+      "command_aggregate"
+    ],
+    "inputs": {
+      "Aggregate": "Order",
+      "AggregateType": "Orders",
+      "Aggregates": "Orders",
+      "Bc": "Orders",
+      "Command": "CancelOrder",
+      "Event": "OrderCancelled",
+      "Slice": "CancelOrder",
+      "aggregate": "order",
+      "apiPath": "/api/orders/cancel",
+      "bc": "orders",
+      "lane": "aggregate",
+      "owner": "orders-team",
+      "packagePath": "com.acme.shop",
+      "slice": "cancel_order",
+      "sliceCamel": "cancelOrder",
+      "tier": "cqrs-es"
+    },
+    "written": [
+      "src/main/java/com/acme/shop/orders/events/OrderCancelled.java",
+      "src/main/java/com/acme/shop/orders/use_cases/cancel_order/CLAUDE.md",
+      "src/main/java/com/acme/shop/orders/use_cases/cancel_order/CancelOrder.java",
+      "src/main/java/com/acme/shop/orders/use_cases/cancel_order/CancelOrderAPI.java",
+      "src/main/java/com/acme/shop/orders/use_cases/cancel_order/CancelOrderHandler.java",
+      "src/main/java/com/acme/shop/orders/use_cases/cancel_order/slice.yaml",
+      "src/test/java/com/acme/shop/orders/use_cases/cancel_order/CancelOrderIT.java",
+      "src/test/java/com/acme/shop/orders/use_cases/cancel_order/CancelOrderTest.java"
+    ],
+    "wiring": [
+      {
+        "path": "src/main/java/com/acme/shop/orders/events/OrderEvent.java",
+        "edit": "permits += OrderCancelled",
+        "status": "applied"
+      }
+    ],
+    "todos": [
+      "src/main/java/com/acme/shop/orders/events/OrderCancelled.java:22: // TODO: replace with the facts this event records",
+      "src/main/java/com/acme/shop/orders/use_cases/cancel_order/CLAUDE.md:3: One intent: **TODO, one sentence.**",
+      "src/main/java/com/acme/shop/orders/use_cases/cancel_order/CancelOrder.java:23: // TODO: replace with this command's real payload",
+      "src/main/java/com/acme/shop/orders/use_cases/cancel_order/CancelOrderHandler.java:58: // TODO: call the ONE invariant method this slice's intent maps to. The aggregate decides;",
+      "src/main/java/com/acme/shop/orders/use_cases/cancel_order/slice.yaml:9: summary: TODO one sentence, present tense.",
+      "src/main/java/com/acme/shop/orders/use_cases/cancel_order/slice.yaml:32: - { id: INV-1, text: \"TODO the rule this slice enforces\", enforcedBy: \"Order.applyPlaceholder\" }",
+      "src/test/java/com/acme/shop/orders/use_cases/cancel_order/CancelOrderIT.java:33: // TODO: extend the project's IntegrationTestBase (until then nothing is injected), then:",
+      "src/test/java/com/acme/shop/orders/use_cases/cancel_order/CancelOrderTest.java:44: // TODO: replace with this slice's real invariant. The point of the assertion is that the"
+    ]
+  },
+  {
+    "language": "java",
+    "kind": "view",
+    "lane": "aggregate",
+    "families": [
+      "view"
+    ],
+    "inputs": {
+      "Aggregate": "Order",
+      "AggregateType": "Orders",
+      "Aggregates": "Orders",
+      "Bc": "Orders",
+      "Event": "OrderPlaced",
+      "View": "OrderList",
+      "aggregate": "order",
+      "apiPath": "/api/orders",
+      "bc": "orders",
+      "lane": "aggregate",
+      "owner": "orders-team",
+      "packagePath": "com.acme.shop",
+      "tier": "cqrs-es",
+      "view": "order_list",
+      "viewCamel": "orderList"
+    },
+    "written": [
+      "src/main/java/com/acme/shop/orders/views/order_list/CLAUDE.md",
+      "src/main/java/com/acme/shop/orders/views/order_list/OrderListAPI.java",
+      "src/main/java/com/acme/shop/orders/views/order_list/OrderListProjection.java",
+      "src/main/java/com/acme/shop/orders/views/order_list/OrderListRepositoryConfiguration.java",
+      "src/main/java/com/acme/shop/orders/views/order_list/OrderListView.java",
+      "src/main/java/com/acme/shop/orders/views/order_list/slice.yaml",
+      "src/test/java/com/acme/shop/orders/views/order_list/OrderListProjectionIT.java"
+    ],
+    "wiring": [],
+    "todos": [
+      "src/main/java/com/acme/shop/orders/views/order_list/CLAUDE.md:6: **Purpose:** TODO one sentence, present tense.",
+      "src/main/java/com/acme/shop/orders/views/order_list/CLAUDE.md:14: **Reacts to / reads:** `OrderPlaced` from `orders/events/` (TODO list every projected event)",
+      "src/main/java/com/acme/shop/orders/views/order_list/OrderListProjection.java:63: repository.save(new OrderListView(id, \"TODO\"), message.getOrder());",
+      "src/main/java/com/acme/shop/orders/views/order_list/OrderListProjection.java:68: existing.setStatus(\"TODO\");",
+      "src/main/java/com/acme/shop/orders/views/order_list/OrderListProjection.java:73: // TODO: one handler per event this view projects. Add each to slice.yaml `projections.from`.",
+      "src/main/java/com/acme/shop/orders/views/order_list/OrderListRepositoryConfiguration.java:48: // TODO: add the indexes this view's queries actually need.",
+      "src/main/java/com/acme/shop/orders/views/order_list/OrderListView.java:55: // TODO: replace with the fields this view serves",
+      "src/main/java/com/acme/shop/orders/views/order_list/slice.yaml:9: summary: TODO one sentence, present tense.",
+      "src/main/java/com/acme/shop/orders/views/order_list/slice.yaml:27: from: [OrderPlaced]                 # TODO every event this view projects",
+      "src/test/java/com/acme/shop/orders/views/order_list/OrderListProjectionIT.java:27: // TODO: append OrderPlaced to the aggregate's stream, await the projection, assert the row.",
+      "src/test/java/com/acme/shop/orders/views/order_list/OrderListProjectionIT.java:32: // TODO: deliver the same event twice; assert the read model applied it once.",
+      "src/test/java/com/acme/shop/orders/views/order_list/OrderListProjectionIT.java:38: // TODO: reset the subscription and assert onSubscriptionsReset(aggregateType,"
+    ]
+  },
+  {
+    "language": "java",
+    "kind": "automation",
+    "lane": "aggregate",
+    "families": [
+      "automation"
+    ],
+    "inputs": {
+      "Aggregate": "Order",
+      "AggregateType": "Orders",
+      "Aggregates": "Orders",
+      "Bc": "Orders",
+      "Event": "OrderPlaced",
+      "Slice": "Fulfillment",
+      "aggregate": "order",
+      "apiPath": "/api/orders",
+      "bc": "orders",
+      "lane": "aggregate",
+      "owner": "orders-team",
+      "packagePath": "com.acme.shop",
+      "slice": "fulfillment",
+      "sliceCamel": "fulfillment",
+      "tier": "cqrs-es"
+    },
+    "written": [
+      "src/main/java/com/acme/shop/orders/automations/fulfillment/CLAUDE.md",
+      "src/main/java/com/acme/shop/orders/automations/fulfillment/FulfillmentProcessor.java",
+      "src/main/java/com/acme/shop/orders/automations/fulfillment/FulfillmentRepository.java",
+      "src/main/java/com/acme/shop/orders/automations/fulfillment/FulfillmentTodoList.java",
+      "src/main/java/com/acme/shop/orders/automations/fulfillment/slice.yaml",
+      "src/test/java/com/acme/shop/orders/automations/fulfillment/FulfillmentIT.java"
+    ],
+    "wiring": [],
+    "todos": [
+      "src/main/java/com/acme/shop/orders/automations/fulfillment/CLAUDE.md:6: **Purpose:** TODO one sentence, present tense.",
+      "src/main/java/com/acme/shop/orders/automations/fulfillment/CLAUDE.md:13: **Reacts to:** `OrderPlaced` (TODO list every event that advances this process)",
+      "src/main/java/com/acme/shop/orders/automations/fulfillment/CLAUDE.md:14: **Dispatches:** TODO the commands this automation issues, on the CommandBus",
+      "src/main/java/com/acme/shop/orders/automations/fulfillment/FulfillmentProcessor.java:77: // TODO: a handler per event that advances this process, including the failure paths.",
+      "src/main/java/com/acme/shop/orders/automations/fulfillment/FulfillmentTodoList.java:43: /** TODO: the real precondition for the next step. Bound the retries. */",
+      "src/main/java/com/acme/shop/orders/automations/fulfillment/slice.yaml:9: summary: TODO one sentence, present tense.",
+      "src/main/java/com/acme/shop/orders/automations/fulfillment/slice.yaml:17: consumes: [OrderPlaced]                 # TODO every event that advances this process",
+      "src/main/java/com/acme/shop/orders/automations/fulfillment/slice.yaml:18: dispatches: []                        # TODO the commands this automation issues",
+      "src/main/java/com/acme/shop/orders/automations/fulfillment/slice.yaml:22: # schedule: { cron: \"0 0 3 * * *\", note: \"TODO why this cadence\" }",
+      "src/main/java/com/acme/shop/orders/automations/fulfillment/slice.yaml:23: # schedule: { fixedDelay: PT15M, initialDelay: PT1M, note: \"TODO why this cadence\" }",
+      "src/main/java/com/acme/shop/orders/automations/fulfillment/slice.yaml:27: - { id: INV-1, text: \"TODO the process rule, e.g. at most three payment attempts\", enforcedBy: FulfillmentProcessor }",
+      "src/test/java/com/acme/shop/orders/automations/fulfillment/FulfillmentIT.java:19: // TODO: append OrderPlaced; assert the TodoList advanced and the command was dispatched.",
+      "src/test/java/com/acme/shop/orders/automations/fulfillment/FulfillmentIT.java:29: // TODO: drive the failure path; assert attempts stop at the cap and the compensating"
+    ]
+  },
+  {
+    "language": "java",
+    "kind": "translation",
+    "lane": "aggregate",
+    "families": [
+      "translation"
+    ],
+    "inputs": {
+      "Aggregate": "Order",
+      "AggregateType": "Orders",
+      "Aggregates": "Orders",
+      "Bc": "Orders",
+      "Event": "OrderPlaced",
+      "ExternalEvent": "InvoiceIssued",
+      "ExternalSystem": "Billing",
+      "aggregate": "order",
+      "apiPath": "/api/orders",
+      "bc": "orders",
+      "externalSystem": "billing",
+      "lane": "aggregate",
+      "owner": "orders-team",
+      "packagePath": "com.acme.shop",
+      "tier": "cqrs-es"
+    },
+    "written": [
+      "src/main/java/com/acme/shop/orders/external_systems/billing/BillingClient.java",
+      "src/main/java/com/acme/shop/orders/external_systems/billing/BillingClientAdapter.java",
+      "src/main/java/com/acme/shop/orders/external_systems/billing/BillingPublisher.java",
+      "src/main/java/com/acme/shop/orders/external_systems/billing/BillingTranslator.java",
+      "src/main/java/com/acme/shop/orders/external_systems/billing/CLAUDE.md",
+      "src/main/java/com/acme/shop/orders/external_systems/billing/OnInvoiceIssued.java",
+      "src/main/java/com/acme/shop/orders/external_systems/billing/slice.yaml",
+      "src/test/java/com/acme/shop/orders/external_systems/billing/BillingTranslatorTest.java"
+    ],
+    "wiring": [],
+    "todos": [
+      "src/main/java/com/acme/shop/orders/external_systems/billing/BillingClientAdapter.java:9: * TODO: implement {@link #send} with the real transport. Until then the context starts, and every",
+      "src/main/java/com/acme/shop/orders/external_systems/billing/BillingClientAdapter.java:21: throw new UnsupportedOperationException(\"TODO: send \" + request + \" to Billing\");",
+      "src/main/java/com/acme/shop/orders/external_systems/billing/BillingTranslator.java:18: // TODO: map external fields onto the internal command, converting types at this boundary",
+      "src/main/java/com/acme/shop/orders/external_systems/billing/BillingTranslator.java:25: // TODO: map the internal event onto the external contract.",
+      "src/main/java/com/acme/shop/orders/external_systems/billing/slice.yaml:29: - { from: InvoiceIssued, to: TODOInternalCommand }",
+      "src/test/java/com/acme/shop/orders/external_systems/billing/BillingTranslatorTest.java:21: // TODO: assert every field, including the type conversions at the boundary.",
+      "src/test/java/com/acme/shop/orders/external_systems/billing/BillingTranslatorTest.java:26: // TODO: assert the external contract shape, not our internal one."
+    ]
+  }
+]

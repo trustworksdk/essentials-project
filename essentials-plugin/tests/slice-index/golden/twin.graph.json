@@ -1,0 +1,239 @@
+{
+  "nodes": [
+    {
+      "id": "s:billing.settle_refund",
+      "type": "slice",
+      "label": "billing.settle_refund",
+      "bc": "billing",
+      "kind": "automation",
+      "rank": 3
+    },
+    {
+      "id": "e:PaymentSettled",
+      "type": "event",
+      "label": "PaymentSettled",
+      "bc": "billing",
+      "kind": null,
+      "rank": 2
+    },
+    {
+      "id": "s:billing.refund_order",
+      "type": "slice",
+      "label": "billing.refund_order",
+      "bc": "billing",
+      "kind": "command",
+      "rank": 1
+    },
+    {
+      "id": "c:RefundOrder",
+      "type": "command",
+      "label": "RefundOrder",
+      "bc": "billing",
+      "kind": null,
+      "rank": 0
+    },
+    {
+      "id": "e:OrderRefunded",
+      "type": "event",
+      "label": "OrderRefunded",
+      "bc": "billing",
+      "kind": null,
+      "rank": 2
+    },
+    {
+      "id": "s:orders.cancel_order",
+      "type": "slice",
+      "label": "orders.cancel_order",
+      "bc": "orders",
+      "kind": "command",
+      "rank": 1
+    },
+    {
+      "id": "c:CancelOrder",
+      "type": "command",
+      "label": "CancelOrder",
+      "bc": "orders",
+      "kind": null,
+      "rank": 0
+    },
+    {
+      "id": "e:OrderCancelled",
+      "type": "event",
+      "label": "OrderCancelled",
+      "bc": "orders",
+      "kind": null,
+      "rank": 2
+    },
+    {
+      "id": "s:orders.place_order",
+      "type": "slice",
+      "label": "orders.place_order",
+      "bc": "orders",
+      "kind": "command",
+      "rank": 1
+    },
+    {
+      "id": "c:PlaceOrder",
+      "type": "command",
+      "label": "PlaceOrder",
+      "bc": "orders",
+      "kind": null,
+      "rank": 0
+    },
+    {
+      "id": "e:OrderPlaced",
+      "type": "event",
+      "label": "OrderPlaced",
+      "bc": "orders",
+      "kind": null,
+      "rank": 2
+    },
+    {
+      "id": "s:orders.customer_summary",
+      "type": "slice",
+      "label": "orders.customer_summary",
+      "bc": "orders",
+      "kind": "view",
+      "rank": 3
+    },
+    {
+      "id": "s:orders.customer_summary_v2",
+      "type": "slice",
+      "label": "orders.customer_summary_v2",
+      "bc": "orders",
+      "kind": "view",
+      "rank": 3
+    },
+    {
+      "id": "s:orders.order_list",
+      "type": "slice",
+      "label": "orders.order_list",
+      "bc": "orders",
+      "kind": "view",
+      "rank": 3
+    },
+    {
+      "id": "s:orders.order_list_v2",
+      "type": "slice",
+      "label": "orders.order_list_v2",
+      "bc": "orders",
+      "kind": "view",
+      "rank": 3
+    },
+    {
+      "id": "s:orders.order_stats",
+      "type": "slice",
+      "label": "orders.order_stats",
+      "bc": "orders",
+      "kind": "view",
+      "rank": 3
+    },
+    {
+      "id": "s:orders.order_totals",
+      "type": "slice",
+      "label": "orders.order_totals",
+      "bc": "orders",
+      "kind": "view",
+      "rank": 3
+    },
+    {
+      "id": "s:orders.shipment_board_v2",
+      "type": "slice",
+      "label": "orders.shipment_board_v2",
+      "bc": "orders",
+      "kind": "view",
+      "rank": 3
+    }
+  ],
+  "edges": [
+    {
+      "from": "e:PaymentSettled",
+      "to": "s:billing.settle_refund",
+      "kind": "event"
+    },
+    {
+      "from": "c:RefundOrder",
+      "to": "s:billing.refund_order",
+      "kind": "command"
+    },
+    {
+      "from": "s:billing.refund_order",
+      "to": "e:OrderRefunded",
+      "kind": "event"
+    },
+    {
+      "from": "c:CancelOrder",
+      "to": "s:orders.cancel_order",
+      "kind": "command"
+    },
+    {
+      "from": "s:orders.cancel_order",
+      "to": "e:OrderCancelled",
+      "kind": "event"
+    },
+    {
+      "from": "c:PlaceOrder",
+      "to": "s:orders.place_order",
+      "kind": "command"
+    },
+    {
+      "from": "s:orders.place_order",
+      "to": "e:OrderPlaced",
+      "kind": "event"
+    },
+    {
+      "from": "e:OrderPlaced",
+      "to": "s:orders.customer_summary",
+      "kind": "event"
+    },
+    {
+      "from": "e:OrderPlaced",
+      "to": "s:orders.customer_summary_v2",
+      "kind": "event"
+    },
+    {
+      "from": "e:OrderCancelled",
+      "to": "s:orders.customer_summary_v2",
+      "kind": "event"
+    },
+    {
+      "from": "e:OrderPlaced",
+      "to": "s:orders.order_list",
+      "kind": "event"
+    },
+    {
+      "from": "e:OrderPlaced",
+      "to": "s:orders.order_list_v2",
+      "kind": "event"
+    },
+    {
+      "from": "e:OrderCancelled",
+      "to": "s:orders.order_list_v2",
+      "kind": "event"
+    },
+    {
+      "from": "e:OrderPlaced",
+      "to": "s:orders.order_stats",
+      "kind": "event"
+    },
+    {
+      "from": "e:OrderPlaced",
+      "to": "s:orders.order_totals",
+      "kind": "event"
+    },
+    {
+      "from": "e:OrderPlaced",
+      "to": "s:orders.shipment_board_v2",
+      "kind": "event"
+    }
+  ],
+  "entries": [
+    "CancelOrder",
+    "PlaceOrder",
+    "RefundOrder",
+    "PaymentSettled"
+  ],
+  "cycles": [],
+  "unconnected": [],
+  "notMapped": []
+}

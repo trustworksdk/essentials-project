@@ -6,7 +6,6 @@ import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Transactional;
 
-// Automation candidate: schedule-triggered, writes, no external API.
 @Component
 public class PaymentReminderJob {
     private final InvoiceRepository invoices;

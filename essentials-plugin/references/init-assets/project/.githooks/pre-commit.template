@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+# Slice manifest gate: see the essentials plugin, /essentials:slice-check.
+# Fails open when the tooling is missing, so a contributor without it can still commit.
+git diff --cached --name-only --diff-filter=ACM | grep -q 'slice\.yaml$' || exit 0
+if command -v uv >/dev/null; then
+    uv run --script scripts/slice-lint.py . --schema scripts/slice-yaml.schema.json
+elif command -v python3 >/dev/null; then
+    python3 scripts/slice-lint.py . --schema scripts/slice-yaml.schema.json
+else
+    exit 0
+fi
+status=$?
+[ $status -eq 2 ] && { echo "slice-lint could not run (install uv, or: pip install pyyaml jsonschema); not blocking"; exit 0; }
+exit $status

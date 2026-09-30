@@ -1,0 +1,292 @@
+diff --git a/pom.xml b/pom.xml
+index 15e6fd5..1f16ba3 100644
+--- a/pom.xml
++++ b/pom.xml
+@@ -11,6 +11,10 @@
+             <groupId>dk.trustworks.essentials.components</groupId>
+             <artifactId>spring-boot-starter-postgresql</artifactId>
+         </dependency>
++        <dependency>
++            <groupId>dk.trustworks.essentials</groupId>
++            <artifactId>types-jackson</artifactId>
++        </dependency>
+         <dependency>
+             <groupId>org.springframework.boot</groupId>
+             <artifactId>spring-boot-starter-data-jpa</artifactId>
+diff --git a/src/main/java/com/acme/shipping/_loadtest/LoadHarness.java b/src/main/java/com/acme/shipping/_loadtest/LoadHarness.java
+index 45f755f..c38f806 100644
+--- a/src/main/java/com/acme/shipping/_loadtest/LoadHarness.java
++++ b/src/main/java/com/acme/shipping/_loadtest/LoadHarness.java
+@@ -3,6 +3,9 @@ package com.acme.shipping._loadtest;
+ import com.acme.shipping.types.OrderId;
+ import com.acme.shipping.use_cases.register_shipping_order.RegisterShippingOrder;
+ import dk.trustworks.essentials.reactive.command.CommandBus;
++import org.jdbi.v3.core.Jdbi;
++
++import javax.sql.DataSource;
+ 
+ public class LoadHarness {
+ 
+@@ -17,4 +20,12 @@ public class LoadHarness {
+             commandBus.send(new RegisterShippingOrder(OrderId.of("load-" + i), "nowhere"));
+         }
+     }
++
++    /** How many orders a run left behind — read once after the run, for the load report. */
++    public long registeredCount(DataSource dataSource) {
++        return Jdbi.create(dataSource).withHandle(handle ->
++                handle.createQuery("select count(*) from shipping_order where order_id like 'load-%'")
++                      .mapTo(Long.class)
++                      .one());
++    }
+ }
+diff --git a/src/main/java/com/acme/shipping/config/CommandBusConfig.java b/src/main/java/com/acme/shipping/config/CommandBusConfig.java
+new file mode 100644
+index 0000000..1137b3d
+--- /dev/null
++++ b/src/main/java/com/acme/shipping/config/CommandBusConfig.java
+@@ -0,0 +1,15 @@
++package com.acme.shipping.config;
++
++import dk.trustworks.essentials.reactive.command.LocalCommandBus;
++import org.springframework.context.annotation.Bean;
++import org.springframework.context.annotation.Configuration;
++
++@Configuration
++public class CommandBusConfig {
++
++    /** Every handler in this service is in-process, so an in-memory bus is all it needs. */
++    @Bean
++    public LocalCommandBus commandBus() {
++        return new LocalCommandBus();
++    }
++}
+diff --git a/src/main/java/com/acme/shipping/entities/ShippingOrder.java b/src/main/java/com/acme/shipping/entities/ShippingOrder.java
+index a082b5c..afcd2e5 100644
+--- a/src/main/java/com/acme/shipping/entities/ShippingOrder.java
++++ b/src/main/java/com/acme/shipping/entities/ShippingOrder.java
+@@ -14,6 +14,7 @@ public class ShippingOrder {
+     private String orderId;
+     private String destination;
+     private boolean shipped;
++    private boolean cancelled;
+ 
+     public ShippingOrder(RegisterShippingOrder cmd) {
+         this.orderId = cmd.orderId().value();
+@@ -37,6 +38,22 @@ public class ShippingOrder {
+         this.shipped = shipped;
+     }
+ 
++    /** A shipment can be cancelled until it has shipped; cancelling twice is a no-op. */
++    public boolean cancelShipment() {
++        if (shipped) {
++            throw new IllegalStateException("Order " + orderId + " has already shipped");
++        }
++        if (cancelled) {
++            return false;
++        }
++        cancelled = true;
++        return true;
++    }
++
++    public void setCancelled(boolean cancelled) {
++        this.cancelled = cancelled;
++    }
++
+     public String getOrderId() {
+         return orderId;
+     }
+diff --git a/src/main/java/com/acme/shipping/events/ShipmentCancelled.java b/src/main/java/com/acme/shipping/events/ShipmentCancelled.java
+new file mode 100644
+index 0000000..123d725
+--- /dev/null
++++ b/src/main/java/com/acme/shipping/events/ShipmentCancelled.java
+@@ -0,0 +1,4 @@
++package com.acme.shipping.events;
++
++public record ShipmentCancelled(String orderId) implements ShippingEvent {
++}
+diff --git a/src/main/java/com/acme/shipping/events/ShippingEvent.java b/src/main/java/com/acme/shipping/events/ShippingEvent.java
+index 2c81e9d..fd6d563 100644
+--- a/src/main/java/com/acme/shipping/events/ShippingEvent.java
++++ b/src/main/java/com/acme/shipping/events/ShippingEvent.java
+@@ -1,6 +1,6 @@
+ package com.acme.shipping.events;
+ 
+ /** Integration facts published on the EventBus. */
+-public sealed interface ShippingEvent permits ShippingOrderRegistered, OrderShipped {
++public sealed interface ShippingEvent permits ShippingOrderRegistered, OrderShipped, ShipmentCancelled {
+     String orderId();
+ }
+diff --git a/src/main/java/com/acme/shipping/use_cases/cancel_shipment/CLAUDE.md b/src/main/java/com/acme/shipping/use_cases/cancel_shipment/CLAUDE.md
+new file mode 100644
+index 0000000..08fddfd
+--- /dev/null
++++ b/src/main/java/com/acme/shipping/use_cases/cancel_shipment/CLAUDE.md
+@@ -0,0 +1,11 @@
++# Slice: shipping.cancel_shipment
++
++**Kind:** command · **Lane:** service-entity · **Status:** live · **Owner:** shipping-team
++
++## Invariants
++- `cancel-before-ship` — `ShippingOrder.cancelShipment()` refuses a shipped order and returns `false`
++  the second time.
++
++## Boundaries
++**Writes:** the `ShippingOrder` entity, through `persistence/ShippingOrders`.
++**Publishes:** `ShipmentCancelled` on the `EventBus`, only when the state actually changed.
+diff --git a/src/main/java/com/acme/shipping/use_cases/cancel_shipment/CancelShipment.java b/src/main/java/com/acme/shipping/use_cases/cancel_shipment/CancelShipment.java
+new file mode 100644
+index 0000000..ff7e3d8
+--- /dev/null
++++ b/src/main/java/com/acme/shipping/use_cases/cancel_shipment/CancelShipment.java
+@@ -0,0 +1,6 @@
++package com.acme.shipping.use_cases.cancel_shipment;
++
++import com.acme.shipping.types.OrderId;
++
++public record CancelShipment(OrderId orderId) {
++}
+diff --git a/src/main/java/com/acme/shipping/use_cases/cancel_shipment/CancelShipmentAPI.java b/src/main/java/com/acme/shipping/use_cases/cancel_shipment/CancelShipmentAPI.java
+new file mode 100644
+index 0000000..0d8bd87
+--- /dev/null
++++ b/src/main/java/com/acme/shipping/use_cases/cancel_shipment/CancelShipmentAPI.java
+@@ -0,0 +1,24 @@
++package com.acme.shipping.use_cases.cancel_shipment;
++
++import com.acme.shipping.types.OrderId;
++import dk.trustworks.essentials.reactive.command.CommandBus;
++import org.springframework.web.bind.annotation.PathVariable;
++import org.springframework.web.bind.annotation.PostMapping;
++import org.springframework.web.bind.annotation.RequestMapping;
++import org.springframework.web.bind.annotation.RestController;
++
++@RestController
++@RequestMapping("/api/shipping/orders")
++public class CancelShipmentAPI {
++
++    private final CommandBus commandBus;
++
++    public CancelShipmentAPI(CommandBus commandBus) {
++        this.commandBus = commandBus;
++    }
++
++    @PostMapping("/{orderId}/cancel")
++    public void cancel(@PathVariable String orderId) {
++        commandBus.send(new CancelShipment(OrderId.of(orderId)));
++    }
++}
+diff --git a/src/main/java/com/acme/shipping/use_cases/cancel_shipment/CancelShipmentHandler.java b/src/main/java/com/acme/shipping/use_cases/cancel_shipment/CancelShipmentHandler.java
+new file mode 100644
+index 0000000..c23b3e5
+--- /dev/null
++++ b/src/main/java/com/acme/shipping/use_cases/cancel_shipment/CancelShipmentHandler.java
+@@ -0,0 +1,31 @@
++package com.acme.shipping.use_cases.cancel_shipment;
++
++import com.acme.shipping.events.ShipmentCancelled;
++import com.acme.shipping.persistence.ShippingOrders;
++import dk.trustworks.essentials.reactive.EventBus;
++import dk.trustworks.essentials.reactive.command.AnnotatedCommandHandler;
++import dk.trustworks.essentials.reactive.command.CmdHandler;
++import org.springframework.stereotype.Component;
++import org.springframework.transaction.annotation.Transactional;
++
++@Component
++public class CancelShipmentHandler extends AnnotatedCommandHandler {
++
++    private final ShippingOrders shippingOrders;
++    private final EventBus eventBus;
++
++    public CancelShipmentHandler(ShippingOrders shippingOrders, EventBus eventBus) {
++        this.shippingOrders = shippingOrders;
++        this.eventBus = eventBus;
++    }
++
++    @CmdHandler
++    @Transactional
++    public void handle(CancelShipment cmd) {
++        var order = shippingOrders.findById(cmd.orderId().value()).orElseThrow();
++        if (order.cancelShipment()) {
++            shippingOrders.save(order);
++            eventBus.publish(new ShipmentCancelled(cmd.orderId().value()));
++        }
++    }
++}
+diff --git a/src/main/java/com/acme/shipping/use_cases/cancel_shipment/slice.yaml b/src/main/java/com/acme/shipping/use_cases/cancel_shipment/slice.yaml
+new file mode 100644
+index 0000000..f891497
+--- /dev/null
++++ b/src/main/java/com/acme/shipping/use_cases/cancel_shipment/slice.yaml
+@@ -0,0 +1,25 @@
++schemaVersion: "1.2"
++slice: shipping.cancel_shipment
++kind: command
++bc: shipping
++owner: shipping-team
++status: live
++summary: Cancel a shipping order that has not shipped yet.
++generator: essentials
++language: java
++tier: service-entity
++lane: service-entity
++handles: [CancelShipment]
++publishes: [ShipmentCancelled]
++writes:
++  - { name: ShippingOrder }
++endpoints:
++  - { method: POST, path: "/api/shipping/orders/{orderId}/cancel", auth: user }
++invariants:
++  - { id: cancel-before-ship, text: "A shipped order cannot be cancelled; cancelling twice is a no-op.", enforcedBy: "ShippingOrder.cancelShipment" }
++forbidden:
++  - cross-slice-internal:shipping
++tests:
++  unit: { present: false }
++  integration: { present: false }
++  contract: { present: false }
+diff --git a/src/main/java/com/acme/shipping/views/order_status/OrderStatusAPI.java b/src/main/java/com/acme/shipping/views/order_status/OrderStatusAPI.java
+index 114e5e8..e3c82d9 100644
+--- a/src/main/java/com/acme/shipping/views/order_status/OrderStatusAPI.java
++++ b/src/main/java/com/acme/shipping/views/order_status/OrderStatusAPI.java
+@@ -1,5 +1,7 @@
+ package com.acme.shipping.views.order_status;
+ 
++import com.acme.shipping.persistence.ShippingOrders;
++import org.springframework.web.bind.annotation.DeleteMapping;
+ import org.springframework.web.bind.annotation.GetMapping;
+ import org.springframework.web.bind.annotation.PathVariable;
+ import org.springframework.web.bind.annotation.RequestMapping;
+@@ -13,9 +15,11 @@ import java.util.List;
+ public class OrderStatusAPI {
+ 
+     private final OrderStatusQueries queries;
++    private final ShippingOrders shippingOrders;
+ 
+-    public OrderStatusAPI(OrderStatusQueries queries) {
++    public OrderStatusAPI(OrderStatusQueries queries, ShippingOrders shippingOrders) {
+         this.queries = queries;
++        this.shippingOrders = shippingOrders;
+     }
+ 
+     @GetMapping
+@@ -32,4 +36,10 @@ public class OrderStatusAPI {
+     public OrderStatusView get(@PathVariable String orderId) {
+         return queries.findByOrderId(orderId).orElseThrow();
+     }
++
++    /** Support tooling: drop a test order that was registered by mistake. */
++    @DeleteMapping("/{orderId}")
++    public void purge(@PathVariable String orderId) {
++        shippingOrders.deleteById(orderId);
++    }
+ }
+diff --git a/src/main/resources/application.properties b/src/main/resources/application.properties
+new file mode 100644
+index 0000000..4a57900
+--- /dev/null
++++ b/src/main/resources/application.properties
+@@ -0,0 +1,3 @@
++spring.application.name=shipping
++essentials.reactive-bean-post-processor-enabled=false
++essentials.durable-queues.enable-queue-statistics=true

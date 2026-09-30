@@ -278,7 +278,7 @@ needs type info.
 ## R4 — a slice never reaches into another slice's internals
 
 A slice may import only another slice's or bounded context's `events/` and `types/`. Never its
-decider, evolver, state, handler, repository, or endpoint.
+decider, evolver, state, handler, repository, or endpoint. On the aggregate style, a read-side slice may also name the aggregate's `AggregateType` constant (the stream it subscribes to) — never a method of the aggregate or its repository wrapper.
 
 **A bounded context's importable surface is exactly `events/` and `types/`.** `routing/` and
 `config/` are BC-private: a foreign BC implementing your routing interface would route its command

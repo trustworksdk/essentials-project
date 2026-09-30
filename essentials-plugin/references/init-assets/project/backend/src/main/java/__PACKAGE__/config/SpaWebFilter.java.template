@@ -1,0 +1,65 @@
+package {{packagePath}}.config;
+
+<!-- IF web=webflux -->
+import org.springframework.stereotype.Component;
+import org.springframework.web.server.ServerWebExchange;
+import org.springframework.web.server.WebFilter;
+import org.springframework.web.server.WebFilterChain;
+import reactor.core.publisher.Mono;
+<!-- END web -->
+<!-- IF web=webmvc -->
+import jakarta.servlet.FilterChain;
+import jakarta.servlet.ServletException;
+import jakarta.servlet.http.HttpServletRequest;
+import jakarta.servlet.http.HttpServletResponse;
+import org.springframework.stereotype.Component;
+import org.springframework.web.filter.OncePerRequestFilter;
+
+import java.io.IOException;
+<!-- END web -->
+import java.util.List;
+import java.util.regex.Pattern;
+
+/**
+ * Embedded frontend (S8, Mode A): deep links such as /orders/42 reach index.html so the client-side router can
+ * handle them. API and infrastructure prefixes, and any path ending in a file extension, pass through.
+ */
+@Component
+<!-- IF web=webflux -->
+public class SpaWebFilter implements WebFilter {
+<!-- END web -->
+<!-- IF web=webmvc -->
+public class SpaWebFilter extends OncePerRequestFilter {
+<!-- END web -->
+    private static final List<String> API_PREFIXES      = List.of("/api/", "/v3/", "/swagger-ui", "/actuator");
+    private static final Pattern      EXTENSION_PATTERN = Pattern.compile("\\.[a-zA-Z0-9]+$");
+
+    private static boolean passesThrough(String path) {
+        if (API_PREFIXES.stream().anyMatch(path::startsWith)) {
+            return true;
+        }
+        return EXTENSION_PATTERN.matcher(path.substring(path.lastIndexOf('/') + 1)).find();
+    }
+<!-- IF web=webflux -->
+
+    @Override
+    public Mono<Void> filter(ServerWebExchange exchange, WebFilterChain chain) {
+        if (passesThrough(exchange.getRequest().getURI().getPath())) {
+            return chain.filter(exchange);
+        }
+        return chain.filter(exchange.mutate().request(exchange.getRequest().mutate().path("/index.html").build()).build());
+    }
+<!-- END web -->
+<!-- IF web=webmvc -->
+
+    @Override
+    protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response, FilterChain chain)
+            throws ServletException, IOException {
+        if (passesThrough(request.getRequestURI().substring(request.getContextPath().length()))) {
+            chain.doFilter(request, response);
+            return;
+        }
+        request.getRequestDispatcher("/index.html").forward(request, response);
+    }
+<!-- END web -->
+}

@@ -10,7 +10,8 @@ default `/essentials:init` offers — the command scaffolds both languages (see
 **On S2.1:** the non-transitive dependency set applies here too. Kotlin projects satisfy the
 `kotlin-stdlib` / `kotlin-reflect` rows for free via `kotlin-maven-plugin`, but **not** the JDBC
 starter, the driver, or the two JDBI artifacts — those are missing from a plain Boot skeleton on
-either Postgres profile regardless of language, and none of them fails at compile time.
+either Postgres profile regardless of language, and all but `jdbi3-core` (which the generated
+`DocumentDbConfig` imports) compile without them and fail at context startup.
 
 ## Compiler configuration (MUST)
 
@@ -183,8 +184,10 @@ On WebMvc, none of this applies and `EssentialsWebMvcConfigurer` replaces the We
 `awaitility-kotlin` for async assertions, AssertJ where its fluency helps.
 
 S10's two import moves (`@AutoConfigureWebTestClient`'s Boot 4 package and
-`org.testcontainers.postgresql.PostgreSQLContainer`) are language-neutral and apply unchanged —
-S10's integration-test base is written in Kotlin and already shows both.
+`org.testcontainers.postgresql.PostgreSQLContainer`) are language-neutral and apply unchanged. The
+`IntegrationTestBase` `/essentials:init` generates is the Kotlin form of S10's recipe; the
+Essentials repository's CI builds it, with the rest of the Kotlin cells, against the framework at
+HEAD.
 
 Note the AssertJ + `CharSequenceType` gotcha applies to Java-style ids: cast to `CharSequence` for
 `isEqualTo`, or compare `.value()`.

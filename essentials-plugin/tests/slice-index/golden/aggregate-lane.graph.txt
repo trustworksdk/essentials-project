@@ -1,0 +1,12 @@
+graph — 8 nodes · 9 edges · 1 entry points · 1 cycle(s)
+
+PayInvoice  (command)
+└─ billing.pay_invoice  [command]
+   └─ InvoicePaid  (event)
+      ├─ billing.recurring_billing  [automation]
+      │  └─ IssueInvoice  (command)
+      │     └─ billing.issue_invoice  [command]
+      │        └─ InvoiceIssued  (event)
+      │           ├─ billing.recurring_billing  [automation]  ↺ cycle
+      │           └─ billing.invoice_list  [view]
+      └─ billing.invoice_list  [view]

@@ -1,0 +1,58 @@
+# review-scan signature fixture: ESS-080 postgresql-document-db @Id field that is not public (Java)
+# A private @Id fires with a mechanical fix, a package-private one without; a public @Id and a JPA @Id do not.
+# expect: backend/src/main/java/com/acme/shop/catalog/Product.java:7 ess-080-document-db-private-id confirmed Blocking mechanical
+# expect: backend/src/main/java/com/acme/shop/catalog/Sku.java:6 ess-080-document-db-private-id confirmed Blocking manual
+# expect-not: backend/src/main/java/com/acme/shop/catalog/Brand.java:7 ess-080-document-db-private-id
+# expect-not: backend/src/main/java/com/acme/shop/legacy/LegacyRow.java:7 ess-080-document-db-private-id
+diff --git a/backend/src/main/java/com/acme/shop/catalog/Product.java b/backend/src/main/java/com/acme/shop/catalog/Product.java
+new file mode 100644
+--- /dev/null
++++ b/backend/src/main/java/com/acme/shop/catalog/Product.java
+@@ -0,0 +1,9 @@
++package com.acme.shop.catalog;
++
++import dk.trustworks.essentials.components.document_db.annotations.Id;
++
++public class Product extends JavaVersionedEntity<String, Product> {
++    @Id
++    private String id;
++    public String name;
++}
+diff --git a/backend/src/main/java/com/acme/shop/catalog/Sku.java b/backend/src/main/java/com/acme/shop/catalog/Sku.java
+new file mode 100644
+--- /dev/null
++++ b/backend/src/main/java/com/acme/shop/catalog/Sku.java
+@@ -0,0 +1,7 @@
++package com.acme.shop.catalog;
++
++import dk.trustworks.essentials.components.document_db.annotations.*;
++
++public class Sku extends JavaVersionedEntity<String, Sku> {
++    @Id String code;
++}
+diff --git a/backend/src/main/java/com/acme/shop/catalog/Brand.java b/backend/src/main/java/com/acme/shop/catalog/Brand.java
+new file mode 100644
+--- /dev/null
++++ b/backend/src/main/java/com/acme/shop/catalog/Brand.java
+@@ -0,0 +1,8 @@
++package com.acme.shop.catalog;
++
++import dk.trustworks.essentials.components.document_db.annotations.Id;
++
++public class Brand extends JavaVersionedEntity<String, Brand> {
++    @Id
++    public String id;
++}
+diff --git a/backend/src/main/java/com/acme/shop/legacy/LegacyRow.java b/backend/src/main/java/com/acme/shop/legacy/LegacyRow.java
+new file mode 100644
+--- /dev/null
++++ b/backend/src/main/java/com/acme/shop/legacy/LegacyRow.java
+@@ -0,0 +1,8 @@
++package com.acme.shop.legacy;
++
++import jakarta.persistence.Id;
++
++public class LegacyRow {
++    @Id
++    private Long id;
++}

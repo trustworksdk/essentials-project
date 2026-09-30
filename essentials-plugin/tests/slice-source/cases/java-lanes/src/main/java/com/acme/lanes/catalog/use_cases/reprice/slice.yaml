@@ -1,0 +1,16 @@
+schemaVersion: "1.2"
+slice: catalog.reprice
+kind: command
+bc: catalog
+owner: team
+status: live
+summary: Lane fixture slice.
+generator: essentials
+language: java
+tier: service-entity
+lane: service-entity
+handles: [Reprice]
+
+writes: [Catalog]
+tests:
+  unit: { present: false }

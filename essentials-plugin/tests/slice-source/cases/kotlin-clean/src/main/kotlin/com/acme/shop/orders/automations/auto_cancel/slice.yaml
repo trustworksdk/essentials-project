@@ -1,0 +1,16 @@
+schemaVersion: "1.2"
+slice: orders.auto_cancel
+kind: automation
+bc: orders
+owner: orders-team
+status: live
+summary: Cancel unpaid orders nightly.
+generator: essentials
+language: kotlin
+tier: cqrs-es
+lane: decider
+consumes: [OrderPlaced]
+dispatches: [CancelOrder]
+schedule: { cron: "0 0 3 * * *", note: "Nightly." }
+tests:
+  unit: { present: false }

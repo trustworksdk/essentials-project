@@ -1,0 +1,40 @@
+spring:
+  application:
+    name: {{artifactId}}
+<!-- IF db!=mongo -->
+  # Used when no Docker Compose service or test container provides the database; both override it.
+  datasource:
+    url: ${DATABASE_URL:jdbc:postgresql://localhost:5432/{{artifactId}}}
+    username: ${DATABASE_USERNAME:{{artifactId}}}
+    password: ${DATABASE_PASSWORD:{{artifactId}}}
+<!-- END db -->
+<!-- IF db=mongo -->
+  # spring.mongodb.*, never spring.data.mongodb.*: the old keys are unbound in Spring Boot 4 and fall back
+  # to mongodb://localhost/test without a warning (S2). Essentials' Mongo transactions need a replica set.
+  # Used when no Docker Compose service or test container provides the database; both override it.
+  mongodb:
+    uri: ${MONGODB_URI:mongodb://localhost:27017/{{artifactId}}?replicaSet=rs0}
+<!-- END db -->
+
+server:
+  port: 8080
+
+springdoc:
+  api-docs:
+    path: /v3/api-docs
+  writer-with-order-by-keys: true   # a stable key order, so contracts/openapi.json diffs only when the API changes
+  swagger-ui:
+    path: /swagger-ui.html
+<!-- IF frontend=standalone -->
+
+# The standalone frontend's real origins (S8, Mode B). Bound through CorsProperties; never "*" together
+# with credentials. http://localhost:4173 is `npm run preview`, the non-proxied origin to test CORS against.
+app:
+  cors:
+    allowed-origins:
+      - http://localhost:4173
+<!-- END frontend -->
+
+logging:
+  level:
+    {{packagePath}}: INFO

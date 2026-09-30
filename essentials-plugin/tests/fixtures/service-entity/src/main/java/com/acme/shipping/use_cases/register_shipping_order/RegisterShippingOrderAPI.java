@@ -21,7 +21,6 @@ public class RegisterShippingOrderAPI {
         this.shippingOrders = shippingOrders;
     }
 
-    /** FINDING (gate 16): returns the @Entity directly — a managed, mutable object on the wire. */
     @PostMapping
     public ShippingOrder register(@RequestBody Body body) {
         commandBus.send(new RegisterShippingOrder(OrderId.of(body.orderId()), body.destination()));

@@ -48,8 +48,9 @@ automation** consumes no events — the law lists the automation trigger as "eve
 requiring `consumes` there would contradict it and produce an information-free `consumes: []`. A
 **port-style ACL** — the system calls out, nothing calls in — has no inbound message and therefore no
 mapping table, and is still unambiguously a translation slice; declare `direction: outbound` and the
-schema stops asking for `consumes` and `maps`. With `direction` absent, `consumes` and `maps` stay
-required.
+schema stops asking for `consumes` and `maps`. That applies to a port-style ACL with no publisher. An
+outbound slice whose publisher handles events still lists them in `consumes` (gate 11(b)). With
+`direction` absent, `consumes` and `maps` stay required.
 
 The schema deliberately does **not** require `projections` on views or `dispatches` on automations —
 integration-heavy/BFF slices legitimately have neither, and the schema is toolchain-neutral and
@@ -117,7 +118,7 @@ a command slice always writes `publishes` and a view slice always writes `projec
   `@RequestParam`, so a manifest-to-code check that greps the declared path verbatim reports a false
   positive on every run. Readers must match the route *before* the `?`, then confirm each named
   parameter is bound in that handler — `/essentials:slice-check` gate 6 and `/essentials:slice-map`
-  both do.
+  both do, through `scripts/slice-source.py` (`6 endpoint route`, `6 discriminator`).
 
   Why the parameter lives in `path` rather than in a field of its own: the schema is toolchain-neutral,
   `path` is a plain string with no format constraint, and one self-describing string beats a second
@@ -198,8 +199,8 @@ a command slice always writes `publishes` and a view slice always writes `projec
   enum** because §R5 sanctions exactly three write styles and a fourth would be a change to the law.
 - **`writes` is the aggregate, not the table.** `writes: [Order]`.
 - **`publishes` is the event type**, owned by this slice: `publishes: [OrderPlaced]`.
-- **`consumes` is what triggers the slice** — events for automations, external messages for
-  translations.
+- **`consumes` is what triggers the slice** — events for automations; for translations, the external
+  messages the ingress receives and the internal events the outbound publisher handles.
 - **A view does not use `consumes`. Its events go on `projections[].from`.** This is the single most
   common place a manifest goes quietly out of step with its code, so it is worth stating flatly:
 
@@ -208,7 +209,7 @@ a command slice always writes `publishes` and a view slice always writes `projec
   | view (event-sourced lanes) | `projections[].from` — every event type its `ViewEventProcessor` / `InTransactionEventProcessor` handles |
   | view (service-entity lane) | nowhere — there is no projector; `projections: []` is correct |
   | automation | `consumes` |
-  | translation | `consumes` (external messages) |
+  | translation | `consumes` (external messages + the internal events its publisher handles) |
 
   One field per kind, never both: a view that also lists its events under `consumes` has two copies to
   keep in step, and they will diverge. **Anything reading the manifest must union the two** rather than
@@ -275,14 +276,22 @@ a command slice always writes `publishes` and a view slice always writes `projec
 ### Validating a manifest
 
 ```bash
-python3 <plugin>/scripts/slice-lint.py .            # every slice.yaml under the current directory
-python3 <plugin>/scripts/slice-lint.py . --require-schema   # what CI should run
+uv run --script <plugin>/scripts/slice-lint.py .                    # every slice.yaml under the current directory
+uv run --script <plugin>/scripts/slice-lint.py . --require-schema   # what CI should run
 ```
 
-It parses, validates against the schema, and checks the three sole-ownership properties across
-manifests. Exit 0 clean, 1 findings, 2 could not run. `/essentials:init` offers to install a project
-wrapper and a pre-commit hook; wire one of them up, because nothing in a Maven or Gradle build reads
-`slice.yaml` and an unparseable manifest is otherwise invisible rather than loud.
+The script pins `pyyaml` and `jsonschema` in inline script metadata, so `uv run --script` needs nothing
+installed first; `python3 <plugin>/scripts/slice-lint.py` works where both are installed. It parses,
+validates against the schema, checks the three sole-ownership properties across manifests (a declared
+`supersedes` twin is not an ownership clash), and reports a write style written into `tier`. Exit 0
+clean, 1 findings, 2 could not run. With `--json`, each finding carries its gate label and its
+`ESS-G<gate><clause>` id. `/essentials:init` offers to install a project copy (the script plus the
+schema beside it, in `scripts/`) and a pre-commit hook. Wire one of them up, because nothing in a Maven
+or Gradle build reads `slice.yaml` and an unparseable manifest is otherwise invisible rather than loud.
+
+Whether the manifests still describe the *code* is a separate check, over the Java and Kotlin sources:
+`uv run --script <plugin>/scripts/slice-source.py . --check` (gates 6, 11(b) and 14's signal rows,
+exit 3 when some source could not be read). It stays in the plugin and is not copied into projects.
 
 ## 4. `supersedes` — the versioned view twin
 

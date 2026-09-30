@@ -7,6 +7,13 @@ invariant: **never invent an Essentials API**.
 A symbol may not appear in a template until it appears here, and it may not appear here until it
 appears in a doc that traces to upstream source.
 
+This ledger proves that a name is documented. Whether the rendered code compiles against the framework
+is proved separately: `scripts/render-slice.py check` renders every template family into the goldens under
+`tests/slice-golden/`, and the repository's `scripts/plugin-scaffold.sh slices` compiles those
+compositions on hosts rendered by `/essentials:init`'s own renderer. Both are needed. A symbol can be
+documented and still be called with the wrong signature, and a template can compile against a symbol
+no doc explains.
+
 ## Verify
 
 ```bash
@@ -55,7 +62,8 @@ EOF
 | `EventProcessorDependencies` | java+kotlin | `dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.processor.EventProcessorDependencies` | `LLM-postgresql-event-store.md` |
 | `ViewEventProcessor` | java+kotlin | `dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.processor.ViewEventProcessor` | `LLM-kotlin-eventsourcing.md` |
 | `ViewEventProcessorDependencies` | java+kotlin | `dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.processor.ViewEventProcessorDependencies` | `LLM-spring-boot-starter-modules.md` |
-| `AggregateIdSerializer` | java+kotlin | `dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.serializer.AggregateIdSerializer` | `LLM-eventsourced-aggregates.md` |
+| `AggregateIdSerializer` | java | `dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.serializer.AggregateIdSerializer` | `LLM-eventsourced-aggregates.md` |
+| `StringValueTypeAggregateIdSerializer` | kotlin | `dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.serializer.StringValueTypeAggregateIdSerializer` | `LLM-kotlin-eventsourcing.md` |
 | `GlobalEventOrder` | java+kotlin | `dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.types.GlobalEventOrder` | `LLM-foundation-types.md` |
 | `MessageHandler` | java+kotlin | `dk.trustworks.essentials.components.foundation.messaging.MessageHandler` | `LLM-foundation-test.md` |
 | `OrderedMessage` | java+kotlin | `dk.trustworks.essentials.components.foundation.messaging.queue.OrderedMessage` | `LLM-components.md` |

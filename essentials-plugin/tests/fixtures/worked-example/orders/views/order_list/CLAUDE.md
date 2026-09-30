@@ -3,19 +3,17 @@
 **Kind:** view
 **Status:** live
 **Owner:** orders-team
-**Purpose:** List all orders with their current status.
+**Purpose:** List orders with their current status, all of them or by status.
 
 ## Boundaries
 **Reacts to / reads:** `OrderPlaced`, `OrderCancelled` (the BC's public events in `orders/events/`)
-**Serves:** `GET /api/orders`
+**Serves:** `GET /api/orders`, `GET /api/orders?status=…`
 **Forbidden:**
   - Read only the BC's public `events/` — never another slice's Decider/State.
   - This view owns its own read model + endpoint; it is not bolted onto a command slice's controller.
 
 ## Data
-**Owns (writes):** `OrderListView` read model (in-memory in this example; use DocumentDb/JDBI in production)
-**Reads:** Order event stream (projected)
+**Owns (writes):** `OrderListView` read model (PostgreSQL DocumentDB, `orders_order_list`)
+**Reads:** Order event stream, through `OrderListProjection` (a `ViewEventProcessor`)
 
-> Teaching example — the projection's subscription/store wiring is illustrative; see
-> `OrderListProjection.kt` and the `essentials-docs` skill for `InTransactionEventProcessor`
-> vs `ViewEventProcessor` and the read store.
+> Teaching example — see `orders/CLAUDE.md`.

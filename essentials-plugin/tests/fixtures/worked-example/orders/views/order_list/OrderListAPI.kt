@@ -1,17 +1,21 @@
 package {{packagePath}}.orders.views.order_list
 
+import {{packagePath}}.orders.types.OrderStatus
 import org.springframework.web.bind.annotation.GetMapping
 import org.springframework.web.bind.annotation.RequestMapping
+import org.springframework.web.bind.annotation.RequestParam
 import org.springframework.web.bind.annotation.RestController
 
 /**
- * Read API for THIS view slice only. Further queries over this same read model (filters, sorts,
- * pagination) belong here, not in a new slice — see the essentials plugin's rules/slice-design.md §R2.
+ * Read API for THIS view slice only (rules/slice-design.md §R2).
  */
 @RestController
 @RequestMapping("/api/orders")
-class OrderListAPI(private val projection: OrderListProjection) {
+class OrderListAPI(private val repository: OrderListRepository) {
 
     @GetMapping
-    fun list(): List<OrderListView> = projection.all()
+    fun list(): List<OrderListView> = repository.findAll().sortedBy { it.orderId.value }
+
+    @GetMapping(params = ["status"])
+    fun byStatus(@RequestParam status: OrderStatus): List<OrderListView> = repository.findByStatus(status)
 }

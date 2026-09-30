@@ -7,10 +7,16 @@ decider-lane} tree with manifests — the input the manifest-reading commands ar
 
 | Consumer | What it checks |
 |---|---|
-| `/essentials:slice-map` | The "project already has manifests" path — three `slice.yaml` files across two kinds, with real `consumes` / `projections[].from` edges — plus the source its *endpoint appears in source* divergence check reads |
+| `/essentials:slice-map` | The "project already has manifests" path — five `slice.yaml` files across all four kinds, with real `consumes` / `projections[].from` / `dispatches` edges, including one cycle (`screen_order` →`CancelOrder`→ `cancel_order` →`OrderCancelled`→ `screen_order`) — plus the source its *endpoint appears in source* and *handled events declared* divergence checks read |
 | `/essentials:slice-discover` | The **pass-0 redirect**: a project that already has manifests is redirected to `slice-check`, not analysed |
-| `/essentials:slice-check` | The only **decider-lane** manifests in the repo; `service-entity` covers the other lane |
+| `/essentials:slice-check` | The **Kotlin decider-lane** manifests; gate 11(b) against real `@MessageHandler` methods, one of them taking an import-aliased event type and one a fully-qualified one; a Kotlin `params = ["status"]` discriminator for gate 6 |
 | `references/slice/api-provenance.md` | The worked example whose Essentials imports the ledger proves |
+
+The machine-readable oracle is `expected.yaml` next to this file: the one expected finding, the
+non-findings, the lane, the facts a source reader must extract, and the edges `slice-map` must draw.
+`uv run --script tests/fixtures/check-expected.py` (from `essentials-plugin/`) checks `expected.yaml` against the tree and that no source carries an oracle label.
+
+Eval: `evals/slice-check-worked-example/` and `evals/slice-map-worked-example/`; the change-router cases run in a copy of it — graders generated from `expected.yaml`; how to run and read it: `evals/README.md`.
 
 **This is sample *input*, never expected *output*.** It is read by the tools that consume manifests
 and source. It is **not** a target that generated code is compared against — see below.
@@ -51,17 +57,27 @@ heuristics do not fire wrongly. This one is exemplary code used as realistic inp
 
 ## Placeholders
 
-Sources carry `{{packagePath}}` placeholders. Nothing renders them, and the manifest-reading
-commands do not care. Leave them or substitute them — but if
-you substitute, do it once and completely, so the tree does not end up half-rendered.
+`DeciderWiring.kt`, beside `orders/`, is the application-level half: the one
+`DeciderAndAggregateTypeConfigurator` for the whole application, in package `{{packagePath}}`. A
+bounded context's `config/` never declares one.
+
+Sources carry `{{packagePath}}` placeholders, and the manifest-reading commands do not care. With
+`{{packagePath}}` replaced by a real package (for example `com.acme.shop`), every source compiles
+against the Essentials reactor with Kotlin 2.4 and the `pg-event-sourced` module set
+(`kotlin-eventsourcing`, `postgresql-document-db`, the event-store starter); no CI job does that yet.
+If you substitute, do it once and completely, so the tree does not end up half-rendered.
 
 ## What it does not cover
 
-- **Only two slice kinds.** Command (`place_order`, `cancel_order`) and view (`order_list`).
-  Automation and translation slices have no worked example; their templates rest on the
-  API-provenance ledger and review alone.
-- **Only the decider lane.** The aggregate and state-stored-entity write styles of `rules/slice-design.md`
-  §R5 are not represented here; `service-entity` covers the third.
-- **Only Kotlin, and that is the point** — `service-entity` is Java. Between them the two fixtures
-  cover {Kotlin, decider} and {Java, service-entity}; the other two cells are uncovered.
-- **Nothing here verifies the slice templates.** No fixture does. That gap is real and unclosed.
+- **Only the decider lane.** `aggregate-lane` covers {Java, aggregate}, `service-entity` covers
+  {Java, service-entity}, and `multi-lane` covers the Blocking mixes and a {Java, decider} BC. No
+  fixture is {Kotlin, service-entity} or {Kotlin, aggregate}; the latter is deliberate (the Kotlin
+  module ships no aggregate pattern).
+- **No test tree.** Every `tests.*` flag is a manifest claim; nothing checks it against files. The
+  one expected finding is `order_list` having no test.
+- **No inbound translation.** `warehouse` is outbound only; the webhook half of a translation slice
+  has no worked example.
+- **No `WarehouseClient` implementation.** The transport binding is the project's; the scaffold harness
+  boots the tree with a test-only stub (`tests/slice-compile/stubs/worked-example/`).
+- **Nothing here verifies the slice templates.** The worked example is input to the manifest and
+  source readers, not a rendering oracle.

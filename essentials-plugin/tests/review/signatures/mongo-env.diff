@@ -1,0 +1,46 @@
+# review-scan signature fixture: ESS-088 SPRING_DATA_MONGODB_* environment variables
+# Env vars set in compose/.env/Dockerfile fire; a ${...} placeholder reading one does not.
+# expect: docker-compose.yml:5 ess-088-mongo-env confirmed Blocking mechanical
+# expect: docker-compose.yml:6 ess-088-mongo-env confirmed mechanical
+# expect-not: docker-compose.yml:7 ess-088-mongo-env
+# expect-not: docker-compose.yml:8 ess-088-mongo-env
+# expect: .env:1 ess-088-mongo-env confirmed mechanical
+# expect-not: .env:2 ess-088-mongo-env
+# expect: Dockerfile:2 ess-088-mongo-env confirmed mechanical
+# expect-not: backend/src/main/resources/application-docker.yml:3 ess-088-mongo-env
+diff --git a/docker-compose.yml b/docker-compose.yml
+new file mode 100644
+--- /dev/null
++++ b/docker-compose.yml
+@@ -0,0 +1,8 @@
++services:
++  app:
++    image: orders:latest
++    environment:
++      SPRING_DATA_MONGODB_URI: mongodb://mongo:27017/orders
++      - SPRING_DATA_MONGODB_UUIDREPRESENTATION=standard
++      SPRING_DATA_MONGODB_AUTOINDEXCREATION: "true"
++      SPRING_MONGODB_URI: mongodb://mongo:27017/orders
+diff --git a/.env b/.env
+new file mode 100644
+--- /dev/null
++++ b/.env
+@@ -0,0 +1,2 @@
++SPRING_DATA_MONGODB_DATABASE=orders
++# SPRING_DATA_MONGODB_HOST=mongo
+diff --git a/Dockerfile b/Dockerfile
+new file mode 100644
+--- /dev/null
++++ b/Dockerfile
+@@ -0,0 +1,3 @@
++FROM eclipse-temurin:25-jre
++ENV SPRING_DATA_MONGODB_SSL_ENABLED true
++COPY target/app.jar /app.jar
+diff --git a/backend/src/main/resources/application-docker.yml b/backend/src/main/resources/application-docker.yml
+new file mode 100644
+--- /dev/null
++++ b/backend/src/main/resources/application-docker.yml
+@@ -0,0 +1,3 @@
++spring:
++  mongodb:
++    uri: ${SPRING_DATA_MONGODB_URI}

@@ -104,8 +104,9 @@ Neither dependency is unused; do not remove them, and do not remove the pin beca
 `.kt` files.
 
 The rest of S2.1 applies unchanged and is language-neutral: the JDBC starter, the driver, and the
-two JDBI artifacts are missing from a plain Boot skeleton on both Postgres profiles, and none of
-them fails at compile time.
+two JDBI artifacts are missing from a plain Boot skeleton on both Postgres profiles, and all but
+`jdbi3-core` (which the generated `DocumentDbConfig` imports) compile without them and fail at context
+startup.
 
 > Proof: `references/llm/LLM-postgresql-document-db.md` (Key deps, and the "pure-Java module must
 > declare `kotlin-stdlib-jdk8` and `kotlin-reflect` itself" note).
@@ -207,12 +208,15 @@ ids.
 
 ## Known gaps in this document
 
-- **Nothing in this plugin compiles a Java Essentials project.** There is no compile oracle
-  here for any lane. The bindings above rest on `references/llm/`, the Java slice templates, and
-  `references/slice/api-provenance.md`. What partly closes this in practice is the **smoke build
-  `/essentials:init` runs on the project it generates** (Step 13.7): it is not a fixture in
-  this plugin, but it means no Java project leaves that command without its context having started
-  once.
+- **What is built, and what is not.** The Essentials repository's CI renders nine
+  `/essentials:init` answer cells (both languages, all three profiles, both web stacks, every
+  frontend mode — four of them Java) and builds each against the framework at HEAD with
+  `mvn verify`, so every binding above that a generated project carries compiles and starts its
+  context against a real database; the slice templates are compiled against backend-only projects
+  the same renderer produces. What stays documentary is what no generated project exercises — the
+  AssertJ cast, the Kotlin-shaped document-db overloads beyond `DocumentDbRepositoryFactory` — which
+  rests on `references/llm/` and `references/slice/api-provenance.md`. On the user's machine,
+  `/essentials:init` Step 13.7 builds the rendered project once more.
 - **Frontend integration is language-neutral** — `frontend-react.md` applies unchanged, since the
   contract-first pipeline runs off the generated OpenAPI document and does not care what produced
   it.

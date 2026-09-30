@@ -30,12 +30,11 @@ class {{Slice}}IT /* extends IntegrationTestBase */ {
 
     @Test
     void handles_the_command_and_appends_the_event() {
-        var id = {{Aggregate}}Id.random();
-        // TODO: create the aggregate first — through its creation slice, not by reaching into the
-        //       repository, so the test exercises the same path production does.
-
-        commandBus.send(new {{Command}}(id, "updated"));
-
-        assertThat({{aggregate}}s.get{{Aggregate}}(id).placeholder()).isEqualTo("updated");
+        // TODO: extend the project's IntegrationTestBase (until then nothing is injected), then:
+        //   var id = {{Aggregate}}Id.random();
+        //   create the aggregate first — through its creation slice, not by reaching into the
+        //   repository, so the test exercises the same path production does;
+        //   commandBus.send(new {{Command}}(id, "updated"));
+        //   assertThat({{aggregate}}s.get{{Aggregate}}(id).placeholder()).isEqualTo("updated");
     }
 }

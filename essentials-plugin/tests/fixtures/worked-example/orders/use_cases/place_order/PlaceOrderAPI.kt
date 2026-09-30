@@ -42,6 +42,6 @@ class PlaceOrderAPI(private val commandBus: CommandBus) {
     @PostMapping
     @ResponseStatus(HttpStatus.ACCEPTED)
     fun placeOrder(@RequestBody command: PlaceOrder) {
-        commandBus.send(command)
+        commandBus.send<Any?, PlaceOrder>(command)
     }
 }

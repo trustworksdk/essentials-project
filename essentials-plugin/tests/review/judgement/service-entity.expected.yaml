@@ -1,0 +1,217 @@
+# service-entity.expected.yaml — the machine-readable oracle for /essentials:review on service-entity.patch
+# (format 1). Field meanings: decider-lane.expected.yaml's header. TEST-GUIDE.md beside it is the human
+# description of the same expectations; when they disagree, fix both.
+
+format: 1
+case: service-entity
+setup:
+  fixture: tests/fixtures/service-entity
+  exclude: [TEST-GUIDE.md, expected.yaml]
+  patch: tests/review/judgement/service-entity.patch
+  commit_message: Cancel shipments
+  prompt: /essentials:review HEAD~1
+
+deterministic:
+  review-scan:            # review-scan.py --diff service-entity.patch --json
+    exit: 1
+    findings:
+    - {id: ESS-094, check: ess-094-jackson2-module, kind: confirmed, severity: Blocking,
+       file: pom.xml, line: 16, mechanical: true,
+       ops: [{op: set-artifact-id, pom: pom.xml, line: 14, groupId: dk.trustworks.essentials, from: types-jackson, to: types-jackson3}]}
+    - {id: ESS-089, check: ess-089-reactive-bpp-disabled, kind: confirmed, severity: Blocking,
+       file: src/main/resources/application.properties, line: 2, mechanical: true}
+    - {id: ESS-064, check: ess-064-jdbi-create, kind: candidate, severity: Should-fix,
+       file: src/main/java/com/acme/shipping/_loadtest/LoadHarness.java, line: 26, mechanical: false}
+    - {id: ESS-097, check: ess-097-queue-statistics, kind: confirmed, severity: Should-fix,
+       file: src/main/resources/application.properties, line: 3, mechanical: true}
+    - {id: ESS-016, check: ess-016-local-command-bus, kind: candidate, severity: Advisory,
+       file: src/main/java/com/acme/shipping/config/CommandBusConfig.java, line: 13, mechanical: false}
+    notRun: []
+  stack-lint:             # head minus base: one new finding; the rest is pre-existing
+    new:
+    - {id: ESS-S3.1, check: s3.1-jackson2-essentials-module, severity: Blocking, file: pom.xml, line: 14}
+    pre_existing: 13
+  slice-lint:
+    new: []
+  slice-source:
+    new:
+    - {id: ESS-G6, gate: 6 undeclared mapping, severity: Should-fix,
+       file: src/main/java/com/acme/shipping/views/order_status/OrderStatusAPI.java, line: 42}
+
+must_find:
+- id: R1
+  gate: null
+  ess: ESS-094
+  also_ids: [ESS-S3.1]
+  severity: Blocking
+  deterministic: true
+  file: pom.xml
+  line: 16
+  anchor: '<artifactId>types-jackson</artifactId>'
+  what: >-
+    The 0.50 Jackson 2 module types-jackson is added; every persistence serializer throws at startup. The fix
+    (types-jackson → types-jackson3) is mechanical. Reported as ONE row: stack-lint's ESS-S3.1 on the same
+    dependency is the same defect and is named on that row, not listed again.
+- id: R2
+  gate: null
+  ess: ESS-089
+  severity: Blocking
+  deterministic: true
+  file: src/main/resources/application.properties
+  line: 2
+  anchor: 'essentials.reactive-bean-post-processor-enabled=false'
+  what: Disabling the reactive bean post-processor unregisters every command and event handler; the fix (delete the key) is mechanical.
+- id: R3
+  gate: null
+  ess: ESS-097
+  severity: Should-fix
+  deterministic: true
+  file: src/main/resources/application.properties
+  line: 3
+  anchor: 'essentials.durable-queues.enable-queue-statistics=true'
+  what: The queue-statistics feature is removed and the key is silently unbound; the fix (delete the key) is mechanical.
+- id: R4
+  gate: null
+  ess: ESS-016
+  severity: Advisory
+  file: src/main/java/com/acme/shipping/config/CommandBusConfig.java
+  line: 13
+  anchor: 'return new LocalCommandBus();'
+  also_names: [src/main/java/com/acme/shipping/automations/auto_ship/AutoShipProcessor.java]
+  what: >-
+    The review-scan candidate is CONFIRMED, with evidence: the auto_ship automation sends ShipOrder with
+    sendAndDontWait, and a LocalCommandBus keeps such commands in memory only, so they are lost on restart.
+- id: R5
+  gate: '6'
+  ess: ESS-G6
+  severity: Should-fix
+  deterministic: true
+  file: src/main/java/com/acme/shipping/views/order_status/OrderStatusAPI.java
+  line: 42
+  anchor: 'public void purge(@PathVariable String orderId) {'
+  symbol: OrderStatusAPI.purge
+  what: DELETE /api/shipping/order-status/{orderId} is a request mapping no endpoint in the view's manifest describes.
+- id: R6
+  gate: 15a
+  ess: ESS-G15a
+  severity: Blocking
+  file: src/main/java/com/acme/shipping/views/order_status/OrderStatusAPI.java
+  line: 43
+  anchor: 'shippingOrders.deleteById(orderId);'
+  symbol: OrderStatusAPI.purge
+  what: A mutating call (deleteById) on the bounded context's write repository from a view slice, outside use_cases/*.
+- id: R7
+  gate: '16'
+  ess: ESS-G16
+  severity: Should-fix
+  file: src/main/java/com/acme/shipping/entities/ShippingOrder.java
+  line: 53
+  anchor: 'public void setCancelled(boolean cancelled) {'
+  symbol: ShippingOrder.setCancelled
+  what: A new public setter writes the field the new cancelShipment() guard protects, so that invariant is bypassable.
+
+dismissed:
+- id: D1
+  ess: ESS-064
+  file: src/main/java/com/acme/shipping/_loadtest/LoadHarness.java
+  line: 26
+  anchor: 'return Jdbi.create(dataSource).withHandle(handle ->'
+  why: A read-only row count for the load report; there is no write and no Spring transaction to join.
+
+not_run: []               # every script runs here; the report still carries a Not run block ("none")
+
+must_not_find:
+- id: N1
+  not_gates: ['*']
+  not_ids: [ESS-S2, ESS-S2.1, ESS-S3.5, ESS-S4, ESS-S7, ESS-S11]
+  file: pom.xml
+  what: any pre-existing stack-contract finding listed as a row (missing S2.1 dependencies, -parameters, the Boot parent, types-spring-web, the OpenAPI contract)
+  why: Pre-existing stack-lint findings are counted and routed to /essentials:upgrade, never listed.
+- id: N2
+  not_gates: ['*']
+  not_ids: [ESS-S3.1]
+  file: pom.xml
+  line: 14
+  anchor: '<dependency>'
+  what: ESS-S3.1 as a row of its own
+  why: The same defect as R1; one row per defect.
+- id: N3
+  not_gates: ['6']
+  file: src/main/java/com/acme/shipping/use_cases/cancel_shipment/CancelShipmentAPI.java
+  line: 20
+  anchor: '@PostMapping("/{orderId}/cancel")'
+  why: One method-level mapping under a class-level @RequestMapping.
+- id: N4
+  not_gates: ['8', 8d]
+  file: src/main/java/com/acme/shipping/entities/ShippingOrder.java
+  symbol: ShippingOrder.<init>(RegisterShippingOrder)
+  why: The command-typed constructor is pre-existing, on lines the patch did not change.
+- id: N5
+  not_gates: ['16']
+  file: src/main/java/com/acme/shipping/entities/ShippingOrder.java
+  symbol: ShippingOrder.setShipped
+  why: setShipped is pre-existing and unchanged; only setCancelled (R7) is new.
+- id: N6
+  not_gates: ['*']
+  file: src/main/java/com/acme/shipping/persistence/ShippingOrders.java
+  why: Unchanged; its gate 15(b), 15(c) and 18(a) findings are pre-existing.
+- id: N7
+  not_gates: ['*']
+  file: src/main/java/com/acme/shipping/routing/ShippingCommand.java
+  why: Unchanged; gate 17 there is pre-existing.
+- id: N8
+  not_gates: ['*']
+  file: src/main/java/com/acme/shipping/views/order_status/OrderStatusQueries.java
+  why: Unchanged; gate 18(c) there is pre-existing.
+- id: N9
+  not_gates: []
+  not_ids: [ESS-080]
+  file: src/main/java/com/acme/shipping/entities/ShippingOrder.java
+  why: ShippingOrder's @Id is JPA's, not the document store's; ESS-080 does not apply.
+- id: N10
+  not_gates: ['4', 4a, 4b, 4c]
+  file: src/main/java/com/acme/shipping/use_cases/cancel_shipment/slice.yaml
+  why: Two command slices writing one entity is the lane's design.
+- id: N11
+  not_gates: ['10']
+  not_ids: [ESS-075]
+  file: src/main/java/com/acme/shipping/views/order_status/OrderStatusAPI.java
+  why: Gate 10 does not apply on the service-entity lane.
+- id: N12
+  not_gates: ['*']
+  not_ids: [ESS-064]
+  file: src/main/java/com/acme/shipping/_loadtest/LoadHarness.java
+  why: The ESS-064 candidate must be dismissed, not reported; _loadtest/ is not a slice.
+
+tolerated:
+- id: T1
+  file: src/main/java/com/acme/shipping/config/CommandBusConfig.java
+  what: ESS-086 named beside R4 (the project's own command-bus bean makes the starter's bean back off)
+  may_merge_with: R4
+- id: T2
+  file: src/main/resources/application.properties
+  what: gate 9's service-entity note (the disabled post-processor unwires every handler) beside R2
+  may_merge_with: R2
+- id: T3
+  file: src/main/java/com/acme/shipping/use_cases/cancel_shipment/slice.yaml
+  what: a Should-fix that cancel_shipment has no test
+- id: T4
+  file: src/main/java/com/acme/shipping/config/CommandBusConfig.java
+  what: an Advisory on the config/ package placed inside the bounded context
+
+fix:                      # prompt /essentials:review HEAD~1 --fix, the questions answered in order
+  prompt: /essentials:review HEAD~1 --fix
+  offers_in_order: [R1, R2, R3]   # only mechanical rows from review-scan (confirmed) or stack-lint; never R4-R7
+  answers: [Apply, Skip, Apply]
+  after:
+  - file: pom.xml
+    contains: ['<artifactId>types-jackson3</artifactId>']
+    not_contains: ['<artifactId>types-jackson</artifactId>']
+  - file: src/main/resources/application.properties
+    equals: |
+      spring.application.name=shipping
+      essentials.reactive-bean-post-processor-enabled=false
+  unchanged:
+  - src/main/java/com/acme/shipping/views/order_status/OrderStatusAPI.java
+  - src/main/java/com/acme/shipping/entities/ShippingOrder.java
+  - src/main/java/com/acme/shipping/config/CommandBusConfig.java

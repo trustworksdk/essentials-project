@@ -15,21 +15,24 @@ import org.springframework.web.bind.annotation.RestController;
  * This is not a slice API in the §R2 sense: it is the external system's ingress, not a public
  * endpoint of the bounded context. It still holds exactly one mapping.
  *
+ * The handler is named for the external event, not {@code on}: springdoc uses the method name as the
+ * operationId, so each translation slice's ingress keeps a unique, stable name in the generated client.
+ *
  * Delete this file if the slice is {@code direction: outbound}.
  */
 @RestController
 public class On{{ExternalEvent}} {
 
     private final CommandBus commandBus;
-    private final {{ExternalSystem}}Translator translator;
+    // The translator is pure (no Spring), so it is constructed here rather than injected.
+    private final {{ExternalSystem}}Translator translator = new {{ExternalSystem}}Translator();
 
-    public On{{ExternalEvent}}(CommandBus commandBus, {{ExternalSystem}}Translator translator) {
+    public On{{ExternalEvent}}(CommandBus commandBus) {
         this.commandBus = commandBus;
-        this.translator = translator;
     }
 
     @PostMapping("/webhooks/{{externalSystem}}")
-    public void on(@RequestBody {{ExternalSystem}}Translator.{{ExternalEvent}}Payload payload) {
+    public void on{{ExternalEvent}}(@RequestBody {{ExternalSystem}}Translator.{{ExternalEvent}}Payload payload) {
         commandBus.sendAndDontWait(translator.toCommand(payload));
     }
 }

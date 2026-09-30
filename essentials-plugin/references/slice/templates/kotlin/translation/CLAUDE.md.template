@@ -29,6 +29,7 @@
 ## Files
 - `{{ExternalSystem}}Translator.kt` — the pure mapping (both directions)
 - `{{ExternalSystem}}Client.kt` — typed outbound port
+- `{{ExternalSystem}}ClientAdapter.kt` — the transport behind the port; its `send` throws until you implement it; delete if `direction: inbound`
 - `On{{ExternalEvent}}.kt` — inbound ingress → CommandBus (Inbox); delete if `direction: outbound`
 - `{{ExternalSystem}}Publisher.kt` — outbound `EventProcessor` (Outbox); delete if `direction: inbound`
 - test: `{{ExternalSystem}}TranslatorTest.kt`

@@ -39,6 +39,6 @@ public class {{Slice}}API {
     public {{Slice}}Response {{sliceCamel}}(@RequestBody {{Slice}}Request body) {
         var id = {{Aggregate}}Id.random();
         commandBus.send(new {{Command}}(id, body.placeholder()));
-        return new {{Slice}}Response(id.value());
+        return new {{Slice}}Response(id.toString());
     }
 }

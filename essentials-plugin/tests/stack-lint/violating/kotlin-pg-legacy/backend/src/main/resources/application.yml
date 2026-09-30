@@ -1,0 +1,6 @@
+spring:
+  application:
+    name: legacy
+essentials:
+  durable-queues:
+    transactional-mode: fully-transactional

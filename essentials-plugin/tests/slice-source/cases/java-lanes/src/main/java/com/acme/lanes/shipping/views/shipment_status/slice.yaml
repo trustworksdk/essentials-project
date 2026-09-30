@@ -1,0 +1,15 @@
+schemaVersion: "1.2"
+slice: shipping.shipment_status
+kind: view
+bc: shipping
+owner: team
+status: live
+summary: Lane fixture slice.
+generator: essentials
+language: java
+tier: service-entity
+lane: service-entity
+serves: [ShipmentStatus]
+projections: []
+tests:
+  unit: { present: false }

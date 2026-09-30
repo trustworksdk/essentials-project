@@ -1,0 +1,12 @@
+graph — 8 nodes · 6 edges · 1 entry points
+
+RegisterShippingOrder  (command)
+└─ shipping.register_shipping_order  [command]
+   └─ ShippingOrderRegistered  (event)
+      └─ shipping.auto_ship  [automation]
+         └─ ShipOrder  (command)
+            └─ shipping.ship_order  [command]
+               └─ OrderShipped  (event)
+
+In no chain — a view served only over HTTP, or a slice nothing reaches:
+  shipping.order_status  [view]

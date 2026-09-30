@@ -5,9 +5,6 @@ import com.acme.shop.service.OrderService;
 import org.springframework.web.bind.annotation.*;
 import java.util.List;
 
-// God controller: five mappings over three write intents and two queries.
-// Ground truth: splits into 3 command slices + 1 view slice (NOT 2 — the two
-// GETs return the same shape).
 @RestController
 @RequestMapping("/api/orders")
 public class OrderController {

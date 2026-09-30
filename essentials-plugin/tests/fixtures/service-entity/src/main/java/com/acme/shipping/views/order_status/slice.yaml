@@ -12,7 +12,6 @@ lane: service-entity
 serves: [OrderStatusList, OrderStatusByStatus, OrderStatusById]
 endpoints:
   - { method: GET, path: "/api/shipping/order-status", auth: user }
-  # Same route, selected by params = "status" — a distinct mapping, so a distinct entry (§R2).
   - { method: GET, path: "/api/shipping/order-status?status=", auth: user }
   - { method: GET, path: "/api/shipping/order-status/{orderId}", auth: user }
 reads:

@@ -1,0 +1,81 @@
+{
+  "tool": "slice-source",
+  "format": 1,
+  "mode": "check",
+  "root": "tests/fixtures/service-entity",
+  "manifests": 4,
+  "parsed": 4,
+  "skippedManifests": [],
+  "slicesWithoutManifest": [],
+  "lanes": [
+    {
+      "bc": "shipping",
+      "path": "src/main/*/com/acme/shipping",
+      "detected": "service-entity?",
+      "signals": {
+        "decider": 0,
+        "aggregates": false,
+        "entities": true,
+        "eventStore": 0
+      },
+      "declared": {
+        "service-entity": [
+          "shipping.auto_ship",
+          "shipping.register_shipping_order",
+          "shipping.ship_order",
+          "shipping.order_status"
+        ]
+      }
+    }
+  ],
+  "endpoints": [
+    {
+      "slice": "shipping.register_shipping_order",
+      "method": "POST",
+      "path": "/api/shipping/orders",
+      "status": "ok",
+      "boundBy": [
+        "RegisterShippingOrderAPI.register"
+      ]
+    },
+    {
+      "slice": "shipping.ship_order",
+      "method": "POST",
+      "path": "/api/shipping/orders/{orderId}/ship",
+      "status": "ok",
+      "boundBy": [
+        "ShipOrderAPI.ship"
+      ]
+    },
+    {
+      "slice": "shipping.order_status",
+      "method": "GET",
+      "path": "/api/shipping/order-status",
+      "status": "ok",
+      "boundBy": [
+        "OrderStatusAPI.list"
+      ]
+    },
+    {
+      "slice": "shipping.order_status",
+      "method": "GET",
+      "path": "/api/shipping/order-status?status=",
+      "status": "ok",
+      "boundBy": [
+        "OrderStatusAPI.byStatus"
+      ]
+    },
+    {
+      "slice": "shipping.order_status",
+      "method": "GET",
+      "path": "/api/shipping/order-status/{orderId}",
+      "status": "ok",
+      "boundBy": [
+        "OrderStatusAPI.get"
+      ]
+    }
+  ],
+  "findings": [],
+  "unverified": [],
+  "unparsed": []
+}

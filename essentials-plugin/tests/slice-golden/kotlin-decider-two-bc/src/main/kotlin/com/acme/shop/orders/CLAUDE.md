@@ -1,0 +1,65 @@
+# Bounded context: orders
+
+**Write style:** decider (`rules/slice-design.md` §R5) — one decider per command slice, folding its
+own state from the event stream. This is the **default** lane: adding a command adds a directory and
+edits nothing.
+**Aggregate:** Order (`AggregateType.of("Orders")`)
+**Owner:** orders-team
+**Purpose:** TODO one sentence — what this context is responsible for.
+
+## Why this lane
+
+Decider style is the default, so this heading needs no defence of the *choice* — it is here for the
+two things that are worth writing down, and `/essentials:slice-check` reads it.
+
+**If this BC departs from the command bus, say so here and say why.** The default write path is a
+`CommandHandler` per slice reached through `commandBus.send` / `sendAsync` / `sendAndDontWait`. A
+deviation documented here is reported as **Advisory**; an undocumented one is **Should-fix**.
+Before writing a reason, check it against §R5's dispatch table — the two usual ones are false:
+`send(cmd)` **blocks and returns the handler's result**, so a synchronous request/response operation
+stays synchronous; and durability attaches only to `sendAndDontWait` on a `DurableLocalCommandBus`,
+so using the bus does not impose it.
+
+**If this BC ever holds two write styles, that is Blocking, not a migration in progress.** Per-slice
+deciders plus `aggregates/`, or plus `entities/`, is two designs competing over one consistency
+boundary. Moving between styles is a real project with a data migration attached, and
+`/essentials:slice-check` refuses to automate it.
+
+## Layout
+
+```
+orders/
+  use_cases/<slice>/       command slices — one Decider, one endpoint each
+  use_cases/_shared/       OrderState + OrderStateEvolver ONLY — created only
+                           once 3+ Deciders need the same state (not scaffolded up front)
+  views/<slice>/           view slices — read models + their projectors
+  automations/<slice>/     automation slices — no API
+  external_systems/<sys>/  translation slices — anti-corruption layers
+  events/                  OrderEvent sealed parent + one file per variant
+  types/                   OrderId and this BC's other semantic types
+  routing/                 OrderCommand routing interface (BC-private)
+  config/                  OrdersConfiguration — one @Bean per Decider
+```
+
+## Slice index
+
+| Slice | Kind | Purpose |
+|---|---|---|
+| _(none yet — add with `/essentials:add-slice`)_ | | |
+
+## Public surface
+
+Other bounded contexts may import **only** `orders/events/` and `orders/types/`. Everything else is
+private to this context. Within the context, a slice may import only another slice's `events/` and
+`types/` — never its Decider, Evolver, State, handler, or repository.
+
+## Rules
+
+The full law is the essentials plugin's `rules/slice-design.md`; the short form is
+`.claude/rules/essentials-slices.md` in this project. Run `/essentials:slice-check` to audit this
+context against it.
+
+## Wiring
+
+Every Decider and processor is registered in `config/OrdersConfiguration.kt`. Adding a slice adds one
+`@Bean` line. An unregistered Decider passes every unit test and fails every `@SpringBootTest`.

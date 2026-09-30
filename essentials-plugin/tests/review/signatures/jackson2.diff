@@ -1,0 +1,104 @@
+# review-scan signature fixture: ESS-094 0.50 Jackson 2 module artifacts; ESS-021 Jackson 2 databind annotations
+# Dependencies fire, exclusions, the Jackson 3 artifacts and comments do not; keyUsing fires only for Jackson 2's
+# annotation (candidate when the import is not visible); any other Jackson 2 databind annotation import is a candidate.
+# expect: backend/pom.xml:9 ess-094-jackson2-module confirmed Blocking mechanical
+# expect-not: backend/pom.xml:13 ess-094-jackson2-module
+# expect-not: backend/pom.xml:21 ess-094-jackson2-module
+# expect-not: backend/pom.xml:25 ess-094-jackson2-module
+# expect: frontend-bff/pom.xml:11 ess-094-jackson2-module candidate Blocking manual
+# expect: build.gradle.kts:2 ess-094-jackson2-module confirmed Blocking mechanical
+# expect-not: build.gradle.kts:3 ess-094-jackson2-module
+# expect-not: backend/src/main/java/com/acme/shop/Basket.java:3 ess-021-j2-databind-annotation
+# expect: backend/src/main/java/com/acme/shop/Basket.java:8 ess-021-j2-key-using confirmed Should-fix manual
+# expect-not: backend/src/main/kotlin/com/acme/shop/Stock.kt:6 ess-021-j2-key-using
+# expect: backend/src/main/kotlin/com/acme/shop/Prices.kt:11 ess-021-j2-key-using candidate Should-fix manual
+# expect: backend/src/main/java/com/acme/shop/Receipt.java:3 ess-021-j2-databind-annotation candidate Should-fix manual
+diff --git a/backend/pom.xml b/backend/pom.xml
+--- a/backend/pom.xml
++++ b/backend/pom.xml
+@@ -6,2 +6,21 @@
+     </dependency>
++    <dependency>
++      <groupId>dk.trustworks.essentials</groupId>
++      <artifactId>types-jackson</artifactId>
++    </dependency>
++    <dependency>
++      <groupId>dk.trustworks.essentials</groupId>
++      <artifactId>immutable-jackson3</artifactId>
++    </dependency>
++    <dependency>
++      <groupId>dk.trustworks.essentials.components</groupId>
++      <artifactId>spring-boot-starter-postgresql</artifactId>
++      <exclusions>
++        <exclusion>
++          <groupId>dk.trustworks.essentials</groupId>
++          <artifactId>immutable-jackson</artifactId>
++        </exclusion>
++      </exclusions>
++    </dependency>
++    <!-- <artifactId>types-jackson</artifactId> -->
+   </dependencies>
+diff --git a/frontend-bff/pom.xml b/frontend-bff/pom.xml
+--- a/frontend-bff/pom.xml
++++ b/frontend-bff/pom.xml
+@@ -10,3 +10,3 @@
+       <!-- filler 5 -->
+-      <artifactId>types-jackson3</artifactId>
++      <artifactId>immutable-jackson</artifactId>
+     </dependency>
+diff --git a/build.gradle.kts b/build.gradle.kts
+new file mode 100644
+--- /dev/null
++++ b/build.gradle.kts
+@@ -0,0 +1,4 @@
++dependencies {
++    implementation("dk.trustworks.essentials:types-jackson:0.50.3")
++    implementation("dk.trustworks.essentials:types-jackson3")
++}
+diff --git a/backend/src/main/java/com/acme/shop/Basket.java b/backend/src/main/java/com/acme/shop/Basket.java
+new file mode 100644
+--- /dev/null
++++ b/backend/src/main/java/com/acme/shop/Basket.java
+@@ -0,0 +1,11 @@
++package com.acme.shop;
++
++import com.fasterxml.jackson.annotation.JsonProperty;
++import com.fasterxml.jackson.databind.annotation.JsonDeserialize;
++import java.util.Map;
++
++public class Basket {
++    @JsonDeserialize(keyUsing = ProductIdKeyDeserializer.class)
++    @JsonProperty("items")
++    private Map<ProductId, Integer> items;
++}
+diff --git a/backend/src/main/kotlin/com/acme/shop/Stock.kt b/backend/src/main/kotlin/com/acme/shop/Stock.kt
+new file mode 100644
+--- /dev/null
++++ b/backend/src/main/kotlin/com/acme/shop/Stock.kt
+@@ -0,0 +1,8 @@
++package com.acme.shop
++
++import tools.jackson.databind.annotation.JsonDeserialize
++
++data class Stock(
++    @JsonDeserialize(keyUsing = WarehouseKeyDeserializer::class)
++    val levels: Map<WarehouseId, Int>,
++)
+diff --git a/backend/src/main/kotlin/com/acme/shop/Prices.kt b/backend/src/main/kotlin/com/acme/shop/Prices.kt
+--- a/backend/src/main/kotlin/com/acme/shop/Prices.kt
++++ b/backend/src/main/kotlin/com/acme/shop/Prices.kt
+@@ -10,2 +10,3 @@
+ data class Prices(
++    @JsonDeserialize(keyUsing = ProductIdKeyDeserializer::class)
+     val byProduct: Map<ProductId, Price>,
+diff --git a/backend/src/main/java/com/acme/shop/Receipt.java b/backend/src/main/java/com/acme/shop/Receipt.java
+new file mode 100644
+--- /dev/null
++++ b/backend/src/main/java/com/acme/shop/Receipt.java
+@@ -0,0 +1,6 @@
++package com.acme.shop;
++
++import com.fasterxml.jackson.databind.annotation.JsonSerialize;
++
++@JsonSerialize(using = ReceiptSerializer.class)
++public record Receipt(String id) {}

@@ -1,0 +1,16 @@
+schemaVersion: "1.3"
+slice: payments.charge_payment
+kind: command
+bc: payments
+owner: payments-team
+status: live
+summary: Charge a payment; a declined charge publishes PaymentFailed.
+language: java
+tier: cqrs-es
+lane: decider
+handles: [ChargePayment]
+publishes: [PaymentCharged, PaymentFailed]
+writes: [Payment]
+tests:
+  unit: { present: true }
+  integration: { present: false }

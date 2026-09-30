@@ -14,7 +14,8 @@ allowed-tools: [Read, Write, Edit, Bash, Glob, Grep, AskUserQuestion]
 Add one vertical slice to an existing Essentials project. To create a *new* project, use
 `/essentials:init` instead.
 
-This command elicits; the kind skill emits. Do not write source files from here — one emission path,
+This command elicits; the kind skill emits, through `scripts/render-slice.py`
+(`references/slice/slice-authoring.md` §4b). Do not write source files from here — one emission path,
 not five.
 
 ## Step 0 — Confirm the project, then the rules pointer
@@ -54,8 +55,11 @@ project may be polyglot across modules; a bounded context may not.
 ## Step 3 — Bounded context
 
 `Glob <sourceRoot>/<packageDir>/*/` and offer every directory containing a `use_cases/` or `views/`
-child, plus **New bounded context**. For a new one, also ask the aggregate name — it drives the id
-type, the sealed event parent, the routing interface, and the `AggregateType`.
+child, plus **New bounded context** — **for the command kind only**. A bounded context starts with its
+first command slice: the view, automation and translation templates import `<bc>/events/<Event>`,
+which only a command slice supplies (`slice-authoring.md` §3). For any other kind with no BC to offer,
+say so and suggest `/essentials:add-command-slice`. For a new BC, also ask the aggregate name — it
+drives the id type, the sealed event parent, the routing interface, and the `AggregateType`.
 
 ### Step 3b — Write-style lane
 
@@ -66,6 +70,10 @@ delegating. It is a **per-BC** property.
 `aggregates/` → aggregate; `entities/` plus an Essentials command bus and no `EventStore`/
 `AggregateType` → service-entity; otherwise decider. If the BC shows **two**, abort: that is Blocking
 under §R5 and adding a slice would deepen it.
+
+**Automation or translation on a service-entity BC: stop here.** No template exists for that lane —
+both kinds are event-store subscribers, and the lane has no event store (its events travel on the
+`EventBus`). The kind skill states the reason; do not ask for names first.
 
 **For a new BC, ask.** One `AskUserQuestion`. Offer the **third option only when the project is
 Java** — the aggregate lane's API is Java-native and this plugin does not scaffold it in Kotlin:
@@ -116,6 +124,9 @@ The skill owns emission, wiring, and the closing report. This command writes no 
 
 - **Slice directory already exists** — abort, name the path, and suggest a different slice name.
   Never merge into an existing slice.
-- **Unsubstituted placeholder** — if a rendered file still contains `{{` or `__`, abort and name the
-  file. The template has drifted from the placeholder table; that is a plugin bug, not a user error.
+- **`render-slice.py` exits 2** — nothing was written. Relay its message. An unknown or unfilled
+  placeholder, or a leftover `{{`/`__`, means the templates drifted from the placeholder table: a plugin
+  bug, not a user error.
+- **`render-slice.py requires` exits 1** — the build file lacks a module the slice imports. Name it
+  and offer to add it; the slice does not compile without it.
 - **Mixed-language bounded context** — abort and report both file types found.

@@ -1,0 +1,374 @@
+# expected.yaml — the machine-readable oracle for this fixture (format 1). TEST-GUIDE.md is the
+# human description of the same expectations; when they disagree, fix both.
+#
+# Paths are relative to this fixture's directory. `line` is 1-based and `anchor` is text that must
+# appear on that line, so a stale line number is detectable. `gate` is the /essentials:slice-check
+# gate as written in commands/slice-check.md ("14", "8a", "6"); `ess` is the review id derived from
+# it (ESS-G<gate><clause>); both are null where the oracle is a law section rather than a numbered
+# gate. Severities: Blocking | Should-fix | Advisory.
+#
+#   runs          which command runs against this fixture, with which argument
+#   lanes         gate 14 per bounded context: code signals, declared lanes, verdict
+#   must_find     every entry must appear in the report (matched on file, plus symbol when given)
+#   must_not_find a finding under any listed gate at that file/symbol fails the run ("*" = any gate)
+#   skipped       gates the report must name as skipped or out of scope, never silently omit
+#   tolerated     findings that may appear or not; neither counts for or against the run
+#   reader        syntactic facts a source reader must extract (handlers, mappings, endpoint bindings)
+#   slice_map     what /essentials:slice-map must draw: slice count, event/command edges, cycles
+#   manifests     facts about the manifests themselves (service-entity)
+#   terrain, contexts, slices, ladder
+#                 /essentials:slice-discover's passes 0-4 (brownfield-layered); must_find there carries
+#                 `rank` (payoff order) and `kind` instead of a gate, and severity is null by design
+#
+# `tests/fixtures/check-expected.py` checks this file against the tree (paths, line anchors, ess ids)
+# and that no fixture source carries an oracle hint.
+#
+# Entry fields beyond file/line/anchor: `symbol` narrows the match to a type or method; `also_names`
+# lists other files the same finding must cite; `may_merge_with` names a finding this one may be
+# reported inside of; `law` names the rules/slice-design.md section when `gate` is null.
+
+fixture: aggregate-lane
+language: java
+runs:
+- command: /essentials:slice-check
+  args: essentials-plugin/tests/fixtures/aggregate-lane
+- command: /essentials:slice-discover
+  args: essentials-plugin/tests/fixtures/aggregate-lane
+  expect: redirect to /essentials:slice-check (manifests exist); no analysis
+- command: /essentials:slice-map
+  args: essentials-plugin/tests/fixtures/aggregate-lane
+lanes:
+  billing:
+    detected: aggregate
+    signals:
+    - kind: aggregates-dir
+      file: src/main/java/com/acme/billing/aggregates/Invoice.java
+      line: 10
+      anchor: public class Invoice extends AggregateRoot<InvoiceId, InvoiceEvent, Invoice> {
+    declared:
+      billing.issue_invoice: aggregate
+      billing.pay_invoice: aggregate
+      billing.invoice_list: aggregate
+      billing.recurring_billing: aggregate
+    verdict: fine
+must_find:
+- id: F1
+  gate: null
+  ess: null
+  severity: Should-fix
+  law: rules/slice-design.md § The aggregate's own bar
+  file: src/main/java/com/acme/billing/use_cases/pay_invoice/PayInvoiceHandler.java
+  line: 18
+  anchor: if (invoice.isPaid())
+  symbol: PayInvoiceHandler.handle
+  what: >-
+    The domain rule is in the handler; Invoice.pay() already guards it, so the aggregate is no longer the sole enforcer.
+    Blocking is also acceptable (the law's 'code cannot be correct' row).
+- id: F2
+  gate: null
+  ess: null
+  severity: Should-fix
+  law: rules/slice-design.md § The aggregate's own bar
+  file: src/main/java/com/acme/billing/use_cases/pay_invoice/slice.yaml
+  line: 20
+  anchor: 'enforcedBy: "PayInvoiceHandler"'
+  may_merge_with: F1
+  what: 'invariants[].enforcedBy names the handler: the manifest records the leak.'
+- id: F3
+  gate: null
+  ess: null
+  severity: Should-fix
+  file: src/main/java/com/acme/billing/use_cases/pay_invoice/slice.yaml
+  line: 24
+  anchor: 'unit: { present: false }'
+  what: No test of any kind on the one command slice that carries a rule.
+- id: F4
+  gate: '6'
+  ess: ESS-G6
+  severity: Should-fix
+  file: src/main/java/com/acme/billing/views/invoice_list/slice.yaml
+  line: 17
+  anchor: 'path: "/api/billing/invoices?paid=true&minAmount="'
+  what: >-
+    The endpoint ?paid=true&minAmount= is served by no handler. paid=true is bound only by paidInvoices() and minAmount
+    only by byAmount(); no single handler binds both. A per-slice union check passes it, which is the bug; the binding
+    is per handler.
+- id: F5
+  gate: null
+  ess: null
+  severity: Should-fix
+  law: rules/slice-design.md § Reporting severities (a view slice with no test)
+  file: src/main/java/com/acme/billing/views/invoice_list/slice.yaml
+  line: 30
+  anchor: 'integration: { present: false }'
+  what: A view slice with no test.
+must_not_find:
+- id: T1
+  not_gates:
+  - '5'
+  file: src/main/java/com/acme/billing/aggregates/Invoice.java
+  line: 35
+  anchor: public boolean isPaid() { return paid; }
+  symbol: Invoice.isPaid
+  why: >-
+    A public getter on an aggregate whose callers are a command handler (PayInvoiceHandler) is not a query surface.
+    The view reads its own read model, not the aggregate.
+- id: T2
+  not_gates:
+  - '*'
+  file: src/main/java/com/acme/billing/use_cases/issue_invoice/IssueInvoiceHandler.java
+  line: 17
+  anchor: if (invoices.isInvoiceMissing(cmd.id())) {
+  why: 'Idempotency, not a domain rule: the command bus delivers at least once.'
+- id: T3
+  not_gates:
+  - '9'
+  - '17'
+  file: src/main/java/com/acme/billing/config/BillingConfiguration.java
+  line: 6
+  anchor: public class BillingConfiguration {
+  why: 'Near-empty is correct on this lane: no decider to wire, no routing.'
+- id: T4
+  not_gates:
+  - '5'
+  file: src/main/java/com/acme/billing/aggregates/Invoice.java
+  line: 14
+  anchor: public Invoice(InvoiceId aggregateId) { super(aggregateId); }
+  why: The rehydration constructor Essentials requires.
+- id: T5
+  not_gates:
+  - '6'
+  - 11a
+  file: src/main/java/com/acme/billing/views/invoice_list/InvoiceListAPI.java
+  line: 28
+  anchor: '@GetMapping(params = "paid=true")'
+  why: >-
+    Value-pinned discriminator: ?paid=true in the manifest, params = "paid=true" in code. Bound in that handler.
+- id: T6
+  not_gates:
+  - '6'
+  - 11a
+  file: src/main/java/com/acme/billing/views/invoice_list/InvoiceListAPI.java
+  line: 35
+  anchor: '@GetMapping(params = {"minAmount", "maxAmount"})'
+  why: 'Multi-parameter discriminator: ?minAmount=&maxAmount= bound together by one handler.'
+- id: T7
+  not_gates:
+  - '6'
+  - 11a
+  file: src/main/java/com/acme/billing/views/invoice_list/InvoiceListAPI.java
+  line: 24
+  anchor: '@RequestParam(defaultValue = "100") int limit'
+  why: >-
+    An optional filter with a default selects no mapping, so it is no endpoint and needs no ?limit entry.
+- id: T8
+  not_gates:
+  - '6'
+  file: src/main/java/com/acme/billing/views/invoice_list/InvoiceListAPI.java
+  line: 15
+  anchor: public class InvoiceListAPI {
+  why: Three @GetMapping methods on a view API over its own read model is §R2 working.
+- id: T9
+  not_gates:
+  - '8'
+  - 8a
+  - '5'
+  file: src/main/java/com/acme/billing/views/invoice_list/InvoiceListProjection.java
+  line: 3
+  anchor: import com.acme.billing.aggregates.Invoices;
+  why: >-
+    The view names Invoices.AGGREGATE_TYPE, the stream it subscribes to, and nothing else of the aggregate. Gate
+    8's clauses do not cover a same-BC aggregates/ import, and a constant is no query surface. It would be a finding
+    if the view called a method on Invoices.
+- id: T10
+  not_gates:
+  - '8'
+  - 8a
+  file: src/main/java/com/acme/billing/automations/recurring_billing/RecurringBillingProcessor.java
+  line: 7
+  anchor: import com.acme.billing.use_cases.issue_invoice.IssueInvoice;
+  why: >-
+    The §R4 carve-out: IssueInvoice is only constructed and handed to getCommandBus().sendAndDontWait(...).
+- id: T11
+  not_gates:
+  - '10'
+  file: src/main/java/com/acme/billing/views/invoice_list/InvoiceListProjection.java
+  line: 19
+  anchor: public class InvoiceListProjection extends ViewEventProcessor {
+  why: Both handlers take OrderedMessage and pass getOrder() to save/update (the long overloads).
+- id: T11b
+  not_gates:
+  - '10'
+  file: src/main/java/com/acme/billing/automations/recurring_billing/RecurringBillingProcessor.java
+  line: 29
+  anchor: public class RecurringBillingProcessor extends EventProcessor {
+  why: Both handlers take OrderedMessage and version the todo with getOrder().
+- id: T12
+  not_gates:
+  - '14'
+  file: src/main/java/com/acme/billing/views/invoice_list/InvoiceListProjection.java
+  line: 19
+  anchor: public class InvoiceListProjection extends ViewEventProcessor {
+  why: >-
+    A processor is not a decider: the view and the automation add no lane signal, so billing stays single-lane (aggregate).
+- id: T13
+  not_gates:
+  - '6'
+  file: src/main/java/com/acme/billing/use_cases/pay_invoice/PayInvoiceAPI.java
+  line: 18
+  anchor: public record PayInvoiceRequest(long paidMinor) {}
+  why: The body carries only what the client sends; the id arrives by path. Assembly, not an adapter.
+- id: T14
+  not_gates:
+  - '*'
+  file: src/main/java/com/acme/billing/views/invoice_list/InvoiceListView.java
+  line: 20
+  anchor: public String invoiceId;
+  why: A Java DocumentDB entity's @Id field must be public (the reflection layer reads the field).
+- id: T15
+  not_gates:
+  - 11b
+  file: src/main/java/com/acme/billing/automations/recurring_billing/slice.yaml
+  line: 12
+  anchor: 'consumes: [InvoiceIssued, InvoicePaid]'
+  why: consumes lists exactly the two handled event types.
+skipped:
+- gate: '15'
+  why: Service-entity lane only.
+- gate: '16'
+  why: Service-entity lane only.
+- gate: '18'
+  why: No Spring Data repository in the project.
+tolerated:
+- id: TOL-tests
+  gates:
+  - '*'
+  what: >-
+    A 'no test' finding on any slice. Every manifest here says tests.*.present: false and the fixture has no test
+    tree; the law rates a view slice with no test Should-fix, so such a finding is correct but not what this fixture
+    grades.
+reader:
+  conventions: >-
+    mapping lines are the method-name line; an event-store reference is the first use site per symbol per file (the
+    import only when unused)
+  handlers:
+  - slice: billing.invoice_list
+    file: src/main/java/com/acme/billing/views/invoice_list/InvoiceListProjection.java
+    line: 40
+    anchor: void on(InvoiceIssued event, OrderedMessage message) {
+    event: InvoiceIssued
+    ordered_message: true
+  - slice: billing.invoice_list
+    file: src/main/java/com/acme/billing/views/invoice_list/InvoiceListProjection.java
+    line: 49
+    anchor: void on(InvoicePaid event, OrderedMessage message) {
+    event: InvoicePaid
+    ordered_message: true
+  - slice: billing.recurring_billing
+    file: src/main/java/com/acme/billing/automations/recurring_billing/RecurringBillingProcessor.java
+    line: 52
+    anchor: void on(InvoiceIssued event, OrderedMessage message) {
+    event: InvoiceIssued
+    ordered_message: true
+  - slice: billing.recurring_billing
+    file: src/main/java/com/acme/billing/automations/recurring_billing/RecurringBillingProcessor.java
+    line: 61
+    anchor: void on(InvoicePaid event, OrderedMessage message) {
+    event: InvoicePaid
+    ordered_message: true
+  subscriptions:
+  - slice: billing.invoice_list
+    aggregate_type: Invoices
+    via: Invoices.AGGREGATE_TYPE
+    file: src/main/java/com/acme/billing/views/invoice_list/InvoiceListProjection.java
+    line: 36
+    anchor: return List.of(Invoices.AGGREGATE_TYPE);
+  - slice: billing.recurring_billing
+    aggregate_type: Invoices
+    via: Invoices.AGGREGATE_TYPE
+    file: src/main/java/com/acme/billing/automations/recurring_billing/RecurringBillingProcessor.java
+    line: 48
+    anchor: return List.of(Invoices.AGGREGATE_TYPE);
+  dispatches:
+  - slice: billing.recurring_billing
+    command: IssueInvoice
+    file: src/main/java/com/acme/billing/automations/recurring_billing/RecurringBillingProcessor.java
+    line: 71
+    anchor: getCommandBus().sendAndDontWait(new IssueInvoice(
+  mappings:
+  - slice: billing.invoice_list
+    method: GET
+    route: /api/billing/invoices
+    params: []
+    optional_params:
+    - limit
+    file: src/main/java/com/acme/billing/views/invoice_list/InvoiceListAPI.java
+    line: 24
+    anchor: public List<InvoiceListView> list(
+  - slice: billing.invoice_list
+    method: GET
+    route: /api/billing/invoices
+    params:
+    - paid=true
+    file: src/main/java/com/acme/billing/views/invoice_list/InvoiceListAPI.java
+    line: 29
+    anchor: public List<InvoiceListView> paidInvoices() {
+  - slice: billing.invoice_list
+    method: GET
+    route: /api/billing/invoices
+    params:
+    - minAmount
+    - maxAmount
+    file: src/main/java/com/acme/billing/views/invoice_list/InvoiceListAPI.java
+    line: 36
+    anchor: public List<InvoiceListView> byAmount(
+  - slice: billing.pay_invoice
+    method: POST
+    route: /api/billing/{invoiceId}/payment
+    params: []
+    file: src/main/java/com/acme/billing/use_cases/pay_invoice/PayInvoiceAPI.java
+    line: 21
+    anchor: public void payInvoice(
+  - slice: billing.issue_invoice
+    method: POST
+    route: /api/billing
+    params: []
+    file: src/main/java/com/acme/billing/use_cases/issue_invoice/IssueInvoiceAPI.java
+    line: 21
+    anchor: public IssueInvoiceResponse issueInvoice(
+  endpoint_bindings:
+  - endpoint: GET /api/billing/invoices
+    bound_by: list
+  - endpoint: GET /api/billing/invoices?paid=true
+    bound_by: paidInvoices
+  - endpoint: GET /api/billing/invoices?minAmount=&maxAmount=
+    bound_by: byAmount
+  - endpoint: GET /api/billing/invoices?paid=true&minAmount=
+    bound_by: null
+    per_slice_union_would_pass: true
+slice_map:
+  slices: 4
+  edges:
+  - - billing.issue_invoice
+    - InvoiceIssued
+    - billing.invoice_list
+  - - billing.issue_invoice
+    - InvoiceIssued
+    - billing.recurring_billing
+  - - billing.pay_invoice
+    - InvoicePaid
+    - billing.invoice_list
+  - - billing.pay_invoice
+    - InvoicePaid
+    - billing.recurring_billing
+  - - billing.recurring_billing
+    - IssueInvoice
+    - billing.issue_invoice
+  cycles:
+  - - billing.issue_invoice
+    - billing.recurring_billing
+    - billing.issue_invoice
+  writers:
+    Invoice:
+    - billing.issue_invoice
+    - billing.pay_invoice

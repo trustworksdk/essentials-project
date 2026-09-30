@@ -28,7 +28,8 @@ class {{View}}IT {
 
     @Test
     fun `the query filters`() {
-        // TODO: seed rows with two different statuses; assert findByStatus returns only one.
+        // TODO: once the slice has a filtering query (findByStatus, …), seed rows that differ on it and
+        //       assert it returns only the matching ones.
     }
 
     @Test

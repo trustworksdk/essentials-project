@@ -21,6 +21,6 @@ public class IssueInvoiceAPI {
     public IssueInvoiceResponse issueInvoice(@RequestBody IssueInvoiceRequest body) {
         var id = InvoiceId.random();
         commandBus.send(new IssueInvoice(id, body.amountMinor()));
-        return new IssueInvoiceResponse(id.value());
+        return new IssueInvoiceResponse(id.toString());
     }
 }

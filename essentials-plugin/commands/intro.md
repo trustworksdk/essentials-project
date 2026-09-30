@@ -39,7 +39,8 @@ skill answers from the bundled docs without needing a project.
 
 Then print the `━━━ SKILLS THAT FIRE ON THEIR OWN ━━━` and `━━━ CREATING AND UPDATING A PROJECT ━━━`
 blocks from the main variant and stop — but drop the `/essentials:upgrade` entry from the second one,
-along with the whole `━━━ SLICES ━━━` block: all of those need an existing Essentials project. In the skills block, print the `essentials-docs` entry only: `essentials-change` gates itself
+along with the whole `━━━ SLICES ━━━` and `━━━ REVIEWING A CHANGE ━━━` blocks: all of those need an
+existing Essentials project. In the skills block, print the `essentials-docs` entry only: `essentials-change` gates itself
 on a project that is already on the slice law, so naming it here would advertise something that cannot
 fire.
 
@@ -53,7 +54,7 @@ Most of this plugin is not a command. Two skills load themselves — one when yo
 ask about Essentials or Claude is about to touch dk.trustworks.essentials.* code,
 the other when you describe a change to a project already on the slice law. The
 commands cover what is worth being deliberate about: creating a project, adding
-or auditing a slice, and seeing the whole map.
+or auditing a slice, seeing the whole map, and reviewing a change.
 
 ━━━ SKILLS THAT FIRE ON THEIR OWN (you do not invoke these) ━━━
 
@@ -84,10 +85,10 @@ or auditing a slice, and seeing the whole map.
   /essentials:add-translation-slice  An ACL to a system you do not own
   /essentials:slice-check
                          Audit slices against the law — layout, manifests,
-                         god-class rules, wiring, handler shapes. Manifest
-                         parsing, schema and sole-ownership run deterministically
-                         via scripts/slice-lint.py. Read-only; --fix-manifests,
-                         --adopt-tier and --fix-source are opt-in.
+                         god-class rules, wiring, handler shapes. The mechanical
+                         gates run as scripts: slice-lint.py over the manifests,
+                         slice-source.py over the sources' syntax. Read-only;
+                         --fix-manifests, --adopt-tier and --fix-source are opt-in.
   /essentials:slice-discover
                          The brownfield counterpart. For a codebase that does
                          NOT follow the law: infers bounded contexts and
@@ -97,21 +98,34 @@ or auditing a slice, and seeing the whole map.
   /essentials:slice-map  What is here and how it connects — contexts and their
                          slices, the command → slice → event → reactor graph,
                          event flow, who writes what, and endpoint → slice.
-                         Built from the manifests, so it reads no method bodies.
-                         Prints by default; --html writes a single self-contained
-                         page whose graph pans, zooms, maximises, filters by kind
-                         and explains each node on hover. Audits nothing.
+                         Built by scripts from the manifests and the sources'
+                         syntax, so it reads no method body for meaning. Prints
+                         by default; --view graph draws the chains in the
+                         terminal; --html writes a single self-contained page
+                         whose graph pans, zooms, maximises, filters by kind and
+                         explains each node on hover. Audits nothing.
+
+━━━ REVIEWING A CHANGE ━━━
+
+  /essentials:review     Review a change — the branch, a ref, a pull request or a
+                         path — against the traps index, the stack contract
+                         (S1-S11) and the slice law. Scripts find what is
+                         mechanical; Claude judges the rest. Every finding has an
+                         ESS id and a link to the section that owns it; what the
+                         change did not introduce is counted, not listed. Reports
+                         only; --fix offers each mechanical fix on its own.
 
 ━━━ CREATING AND UPDATING A PROJECT ━━━
 
   /essentials:init       Interactive scaffolder. Asks for target directory,
-                         frontend mode, language, DB profile, Docker Compose and
-                         Maven coordinates — then produces a Spring Boot skeleton
-                         (official Spring Initializr by default, or generated
-                         locally with no network) and applies the stack contract
-                         on top. Refuses to overwrite a non-empty target, and
-                         redirects to /essentials:upgrade when the directory is
-                         already an Essentials project.
+                         frontend mode, language, web stack, DB profile, Docker
+                         Compose, Maven coordinates and the slice-manifest lint
+                         gate — then renders the project from the plugin's
+                         template tree (scripts/init-render.py, every version
+                         from stack-pins.md), lints it and smoke-builds it.
+                         Refuses to overwrite a non-empty target, and redirects
+                         to /essentials:upgrade when the directory is already an
+                         Essentials project.
   /essentials:upgrade    The other half: what init never does. Brings an EXISTING
                          project up to the installed plugin — refreshes the slice
                          rules pointer, installs or refreshes the slice-manifest
@@ -125,8 +139,9 @@ or auditing a slice, and seeing the whole map.
 
 ━━━ WHAT /essentials:init SETS UP ━━━
 
-  Backend                Spring Boot 4 + WebFlux + Maven, Kotlin or Java —
-                         both lanes fully generated, not a fallback
+  Backend                Spring Boot 4 + WebFlux (recommended) or WebMvc + Maven,
+                         Kotlin or Java — every combination rendered by one
+                         script and built in the Essentials repository's CI
   Frontend (optional)    React 19 + TypeScript + Vite + Tailwind, typed client
                          generated SpringDoc → openapi.json → Orval
   DB profile             PostgreSQL event-sourced (default) · PostgreSQL CRUD ·
@@ -137,9 +152,16 @@ or auditing a slice, and seeing the whole map.
   First slice            None is scaffolded. Run /essentials:add-slice, which
                          emits one matching the project's own lane.
   Docker Compose         Optional; backend auto-starts the DB on run
-  Smoke build            The generated project is compiled AND its Spring context
-                         started before you are handed it. The stack contract's
-                         costliest failures compile clean and die at startup.
+  Wiring tests           A Testcontainers context test for the DB profile, a
+                         contract test that regenerates contracts/openapi.json,
+                         a CORS preflight test (standalone frontend) and a
+                         frontend base-URL test
+  Lint gate              Optional: the slice-manifest lint as a git pre-commit
+                         hook or a script for your CI
+  Smoke build            The generated project is linted against S1-S11, then
+                         compiled AND its Spring context started before you are
+                         handed it. The stack contract's costliest failures
+                         compile clean and die at startup.
   Project CLAUDE.md      Points future sessions back at essentials-docs, and
                          carries an <!-- essentials-init: essentials <version> -->
                          stamp — the Essentials version the plugin targets —
@@ -211,14 +233,12 @@ or auditing a slice, and seeing the whole map.
                          then it is a declared twin (supersedes:) whose original
                          gets deleted as part of the same change.
 
-━━━ NOT YET SHIPPED (planned) ━━━
+━━━ DELIBERATELY ABSENT ━━━
 
-  Kotlin aggregate lane  Deliberate, not a backlog item: AggregateRoot and
-                         StatefulAggregateRepository are a Java-native family,
-                         and slice-check treats aggregates/ in a Kotlin BC as
-                         Advisory interop. Kotlin gets the other two §R5 styles.
-  Anti-pattern hook      Post-write check — not implemented. /essentials:slice-check
-                         is the opt-in, read-only stand-in.
+  Kotlin aggregate lane  AggregateRoot and StatefulAggregateRepository are a
+                         Java-native family, and slice-check treats aggregates/
+                         in a Kotlin BC as Advisory interop. Kotlin gets the
+                         other two §R5 styles.
 
 ━━━ GET STARTED ━━━
 
@@ -228,6 +248,7 @@ or auditing a slice, and seeing the whole map.
   /essentials:slice-map   ← existing project that follows the law; see it
   /essentials:slice-check ← existing project that follows the law; audit it
   /essentials:slice-discover ← existing project that does not; map it first
+  /essentials:review      ← before you open a pull request
   Just ask                ← both skills load themselves: a question routes to
                             the docs, a change request routes to the slice
 ```
@@ -249,7 +270,8 @@ said so; otherwise drop that segment rather than assuming Kotlin.
 - Read-only. Never modify a file, never scaffold, never run a build.
 - Print what detection actually observed. Do not name a language, DB profile, or project state you
   did not verify.
-- Keep the planned items labelled `(planned)`. Never print a planned item as available.
-- `━━━ SLICES ━━━` and the `/essentials:upgrade` entry are printed only when an Essentials project
-  was detected — those commands operate on an existing project.
+- Print no planned or backlog item: the plugin names only what ships. `━━━ DELIBERATELY ABSENT ━━━` lists
+  design choices, not future work.
+- `━━━ SLICES ━━━`, `━━━ REVIEWING A CHANGE ━━━` and the `/essentials:upgrade` entry are printed only
+  when an Essentials project was detected — those commands operate on an existing project.
 - Do not enumerate the bundled docs file-by-file. That is the skill's module index's job.

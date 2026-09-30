@@ -1,0 +1,21 @@
+spring:
+  application:
+    name: orders
+  data:
+    mongodb:
+      database: orders
+      uri: mongodb://localhost/orders
+      # filler 0
+      # filler 1
+      # filler 2
+      # filler 3
+      # filler 4
+      # filler 5
+      # filler 6
+      # filler 7
+essentials:
+  life-cycles:
+    start-life-cycles: true
+  durable-queues:
+    max-polling-interval: 2s
+    transactional-mode: fully-transactional

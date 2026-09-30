@@ -15,10 +15,11 @@ import com.fasterxml.jackson.annotation.JsonTypeInfo
  * Adding a new command means adding a new variant FILE here + a new slice — never
  * editing another slice's variant.
  *
- * `@JsonTypeInfo` is required on sealed interfaces persisted via the Essentials
- * event store (its ObjectMapper does not use Jackson default typing) — without it
- * deserialization silently fails and projections get stuck. Each variant adds its
- * own `@JsonTypeName`.
+ * The event store records each event's class name and deserializes by it, so this
+ * hierarchy needs no Jackson type metadata to be read back. `@JsonTypeInfo` here only
+ * gives each event a logical `@type` in its JSON (each variant names its own with
+ * `@JsonTypeName`). A sealed type used as a FIELD inside an event is different and
+ * does need it (references/llm/LLM-kotlin-eventsourcing.md).
  */
 @JsonTypeInfo(use = JsonTypeInfo.Id.NAME, include = JsonTypeInfo.As.PROPERTY, property = "@type")
 sealed interface OrderEvent {

@@ -1,0 +1,131 @@
+[
+  {
+    "language": "kotlin",
+    "kind": "command",
+    "lane": "decider",
+    "families": [
+      "app-wiring",
+      "bc-scaffold",
+      "command"
+    ],
+    "inputs": {
+      "Aggregate": "Order",
+      "AggregateType": "Orders",
+      "Bc": "Orders",
+      "Command": "PlaceOrder",
+      "Event": "OrderPlaced",
+      "Slice": "PlaceOrder",
+      "aggregate": "order",
+      "apiPath": "/api/orders",
+      "bc": "orders",
+      "lane": "decider",
+      "owner": "orders-team",
+      "packagePath": "com.acme.shop",
+      "slice": "place_order",
+      "sliceCamel": "placeOrder",
+      "tier": "cqrs-es"
+    },
+    "written": [
+      "src/main/kotlin/com/acme/shop/DeciderWiring.kt",
+      "src/main/kotlin/com/acme/shop/orders/CLAUDE.md",
+      "src/main/kotlin/com/acme/shop/orders/config/OrdersConfiguration.kt",
+      "src/main/kotlin/com/acme/shop/orders/events/OrderEvent.kt",
+      "src/main/kotlin/com/acme/shop/orders/events/OrderPlaced.kt",
+      "src/main/kotlin/com/acme/shop/orders/routing/OrderCommand.kt",
+      "src/main/kotlin/com/acme/shop/orders/types/OrderId.kt",
+      "src/main/kotlin/com/acme/shop/orders/use_cases/place_order/CLAUDE.md",
+      "src/main/kotlin/com/acme/shop/orders/use_cases/place_order/PlaceOrder.kt",
+      "src/main/kotlin/com/acme/shop/orders/use_cases/place_order/PlaceOrderAPI.kt",
+      "src/main/kotlin/com/acme/shop/orders/use_cases/place_order/PlaceOrderDecider.kt",
+      "src/main/kotlin/com/acme/shop/orders/use_cases/place_order/slice.yaml",
+      "src/test/kotlin/com/acme/shop/orders/use_cases/place_order/PlaceOrderTest.kt"
+    ],
+    "wiring": [
+      {
+        "path": "src/main/kotlin/com/acme/shop/DeciderWiring.kt",
+        "edit": "one decider configurator per application",
+        "status": "applied"
+      },
+      {
+        "path": "src/main/kotlin/com/acme/shop/orders/config/OrdersConfiguration.kt",
+        "edit": "@Bean placeOrderDecider()",
+        "status": "applied"
+      }
+    ],
+    "todos": [
+      "src/main/kotlin/com/acme/shop/orders/CLAUDE.md:8: **Purpose:** TODO one sentence — what this context is responsible for.",
+      "src/main/kotlin/com/acme/shop/orders/events/OrderPlaced.kt:18: // TODO: replace with the facts this event records",
+      "src/main/kotlin/com/acme/shop/orders/use_cases/place_order/CLAUDE.md:6: **Purpose:** TODO one sentence, present tense.",
+      "src/main/kotlin/com/acme/shop/orders/use_cases/place_order/CLAUDE.md:9: - TODO the rule this slice enforces (enforced by `PlaceOrderDecider`).",
+      "src/main/kotlin/com/acme/shop/orders/use_cases/place_order/PlaceOrder.kt:15: // TODO: replace with this command's real payload",
+      "src/main/kotlin/com/acme/shop/orders/use_cases/place_order/PlaceOrderDecider.kt:24: // TODO: enforce this slice's invariants here. Record each one in slice.yaml `invariants`",
+      "src/main/kotlin/com/acme/shop/orders/use_cases/place_order/slice.yaml:9: summary: TODO one sentence, present tense.",
+      "src/main/kotlin/com/acme/shop/orders/use_cases/place_order/slice.yaml:28: - { id: INV-1, text: \"TODO the rule this slice enforces\", enforcedBy: PlaceOrderDecider }",
+      "src/test/kotlin/com/acme/shop/orders/use_cases/place_order/PlaceOrderTest.kt:39: // TODO: one test per invariant enforced by PlaceOrderDecider."
+    ]
+  },
+  {
+    "language": "kotlin",
+    "kind": "command",
+    "lane": "decider",
+    "families": [
+      "app-wiring",
+      "bc-scaffold",
+      "command"
+    ],
+    "inputs": {
+      "Aggregate": "Payment",
+      "AggregateType": "Payments",
+      "Bc": "Payments",
+      "Command": "RequestPayment",
+      "Event": "PaymentRequested",
+      "Slice": "RequestPayment",
+      "aggregate": "payment",
+      "apiPath": "/api/payments",
+      "bc": "payments",
+      "lane": "decider",
+      "owner": "payments-team",
+      "packagePath": "com.acme.shop",
+      "slice": "request_payment",
+      "sliceCamel": "requestPayment",
+      "tier": "cqrs-es"
+    },
+    "written": [
+      "src/main/kotlin/com/acme/shop/payments/CLAUDE.md",
+      "src/main/kotlin/com/acme/shop/payments/config/PaymentsConfiguration.kt",
+      "src/main/kotlin/com/acme/shop/payments/events/PaymentEvent.kt",
+      "src/main/kotlin/com/acme/shop/payments/events/PaymentRequested.kt",
+      "src/main/kotlin/com/acme/shop/payments/routing/PaymentCommand.kt",
+      "src/main/kotlin/com/acme/shop/payments/types/PaymentId.kt",
+      "src/main/kotlin/com/acme/shop/payments/use_cases/request_payment/CLAUDE.md",
+      "src/main/kotlin/com/acme/shop/payments/use_cases/request_payment/RequestPayment.kt",
+      "src/main/kotlin/com/acme/shop/payments/use_cases/request_payment/RequestPaymentAPI.kt",
+      "src/main/kotlin/com/acme/shop/payments/use_cases/request_payment/RequestPaymentDecider.kt",
+      "src/main/kotlin/com/acme/shop/payments/use_cases/request_payment/slice.yaml",
+      "src/test/kotlin/com/acme/shop/payments/use_cases/request_payment/RequestPaymentTest.kt"
+    ],
+    "wiring": [
+      {
+        "path": "src/main/kotlin/com/acme/shop/DeciderWiring.kt",
+        "edit": "one decider configurator per application",
+        "status": "present"
+      },
+      {
+        "path": "src/main/kotlin/com/acme/shop/payments/config/PaymentsConfiguration.kt",
+        "edit": "@Bean requestPaymentDecider()",
+        "status": "applied"
+      }
+    ],
+    "todos": [
+      "src/main/kotlin/com/acme/shop/payments/CLAUDE.md:8: **Purpose:** TODO one sentence — what this context is responsible for.",
+      "src/main/kotlin/com/acme/shop/payments/events/PaymentRequested.kt:18: // TODO: replace with the facts this event records",
+      "src/main/kotlin/com/acme/shop/payments/use_cases/request_payment/CLAUDE.md:6: **Purpose:** TODO one sentence, present tense.",
+      "src/main/kotlin/com/acme/shop/payments/use_cases/request_payment/CLAUDE.md:9: - TODO the rule this slice enforces (enforced by `RequestPaymentDecider`).",
+      "src/main/kotlin/com/acme/shop/payments/use_cases/request_payment/RequestPayment.kt:15: // TODO: replace with this command's real payload",
+      "src/main/kotlin/com/acme/shop/payments/use_cases/request_payment/RequestPaymentDecider.kt:24: // TODO: enforce this slice's invariants here. Record each one in slice.yaml `invariants`",
+      "src/main/kotlin/com/acme/shop/payments/use_cases/request_payment/slice.yaml:9: summary: TODO one sentence, present tense.",
+      "src/main/kotlin/com/acme/shop/payments/use_cases/request_payment/slice.yaml:28: - { id: INV-1, text: \"TODO the rule this slice enforces\", enforcedBy: RequestPaymentDecider }",
+      "src/test/kotlin/com/acme/shop/payments/use_cases/request_payment/RequestPaymentTest.kt:39: // TODO: one test per invariant enforced by RequestPaymentDecider."
+    ]
+  }
+]

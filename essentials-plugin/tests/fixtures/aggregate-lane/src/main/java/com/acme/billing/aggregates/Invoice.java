@@ -7,9 +7,6 @@ import com.acme.billing.types.InvoiceId;
 import dk.trustworks.essentials.components.eventsourced.aggregates.EventHandler;
 import dk.trustworks.essentials.components.eventsourced.aggregates.stateful.modern.AggregateRoot;
 
-/**
- * FIXTURE. The BC's single write model — this is what makes the lane detectable.
- */
 public class Invoice extends AggregateRoot<InvoiceId, InvoiceEvent, Invoice> {
     private long amountMinor;
     private boolean paid;
@@ -24,7 +21,6 @@ public class Invoice extends AggregateRoot<InvoiceId, InvoiceEvent, Invoice> {
         apply(new InvoiceIssued(invoiceId, amountMinor));
     }
 
-    /** The invariant lives here, and runs before apply(). Idempotent by design. */
     public boolean pay(long paidMinor) {
         if (paid) {
             return false;
@@ -36,7 +32,6 @@ public class Invoice extends AggregateRoot<InvoiceId, InvoiceEvent, Invoice> {
         return true;
     }
 
-    /** TRAP: a public getter on an aggregate is NOT a violation — readers must not flag it. */
     public boolean isPaid() { return paid; }
 
     @EventHandler

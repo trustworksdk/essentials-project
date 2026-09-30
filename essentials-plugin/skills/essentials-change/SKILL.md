@@ -130,7 +130,8 @@ that one checks framework usage.
 
 ## Step 7 — Report
 
-- The class, and the slice(s) changed, by id.
+- First line: `Class <letter> — <name>` (for example `Class B — extend one slice`), then the
+  slice(s) changed, by id.
 - Every file written, edited, or deleted, with its path.
 - The manifest fields updated.
 - What the user must still fill in — invariants, event fields, the query body.

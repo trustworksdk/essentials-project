@@ -13,7 +13,7 @@ lane: decider
 handles: [CancelOrder]
 publishes: [OrderCancelled]
 endpoints:
-  - { method: POST, path: "/api/orders/{id}/cancel", auth: user }
+  - { method: POST, path: "/api/orders/{orderId}/cancel", auth: user }
 
 writes: [Order]
 reads:

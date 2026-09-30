@@ -1,0 +1,74 @@
+# review-scan signature fixture: ESS-088 spring.data.mongodb.* keys Spring Boot 4 no longer binds
+# Moved keys fire; keys spring-boot-data-mongodb still binds, comments and spring.mongodb.* do not.
+# expect: backend/src/main/resources/application.yml:6 ess-088-mongo-key confirmed Blocking manual
+# expect: backend/src/main/resources/application.yml:7 ess-088-mongo-key confirmed Blocking manual
+# expect-not: backend/src/main/resources/application.yml:8 ess-088-mongo-key
+# expect-not: backend/src/main/resources/application.yml:10 ess-088-mongo-key
+# expect-not: backend/src/main/resources/application.yml:11 ess-088-mongo-key
+# expect-not: backend/src/main/resources/application.yml:13 ess-088-mongo-key
+# expect: backend/src/main/resources/application-local.yml:1 ess-088-mongo-key confirmed Blocking mechanical
+# expect-not: backend/src/main/resources/application-local.yml:2 ess-088-mongo-key
+# expect: backend/src/test/resources/application-test.properties:2 ess-088-mongo-key confirmed Blocking mechanical
+# expect: backend/src/test/resources/application-test.properties:3 ess-088-mongo-key confirmed mechanical
+# expect-not: backend/src/test/resources/application-test.properties:4 ess-088-mongo-key
+# expect-not: backend/src/test/resources/application-test.properties:5 ess-088-mongo-key
+# expect: backend/src/test/kotlin/com/acme/shop/MongoContainerIT.kt:11 ess-088-mongo-key confirmed Blocking mechanical
+# expect-not: backend/src/test/kotlin/com/acme/shop/MongoContainerIT.kt:12 ess-088-mongo-key
+# expect-not: backend/src/test/kotlin/com/acme/shop/MongoContainerIT.kt:13 ess-088-mongo-key
+diff --git a/backend/src/main/resources/application.yml b/backend/src/main/resources/application.yml
+new file mode 100644
+--- /dev/null
++++ b/backend/src/main/resources/application.yml
+@@ -0,0 +1,13 @@
++spring:
++  application:
++    name: orders
++  data:
++    mongodb:
++      uri: mongodb://localhost:27017/orders?replicaSet=rs0
++      database: orders
++      auto-index-creation: true
++      gridfs:
++        bucket: files
++      # uuid-representation: standard
++  mongodb:
++    host: localhost
+diff --git a/backend/src/main/resources/application-local.yml b/backend/src/main/resources/application-local.yml
+new file mode 100644
+--- /dev/null
++++ b/backend/src/main/resources/application-local.yml
+@@ -0,0 +1,2 @@
++spring.data.mongodb.host: localhost
++spring.data.mongodb.repositories.type: none
+diff --git a/backend/src/test/resources/application-test.properties b/backend/src/test/resources/application-test.properties
+--- a/backend/src/test/resources/application-test.properties
++++ b/backend/src/test/resources/application-test.properties
+@@ -1,3 +1,6 @@
+ spring.application.name=orders-test
+-spring.data.mongodb.host=old-host
++spring.data.mongodb.uuid-representation=standard
++spring.data.mongodb.replicaSetName=rs0
++spring.data.mongodb.representation.big-decimal=decimal128
++#spring.data.mongodb.uri=mongodb://nowhere
+ logging.level.root=INFO
+diff --git a/backend/src/test/kotlin/com/acme/shop/MongoContainerIT.kt b/backend/src/test/kotlin/com/acme/shop/MongoContainerIT.kt
+new file mode 100644
+--- /dev/null
++++ b/backend/src/test/kotlin/com/acme/shop/MongoContainerIT.kt
+@@ -0,0 +1,16 @@
++package com.acme.shop
++
++import org.springframework.test.context.DynamicPropertyRegistry
++import org.springframework.test.context.DynamicPropertySource
++
++abstract class MongoContainerIT {
++    companion object {
++        @JvmStatic
++        @DynamicPropertySource
++        fun mongoProperties(registry: DynamicPropertyRegistry) {
++            registry.add("spring.data.mongodb.uri") { mongo.replicaSetUrl }
++            // registry.add("spring.data.mongodb.database") { "orders" }
++            registry.add("spring.mongodb.database") { "orders" }
++        }
++    }
++}

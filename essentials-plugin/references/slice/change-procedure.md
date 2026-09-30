@@ -53,21 +53,31 @@ The manifests are an index. Use them before grepping source — they are smaller
 searching them is what keeps this procedure cheap on a large project.
 
 ```bash
-# every slice, with kind and status
-grep -rl 'schemaVersion' --include=slice.yaml .
+q="uv run --script ${CLAUDE_PLUGIN_ROOT}/scripts/slice-index.py query ."
 
-# which slice handles a command / serves a query
-grep -rn -A3 '^handles:\|^serves:' --include=slice.yaml .
+$q who-handles PlaceOrder             # which slice handles a command
+$q who-serves ListOrders              # which view serves a query
+$q who-owns-endpoint /api/orders/42/cancel --method POST   # exact route, then {var} template, then prefix
+$q who-publishes OrderCancelled       # who publishes an event
+$q who-reacts OrderCancelled          # who reacts to it: consumes AND projections[].from, so views too
+$q who-dispatches CancelOrder         # which automation sends a command
+$q who-writes Order                   # the sole-writer question (writes = aggregate, owns = read model)
+$q who-reads OrderList                # readers of a read model, with their via: interface
+$q slice orders.place_order           # one manifest, normalised
+```
 
-# which slice owns an endpoint path
-grep -rn -B8 'path: "/api/orders' --include=slice.yaml .
+Names compare case-insensitively. Each hit names the slice, its kind, the field that matched and the
+slice directory; `--json` gives the same as data. Exit 1 means no hit. A manifest that does not parse is
+listed as "NOT SEARCHED — did not parse", never silently skipped, and a miss beside one is not proof of
+absence. **`who-reacts` is the query to trust for "who reacts":**
+a view declares its events in `projections[].from`, not `consumes`, so a search of `consumes` alone
+misses every view.
 
-# who publishes an event, and who reacts to it
-grep -rn -A5 '^publishes:' --include=slice.yaml . | grep -i 'ordercancelled'
-grep -rn -A5 '^consumes:'  --include=slice.yaml . | grep -i 'ordercancelled'
+Without `uv` (and without `pyyaml` for `python3`), the grep fallback for the same question must search
+both fields:
 
-# who writes a given aggregate / entity — the sole-writer question
-grep -rn -A3 '^writes:' --include=slice.yaml .
+```bash
+grep -rn -A5 '^consumes:\|from:' --include=slice.yaml . | grep -i 'ordercancelled'
 ```
 
 **If the manifests do not contain what the code contains, that is drift, and it is a finding.** Say so
@@ -83,7 +93,9 @@ outside edit that looks locally correct.
 The §R5 write style is a per-bounded-context property and it changes what a correct edit looks like.
 Detect it per `slice-authoring.md` §1b — decider, aggregate, or service-entity — and **never migrate
 between lanes as part of an unrelated change.** A lane migration is a design decision with a test
-suite and a data migration attached; it is never a side effect of adding a field.
+suite and a data migration attached; it is never a side effect of adding a field. `uv run --script ${CLAUDE_PLUGIN_ROOT}/scripts/slice-source.py . --bc <bc> --json` lists the
+signals with `path:line` (`bcs[].lane`); its `service-entity?` still needs the "state loaded, mutated and
+saved in place" check by hand.
 
 If the BC shows two lanes, stop and report it. That is Blocking under §R5, and changing code inside it
 deepens the violation.
