@@ -311,9 +311,12 @@ views.queues = async () => {
    owned by another instance reads as "elsewhere" rather than as a stalled one. */
 const subscriptionKey = (subscriberId, aggregateType) => `${subscriberId} ${aggregateType}`;
 
+/* A subscription halted by its error policy (mode STOP) stays active - it keeps its lock and its resume point is still
+   checkpointed - so "Active" would read as healthy. stoppedByErrorPolicy replaces that badge until it is started again. */
 function subscriptionState(s) {
     if (!s.runningInThisInstance) return badge('neutral', 'Other instance');
-    const chips = [s.active ? badge('good', 'Active') : badge('warning', 'Inactive')];
+    const chips = [s.stoppedByErrorPolicy ? badge('critical', 'Stopped by error policy')
+                 : s.active ? badge('good', 'Active') : badge('warning', 'Inactive')];
     if (s.exclusive) chips.push(`<span class="chip">exclusive</span>`);
     if (s.inTransaction) chips.push(`<span class="chip">in-transaction</span>`);
     if (s.tenant) chips.push(`<span class="chip">${esc(s.tenant)}</span>`);
@@ -334,6 +337,7 @@ views.subscriptions = async () => {
     const byKey = new Map(stats.map((s) => [subscriptionKey(s.subscriberId, s.aggregateType), s]));
 
     const runningHere = subs.filter((s) => s.runningInThisInstance).length;
+    const stopped = subs.filter((s) => s.stoppedByErrorPolicy).length;
     const failures = stats.reduce((total, s) => total + s.eventHandling.failures, 0);
     const replays = stats.reduce((total, s) => total + s.reset.resets, 0);
 
@@ -372,6 +376,7 @@ views.subscriptions = async () => {
     <div class="kpi-row">
       ${tile('Subscriptions', num(subs.length), 'across all instances')}
       ${tile('Running here', num(runningHere), 'registered in this instance')}
+      ${tile('Stopped', num(stopped), 'by their error policy here — handle nothing until restarted', stopped > 0)}
       ${tile('Handler failures', num(failures), 'since this instance started', failures > 0)}
       ${tile('Replays', num(replays), 'resume-point resets here')}
     </div>

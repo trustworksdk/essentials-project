@@ -181,7 +181,8 @@ public class DefaultEventStoreApi implements EventStoreApi {
                 eventStoreSubscription.map(EventStoreSubscription::isExclusive).orElse(null),
                 eventStoreSubscription.map(EventStoreSubscription::isInTransaction).orElse(null),
                 eventStoreSubscription.flatMap(subscription -> subscription.onlyIncludeEventsForTenant().map(Object::toString)).orElse(null),
-                inMemoryGlobalOrderOf(eventStoreSubscription.orElse(null)));
+                inMemoryGlobalOrderOf(eventStoreSubscription.orElse(null)),
+                eventStoreSubscription.map(EventStoreSubscription::isStoppedByErrorPolicy).orElse(null));
     }
 
     /**
@@ -203,7 +204,8 @@ public class DefaultEventStoreApi implements EventStoreApi {
                 eventStoreSubscription.isExclusive(),
                 eventStoreSubscription.isInTransaction(),
                 eventStoreSubscription.onlyIncludeEventsForTenant().map(Object::toString).orElse(null),
-                inMemoryGlobalOrderOf(eventStoreSubscription));
+                inMemoryGlobalOrderOf(eventStoreSubscription),
+                eventStoreSubscription.isStoppedByErrorPolicy());
     }
 
     private static Long inMemoryGlobalOrderOf(EventStoreSubscription eventStoreSubscription) {

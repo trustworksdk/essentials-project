@@ -3452,6 +3452,14 @@ components:
             running in this instance.
           format: int64
           nullable: true
+        stoppedByErrorPolicy:
+          type: boolean
+          description: Whether the error policy of the subscription halted it after
+            a handler failure (mode STOP). It then handles no further events until
+            it is started again. active stays true for such a subscription. Always
+            false for an in-transaction subscription. Null when the subscription is
+            not running in this instance.
+          nullable: true
     ApiSubscriptionEventHandlingStatistics:
       required:
       - eventsHandled

@@ -77,6 +77,33 @@ class DefaultEventStoreApiTest {
         assertThat(subscription.inTransaction()).isFalse();
         assertThat(subscription.tenant()).isNull();
         assertThat(subscription.inMemoryGlobalOrder()).isEqualTo(105L);
+        assertThat(subscription.stoppedByErrorPolicy()).isFalse();
+    }
+
+    /**
+     * A STOP leaves the subscription active on purpose, so without this flag a halted subscription reads as a healthy
+     * one with no new events.
+     */
+    @Test
+    void a_subscription_stopped_by_its_error_policy_is_reported_as_stopped_while_still_active() {
+        var stoppedProcessor = subscription(ORDER_PROCESSOR, true, true, false, 100L);
+        when(stoppedProcessor.isStoppedByErrorPolicy()).thenReturn(true);
+        var inTransactionProjector = subscription(IN_TX_PROJECTOR, true, false, true, null);
+        when(inTransactionProjector.isStoppedByErrorPolicy()).thenReturn(true);
+        when(durableSubscriptionRepository.findAllResumePoints()).thenReturn(List.of(resumePoint(ORDER_PROCESSOR, 100)));
+        when(subscriptionManager.getSubscriptions()).thenReturn(Set.of(Pair.of(ORDER_PROCESSOR, ORDERS), Pair.of(IN_TX_PROJECTOR, ORDERS)));
+        when(subscriptionManager.getSubscription(ORDER_PROCESSOR, ORDERS)).thenReturn(Optional.of(stoppedProcessor));
+        when(subscriptionManager.getSubscription(IN_TX_PROJECTOR, ORDERS)).thenReturn(Optional.of(inTransactionProjector));
+
+        var subscriptions = api.findAllSubscriptions("principal");
+
+        assertThat(subscriptions).hasSize(2);
+        // Both mapping paths - with and without a durable resume point - carry the flag
+        assertThat(subscriptions).allSatisfy(subscription -> {
+            assertThat(subscription.active()).isTrue();
+            assertThat(subscription.stoppedByErrorPolicy()).isTrue();
+        });
+        assertThat(subscriptions).extracting(ApiSubscription::durableResumePointPresent).containsExactlyInAnyOrder(true, false);
     }
 
     /**
@@ -101,6 +128,7 @@ class DefaultEventStoreApiTest {
         assertThat(subscription.runningInThisInstance()).isTrue();
         assertThat(subscription.inTransaction()).isTrue();
         assertThat(subscription.inMemoryGlobalOrder()).isNull();
+        assertThat(subscription.stoppedByErrorPolicy()).isFalse();
     }
 
     @Test
@@ -130,6 +158,7 @@ class DefaultEventStoreApiTest {
         assertThat(subscription.exclusive()).isNull();
         assertThat(subscription.inTransaction()).isNull();
         assertThat(subscription.inMemoryGlobalOrder()).isNull();
+        assertThat(subscription.stoppedByErrorPolicy()).isNull();
         assertThat(subscription.durableResumePointPresent()).isTrue();
     }
 

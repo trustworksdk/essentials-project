@@ -133,7 +133,11 @@ final class EssentialsAdminApiSpec {
                     "tenant", "The tenant the subscription is restricted to. Null when the subscription is not "
                             + "restricted to a tenant or is not running in this instance.",
                     "inMemoryGlobalOrder", "The in-memory resume point of the running subscription. It can be ahead of "
-                            + "currentGlobalOrder. Null when the subscription is not running in this instance."));
+                            + "currentGlobalOrder. Null when the subscription is not running in this instance.",
+                    "stoppedByErrorPolicy", "Whether the error policy of the subscription halted it after a handler "
+                            + "failure (mode STOP). It then handles no further events until it is started again. active stays true for "
+                            + "such a subscription. Always false for an in-transaction subscription. Null when the "
+                            + "subscription is not running in this instance."));
 
     /** Tag name &rarr; description, in display order. */
     static final Map<String, String> TAGS = new LinkedHashMap<>() {{

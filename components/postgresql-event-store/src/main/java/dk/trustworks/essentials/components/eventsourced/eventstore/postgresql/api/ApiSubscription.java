@@ -57,6 +57,11 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
  * @param inMemoryGlobalOrder       The in-memory resume point of the running subscription, which can be ahead of
  *                                  {@link #currentGlobalOrder()}. Null when the subscription does not run in this
  *                                  instance or has no resume point.
+ * @param stoppedByErrorPolicy      Whether the subscription's {@code SubscriptionErrorPolicy} halted it after a handler
+ *                                  failure (mode {@code STOP}): it handles no further events until it is started again.
+ *                                  {@link #active()} stays true for such a subscription, so this is the property that tells
+ *                                  a halted subscription apart from a healthy one with no new events. Always false for an
+ *                                  in-transaction subscription. Null when the subscription does not run in this instance.
  */
 public record ApiSubscription(
         SubscriberId subscriberId,
@@ -69,8 +74,28 @@ public record ApiSubscription(
         Boolean exclusive,
         Boolean inTransaction,
         String tenant,
-        Long inMemoryGlobalOrder
+        Long inMemoryGlobalOrder,
+        Boolean stoppedByErrorPolicy
 ) {
+
+    /**
+     * The constructor released before {@link #stoppedByErrorPolicy()} was added, kept so existing callers keep compiling
+     * and linking. {@link #stoppedByErrorPolicy()} is null.
+     */
+    public ApiSubscription(SubscriberId subscriberId,
+                           AggregateType aggregateType,
+                           long currentGlobalOrder,
+                           OffsetDateTime lastUpdated,
+                           boolean durableResumePointPresent,
+                           boolean runningInThisInstance,
+                           Boolean active,
+                           Boolean exclusive,
+                           Boolean inTransaction,
+                           String tenant,
+                           Long inMemoryGlobalOrder) {
+        this(subscriberId, aggregateType, currentGlobalOrder, lastUpdated, durableResumePointPresent, runningInThisInstance,
+             active, exclusive, inTransaction, tenant, inMemoryGlobalOrder, null);
+    }
 
     /**
      * Describe a subscription known only from its durable resume point, i.e. without any knowledge of whether it runs
@@ -95,6 +120,7 @@ public record ApiSubscription(
                 null,
                 null,
                 null,
+                null,
                 null);
     }
 
@@ -112,6 +138,7 @@ public record ApiSubscription(
                 ", inTransaction=" + inTransaction +
                 ", tenant=" + tenant +
                 ", inMemoryGlobalOrder=" + inMemoryGlobalOrder +
+                ", stoppedByErrorPolicy=" + stoppedByErrorPolicy +
                 '}';
     }
 }
