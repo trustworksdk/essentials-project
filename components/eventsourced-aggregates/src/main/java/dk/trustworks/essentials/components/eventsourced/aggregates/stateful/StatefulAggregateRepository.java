@@ -832,6 +832,14 @@ public interface StatefulAggregateRepository<ID, EVENT_TYPE, AGGREGATE_IMPL_TYPE
                 return processingStatus.get();
             }
 
+            /**
+             * An aggregate that only was loaded has no uncommitted changes, so committing leaves it untouched
+             */
+            @Override
+            public boolean hasPendingChanges(AGGREGATE_IMPL_TYPE aggregate) {
+                return !aggregate.getUncommittedChanges().isEmpty();
+            }
+
             @Override
             public void afterCommit(UnitOfWork unitOfWork, java.util.List<AGGREGATE_IMPL_TYPE> associatedResources) {
 

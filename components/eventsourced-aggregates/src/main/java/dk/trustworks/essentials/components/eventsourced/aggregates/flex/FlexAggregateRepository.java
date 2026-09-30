@@ -390,6 +390,11 @@ public interface FlexAggregateRepository<ID, AGGREGATE_TYPE extends FlexAggregat
             }
 
             @Override
+            public boolean hasPendingChanges(EventsToPersist<ID, Object> eventsToPersist) {
+                return !eventsToPersist.events.isEmpty() && !eventsToPersist.isCommitted();
+            }
+
+            @Override
             public void afterCommit(UnitOfWork unitOfWork, List<EventsToPersist<ID, Object>> associatedResources) {
 
             }

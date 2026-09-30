@@ -136,10 +136,10 @@ public interface UnitOfWork {
     /**
      * Retrieves every resource registered through {@link #registerLifecycleCallbackForResource(Object, UnitOfWorkLifecycleCallback)},
      * across all {@link UnitOfWorkLifecycleCallback}s.<br>
-     * A registered resource is state the {@link UnitOfWork} holds in memory and acts on when it commits (e.g. an Aggregate
-     * whose uncommitted events are persisted by its callback's {@code beforeCommit}), so it is not undone by rolling the
-     * underlying transaction back to a savepoint. A non-empty result therefore tells that committing this
-     * {@link UnitOfWork} will do more than commit the SQL written so far.
+     * A registered resource is state the {@link UnitOfWork} holds in memory and may act on when it commits (e.g. an
+     * Aggregate whose uncommitted events are persisted by its callback's {@code beforeCommit}), so it is not undone by
+     * rolling the underlying transaction back to a savepoint. Whether committing will act on any of them is told by
+     * {@link #hasLifecycleCallbackResourcesWithPendingChanges()}.
      * <p>
      * The default implementation throws {@link UnsupportedOperationException}, since a {@link UnitOfWork} that doesn't
      * track its resources can't answer; callers must treat that as "unknown" and assume resources are registered.
@@ -150,6 +150,26 @@ public interface UnitOfWork {
      * @throws UnsupportedOperationException if this {@link UnitOfWork} doesn't expose its registered resources
      */
     default List<Object> getAllUnitOfWorkLifecycleCallbackResources() {
+        throw new UnsupportedOperationException(getClass().getName() + " doesn't expose its UnitOfWorkLifecycleCallback resources");
+    }
+
+    /**
+     * Is any resource registered through {@link #registerLifecycleCallbackForResource(Object, UnitOfWorkLifecycleCallback)}
+     * one that committing this {@link UnitOfWork} would persist or publish something for, as told by its callback's
+     * {@link UnitOfWorkLifecycleCallback#hasPendingChanges(Object)}? E.g. an Aggregate that had an event applied has
+     * pending changes, while an Aggregate that only was loaded has none.<br>
+     * Such a resource is state the {@link UnitOfWork} holds in memory, so rolling the underlying transaction back to a
+     * savepoint does not undo it.
+     * <p>
+     * The default implementation throws {@link UnsupportedOperationException}, since a {@link UnitOfWork} that doesn't
+     * track its resources can't answer; callers must treat that as "unknown" and assume there are pending changes.
+     * All {@link UnitOfWork} implementations provided by Essentials override it.
+     *
+     * @return {@code true} if at least one registered resource has pending changes, {@code false} if none has
+     * (including when no resources are registered)
+     * @throws UnsupportedOperationException if this {@link UnitOfWork} doesn't expose its registered resources
+     */
+    default boolean hasLifecycleCallbackResourcesWithPendingChanges() {
         throw new UnsupportedOperationException(getClass().getName() + " doesn't expose its UnitOfWorkLifecycleCallback resources");
     }
 }

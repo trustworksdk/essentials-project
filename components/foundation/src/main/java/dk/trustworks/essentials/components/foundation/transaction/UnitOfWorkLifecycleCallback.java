@@ -37,4 +37,24 @@ public interface UnitOfWorkLifecycleCallback<RESOURCE_TYPE> {
     void beforeRollback(UnitOfWork unitOfWork, List<RESOURCE_TYPE> associatedResources, Throwable causeOfTheRollback);
 
     void afterRollback(UnitOfWork unitOfWork, List<RESOURCE_TYPE> associatedResources, Throwable causeOfTheRollback);
+
+    /**
+     * Would committing the {@link UnitOfWork} make this callback persist or publish something for the given
+     * <code>resource</code>? E.g. an Aggregate that only was loaded has no pending changes, whereas an Aggregate that
+     * had an event applied has, since {@link #beforeCommit(UnitOfWork, List)} will persist its uncommitted events.<br>
+     * Used to tell whether a {@link UnitOfWork} holds in-memory state that rolling the underlying transaction back to a
+     * savepoint cannot undo - see {@link UnitOfWork#hasLifecycleCallbackResourcesWithPendingChanges()}.
+     * <p>
+     * The default implementation returns {@code true}, so a callback that doesn't override it is assumed to act on
+     * every resource registered with it - the safe answer when it cannot be told. Override it when a registered
+     * resource can be unchanged.
+     *
+     * @param resource a resource registered with this callback through
+     *                 {@link UnitOfWork#registerLifecycleCallbackForResource(Object, UnitOfWorkLifecycleCallback)}
+     * @return {@code true} if committing the {@link UnitOfWork} would persist or publish something for the <code>resource</code>,
+     * {@code false} if committing leaves it untouched
+     */
+    default boolean hasPendingChanges(RESOURCE_TYPE resource) {
+        return true;
+    }
 }

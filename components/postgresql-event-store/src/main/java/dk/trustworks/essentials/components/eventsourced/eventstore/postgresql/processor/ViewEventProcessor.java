@@ -45,8 +45,9 @@ import static dk.trustworks.essentials.shared.MessageFormatter.msg;
  * The direct handling runs under a savepoint in the subscription's transaction: when it fails - a failed SQL statement
  * that aborts the transaction, or an event payload that cannot be deserialized, included - only the handler's own
  * writes are rolled back, and the event is queued in the same transaction. A failed handler that had appended events
- * through the {@link EventStore} or loaded/saved an aggregate (state the savepoint cannot undo) is not queued: the
+ * through the {@link EventStore} or changed an aggregate (state the savepoint cannot undo) is not queued: the
  * subscription's transaction is rolled back and the failure reaches the subscription's {@code SubscriptionErrorPolicy}.
+ * A handler that only loaded an aggregate is queued like any other failure.
  * <p>
  * <h3>Event Queuing</h3>
  * When events from the {@link EventStore} need to be queued for processing, they are converted to {@link OrderedMessage}s where:
@@ -273,16 +274,19 @@ public abstract class ViewEventProcessor extends AbstractEventProcessor {
      *     <li>events the handler appended through the {@link EventStore} ({@link EventStoreUnitOfWork#getNumberOfEventsPersisted()})
      *     would be handed to the in-transaction subscriptions and published on the local event bus, while their rows
      *     were rolled back to the savepoint - and appended once more when the queued event is retried</li>
-     *     <li>resources registered for commit-time processing ({@link UnitOfWork#getAllUnitOfWorkLifecycleCallbackResources()}),
-     *     such as an aggregate the handler loaded and applied an event to, would have their callbacks persist the
-     *     aggregate's uncommitted events</li>
+     *     <li>resources registered for commit-time processing that have pending changes
+     *     ({@link UnitOfWork#hasLifecycleCallbackResourcesWithPendingChanges()}), such as an aggregate the handler loaded
+     *     and applied an event to, would have their callbacks persist the aggregate's uncommitted events</li>
      * </ul>
      * So when the failed handler left either kind of state behind, the event is not queued: the failure is rethrown as
      * {@link UnitOfWorkRequiresRollbackException}, the whole {@link UnitOfWork} is rolled back, and the failure reaches
      * the subscription's {@link dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.subscription.SubscriptionErrorPolicy}.
-     * Any registered resource counts, not only one registered by the handler, because a repository hands out the
+     * Every registered resource is asked, not only one registered by the handler, because a repository hands out the
      * instance already registered in the {@link UnitOfWork}, so the handler may have changed it without registering
-     * anything. A {@link UnitOfWork} that cannot report this state is treated as having it.
+     * anything. A resource without pending changes - an aggregate the handler only loaded - is left alone by the
+     * commit, so it doesn't prevent queueing. A {@link UnitOfWork} that cannot report this state is treated as having it,
+     * as is a resource whose {@link UnitOfWorkLifecycleCallback} doesn't implement
+     * {@link UnitOfWorkLifecycleCallback#hasPendingChanges(Object)}.
      * The same applies if the handler joined the {@link UnitOfWork} through {@code usingUnitOfWork}/{@code withUnitOfWork}
      * and so marked it rollback-only: nothing written in it can commit any more.
      * Only a failure that left no such state behind is queued.
@@ -314,8 +318,8 @@ public abstract class ViewEventProcessor extends AbstractEventProcessor {
                 throw new UnitOfWorkRequiresRollbackException(UNIT_OF_WORK_UNABLE_TO_COMMIT, handlerFailure);
             }
             var eventsPersisted = numberOfEventsPersistedBefore.isEmpty() || !numberOfEventsPersistedBefore.equals(numberOfEventsPersisted(unitOfWork));
-            if (eventsPersisted || hasLifecycleCallbackResources(unitOfWork)) {
-                throw new UnitOfWorkRequiresRollbackException("The direct handler failed after persisting events or registering resources in the UnitOfWork, which a savepoint cannot undo - " +
+            if (eventsPersisted || hasLifecycleCallbackResourcesWithPendingChanges(unitOfWork)) {
+                throw new UnitOfWorkRequiresRollbackException("The direct handler failed after persisting events or changing resources registered in the UnitOfWork, which a savepoint cannot undo - " +
                                                               "the event cannot be queued in it, as committing it would persist or publish them",
                                                               handlerFailure);
             }
@@ -336,11 +340,11 @@ public abstract class ViewEventProcessor extends AbstractEventProcessor {
     }
 
     /**
-     * @return whether the {@link UnitOfWork} has resources registered - {@code true} if it doesn't support telling
+     * @return {@link UnitOfWork#hasLifecycleCallbackResourcesWithPendingChanges()} - {@code true} if the {@link UnitOfWork} doesn't support it
      */
-    private static boolean hasLifecycleCallbackResources(UnitOfWork unitOfWork) {
+    private static boolean hasLifecycleCallbackResourcesWithPendingChanges(UnitOfWork unitOfWork) {
         try {
-            return !unitOfWork.getAllUnitOfWorkLifecycleCallbackResources().isEmpty();
+            return unitOfWork.hasLifecycleCallbackResourcesWithPendingChanges();
         } catch (UnsupportedOperationException e) {
             return true;
         }

@@ -203,4 +203,11 @@ public class SpringTransactionAwareUnitOfWork<TRX_MGR extends PlatformTransactio
                                                    .flatMap(List::stream)
                                                    .toList();
     }
+
+    @Override
+    public boolean hasLifecycleCallbackResourcesWithPendingChanges() {
+        return unitOfWorkLifecycleCallbackResources.entrySet().stream()
+                                                   .anyMatch(callbackAndResources -> callbackAndResources.getValue().stream()
+                                                                                                         .anyMatch(callbackAndResources.getKey()::hasPendingChanges));
+    }
 }

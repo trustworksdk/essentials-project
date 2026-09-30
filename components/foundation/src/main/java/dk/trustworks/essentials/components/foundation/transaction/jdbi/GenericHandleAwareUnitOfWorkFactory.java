@@ -291,6 +291,13 @@ public abstract class GenericHandleAwareUnitOfWorkFactory<UOW extends HandleAwar
         }
 
         @Override
+        public boolean hasLifecycleCallbackResourcesWithPendingChanges() {
+            return unitOfWorkLifecycleCallbackResources.entrySet().stream()
+                                                       .anyMatch(callbackAndResources -> callbackAndResources.getValue().stream()
+                                                                                                             .anyMatch(callbackAndResources.getKey()::hasPendingChanges));
+        }
+
+        @Override
         public String info() {
             return "TYPE:" + this.getClass().getSimpleName() + ":HASH:" + this.hashCode() + ":STATUS:" + this.status();
         }

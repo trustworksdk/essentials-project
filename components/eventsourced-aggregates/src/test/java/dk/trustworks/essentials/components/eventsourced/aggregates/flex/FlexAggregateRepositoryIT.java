@@ -113,6 +113,25 @@ public class FlexAggregateRepositoryIT {
         }
     }
 
+    /**
+     * The repository's {@link dk.trustworks.essentials.components.foundation.transaction.UnitOfWorkLifecycleCallback}
+     * only reports {@link EventsToPersist} that contain events as pending changes
+     */
+    @Test
+    void only_events_to_persist_with_events_are_pending_changes_in_the_unit_of_work() {
+        var orderId    = OrderId.of("0784e5b6-9b27-4236-8797-480c117b0599");
+        var customerId = CustomerId.of("bc049499-f338-46a5-85fe-26d4da26faff");
+
+        unitOfWorkFactory.usingUnitOfWork(unitOfWork -> {
+            ordersRepository.persist(EventsToPersist.noEvents(orderId));
+            assertThat(unitOfWork.getAllUnitOfWorkLifecycleCallbackResources()).hasSize(1);
+            assertThat(unitOfWork.hasLifecycleCallbackResourcesWithPendingChanges()).isFalse();
+
+            ordersRepository.persist(Order.createNewOrder(orderId, customerId, 123));
+            assertThat(unitOfWork.hasLifecycleCallbackResourcesWithPendingChanges()).isTrue();
+        });
+    }
+
     @DisplayName("Verify we can persist an Aggregate and load it again")
     @Test
     void persistAndLoadAggregate() {

@@ -62,28 +62,34 @@ import static org.assertj.core.api.Assertions.assertThat;
 @Testcontainers
 public class ViewEventProcessorIT {
 
-    public static final EventMetaData META_DATA                     = EventMetaData.of("Key1", "Value1", "Key2", "Value2");
+    public static final EventMetaData META_DATA                               = EventMetaData.of("Key1", "Value1", "Key2", "Value2");
     /**
      * {@link EventProcessorIT.OrderPlacedEvent#orderDetails} that makes the test processor's view update fail with a
      * primary key violation on its first attempt - after it already wrote a row - and succeed on later attempts
      */
-    public static final String        SQL_FAILS_ON_FIRST_ATTEMPT    = "SqlFailsOnFirstAttempt order details";
+    public static final String        SQL_FAILS_ON_FIRST_ATTEMPT              = "SqlFailsOnFirstAttempt order details";
     /**
      * {@link EventProcessorIT.OrderPlacedEvent#orderDetails} that makes the test processor append an
      * {@link EventProcessorIT.OrderConfirmedEvent} through the {@link PostgresqlEventStore} and then fail
      */
-    public static final String        APPENDS_EVENT_THEN_FAILS      = "AppendsEventThenFails order details";
+    public static final String        APPENDS_EVENT_THEN_FAILS                = "AppendsEventThenFails order details";
     /**
      * {@link EventProcessorIT.OrderPlacedEvent#orderDetails} that makes the test processor register a resource with the
      * {@link UnitOfWork} whose callback appends an {@link EventProcessorIT.OrderConfirmedEvent} at commit time - as an
      * aggregate repository does with the aggregate's uncommitted events - and then fail
      */
-    public static final String        REGISTERS_RESOURCE_THEN_FAILS = "RegistersResourceThenFails order details";
+    public static final String        REGISTERS_RESOURCE_THEN_FAILS           = "RegistersResourceThenFails order details";
+    /**
+     * {@link EventProcessorIT.OrderPlacedEvent#orderDetails} that makes the test processor register a resource with the
+     * {@link UnitOfWork} whose callback reports no pending changes for it - as an aggregate repository does for an
+     * aggregate that only was loaded - and then fail
+     */
+    public static final String        REGISTERS_UNCHANGED_RESOURCE_THEN_FAILS = "RegistersUnchangedResourceThenFails order details";
     /**
      * {@link EventProcessorIT.OrderPlacedEvent#orderDetails} that makes the test processor join the {@link UnitOfWork}
      * through {@code usingUnitOfWork} and fail inside it, which marks the {@link UnitOfWork} rollback-only
      */
-    public static final String        JOINS_UNIT_OF_WORK_THEN_FAILS = "JoinsUnitOfWorkThenFails order details";
+    public static final String        JOINS_UNIT_OF_WORK_THEN_FAILS           = "JoinsUnitOfWorkThenFails order details";
 
     private HikariConfig                                                            cfg;
     private HikariDataSource                                                        ds;
@@ -422,6 +428,27 @@ public class ViewEventProcessorIT {
     }
 
     /**
+     * An aggregate the failed handler only loaded is registered in the {@link UnitOfWork} too, but it has no pending
+     * changes, so committing the {@link UnitOfWork} leaves it untouched. It is safe to queue the event in it, as for
+     * any other failure - the queued redeliveries fail as well, so the event ends up as a dead letter.
+     */
+    @Test
+    public void verify_a_handler_that_registered_a_resource_without_pending_changes_before_failing_gets_queued() {
+        var orderId = EventProcessorIT.OrderId.random();
+        unitOfWorkFactory.usingUnitOfWork(uow -> {
+            eventStore.appendToStream(TEST_ORDERS, orderId, List.of(new EventProcessorIT.OrderPlacedEvent(orderId, REGISTERS_UNCHANGED_RESOURCE_THEN_FAILS)));
+        });
+
+        var queueName = testProcessor.getDurableQueueName();
+        Awaitility.waitAtMost(Duration.ofSeconds(10))
+                  .untilAsserted(() -> assertThat(durableQueues.getTotalDeadLetterMessagesQueuedFor(queueName)).isEqualTo(1));
+        var deadLetterMessages = durableQueues.getDeadLetterMessages(queueName, DurableQueues.QueueingSortOrder.ASC, 0, 10);
+        assertThat(((OrderedMessage) deadLetterMessages.get(0).getMessage()).getKey()).isEqualTo(orderId.toString());
+        assertThat(handleEventFailedEvents).isEmpty();
+        assertOnlyTheOrderPlacedEventIsPersisted(orderId);
+    }
+
+    /**
      * A handler that joins the {@link UnitOfWork} through {@code usingUnitOfWork} and fails marks it rollback-only, so
      * nothing written in it - the queued event included - can commit. The failure must reach the subscription's
      * {@link SubscriptionErrorPolicy} instead of the queued event being rolled back silently; with
@@ -609,12 +636,41 @@ public class ViewEventProcessorIT {
         private final AtomicInteger appendedEventsBeforeFailing = new AtomicInteger(0);
         /**
          * Appends the registered events when the {@link UnitOfWork} commits - the way an aggregate repository's
-         * {@link UnitOfWorkLifecycleCallback} persists an aggregate's uncommitted events
+         * {@link UnitOfWorkLifecycleCallback} persists an aggregate's uncommitted events. Doesn't override
+         * {@link UnitOfWorkLifecycleCallback#hasPendingChanges(Object)}, so every resource counts as having pending changes
          */
         private final UnitOfWorkLifecycleCallback<EventProcessorIT.OrderConfirmedEvent> appendEventsWhenCommitting = new UnitOfWorkLifecycleCallback<>() {
             @Override
             public BeforeCommitProcessingStatus beforeCommit(UnitOfWork unitOfWork, List<EventProcessorIT.OrderConfirmedEvent> associatedResources) {
                 associatedResources.forEach(event -> eventStore.appendToStream(TEST_ORDERS, event.orderId, event));
+                return BeforeCommitProcessingStatus.COMPLETED;
+            }
+
+            @Override
+            public void afterCommit(UnitOfWork unitOfWork, List<EventProcessorIT.OrderConfirmedEvent> associatedResources) {
+            }
+
+            @Override
+            public void beforeRollback(UnitOfWork unitOfWork, List<EventProcessorIT.OrderConfirmedEvent> associatedResources, Throwable causeOfTheRollback) {
+            }
+
+            @Override
+            public void afterRollback(UnitOfWork unitOfWork, List<EventProcessorIT.OrderConfirmedEvent> associatedResources, Throwable causeOfTheRollback) {
+            }
+        };
+
+        /**
+         * Reports every registered resource as unchanged, so committing the {@link UnitOfWork} leaves it untouched - the
+         * way an aggregate repository's {@link UnitOfWorkLifecycleCallback} treats an aggregate that only was loaded
+         */
+        private final UnitOfWorkLifecycleCallback<EventProcessorIT.OrderConfirmedEvent> neverChangedResources = new UnitOfWorkLifecycleCallback<>() {
+            @Override
+            public boolean hasPendingChanges(EventProcessorIT.OrderConfirmedEvent resource) {
+                return false;
+            }
+
+            @Override
+            public BeforeCommitProcessingStatus beforeCommit(UnitOfWork unitOfWork, List<EventProcessorIT.OrderConfirmedEvent> associatedResources) {
                 return BeforeCommitProcessingStatus.COMPLETED;
             }
 
@@ -722,6 +778,9 @@ public class ViewEventProcessorIT {
                 throw new RuntimeException(event.orderDetails);
             } else if (event.orderDetails.equals(REGISTERS_RESOURCE_THEN_FAILS)) {
                 unitOfWork.registerLifecycleCallbackForResource(new EventProcessorIT.OrderConfirmedEvent(event.orderId), appendEventsWhenCommitting);
+                throw new RuntimeException(event.orderDetails);
+            } else if (event.orderDetails.equals(REGISTERS_UNCHANGED_RESOURCE_THEN_FAILS)) {
+                unitOfWork.registerLifecycleCallbackForResource(new EventProcessorIT.OrderConfirmedEvent(event.orderId), neverChangedResources);
                 throw new RuntimeException(event.orderDetails);
             } else if (event.orderDetails.equals(JOINS_UNIT_OF_WORK_THEN_FAILS)) {
                 eventStore.getUnitOfWorkFactory().usingUnitOfWork(joinedUnitOfWork -> {

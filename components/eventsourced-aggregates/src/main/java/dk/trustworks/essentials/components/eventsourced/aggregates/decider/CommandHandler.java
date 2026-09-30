@@ -297,6 +297,11 @@ public interface CommandHandler<COMMAND, EVENT, ERROR> {
                 }
 
                 @Override
+                public boolean hasPendingChanges(EventsToAppendToStream<ID, EVENT, STATE> eventsToAppendToStream) {
+                    return !eventsToAppendToStream.events().isEmpty();
+                }
+
+                @Override
                 public void afterCommit(UnitOfWork unitOfWork, List<EventsToAppendToStream<ID, EVENT, STATE>> associatedResources) {
 
                 }

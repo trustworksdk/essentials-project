@@ -27,7 +27,8 @@ import java.util.List;
 import static org.assertj.core.api.Assertions.*;
 
 /**
- * Verifies {@link GenericHandleAwareUnitOfWork#getAllUnitOfWorkLifecycleCallbackResources()} - registering resources
+ * Verifies {@link GenericHandleAwareUnitOfWork#getAllUnitOfWorkLifecycleCallbackResources()} and
+ * {@link GenericHandleAwareUnitOfWork#hasLifecycleCallbackResourcesWithPendingChanges()} - registering resources
  * doesn't need the underlying transaction, so no database is involved.
  */
 class GenericHandleAwareUnitOfWorkTest {
@@ -69,6 +70,49 @@ class GenericHandleAwareUnitOfWorkTest {
 
         assertThatThrownBy(() -> unitOfWork.getAllUnitOfWorkLifecycleCallbackResources().add("another resource"))
                 .isInstanceOf(UnsupportedOperationException.class);
+    }
+
+    @Test
+    void a_unit_of_work_without_resources_has_no_pending_changes() {
+        var unitOfWork = new GenericHandleAwareUnitOfWork(unitOfWorkFactory);
+
+        assertThat(unitOfWork.hasLifecycleCallbackResourcesWithPendingChanges()).isFalse();
+    }
+
+    @Test
+    void resources_whose_callback_reports_no_pending_changes_are_not_pending_changes() {
+        var unitOfWork = new GenericHandleAwareUnitOfWork(unitOfWorkFactory);
+        var callback   = new PendingWhenStartsWithChangedCallback();
+        unitOfWork.registerLifecycleCallbackForResource("loaded", callback);
+        unitOfWork.registerLifecycleCallbackForResource("also loaded", callback);
+
+        assertThat(unitOfWork.hasLifecycleCallbackResourcesWithPendingChanges()).isFalse();
+    }
+
+    @Test
+    void a_single_resource_with_pending_changes_is_enough() {
+        var unitOfWork = new GenericHandleAwareUnitOfWork(unitOfWorkFactory);
+        var callback   = new PendingWhenStartsWithChangedCallback();
+        unitOfWork.registerLifecycleCallbackForResource("loaded", callback);
+        unitOfWork.registerLifecycleCallbackForResource("changed", callback);
+
+        assertThat(unitOfWork.hasLifecycleCallbackResourcesWithPendingChanges()).isTrue();
+    }
+
+    @Test
+    void a_callback_that_does_not_override_hasPendingChanges_counts_every_resource_as_pending() {
+        var unitOfWork = new GenericHandleAwareUnitOfWork(unitOfWorkFactory);
+        unitOfWork.registerLifecycleCallbackForResource("loaded", new PendingWhenStartsWithChangedCallback());
+        unitOfWork.registerLifecycleCallbackForResource("unknown", new NoOpCallback<String>());
+
+        assertThat(unitOfWork.hasLifecycleCallbackResourcesWithPendingChanges()).isTrue();
+    }
+
+    private static class PendingWhenStartsWithChangedCallback extends NoOpCallback<String> {
+        @Override
+        public boolean hasPendingChanges(String resource) {
+            return resource.startsWith("changed");
+        }
     }
 
     private static class NoOpCallback<T> implements UnitOfWorkLifecycleCallback<T> {
