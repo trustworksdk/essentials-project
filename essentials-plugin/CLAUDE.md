@@ -3,8 +3,13 @@
 Applies to any change under `essentials-plugin/`. The repository-root `CLAUDE.md` governs the
 Essentials framework build and git hygiene; everything specific to the plugin lives here and only here.
 
-The plugin carries **no version** — `plugin.json` has none. Every commit that reaches the marketplace
-ref is a release, so land plugin changes on `main` in release-sized batches.
+`plugin.json` `version` is the release: Claude Code updates an installed plugin only when that string
+changes, so a change without a new version never reaches a user. It is the Essentials version the
+plugin targets (the `essentials.version` pin in `references/stack/stack-pins.md`), then `-1`, `-2`, …
+for plugin-only releases; the next Essentials release resets it. CI (`plugin-docs`) fails a change under
+`essentials-plugin/` — an `LLM/` edit included, since it regenerates `references/llm/` — whose version
+did not move, or that is not the pin with an optional `-N`. Land plugin changes on `main` in
+release-sized batches, one version each.
 
 Work on the plugin runs it from disk: `claude --plugin-dir essentials-plugin` from the repository root,
 then `/reload-plugins` after an edit. In the devcontainer `claude` is already aliased to that
@@ -262,8 +267,8 @@ that load.
 - **The version stamp is a comment, not state.** `<!-- essentials-init: essentials <ESSENTIALS_VERSION> -->`
   lives in the project's own `CLAUDE.md`, a file init was writing anyway. `ESSENTIALS_VERSION` is the
   `essentials.version` pin in `references/stack/stack-pins.md` — the Essentials release the plugin
-  targets; nothing reads `plugin.json`, which carries no version. The stamp exists so upgrade can
-  *report* which Essentials version a project was scaffolded against — nothing branches on it, and
+  targets; nothing reads `plugin.json`'s version, whose `-N` suffix says nothing about a project.
+  The stamp exists so upgrade can *report* which Essentials version a project was scaffolded against — nothing branches on it, and
   every check reads current files instead. An absent stamp or an old `v<semver>` one (a project
   scaffolded before the plugin's first release, plus the `skip`/`merge` paths) is reported as such,
   degrades the report by one line, and must never gate a check. This is what keeps the statelessness invariant intact: the
@@ -397,18 +402,17 @@ grep -c '^> Proof:' references/stack/stack-contract.md       # >= 9: every requi
 
 ## Before a release
 
-The plugin has no version, so a release is the commit that reaches the marketplace ref. Before it:
+A release is a commit that reaches the marketplace ref with a new `plugin.json` version. Before it:
 
 1. § Before committing, all three blocks, green — including `render-check.py` with a Chrome (exit 0,
    not 3), the scaffold builds and the frontend legs — and the latest run of
    `plugin-scaffold-scheduled.yml` green (start it by hand if the ref has not had a nightly run).
 2. `claude plugin validate essentials-plugin` (and `claude plugin validate .` from the repository
-   root for the marketplace manifest): passes. Two warnings are expected and by design — no
-   `version` in `plugin.json`, and this `CLAUDE.md` not being loaded as plugin context (it is the
-   maintainers' file).
+   root for the marketplace manifest): passes. One warning is expected and by design — this
+   `CLAUDE.md` not being loaded as plugin context (it is the maintainers' file).
 3. The eval suite, as `evals/README.md` § Run it describes: `uv run --script evals/build.py --check`,
    then `claude plugin eval essentials-plugin --scaffold --trust-plugin …` with the flags given
    there. Read every case under the threshold in the report before deciding; one red run of three is
    noise until it repeats.
-4. `CHANGELOG.md` names what the release adds or changes, and the Essentials release it targets
-   (the `essentials.version` pin).
+4. `CHANGELOG.md` names what the release adds or changes under a heading with the new `plugin.json`
+   version, and the Essentials release it targets (the `essentials.version` pin).

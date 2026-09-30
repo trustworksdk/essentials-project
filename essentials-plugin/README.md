@@ -24,8 +24,9 @@ The plugin is published from the Essentials repository, which is also its market
 ```
 
 To pin a branch or tag, add it to the marketplace source with `#<ref>`, for example
-`/plugin marketplace add trustworksdk/essentials-project#<ref>`. The plugin carries no version
-number: every commit on that ref is a release. Third-party marketplaces do not auto-update by
+`/plugin marketplace add trustworksdk/essentials-project#<ref>`. The plugin's version is the
+Essentials release it targets, with a `-N` suffix for plugin-only releases; you are offered an
+update when it changes. Third-party marketplaces do not auto-update by
 default — turn it on in the `/plugin` Marketplaces tab, or refresh with
 `/plugin marketplace update essentials-marketplace`.
 

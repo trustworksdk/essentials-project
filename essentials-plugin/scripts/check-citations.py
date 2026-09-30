@@ -63,6 +63,10 @@ references/init-assets/project/contracts/openapi.json.template, the `"openapi"` 
                                      the OpenAPI document-format version springdoc writes, which
                                      equals the springdoc pin by coincidence; JSON has no comment
                                      for a cite-ok marker. Every other line of the file is scanned
+.claude-plugin/plugin.json, the `"version"` line only
+                                     the plugin's release version, which is the essentials.version pin
+                                     plus an optional -N by design (the plugin-docs CI job holds it to
+                                     the pin); JSON has no comment for a cite-ok marker
 
 Usage
 -----
@@ -115,6 +119,8 @@ EXEMPT_DIRS = ("references/llm/", "tests/fixtures/", "tests/citations/", "tests/
 NOT_A_PIN = {
     "references/init-assets/project/contracts/openapi.json.template":
         re.compile(r'^\s*"openapi"\s*:\s*"[\d.]+"\s*,?\s*$'),
+    ".claude-plugin/plugin.json":
+        re.compile(r'^\s*"version"\s*:\s*"[\d.]+(-\d+)?"\s*,?\s*$'),
 }
 
 SCANNED_SUFFIXES = {
@@ -483,7 +489,7 @@ output:  path:line: rule: message   (path relative to ROOT)
 allow:   <!-- cite-ok: reason --> on the flagged line or the line above it
 exempt:  stack-pins.md, stack-contract.md, CHANGELOG.md, references/llm/**,
          tests/fixtures/**, tests/citations/**, tests/golden/**, the seed spec's
-         "openapi" line; the three binding docs in references/stack/ are exempt
+         "openapi" line, plugin.json's "version" line; the three binding docs in references/stack/ are exempt
          from restated-requirement only
 exit:    0 clean, 1 findings, 2 usage error (bad arguments, unreadable pins/contract)
          with --self-test: 0 every expectation met, 1 one was not""",

@@ -896,6 +896,11 @@ scripts/sync-plugin-llm.sh
 git add LLM essentials-plugin/references/llm
 ```
 
+A change to the copy is a change to the plugin, and users receive a plugin change only with a new version, so
+the same pull request moves `version` in `essentials-plugin/.claude-plugin/plugin.json`: the Essentials version the
+plugin targets, with a `-N` suffix raised for a plugin-only release (`0.60.0` → `0.60.0-1`). CI fails a pull request
+that changes `essentials-plugin/` without it.
+
 ---
 
 ## Resources

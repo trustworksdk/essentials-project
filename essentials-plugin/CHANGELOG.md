@@ -1,9 +1,9 @@
 # Changelog
 
-The plugin carries no version number: every commit that reaches the marketplace ref is a release.
-Entries name the Essentials release the plugin targets.
+Each entry is a release, headed by its `plugin.json` version: the Essentials release the plugin
+targets, with a `-N` suffix for plugin-only releases.
 
-## First release — targets Essentials 0.60.0
+## 0.60.0 — first release, targets Essentials 0.60.0
 
 The first official release of the `essentials` Claude Code plugin, published from the Essentials
 repository itself.

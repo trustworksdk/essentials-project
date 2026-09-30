@@ -37,8 +37,8 @@ jobs:
       UV_PYTHON: '3.11'
 
     steps:
-      # Two commits deep, so check-ess-ids can hold the catalogue to HEAD^1: the base side of a pull request's merge
-      # commit, or the previous commit on a push.
+      # Two commits deep, so check-ess-ids and the plugin-version check can compare with HEAD^1: the base side of a pull
+      # request's merge commit, or the previous commit on a push.
       - uses: actions/checkout@v4
         with:
           fetch-depth: 2
@@ -67,6 +67,27 @@ jobs:
         run: |
           uv run --script scripts/check-ess-ids.py --self-test
           uv run --script scripts/check-ess-ids.py --baseline HEAD^1
+
+      # Claude Code updates an installed plugin only when plugin.json's version string changes, so a plugin change
+      # without a new version never reaches a user. An LLM/ edit counts: it regenerates references/llm/.
+      - name: Plugin version moves with the plugin
+        run: |
+          if git diff --quiet HEAD^1 HEAD -- essentials-plugin/; then
+            echo "essentials-plugin/ unchanged against HEAD^1"
+            exit 0
+          fi
+          old=$(git show HEAD^1:essentials-plugin/.claude-plugin/plugin.json | jq -r '.version // ""')
+          new=$(jq -r '.version // ""' essentials-plugin/.claude-plugin/plugin.json)
+          if [ -z "$new" ] || [ "$new" = "$old" ]; then
+            echo "::error file=essentials-plugin/.claude-plugin/plugin.json::essentials-plugin/ changed but plugin.json version is still '${new}'. Set it to the Essentials version the plugin targets, or add or raise the -N suffix for a plugin-only release (essentials-plugin/CLAUDE.md)."
+            exit 1
+          fi
+          pin=$(sed -n 's/^| `essentials.version` | \*\*\([^*]*\)\*\*.*/\1/p' essentials-plugin/references/stack/stack-pins.md)
+          if ! printf '%s\n' "$new" | grep -Eq "^${pin//./\\.}(-[0-9]+)?$"; then
+            echo "::error file=essentials-plugin/.claude-plugin/plugin.json::plugin.json version '${new}' is not the essentials.version pin '${pin}' (stack-pins.md) or that pin with a -N suffix."
+            exit 1
+          fi
+          echo "plugin version ${old:-none} -> ${new}"
 
       - name: Fail on symlinks under essentials-plugin/
         run: |
