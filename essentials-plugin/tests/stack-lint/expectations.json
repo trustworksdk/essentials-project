@@ -1,5 +1,5 @@
 {
-  "about": "Oracle for scripts/stack-lint.py --self-test. Each fixture lists every finding it must produce as (check, file, line); anything else reported is a failure, and so is anything listed that is not reported. `line: null` is an absence with no natural line. `facts` passes the fact overrides; `expectFacts` asserts detection. Clean fixtures also carry traps: comments naming forbidden artifacts, keys and imports, which must stay silent.",
+  "about": "Oracle for scripts/stack-lint.py --self-test. Each fixture lists every finding it must produce as (check, file, line); anything else reported is a failure, and so is anything listed that is not reported. `line: null` is an absence with no natural line. `facts` passes the fact overrides; `expectFacts` asserts detection. A finding may also pin `targetOnly` and `appliesWithUpgrade` as the JSON reports them. Clean fixtures also carry traps: comments naming forbidden artifacts, keys and imports, which must stay silent.",
   "fixtures": {
     "clean/kotlin-pges-flux-embedded": {
       "exit": 0,
@@ -18,9 +18,11 @@
     },
     "violating/kotlin-pg-legacy": {
       "exit": 1,
-      "expectFacts": {"language": "kotlin", "db": "pg-event-sourced", "web": "webflux", "frontend": "embedded"},
+      "expectFacts": {"language": "kotlin", "db": "pg-event-sourced", "web": "webflux", "frontend": "embedded",
+                      "essentialsVersion": "DEV-SNAPSHOT", "essentialsBehind": null},
       "findings": [
-        {"check": "s7-model-converter", "file": "backend/pom.xml", "line": 15},
+        {"check": "s1-kotlin-compiler-floor", "file": "pom.xml", "line": 19, "targetOnly": true, "appliesWithUpgrade": false},
+        {"check": "s7-model-converter", "file": "backend/pom.xml", "line": 15, "targetOnly": true, "appliesWithUpgrade": false},
         {"check": "s1-boot-line", "file": "pom.xml", "line": 4},
         {"check": "s1-java-baseline", "file": "pom.xml", "line": null},
         {"check": "s1-one-essentials-version", "file": "backend/pom.xml", "line": 21},
@@ -123,8 +125,22 @@
       "expectFacts": {"language": "kotlin", "db": "pg-event-sourced", "web": "none"},
       "findings": [
         {"check": "s3.4-persistence-serializer", "file": "src/main/kotlin/com/example/ledger/PersistenceSerializerConfiguration.kt", "line": 15},
+        {"check": "s1-kotlin-compiler-floor", "file": "pom.xml", "line": 40, "targetOnly": false},
         {"check": "s3.5-kotlin-jsr305", "file": "pom.xml", "line": 37},
         {"check": "s2-document-db", "file": "pom.xml", "line": 18}
+      ]
+    },
+    "violating/kotlin-behind": {
+      "exit": 1,
+      "expectFacts": {"language": "kotlin", "db": "pg-event-sourced", "web": "none", "bootVersion": "4.0.8",
+                      "essentialsVersion": "0.50.0", "essentialsBehind": true},
+      "findings": [
+        {"check": "s1-boot-line", "file": "pom.xml", "line": 4, "targetOnly": true, "appliesWithUpgrade": true},
+        {"check": "s1-kotlin-compiler-floor", "file": "pom.xml", "line": 15, "targetOnly": false, "appliesWithUpgrade": false},
+        {"check": "s2-document-db", "file": "pom.xml", "line": 19, "appliesWithUpgrade": false},
+        {"check": "s3.1-jackson2-databind", "file": "pom.xml", "line": 32, "targetOnly": true, "appliesWithUpgrade": true},
+        {"check": "s3.4-persistence-serializer", "file": "src/main", "line": null, "appliesWithUpgrade": false},
+        {"check": "s5-transactional-mode", "file": "src/main/resources/application.yml", "line": 6, "targetOnly": true, "appliesWithUpgrade": true}
       ]
     },
     "violating/not-essentials": {

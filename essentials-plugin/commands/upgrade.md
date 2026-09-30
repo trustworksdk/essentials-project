@@ -5,8 +5,9 @@ description: >-
   slice-rules pointer and the slice-manifest lint gate (installing it if the project predates it),
   check the project CLAUDE.md still routes to the essentials-docs skill, and audit the app against
   the stack contract (S1-S11), silent-startup failures first. Reports every finding before writing
-  and offers each fix singly. Never regenerates a skeleton, edits slice source or moves a version
-  pin.
+  and offers each fix singly, keeping apart what only applies once the project moves to the
+  plugin's Essentials release. Never regenerates a skeleton or edits slice source, and moves no
+  version pin except a Kotlin compiler too old for the project's own Java baseline.
 user-invocable: true
 allowed-tools: [Read, Write, Edit, Bash, Grep, Glob, AskUserQuestion]
 ---
@@ -63,6 +64,9 @@ grep -m1 '^| `essentials.version`' "${CLAUDE_PLUGIN_ROOT}/references/stack/stack
 
 # Essentials version the project was scaffolded against (may be absent, or an older v<semver> stamp)
 grep -rhoE 'essentials-init: (essentials [^ ]+|v[0-9.]+)' CLAUDE.md */CLAUDE.md 2>/dev/null | head -1
+
+# Essentials version the project pins now (the essentials.version property)
+grep -rhoE '<essentials\.version>[^<]+' --include=pom.xml . 2>/dev/null | head -1 | sed 's/.*>//'
 ```
 
 **No Essentials marker ⇒ stop.** Do not audit, do not offer to install anything, do not suggest a
@@ -75,9 +79,27 @@ Record `ESSENTIALS_VERSION` (from `stack-pins.md`) and `PROJECT_STAMP`: the vers
 means the project was scaffolded before the plugin's first release (report it as that and do not
 interpret the number); or `absent`. **An absent or `pre-release` stamp is normal** — projects
 scaffolded before the first release have one or the other, and init's `skip`/`merge` paths can leave
-none. It degrades the report by one line and changes nothing else: every check below reads the
-project's actual files, never the stamp. Do not treat it as a finding, and never make a check
-conditional on it.
+none. It is at most an Advisory (B3) and never gates a check: every check below reads the project's
+actual files, never the stamp.
+
+Record `PROJECT_ESSENTIALS`, the Essentials release the project builds against — not the stamp,
+which only says what it was scaffolded for. It is the `essentials.version` property the grep above
+finds. When no POM in the project defines it — inherited from a parent outside the project, imported
+from a BOM, or every Essentials dependency versioned directly — ask Maven, from the module that
+declares the Essentials starter (`./mvnw` when the project has one):
+
+```bash
+mvn -q help:evaluate -Dexpression=essentials.version -DforceStdout
+# when no parent defines the property either: the version the Essentials artifacts resolve to
+mvn -B dependency:tree -Dincludes='dk.trustworks.essentials*' | grep -m1 -o 'dk\.trustworks\.essentials[^ ]*'
+```
+
+A property that resolves to nothing, to an unresolved `${…}`, or to something that is not a version
+number (`DEV-SNAPSHOT`) is `unknown`. Step 4's `stack-lint.py` reads the same property and reports it
+as `facts.essentialsVersion`; when it reports `null` and Maven gave you a version here, pass that
+with `--essentials-version`. **The project is behind** when `PROJECT_ESSENTIALS` is below
+`ESSENTIALS_VERSION` (stack-lint's `facts.essentialsBehind`), and that changes how Group C reports
+(Step 4).
 
 Then establish the two facts every conformance check is conditioned on, from the project itself:
 
@@ -120,6 +142,8 @@ Compare the two numbers as integers, never as strings (`10` is newer than `9`).
 diff "${CLAUDE_PLUGIN_ROOT}/scripts/slice-lint.py" scripts/slice-lint.py 2>&1 | head -5
 diff "${CLAUDE_PLUGIN_ROOT}/references/slice/slice-yaml.schema.json" \
      scripts/slice-yaml.schema.json 2>&1 | head -5
+diff "${CLAUDE_PLUGIN_ROOT}/references/init-assets/project/.githooks/pre-commit.template" \
+     .githooks/pre-commit 2>&1 | head -5     # only when the project installed the hook
 ```
 
 - **Not installed at all** ⇒ **Should-fix**, and offer the install. This is the case
@@ -130,9 +154,13 @@ diff "${CLAUDE_PLUGIN_ROOT}/references/slice/slice-yaml.schema.json" \
   (it has no placeholders; copy it as `.githooks/pre-commit`, executable, and set `core.hooksPath`
   when unset); copy the schema beside the script (**required**, not optional: installed into a
   project the script has no plugin root to walk up to).
-- **Installed but differing** ⇒ **Advisory**. A project running a stale schema validates against
-  yesterday's contract and reports a clean pass it has not earned. Offer to refresh both files
-  together — the script and the schema are one contract and must not drift apart.
+- **Installed but differing** — the script, the schema or the hook differs ⇒ **Advisory**. A project
+  running a stale schema validates against yesterday's contract and reports a clean pass it has not
+  earned, and a stale hook can call the script in a way it no longer runs. Offer to refresh the
+  script, the schema and the hook together, as one fix — they are one contract and must not drift
+  apart. A project that chose "script only" has no `.githooks/pre-commit`; that is not a finding, and
+  the refresh covers the other two. If the project's hook carries lines of its own beyond the
+  template's, show the diff and offer to merge rather than replace.
 - Identical ⇒ current.
 
 **No third file joins these two.** If a check below wants a file copied into the project to fix
@@ -178,13 +206,29 @@ python3 "${CLAUDE_PLUGIN_ROOT}/scripts/stack-lint.py" . --json
 ```
 
 It detects `LANGUAGE`, the profile, the web stack and the frontend mode itself (`facts` in the
-output; pass `--language`/`--db`/`--web`/`--frontend` only when Step 1 had to ask the user). Report
+output; pass `--language`/`--db`/`--web`/`--frontend` only when Step 1 had to ask the user, and
+`--essentials-version` only when Step 1 resolved `PROJECT_ESSENTIALS` through Maven). Report
 every finding as it comes — `id` (`ESS-S<n>`), severity, `file:line`, `message`, `fix.text` — and
 list `notRun` under "not run" with its reason. **Do not re-derive, re-grade or drop a finding**, and
 do not add a finding for a row the script covers because the file "looks" wrong to you: that is the
 second, weaker audit this split exists to prevent. Exit 2 means the script could not run (no
 `pom.xml`, a POM that does not parse, a Gradle-only build): report "Group C: not run" with its
 stderr line and run the judgement rows only. Never fall back to checking the decidable rows by hand.
+
+**A project behind the plugin's Essentials release.** The contract describes `ESSENTIALS_VERSION`,
+and some of its requirements do not hold on the release before it: there, the project's current
+state is the correct one, and the "fix" breaks it — removing Jackson 2 `jackson-databind` from a
+0.50 project takes away the type its starters' serializer beans are declared against. `stack-lint`
+marks each such finding `targetOnly`, and `appliesWithUpgrade` as well when `facts.essentialsBehind`
+is `true`. Report every `appliesWithUpgrade` finding in its own block of Group C, labelled
+**applies with the Essentials upgrade**, and never offer it as a fix on its own. Together they are
+the part of this audit that belongs to moving `essentials.version`, which is the pin move this
+command does not make: point at `references/llm/LLM-traps.md` § Upgrading for it. Every other
+finding holds on the release the project runs and is reported and offered as usual, on a project
+that is behind too. When `facts.essentialsBehind` is `null` (the release is unknown, or not a
+version number) nothing is labelled, and the header says Group C assumes the plugin's release. A
+judgement finding you raise takes the same test: if what it asks for exists only in
+`ESSENTIALS_VERSION`, it goes in that block.
 
 What the rows cover, so the report can say what was checked and what was clean:
 
@@ -201,7 +245,7 @@ What the rows cover, so the report can say what was checked and what was clean:
 | C9 | **S7** | `s7-*` — the spec is regenerated by an integration test, the committed spec exists, the frontend builds from it, and `SingleValueTypeModelConverter` is registered wherever springdoc runs (without it every generated client types the semantic ids as objects). A project still on the forked-app pipeline (`springdoc-openapi-maven-plugin` with start/stop executions and `application-openapi.yml`) is reported under `s7-spec-generation`: it serves a stale spec silently once an endpoint needs the database | — |
 | C10 | **S10** | `s10-*` — Testcontainers 2.x coordinates and packages, S10's `@AutoConfigureWebTestClient` package, Failsafe bound | Context caching and fork reuse |
 | C11 | **S8** | `s8-*` — both half-choices: embedded without CORS, base URL or dead pieces and with its SPA fallback and static copy; standalone with a consumed `VITE_API_BASE_URL`, a `CorsConfigurationSource` bound through `@ConfigurationProperties`, no wildcard with credentials; the generated client git-ignored | Whether the chosen mode is the one the deployment needs |
-| C12 | **S1 / S11** | `s1-*`, `s11-*` — the Boot line and Java baseline, one `essentials.version`, the Kotlin `jvmTarget`, the `skip-frontend` profile, `spring-boot-starter-parent` | — |
+| C12 | **S1 / S11** | `s1-*`, `s11-*` — the Boot line and Java baseline, one `essentials.version`, the Kotlin `jvmTarget` and compiler floor, the `skip-frontend` profile, `spring-boot-starter-parent` | — |
 
 Severities are the script's; the judgement rows carry the severity in their text. **A judgement
 finding needs a reason that names the file and the contract line**, the same standard the script
@@ -212,7 +256,15 @@ meets.
 with a blast radius across the whole application — the project `CLAUDE.md` says pins are fixed and
 upgrades want an ADR. This command exists to close gaps the project could not have
 known about, not to move it onto versions the user has not chosen. If the user asks for a pin
-review, that is a separate conversation.
+review, that is a separate conversation. So `s1-boot-line` and `s1-java-baseline` are reported and
+never offered: moving the Boot line or the Java baseline is that decision.
+
+**One pin move is offered: `s1-kotlin-compiler-floor` without `appliesWithUpgrade`.** It is not a lag
+but a project that cannot compile — its own `java.version` is one the Kotlin compiler it pins cannot
+target — whatever Essentials release it is on. Its fix raises `kotlin.version` to the
+`stack-pins.md` pin and touches nothing else; it is `mechanical: false`, so show it and confirm
+before applying (Step 6). With `appliesWithUpgrade` it is part of the Essentials upgrade like any
+other such finding.
 
 **A finding here can be a defect in the contract rather than in the project.** If the project is
 missing something S1–S11 does not state, or if a check contradicts what the project plainly does,
@@ -229,6 +281,7 @@ in one line and exits.
 ```
 ESSENTIALS UPGRADE — <project name>
   Scaffolded for: essentials <PROJECT_STAMP>   (or: before the plugin's first release · or: stamp absent)
+  Project pins:   essentials <PROJECT_ESSENTIALS>   (or: unknown — Group C assumes the plugin's release)
   Plugin targets: essentials <ESSENTIALS_VERSION>
   Detected:       kotlin · pg-event-sourced
 
@@ -238,17 +291,25 @@ ESSENTIALS UPGRADE — <project name>
   B · Orientation
     [ok]         Framework-knowledge block present
     [Advisory]   No version stamp in CLAUDE.md
-  C · Stack contract (stack-lint: 3 findings)
+  C · Stack contract (stack-lint: 5 findings)
     [Blocking]   ESS-S2.1 s2.1-jdbi  backend/pom.xml:41
                  org.jdbi:jdbi3-core is not declared — the starter declares it `provided`, so nothing
                  brings it; compiles, then fails at context startup
     [Blocking]   ESS-S2 s2-eventsourced-aggregates  backend/pom.xml:41
     [Advisory]   ESS-S10 s10-tc-package  backend/src/test/kotlin/…/IntegrationTestBase.kt:7
-    [ok]         S1, S3.x, S4, S5, S7, S8, S9, S11
+    [ok]         S3.x, S4, S5, S7, S8, S9, S11
     [Should-fix] S9 (judgement) — config/SecurityConfig is the permit-all init emitted, unchanged
+    Applies with the Essentials upgrade (<PROJECT_ESSENTIALS> → <ESSENTIALS_VERSION>) — not offered on its own
+    [Blocking]   ESS-S1 s1-boot-line  pom.xml:8
+    [Advisory]   ESS-S3.1 s3.1-jackson2-databind  backend/pom.xml:119
 
-  3 fixes offered · 1 Blocking
+  6 fixes offered · 2 Blocking · 2 apply with the Essentials upgrade
 ```
+
+The footer counts the fixes Step 6 will offer and the Blocking findings among them. An
+`appliesWithUpgrade` finding, or an S1 pin move Step 4 does not offer, is never one of them; the
+first kind gets its own count. Under `--check` it reads `N fixes available (run without --check to
+apply)` instead, since that run offers nothing.
 
 Under `--check`, stop here. Write nothing, ask nothing.
 
@@ -256,7 +317,8 @@ Under `--check`, stop here. Write nothing, ask nothing.
 
 Blocking first, then Should-fix, then Advisory. For each, `AskUserQuestion` with **Apply / Skip /
 Show me the change first**. Never bundle unrelated fixes behind one confirmation, and never apply an
-Advisory without asking because it "seemed safe".
+Advisory without asking because it "seemed safe". Nothing in the "applies with the Essentials
+upgrade" block is offered, and no S1 pin move but the one Step 4 names.
 
 **A `stack-lint` finding carries its own fix.** `fix.text` is what to show; `fix.ops` is the edit.
 Apply the ops exactly as `commands/review.md` § Applying a fix descriptor specifies — the one
@@ -324,7 +386,9 @@ findings, say in the final line which ones remain open and stamp anyway (the sta
 Essentials version the plugin audited against, not a claim of full conformance) — but never stamp a run where the user skipped everything, and never
 stamp a `--check` run.
 
-Close with what remains: skipped findings as runnable next steps, and `/essentials:slice-check` if
+Close with what remains: skipped findings as runnable next steps, the open "applies with the
+Essentials upgrade" block when the project is behind (those findings wait for that upgrade, and
+the stamp does not claim it), and `/essentials:slice-check` if
 the lint gate was just installed — its first run is the one that finds the manifests that have been
 silently unparseable.
 
@@ -338,7 +402,8 @@ silently unparseable.
   place a version may appear. Never restate a requirement from memory, and never invent one.
 - **Detect, never assume.** Language and profile come from the project's files. If they cannot be
   determined, run Groups A and B and say why C was skipped.
-- **Not an upgrader of versions.** No pin moves, no "upgrade to latest", no Boot major.
+- **Not an upgrader of versions.** No pin moves, no "upgrade to latest", no Boot major. The one
+  exception is a Kotlin compiler the project's own Java baseline already outgrew (Step 4).
 - **Stateless.** The version stamp is a comment in the project's own `CLAUDE.md`. Do not introduce
   a `.essentials/` directory, a config file, or a run log — that is a design decision to raise.
 

@@ -79,5 +79,24 @@ class StripComments(unittest.TestCase):
         self.assertEqual(out.count("\n"), 2)
 
 
+class Versions(unittest.TestCase):
+    def test_below(self):
+        self.assertTrue(sl.version_below("1.4.0", "1.5.0"))
+        self.assertTrue(sl.version_below("1.4", "1.5"))
+        self.assertFalse(sl.version_below("1.5.0", "1.5"))
+        self.assertFalse(sl.version_below("1.5.0-RC1", "1.5.0"))
+        self.assertFalse(sl.version_below("1.100.0", "1.5.0"))
+
+    def test_not_a_version_is_unknown(self):
+        self.assertIsNone(sl.version_below("DEV-SNAPSHOT", "1.5.0"))
+        self.assertIsNone(sl.version_below("${essentials.version}", "1.5.0"))
+        self.assertIsNone(sl.version_below(None, "1.5.0"))
+
+    def test_pins_carry_the_kotlin_floor(self):
+        pins = sl.read_pins(sl.PLUGIN / sl.PINS_REL)
+        self.assertRegex(pins["kotlin.floor"], r"^\d+\.\d+$")
+        self.assertFalse(sl.version_below(pins["kotlin.version"], pins["kotlin.floor"]))
+
+
 if __name__ == "__main__":
     unittest.main()

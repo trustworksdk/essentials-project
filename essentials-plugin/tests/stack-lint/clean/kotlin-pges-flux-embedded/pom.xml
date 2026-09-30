@@ -17,6 +17,7 @@
     <properties>
         <java.version>26</java.version>
         <essentials.version>DEV-SNAPSHOT</essentials.version>
+        <kotlin.version>2.3.0</kotlin.version>
         <springdoc.version>3.0.0</springdoc.version>
     </properties>
 </project>

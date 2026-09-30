@@ -259,7 +259,12 @@ that load.
   offers.** Upgrade re-asks nothing (language, profile, frontend mode and coordinates are facts of
   the project — read them), regenerates no skeleton, touches no slice source, and **moves no version
   pin** — a pin move is an upgrade decision wanting an ADR, and folding it in here would make
-  "catch up with the plugin" mean "change every dependency in the application". Upgrade's Group C is
+  "catch up with the plugin" mean "change every dependency in the application". The one exception
+  is `s1-kotlin-compiler-floor`: a Kotlin compiler that cannot target the project's own Java
+  baseline is a project that does not compile, not a lag. Upgrade reads the project's own
+  `essentials.version`, and a finding that only holds on the plugin's Essentials release
+  (`appliesWithUpgrade` in stack-lint's JSON) is reported as applying with that upgrade, never
+  offered on its own — its fix would break an application still on its older release. Upgrade's Group C is
   `scripts/stack-lint.py`'s output plus the judgement rows, read against the contract live — never a
   diff against the template tree `/essentials:init` renders from: a project diverges from its render
   the day work starts, and a diff would report the application itself as drift.

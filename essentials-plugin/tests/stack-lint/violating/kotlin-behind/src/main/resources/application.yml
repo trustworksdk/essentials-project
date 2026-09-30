@@ -1,0 +1,6 @@
+spring:
+  application:
+    name: behind
+essentials:
+  durable-queues:
+    transactional-mode: single-operation-transaction

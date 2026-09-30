@@ -19,6 +19,13 @@ Every finding carries an `ESS-S<n>[.<m>]` id that resolves to a contract heading
 a severity, `file:line`, a one-line fix, and — where the fix is mechanical — a machine-readable fix
 descriptor. The contract is cited, never restated: each rule names the contract line it enforces.
 
+The contract is the one for the Essentials release `stack-pins.md` targets. A project still pinning
+an older release gets every finding, but one whose rule holds only on the target (`targetOnly`)
+is marked `appliesWithUpgrade`: it is part of moving to that release, not a fix on its own. The
+project's release is `facts.essentialsVersion` (its `essentials.version` property, else an
+Essentials dependency's version, else `--essentials-version`), and `facts.essentialsBehind` is
+null when that release is unknown or not a version number.
+
 Usage
 -----
     stack-lint.py [ROOT] [options]
@@ -27,6 +34,8 @@ Usage
     --json                  emit the report as JSON on stdout
     --quiet                 print findings only, no header or summary
     --language kotlin|java  override detection (likewise --db, --web, --frontend)
+    --essentials-version V  the Essentials release the project resolves to, when no POM in it says
+                            (the property inherited from a parent outside the project, or a BOM)
     --fail-on LEVEL         advisory (default) | should-fix | blocking — lowest severity that exits 1
     --pins PATH             stack-pins.md (default: ../references/stack/stack-pins.md)
     --contract PATH         stack-contract.md (default: ../references/stack/stack-contract.md)
@@ -101,14 +110,19 @@ LOOSE_COMPONENTS = {
 # contract; --self-test fails when the cited line no longer carries the token, so a contract edit
 # that moves a line makes this table loud instead of quietly pointing at the wrong sentence.
 # `src` records the 0.60 framework evidence for the rule (repository paths, not shipped).
+# `target_only` marks a rule whose finding holds only on the Essentials release stack-pins.md targets:
+# on the release before it the project is right as it stands, so a project still pinning that release
+# gets the finding labelled `appliesWithUpgrade` rather than offered as a fix of its own. The evidence
+# for each is the `# 0.50.0:` comment above it (the `0.50.0` tag of this repository and its jars).
 
 
 class Rule:
-    __slots__ = ("check", "sid", "severity", "cites", "title", "src")
+    __slots__ = ("check", "sid", "severity", "cites", "title", "src", "target_only")
 
-    def __init__(self, check, sid, severity, cites, title, src=""):
+    def __init__(self, check, sid, severity, cites, title, src="", target_only=False):
         self.check, self.sid, self.severity, self.cites, self.title, self.src = (
             check, sid, severity, cites, title, src)
+        self.target_only = target_only
 
     @property
     def id(self):
@@ -120,17 +134,27 @@ class Rule:
 
 RULES_LIST = [
     # S1 ---------------------------------------------------------------------------------------
+    # 0.50.0: root pom.xml spring-boot.version 4.0.8 — the 4.0 line is the one it runs on.
     Rule("s1-boot-line", "S1", "Blocking", [("C", 55, "application runs on")],
-         "Spring Boot is not on the line stack-pins.md targets"),
+         "Spring Boot is not on the line stack-pins.md targets", target_only=True),
+    # 0.50.0: root pom.xml java.release.version 21; its jars are class-file major 65 (javap -v).
     Rule("s1-java-baseline", "S1", "Blocking", [("C", 57, "UnsupportedClassVersionError")],
          "Java release below the stack-pins.md baseline",
          "spring-boot-starter-parent pom (Maven Central): java.version defaults below the Essentials "
-         "baseline and maven.compiler.release follows it; root pom.xml java.release.version"),
+         "baseline and maven.compiler.release follows it; root pom.xml java.release.version",
+         target_only=True),
     Rule("s1-one-essentials-version", "S1", "Blocking", [("C", 59, "`essentials.version` property")],
          "an Essentials artifact not versioned from the one essentials.version property"),
+    # 0.50.0: built at release 21 (above), so its inline functions inline into code targeting 21.
     Rule("s1-kotlin-jvm-target", "S1", "Blocking",
          [("C", 55, "application runs on"), ("K", 42, "`jvmTarget` must match the `java.version` pin")],
-         "kotlin-maven-plugin jvmTarget below the Java baseline"),
+         "kotlin-maven-plugin jvmTarget below the Java baseline", target_only=True),
+    # 0.50.0: root pom.xml kotlin.version 2.2.21 at java.release.version 21 — a compiler below the floor
+    # targets that. A finding is target-only unless the project's own java.version is already at the
+    # baseline, where the compiler cannot build the project today (Lint._kotlin_floor decides).
+    Rule("s1-kotlin-compiler-floor", "S1", "Blocking",
+         [("C", 55, "application runs on"), ("K", 38, "The compiler floor is nonetheless")],
+         "kotlin.version below the Kotlin compiler floor stack-pins.md states", target_only=True),
     # S2 ---------------------------------------------------------------------------------------
     Rule("s2-one-starter", "S2", "Blocking", [("C", 68, "MUST pick exactly one persistence profile"),
                                               ("C", 80, "declaring the *components* individually")],
@@ -188,8 +212,11 @@ RULES_LIST = [
     Rule("s3.1-jackson2-essentials-module", "S3.1", "Blocking", [("C", 172, "`immutable-jackson` are gone")],
          "a Jackson 2 Essentials module (types-jackson / immutable-jackson) declared",
          "root pom.xml modules: only types-jackson3 / immutable-jackson3 are built"),
+    # 0.50.0: both starter POMs declare com.fasterxml.jackson.core:jackson-databind `provided`, and
+    # EssentialsComponentsConfiguration / EventStoreConfiguration.jsonSerializer take
+    # List<com.fasterxml.jackson.databind.Module> (javap on the 0.50.0 jars).
     Rule("s3.1-jackson2-databind", "S3.1", "Advisory", [("C", 174, "No Essentials artifact needs Jackson 2's")],
-         "Jackson 2 jackson-databind declared; nothing in Essentials uses it"),
+         "Jackson 2 jackson-databind declared; nothing in Essentials uses it", target_only=True),
     Rule("s3.3-own-json-mapper", "S3.3", "Blocking", [("C", 195, "replaces Boot's `JsonMapper` with its own bean")],
          "a JsonMapper bean that does not register EssentialTypesJacksonModule"),
     Rule("s3.4-jackson-module-kotlin", "S3.4", "Blocking",
@@ -236,9 +263,11 @@ RULES_LIST = [
          "DocumentDbRepository.kt:536 (plain class, no auto-configuration)"),
     Rule("s5-mongo-document-db", "S5", "Should-fix", [("C", 266, "on the `mongo` profile there is no such thing")],
          "postgresql-document-db declared on the mongo profile"),
+    # 0.50.0: EssentialsComponentsProperties.java:286 binds durable-queues.transactional-mode.
     Rule("s5-transactional-mode", "S5", "Should-fix", [("C", 261, "binds to nothing")],
          "essentials.durable-queues.transactional-mode in configuration",
-         "docs/MIGRATION-0.60.md:542; EssentialsComponentsProperties.java:292-303 (no such field)"),
+         "docs/MIGRATION-0.60.md:542; EssentialsComponentsProperties.java:292-303 (no such field)",
+         target_only=True),
     Rule("s5-aggregate-declarations", "S5", "Should-fix", [("C", 271, "`EssentialsAggregateDeclarations`")],
          "an aggregate policy annotation on a class no EssentialsAggregateDeclarations bean declares",
          "AggregateSnapshotPolicy.java:38-40, AggregateClosingBooksPolicy.java:38 (@Target TYPE); "
@@ -252,10 +281,11 @@ RULES_LIST = [
          [("C", 310, "checked-in `contracts/openapi.json`"),
           ("F", 66, "target: '../contracts/openapi.json'")],
          "the frontend generator reads a live /v3/api-docs URL instead of the committed spec"),
+    # 0.50.0: types-spring-web has no SingleValueTypeModelConverter (jar listing; the tag's source tree).
     Rule("s7-model-converter", "S7", "Advisory", [("C", 328, "`SingleValueTypeModelConverter` as a bean")],
          "springdoc runs but SingleValueTypeModelConverter is not registered: the spec types semantic ids as objects",
          "types-spring-web/src/main/java/dk/trustworks/essentials/types/spring/web/SingleValueTypeModelConverter.java "
-         "(a swagger-core ModelConverter; no auto-configuration in types-spring-web)"),
+         "(a swagger-core ModelConverter; no auto-configuration in types-spring-web)", target_only=True),
     # S8 ---------------------------------------------------------------------------------------
     Rule("s8-embedded-cors", "S8", "Should-fix",
          [("C", 346, "pick a mode explicitly and configure only that mode's pieces"),
@@ -339,9 +369,9 @@ RETIRED_CHECKS = {"s7-start-stop", "s7-openapi-profile"}
 
 
 class Finding:
-    __slots__ = ("rule", "file", "line", "message", "fix_text", "mechanical", "ops")
+    __slots__ = ("rule", "file", "line", "message", "fix_text", "mechanical", "ops", "target_only")
 
-    def __init__(self, check, file, line, message, fix_text, ops=None, mechanical=None):
+    def __init__(self, check, file, line, message, fix_text, ops=None, mechanical=None, target_only=None):
         self.rule = RULES[check]
         self.file = file
         self.line = line
@@ -349,11 +379,16 @@ class Finding:
         self.fix_text = fix_text
         self.ops = ops or []
         self.mechanical = bool(self.ops) if mechanical is None else mechanical
+        self.target_only = self.rule.target_only if target_only is None else target_only
 
     def sort_key(self):
         return (SEVERITY_ORDER[self.rule.severity], self.file or "", self.line or 0, self.rule.check)
 
-    def as_dict(self, anchors):
+    def applies_with_upgrade(self, behind):
+        """Holds only on the target release, and the project pins an older one."""
+        return self.target_only and behind is True
+
+    def as_dict(self, anchors, behind=None):
         return {
             "id": self.rule.id,
             "check": self.rule.check,
@@ -364,6 +399,8 @@ class Finding:
             "fix": {"text": self.fix_text, "mechanical": self.mechanical, "ops": self.ops},
             "cite": self.rule.cite_strings(),
             "link": f"{CONTRACT_REL}#{anchors.get(self.rule.sid, '')}",
+            "targetOnly": self.target_only,
+            "appliesWithUpgrade": self.applies_with_upgrade(behind),
         }
 
 
@@ -387,10 +424,30 @@ def read_pins(path: Path):
         cells = [c.strip() for c in line.strip().strip("|").split("|")]
         if len(cells) >= 2:
             pins[cells[0].replace("`", "").strip()] = cells[1].replace("*", "").strip()
-    for need in ("spring-boot-starter-parent", "java.version"):
+    for need in ("spring-boot-starter-parent", "java.version", "kotlin.version", "essentials.version"):
         if not re.match(r"^\d+", pins.get(need, "")):
             raise UsageError(f"{path}: no `{need}` pin")
+    # The Kotlin compiler floor is stated in the kotlin.version row's notes, not as a pin of its own.
+    floor = re.search(r"the floor is Kotlin \*\*(\d+\.\d+)\*\*", text)
+    if floor is None:
+        raise UsageError(f"{path}: the `kotlin.version` row states no \"the floor is Kotlin **<major.minor>**\"")
+    pins["kotlin.floor"] = floor.group(1)
     return pins
+
+
+def version_tuple(value):
+    """(1, 2, 0) for '1.2.0' or '1.2.0-RC1'; None when the value does not start with a number."""
+    m = re.match(r"^(\d+(?:\.\d+)*)", (value or "").strip())
+    return tuple(int(x) for x in m.group(1).split(".")) if m else None
+
+
+def version_below(value, target):
+    """True/False when both parse as version numbers, None otherwise (a DEV-SNAPSHOT, an unresolved ${…})."""
+    a, b = version_tuple(value), version_tuple(target)
+    if a is None or b is None:
+        return None
+    n = max(len(a), len(b))
+    return a + (0,) * (n - len(a)) < b + (0,) * (n - len(b))
 
 
 def gh_anchor(heading: str):
@@ -784,8 +841,8 @@ class Lint:
 
     # -- helpers ---------------------------------------------------------------------------------
 
-    def add(self, check, file, line, message, fix_text, ops=None, mechanical=None):
-        self.findings.append(Finding(check, file, line, message, fix_text, ops, mechanical))
+    def add(self, check, file, line, message, fix_text, ops=None, mechanical=None, target_only=None):
+        self.findings.append(Finding(check, file, line, message, fix_text, ops, mechanical, target_only))
 
     def skip(self, checks, reason):
         self.not_run.append({"checks": list(checks), "reason": reason})
@@ -860,6 +917,28 @@ class Lint:
             fe = ("embedded" if "frontend-maven-plugin" in plugins
                   else "standalone" if self.frontend_dirs else "none")
             self.facts["frontend"], self.fact_source["frontend"] = fe, "detected"
+        # The Essentials release the project pins, against the one stack-pins.md targets. Unresolvable here
+        # (inherited from a parent outside the project, or a BOM) is None: pass --essentials-version.
+        if ov.get("essentials_version"):
+            ev, ev_src = ov["essentials_version"], "flag"
+        else:
+            ev, ev_src = self._essentials_version()
+        self.facts["essentialsVersion"], self.fact_source["essentialsVersion"] = ev, ev_src
+        self.facts["targetEssentialsVersion"] = self.pins["essentials.version"]
+        self.facts["essentialsBehind"] = version_below(ev, self.pins["essentials.version"])
+
+    def _essentials_version(self):
+        """(version, source): the essentials.version property, else an Essentials dependency's own version."""
+        v, _, _ = self.p.prop(self.app, "essentials.version")
+        if v and "${" not in v:
+            return v, "property"
+        ess = [d for d in self.app_deps + list(self.p.all_deps()) + list(self.p.all_deps(managed=True))
+               if d.g.startswith(ESS_GROUP) and d.v]
+        for d in ess:
+            r = self.p.resolve(d.pom, d.v.strip())
+            if r and "${" not in r:
+                return r, "dependency"
+        return None, None
 
     # -- S1 --------------------------------------------------------------------------------------
 
@@ -937,6 +1016,8 @@ class Lint:
                                      [{"op": "replace-text", "file": p.rel, "line": cfg.line,
                                        "from": f"<jvmTarget>{cfg.text.strip()}</jvmTarget>",
                                        "to": "<jvmTarget>${java.version}</jvmTarget>"}])
+        if self.facts["language"] == "kotlin":
+            self._kotlin_floor(pom, floor)
         # One essentials.version
         has_prop = any("essentials.version" in p.props for p in self.p.poms)
         for d in list(self.p.all_deps()) + list(self.p.all_deps(managed=True)):
@@ -954,6 +1035,50 @@ class Lint:
                      "version every Essentials artifact as ${essentials.version}"
                      + ("" if has_prop else " (define the property in the reactor POM first)"),
                      ops, mechanical=has_prop)
+
+    def _kotlin_floor(self, pom, java_floor):
+        """kotlin.version (or kotlin-maven-plugin's own <version>) below the floor stack-pins.md states."""
+        want = self.pins["kotlin.floor"]
+        v, where, line = self.p.prop(pom, "kotlin.version")
+        plugin_version = None
+        if v is None or where is None:
+            for p in self.p.chain(pom):
+                for plug in p.plugins + p.managed_plugins:
+                    node = plug.child("version")
+                    if plug.val("artifactId") != "kotlin-maven-plugin" or node is None or v is not None:
+                        continue
+                    resolved = self.p.resolve(p, node.text.strip())
+                    if resolved and "${" not in resolved:
+                        v, where, line, plugin_version = resolved, p, node.line, node.text.strip()
+        if v is None or where is None:
+            self.skip(["s1-kotlin-compiler-floor"],
+                      "no kotlin.version property and no kotlin-maven-plugin <version> in the project — the "
+                      "parent's managed Kotlin applies")
+            return
+        have = version_tuple(v)
+        if have is None:
+            self.skip(["s1-kotlin-compiler-floor"], f"Kotlin version `{v}` is not a version number")
+            return
+        if not version_below(".".join(str(x) for x in have[:2]), want):
+            return
+        # The floor exists because a compiler below it cannot target the Java baseline. A project whose own
+        # java.version is already there does not compile today, whatever Essentials release it pins.
+        java_v, _, _ = self.p.prop(pom, "java.version")
+        java_m = re.fullmatch(r"(?:1\.)?(\d+)", (java_v or "").strip())
+        holds_now = java_m is not None and int(java_m.group(1)) >= java_floor
+        pin = self.pins["kotlin.version"]
+        message = (f"Kotlin {v} is below the compiler floor {want}: a compiler older than {want} cannot "
+                   f"target JVM {java_floor}"
+                   + (f", and java.version is {java_v}, so the Kotlin sources do not compile" if holds_now else ""))
+        if plugin_version is not None:
+            ops = [{"op": "replace-text", "file": where.rel, "line": line,
+                    "from": f"<version>{plugin_version}</version>", "to": f"<version>{pin}</version>"}]
+            fix = f"set kotlin-maven-plugin's <version> to {pin} (stack-pins.md), or declare kotlin.version"
+        else:
+            ops = [{"op": "set-property", "pom": where.rel, "name": "kotlin.version", "from": v, "to": pin}]
+            fix = f"raise kotlin.version to {pin}, the stack-pins.md pin"
+        self.add("s1-kotlin-compiler-floor", where.rel, line, message, fix, ops, mechanical=False,
+                 target_only=not holds_now)
 
     # -- S2 / S2.1 -------------------------------------------------------------------------------
 
@@ -1582,11 +1707,17 @@ def report_text(lint, anchors, quiet, out):
         print("  facts: " + " · ".join(
             f"{k}={f.get(k) or 'unknown'}{'' if src.get(k) != 'flag' else ' (flag)'}"
             for k in ("language", "db", "web", "frontend")) + f" · app={f.get('appPom')}", file=out)
+        print(f"  essentials: {f.get('essentialsVersion') or 'unknown'}"
+              f"{' (flag)' if src.get('essentialsVersion') == 'flag' else ''}"
+              f" · target {f.get('targetEssentialsVersion')}"
+              + (" · behind the target" if f.get("essentialsBehind") else ""), file=out)
         for nr in lint.not_run:
             print(f"  not run: {', '.join(nr['checks'])} — {nr['reason']}", file=out)
+    behind = f.get("essentialsBehind")
     for x in lint.findings:
         loc = f"{x.file}:{x.line}" if x.line else (x.file or "(project)")
-        print(f"[{x.rule.severity}] {x.rule.id} {x.rule.check}  {loc}", file=out)
+        tag = "  (applies with the Essentials upgrade)" if x.applies_with_upgrade(behind) else ""
+        print(f"[{x.rule.severity}] {x.rule.id} {x.rule.check}  {loc}{tag}", file=out)
         print(f"    {x.message}", file=out)
         print(f"    fix: {x.fix_text}", file=out)
         print(f"    → {', '.join(x.rule.cite_strings())}", file=out)
@@ -1599,19 +1730,22 @@ def report_json(lint, anchors):
     counts = {s: sum(1 for x in lint.findings if x.rule.severity == s) for s in SEVERITY_ORDER}
     facts = dict(lint.facts)
     facts["sources"] = lint.fact_source
+    behind = lint.facts.get("essentialsBehind")
     return {
         "tool": "stack-lint",
         "root": str(lint.root),
         "facts": facts,
         "notRun": lint.not_run,
-        "findings": [x.as_dict(anchors) for x in lint.findings],
+        "findings": [x.as_dict(anchors, behind) for x in lint.findings],
         "counts": counts,
+        "appliesWithUpgrade": sum(1 for x in lint.findings if x.applies_with_upgrade(behind)),
     }
 
 
 def rules_json(anchors):
     return [{"id": r.id, "check": r.check, "severity": r.severity, "title": r.title,
-             "cite": r.cite_strings(), "link": f"{CONTRACT_REL}#{anchors.get(r.sid, '')}"}
+             "cite": r.cite_strings(), "link": f"{CONTRACT_REL}#{anchors.get(r.sid, '')}",
+             "targetOnly": r.target_only}
             for r in RULES_LIST]
 
 
@@ -1689,6 +1823,16 @@ def self_test(pins_path, contract_path):
             covered.add(e["check"])
         for miss in sorted(want - got, key=str):
             problems.append(f"{name}: expected {miss[0]} at {miss[1]}:{miss[2]} — not reported")
+        # Optional per-finding flags: targetOnly and appliesWithUpgrade, as the JSON reports them.
+        behind = lint.facts.get("essentialsBehind")
+        for e in exp.get("findings", []):
+            for f in lint.findings:
+                if (f.rule.check, f.file, f.line) != (e["check"], e["file"], e.get("line")):
+                    continue
+                for key, have in (("targetOnly", f.target_only), ("appliesWithUpgrade", f.applies_with_upgrade(behind))):
+                    if key in e and e[key] != have:
+                        problems.append(f"{name}: {e['check']} at {e['file']}:{e.get('line')} {key}={have}, "
+                                        f"expected {e[key]}")
         for extra in sorted(got - want, key=str):
             problems.append(f"{name}: unexpected {extra[0]} at {extra[1]}:{extra[2]}")
         for f in lint.findings:
@@ -1720,6 +1864,8 @@ def main(argv=None):
     ap.add_argument("--db", choices=["pg-event-sourced", "pg-crud", "mongo"])
     ap.add_argument("--web", choices=["webflux", "webmvc", "none"])
     ap.add_argument("--frontend", choices=["none", "embedded", "standalone"])
+    ap.add_argument("--essentials-version", metavar="V",
+                    help="the Essentials release the project resolves to, when its POMs do not say")
     ap.add_argument("--fail-on", choices=list(FAIL_ON), default="advisory")
     ap.add_argument("--pins", default=str(PLUGIN / PINS_REL))
     ap.add_argument("--contract", default=str(PLUGIN / CONTRACT_REL))
@@ -1743,7 +1889,8 @@ def main(argv=None):
         root = Path(args.root).resolve()
         if not root.is_dir():
             raise UsageError(f"not a directory: {root}")
-        overrides = {k: getattr(args, k) for k in ("language", "db", "web", "frontend") if getattr(args, k)}
+        overrides = {k: getattr(args, k) for k in ("language", "db", "web", "frontend", "essentials_version")
+                     if getattr(args, k)}
         lint = Lint(root, pins, overrides)
         lint.run()
     except UsageError as exc:

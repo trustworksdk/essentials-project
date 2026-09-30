@@ -133,8 +133,11 @@ or auditing a slice, seeing the whole map, and reviewing a change.
                          essentials-docs, and audits the application against the
                          current stack contract (S1-S11), the silent-startup-
                          failure set first. Reports before it writes and offers
-                         each fix on its own. Never regenerates a skeleton, never
-                         edits slice source, never moves a version pin.
+                         each fix on its own, apart from what only applies once
+                         the project moves to the plugin's Essentials release.
+                         Never regenerates a skeleton, never edits slice source,
+                         moves no version pin but a Kotlin compiler too old for
+                         the project's Java baseline.
                          --check is a report-only dry run.
 
 ━━━ WHAT /essentials:init SETS UP ━━━
