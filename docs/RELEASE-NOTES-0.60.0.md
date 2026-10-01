@@ -12,6 +12,9 @@ Three new things ship with it:
 - a **database schema harness**, so Essentials can run against a database whose application user has no DDL rights
 - **`UnitOfWorkMode.NONE`**, for `@MessageHandler` methods that make blocking calls to other systems
 
+It is also the first release to ship the **`essentials` Claude Code plugin** from this repository, see
+[§2.11](#211-the-essentials-claude-code-plugin).
+
 **The persisted format does not change.** Events, queue payloads and documents written by 0.50 read back
 unchanged. Jackson 3 writes byte-identical JSON to 0.50's Jackson 2 mapper, and golden documents written by the
 old mapper guard that.
@@ -701,6 +704,49 @@ API response only gains an optional field.
 → [`postgresql-event-store` README § Subscription Error Policy](../components/postgresql-event-store/README.md#subscription-error-policy),
 [`LLM/LLM-postgresql-event-store.md` § Direct async subscribers skip a failing event by default](../LLM/LLM-postgresql-event-store.md#direct-async-subscribers-skip-a-failing-event-by-default)
 
+### 2.11 The `essentials` Claude Code plugin
+
+0.60.0 is the first release that ships the `essentials` plugin for Claude Code from this repository. It is for
+teams that build Essentials applications with Claude Code. It gives Claude the framework's documentation, a design
+law for vertical slices, and an application stack contract (requirements S1–S11, with the version pins that go
+with them), plus commands that scaffold, audit and review a project against them. It changes nothing in the
+framework, and nothing for an application that does not use Claude Code.
+
+The repository is also the plugin's marketplace (`.claude-plugin/marketplace.json`). To install:
+
+```
+/plugin marketplace add trustworksdk/essentials-project
+/plugin install essentials@essentials-marketplace
+```
+
+**The plugin's version is the Essentials release it targets**, so this one is `0.60.0`. A plugin-only release
+adds `-1`, `-2`, …, and the next Essentials release resets the suffix. Claude Code updates an installed plugin
+only when that version changes. Third-party marketplaces do not auto-update by default: turn it on in the
+`/plugin` Marketplaces tab, or refresh with `/plugin marketplace update essentials-marketplace`. To pin a branch
+or tag, add `#<ref>` to the marketplace source.
+
+| Command or skill | What it does |
+|---|---|
+| `/essentials:init` | Scaffolds a new Spring Boot project: Kotlin or Java, WebFlux or WebMvc, PostgreSQL event-sourced, PostgreSQL CRUD or MongoDB, with an optional React frontend and Docker Compose. Every version comes from the plugin's pins. It then lints the project against the stack contract, builds it and starts its Spring context before handing it over |
+| `/essentials:add-slice`, and `add-command-slice`, `add-view-slice`, `add-automation-slice`, `add-translation-slice` for one kind | Scaffold a vertical slice into an existing project, in Java or Kotlin: its source, `slice.yaml` manifest, test and Spring wiring |
+| `/essentials:slice-check`, `slice-discover`, `slice-map` | Audit a project that follows the slice law; analyse one that does not and infer what it would look like if it did; render the structure of one that does. Discover and map are read-only |
+| `/essentials:review` | Reviews a change (the current branch, a ref, a pull request or a path) against the framework's traps index, the stack contract and the slice law. Every finding carries an `ESS-…` id that links to the section that owns it |
+| `/essentials:upgrade` | Brings an existing project up to what the installed plugin ships and audits it against the stack contract, offering each fix singly. It reads the project's own Essentials version, and reports a finding whose fix would break an application still on an older release as applying with the Essentials upgrade, rather than offering it on its own. It moves no version pin, except a Kotlin compiler too old for the project's own Java baseline |
+| `/essentials:intro` | Read-only orientation |
+| `essentials-docs` skill | Loads on questions about Essentials and on code that uses `dk.trustworks.essentials.*`, and answers from the bundled framework docs |
+| `essentials-change` skill | Picks up a change described in prose in a project that follows the slice law, finds the slice that owns it from its manifest, and applies the slice law to the change |
+
+The deterministic half of the commands is Python scripts, which need Python 3.11 or newer; the plugin README lists
+the rest of the requirements.
+
+The framework docs the plugin bundles, in `essentials-plugin/references/llm/`, are a generated copy of `LLM/`, made
+by `scripts/sync-plugin-llm.sh`. Links that leave `LLM/` are rewritten to GitHub URLs that point at this release's
+tag, `0.60.0`, not at `main`, so an installed plugin's links match the release it targets. `LLM/` remains the only
+place the docs are edited; see the root README's [Editing the LLM docs](../README.md#editing-the-llm-docs).
+
+→ [`essentials-plugin/README.md`](../essentials-plugin/README.md),
+[`essentials-plugin/CHANGELOG.md`](../essentials-plugin/CHANGELOG.md)
+
 ---
 
 ## 3. Bug fixes
@@ -793,6 +839,7 @@ test utility, and the `examples/` modules are not released.
 | [`docs/durable-queue-measurements.md`](durable-queue-measurements.md) | Every measured figure, with its conditions |
 | [`docs/RELEASE-NOTES-0.50.0.md`](RELEASE-NOTES-0.50.0.md), [`0.50.1`](RELEASE-NOTES-0.50.1.md) | The previous releases |
 | [`LLM/LLM.md`](../LLM/LLM.md) | Entry point for the per-module consumer references |
+| [`essentials-plugin/README.md`](../essentials-plugin/README.md) | The `essentials` Claude Code plugin: install, commands, skills and requirements |
 
 **Standing constraints, unchanged in 0.60.0:**
 
