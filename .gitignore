@@ -48,3 +48,8 @@ graphify-out
 .claude/skills/graphify
 # <<< managed <<<
 /.claude/settings.json.graphify-bak
+
+# tw-code-review (managed)
+.tw-code-review/reviews/
+.tw-code-review/logs/
+.tw-code-review/bridge-exports/
