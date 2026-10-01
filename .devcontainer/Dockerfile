@@ -51,27 +51,27 @@ ARG MAVEN_SHA512="831a8591fe20c8243b1dbe7d71e3244f31d1665b0804b2e825e38cbbe5ce0c
 # JDT-LS (Eclipse Java LSP). SHA-256 must match the pinned tarball — update both
 # together. The build-date suffix is part of the filename. Get the SHA from:
 # https://download.eclipse.org/jdtls/milestones/<version>/<tarball>.sha256
-ARG JDTLS_VERSION="1.60.0"
-ARG JDTLS_BUILD_DATE="202606262232"
-ARG JDTLS_SHA256="e94c303d8198f977930803582738771fd18c52c5492878410bf222b1aa81ef1d"
+ARG JDTLS_VERSION="1.61.0"
+ARG JDTLS_BUILD_DATE="202609031315"
+ARG JDTLS_SHA256="338e7e73d61836651ba2453919a0d34fa763eb4e7c03342092309bffb8934c64"
 # kotlin-language-server (official JetBrains Kotlin LSP). Tarballs are hosted on
 # JetBrains' CDN (the GitHub release page just links out). Each tarball ships a
 # sibling .sha256 file; values below were captured at the pinned version.
 # Refresh recipe:
 #   curl -fsSL https://download-cdn.jetbrains.com/language-server/kotlin-server/<ver>/kotlin-server-<ver>.tar.gz.sha256
 #   curl -fsSL https://download-cdn.jetbrains.com/language-server/kotlin-server/<ver>/kotlin-server-<ver>-aarch64.tar.gz.sha256
-ARG KOTLIN_LS_VERSION="262.8190.0"
-ARG KOTLIN_LS_SHA256_AMD64="8b4c70e95065420e7867c99aaf9f18e0b4e76311ec453e4c1a39e3f6ae774cbf"
-ARG KOTLIN_LS_SHA256_ARM64="c3edd59ef34a7faa4d04f3517afb7a932b19c3f9cf17d1a14e9da17b0b5440ad"
+ARG KOTLIN_LS_VERSION="263.4702.0"
+ARG KOTLIN_LS_SHA256_AMD64="1e11d2e5fefbf9ea215ad8dd6be95f2222897cd086e8cb7a661a52084a590405"
+ARG KOTLIN_LS_SHA256_ARM64="ec7cb254a6662a07fff9f10e4365226afab6c40008f8a974c10ac5e785d6510f"
 # rtk (Rust Token Killer). Per-arch release tarball from GitHub (amd64 → musl,
 # arm64 → gnu). SHA-256 = GitHub's published per-asset digest for the pinned tag,
 # verified at build. Refresh recipe (after bumping RTK_VERSION):
 #   curl -fsSL -H "Accept: application/vnd.github+json" \
 #     https://api.github.com/repos/rtk-ai/rtk/releases/tags/v<ver> \
 #     | python3 -c "import sys,json;[print(a['name'],a.get('digest')) for a in json.load(sys.stdin)['assets']]"
-ARG RTK_VERSION="0.45.0"
-ARG RTK_SHA256_AMD64="c4c036fbf181fc55ef329786c8c17e0d427972b053b825944d968a6aafef1ba4"
-ARG RTK_SHA256_ARM64="80a746dd305ef944ff50ef011ae4ce3878dd5ba88dfe35d859d05498191637c3"
+ARG RTK_VERSION="0.50.0"
+ARG RTK_SHA256_AMD64="bc2b8902b0d9c796c82ef45f16ae2307e17757afeca5ee156235a3dc7bda5f89"
+ARG RTK_SHA256_ARM64="d1cc49dfa2cd443fc32625444b59fe616b6c80478cca210985118347174dd758"
 
 # -----------------------------------------------------------------------------
 # JetBrains Configuration
@@ -332,7 +332,13 @@ RUN cp /tmp/uv-binaries/uv /usr/local/bin/uv && \
 
 # UV environment variables
 ENV UV_LINK_MODE=copy
-ENV UV_CACHE_DIR=/home/vscode/.cache/uv
+# UV_CACHE_DIR is deliberately NOT set here. A Dockerfile ENV reaches every
+# process, whatever its user, and the container starts as root
+# ("containerUser": "root"). One root-context `uv` run against a cache inside
+# vscode's home leaves root-owned entries in the cache volume; every later `uv`
+# command as vscode then fails ("Failed to initialize cache … Permission
+# denied"), across rebuilds, and vscode has no sudo to repair it. It is set for
+# the remote user only, in devcontainer.json "remoteEnv".
 
 # -----------------------------------------------------------------------------
 # Claude Code CLI (Conditional)
@@ -362,7 +368,7 @@ RUN mkdir -p /opt/claude-seed/marketplaces
 # Create base directories (always needed)
 RUN mkdir -p \
     /home/vscode/.npm \
-    /home/vscode/.cache/uv \
+    /home/vscode/.uv-cache \
     /home/vscode/.cache/pip \
     /home/vscode/.local/bin \
     /workspace && \
@@ -394,6 +400,25 @@ RUN mkdir -p \
 # -----------------------------------------------------------------------------
 # Reset to interactive mode
 ENV DEBIAN_FRONTEND=dialog
+
+# -----------------------------------------------------------------------------
+# Sudo: no root for the vscode user
+# -----------------------------------------------------------------------------
+# The base image gives vscode passwordless sudo for everything
+# (/etc/sudoers.d/vscode). Everything that runs as vscode — an AI agent included —
+# could then become root and, among other things, remount the read-only
+# .devcontainer/ bind writable and plant code that runs on the host at the next
+# start. There is no egress firewall in this config, so vscode needs no sudo rule
+# at all. Docker-in-Docker still works: PID 1 runs as root ("containerUser":
+# "root"), so the feature starts dockerd without sudo. Note that membership of
+# the docker group stays root-equivalent; this removes the direct path, not that one.
+# A developer who needs root runs, from the HOST:
+#   docker exec -u root -it essentials-project-devcontainer bash
+# The build fails if a blanket rule survives.
+RUN rm -f /etc/sudoers.d/vscode && \
+    if sudo -l -U vscode | grep -qE 'NOPASSWD: *ALL *$|\) *ALL *$'; then \
+    echo "ERROR: vscode still has blanket sudo — find the rule under /etc/sudoers*" >&2; exit 1; \
+    fi
 
 # Switch to non-root user for security
 USER vscode

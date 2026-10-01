@@ -7,6 +7,23 @@ set -e
 
 echo "Running post-create setup..."
 
+# Problems that leave the container short of what its config asked for. Each
+# step warns and carries on, so one failed install does not stop the rest; the
+# list is printed as a banner at the very end, where it cannot scroll past.
+SETUP_PROBLEMS=()
+setup_problem() {
+    SETUP_PROBLEMS+=("$1")
+    echo "  WARNING: $1"
+}
+
+# Nothing in this script can repair a root-owned path: vscode has no sudo (see
+# the Dockerfile's sudo block). The Dockerfile pre-creates every volume
+# mountpoint as vscode, so this is a volume from an older build, or one a root
+# process wrote into. Name the host-side fix.
+fix_owner() {
+    setup_problem "$1 is not owned by vscode. From the host: docker exec -u root essentials-project-devcontainer chown -R vscode:vscode $1"
+}
+
 # =============================================================================
 # Directory Ownership
 # =============================================================================
@@ -27,10 +44,22 @@ for dir in "${directories[@]}"; do
     if [ -d "$dir" ]; then
         # Only fix ownership if not already correct
         if [ "$(stat -c '%U' "$dir" 2>/dev/null)" != "vscode" ]; then
-            sudo chown -R vscode:vscode "$dir" 2>/dev/null || true
+            fix_owner "$dir"
         fi
     fi
 done
+
+# uv cache. UV_CACHE_DIR comes from devcontainer.json "remoteEnv", which reaches
+# vscode's processes only — never root's, so a root-context `uv` run cannot
+# leave root-owned entries in this volume. The default covers a tool that does
+# not pass remoteEnv to lifecycle commands. The check looks two levels down: a
+# root-owned bucket (e.g. sdists-v9) under a vscode-owned top directory makes
+# every `uv` command fail with "Failed to initialize cache … Permission denied".
+export UV_CACHE_DIR="${UV_CACHE_DIR:-$HOME/.uv-cache}"
+mkdir -p "$UV_CACHE_DIR" 2>/dev/null || true
+if [ -d "$UV_CACHE_DIR" ] && [ -n "$(find "$UV_CACHE_DIR" -maxdepth 2 ! -user vscode -print -quit 2>/dev/null)" ]; then
+    fix_owner "$UV_CACHE_DIR"
+fi
 
 # =============================================================================
 # NPM Configuration
@@ -83,14 +112,6 @@ fi
 # Pyright (uv tool).
 if command -v uv &> /dev/null; then
     if ! command -v pyright &> /dev/null; then
-        # Heal root-owned entries inside ~/.cache/uv that the top-level
-        # ownership loop misses (it stats only the top dir; subtrees from a
-        # prior root-context `uv` run stay root-owned and break uv tool install
-        # with a silent permission warning + visible "Permission denied" later).
-        if [ -d "$HOME/.cache/uv" ] && find "$HOME/.cache/uv" -maxdepth 2 ! -user vscode -print -quit | grep -q .; then
-            echo "  Healing root-owned entries in ~/.cache/uv..."
-            sudo chown -R vscode:vscode "$HOME/.cache/uv" 2>/dev/null || true
-        fi
         echo "  Installing pyright (uv tool)..."
         UV_TOOL_BIN_DIR="$HOME/.local/bin" \
         UV_TOOL_DIR="$HOME/.local/share/uv/tools" \
@@ -143,6 +164,56 @@ if [ "${CLAUDE_DEFAULT_MODE_AUTO:-false}" = "true" ] && [ "${INSTALL_CLAUDE:-fal
 fi
 
 # =============================================================================
+# Claude Code status line (Conditional)
+# Renders model, context usage, git branch and worktree in the footer:
+#   <model>[:effort] [<fast>] │ <used>/<window> (<pct>%) │ <branch> [<worktree>] │ <dir>
+# Claude Code has NO built-in setting for this (no showContext / contextMeter key
+# exists) — statusLine is the only supported route, and it runs a command per
+# render with the session state as JSON on stdin.
+#
+# USER settings, not project settings, on purpose: project settings WIN over user
+# settings, so a tracked statusLine would silently replace whatever footer every
+# contributor already chose. A footer is a personal display preference, unlike
+# worktree.baseRef which is a repo-level opinion about behaviour.
+#
+# Idempotent and non-destructive: an existing statusLine (the developer's own, or
+# one from a previous run pointing elsewhere) is never overwritten. To re-point it
+# at this script, delete the statusLine key and re-create the container.
+# =============================================================================
+if [ "${CLAUDE_STATUSLINE:-false}" = "true" ] && [ "${INSTALL_CLAUDE:-false}" = "true" ]; then
+    echo "Configuring Claude Code status line (user settings)..."
+    # Sibling of this script — never hardcode /workspace, the generated project's
+    # workspace folder is whatever the user named it.
+    STATUSLINE_SH="$(cd "$(dirname "$0")" && pwd)/statusline.sh"
+    CLAUDE_USER_SETTINGS="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/settings.json"
+    if [ ! -f "$STATUSLINE_SH" ]; then
+        echo "  WARNING: $STATUSLINE_SH not found; skipping status line."
+    elif ! command -v jq &> /dev/null; then
+        echo "  WARNING: jq not found; skipping status line."
+    else
+        chmod +x "$STATUSLINE_SH" 2>/dev/null || true
+        mkdir -p "$(dirname "$CLAUDE_USER_SETTINGS")"
+        if [ ! -s "$CLAUDE_USER_SETTINGS" ] || ! jq -e . "$CLAUDE_USER_SETTINGS" > /dev/null 2>&1; then
+            echo '{}' > "$CLAUDE_USER_SETTINGS"
+        fi
+        if [ "$(jq -r 'has("statusLine")' "$CLAUDE_USER_SETTINGS")" = "true" ]; then
+            echo "  → statusLine already set in $CLAUDE_USER_SETTINGS — left untouched."
+        else
+            _tmp="$(mktemp)"
+            if jq --arg cmd "$STATUSLINE_SH" \
+                  '.statusLine = { type: "command", command: $cmd, padding: 0 }' \
+                  "$CLAUDE_USER_SETTINGS" > "$_tmp"; then
+                mv "$_tmp" "$CLAUDE_USER_SETTINGS"
+                echo "  → statusLine → $STATUSLINE_SH"
+            else
+                rm -f "$_tmp"
+                echo "  WARNING: failed to write statusLine to $CLAUDE_USER_SETTINGS."
+            fi
+        fi
+    fi
+fi
+
+# =============================================================================
 # graphify Knowledge Graph (Conditional) — knowledge-graph indexer slot
 # https://github.com/safishamsi/graphify (MIT). A whole-system knowledge graph
 # (code + SQL + infra + docs) delivered as an agent skill + CLI. Installed as a
@@ -159,10 +230,6 @@ if [ "${INSTALL_GRAPHIFY:-false}" = "true" ]; then
     export PATH="$HOME/.local/bin:$PATH"
     if command -v uv &> /dev/null; then
         if ! command -v graphify &> /dev/null; then
-            # Heal any root-owned uv cache entries (same guard as skillspector/pyright).
-            if [ -d "$HOME/.cache/uv" ] && find "$HOME/.cache/uv" -maxdepth 2 ! -user vscode -print -quit | grep -q .; then
-                sudo chown -R vscode:vscode "$HOME/.cache/uv" 2>/dev/null || true
-            fi
             echo "  Installing graphifyy (uv tool, with SQL grammar)..."
             # [sql] extra pulls tree-sitter-sql so .sql files are indexed too;
             # without it graphify warns and skips SQL sources (#1745).
@@ -371,9 +438,6 @@ if [ "${INSTALL_HEADROOM:-false}" = "true" ]; then
     export HEADROOM_WORKSPACE_DIR="$HOME/.headroom"
     if command -v uv &> /dev/null; then
         if ! command -v headroom &> /dev/null; then
-            if [ -d "$HOME/.cache/uv" ] && find "$HOME/.cache/uv" -maxdepth 2 ! -user vscode -print -quit | grep -q .; then
-                sudo chown -R vscode:vscode "$HOME/.cache/uv" 2>/dev/null || true
-            fi
             echo "  Installing headroom-ai[code,mcp] (uv tool — light extras, no proxy/ML deps)..."
             uv tool install "headroom-ai[code,mcp]" --with fastapi --with "mcp<2" 2>&1 \
                 || echo "  WARNING: headroom install failed. Retry with: uv tool install \"headroom-ai[code,mcp]\" --with fastapi --with \"mcp<2\"."
@@ -393,7 +457,7 @@ if [ "${INSTALL_HEADROOM:-false}" = "true" ]; then
 
         # Heal the ~/.headroom named-volume mountpoint if it ended up root-owned.
         if [ -d "$HOME/.headroom" ] && [ "$(stat -c '%U' "$HOME/.headroom" 2>/dev/null)" != "vscode" ]; then
-            sudo chown -R vscode:vscode "$HOME/.headroom" 2>/dev/null || true
+            fix_owner "$HOME/.headroom"
         fi
 
         # Register headroom's MCP server with Claude Code (--force → idempotent
@@ -491,23 +555,9 @@ fi
 # =============================================================================
 echo "Configuring Python/UV..."
 
-# Ensure /usr/local/bin/python (and python3) resolve to the active interpreter.
-# The ghcr.io/devcontainers/features/python feature installs Python under
-# /usr/local/python/current/bin and only adds that directory to PATH — it does
-# NOT create /usr/local/bin/python. VS Code's Python extension (and the
-# python.defaultInterpreterPath setting in devcontainer.json) expects an
-# absolute path at /usr/local/bin/python, so we bridge it with a symlink.
-PYTHON_BIN="$(command -v python3 || command -v python || true)"
-if [ -n "$PYTHON_BIN" ]; then
-    if [ "$PYTHON_BIN" != "/usr/local/bin/python3" ] && [ ! -e "/usr/local/bin/python3" ]; then
-        sudo ln -sf "$PYTHON_BIN" /usr/local/bin/python3
-        echo "  Linked /usr/local/bin/python3 -> $PYTHON_BIN"
-    fi
-    if [ "$PYTHON_BIN" != "/usr/local/bin/python" ] && [ ! -e "/usr/local/bin/python" ]; then
-        sudo ln -sf "$PYTHON_BIN" /usr/local/bin/python
-        echo "  Linked /usr/local/bin/python -> $PYTHON_BIN"
-    fi
-fi
+# No /usr/local/bin/python symlink: creating one needs root, which vscode no
+# longer has. The Python feature installs under /usr/local/python/current/bin,
+# and python.defaultInterpreterPath in devcontainer.json points there directly.
 
 # Verify UV installation
 if command -v uv &> /dev/null; then
@@ -675,6 +725,10 @@ if [ "${INSTALL_CLAUDE:-false}" = "true" ]; then
         echo "      See 'Authenticating Claude Code' at the top of README.md for details."
     fi
 fi
+if [ "${CLAUDE_STATUSLINE:-false}" = "true" ] && [ "${INSTALL_CLAUDE:-false}" = "true" ]; then
+    echo "  Status line (model · context usage · branch · worktree)"
+    echo "    → Registered in user settings; edit or disable in ~/.claude/settings.json"
+fi
 if [ "${INSTALL_GRAPHIFY:-false}" = "true" ]; then
     echo "  graphify (knowledge graph — code + SQL + infra + docs)"
     echo "    → Re-index (code-only, local): graphify update /workspace"
@@ -698,3 +752,42 @@ if [ "${ENABLE_LSP_TOOL:-0}" = "1" ]; then
     echo "      Prefer the LSP tool over grep for symbol navigation; trust its results."
 fi
 echo ""
+
+# =============================================================================
+# Setup check — keep it last, so the banner is the end of the creation log
+# Every tool this config asked for must be on PATH now, whatever made an install
+# above fail (each one only warns). The script still exits 0.
+# =============================================================================
+export PATH="$HOME/.local/bin:$PATH"
+require_tool() {
+    # $1 = command, $2 = what should have provided it
+    if ! command -v "$1" &> /dev/null; then
+        SETUP_PROBLEMS+=("$1 is missing ($2)")
+    fi
+}
+require_tool uv "Dockerfile"
+require_tool npm "Node.js feature"
+require_tool pyright "post-create.sh: uv tool install pyright"
+require_tool typescript-language-server "post-create.sh: npm install -g"
+if [ "${INSTALL_JAVA:-false}" = "true" ]; then require_tool jdtls "Dockerfile"; fi
+if [ "${INSTALL_KOTLIN_LSP:-false}" = "true" ]; then require_tool kotlin-language-server "Dockerfile"; fi
+if [ "${INSTALL_CLAUDE:-false}" = "true" ]; then require_tool claude "post-create.sh: Claude Code installer"; fi
+if [ "${INSTALL_GRAPHIFY:-false}" = "true" ]; then require_tool graphify "post-create.sh: uv tool install graphifyy"; fi
+if [ "${INSTALL_HEADROOM:-false}" = "true" ]; then require_tool headroom "post-create.sh: uv tool install headroom-ai"; fi
+if [ "${INSTALL_RTK:-false}" = "true" ]; then require_tool rtk "Dockerfile"; fi
+
+if [ "${#SETUP_PROBLEMS[@]}" -gt 0 ]; then
+    echo "============================================================================"
+    echo ""
+    echo "  SETUP INCOMPLETE: ${#SETUP_PROBLEMS[@]} problem(s)"
+    echo ""
+    for _problem in "${SETUP_PROBLEMS[@]}"; do
+        echo "  - $_problem"
+    done
+    echo ""
+    echo "  The WARNING lines above give each cause. Once it is fixed, re-run:"
+    echo "      bash .devcontainer/scripts/post-create.sh"
+    echo ""
+    echo "============================================================================"
+    echo ""
+fi
