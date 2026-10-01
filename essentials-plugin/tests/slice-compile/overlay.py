@@ -14,7 +14,7 @@ A case is one host build:
   - the fixtures that are Essentials applications. Only `.java`/`.kt` files are copied. `fixture-worked-example`
     (`{{packagePath}}` rendered to the host's packagePath, plus a test-only adapter for its outbound port from
     `stubs/worked-example/`) runs `verify`; `fixture-multi-lane` and `fixture-aggregate-lane` live outside the host's
-    package (`com.acme.multi`, `com.acme.billing`), so no context would load them: `test-compile`.
+    package (`com.example.multi`, `com.example.billing`), so no context would load them: `test-compile`.
 
 Every fixture (a directory under `tests/fixtures/` holding a TEST-GUIDE.md) is either a case or listed in
 NOT_COMPILED with the reason, so a new fixture forces a decision (`check`).

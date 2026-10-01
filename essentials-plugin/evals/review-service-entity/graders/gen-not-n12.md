@@ -5,7 +5,7 @@ type: llm
 
 The agent's final message is the report `/essentials:review` printed for a test project. Paths in it are relative to the project root, and a report may cite a file by path, by `path:line`, or by its type or directory name.
 
-PASS unless the report raises a finding of any kind about `src/main/java/com/acme/shipping/_loadtest/LoadHarness.java`.
+PASS unless the report raises a finding of any kind about `src/main/java/com/example/shipping/_loadtest/LoadHarness.java`.
 Why that would be wrong: The ESS-064 candidate must be dismissed, not reported; _loadtest/ is not a slice.
 A mention that is not a finding does not fail this check: the file listed as passing, cited as evidence for a different finding, or named in a lane or inventory summary.
 FAIL only if such a finding is present.

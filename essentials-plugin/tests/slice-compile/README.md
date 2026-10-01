@@ -18,7 +18,7 @@ stubs/worked-example/src/   a test-only adapter for the worked example's outboun
 | `java-service-entity`, `kotlin-service-entity` | `<lang>-mongo` | `verify` | the same for the service-entity lane (command, view, the seeded entity) |
 | `java-decider-two-bc`, `kotlin-decider-two-bc` | `<lang>-pg-event-sourced` | `verify` | two decider BCs start in one Spring context against Testcontainers PostgreSQL, the application has exactly one decider configurator, and `PlaceOrder` and `RequestPayment` each reach their own BC's decider through the `CommandBus` (no `MultipleCommandHandlersFoundException`, no duplicate bean) |
 | `fixture-multi-lane`, `fixture-aggregate-lane` | `java-pg-event-sourced` | `test-compile` | the Java fixtures compile, so the imports and API shapes they hold are real (their packages sit outside the host's, so a context start would not load them) |
-| `fixture-worked-example` | `kotlin-pg-event-sourced` | `verify` | the worked example, with `{{packagePath}}` rendered to the host's `com.acme.shop`, `orders/` and `DeciderWiring.kt` placed under it, compiles and starts |
+| `fixture-worked-example` | `kotlin-pg-event-sourced` | `verify` | the worked example, with `{{packagePath}}` rendered to the host's `com.example.shop`, `orders/` and `DeciderWiring.kt` placed under it, compiles and starts |
 
 Not compiled, and why, is `NOT_COMPILED` in `overlay.py` (`service-entity` is a JPA application and no host declares
 JPA; the rest hold no application sources). `overlay.py check` fails on a fixture directory that is in neither list.

@@ -6,7 +6,7 @@ type: llm
 The agent's final message is the report `/essentials:slice-discover` printed for a test project. Paths in it are relative to the project root, and a report may cite a file by path, by `path:line`, or by its type or directory name.
 
 PASS if the report contains a finding that matches all of:
-- it concerns `src/main/java/com/acme/shop/service/BillingService.java`
+- it concerns `src/main/java/com/example/shop/service/BillingService.java`
 - it is a boundary finding
 - it is ranked #3 among the report's structural findings
 - its substance: BillingService reaches into orders' entity and repository directly.

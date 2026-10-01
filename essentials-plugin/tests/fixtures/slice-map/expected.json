@@ -12,7 +12,7 @@
         "s:billing.invoice_list": 3, "e:PaymentSettled": 2
       },
       "isolated": ["s:billing.invoice_list"],
-      "inbound": {"s:orders.order_list": 2, "s:billing.acme_gateway": 2, "x:acme_gateway": 1},
+      "inbound": {"s:orders.order_list": 2, "s:billing.example_gateway": 2, "x:example_gateway": 1},
       "firstFlows": ["OrderPlaced", "PaymentSettled"],
       "flaggedWriters": ["Invoice"],
       "text": ["declared endpoint not found in source", "skipped: module payments (not analysed)"]

@@ -6,15 +6,15 @@ type: llm
 The agent's final message is the report `/essentials:slice-discover` printed for a test project. Paths in it are relative to the project root, and a report may cite a file by path, by `path:line`, or by its type or directory name.
 
 PASS if the report proposes exactly 7 candidate slices (names may differ slightly), namely:
-- command `orders.place_order` (from `src/main/java/com/acme/shop/controller/OrderController.java`)
-- command `orders.cancel_order` (from `src/main/java/com/acme/shop/controller/OrderController.java`)
-- command `orders.ship_order` (from `src/main/java/com/acme/shop/controller/OrderController.java`)
-- view `orders.order_list` (from `src/main/java/com/acme/shop/controller/OrderController.java`) — OrderController.get — one slice, two queries
-- command `billing.pay_invoice` (from `src/main/java/com/acme/shop/controller/InvoiceController.java`)
-- view `billing.unpaid_invoices` (from `src/main/java/com/acme/shop/controller/InvoiceController.java`)
-- view `orders.order_status_report` (from `src/main/java/com/acme/shop/controller/ReportController.java`)
+- command `orders.place_order` (from `src/main/java/com/example/shop/controller/OrderController.java`)
+- command `orders.cancel_order` (from `src/main/java/com/example/shop/controller/OrderController.java`)
+- command `orders.ship_order` (from `src/main/java/com/example/shop/controller/OrderController.java`)
+- view `orders.order_list` (from `src/main/java/com/example/shop/controller/OrderController.java`) — OrderController.get — one slice, two queries
+- command `billing.pay_invoice` (from `src/main/java/com/example/shop/controller/InvoiceController.java`)
+- view `billing.unpaid_invoices` (from `src/main/java/com/example/shop/controller/InvoiceController.java`)
+- view `orders.order_status_report` (from `src/main/java/com/example/shop/controller/ReportController.java`)
 It may additionally list these outside the count, or not at all:
-- automation `billing.payment_reminders` (from `src/main/java/com/acme/shop/service/PaymentReminderJob.java`)
-- translation `payment_gateway` (from `src/main/java/com/acme/shop/integration/PaymentGatewayClient.java`)
+- automation `billing.payment_reminders` (from `src/main/java/com/example/shop/service/PaymentReminderJob.java`)
+- translation `payment_gateway` (from `src/main/java/com/example/shop/integration/PaymentGatewayClient.java`)
 OrderController must be shown splitting into 4 slices.
 FAIL if the count differs or a listed slice is missing or merged into another.

@@ -6,8 +6,8 @@ type: llm
 The agent's final message is the report `/essentials:slice-check` printed for a test project. Paths in it are relative to the project root, and a report may cite a file by path, by `path:line`, or by its type or directory name.
 
 PASS if the report contains a finding that matches all of:
-- it concerns `src/main/java/com/acme/multi/payments/use_cases/capture_payment/slice.yaml`
-- it also cites `src/main/java/com/acme/multi/payments/use_cases/request_payment/slice.yaml`
+- it concerns `src/main/java/com/example/multi/payments/use_cases/capture_payment/slice.yaml`
+- it also cites `src/main/java/com/example/multi/payments/use_cases/request_payment/slice.yaml`
 - it is filed under gate 14 (Write-style lane (§R5)), id ESS-G14, or plainly describes that check
 - its severity is Blocking
 - its substance: payments' manifests declare two lanes (request_payment: decider, capture_payment: aggregate). The declared-lane cross-check is Blocking and must name which slice sits on which side, even though the code has a single lane (decider).

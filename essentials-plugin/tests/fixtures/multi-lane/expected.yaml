@@ -40,11 +40,11 @@ lanes:
     detected: blocking
     signals:
     - kind: decider
-      file: src/main/java/com/acme/multi/ledger/use_cases/open_account/OpenAccountDecider.java
+      file: src/main/java/com/example/multi/ledger/use_cases/open_account/OpenAccountDecider.java
       line: 10
       anchor: implements EventStreamDecider<OpenAccount, AccountEvent>
     - kind: aggregates-dir
-      file: src/main/java/com/acme/multi/ledger/aggregates/Account.java
+      file: src/main/java/com/example/multi/ledger/aggregates/Account.java
       line: 10
       anchor: extends AggregateRoot<AccountId, AccountEvent, Account>
     declared:
@@ -55,11 +55,11 @@ lanes:
     detected: blocking
     signals:
     - kind: entities-dir
-      file: src/main/java/com/acme/multi/catalog/entities/Product.java
+      file: src/main/java/com/example/multi/catalog/entities/Product.java
       line: 12
       anchor: public class Product extends JavaVersionedEntity<String, Product>
     - kind: event-store-reference
-      file: src/main/java/com/acme/multi/catalog/use_cases/reprice_product/RepriceProductHandler.java
+      file: src/main/java/com/example/multi/catalog/use_cases/reprice_product/RepriceProductHandler.java
       line: 34
       anchor: eventStore.appendToStream(PRICE_HISTORY, cmd.id(), List.of(event));
     declared:
@@ -70,11 +70,11 @@ lanes:
     detected: decider
     signals:
     - kind: decider
-      file: src/main/java/com/acme/multi/payments/use_cases/request_payment/RequestPaymentDecider.java
+      file: src/main/java/com/example/multi/payments/use_cases/request_payment/RequestPaymentDecider.java
       line: 10
       anchor: implements EventStreamDecider<RequestPayment, PaymentEvent>
     - kind: decider
-      file: src/main/java/com/acme/multi/payments/use_cases/capture_payment/CapturePaymentDecider.java
+      file: src/main/java/com/example/multi/payments/use_cases/capture_payment/CapturePaymentDecider.java
       line: 11
       anchor: implements EventStreamDecider<CapturePayment, PaymentEvent>
     declared:
@@ -85,7 +85,7 @@ lanes:
     detected: service-entity
     signals:
     - kind: entities-dir
-      file: src/main/java/com/acme/multi/inventory/entities/StockItem.java
+      file: src/main/java/com/example/multi/inventory/entities/StockItem.java
       line: 12
       anchor: public class StockItem extends JavaVersionedEntity<String, StockItem>
     declared:
@@ -96,11 +96,11 @@ must_find:
   gate: '14'
   ess: ESS-G14
   severity: Blocking
-  file: src/main/java/com/acme/multi/ledger/use_cases/open_account/OpenAccountDecider.java
+  file: src/main/java/com/example/multi/ledger/use_cases/open_account/OpenAccountDecider.java
   line: 10
   anchor: implements EventStreamDecider<OpenAccount, AccountEvent>
   also_names:
-  - src/main/java/com/acme/multi/ledger/aggregates/
+  - src/main/java/com/example/multi/ledger/aggregates/
   what: >-
     ledger holds two write designs over one stream: a per-slice decider (open_account) and an aggregate (aggregates/Account.java,
     loaded by post_entry). Both signals named, no lane picked.
@@ -108,11 +108,11 @@ must_find:
   gate: '14'
   ess: ESS-G14
   severity: Blocking
-  file: src/main/java/com/acme/multi/catalog/use_cases/reprice_product/RepriceProductHandler.java
+  file: src/main/java/com/example/multi/catalog/use_cases/reprice_product/RepriceProductHandler.java
   line: 34
   anchor: eventStore.appendToStream(PRICE_HISTORY, cmd.id(), List.of(event));
   also_names:
-  - src/main/java/com/acme/multi/catalog/entities/
+  - src/main/java/com/example/multi/catalog/entities/
   what: >-
     catalog has entities/ and also appends to the event store (an EventStore and an AggregateType in reprice_product):
     the BC is drifting off the service-entity lane.
@@ -120,11 +120,11 @@ must_find:
   gate: '14'
   ess: ESS-G14
   severity: Blocking
-  file: src/main/java/com/acme/multi/payments/use_cases/capture_payment/slice.yaml
+  file: src/main/java/com/example/multi/payments/use_cases/capture_payment/slice.yaml
   line: 11
   anchor: 'lane: aggregate'
   also_names:
-  - src/main/java/com/acme/multi/payments/use_cases/request_payment/slice.yaml
+  - src/main/java/com/example/multi/payments/use_cases/request_payment/slice.yaml
   what: >-
     payments' manifests declare two lanes (request_payment: decider, capture_payment: aggregate). The declared-lane
     cross-check is Blocking and must name which slice sits on which side, even though the code has a single lane
@@ -133,18 +133,18 @@ must_find:
   gate: '14'
   ess: ESS-G14
   severity: Blocking
-  file: src/main/java/com/acme/multi/ledger/use_cases/post_entry/slice.yaml
+  file: src/main/java/com/example/multi/ledger/use_cases/post_entry/slice.yaml
   line: 11
   anchor: 'lane: aggregate'
   also_names:
-  - src/main/java/com/acme/multi/ledger/use_cases/open_account/slice.yaml
+  - src/main/java/com/example/multi/ledger/use_cases/open_account/slice.yaml
   may_merge_with: ML-1
   what: ledger's manifests also declare two lanes. It corroborates ML-1; reporting it inside ML-1 counts.
 - id: ML-5
   gate: '14'
   ess: ESS-G14
   severity: Should-fix
-  file: src/main/java/com/acme/multi/ledger/use_cases/post_entry/slice.yaml
+  file: src/main/java/com/example/multi/ledger/use_cases/post_entry/slice.yaml
   line: 10
   anchor: 'tier: aggregate'
   deterministic: scripts/slice-lint.py reports it (gate 14, tier)
@@ -154,7 +154,7 @@ must_not_find:
 - id: ML-T1
   not_gates:
   - '14'
-  file: src/main/java/com/acme/multi/inventory/
+  file: src/main/java/com/example/multi/inventory/
   why: >-
     inventory is a clean service-entity BC. Lanes are detected per BC; catalog's drift and ledger's conflict in
     the same project say nothing about it.
@@ -162,7 +162,7 @@ must_not_find:
   not_gates:
   - '14'
   - '17'
-  file: src/main/java/com/acme/multi/payments/routing/PaymentCommand.java
+  file: src/main/java/com/example/multi/payments/routing/PaymentCommand.java
   line: 6
   anchor: public interface PaymentCommand {
   why: >-
@@ -171,7 +171,7 @@ must_not_find:
 - id: ML-T3
   not_gates:
   - '14'
-  file: src/main/java/com/acme/multi/ledger/use_cases/post_entry/slice.yaml
+  file: src/main/java/com/example/multi/ledger/use_cases/post_entry/slice.yaml
   line: 10
   anchor: 'tier: aggregate'
   why: >-
@@ -180,7 +180,7 @@ must_not_find:
 - id: ML-T4
   not_gates:
   - '17'
-  file: src/main/java/com/acme/multi/ledger/use_cases/post_entry/PostEntry.java
+  file: src/main/java/com/example/multi/ledger/use_cases/post_entry/PostEntry.java
   line: 5
   anchor: public record PostEntry(AccountId id, long amountMinor) {
   why: >-
@@ -189,7 +189,7 @@ must_not_find:
 - id: ML-T5
   not_gates:
   - '17'
-  file: src/main/java/com/acme/multi/ledger/routing/AccountCommand.java
+  file: src/main/java/com/example/multi/ledger/routing/AccountCommand.java
   line: 6
   anchor: public interface AccountCommand {
   why: 'Same reason: ''routing/ on the aggregate lane'' also presumes a lane was picked.'
@@ -197,7 +197,7 @@ must_not_find:
   not_gates:
   - 4c
   - '4'
-  file: src/main/java/com/acme/multi/ledger/use_cases/post_entry/slice.yaml
+  file: src/main/java/com/example/multi/ledger/use_cases/post_entry/slice.yaml
   line: 16
   anchor: 'writes: [Account]'
   why: Two command slices in one BC writing the same aggregate is the design on every lane.
@@ -205,7 +205,7 @@ must_not_find:
   not_gates:
   - '9'
   - '2'
-  file: src/main/java/com/acme/multi/DeciderWiring.java
+  file: src/main/java/com/example/multi/DeciderWiring.java
   line: 19
   anchor: public class DeciderWiring {
   why: >-
@@ -216,7 +216,7 @@ must_not_find:
   not_gates:
   - '15'
   - '18'
-  file: src/main/java/com/acme/multi/catalog/entities/Products.java
+  file: src/main/java/com/example/multi/catalog/entities/Products.java
   line: 8
   anchor: public class Products extends DelegatingDocumentDbRepository<Product, String> {
   why: >-
@@ -226,7 +226,7 @@ must_not_find:
   not_gates:
   - '5'
   - '16'
-  file: src/main/java/com/acme/multi/inventory/entities/StockItem.java
+  file: src/main/java/com/example/multi/inventory/entities/StockItem.java
   line: 39
   anchor: '@Override public void setVersionValue(long version)'
   why: >-
@@ -235,7 +235,7 @@ must_not_find:
 - id: ML-T10
   not_gates:
   - '14'
-  file: src/main/java/com/acme/multi/payments/use_cases/request_payment/slice.yaml
+  file: src/main/java/com/example/multi/payments/use_cases/request_payment/slice.yaml
   line: 11
   anchor: 'lane: decider'
   why: request_payment declares the lane the code has; the wrong side of ML-3 is capture_payment.
@@ -256,12 +256,12 @@ tolerated:
 - id: TOL-stale-lane
   gates:
   - '14'
-  file: src/main/java/com/acme/multi/payments/use_cases/capture_payment/slice.yaml
+  file: src/main/java/com/example/multi/payments/use_cases/capture_payment/slice.yaml
   what: Also rating capture_payment's lane as stale (Should-fix, repaired by --fix-manifests) beside ML-3.
 - id: TOL-history
   gates:
   - '*'
-  file: src/main/java/com/acme/multi/catalog/CLAUDE.md
+  file: src/main/java/com/example/multi/catalog/CLAUDE.md
   what: >-
     Pointing out that catalog's CLAUDE.md says 'no history' while reprice_product keeps one; it corroborates ML-2.
 reader:
@@ -270,9 +270,9 @@ reader:
     import only when unused)
   lane_signals: see lanes.*.signals
   event_store_references:
-  - file: src/main/java/com/acme/multi/catalog/use_cases/reprice_product/RepriceProductHandler.java
+  - file: src/main/java/com/example/multi/catalog/use_cases/reprice_product/RepriceProductHandler.java
     line: 20
     anchor: private final EventStore eventStore;
-  - file: src/main/java/com/acme/multi/catalog/use_cases/reprice_product/RepriceProductHandler.java
+  - file: src/main/java/com/example/multi/catalog/use_cases/reprice_product/RepriceProductHandler.java
     line: 16
     anchor: private static final AggregateType PRICE_HISTORY = AggregateType.of("ProductPrices");

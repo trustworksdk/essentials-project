@@ -10,7 +10,7 @@
   "lanes": [
     {
       "bc": "billing",
-      "path": "src/main/*/com/acme/billing",
+      "path": "src/main/*/com/example/billing",
       "detected": "aggregate",
       "signals": {
         "decider": 0,
@@ -88,9 +88,9 @@
       "gate": "6 discriminator",
       "id": "ESS-G6",
       "slice": "billing.invoice_list",
-      "file": "src/main/java/com/acme/billing/views/invoice_list/slice.yaml",
+      "file": "src/main/java/com/example/billing/views/invoice_list/slice.yaml",
       "line": 17,
-      "message": "declared endpoint GET /api/billing/invoices?paid=true&minAmount=: InvoiceListAPI.paidInvoices (src/main/java/com/acme/billing/views/invoice_list/InvoiceListAPI.java:29) does not bind minAmount; InvoiceListAPI.byAmount (src/main/java/com/acme/billing/views/invoice_list/InvoiceListAPI.java:36) does not bind paid=true and requires params maxAmount the endpoint does not declare",
+      "message": "declared endpoint GET /api/billing/invoices?paid=true&minAmount=: InvoiceListAPI.paidInvoices (src/main/java/com/example/billing/views/invoice_list/InvoiceListAPI.java:29) does not bind minAmount; InvoiceListAPI.byAmount (src/main/java/com/example/billing/views/invoice_list/InvoiceListAPI.java:36) does not bind paid=true and requires params maxAmount the endpoint does not declare",
       "hint": "each discriminator after `?` must be bound in the handler that serves the route (manifest-guide.md \u00a73)"
     }
   ],

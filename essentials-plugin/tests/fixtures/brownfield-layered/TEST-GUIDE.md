@@ -6,7 +6,7 @@ A synthetic Maven/Spring/JPA service organised **by technical layer**, used to e
 
 ```
 pom.xml                                  Spring Boot 3 + web + data-jpa
-src/main/java/com/acme/shop/
+src/main/java/com/example/shop/
   controller/   OrderController          5 mappings — the god controller
                 InvoiceController        2 mappings
                 ReportController         1 mapping — the trap

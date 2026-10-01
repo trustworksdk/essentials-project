@@ -12,7 +12,7 @@ essentials-not-on-law/     a layered Spring/JPA service that depends on Essentia
 
 Most cases run in a copy of `../worked-example/` (the `orders` bounded context on the decider lane:
 `place_order`, `cancel_order`, `order_list`, `screen_order`, `warehouse`), with `{{packagePath}}`
-rendered to `com.acme.shop`. Three cases walk the gate ladder of §1, each in its own tree:
+rendered to `com.example.shop`. Three cases walk the gate ladder of §1, each in its own tree:
 
 | Case | Tree | Expected |
 |---|---|---|

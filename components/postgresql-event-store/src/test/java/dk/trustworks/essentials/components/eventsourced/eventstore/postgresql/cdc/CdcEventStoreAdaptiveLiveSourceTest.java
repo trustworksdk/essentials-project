@@ -243,11 +243,11 @@ class CdcEventStoreAdaptiveLiveSourceTest {
         var fx = fixture(Duration.ofMillis(100));
         fx.availability.active("slot");
 
-        var received = subscribe(fx, Optional.of(new TestTenant("acme")));
+        var received = subscribe(fx, Optional.of(new TestTenant("example")));
 
         fx.bus.publish(List.of(
                 event(1),                  // tenant-less     -> must be delivered (IS NULL)
-                tenantEvent(2, "acme")     // matching tenant -> delivered (= :tenant)
+                tenantEvent(2, "example")  // matching tenant -> delivered (= :tenant)
                                                   ));
 
         await().atMost(Duration.ofSeconds(2)).until(() -> received.size() >= 2);
@@ -260,19 +260,19 @@ class CdcEventStoreAdaptiveLiveSourceTest {
         // BackfillThenLiveOrdered's strict expectedNext drain. An other-tenant event sitting in the
         // MIDDLE of the global-order sequence must be excluded WITHOUT stalling the events after it —
         // the common multi-tenant case where tenants interleave in global_event_order. With the filter
-        // misplaced upstream of the drain, event 3 (globex) would punch a hole and events 4 & 5 would
+        // misplaced upstream of the drain, event 3 (example2) would punch a hole and events 4 & 5 would
         // never be delivered.
         var fx = fixture(Duration.ofMillis(100));
         fx.availability.active("slot");
 
-        var received = subscribe(fx, Optional.of(new TestTenant("acme")));
+        var received = subscribe(fx, Optional.of(new TestTenant("example")));
 
         fx.bus.publish(List.of(
-                event(1),                  // tenant-less     -> delivered
-                tenantEvent(2, "acme"),    // matching tenant -> delivered
-                tenantEvent(3, "globex"),  // other tenant    -> excluded (mid-sequence — must not stall)
-                event(4),                  // tenant-less     -> delivered (proves no stall)
-                tenantEvent(5, "acme")     // matching tenant -> delivered
+                event(1),                   // tenant-less     -> delivered
+                tenantEvent(2, "example"),  // matching tenant -> delivered
+                tenantEvent(3, "example2"), // other tenant    -> excluded (mid-sequence — must not stall)
+                event(4),                   // tenant-less     -> delivered (proves no stall)
+                tenantEvent(5, "example")   // matching tenant -> delivered
                                                   ));
 
         await().atMost(Duration.ofSeconds(2)).until(() -> received.size() >= 4);

@@ -1,6 +1,6 @@
 # Test guide — `service-entity`
 
-A **synthetic** Essentials bounded context (`com.acme.shipping`) on the service-entity write-style lane
+A **synthetic** Essentials bounded context (`com.example.shipping`) on the service-entity write-style lane
 (`rules/slice-design.md` §R5). Never shipped, not a template — to copy something, copy
 `references/slice/templates/` instead. `brownfield-layered/` is the `slice-discover` counterpart.
 

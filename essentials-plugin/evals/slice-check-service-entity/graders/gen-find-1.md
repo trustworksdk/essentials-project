@@ -6,7 +6,7 @@ type: llm
 The agent's final message is the report `/essentials:slice-check` printed for a test project. Paths in it are relative to the project root, and a report may cite a file by path, by `path:line`, or by its type or directory name.
 
 PASS if the report contains a finding that matches all of:
-- it concerns `src/main/java/com/acme/shipping/events/ShippingOrderRegistered.java` (symbol `ShippingOrderRegistered.from`)
+- it concerns `src/main/java/com/example/shipping/events/ShippingOrderRegistered.java` (symbol `ShippingOrderRegistered.from`)
 - it is filed under gate 8d (§R4), id ESS-G8d, or plainly describes that check
 - its severity is Blocking
 - its substance: Command-type leakage into events/, the BC's importable surface: a slice-private wire contract becomes part of every foreign consumer's compile surface.

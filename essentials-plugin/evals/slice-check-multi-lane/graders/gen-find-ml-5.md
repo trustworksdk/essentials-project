@@ -6,7 +6,7 @@ type: llm
 The agent's final message is the report `/essentials:slice-check` printed for a test project. Paths in it are relative to the project root, and a report may cite a file by path, by `path:line`, or by its type or directory name.
 
 PASS if the report contains a finding that matches all of:
-- it concerns `src/main/java/com/acme/multi/ledger/use_cases/post_entry/slice.yaml`
+- it concerns `src/main/java/com/example/multi/ledger/use_cases/post_entry/slice.yaml`
 - it is filed under gate 14 (Write-style lane (§R5)), id ESS-G14, or plainly describes that check
 - its severity is Should-fix
 - its substance: tier: aggregate is a write style, not an architectureTier value. Repair: tier: cqrs-es and lane: aggregate.

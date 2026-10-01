@@ -8,9 +8,9 @@
   "bcs": [
     {
       "name": "shipping",
-      "path": "src/main/*/com/acme/shipping",
+      "path": "src/main/*/com/example/shipping",
       "dirs": [
-        "src/main/java/com/acme/shipping"
+        "src/main/java/com/example/shipping"
       ],
       "languages": [
         "java"
@@ -26,7 +26,7 @@
           "decider": [],
           "aggregates": null,
           "entities": {
-            "dir": "src/main/*/com/acme/shipping/entities",
+            "dir": "src/main/*/com/example/shipping/entities",
             "files": 1
           },
           "eventStore": []
@@ -35,22 +35,22 @@
           {
             "slice": "shipping.auto_ship",
             "lane": "service-entity",
-            "file": "src/main/java/com/acme/shipping/automations/auto_ship/slice.yaml"
+            "file": "src/main/java/com/example/shipping/automations/auto_ship/slice.yaml"
           },
           {
             "slice": "shipping.register_shipping_order",
             "lane": "service-entity",
-            "file": "src/main/java/com/acme/shipping/use_cases/register_shipping_order/slice.yaml"
+            "file": "src/main/java/com/example/shipping/use_cases/register_shipping_order/slice.yaml"
           },
           {
             "slice": "shipping.ship_order",
             "lane": "service-entity",
-            "file": "src/main/java/com/acme/shipping/use_cases/ship_order/slice.yaml"
+            "file": "src/main/java/com/example/shipping/use_cases/ship_order/slice.yaml"
           },
           {
             "slice": "shipping.order_status",
             "lane": "service-entity",
-            "file": "src/main/java/com/acme/shipping/views/order_status/slice.yaml"
+            "file": "src/main/java/com/example/shipping/views/order_status/slice.yaml"
           }
         ],
         "detected": "service-entity?"
@@ -62,13 +62,13 @@
       "id": "shipping.auto_ship",
       "idSource": "manifest",
       "bc": "shipping",
-      "bcPath": "src/main/*/com/acme/shipping",
-      "dir": "src/main/java/com/acme/shipping/automations/auto_ship",
+      "bcPath": "src/main/*/com/example/shipping",
+      "dir": "src/main/java/com/example/shipping/automations/auto_ship",
       "role": "automations",
       "kind": "automation",
-      "manifest": "src/main/java/com/acme/shipping/automations/auto_ship/slice.yaml",
+      "manifest": "src/main/java/com/example/shipping/automations/auto_ship/slice.yaml",
       "language": "java",
-      "package": "com.acme.shipping.automations.auto_ship",
+      "package": "com.example.shipping.automations.auto_ship",
       "files": [
         "AutoShipProcessor.java"
       ],
@@ -80,13 +80,13 @@
           "annotation": "EventListener",
           "annotationFqn": "org.springframework.context.event.EventListener",
           "role": "event",
-          "file": "src/main/java/com/acme/shipping/automations/auto_ship/AutoShipProcessor.java",
+          "file": "src/main/java/com/example/shipping/automations/auto_ship/AutoShipProcessor.java",
           "line": 25,
           "annotationLine": 24,
           "message": {
             "written": "ShippingOrderRegistered",
             "name": "ShippingOrderRegistered",
-            "fqn": "com.acme.shipping.events.ShippingOrderRegistered",
+            "fqn": "com.example.shipping.events.ShippingOrderRegistered",
             "resolvedBy": "import"
           },
           "params": [
@@ -102,19 +102,19 @@
       "dispatches": [
         {
           "name": "ShipOrder",
-          "fqn": "com.acme.shipping.use_cases.ship_order.ShipOrder",
+          "fqn": "com.example.shipping.use_cases.ship_order.ShipOrder",
           "resolvedBy": "import",
           "via": "sendAndDontWait",
-          "file": "src/main/java/com/acme/shipping/automations/auto_ship/AutoShipProcessor.java",
+          "file": "src/main/java/com/example/shipping/automations/auto_ship/AutoShipProcessor.java",
           "line": 26,
           "own": false
         },
         {
           "name": "ShipOrder",
-          "fqn": "com.acme.shipping.use_cases.ship_order.ShipOrder",
+          "fqn": "com.example.shipping.use_cases.ship_order.ShipOrder",
           "resolvedBy": "import",
           "via": "sendAndDontWait",
-          "file": "src/main/java/com/acme/shipping/automations/auto_ship/AutoShipProcessor.java",
+          "file": "src/main/java/com/example/shipping/automations/auto_ship/AutoShipProcessor.java",
           "line": 31,
           "own": false
         }
@@ -129,13 +129,13 @@
       "id": "shipping.register_shipping_order",
       "idSource": "manifest",
       "bc": "shipping",
-      "bcPath": "src/main/*/com/acme/shipping",
-      "dir": "src/main/java/com/acme/shipping/use_cases/register_shipping_order",
+      "bcPath": "src/main/*/com/example/shipping",
+      "dir": "src/main/java/com/example/shipping/use_cases/register_shipping_order",
       "role": "use_cases",
       "kind": "command",
-      "manifest": "src/main/java/com/acme/shipping/use_cases/register_shipping_order/slice.yaml",
+      "manifest": "src/main/java/com/example/shipping/use_cases/register_shipping_order/slice.yaml",
       "language": "java",
-      "package": "com.acme.shipping.use_cases.register_shipping_order",
+      "package": "com.example.shipping.use_cases.register_shipping_order",
       "files": [
         "RegisterShippingOrder.java",
         "RegisterShippingOrderAPI.java",
@@ -149,13 +149,13 @@
           "annotation": "CmdHandler",
           "annotationFqn": "dk.trustworks.essentials.reactive.command.CmdHandler",
           "role": "command",
-          "file": "src/main/java/com/acme/shipping/use_cases/register_shipping_order/RegisterShippingOrderHandler.java",
+          "file": "src/main/java/com/example/shipping/use_cases/register_shipping_order/RegisterShippingOrderHandler.java",
           "line": 25,
           "annotationLine": 23,
           "message": {
             "written": "RegisterShippingOrder",
             "name": "RegisterShippingOrder",
-            "fqn": "com.acme.shipping.use_cases.register_shipping_order.RegisterShippingOrder",
+            "fqn": "com.example.shipping.use_cases.register_shipping_order.RegisterShippingOrder",
             "resolvedBy": "same-package"
           },
           "params": [
@@ -170,20 +170,20 @@
       "handles": [
         {
           "name": "RegisterShippingOrder",
-          "fqn": "com.acme.shipping.use_cases.register_shipping_order.RegisterShippingOrder",
+          "fqn": "com.example.shipping.use_cases.register_shipping_order.RegisterShippingOrder",
           "resolvedBy": "same-package",
           "via": "CmdHandler",
-          "file": "src/main/java/com/acme/shipping/use_cases/register_shipping_order/RegisterShippingOrderHandler.java",
+          "file": "src/main/java/com/example/shipping/use_cases/register_shipping_order/RegisterShippingOrderHandler.java",
           "line": 25
         }
       ],
       "dispatches": [
         {
           "name": "RegisterShippingOrder",
-          "fqn": "com.acme.shipping.use_cases.register_shipping_order.RegisterShippingOrder",
+          "fqn": "com.example.shipping.use_cases.register_shipping_order.RegisterShippingOrder",
           "resolvedBy": "same-package",
           "via": "send",
-          "file": "src/main/java/com/acme/shipping/use_cases/register_shipping_order/RegisterShippingOrderAPI.java",
+          "file": "src/main/java/com/example/shipping/use_cases/register_shipping_order/RegisterShippingOrderAPI.java",
           "line": 26,
           "own": true
         }
@@ -191,10 +191,10 @@
       "publishes": [
         {
           "name": "ShippingOrderRegistered",
-          "fqn": "com.acme.shipping.events.ShippingOrderRegistered",
+          "fqn": "com.example.shipping.events.ShippingOrderRegistered",
           "resolvedBy": "import",
           "via": "eventBus.publish",
-          "file": "src/main/java/com/acme/shipping/use_cases/register_shipping_order/RegisterShippingOrderHandler.java",
+          "file": "src/main/java/com/example/shipping/use_cases/register_shipping_order/RegisterShippingOrderHandler.java",
           "line": 28
         }
       ],
@@ -203,7 +203,7 @@
         {
           "class": "RegisterShippingOrderAPI",
           "method": "register",
-          "file": "src/main/java/com/acme/shipping/use_cases/register_shipping_order/RegisterShippingOrderAPI.java",
+          "file": "src/main/java/com/example/shipping/use_cases/register_shipping_order/RegisterShippingOrderAPI.java",
           "line": 25,
           "annotationLine": 24,
           "annotation": "PostMapping",
@@ -218,7 +218,7 @@
           "queryParams": [],
           "requestBody": {
             "name": "Body",
-            "fqn": "com.acme.shipping.use_cases.register_shipping_order.RegisterShippingOrderAPI.Body",
+            "fqn": "com.example.shipping.use_cases.register_shipping_order.RegisterShippingOrderAPI.Body",
             "resolvedBy": "same-file"
           }
         }
@@ -230,13 +230,13 @@
       "id": "shipping.ship_order",
       "idSource": "manifest",
       "bc": "shipping",
-      "bcPath": "src/main/*/com/acme/shipping",
-      "dir": "src/main/java/com/acme/shipping/use_cases/ship_order",
+      "bcPath": "src/main/*/com/example/shipping",
+      "dir": "src/main/java/com/example/shipping/use_cases/ship_order",
       "role": "use_cases",
       "kind": "command",
-      "manifest": "src/main/java/com/acme/shipping/use_cases/ship_order/slice.yaml",
+      "manifest": "src/main/java/com/example/shipping/use_cases/ship_order/slice.yaml",
       "language": "java",
-      "package": "com.acme.shipping.use_cases.ship_order",
+      "package": "com.example.shipping.use_cases.ship_order",
       "files": [
         "ShipOrder.java",
         "ShipOrderAPI.java",
@@ -250,13 +250,13 @@
           "annotation": "CmdHandler",
           "annotationFqn": "dk.trustworks.essentials.reactive.command.CmdHandler",
           "role": "command",
-          "file": "src/main/java/com/acme/shipping/use_cases/ship_order/ShipOrderHandler.java",
+          "file": "src/main/java/com/example/shipping/use_cases/ship_order/ShipOrderHandler.java",
           "line": 24,
           "annotationLine": 22,
           "message": {
             "written": "ShipOrder",
             "name": "ShipOrder",
-            "fqn": "com.acme.shipping.use_cases.ship_order.ShipOrder",
+            "fqn": "com.example.shipping.use_cases.ship_order.ShipOrder",
             "resolvedBy": "same-package"
           },
           "params": [
@@ -271,20 +271,20 @@
       "handles": [
         {
           "name": "ShipOrder",
-          "fqn": "com.acme.shipping.use_cases.ship_order.ShipOrder",
+          "fqn": "com.example.shipping.use_cases.ship_order.ShipOrder",
           "resolvedBy": "same-package",
           "via": "CmdHandler",
-          "file": "src/main/java/com/acme/shipping/use_cases/ship_order/ShipOrderHandler.java",
+          "file": "src/main/java/com/example/shipping/use_cases/ship_order/ShipOrderHandler.java",
           "line": 24
         }
       ],
       "dispatches": [
         {
           "name": "ShipOrder",
-          "fqn": "com.acme.shipping.use_cases.ship_order.ShipOrder",
+          "fqn": "com.example.shipping.use_cases.ship_order.ShipOrder",
           "resolvedBy": "same-package",
           "via": "send",
-          "file": "src/main/java/com/acme/shipping/use_cases/ship_order/ShipOrderAPI.java",
+          "file": "src/main/java/com/example/shipping/use_cases/ship_order/ShipOrderAPI.java",
           "line": 22,
           "own": true
         }
@@ -292,10 +292,10 @@
       "publishes": [
         {
           "name": "OrderShipped",
-          "fqn": "com.acme.shipping.events.OrderShipped",
+          "fqn": "com.example.shipping.events.OrderShipped",
           "resolvedBy": "import",
           "via": "eventBus.publish",
-          "file": "src/main/java/com/acme/shipping/use_cases/ship_order/ShipOrderHandler.java",
+          "file": "src/main/java/com/example/shipping/use_cases/ship_order/ShipOrderHandler.java",
           "line": 28
         }
       ],
@@ -304,7 +304,7 @@
         {
           "class": "ShipOrderAPI",
           "method": "ship",
-          "file": "src/main/java/com/acme/shipping/use_cases/ship_order/ShipOrderAPI.java",
+          "file": "src/main/java/com/example/shipping/use_cases/ship_order/ShipOrderAPI.java",
           "line": 21,
           "annotationLine": 20,
           "annotation": "PostMapping",
@@ -327,13 +327,13 @@
       "id": "shipping.order_status",
       "idSource": "manifest",
       "bc": "shipping",
-      "bcPath": "src/main/*/com/acme/shipping",
-      "dir": "src/main/java/com/acme/shipping/views/order_status",
+      "bcPath": "src/main/*/com/example/shipping",
+      "dir": "src/main/java/com/example/shipping/views/order_status",
       "role": "views",
       "kind": "view",
-      "manifest": "src/main/java/com/acme/shipping/views/order_status/slice.yaml",
+      "manifest": "src/main/java/com/example/shipping/views/order_status/slice.yaml",
       "language": "java",
-      "package": "com.acme.shipping.views.order_status",
+      "package": "com.example.shipping.views.order_status",
       "files": [
         "OrderStatusAPI.java",
         "OrderStatusQueries.java",
@@ -349,7 +349,7 @@
         {
           "class": "OrderStatusAPI",
           "method": "list",
-          "file": "src/main/java/com/acme/shipping/views/order_status/OrderStatusAPI.java",
+          "file": "src/main/java/com/example/shipping/views/order_status/OrderStatusAPI.java",
           "line": 22,
           "annotationLine": 21,
           "annotation": "GetMapping",
@@ -372,7 +372,7 @@
         {
           "class": "OrderStatusAPI",
           "method": "byStatus",
-          "file": "src/main/java/com/acme/shipping/views/order_status/OrderStatusAPI.java",
+          "file": "src/main/java/com/example/shipping/views/order_status/OrderStatusAPI.java",
           "line": 27,
           "annotationLine": 26,
           "annotation": "GetMapping",
@@ -397,7 +397,7 @@
         {
           "class": "OrderStatusAPI",
           "method": "get",
-          "file": "src/main/java/com/acme/shipping/views/order_status/OrderStatusAPI.java",
+          "file": "src/main/java/com/example/shipping/views/order_status/OrderStatusAPI.java",
           "line": 32,
           "annotationLine": 31,
           "annotation": "GetMapping",
@@ -431,7 +431,7 @@
               "note": null
             }
           ],
-          "declaredIn": "src/main/java/com/acme/shipping/views/order_status/OrderStatusView.java",
+          "declaredIn": "src/main/java/com/example/shipping/views/order_status/OrderStatusView.java",
           "line": 3,
           "matchedBy": [
             "name"
@@ -450,7 +450,7 @@
       "fields": [
         "orderId: String"
       ],
-      "declaredIn": "src/main/java/com/acme/shipping/events/OrderShipped.java",
+      "declaredIn": "src/main/java/com/example/shipping/events/OrderShipped.java",
       "line": 3,
       "alsoDeclaredIn": []
     },
@@ -464,7 +464,7 @@
         "orderId: OrderId",
         "destination: String"
       ],
-      "declaredIn": "src/main/java/com/acme/shipping/use_cases/register_shipping_order/RegisterShippingOrder.java",
+      "declaredIn": "src/main/java/com/example/shipping/use_cases/register_shipping_order/RegisterShippingOrder.java",
       "line": 5,
       "alsoDeclaredIn": []
     },
@@ -477,7 +477,7 @@
       "fields": [
         "orderId: OrderId"
       ],
-      "declaredIn": "src/main/java/com/acme/shipping/use_cases/ship_order/ShipOrder.java",
+      "declaredIn": "src/main/java/com/example/shipping/use_cases/ship_order/ShipOrder.java",
       "line": 5,
       "alsoDeclaredIn": []
     },
@@ -491,7 +491,7 @@
         "orderId: String",
         "destination: String"
       ],
-      "declaredIn": "src/main/java/com/acme/shipping/events/ShippingOrderRegistered.java",
+      "declaredIn": "src/main/java/com/example/shipping/events/ShippingOrderRegistered.java",
       "line": 5,
       "alsoDeclaredIn": []
     }

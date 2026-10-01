@@ -6,7 +6,7 @@ type: llm
 The agent's final message is the report `/essentials:slice-discover` printed for a test project. Paths in it are relative to the project root, and a report may cite a file by path, by `path:line`, or by its type or directory name.
 
 PASS if the report contains a finding that matches all of:
-- it concerns `src/main/java/com/acme/shop/repository/OrderRepository.java`
+- it concerns `src/main/java/com/example/shop/repository/OrderRepository.java`
 - it is a write-repository-query-drift finding
 - its substance: Write-repository finders serve OrderController.list/.get, ReportController and InvoiceController.unpaid.
 FAIL if no finding matches. Ignore formatting, ordering and other findings.

@@ -1,9 +1,9 @@
 {
   "defaults": {
     "projectName": "Shop",
-    "groupId": "com.acme",
+    "groupId": "com.example",
     "artifactId": "shop",
-    "packagePath": "com.acme.shop",
+    "packagePath": "com.example.shop",
     "web": "webflux",
     "frontend": "none",
     "compose": false,

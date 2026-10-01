@@ -300,7 +300,7 @@ The template consumes exactly this shape, and `slice-index.py map` emits it: eve
 ```json
 {
   "meta": {
-    "root": "backend/src/main/kotlin/com/acme/shop",
+    "root": "backend/src/main/kotlin/com/example/shop",
     "sha": "a1b2c3d",
     "project": "shop",
     "scope": "full",
@@ -316,7 +316,7 @@ The template consumes exactly this shape, and `slice-index.py map` emits it: eve
     { "id": "orders.place_order", "bc": "orders", "name": "place_order", "kind": "command",
       "status": "live", "owner": "orders-team", "summary": "Accept a new order",
       "language": "kotlin", "path": "…/orders/use_cases/place_order",
-      "package": "com.acme.shop.orders.use_cases.place_order",
+      "package": "com.example.shop.orders.use_cases.place_order",
       "files": ["PlaceOrder.kt", "PlaceOrderDecider.kt", "PlaceOrderAPI.kt", "OrderPlaced.kt"],
       "handles": ["PlaceOrder"], "serves": [], "publishes": ["OrderPlaced"], "consumes": [],
       "dispatches": [], "writes": ["Order"], "owns": [], "projections": [],

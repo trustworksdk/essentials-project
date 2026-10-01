@@ -1,6 +1,6 @@
 ---
 type: llm
-focus: { source: file, path: "backend/src/main/java/com/acme/shop/orders/use_cases/place_order/PlaceOrderDecider.java" }
+focus: { source: file, path: "backend/src/main/java/com/example/shop/orders/use_cases/place_order/PlaceOrderDecider.java" }
 ---
 
 The file is the decider of a `place_order` command slice. The user asked for one invariant: a PlaceOrder whose

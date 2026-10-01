@@ -191,7 +191,7 @@ class Rules(unittest.TestCase):
             for h in s["handlers"]:
                 seen[(s["id"], h["message"]["written"])] = (h["message"]["name"], h["message"]["resolvedBy"])
         self.assertEqual(seen[("orders.order_list", "Placed")], ("OrderPlaced", "alias"))
-        self.assertEqual(seen[("orders.order_list", "com.acme.shop.orders.events.OrderCancelled")],
+        self.assertEqual(seen[("orders.order_list", "com.example.shop.orders.events.OrderCancelled")],
                          ("OrderCancelled", "fqn"))
         self.assertEqual(seen[("orders.warehouse", "Placement")], ("OrderPlaced", "typealias"))
         self.assertEqual(seen[("orders.warehouse", "OrderCancelled?")], ("OrderCancelled", "import"))
@@ -279,7 +279,7 @@ class Rules(unittest.TestCase):
         self.assertEqual(mappings, [("edge.java_edge", ("/edge",)), ("edge.kotlin_edge", ("/edge",))])
         anonymous = [na for s in self.facts["lexer"]["slices"] for na in s["notAnalysed"]]
         self.assertEqual(len(anonymous), 2, "a handler in an anonymous class is reported, never dropped")
-        self.assertEqual([b["path"] for b in self.facts["lexer"]["bcs"]], ["src/main/*/com/acme/edge"],
+        self.assertEqual([b["path"] for b in self.facts["lexer"]["bcs"]], ["src/main/*/com/example/edge"],
                          "one BC across the java and kotlin source roots")
 
     def test_unparsed_is_loud(self):
@@ -298,7 +298,7 @@ class Rules(unittest.TestCase):
 
     def test_slice_package_from_sub_packages(self):
         gateway = self.slice("java-clean", "orders.payment_gateway")
-        self.assertEqual(gateway["package"], "com.acme.shop.orders.external_systems.payment_gateway")
+        self.assertEqual(gateway["package"], "com.example.shop.orders.external_systems.payment_gateway")
         self.assertEqual(gateway["files"], ["incoming/PaymentWebhook.java"])
 
     def test_messages_identity_prefers_the_aggregate_id(self):

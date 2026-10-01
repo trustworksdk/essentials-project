@@ -6,7 +6,7 @@ type: llm
 The agent's final message is the report `/essentials:slice-check` printed for a test project. Paths in it are relative to the project root, and a report may cite a file by path, by `path:line`, or by its type or directory name.
 
 PASS if the report contains a finding that matches all of:
-- it concerns `src/main/java/com/acme/billing/views/invoice_list/slice.yaml`
+- it concerns `src/main/java/com/example/billing/views/invoice_list/slice.yaml`
 - it is filed under gate 6 (§R2), id ESS-G6, or plainly describes that check
 - its severity is Should-fix
 - its substance: The endpoint ?paid=true&minAmount= is served by no handler. paid=true is bound only by paidInvoices() and minAmount only by byAmount(); no single handler binds both. A per-slice union check passes it, which is the bug; the binding is per handler.

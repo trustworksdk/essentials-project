@@ -5,7 +5,7 @@
       "lane": "decider",
       "host": "java-pg-event-sourced",
       "inputs": {
-        "packagePath": "com.acme.shop",
+        "packagePath": "com.example.shop",
         "bc": "orders",
         "Aggregate": "Order",
         "AggregateType": "Orders"
@@ -59,7 +59,7 @@
       "lane": "decider",
       "host": "java-pg-event-sourced",
       "inputs": {
-        "packagePath": "com.acme.shop"
+        "packagePath": "com.example.shop"
       },
       "steps": [
         {
@@ -93,7 +93,7 @@
       "lane": "aggregate",
       "host": "java-pg-event-sourced",
       "inputs": {
-        "packagePath": "com.acme.shop",
+        "packagePath": "com.example.shop",
         "bc": "orders",
         "Aggregate": "Order",
         "Aggregates": "Orders",
@@ -147,7 +147,7 @@
       "lane": "service-entity",
       "host": "java-mongo",
       "inputs": {
-        "packagePath": "com.acme.shop",
+        "packagePath": "com.example.shop",
         "bc": "orders",
         "Aggregate": "Order"
       },
@@ -186,7 +186,7 @@
       "lane": "decider",
       "host": "kotlin-pg-event-sourced",
       "inputs": {
-        "packagePath": "com.acme.shop",
+        "packagePath": "com.example.shop",
         "bc": "orders",
         "Aggregate": "Order",
         "AggregateType": "Orders"
@@ -240,7 +240,7 @@
       "lane": "decider",
       "host": "kotlin-pg-event-sourced",
       "inputs": {
-        "packagePath": "com.acme.shop"
+        "packagePath": "com.example.shop"
       },
       "steps": [
         {
@@ -274,7 +274,7 @@
       "lane": "service-entity",
       "host": "kotlin-mongo",
       "inputs": {
-        "packagePath": "com.acme.shop",
+        "packagePath": "com.example.shop",
         "bc": "orders",
         "Aggregate": "Order"
       },

@@ -21,11 +21,11 @@ deterministic:
     - {id: ESS-089, check: ess-089-reactive-bpp-disabled, kind: confirmed, severity: Blocking,
        file: src/main/resources/application.properties, line: 2, mechanical: true}
     - {id: ESS-064, check: ess-064-jdbi-create, kind: candidate, severity: Should-fix,
-       file: src/main/java/com/acme/shipping/_loadtest/LoadHarness.java, line: 26, mechanical: false}
+       file: src/main/java/com/example/shipping/_loadtest/LoadHarness.java, line: 26, mechanical: false}
     - {id: ESS-097, check: ess-097-queue-statistics, kind: confirmed, severity: Should-fix,
        file: src/main/resources/application.properties, line: 3, mechanical: true}
     - {id: ESS-016, check: ess-016-local-command-bus, kind: candidate, severity: Advisory,
-       file: src/main/java/com/acme/shipping/config/CommandBusConfig.java, line: 13, mechanical: false}
+       file: src/main/java/com/example/shipping/config/CommandBusConfig.java, line: 13, mechanical: false}
     notRun: []
   stack-lint:             # head minus base: one new finding; the rest is pre-existing
     new:
@@ -36,7 +36,7 @@ deterministic:
   slice-source:
     new:
     - {id: ESS-G6, gate: 6 undeclared mapping, severity: Should-fix,
-       file: src/main/java/com/acme/shipping/views/order_status/OrderStatusAPI.java, line: 42}
+       file: src/main/java/com/example/shipping/views/order_status/OrderStatusAPI.java, line: 42}
 
 must_find:
 - id: R1
@@ -74,10 +74,10 @@ must_find:
   gate: null
   ess: ESS-016
   severity: Advisory
-  file: src/main/java/com/acme/shipping/config/CommandBusConfig.java
+  file: src/main/java/com/example/shipping/config/CommandBusConfig.java
   line: 13
   anchor: 'return new LocalCommandBus();'
-  also_names: [src/main/java/com/acme/shipping/automations/auto_ship/AutoShipProcessor.java]
+  also_names: [src/main/java/com/example/shipping/automations/auto_ship/AutoShipProcessor.java]
   what: >-
     The review-scan candidate is CONFIRMED, with evidence: the auto_ship automation sends ShipOrder with
     sendAndDontWait, and a LocalCommandBus keeps such commands in memory only, so they are lost on restart.
@@ -86,7 +86,7 @@ must_find:
   ess: ESS-G6
   severity: Should-fix
   deterministic: true
-  file: src/main/java/com/acme/shipping/views/order_status/OrderStatusAPI.java
+  file: src/main/java/com/example/shipping/views/order_status/OrderStatusAPI.java
   line: 42
   anchor: 'public void purge(@PathVariable String orderId) {'
   symbol: OrderStatusAPI.purge
@@ -95,7 +95,7 @@ must_find:
   gate: 15a
   ess: ESS-G15a
   severity: Blocking
-  file: src/main/java/com/acme/shipping/views/order_status/OrderStatusAPI.java
+  file: src/main/java/com/example/shipping/views/order_status/OrderStatusAPI.java
   line: 43
   anchor: 'shippingOrders.deleteById(orderId);'
   symbol: OrderStatusAPI.purge
@@ -104,7 +104,7 @@ must_find:
   gate: '16'
   ess: ESS-G16
   severity: Should-fix
-  file: src/main/java/com/acme/shipping/entities/ShippingOrder.java
+  file: src/main/java/com/example/shipping/entities/ShippingOrder.java
   line: 53
   anchor: 'public void setCancelled(boolean cancelled) {'
   symbol: ShippingOrder.setCancelled
@@ -113,7 +113,7 @@ must_find:
 dismissed:
 - id: D1
   ess: ESS-064
-  file: src/main/java/com/acme/shipping/_loadtest/LoadHarness.java
+  file: src/main/java/com/example/shipping/_loadtest/LoadHarness.java
   line: 26
   anchor: 'return Jdbi.create(dataSource).withHandle(handle ->'
   why: A read-only row count for the load report; there is no write and no Spring transaction to join.
@@ -137,55 +137,55 @@ must_not_find:
   why: The same defect as R1; one row per defect.
 - id: N3
   not_gates: ['6']
-  file: src/main/java/com/acme/shipping/use_cases/cancel_shipment/CancelShipmentAPI.java
+  file: src/main/java/com/example/shipping/use_cases/cancel_shipment/CancelShipmentAPI.java
   line: 20
   anchor: '@PostMapping("/{orderId}/cancel")'
   why: One method-level mapping under a class-level @RequestMapping.
 - id: N4
   not_gates: ['8', 8d]
-  file: src/main/java/com/acme/shipping/entities/ShippingOrder.java
+  file: src/main/java/com/example/shipping/entities/ShippingOrder.java
   symbol: ShippingOrder.<init>(RegisterShippingOrder)
   why: The command-typed constructor is pre-existing, on lines the patch did not change.
 - id: N5
   not_gates: ['16']
-  file: src/main/java/com/acme/shipping/entities/ShippingOrder.java
+  file: src/main/java/com/example/shipping/entities/ShippingOrder.java
   symbol: ShippingOrder.setShipped
   why: setShipped is pre-existing and unchanged; only setCancelled (R7) is new.
 - id: N6
   not_gates: ['*']
-  file: src/main/java/com/acme/shipping/persistence/ShippingOrders.java
+  file: src/main/java/com/example/shipping/persistence/ShippingOrders.java
   why: Unchanged; its gate 15(b), 15(c) and 18(a) findings are pre-existing.
 - id: N7
   not_gates: ['*']
-  file: src/main/java/com/acme/shipping/routing/ShippingCommand.java
+  file: src/main/java/com/example/shipping/routing/ShippingCommand.java
   why: Unchanged; gate 17 there is pre-existing.
 - id: N8
   not_gates: ['*']
-  file: src/main/java/com/acme/shipping/views/order_status/OrderStatusQueries.java
+  file: src/main/java/com/example/shipping/views/order_status/OrderStatusQueries.java
   why: Unchanged; gate 18(c) there is pre-existing.
 - id: N9
   not_gates: []
   not_ids: [ESS-080]
-  file: src/main/java/com/acme/shipping/entities/ShippingOrder.java
+  file: src/main/java/com/example/shipping/entities/ShippingOrder.java
   why: ShippingOrder's @Id is JPA's, not the document store's; ESS-080 does not apply.
 - id: N10
   not_gates: ['4', 4a, 4b, 4c]
-  file: src/main/java/com/acme/shipping/use_cases/cancel_shipment/slice.yaml
+  file: src/main/java/com/example/shipping/use_cases/cancel_shipment/slice.yaml
   why: Two command slices writing one entity is the lane's design.
 - id: N11
   not_gates: ['10']
   not_ids: [ESS-075]
-  file: src/main/java/com/acme/shipping/views/order_status/OrderStatusAPI.java
+  file: src/main/java/com/example/shipping/views/order_status/OrderStatusAPI.java
   why: Gate 10 does not apply on the service-entity lane.
 - id: N12
   not_gates: ['*']
   not_ids: [ESS-064]
-  file: src/main/java/com/acme/shipping/_loadtest/LoadHarness.java
+  file: src/main/java/com/example/shipping/_loadtest/LoadHarness.java
   why: The ESS-064 candidate must be dismissed, not reported; _loadtest/ is not a slice.
 
 tolerated:
 - id: T1
-  file: src/main/java/com/acme/shipping/config/CommandBusConfig.java
+  file: src/main/java/com/example/shipping/config/CommandBusConfig.java
   what: ESS-086 named beside R4 (the project's own command-bus bean makes the starter's bean back off)
   may_merge_with: R4
 - id: T2
@@ -193,10 +193,10 @@ tolerated:
   what: gate 9's service-entity note (the disabled post-processor unwires every handler) beside R2
   may_merge_with: R2
 - id: T3
-  file: src/main/java/com/acme/shipping/use_cases/cancel_shipment/slice.yaml
+  file: src/main/java/com/example/shipping/use_cases/cancel_shipment/slice.yaml
   what: a Should-fix that cancel_shipment has no test
 - id: T4
-  file: src/main/java/com/acme/shipping/config/CommandBusConfig.java
+  file: src/main/java/com/example/shipping/config/CommandBusConfig.java
   what: an Advisory on the config/ package placed inside the bounded context
 
 fix:                      # prompt /essentials:review HEAD~1 --fix, the questions answered in order
@@ -212,6 +212,6 @@ fix:                      # prompt /essentials:review HEAD~1 --fix, the question
       spring.application.name=shipping
       essentials.reactive-bean-post-processor-enabled=false
   unchanged:
-  - src/main/java/com/acme/shipping/views/order_status/OrderStatusAPI.java
-  - src/main/java/com/acme/shipping/entities/ShippingOrder.java
-  - src/main/java/com/acme/shipping/config/CommandBusConfig.java
+  - src/main/java/com/example/shipping/views/order_status/OrderStatusAPI.java
+  - src/main/java/com/example/shipping/entities/ShippingOrder.java
+  - src/main/java/com/example/shipping/config/CommandBusConfig.java

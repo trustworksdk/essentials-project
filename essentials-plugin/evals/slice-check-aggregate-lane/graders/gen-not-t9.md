@@ -5,7 +5,7 @@ type: llm
 
 The agent's final message is the report `/essentials:slice-check` printed for a test project. Paths in it are relative to the project root, and a report may cite a file by path, by `path:line`, or by its type or directory name.
 
-PASS unless the report raises a finding under gate 8 (§R4) or gate 8a (§R4) or gate 5 (§R1) about `src/main/java/com/acme/billing/views/invoice_list/InvoiceListProjection.java`.
+PASS unless the report raises a finding under gate 8 (§R4) or gate 8a (§R4) or gate 5 (§R1) about `src/main/java/com/example/billing/views/invoice_list/InvoiceListProjection.java`.
 Why that would be wrong: The view names Invoices.AGGREGATE_TYPE, the stream it subscribes to, and nothing else of the aggregate. Gate 8's clauses do not cover a same-BC aggregates/ import, and a constant is no query surface. It would be a finding if the view called a method on Invoices.
 A mention that is not a finding does not fail this check: the file listed as passing, cited as evidence for a different finding, or named in a lane or inventory summary.
 These are tolerated and do not fail this check either:

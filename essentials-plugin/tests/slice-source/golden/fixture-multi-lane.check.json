@@ -10,7 +10,7 @@
   "lanes": [
     {
       "bc": "catalog",
-      "path": "src/main/*/com/acme/multi/catalog",
+      "path": "src/main/*/com/example/multi/catalog",
       "detected": "conflict",
       "signals": {
         "decider": 0,
@@ -27,7 +27,7 @@
     },
     {
       "bc": "inventory",
-      "path": "src/main/*/com/acme/multi/inventory",
+      "path": "src/main/*/com/example/multi/inventory",
       "detected": "service-entity?",
       "signals": {
         "decider": 0,
@@ -43,7 +43,7 @@
     },
     {
       "bc": "ledger",
-      "path": "src/main/*/com/acme/multi/ledger",
+      "path": "src/main/*/com/example/multi/ledger",
       "detected": "conflict",
       "signals": {
         "decider": 1,
@@ -62,7 +62,7 @@
     },
     {
       "bc": "payments",
-      "path": "src/main/*/com/acme/multi/payments",
+      "path": "src/main/*/com/example/multi/payments",
       "detected": "decider",
       "signals": {
         "decider": 2,
@@ -151,9 +151,9 @@
       "gate": "14 entities with event store",
       "id": "ESS-G14",
       "slice": null,
-      "file": "src/main/*/com/acme/multi/catalog",
+      "file": "src/main/*/com/example/multi/catalog",
       "line": null,
-      "message": "bounded context 'catalog' has src/main/*/com/acme/multi/catalog/entities/ (2 source file(s)) and references the event store: AggregateType (src/main/java/com/acme/multi/catalog/use_cases/reprice_product/RepriceProductHandler.java:16), EventStore (src/main/java/com/acme/multi/catalog/use_cases/reprice_product/RepriceProductHandler.java:20)",
+      "message": "bounded context 'catalog' has src/main/*/com/example/multi/catalog/entities/ (2 source file(s)) and references the event store: AggregateType (src/main/java/com/example/multi/catalog/use_cases/reprice_product/RepriceProductHandler.java:16), EventStore (src/main/java/com/example/multi/catalog/use_cases/reprice_product/RepriceProductHandler.java:20)",
       "hint": "the BC is drifting off the service-entity lane (\u00a7R5)"
     },
     {
@@ -161,7 +161,7 @@
       "gate": "14 declared lanes",
       "id": "ESS-G14",
       "slice": null,
-      "file": "src/main/*/com/acme/multi/ledger",
+      "file": "src/main/*/com/example/multi/ledger",
       "line": null,
       "message": "manifests in bounded context 'ledger' declare 2 lanes: aggregate: ledger.post_entry; decider: ledger.open_account",
       "hint": "a half-finished migration between write styles \u2014 corroborates gate 14"
@@ -171,9 +171,9 @@
       "gate": "14 two write styles",
       "id": "ESS-G14",
       "slice": null,
-      "file": "src/main/*/com/acme/multi/ledger",
+      "file": "src/main/*/com/example/multi/ledger",
       "line": null,
-      "message": "bounded context 'ledger' holds 2 write styles: deciders OpenAccountDecider (src/main/java/com/acme/multi/ledger/use_cases/open_account/OpenAccountDecider.java:10); src/main/*/com/acme/multi/ledger/aggregates/ (2 source file(s))",
+      "message": "bounded context 'ledger' holds 2 write styles: deciders OpenAccountDecider (src/main/java/com/example/multi/ledger/use_cases/open_account/OpenAccountDecider.java:10); src/main/*/com/example/multi/ledger/aggregates/ (2 source file(s))",
       "hint": "two write designs over one consistency boundary \u2014 report both signals and stop; do not pick one (\u00a7R5)"
     },
     {
@@ -181,7 +181,7 @@
       "gate": "14 declared lanes",
       "id": "ESS-G14",
       "slice": null,
-      "file": "src/main/*/com/acme/multi/payments",
+      "file": "src/main/*/com/example/multi/payments",
       "line": null,
       "message": "manifests in bounded context 'payments' declare 2 lanes: aggregate: payments.capture_payment; decider: payments.request_payment",
       "hint": "a half-finished migration between write styles \u2014 corroborates gate 14"
@@ -191,9 +191,9 @@
       "gate": "14 stale lane",
       "id": "ESS-G14",
       "slice": "payments.capture_payment",
-      "file": "src/main/java/com/acme/multi/payments/use_cases/capture_payment/slice.yaml",
+      "file": "src/main/java/com/example/multi/payments/use_cases/capture_payment/slice.yaml",
       "line": null,
-      "message": "declares lane: aggregate, but the only write-style signal in 'payments' is deciders CapturePaymentDecider (src/main/java/com/acme/multi/payments/use_cases/capture_payment/CapturePaymentDecider.java:11), RequestPaymentDecider (src/main/java/com/acme/multi/payments/use_cases/request_payment/RequestPaymentDecider.java:10)",
+      "message": "declares lane: aggregate, but the only write-style signal in 'payments' is deciders CapturePaymentDecider (src/main/java/com/example/multi/payments/use_cases/capture_payment/CapturePaymentDecider.java:11), RequestPaymentDecider (src/main/java/com/example/multi/payments/use_cases/request_payment/RequestPaymentDecider.java:10)",
       "hint": "`lane` is machine-derived; `--fix-manifests` repairs it"
     }
   ],

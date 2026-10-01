@@ -20,53 +20,53 @@
       "bc": "orders",
       "lane": "decider",
       "owner": "orders-team",
-      "packagePath": "com.acme.shop",
+      "packagePath": "com.example.shop",
       "slice": "place_order",
       "sliceCamel": "placeOrder",
       "tier": "cqrs-es"
     },
     "written": [
-      "src/main/java/com/acme/shop/DeciderWiring.java",
-      "src/main/java/com/acme/shop/orders/CLAUDE.md",
-      "src/main/java/com/acme/shop/orders/config/OrdersConfiguration.java",
-      "src/main/java/com/acme/shop/orders/events/OrderEvent.java",
-      "src/main/java/com/acme/shop/orders/events/OrderPlaced.java",
-      "src/main/java/com/acme/shop/orders/routing/OrderCommand.java",
-      "src/main/java/com/acme/shop/orders/types/OrderId.java",
-      "src/main/java/com/acme/shop/orders/use_cases/place_order/CLAUDE.md",
-      "src/main/java/com/acme/shop/orders/use_cases/place_order/PlaceOrder.java",
-      "src/main/java/com/acme/shop/orders/use_cases/place_order/PlaceOrderAPI.java",
-      "src/main/java/com/acme/shop/orders/use_cases/place_order/PlaceOrderDecider.java",
-      "src/main/java/com/acme/shop/orders/use_cases/place_order/slice.yaml",
-      "src/test/java/com/acme/shop/orders/use_cases/place_order/PlaceOrderTest.java"
+      "src/main/java/com/example/shop/DeciderWiring.java",
+      "src/main/java/com/example/shop/orders/CLAUDE.md",
+      "src/main/java/com/example/shop/orders/config/OrdersConfiguration.java",
+      "src/main/java/com/example/shop/orders/events/OrderEvent.java",
+      "src/main/java/com/example/shop/orders/events/OrderPlaced.java",
+      "src/main/java/com/example/shop/orders/routing/OrderCommand.java",
+      "src/main/java/com/example/shop/orders/types/OrderId.java",
+      "src/main/java/com/example/shop/orders/use_cases/place_order/CLAUDE.md",
+      "src/main/java/com/example/shop/orders/use_cases/place_order/PlaceOrder.java",
+      "src/main/java/com/example/shop/orders/use_cases/place_order/PlaceOrderAPI.java",
+      "src/main/java/com/example/shop/orders/use_cases/place_order/PlaceOrderDecider.java",
+      "src/main/java/com/example/shop/orders/use_cases/place_order/slice.yaml",
+      "src/test/java/com/example/shop/orders/use_cases/place_order/PlaceOrderTest.java"
     ],
     "wiring": [
       {
-        "path": "src/main/java/com/acme/shop/DeciderWiring.java",
+        "path": "src/main/java/com/example/shop/DeciderWiring.java",
         "edit": "one decider configurator per application",
         "status": "applied"
       },
       {
-        "path": "src/main/java/com/acme/shop/orders/config/OrdersConfiguration.java",
+        "path": "src/main/java/com/example/shop/orders/config/OrdersConfiguration.java",
         "edit": "@Bean placeOrderDecider()",
         "status": "applied"
       },
       {
-        "path": "src/main/java/com/acme/shop/orders/events/OrderEvent.java",
+        "path": "src/main/java/com/example/shop/orders/events/OrderEvent.java",
         "edit": "permits += OrderPlaced",
         "status": "present"
       }
     ],
     "todos": [
-      "src/main/java/com/acme/shop/orders/CLAUDE.md:8: **Purpose:** TODO one sentence — what this context is responsible for.",
-      "src/main/java/com/acme/shop/orders/events/OrderPlaced.java:22: // TODO: replace with the facts this event records",
-      "src/main/java/com/acme/shop/orders/use_cases/place_order/CLAUDE.md:6: **Purpose:** TODO one sentence, present tense.",
-      "src/main/java/com/acme/shop/orders/use_cases/place_order/CLAUDE.md:9: - TODO the rule this slice enforces (enforced by `PlaceOrderDecider`).",
-      "src/main/java/com/acme/shop/orders/use_cases/place_order/PlaceOrder.java:18: // TODO: replace with this command's real payload",
-      "src/main/java/com/acme/shop/orders/use_cases/place_order/PlaceOrderDecider.java:34: // TODO: enforce this slice's invariants here. Record each one in slice.yaml `invariants`",
-      "src/main/java/com/acme/shop/orders/use_cases/place_order/slice.yaml:9: summary: TODO one sentence, present tense.",
-      "src/main/java/com/acme/shop/orders/use_cases/place_order/slice.yaml:28: - { id: INV-1, text: \"TODO the rule this slice enforces\", enforcedBy: PlaceOrderDecider }",
-      "src/test/java/com/acme/shop/orders/use_cases/place_order/PlaceOrderTest.java:39: // TODO: one test per invariant enforced by PlaceOrderDecider."
+      "src/main/java/com/example/shop/orders/CLAUDE.md:8: **Purpose:** TODO one sentence — what this context is responsible for.",
+      "src/main/java/com/example/shop/orders/events/OrderPlaced.java:22: // TODO: replace with the facts this event records",
+      "src/main/java/com/example/shop/orders/use_cases/place_order/CLAUDE.md:6: **Purpose:** TODO one sentence, present tense.",
+      "src/main/java/com/example/shop/orders/use_cases/place_order/CLAUDE.md:9: - TODO the rule this slice enforces (enforced by `PlaceOrderDecider`).",
+      "src/main/java/com/example/shop/orders/use_cases/place_order/PlaceOrder.java:18: // TODO: replace with this command's real payload",
+      "src/main/java/com/example/shop/orders/use_cases/place_order/PlaceOrderDecider.java:34: // TODO: enforce this slice's invariants here. Record each one in slice.yaml `invariants`",
+      "src/main/java/com/example/shop/orders/use_cases/place_order/slice.yaml:9: summary: TODO one sentence, present tense.",
+      "src/main/java/com/example/shop/orders/use_cases/place_order/slice.yaml:28: - { id: INV-1, text: \"TODO the rule this slice enforces\", enforcedBy: PlaceOrderDecider }",
+      "src/test/java/com/example/shop/orders/use_cases/place_order/PlaceOrderTest.java:39: // TODO: one test per invariant enforced by PlaceOrderDecider."
     ]
   },
   {
@@ -90,52 +90,52 @@
       "bc": "payments",
       "lane": "decider",
       "owner": "payments-team",
-      "packagePath": "com.acme.shop",
+      "packagePath": "com.example.shop",
       "slice": "request_payment",
       "sliceCamel": "requestPayment",
       "tier": "cqrs-es"
     },
     "written": [
-      "src/main/java/com/acme/shop/payments/CLAUDE.md",
-      "src/main/java/com/acme/shop/payments/config/PaymentsConfiguration.java",
-      "src/main/java/com/acme/shop/payments/events/PaymentEvent.java",
-      "src/main/java/com/acme/shop/payments/events/PaymentRequested.java",
-      "src/main/java/com/acme/shop/payments/routing/PaymentCommand.java",
-      "src/main/java/com/acme/shop/payments/types/PaymentId.java",
-      "src/main/java/com/acme/shop/payments/use_cases/request_payment/CLAUDE.md",
-      "src/main/java/com/acme/shop/payments/use_cases/request_payment/RequestPayment.java",
-      "src/main/java/com/acme/shop/payments/use_cases/request_payment/RequestPaymentAPI.java",
-      "src/main/java/com/acme/shop/payments/use_cases/request_payment/RequestPaymentDecider.java",
-      "src/main/java/com/acme/shop/payments/use_cases/request_payment/slice.yaml",
-      "src/test/java/com/acme/shop/payments/use_cases/request_payment/RequestPaymentTest.java"
+      "src/main/java/com/example/shop/payments/CLAUDE.md",
+      "src/main/java/com/example/shop/payments/config/PaymentsConfiguration.java",
+      "src/main/java/com/example/shop/payments/events/PaymentEvent.java",
+      "src/main/java/com/example/shop/payments/events/PaymentRequested.java",
+      "src/main/java/com/example/shop/payments/routing/PaymentCommand.java",
+      "src/main/java/com/example/shop/payments/types/PaymentId.java",
+      "src/main/java/com/example/shop/payments/use_cases/request_payment/CLAUDE.md",
+      "src/main/java/com/example/shop/payments/use_cases/request_payment/RequestPayment.java",
+      "src/main/java/com/example/shop/payments/use_cases/request_payment/RequestPaymentAPI.java",
+      "src/main/java/com/example/shop/payments/use_cases/request_payment/RequestPaymentDecider.java",
+      "src/main/java/com/example/shop/payments/use_cases/request_payment/slice.yaml",
+      "src/test/java/com/example/shop/payments/use_cases/request_payment/RequestPaymentTest.java"
     ],
     "wiring": [
       {
-        "path": "src/main/java/com/acme/shop/DeciderWiring.java",
+        "path": "src/main/java/com/example/shop/DeciderWiring.java",
         "edit": "one decider configurator per application",
         "status": "present"
       },
       {
-        "path": "src/main/java/com/acme/shop/payments/config/PaymentsConfiguration.java",
+        "path": "src/main/java/com/example/shop/payments/config/PaymentsConfiguration.java",
         "edit": "@Bean requestPaymentDecider()",
         "status": "applied"
       },
       {
-        "path": "src/main/java/com/acme/shop/payments/events/PaymentEvent.java",
+        "path": "src/main/java/com/example/shop/payments/events/PaymentEvent.java",
         "edit": "permits += PaymentRequested",
         "status": "present"
       }
     ],
     "todos": [
-      "src/main/java/com/acme/shop/payments/CLAUDE.md:8: **Purpose:** TODO one sentence — what this context is responsible for.",
-      "src/main/java/com/acme/shop/payments/events/PaymentRequested.java:22: // TODO: replace with the facts this event records",
-      "src/main/java/com/acme/shop/payments/use_cases/request_payment/CLAUDE.md:6: **Purpose:** TODO one sentence, present tense.",
-      "src/main/java/com/acme/shop/payments/use_cases/request_payment/CLAUDE.md:9: - TODO the rule this slice enforces (enforced by `RequestPaymentDecider`).",
-      "src/main/java/com/acme/shop/payments/use_cases/request_payment/RequestPayment.java:18: // TODO: replace with this command's real payload",
-      "src/main/java/com/acme/shop/payments/use_cases/request_payment/RequestPaymentDecider.java:34: // TODO: enforce this slice's invariants here. Record each one in slice.yaml `invariants`",
-      "src/main/java/com/acme/shop/payments/use_cases/request_payment/slice.yaml:9: summary: TODO one sentence, present tense.",
-      "src/main/java/com/acme/shop/payments/use_cases/request_payment/slice.yaml:28: - { id: INV-1, text: \"TODO the rule this slice enforces\", enforcedBy: RequestPaymentDecider }",
-      "src/test/java/com/acme/shop/payments/use_cases/request_payment/RequestPaymentTest.java:39: // TODO: one test per invariant enforced by RequestPaymentDecider."
+      "src/main/java/com/example/shop/payments/CLAUDE.md:8: **Purpose:** TODO one sentence — what this context is responsible for.",
+      "src/main/java/com/example/shop/payments/events/PaymentRequested.java:22: // TODO: replace with the facts this event records",
+      "src/main/java/com/example/shop/payments/use_cases/request_payment/CLAUDE.md:6: **Purpose:** TODO one sentence, present tense.",
+      "src/main/java/com/example/shop/payments/use_cases/request_payment/CLAUDE.md:9: - TODO the rule this slice enforces (enforced by `RequestPaymentDecider`).",
+      "src/main/java/com/example/shop/payments/use_cases/request_payment/RequestPayment.java:18: // TODO: replace with this command's real payload",
+      "src/main/java/com/example/shop/payments/use_cases/request_payment/RequestPaymentDecider.java:34: // TODO: enforce this slice's invariants here. Record each one in slice.yaml `invariants`",
+      "src/main/java/com/example/shop/payments/use_cases/request_payment/slice.yaml:9: summary: TODO one sentence, present tense.",
+      "src/main/java/com/example/shop/payments/use_cases/request_payment/slice.yaml:28: - { id: INV-1, text: \"TODO the rule this slice enforces\", enforcedBy: RequestPaymentDecider }",
+      "src/test/java/com/example/shop/payments/use_cases/request_payment/RequestPaymentTest.java:39: // TODO: one test per invariant enforced by RequestPaymentDecider."
     ]
   }
 ]

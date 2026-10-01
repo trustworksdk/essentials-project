@@ -57,7 +57,7 @@ contexts:
       - OrderLine
       - OrderRepository
       counter_evidence:
-        file: src/main/java/com/acme/shop/service/BillingService.java
+        file: src/main/java/com/example/shop/service/BillingService.java
         line: 35
         anchor: orders.save(order);
         what: BillingService.payInvoice also writes Order
@@ -66,7 +66,7 @@ contexts:
       - Invoice
       - InvoiceRepository
       counter_evidence:
-        file: src/main/java/com/acme/shop/model/Invoice.java
+        file: src/main/java/com/example/shop/model/Invoice.java
         line: 10
         anchor: private String orderId;
         what: Invoice.orderId references the other context
@@ -76,49 +76,49 @@ slices:
   list:
   - kind: command
     slice: orders.place_order
-    file: src/main/java/com/acme/shop/controller/OrderController.java
+    file: src/main/java/com/example/shop/controller/OrderController.java
     line: 16
     anchor: public String place(@RequestBody PlaceOrderRequest body) {
   - kind: command
     slice: orders.cancel_order
-    file: src/main/java/com/acme/shop/controller/OrderController.java
+    file: src/main/java/com/example/shop/controller/OrderController.java
     line: 21
     anchor: public void cancel(@PathVariable String orderId, @RequestBody CancelRequest body) {
   - kind: command
     slice: orders.ship_order
-    file: src/main/java/com/acme/shop/controller/OrderController.java
+    file: src/main/java/com/example/shop/controller/OrderController.java
     line: 26
     anchor: public void ship(@PathVariable String orderId) {
   - kind: view
     slice: orders.order_list
-    file: src/main/java/com/acme/shop/controller/OrderController.java
+    file: src/main/java/com/example/shop/controller/OrderController.java
     line: 31
     anchor: public List<Order> list(@RequestParam String customerId) {
     also: OrderController.get — one slice, two queries
   - kind: command
     slice: billing.pay_invoice
-    file: src/main/java/com/acme/shop/controller/InvoiceController.java
+    file: src/main/java/com/example/shop/controller/InvoiceController.java
     line: 16
     anchor: public void pay(@PathVariable String invoiceId, @RequestBody PayRequest body) {
   - kind: view
     slice: billing.unpaid_invoices
-    file: src/main/java/com/acme/shop/controller/InvoiceController.java
+    file: src/main/java/com/example/shop/controller/InvoiceController.java
     line: 21
     anchor: public List<Invoice> unpaid() {
   - kind: view
     slice: orders.order_status_report
-    file: src/main/java/com/acme/shop/controller/ReportController.java
+    file: src/main/java/com/example/shop/controller/ReportController.java
     line: 16
     anchor: public Map<String, Long> ordersByStatus() {
   also:
   - kind: automation
     slice: billing.payment_reminders
-    file: src/main/java/com/acme/shop/service/PaymentReminderJob.java
+    file: src/main/java/com/example/shop/service/PaymentReminderJob.java
     line: 15
     anchor: '@Scheduled(cron = "0 0 9 * * *")'
   - kind: translation
     slice: payment_gateway
-    file: src/main/java/com/acme/shop/integration/PaymentGatewayClient.java
+    file: src/main/java/com/example/shop/integration/PaymentGatewayClient.java
     line: 10
     anchor: public class PaymentGatewayClient {
   order_controller_splits_into: 4
@@ -129,7 +129,7 @@ must_find:
   ess: null
   severity: null
   kind: sole-writer
-  file: src/main/java/com/acme/shop/service/BillingService.java
+  file: src/main/java/com/example/shop/service/BillingService.java
   line: 24
   anchor: public void payInvoice(String invoiceId, String cardToken) {
   what: >-
@@ -141,7 +141,7 @@ must_find:
   ess: null
   severity: null
   kind: cohesion
-  file: src/main/java/com/acme/shop/controller/OrderController.java
+  file: src/main/java/com/example/shop/controller/OrderController.java
   line: 10
   anchor: public class OrderController {
   what: OrderController → 4 slices; OrderService → 4 slices. Reported as slice counts, not line counts.
@@ -151,7 +151,7 @@ must_find:
   ess: null
   severity: null
   kind: boundary
-  file: src/main/java/com/acme/shop/service/BillingService.java
+  file: src/main/java/com/example/shop/service/BillingService.java
   line: 14
   anchor: private final OrderRepository orders;
   what: BillingService reaches into orders' entity and repository directly.
@@ -172,7 +172,7 @@ must_find:
   ess: null
   severity: null
   kind: write-repository-query-drift
-  file: src/main/java/com/acme/shop/repository/OrderRepository.java
+  file: src/main/java/com/example/shop/repository/OrderRepository.java
   line: 8
   anchor: List<Order> findByCustomerId(String customerId);
   what: >-
@@ -183,7 +183,7 @@ must_find:
   ess: null
   severity: null
   kind: entity-returned-from-api
-  file: src/main/java/com/acme/shop/controller/OrderController.java
+  file: src/main/java/com/example/shop/controller/OrderController.java
   line: 36
   anchor: public Order get(@PathVariable String orderId) {
   what: The controllers return Order / Invoice directly.
@@ -195,14 +195,14 @@ must_not_find:
   not_gates:
   - '*'
   what: a payments or reporting bounded context
-  file: src/main/java/com/acme/shop/integration/PaymentGatewayClient.java
+  file: src/main/java/com/example/shop/integration/PaymentGatewayClient.java
   line: 10
   anchor: public class PaymentGatewayClient {
 - id: N2
   not_gates:
   - '*'
   what: orders.get_order as its own view slice
-  file: src/main/java/com/acme/shop/controller/OrderController.java
+  file: src/main/java/com/example/shop/controller/OrderController.java
   line: 36
   anchor: public Order get(@PathVariable String orderId) {
 - id: N3
@@ -221,13 +221,13 @@ must_not_find:
   not_gates:
   - '*'
   what: Order.getStatus() / Invoice.getStatus() as a query surface
-  file: src/main/java/com/acme/shop/model/Order.java
+  file: src/main/java/com/example/shop/model/Order.java
   line: 20
   anchor: public String getStatus() { return status; }
 - id: N7
   not_gates:
   - '*'
   what: merging ReportController.ordersByStatus into orders.order_list
-  file: src/main/java/com/acme/shop/controller/ReportController.java
+  file: src/main/java/com/example/shop/controller/ReportController.java
   line: 16
   anchor: public Map<String, Long> ordersByStatus() {

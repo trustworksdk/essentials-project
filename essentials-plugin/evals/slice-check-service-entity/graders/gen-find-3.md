@@ -6,7 +6,7 @@ type: llm
 The agent's final message is the report `/essentials:slice-check` printed for a test project. Paths in it are relative to the project root, and a report may cite a file by path, by `path:line`, or by its type or directory name.
 
 PASS if the report contains a finding that matches all of:
-- it concerns `src/main/java/com/acme/shipping/persistence/ShippingOrders.java` (symbol `ShippingOrders.findByShipped`)
+- it concerns `src/main/java/com/example/shipping/persistence/ShippingOrders.java` (symbol `ShippingOrders.findByShipped`)
 - it is filed under gate 15b (Write-repository purity and placement), id ESS-G15b, or plainly describes that check
 - its severity is Should-fix
 - its substance: A finder on the write repository whose only caller is a read path; it belongs to views/order_status.

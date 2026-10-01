@@ -62,7 +62,7 @@ class SliceLint(unittest.TestCase):
                     self.assertEqual(code, 1)
                     self.assertEqual(found(doc, fixture), [(
                         "14 tier", "ESS-G14",
-                        "src/main/java/com/acme/multi/ledger/use_cases/post_entry/slice.yaml")])
+                        "src/main/java/com/example/multi/ledger/use_cases/post_entry/slice.yaml")])
                     self.assertEqual(doc["findings"][0]["line"], 10)
                     self.assertEqual(doc["findings"][0]["severity"], "Should-fix")
                 else:

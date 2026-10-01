@@ -601,7 +601,7 @@ The built-in `TenantId` class provides a simple implementation:
 
 ```java
 // Built-in TenantId implementation
-TenantId tenant = TenantId.of("acme-corp");
+TenantId tenant = TenantId.of("example-corp");
 
 // Custom Tenant implementation (optional)
 public class CompanyTenant extends CharSequenceType<CompanyTenant> implements Tenant {
@@ -696,7 +696,7 @@ The Event Store provides overloaded methods for tenant-scoped operations:
 
 ```java
 var orders = AggregateType.of("Orders");
-var tenant = TenantId.of("acme-corp");
+var tenant = TenantId.of("example-corp");
 
 // Fetch stream for a specific tenant
 Optional<AggregateEventStream<OrderId>> stream = eventStore.fetchStream(

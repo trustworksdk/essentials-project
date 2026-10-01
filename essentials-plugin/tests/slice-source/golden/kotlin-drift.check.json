@@ -10,7 +10,7 @@
   "lanes": [
     {
       "bc": "orders",
-      "path": "src/main/*/com/acme/shop/orders",
+      "path": "src/main/*/com/example/shop/orders",
       "detected": "undetermined",
       "signals": {
         "decider": 0,
@@ -83,9 +83,9 @@
       "gate": "11(b) handled events",
       "id": "ESS-G11b",
       "slice": "orders.notify_customer",
-      "file": "src/main/kotlin/com/acme/shop/orders/automations/notify_customer/NotifyCustomerProcessor.kt",
+      "file": "src/main/kotlin/com/example/shop/orders/automations/notify_customer/NotifyCustomerProcessor.kt",
       "line": 15,
-      "message": "NotifyCustomerProcessor.on(Placed) handles OrderPlaced (written `Placed`, an import alias of com.acme.shop.orders.events.OrderPlaced), which is not declared in consumes",
+      "message": "NotifyCustomerProcessor.on(Placed) handles OrderPlaced (written `Placed`, an import alias of com.example.shop.orders.events.OrderPlaced), which is not declared in consumes",
       "hint": "the code is right and the manifest is stale \u2014 `/essentials:slice-check --fix-manifests` (manifest-reconciliation.md \u00a72)"
     },
     {
@@ -93,9 +93,9 @@
       "gate": "6 undeclared mapping",
       "id": "ESS-G6",
       "slice": "orders.order_board",
-      "file": "src/main/kotlin/com/acme/shop/orders/views/order_board/OrderBoardAPI.kt",
+      "file": "src/main/kotlin/com/example/shop/orders/views/order_board/OrderBoardAPI.kt",
       "line": 21,
-      "message": "GET /api/orders/board?state=open (OrderBoardAPI.open) is not described by any endpoint in src/main/kotlin/com/acme/shop/orders/views/order_board/slice.yaml",
+      "message": "GET /api/orders/board?state=open (OrderBoardAPI.open) is not described by any endpoint in src/main/kotlin/com/example/shop/orders/views/order_board/slice.yaml",
       "hint": "the code is right and the manifest is stale \u2014 `--fix-manifests` adds it"
     },
     {
@@ -103,9 +103,9 @@
       "gate": "11(b) handled events",
       "id": "ESS-G11b",
       "slice": "orders.order_board",
-      "file": "src/main/kotlin/com/acme/shop/orders/views/order_board/OrderBoardProjection.kt",
+      "file": "src/main/kotlin/com/example/shop/orders/views/order_board/OrderBoardProjection.kt",
       "line": 17,
-      "message": "OrderBoardProjection.on(Shipped) handles OrderShipped (written `Shipped`, an import alias of com.acme.shop.orders.events.OrderShipped), which is not declared in projections[].from",
+      "message": "OrderBoardProjection.on(Shipped) handles OrderShipped (written `Shipped`, an import alias of com.example.shop.orders.events.OrderShipped), which is not declared in projections[].from",
       "hint": "the code is right and the manifest is stale \u2014 `/essentials:slice-check --fix-manifests` (manifest-reconciliation.md \u00a72)"
     },
     {
@@ -113,7 +113,7 @@
       "gate": "6 discriminator",
       "id": "ESS-G6",
       "slice": "orders.order_board",
-      "file": "src/main/kotlin/com/acme/shop/orders/views/order_board/slice.yaml",
+      "file": "src/main/kotlin/com/example/shop/orders/views/order_board/slice.yaml",
       "line": 15,
       "message": "declared endpoint GET /api/orders/board?status=: no handler on /api/orders/board binds status",
       "hint": "bound only in a handler on another route: OrderBoardAPI.filtered \u2014 per-handler, not per-slice (manifest-guide.md \u00a73)"
@@ -123,9 +123,9 @@
       "gate": "6 discriminator",
       "id": "ESS-G6",
       "slice": "orders.order_board",
-      "file": "src/main/kotlin/com/acme/shop/orders/views/order_board/slice.yaml",
+      "file": "src/main/kotlin/com/example/shop/orders/views/order_board/slice.yaml",
       "line": 17,
-      "message": "declared endpoint GET /api/orders/board?state=closed: OrderBoardAPI.open (src/main/kotlin/com/acme/shop/orders/views/order_board/OrderBoardAPI.kt:21) does not bind state=closed",
+      "message": "declared endpoint GET /api/orders/board?state=closed: OrderBoardAPI.open (src/main/kotlin/com/example/shop/orders/views/order_board/OrderBoardAPI.kt:21) does not bind state=closed",
       "hint": "each discriminator after `?` must be bound in the handler that serves the route (manifest-guide.md \u00a73)"
     }
   ],
@@ -134,7 +134,7 @@
       "slice": "orders.order_feed",
       "gate": "6 endpoint route",
       "id": "ESS-G6",
-      "file": "src/main/kotlin/com/acme/shop/orders/views/order_feed/slice.yaml",
+      "file": "src/main/kotlin/com/example/shop/orders/views/order_feed/slice.yaml",
       "reason": "endpoints not checked: WebFlux RouterFunction routes are not analysed"
     }
   ],

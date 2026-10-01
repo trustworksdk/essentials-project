@@ -1,25 +1,25 @@
 # review-scan signature fixture: ESS-052 / ESS-016 / ESS-064 / ESS-032 wiring that needs a second look
 # Candidates in main code; the Essentials-built equivalents, comments and test code do not fire.
-# expect: backend/src/main/kotlin/com/acme/shop/config/WiringConfig.kt:7 ess-052-hand-built-mapper candidate Should-fix manual
-# expect: backend/src/main/kotlin/com/acme/shop/config/WiringConfig.kt:8 ess-052-hand-built-mapper candidate
-# expect-not: backend/src/main/kotlin/com/acme/shop/config/WiringConfig.kt:9 ess-052-hand-built-mapper
-# expect: backend/src/main/kotlin/com/acme/shop/config/WiringConfig.kt:10 ess-016-local-command-bus candidate Advisory manual
-# expect-not: backend/src/main/kotlin/com/acme/shop/config/WiringConfig.kt:11 ess-016-local-command-bus
-# expect: backend/src/main/kotlin/com/acme/shop/config/WiringConfig.kt:12 ess-064-jdbi-create candidate Should-fix manual
-# expect-not: backend/src/main/kotlin/com/acme/shop/config/WiringConfig.kt:13 ess-064-jdbi-create
-# expect: backend/src/main/kotlin/com/acme/shop/config/WiringConfig.kt:15 ess-032-kotlin-converter-by-hand candidate Advisory manual
-# expect-not: backend/src/main/kotlin/com/acme/shop/config/WiringConfig.kt:16 ess-032-kotlin-converter-by-hand
-# expect: backend/src/main/java/com/acme/shop/config/LegacyConfig.java:4 ess-052-hand-built-mapper candidate
-# expect-not: backend/src/main/java/com/acme/shop/config/LegacyConfig.java:5 ess-052-hand-built-mapper
-# expect-not: backend/src/main/java/com/acme/shop/config/LegacyConfig.java:6 ess-052-hand-built-mapper
-# expect-not: backend/src/test/kotlin/com/acme/shop/SerializationTest.kt:4 ess-052-hand-built-mapper
-# expect-not: backend/src/test/kotlin/com/acme/shop/SerializationTest.kt:5 ess-016-local-command-bus
-diff --git a/backend/src/main/kotlin/com/acme/shop/config/WiringConfig.kt b/backend/src/main/kotlin/com/acme/shop/config/WiringConfig.kt
+# expect: backend/src/main/kotlin/com/example/shop/config/WiringConfig.kt:7 ess-052-hand-built-mapper candidate Should-fix manual
+# expect: backend/src/main/kotlin/com/example/shop/config/WiringConfig.kt:8 ess-052-hand-built-mapper candidate
+# expect-not: backend/src/main/kotlin/com/example/shop/config/WiringConfig.kt:9 ess-052-hand-built-mapper
+# expect: backend/src/main/kotlin/com/example/shop/config/WiringConfig.kt:10 ess-016-local-command-bus candidate Advisory manual
+# expect-not: backend/src/main/kotlin/com/example/shop/config/WiringConfig.kt:11 ess-016-local-command-bus
+# expect: backend/src/main/kotlin/com/example/shop/config/WiringConfig.kt:12 ess-064-jdbi-create candidate Should-fix manual
+# expect-not: backend/src/main/kotlin/com/example/shop/config/WiringConfig.kt:13 ess-064-jdbi-create
+# expect: backend/src/main/kotlin/com/example/shop/config/WiringConfig.kt:15 ess-032-kotlin-converter-by-hand candidate Advisory manual
+# expect-not: backend/src/main/kotlin/com/example/shop/config/WiringConfig.kt:16 ess-032-kotlin-converter-by-hand
+# expect: backend/src/main/java/com/example/shop/config/LegacyConfig.java:4 ess-052-hand-built-mapper candidate
+# expect-not: backend/src/main/java/com/example/shop/config/LegacyConfig.java:5 ess-052-hand-built-mapper
+# expect-not: backend/src/main/java/com/example/shop/config/LegacyConfig.java:6 ess-052-hand-built-mapper
+# expect-not: backend/src/test/kotlin/com/example/shop/SerializationTest.kt:4 ess-052-hand-built-mapper
+# expect-not: backend/src/test/kotlin/com/example/shop/SerializationTest.kt:5 ess-016-local-command-bus
+diff --git a/backend/src/main/kotlin/com/example/shop/config/WiringConfig.kt b/backend/src/main/kotlin/com/example/shop/config/WiringConfig.kt
 new file mode 100644
 --- /dev/null
-+++ b/backend/src/main/kotlin/com/acme/shop/config/WiringConfig.kt
++++ b/backend/src/main/kotlin/com/example/shop/config/WiringConfig.kt
 @@ -0,0 +1,18 @@
-+package com.acme.shop.config
++package com.example.shop.config
 +
 +import com.fasterxml.jackson.databind.ObjectMapper
 +
@@ -37,24 +37,24 @@ new file mode 100644
 +        // registry.addConverter(KotlinValueTypeConverter())
 +    }
 +}
-diff --git a/backend/src/main/java/com/acme/shop/config/LegacyConfig.java b/backend/src/main/java/com/acme/shop/config/LegacyConfig.java
+diff --git a/backend/src/main/java/com/example/shop/config/LegacyConfig.java b/backend/src/main/java/com/example/shop/config/LegacyConfig.java
 new file mode 100644
 --- /dev/null
-+++ b/backend/src/main/java/com/acme/shop/config/LegacyConfig.java
++++ b/backend/src/main/java/com/example/shop/config/LegacyConfig.java
 @@ -0,0 +1,7 @@
-+package com.acme.shop.config;
++package com.example.shop.config;
 +
 +class LegacyConfig {
 +    ObjectMapper mapper() { return new ObjectMapper(); }
 +    // ObjectMapper old = new ObjectMapper();
 +    String doc = "new ObjectMapper() is not how we do it";
 +}
-diff --git a/backend/src/test/kotlin/com/acme/shop/SerializationTest.kt b/backend/src/test/kotlin/com/acme/shop/SerializationTest.kt
+diff --git a/backend/src/test/kotlin/com/example/shop/SerializationTest.kt b/backend/src/test/kotlin/com/example/shop/SerializationTest.kt
 new file mode 100644
 --- /dev/null
-+++ b/backend/src/test/kotlin/com/acme/shop/SerializationTest.kt
++++ b/backend/src/test/kotlin/com/example/shop/SerializationTest.kt
 @@ -0,0 +1,6 @@
-+package com.acme.shop
++package com.example.shop
 +
 +class SerializationTest {
 +    private val mapper = ObjectMapper()

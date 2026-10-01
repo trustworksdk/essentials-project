@@ -20,48 +20,48 @@
       "bc": "orders",
       "lane": "decider",
       "owner": "orders-team",
-      "packagePath": "com.acme.shop",
+      "packagePath": "com.example.shop",
       "slice": "place_order",
       "sliceCamel": "placeOrder",
       "tier": "cqrs-es"
     },
     "written": [
-      "src/main/kotlin/com/acme/shop/DeciderWiring.kt",
-      "src/main/kotlin/com/acme/shop/orders/CLAUDE.md",
-      "src/main/kotlin/com/acme/shop/orders/config/OrdersConfiguration.kt",
-      "src/main/kotlin/com/acme/shop/orders/events/OrderEvent.kt",
-      "src/main/kotlin/com/acme/shop/orders/events/OrderPlaced.kt",
-      "src/main/kotlin/com/acme/shop/orders/routing/OrderCommand.kt",
-      "src/main/kotlin/com/acme/shop/orders/types/OrderId.kt",
-      "src/main/kotlin/com/acme/shop/orders/use_cases/place_order/CLAUDE.md",
-      "src/main/kotlin/com/acme/shop/orders/use_cases/place_order/PlaceOrder.kt",
-      "src/main/kotlin/com/acme/shop/orders/use_cases/place_order/PlaceOrderAPI.kt",
-      "src/main/kotlin/com/acme/shop/orders/use_cases/place_order/PlaceOrderDecider.kt",
-      "src/main/kotlin/com/acme/shop/orders/use_cases/place_order/slice.yaml",
-      "src/test/kotlin/com/acme/shop/orders/use_cases/place_order/PlaceOrderTest.kt"
+      "src/main/kotlin/com/example/shop/DeciderWiring.kt",
+      "src/main/kotlin/com/example/shop/orders/CLAUDE.md",
+      "src/main/kotlin/com/example/shop/orders/config/OrdersConfiguration.kt",
+      "src/main/kotlin/com/example/shop/orders/events/OrderEvent.kt",
+      "src/main/kotlin/com/example/shop/orders/events/OrderPlaced.kt",
+      "src/main/kotlin/com/example/shop/orders/routing/OrderCommand.kt",
+      "src/main/kotlin/com/example/shop/orders/types/OrderId.kt",
+      "src/main/kotlin/com/example/shop/orders/use_cases/place_order/CLAUDE.md",
+      "src/main/kotlin/com/example/shop/orders/use_cases/place_order/PlaceOrder.kt",
+      "src/main/kotlin/com/example/shop/orders/use_cases/place_order/PlaceOrderAPI.kt",
+      "src/main/kotlin/com/example/shop/orders/use_cases/place_order/PlaceOrderDecider.kt",
+      "src/main/kotlin/com/example/shop/orders/use_cases/place_order/slice.yaml",
+      "src/test/kotlin/com/example/shop/orders/use_cases/place_order/PlaceOrderTest.kt"
     ],
     "wiring": [
       {
-        "path": "src/main/kotlin/com/acme/shop/DeciderWiring.kt",
+        "path": "src/main/kotlin/com/example/shop/DeciderWiring.kt",
         "edit": "one decider configurator per application",
         "status": "applied"
       },
       {
-        "path": "src/main/kotlin/com/acme/shop/orders/config/OrdersConfiguration.kt",
+        "path": "src/main/kotlin/com/example/shop/orders/config/OrdersConfiguration.kt",
         "edit": "@Bean placeOrderDecider()",
         "status": "applied"
       }
     ],
     "todos": [
-      "src/main/kotlin/com/acme/shop/orders/CLAUDE.md:8: **Purpose:** TODO one sentence — what this context is responsible for.",
-      "src/main/kotlin/com/acme/shop/orders/events/OrderPlaced.kt:18: // TODO: replace with the facts this event records",
-      "src/main/kotlin/com/acme/shop/orders/use_cases/place_order/CLAUDE.md:6: **Purpose:** TODO one sentence, present tense.",
-      "src/main/kotlin/com/acme/shop/orders/use_cases/place_order/CLAUDE.md:9: - TODO the rule this slice enforces (enforced by `PlaceOrderDecider`).",
-      "src/main/kotlin/com/acme/shop/orders/use_cases/place_order/PlaceOrder.kt:15: // TODO: replace with this command's real payload",
-      "src/main/kotlin/com/acme/shop/orders/use_cases/place_order/PlaceOrderDecider.kt:24: // TODO: enforce this slice's invariants here. Record each one in slice.yaml `invariants`",
-      "src/main/kotlin/com/acme/shop/orders/use_cases/place_order/slice.yaml:9: summary: TODO one sentence, present tense.",
-      "src/main/kotlin/com/acme/shop/orders/use_cases/place_order/slice.yaml:28: - { id: INV-1, text: \"TODO the rule this slice enforces\", enforcedBy: PlaceOrderDecider }",
-      "src/test/kotlin/com/acme/shop/orders/use_cases/place_order/PlaceOrderTest.kt:39: // TODO: one test per invariant enforced by PlaceOrderDecider."
+      "src/main/kotlin/com/example/shop/orders/CLAUDE.md:8: **Purpose:** TODO one sentence — what this context is responsible for.",
+      "src/main/kotlin/com/example/shop/orders/events/OrderPlaced.kt:18: // TODO: replace with the facts this event records",
+      "src/main/kotlin/com/example/shop/orders/use_cases/place_order/CLAUDE.md:6: **Purpose:** TODO one sentence, present tense.",
+      "src/main/kotlin/com/example/shop/orders/use_cases/place_order/CLAUDE.md:9: - TODO the rule this slice enforces (enforced by `PlaceOrderDecider`).",
+      "src/main/kotlin/com/example/shop/orders/use_cases/place_order/PlaceOrder.kt:15: // TODO: replace with this command's real payload",
+      "src/main/kotlin/com/example/shop/orders/use_cases/place_order/PlaceOrderDecider.kt:24: // TODO: enforce this slice's invariants here. Record each one in slice.yaml `invariants`",
+      "src/main/kotlin/com/example/shop/orders/use_cases/place_order/slice.yaml:9: summary: TODO one sentence, present tense.",
+      "src/main/kotlin/com/example/shop/orders/use_cases/place_order/slice.yaml:28: - { id: INV-1, text: \"TODO the rule this slice enforces\", enforcedBy: PlaceOrderDecider }",
+      "src/test/kotlin/com/example/shop/orders/use_cases/place_order/PlaceOrderTest.kt:39: // TODO: one test per invariant enforced by PlaceOrderDecider."
     ]
   },
   {
@@ -83,45 +83,45 @@
       "bc": "orders",
       "lane": "decider",
       "owner": "orders-team",
-      "packagePath": "com.acme.shop",
+      "packagePath": "com.example.shop",
       "slice": "cancel_order",
       "sliceCamel": "cancelOrder",
       "tier": "cqrs-es"
     },
     "written": [
-      "src/main/kotlin/com/acme/shop/orders/events/OrderCancelled.kt",
-      "src/main/kotlin/com/acme/shop/orders/use_cases/cancel_order/CLAUDE.md",
-      "src/main/kotlin/com/acme/shop/orders/use_cases/cancel_order/CancelOrder.kt",
-      "src/main/kotlin/com/acme/shop/orders/use_cases/cancel_order/CancelOrderAPI.kt",
-      "src/main/kotlin/com/acme/shop/orders/use_cases/cancel_order/CancelOrderDecider.kt",
-      "src/main/kotlin/com/acme/shop/orders/use_cases/cancel_order/OrderState.kt",
-      "src/main/kotlin/com/acme/shop/orders/use_cases/cancel_order/OrderStateEvolver.kt",
-      "src/main/kotlin/com/acme/shop/orders/use_cases/cancel_order/slice.yaml",
-      "src/test/kotlin/com/acme/shop/orders/use_cases/cancel_order/CancelOrderTest.kt"
+      "src/main/kotlin/com/example/shop/orders/events/OrderCancelled.kt",
+      "src/main/kotlin/com/example/shop/orders/use_cases/cancel_order/CLAUDE.md",
+      "src/main/kotlin/com/example/shop/orders/use_cases/cancel_order/CancelOrder.kt",
+      "src/main/kotlin/com/example/shop/orders/use_cases/cancel_order/CancelOrderAPI.kt",
+      "src/main/kotlin/com/example/shop/orders/use_cases/cancel_order/CancelOrderDecider.kt",
+      "src/main/kotlin/com/example/shop/orders/use_cases/cancel_order/OrderState.kt",
+      "src/main/kotlin/com/example/shop/orders/use_cases/cancel_order/OrderStateEvolver.kt",
+      "src/main/kotlin/com/example/shop/orders/use_cases/cancel_order/slice.yaml",
+      "src/test/kotlin/com/example/shop/orders/use_cases/cancel_order/CancelOrderTest.kt"
     ],
     "wiring": [
       {
-        "path": "src/main/kotlin/com/acme/shop/DeciderWiring.kt",
+        "path": "src/main/kotlin/com/example/shop/DeciderWiring.kt",
         "edit": "one decider configurator per application",
         "status": "present"
       },
       {
-        "path": "src/main/kotlin/com/acme/shop/orders/config/OrdersConfiguration.kt",
+        "path": "src/main/kotlin/com/example/shop/orders/config/OrdersConfiguration.kt",
         "edit": "@Bean cancelOrderDecider()",
         "status": "applied"
       }
     ],
     "todos": [
-      "src/main/kotlin/com/acme/shop/orders/events/OrderCancelled.kt:18: // TODO: replace with the facts this event records",
-      "src/main/kotlin/com/acme/shop/orders/use_cases/cancel_order/CLAUDE.md:6: **Purpose:** TODO one sentence, present tense.",
-      "src/main/kotlin/com/acme/shop/orders/use_cases/cancel_order/CLAUDE.md:9: - TODO the rule this slice enforces (enforced by `CancelOrderDecider`).",
-      "src/main/kotlin/com/acme/shop/orders/use_cases/cancel_order/CancelOrder.kt:15: // TODO: replace with this command's real payload",
-      "src/main/kotlin/com/acme/shop/orders/use_cases/cancel_order/CancelOrderDecider.kt:24: // TODO: enforce this slice's invariants here. Record each one in slice.yaml `invariants`",
-      "src/main/kotlin/com/acme/shop/orders/use_cases/cancel_order/OrderState.kt:24: // TODO: the fields this BC's deciders need to decide",
-      "src/main/kotlin/com/acme/shop/orders/use_cases/cancel_order/OrderStateEvolver.kt:22: // TODO: one branch per event variant this BC emits",
-      "src/main/kotlin/com/acme/shop/orders/use_cases/cancel_order/slice.yaml:9: summary: TODO one sentence, present tense.",
-      "src/main/kotlin/com/acme/shop/orders/use_cases/cancel_order/slice.yaml:28: - { id: INV-1, text: \"TODO the rule this slice enforces\", enforcedBy: CancelOrderDecider }",
-      "src/test/kotlin/com/acme/shop/orders/use_cases/cancel_order/CancelOrderTest.kt:39: // TODO: one test per invariant enforced by CancelOrderDecider."
+      "src/main/kotlin/com/example/shop/orders/events/OrderCancelled.kt:18: // TODO: replace with the facts this event records",
+      "src/main/kotlin/com/example/shop/orders/use_cases/cancel_order/CLAUDE.md:6: **Purpose:** TODO one sentence, present tense.",
+      "src/main/kotlin/com/example/shop/orders/use_cases/cancel_order/CLAUDE.md:9: - TODO the rule this slice enforces (enforced by `CancelOrderDecider`).",
+      "src/main/kotlin/com/example/shop/orders/use_cases/cancel_order/CancelOrder.kt:15: // TODO: replace with this command's real payload",
+      "src/main/kotlin/com/example/shop/orders/use_cases/cancel_order/CancelOrderDecider.kt:24: // TODO: enforce this slice's invariants here. Record each one in slice.yaml `invariants`",
+      "src/main/kotlin/com/example/shop/orders/use_cases/cancel_order/OrderState.kt:24: // TODO: the fields this BC's deciders need to decide",
+      "src/main/kotlin/com/example/shop/orders/use_cases/cancel_order/OrderStateEvolver.kt:22: // TODO: one branch per event variant this BC emits",
+      "src/main/kotlin/com/example/shop/orders/use_cases/cancel_order/slice.yaml:9: summary: TODO one sentence, present tense.",
+      "src/main/kotlin/com/example/shop/orders/use_cases/cancel_order/slice.yaml:28: - { id: INV-1, text: \"TODO the rule this slice enforces\", enforcedBy: CancelOrderDecider }",
+      "src/test/kotlin/com/example/shop/orders/use_cases/cancel_order/CancelOrderTest.kt:39: // TODO: one test per invariant enforced by CancelOrderDecider."
     ]
   },
   {
@@ -142,35 +142,35 @@
       "bc": "orders",
       "lane": "decider",
       "owner": "orders-team",
-      "packagePath": "com.acme.shop",
+      "packagePath": "com.example.shop",
       "tier": "cqrs-es",
       "view": "order_list",
       "viewCamel": "orderList"
     },
     "written": [
-      "src/main/kotlin/com/acme/shop/orders/views/order_list/CLAUDE.md",
-      "src/main/kotlin/com/acme/shop/orders/views/order_list/OrderListAPI.kt",
-      "src/main/kotlin/com/acme/shop/orders/views/order_list/OrderListProjection.kt",
-      "src/main/kotlin/com/acme/shop/orders/views/order_list/OrderListRepository.kt",
-      "src/main/kotlin/com/acme/shop/orders/views/order_list/OrderListView.kt",
-      "src/main/kotlin/com/acme/shop/orders/views/order_list/slice.yaml",
-      "src/test/kotlin/com/acme/shop/orders/views/order_list/OrderListProjectionIT.kt"
+      "src/main/kotlin/com/example/shop/orders/views/order_list/CLAUDE.md",
+      "src/main/kotlin/com/example/shop/orders/views/order_list/OrderListAPI.kt",
+      "src/main/kotlin/com/example/shop/orders/views/order_list/OrderListProjection.kt",
+      "src/main/kotlin/com/example/shop/orders/views/order_list/OrderListRepository.kt",
+      "src/main/kotlin/com/example/shop/orders/views/order_list/OrderListView.kt",
+      "src/main/kotlin/com/example/shop/orders/views/order_list/slice.yaml",
+      "src/test/kotlin/com/example/shop/orders/views/order_list/OrderListProjectionIT.kt"
     ],
     "wiring": [],
     "todos": [
-      "src/main/kotlin/com/acme/shop/orders/views/order_list/CLAUDE.md:6: **Purpose:** TODO one sentence, present tense.",
-      "src/main/kotlin/com/acme/shop/orders/views/order_list/CLAUDE.md:14: **Reacts to / reads:** `OrderPlaced` from `orders/events/` (TODO list every projected event)",
-      "src/main/kotlin/com/acme/shop/orders/views/order_list/OrderListProjection.kt:51: OrderListView(orderId = event.id, status = \"TODO\"),",
-      "src/main/kotlin/com/acme/shop/orders/views/order_list/OrderListProjection.kt:56: existing.status = \"TODO\"",
-      "src/main/kotlin/com/acme/shop/orders/views/order_list/OrderListProjection.kt:61: // TODO: one handler per event this view projects. Add each to slice.yaml `projections.from`.",
-      "src/main/kotlin/com/acme/shop/orders/views/order_list/OrderListRepository.kt:23: // TODO: add the indexes this view's queries actually need.",
-      "src/main/kotlin/com/acme/shop/orders/views/order_list/OrderListRepository.kt:27: // TODO: slice-specific finders, e.g.",
-      "src/main/kotlin/com/acme/shop/orders/views/order_list/OrderListView.kt:25: // TODO: replace with the fields this view serves",
-      "src/main/kotlin/com/acme/shop/orders/views/order_list/slice.yaml:9: summary: TODO one sentence, present tense.",
-      "src/main/kotlin/com/acme/shop/orders/views/order_list/slice.yaml:27: from: [OrderPlaced]                 # TODO every event this view projects",
-      "src/test/kotlin/com/acme/shop/orders/views/order_list/OrderListProjectionIT.kt:24: // TODO: append OrderPlaced to the aggregate's stream, await the projection, assert the row.",
-      "src/test/kotlin/com/acme/shop/orders/views/order_list/OrderListProjectionIT.kt:29: // TODO: deliver the same event twice; assert the read model applied it once.",
-      "src/test/kotlin/com/acme/shop/orders/views/order_list/OrderListProjectionIT.kt:35: // TODO: reset the subscription and assert onSubscriptionsReset(aggregateType,"
+      "src/main/kotlin/com/example/shop/orders/views/order_list/CLAUDE.md:6: **Purpose:** TODO one sentence, present tense.",
+      "src/main/kotlin/com/example/shop/orders/views/order_list/CLAUDE.md:14: **Reacts to / reads:** `OrderPlaced` from `orders/events/` (TODO list every projected event)",
+      "src/main/kotlin/com/example/shop/orders/views/order_list/OrderListProjection.kt:51: OrderListView(orderId = event.id, status = \"TODO\"),",
+      "src/main/kotlin/com/example/shop/orders/views/order_list/OrderListProjection.kt:56: existing.status = \"TODO\"",
+      "src/main/kotlin/com/example/shop/orders/views/order_list/OrderListProjection.kt:61: // TODO: one handler per event this view projects. Add each to slice.yaml `projections.from`.",
+      "src/main/kotlin/com/example/shop/orders/views/order_list/OrderListRepository.kt:23: // TODO: add the indexes this view's queries actually need.",
+      "src/main/kotlin/com/example/shop/orders/views/order_list/OrderListRepository.kt:27: // TODO: slice-specific finders, e.g.",
+      "src/main/kotlin/com/example/shop/orders/views/order_list/OrderListView.kt:25: // TODO: replace with the fields this view serves",
+      "src/main/kotlin/com/example/shop/orders/views/order_list/slice.yaml:9: summary: TODO one sentence, present tense.",
+      "src/main/kotlin/com/example/shop/orders/views/order_list/slice.yaml:27: from: [OrderPlaced]                 # TODO every event this view projects",
+      "src/test/kotlin/com/example/shop/orders/views/order_list/OrderListProjectionIT.kt:24: // TODO: append OrderPlaced to the aggregate's stream, await the projection, assert the row.",
+      "src/test/kotlin/com/example/shop/orders/views/order_list/OrderListProjectionIT.kt:29: // TODO: deliver the same event twice; assert the read model applied it once.",
+      "src/test/kotlin/com/example/shop/orders/views/order_list/OrderListProjectionIT.kt:35: // TODO: reset the subscription and assert onSubscriptionsReset(aggregateType,"
     ]
   },
   {
@@ -191,35 +191,35 @@
       "bc": "orders",
       "lane": "decider",
       "owner": "orders-team",
-      "packagePath": "com.acme.shop",
+      "packagePath": "com.example.shop",
       "slice": "fulfillment",
       "sliceCamel": "fulfillment",
       "tier": "cqrs-es"
     },
     "written": [
-      "src/main/kotlin/com/acme/shop/orders/automations/fulfillment/CLAUDE.md",
-      "src/main/kotlin/com/acme/shop/orders/automations/fulfillment/FulfillmentProcessor.kt",
-      "src/main/kotlin/com/acme/shop/orders/automations/fulfillment/FulfillmentRepository.kt",
-      "src/main/kotlin/com/acme/shop/orders/automations/fulfillment/FulfillmentTodoList.kt",
-      "src/main/kotlin/com/acme/shop/orders/automations/fulfillment/slice.yaml",
-      "src/test/kotlin/com/acme/shop/orders/automations/fulfillment/FulfillmentIT.kt"
+      "src/main/kotlin/com/example/shop/orders/automations/fulfillment/CLAUDE.md",
+      "src/main/kotlin/com/example/shop/orders/automations/fulfillment/FulfillmentProcessor.kt",
+      "src/main/kotlin/com/example/shop/orders/automations/fulfillment/FulfillmentRepository.kt",
+      "src/main/kotlin/com/example/shop/orders/automations/fulfillment/FulfillmentTodoList.kt",
+      "src/main/kotlin/com/example/shop/orders/automations/fulfillment/slice.yaml",
+      "src/test/kotlin/com/example/shop/orders/automations/fulfillment/FulfillmentIT.kt"
     ],
     "wiring": [],
     "todos": [
-      "src/main/kotlin/com/acme/shop/orders/automations/fulfillment/CLAUDE.md:6: **Purpose:** TODO one sentence, present tense.",
-      "src/main/kotlin/com/acme/shop/orders/automations/fulfillment/CLAUDE.md:13: **Reacts to:** `OrderPlaced` (TODO list every event that advances this process)",
-      "src/main/kotlin/com/acme/shop/orders/automations/fulfillment/CLAUDE.md:14: **Dispatches:** TODO the commands this automation issues, on the CommandBus",
-      "src/main/kotlin/com/acme/shop/orders/automations/fulfillment/FulfillmentProcessor.kt:47: commandBus.sendAndDontWait(/* TODO: the next command */ Any())",
-      "src/main/kotlin/com/acme/shop/orders/automations/fulfillment/FulfillmentProcessor.kt:53: // TODO: a handler per event that advances this process, including the failure paths.",
-      "src/main/kotlin/com/acme/shop/orders/automations/fulfillment/FulfillmentTodoList.kt:30: /** TODO: the real precondition for the next step. Bound the retries. */",
-      "src/main/kotlin/com/acme/shop/orders/automations/fulfillment/slice.yaml:9: summary: TODO one sentence, present tense.",
-      "src/main/kotlin/com/acme/shop/orders/automations/fulfillment/slice.yaml:17: consumes: [OrderPlaced]                 # TODO every event that advances this process",
-      "src/main/kotlin/com/acme/shop/orders/automations/fulfillment/slice.yaml:18: dispatches: []                        # TODO the commands this automation issues",
-      "src/main/kotlin/com/acme/shop/orders/automations/fulfillment/slice.yaml:22: # schedule: { cron: \"0 0 3 * * *\", note: \"TODO why this cadence\" }",
-      "src/main/kotlin/com/acme/shop/orders/automations/fulfillment/slice.yaml:23: # schedule: { fixedDelay: PT15M, initialDelay: PT1M, note: \"TODO why this cadence\" }",
-      "src/main/kotlin/com/acme/shop/orders/automations/fulfillment/slice.yaml:27: - { id: INV-1, text: \"TODO the process rule, e.g. at most three payment attempts\", enforcedBy: FulfillmentProcessor }",
-      "src/test/kotlin/com/acme/shop/orders/automations/fulfillment/FulfillmentIT.kt:19: // TODO: append OrderPlaced; assert the TodoList advanced and the command was dispatched.",
-      "src/test/kotlin/com/acme/shop/orders/automations/fulfillment/FulfillmentIT.kt:29: // TODO: drive the failure path; assert attempts stop at the cap and the compensating"
+      "src/main/kotlin/com/example/shop/orders/automations/fulfillment/CLAUDE.md:6: **Purpose:** TODO one sentence, present tense.",
+      "src/main/kotlin/com/example/shop/orders/automations/fulfillment/CLAUDE.md:13: **Reacts to:** `OrderPlaced` (TODO list every event that advances this process)",
+      "src/main/kotlin/com/example/shop/orders/automations/fulfillment/CLAUDE.md:14: **Dispatches:** TODO the commands this automation issues, on the CommandBus",
+      "src/main/kotlin/com/example/shop/orders/automations/fulfillment/FulfillmentProcessor.kt:47: commandBus.sendAndDontWait(/* TODO: the next command */ Any())",
+      "src/main/kotlin/com/example/shop/orders/automations/fulfillment/FulfillmentProcessor.kt:53: // TODO: a handler per event that advances this process, including the failure paths.",
+      "src/main/kotlin/com/example/shop/orders/automations/fulfillment/FulfillmentTodoList.kt:30: /** TODO: the real precondition for the next step. Bound the retries. */",
+      "src/main/kotlin/com/example/shop/orders/automations/fulfillment/slice.yaml:9: summary: TODO one sentence, present tense.",
+      "src/main/kotlin/com/example/shop/orders/automations/fulfillment/slice.yaml:17: consumes: [OrderPlaced]                 # TODO every event that advances this process",
+      "src/main/kotlin/com/example/shop/orders/automations/fulfillment/slice.yaml:18: dispatches: []                        # TODO the commands this automation issues",
+      "src/main/kotlin/com/example/shop/orders/automations/fulfillment/slice.yaml:22: # schedule: { cron: \"0 0 3 * * *\", note: \"TODO why this cadence\" }",
+      "src/main/kotlin/com/example/shop/orders/automations/fulfillment/slice.yaml:23: # schedule: { fixedDelay: PT15M, initialDelay: PT1M, note: \"TODO why this cadence\" }",
+      "src/main/kotlin/com/example/shop/orders/automations/fulfillment/slice.yaml:27: - { id: INV-1, text: \"TODO the process rule, e.g. at most three payment attempts\", enforcedBy: FulfillmentProcessor }",
+      "src/test/kotlin/com/example/shop/orders/automations/fulfillment/FulfillmentIT.kt:19: // TODO: append OrderPlaced; assert the TodoList advanced and the command was dispatched.",
+      "src/test/kotlin/com/example/shop/orders/automations/fulfillment/FulfillmentIT.kt:29: // TODO: drive the failure path; assert attempts stop at the cap and the compensating"
     ]
   },
   {
@@ -242,31 +242,31 @@
       "externalSystem": "billing",
       "lane": "decider",
       "owner": "orders-team",
-      "packagePath": "com.acme.shop",
+      "packagePath": "com.example.shop",
       "tier": "cqrs-es"
     },
     "written": [
-      "src/main/kotlin/com/acme/shop/orders/external_systems/billing/BillingClient.kt",
-      "src/main/kotlin/com/acme/shop/orders/external_systems/billing/BillingClientAdapter.kt",
-      "src/main/kotlin/com/acme/shop/orders/external_systems/billing/BillingPublisher.kt",
-      "src/main/kotlin/com/acme/shop/orders/external_systems/billing/BillingTranslator.kt",
-      "src/main/kotlin/com/acme/shop/orders/external_systems/billing/CLAUDE.md",
-      "src/main/kotlin/com/acme/shop/orders/external_systems/billing/OnInvoiceIssued.kt",
-      "src/main/kotlin/com/acme/shop/orders/external_systems/billing/slice.yaml",
-      "src/test/kotlin/com/acme/shop/orders/external_systems/billing/BillingTranslatorTest.kt"
+      "src/main/kotlin/com/example/shop/orders/external_systems/billing/BillingClient.kt",
+      "src/main/kotlin/com/example/shop/orders/external_systems/billing/BillingClientAdapter.kt",
+      "src/main/kotlin/com/example/shop/orders/external_systems/billing/BillingPublisher.kt",
+      "src/main/kotlin/com/example/shop/orders/external_systems/billing/BillingTranslator.kt",
+      "src/main/kotlin/com/example/shop/orders/external_systems/billing/CLAUDE.md",
+      "src/main/kotlin/com/example/shop/orders/external_systems/billing/OnInvoiceIssued.kt",
+      "src/main/kotlin/com/example/shop/orders/external_systems/billing/slice.yaml",
+      "src/test/kotlin/com/example/shop/orders/external_systems/billing/BillingTranslatorTest.kt"
     ],
     "wiring": [],
     "todos": [
-      "src/main/kotlin/com/acme/shop/orders/external_systems/billing/BillingClientAdapter.kt:9: * TODO: implement [send] with the real transport. Until then the context starts, and every outbound",
-      "src/main/kotlin/com/acme/shop/orders/external_systems/billing/BillingClientAdapter.kt:20: throw UnsupportedOperationException(\"TODO: send $request to Billing\")",
-      "src/main/kotlin/com/acme/shop/orders/external_systems/billing/BillingTranslator.kt:18: // TODO: map external fields onto the internal command, converting types at this boundary",
-      "src/main/kotlin/com/acme/shop/orders/external_systems/billing/BillingTranslator.kt:20: TODO(\"map InvoiceIssuedPayload -> internal command\")",
-      "src/main/kotlin/com/acme/shop/orders/external_systems/billing/BillingTranslator.kt:25: // TODO: map the internal event onto the external contract.",
-      "src/main/kotlin/com/acme/shop/orders/external_systems/billing/BillingTranslator.kt:26: TODO(\"map internal event -> BillingRequest\")",
-      "src/main/kotlin/com/acme/shop/orders/external_systems/billing/slice.yaml:29: - { from: InvoiceIssued, to: TODOInternalCommand }",
-      "src/test/kotlin/com/acme/shop/orders/external_systems/billing/BillingTranslatorTest.kt:21: // TODO: assert every field, including the type conversions at the boundary.",
-      "src/test/kotlin/com/acme/shop/orders/external_systems/billing/BillingTranslatorTest.kt:23: //   assertThat(command).isEqualTo(TODOInternalCommand(...))",
-      "src/test/kotlin/com/acme/shop/orders/external_systems/billing/BillingTranslatorTest.kt:28: // TODO: assert the external contract shape, not our internal one."
+      "src/main/kotlin/com/example/shop/orders/external_systems/billing/BillingClientAdapter.kt:9: * TODO: implement [send] with the real transport. Until then the context starts, and every outbound",
+      "src/main/kotlin/com/example/shop/orders/external_systems/billing/BillingClientAdapter.kt:20: throw UnsupportedOperationException(\"TODO: send $request to Billing\")",
+      "src/main/kotlin/com/example/shop/orders/external_systems/billing/BillingTranslator.kt:18: // TODO: map external fields onto the internal command, converting types at this boundary",
+      "src/main/kotlin/com/example/shop/orders/external_systems/billing/BillingTranslator.kt:20: TODO(\"map InvoiceIssuedPayload -> internal command\")",
+      "src/main/kotlin/com/example/shop/orders/external_systems/billing/BillingTranslator.kt:25: // TODO: map the internal event onto the external contract.",
+      "src/main/kotlin/com/example/shop/orders/external_systems/billing/BillingTranslator.kt:26: TODO(\"map internal event -> BillingRequest\")",
+      "src/main/kotlin/com/example/shop/orders/external_systems/billing/slice.yaml:29: - { from: InvoiceIssued, to: TODOInternalCommand }",
+      "src/test/kotlin/com/example/shop/orders/external_systems/billing/BillingTranslatorTest.kt:21: // TODO: assert every field, including the type conversions at the boundary.",
+      "src/test/kotlin/com/example/shop/orders/external_systems/billing/BillingTranslatorTest.kt:23: //   assertThat(command).isEqualTo(TODOInternalCommand(...))",
+      "src/test/kotlin/com/example/shop/orders/external_systems/billing/BillingTranslatorTest.kt:28: // TODO: assert the external contract shape, not our internal one."
     ]
   }
 ]

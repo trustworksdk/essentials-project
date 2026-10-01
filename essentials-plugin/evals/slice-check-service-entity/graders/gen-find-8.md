@@ -6,7 +6,7 @@ type: llm
 The agent's final message is the report `/essentials:slice-check` printed for a test project. Paths in it are relative to the project root, and a report may cite a file by path, by `path:line`, or by its type or directory name.
 
 PASS if the report contains a finding that matches all of:
-- it concerns `src/main/java/com/acme/shipping/views/order_status/OrderStatusQueries.java` (symbol `OrderStatusQueries.findById`)
+- it concerns `src/main/java/com/example/shipping/views/order_status/OrderStatusQueries.java` (symbol `OrderStatusQueries.findById`)
 - it is filed under gate 18c (Spring Data repository surface), id ESS-G18c, or plainly describes that check
 - its severity is Blocking
 - its substance: A projection return type on a method named after a CRUD base method: the base captures it and the caller gets a ClassCastException. It has no caller, so it must be found from the declaration. Fix: rename to findOrderStatusById.

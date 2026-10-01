@@ -136,8 +136,8 @@ Default `Tenant` implementation.
 TenantId.of(CharSequence value)
 
 // Usage
-TenantId tenantId = TenantId.of("acme-corp");
-String value = tenantId.toString();  // "acme-corp"
+TenantId tenantId = TenantId.of("example-corp");
+String value = tenantId.toString();  // "example-corp"
 ```
 
 **Pattern**: Pass to queries/commands for tenant-scoped operations.

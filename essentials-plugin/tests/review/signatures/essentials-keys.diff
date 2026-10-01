@@ -10,8 +10,8 @@
 # expect: backend/src/main/resources/application-legacy.properties:3 ess-097-queue-statistics confirmed Should-fix mechanical
 # expect: backend/src/main/resources/application-legacy.properties:4 ess-097-queue-statistics confirmed Advisory mechanical
 # expect-not: backend/src/main/resources/application-legacy.properties:5 ess-097-queue-statistics
-# expect: backend/src/test/kotlin/com/acme/shop/NoHandlersIT.kt:5 ess-089-reactive-bpp-disabled confirmed Blocking manual
-# expect-not: backend/src/test/kotlin/com/acme/shop/NoHandlersIT.kt:8 ess-089-reactive-bpp-disabled
+# expect: backend/src/test/kotlin/com/example/shop/NoHandlersIT.kt:5 ess-089-reactive-bpp-disabled confirmed Blocking manual
+# expect-not: backend/src/test/kotlin/com/example/shop/NoHandlersIT.kt:8 ess-089-reactive-bpp-disabled
 diff --git a/backend/src/main/resources/application.yml b/backend/src/main/resources/application.yml
 new file mode 100644
 --- /dev/null
@@ -33,12 +33,12 @@ new file mode 100644
 +essentials.durable-queues.enable-queue-statistics=true
 +essentials.durable-queues.queue-statistics-ttl-duration=7d
 +essentials.durable-queues.shared-queue-table-name=durable_queues
-diff --git a/backend/src/test/kotlin/com/acme/shop/NoHandlersIT.kt b/backend/src/test/kotlin/com/acme/shop/NoHandlersIT.kt
+diff --git a/backend/src/test/kotlin/com/example/shop/NoHandlersIT.kt b/backend/src/test/kotlin/com/example/shop/NoHandlersIT.kt
 new file mode 100644
 --- /dev/null
-+++ b/backend/src/test/kotlin/com/acme/shop/NoHandlersIT.kt
++++ b/backend/src/test/kotlin/com/example/shop/NoHandlersIT.kt
 @@ -0,0 +1,9 @@
-+package com.acme.shop
++package com.example.shop
 +
 +import org.springframework.boot.test.context.SpringBootTest
 +

@@ -1,6 +1,6 @@
 # `multi-lane` — gate 14's Blocking branches, and a clean control beside them
 
-A synthetic Java project (`com.acme.multi`) with four bounded contexts. Three of them each isolate one
+A synthetic Java project (`com.example.multi`) with four bounded contexts. Three of them each isolate one
 Blocking row of `/essentials:slice-check` gate 14; the fourth is a clean single-lane BC that must stay
 clean although its neighbours are not. It exists because lane detection is **per BC**: a finding in
 one bounded context must never bleed into another.
@@ -24,7 +24,7 @@ Eval: `evals/slice-check-multi-lane/` — graders generated from `expected.yaml`
 ## Layout
 
 ```
-src/main/java/com/acme/multi/
+src/main/java/com/example/multi/
   DeciderWiring.java     the ONE EventStreamDeciderAndAggregateTypeConfigurator for the application
   ledger/                per-slice decider (open_account) AND aggregates/ (post_entry) over one stream
   catalog/               entities/ AND an event-store append (reprice_product)

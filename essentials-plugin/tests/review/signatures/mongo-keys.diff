@@ -12,9 +12,9 @@
 # expect: backend/src/test/resources/application-test.properties:3 ess-088-mongo-key confirmed mechanical
 # expect-not: backend/src/test/resources/application-test.properties:4 ess-088-mongo-key
 # expect-not: backend/src/test/resources/application-test.properties:5 ess-088-mongo-key
-# expect: backend/src/test/kotlin/com/acme/shop/MongoContainerIT.kt:11 ess-088-mongo-key confirmed Blocking mechanical
-# expect-not: backend/src/test/kotlin/com/acme/shop/MongoContainerIT.kt:12 ess-088-mongo-key
-# expect-not: backend/src/test/kotlin/com/acme/shop/MongoContainerIT.kt:13 ess-088-mongo-key
+# expect: backend/src/test/kotlin/com/example/shop/MongoContainerIT.kt:11 ess-088-mongo-key confirmed Blocking mechanical
+# expect-not: backend/src/test/kotlin/com/example/shop/MongoContainerIT.kt:12 ess-088-mongo-key
+# expect-not: backend/src/test/kotlin/com/example/shop/MongoContainerIT.kt:13 ess-088-mongo-key
 diff --git a/backend/src/main/resources/application.yml b/backend/src/main/resources/application.yml
 new file mode 100644
 --- /dev/null
@@ -51,12 +51,12 @@ diff --git a/backend/src/test/resources/application-test.properties b/backend/sr
 +spring.data.mongodb.representation.big-decimal=decimal128
 +#spring.data.mongodb.uri=mongodb://nowhere
  logging.level.root=INFO
-diff --git a/backend/src/test/kotlin/com/acme/shop/MongoContainerIT.kt b/backend/src/test/kotlin/com/acme/shop/MongoContainerIT.kt
+diff --git a/backend/src/test/kotlin/com/example/shop/MongoContainerIT.kt b/backend/src/test/kotlin/com/example/shop/MongoContainerIT.kt
 new file mode 100644
 --- /dev/null
-+++ b/backend/src/test/kotlin/com/acme/shop/MongoContainerIT.kt
++++ b/backend/src/test/kotlin/com/example/shop/MongoContainerIT.kt
 @@ -0,0 +1,16 @@
-+package com.acme.shop
++package com.example.shop
 +
 +import org.springframework.test.context.DynamicPropertyRegistry
 +import org.springframework.test.context.DynamicPropertySource

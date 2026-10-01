@@ -13,7 +13,7 @@
   "lanes": [
     {
       "bc": "edge",
-      "path": "src/main/*/com/acme/edge",
+      "path": "src/main/*/com/example/edge",
       "detected": "undetermined",
       "signals": {
         "decider": 0,

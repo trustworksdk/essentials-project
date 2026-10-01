@@ -106,7 +106,7 @@ Two namespaces, mirroring the project template's established contract:
 
 | Placeholder | Source | Example |
 |---|---|---|
-| `{{packagePath}}` | read from the project (§2.4) — never elicited | `com.acme.shop` |
+| `{{packagePath}}` | read from the project (§2.4) — never elicited | `com.example.shop` |
 | `{{bc}}` / `{{Bc}}` | elicited | `orders` / `Orders` |
 | `{{slice}}` / `{{Slice}}` / `{{sliceCamel}}` | elicited; the camel form is derived | `place_order` / `PlaceOrder` / `placeOrder` |
 | `{{aggregate}}` / `{{Aggregate}}` | elicited, or derived from the BC | `order` / `Order` |

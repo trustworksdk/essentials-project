@@ -8,9 +8,9 @@
   "bcs": [
     {
       "name": "orders",
-      "path": "src/main/*/com/acme/shop/orders",
+      "path": "src/main/*/com/example/shop/orders",
       "dirs": [
-        "src/main/kotlin/com/acme/shop/orders"
+        "src/main/kotlin/com/example/shop/orders"
       ],
       "languages": [
         "kotlin"
@@ -26,13 +26,13 @@
         "signals": {
           "decider": [
             {
-              "file": "src/main/kotlin/com/acme/shop/orders/use_cases/cancel_order/CancelOrderDecider.kt",
+              "file": "src/main/kotlin/com/example/shop/orders/use_cases/cancel_order/CancelOrderDecider.kt",
               "line": 7,
               "symbol": "CancelOrderDecider",
               "via": "Decider"
             },
             {
-              "file": "src/main/kotlin/com/acme/shop/orders/use_cases/place_order/PlaceOrderDecider.kt",
+              "file": "src/main/kotlin/com/example/shop/orders/use_cases/place_order/PlaceOrderDecider.kt",
               "line": 7,
               "symbol": "PlaceOrderDecider",
               "via": "Decider"
@@ -42,22 +42,22 @@
           "entities": null,
           "eventStore": [
             {
-              "file": "src/main/kotlin/com/acme/shop/orders/automations/auto_cancel/AutoCancelProcessor.kt",
+              "file": "src/main/kotlin/com/example/shop/orders/automations/auto_cancel/AutoCancelProcessor.kt",
               "line": 18,
               "symbol": "AggregateType"
             },
             {
-              "file": "src/main/kotlin/com/acme/shop/orders/config/OrdersConfiguration.kt",
+              "file": "src/main/kotlin/com/example/shop/orders/config/OrdersConfiguration.kt",
               "line": 12,
               "symbol": "AggregateType"
             },
             {
-              "file": "src/main/kotlin/com/acme/shop/orders/external_systems/warehouse/WarehousePublisher.kt",
+              "file": "src/main/kotlin/com/example/shop/orders/external_systems/warehouse/WarehousePublisher.kt",
               "line": 19,
               "symbol": "AggregateType"
             },
             {
-              "file": "src/main/kotlin/com/acme/shop/orders/views/order_list/OrderListProjection.kt",
+              "file": "src/main/kotlin/com/example/shop/orders/views/order_list/OrderListProjection.kt",
               "line": 24,
               "symbol": "AggregateType"
             }
@@ -67,27 +67,27 @@
           {
             "slice": "orders.auto_cancel",
             "lane": "decider",
-            "file": "src/main/kotlin/com/acme/shop/orders/automations/auto_cancel/slice.yaml"
+            "file": "src/main/kotlin/com/example/shop/orders/automations/auto_cancel/slice.yaml"
           },
           {
             "slice": "orders.warehouse",
             "lane": "decider",
-            "file": "src/main/kotlin/com/acme/shop/orders/external_systems/warehouse/slice.yaml"
+            "file": "src/main/kotlin/com/example/shop/orders/external_systems/warehouse/slice.yaml"
           },
           {
             "slice": "orders.cancel_order",
             "lane": "decider",
-            "file": "src/main/kotlin/com/acme/shop/orders/use_cases/cancel_order/slice.yaml"
+            "file": "src/main/kotlin/com/example/shop/orders/use_cases/cancel_order/slice.yaml"
           },
           {
             "slice": "orders.place_order",
             "lane": "decider",
-            "file": "src/main/kotlin/com/acme/shop/orders/use_cases/place_order/slice.yaml"
+            "file": "src/main/kotlin/com/example/shop/orders/use_cases/place_order/slice.yaml"
           },
           {
             "slice": "orders.order_list",
             "lane": "decider",
-            "file": "src/main/kotlin/com/acme/shop/orders/views/order_list/slice.yaml"
+            "file": "src/main/kotlin/com/example/shop/orders/views/order_list/slice.yaml"
           }
         ],
         "detected": "decider"
@@ -99,13 +99,13 @@
       "id": "orders.auto_cancel",
       "idSource": "manifest",
       "bc": "orders",
-      "bcPath": "src/main/*/com/acme/shop/orders",
-      "dir": "src/main/kotlin/com/acme/shop/orders/automations/auto_cancel",
+      "bcPath": "src/main/*/com/example/shop/orders",
+      "dir": "src/main/kotlin/com/example/shop/orders/automations/auto_cancel",
       "role": "automations",
       "kind": "automation",
-      "manifest": "src/main/kotlin/com/acme/shop/orders/automations/auto_cancel/slice.yaml",
+      "manifest": "src/main/kotlin/com/example/shop/orders/automations/auto_cancel/slice.yaml",
       "language": "kotlin",
-      "package": "com.acme.shop.orders.automations.auto_cancel",
+      "package": "com.example.shop.orders.automations.auto_cancel",
       "files": [
         "AutoCancelProcessor.kt"
       ],
@@ -113,7 +113,7 @@
         {
           "class": "AutoCancelProcessor",
           "base": "EventProcessor",
-          "file": "src/main/kotlin/com/acme/shop/orders/automations/auto_cancel/AutoCancelProcessor.kt",
+          "file": "src/main/kotlin/com/example/shop/orders/automations/auto_cancel/AutoCancelProcessor.kt",
           "line": 13
         }
       ],
@@ -124,13 +124,13 @@
           "annotation": "MessageHandler",
           "annotationFqn": "dk.trustworks.essentials.components.foundation.messaging.MessageHandler",
           "role": "event",
-          "file": "src/main/kotlin/com/acme/shop/orders/automations/auto_cancel/AutoCancelProcessor.kt",
+          "file": "src/main/kotlin/com/example/shop/orders/automations/auto_cancel/AutoCancelProcessor.kt",
           "line": 21,
           "annotationLine": 20,
           "message": {
             "written": "Placed",
             "name": "OrderPlaced",
-            "fqn": "com.acme.shop.orders.events.OrderPlaced",
+            "fqn": "com.example.shop.orders.events.OrderPlaced",
             "resolvedBy": "alias"
           },
           "params": [
@@ -146,10 +146,10 @@
       "dispatches": [
         {
           "name": "CancelOrder",
-          "fqn": "com.acme.shop.orders.use_cases.cancel_order.CancelOrder",
+          "fqn": "com.example.shop.orders.use_cases.cancel_order.CancelOrder",
           "resolvedBy": "import",
           "via": "sendAndDontWait",
-          "file": "src/main/kotlin/com/acme/shop/orders/automations/auto_cancel/AutoCancelProcessor.kt",
+          "file": "src/main/kotlin/com/example/shop/orders/automations/auto_cancel/AutoCancelProcessor.kt",
           "line": 30,
           "own": false
         }
@@ -159,7 +159,7 @@
         {
           "aggregateType": "Orders",
           "written": "AggregateType.of(\"Orders\")",
-          "file": "src/main/kotlin/com/acme/shop/orders/automations/auto_cancel/AutoCancelProcessor.kt",
+          "file": "src/main/kotlin/com/example/shop/orders/automations/auto_cancel/AutoCancelProcessor.kt",
           "line": 18
         }
       ],
@@ -168,7 +168,7 @@
         {
           "class": "AutoCancelProcessor",
           "method": "sweep",
-          "file": "src/main/kotlin/com/acme/shop/orders/automations/auto_cancel/AutoCancelProcessor.kt",
+          "file": "src/main/kotlin/com/example/shop/orders/automations/auto_cancel/AutoCancelProcessor.kt",
           "line": 27,
           "cron": "0 0 3 * * *",
           "fixedDelay": null,
@@ -185,13 +185,13 @@
       "id": "orders.warehouse",
       "idSource": "manifest",
       "bc": "orders",
-      "bcPath": "src/main/*/com/acme/shop/orders",
-      "dir": "src/main/kotlin/com/acme/shop/orders/external_systems/warehouse",
+      "bcPath": "src/main/*/com/example/shop/orders",
+      "dir": "src/main/kotlin/com/example/shop/orders/external_systems/warehouse",
       "role": "external_systems",
       "kind": "translation",
-      "manifest": "src/main/kotlin/com/acme/shop/orders/external_systems/warehouse/slice.yaml",
+      "manifest": "src/main/kotlin/com/example/shop/orders/external_systems/warehouse/slice.yaml",
       "language": "kotlin",
-      "package": "com.acme.shop.orders.external_systems.warehouse",
+      "package": "com.example.shop.orders.external_systems.warehouse",
       "files": [
         "WarehousePublisher.kt"
       ],
@@ -199,7 +199,7 @@
         {
           "class": "WarehousePublisher",
           "base": "EventProcessor",
-          "file": "src/main/kotlin/com/acme/shop/orders/external_systems/warehouse/WarehousePublisher.kt",
+          "file": "src/main/kotlin/com/example/shop/orders/external_systems/warehouse/WarehousePublisher.kt",
           "line": 16
         }
       ],
@@ -210,13 +210,13 @@
           "annotation": "MessageHandler",
           "annotationFqn": "dk.trustworks.essentials.components.foundation.messaging.MessageHandler",
           "role": "event",
-          "file": "src/main/kotlin/com/acme/shop/orders/external_systems/warehouse/WarehousePublisher.kt",
+          "file": "src/main/kotlin/com/example/shop/orders/external_systems/warehouse/WarehousePublisher.kt",
           "line": 22,
           "annotationLine": 21,
           "message": {
             "written": "Placement",
             "name": "OrderPlaced",
-            "fqn": "com.acme.shop.orders.events.OrderPlaced",
+            "fqn": "com.example.shop.orders.events.OrderPlaced",
             "resolvedBy": "typealias"
           },
           "params": [
@@ -233,13 +233,13 @@
           "annotation": "MessageHandler",
           "annotationFqn": "dk.trustworks.essentials.components.foundation.messaging.MessageHandler",
           "role": "event",
-          "file": "src/main/kotlin/com/acme/shop/orders/external_systems/warehouse/WarehousePublisher.kt",
+          "file": "src/main/kotlin/com/example/shop/orders/external_systems/warehouse/WarehousePublisher.kt",
           "line": 25,
           "annotationLine": 24,
           "message": {
             "written": "OrderCancelled?",
             "name": "OrderCancelled",
-            "fqn": "com.acme.shop.orders.events.OrderCancelled",
+            "fqn": "com.example.shop.orders.events.OrderCancelled",
             "resolvedBy": "import"
           },
           "params": [
@@ -258,7 +258,7 @@
         {
           "aggregateType": "Orders",
           "written": "OrdersConfiguration.AGGREGATE_TYPE",
-          "file": "src/main/kotlin/com/acme/shop/orders/external_systems/warehouse/WarehousePublisher.kt",
+          "file": "src/main/kotlin/com/example/shop/orders/external_systems/warehouse/WarehousePublisher.kt",
           "line": 19
         }
       ],
@@ -270,13 +270,13 @@
       "id": "orders.cancel_order",
       "idSource": "manifest",
       "bc": "orders",
-      "bcPath": "src/main/*/com/acme/shop/orders",
-      "dir": "src/main/kotlin/com/acme/shop/orders/use_cases/cancel_order",
+      "bcPath": "src/main/*/com/example/shop/orders",
+      "dir": "src/main/kotlin/com/example/shop/orders/use_cases/cancel_order",
       "role": "use_cases",
       "kind": "command",
-      "manifest": "src/main/kotlin/com/acme/shop/orders/use_cases/cancel_order/slice.yaml",
+      "manifest": "src/main/kotlin/com/example/shop/orders/use_cases/cancel_order/slice.yaml",
       "language": "kotlin",
-      "package": "com.acme.shop.orders.use_cases.cancel_order",
+      "package": "com.example.shop.orders.use_cases.cancel_order",
       "files": [
         "CancelOrder.kt",
         "CancelOrderAPI.kt",
@@ -287,20 +287,20 @@
       "handles": [
         {
           "name": "CancelOrder",
-          "fqn": "com.acme.shop.orders.use_cases.cancel_order.CancelOrder",
+          "fqn": "com.example.shop.orders.use_cases.cancel_order.CancelOrder",
           "resolvedBy": "same-package",
           "via": "Decider",
-          "file": "src/main/kotlin/com/acme/shop/orders/use_cases/cancel_order/CancelOrderDecider.kt",
+          "file": "src/main/kotlin/com/example/shop/orders/use_cases/cancel_order/CancelOrderDecider.kt",
           "line": 7
         }
       ],
       "dispatches": [
         {
           "name": "CancelOrder",
-          "fqn": "com.acme.shop.orders.use_cases.cancel_order.CancelOrder",
+          "fqn": "com.example.shop.orders.use_cases.cancel_order.CancelOrder",
           "resolvedBy": "same-package",
           "via": "send",
-          "file": "src/main/kotlin/com/acme/shop/orders/use_cases/cancel_order/CancelOrderAPI.kt",
+          "file": "src/main/kotlin/com/example/shop/orders/use_cases/cancel_order/CancelOrderAPI.kt",
           "line": 16,
           "own": true
         }
@@ -308,10 +308,10 @@
       "publishes": [
         {
           "name": "OrderCancelled",
-          "fqn": "com.acme.shop.orders.events.OrderCancelled",
+          "fqn": "com.example.shop.orders.events.OrderCancelled",
           "resolvedBy": "import",
           "via": "decider",
-          "file": "src/main/kotlin/com/acme/shop/orders/use_cases/cancel_order/CancelOrderDecider.kt",
+          "file": "src/main/kotlin/com/example/shop/orders/use_cases/cancel_order/CancelOrderDecider.kt",
           "line": 9
         }
       ],
@@ -320,7 +320,7 @@
         {
           "class": "CancelOrderAPI",
           "method": "cancel",
-          "file": "src/main/kotlin/com/acme/shop/orders/use_cases/cancel_order/CancelOrderAPI.kt",
+          "file": "src/main/kotlin/com/example/shop/orders/use_cases/cancel_order/CancelOrderAPI.kt",
           "line": 15,
           "annotationLine": 14,
           "annotation": "PostMapping",
@@ -335,7 +335,7 @@
           "queryParams": [],
           "requestBody": {
             "name": "Body",
-            "fqn": "com.acme.shop.orders.use_cases.cancel_order.CancelOrderAPI.Body",
+            "fqn": "com.example.shop.orders.use_cases.cancel_order.CancelOrderAPI.Body",
             "resolvedBy": "same-file"
           }
         }
@@ -347,13 +347,13 @@
       "id": "orders.place_order",
       "idSource": "manifest",
       "bc": "orders",
-      "bcPath": "src/main/*/com/acme/shop/orders",
-      "dir": "src/main/kotlin/com/acme/shop/orders/use_cases/place_order",
+      "bcPath": "src/main/*/com/example/shop/orders",
+      "dir": "src/main/kotlin/com/example/shop/orders/use_cases/place_order",
       "role": "use_cases",
       "kind": "command",
-      "manifest": "src/main/kotlin/com/acme/shop/orders/use_cases/place_order/slice.yaml",
+      "manifest": "src/main/kotlin/com/example/shop/orders/use_cases/place_order/slice.yaml",
       "language": "kotlin",
-      "package": "com.acme.shop.orders.use_cases.place_order",
+      "package": "com.example.shop.orders.use_cases.place_order",
       "files": [
         "PlaceOrder.kt",
         "PlaceOrderAPI.kt",
@@ -364,20 +364,20 @@
       "handles": [
         {
           "name": "PlaceOrder",
-          "fqn": "com.acme.shop.orders.use_cases.place_order.PlaceOrder",
+          "fqn": "com.example.shop.orders.use_cases.place_order.PlaceOrder",
           "resolvedBy": "same-package",
           "via": "Decider",
-          "file": "src/main/kotlin/com/acme/shop/orders/use_cases/place_order/PlaceOrderDecider.kt",
+          "file": "src/main/kotlin/com/example/shop/orders/use_cases/place_order/PlaceOrderDecider.kt",
           "line": 7
         }
       ],
       "dispatches": [
         {
           "name": "PlaceOrder",
-          "fqn": "com.acme.shop.orders.use_cases.place_order.PlaceOrder",
+          "fqn": "com.example.shop.orders.use_cases.place_order.PlaceOrder",
           "resolvedBy": "same-package",
           "via": "send",
-          "file": "src/main/kotlin/com/acme/shop/orders/use_cases/place_order/PlaceOrderAPI.kt",
+          "file": "src/main/kotlin/com/example/shop/orders/use_cases/place_order/PlaceOrderAPI.kt",
           "line": 21,
           "own": true
         }
@@ -385,10 +385,10 @@
       "publishes": [
         {
           "name": "OrderPlaced",
-          "fqn": "com.acme.shop.orders.events.OrderPlaced",
+          "fqn": "com.example.shop.orders.events.OrderPlaced",
           "resolvedBy": "import",
           "via": "decider",
-          "file": "src/main/kotlin/com/acme/shop/orders/use_cases/place_order/PlaceOrderDecider.kt",
+          "file": "src/main/kotlin/com/example/shop/orders/use_cases/place_order/PlaceOrderDecider.kt",
           "line": 10
         }
       ],
@@ -397,7 +397,7 @@
         {
           "class": "PlaceOrderAPI",
           "method": "placeOrder",
-          "file": "src/main/kotlin/com/acme/shop/orders/use_cases/place_order/PlaceOrderAPI.kt",
+          "file": "src/main/kotlin/com/example/shop/orders/use_cases/place_order/PlaceOrderAPI.kt",
           "line": 20,
           "annotationLine": 19,
           "annotation": "PostMapping",
@@ -412,7 +412,7 @@
           "queryParams": [],
           "requestBody": {
             "name": "PlaceOrder",
-            "fqn": "com.acme.shop.orders.use_cases.place_order.PlaceOrder",
+            "fqn": "com.example.shop.orders.use_cases.place_order.PlaceOrder",
             "resolvedBy": "same-package"
           }
         }
@@ -424,13 +424,13 @@
       "id": "orders.order_list",
       "idSource": "manifest",
       "bc": "orders",
-      "bcPath": "src/main/*/com/acme/shop/orders",
-      "dir": "src/main/kotlin/com/acme/shop/orders/views/order_list",
+      "bcPath": "src/main/*/com/example/shop/orders",
+      "dir": "src/main/kotlin/com/example/shop/orders/views/order_list",
       "role": "views",
       "kind": "view",
-      "manifest": "src/main/kotlin/com/acme/shop/orders/views/order_list/slice.yaml",
+      "manifest": "src/main/kotlin/com/example/shop/orders/views/order_list/slice.yaml",
       "language": "kotlin",
-      "package": "com.acme.shop.orders.views.order_list",
+      "package": "com.example.shop.orders.views.order_list",
       "files": [
         "OrderListAPI.kt",
         "OrderListProjection.kt",
@@ -441,7 +441,7 @@
         {
           "class": "OrderListProjection",
           "base": "ViewEventProcessor",
-          "file": "src/main/kotlin/com/acme/shop/orders/views/order_list/OrderListProjection.kt",
+          "file": "src/main/kotlin/com/example/shop/orders/views/order_list/OrderListProjection.kt",
           "line": 17
         }
       ],
@@ -452,13 +452,13 @@
           "annotation": "MessageHandler",
           "annotationFqn": "dk.trustworks.essentials.components.foundation.messaging.MessageHandler",
           "role": "event",
-          "file": "src/main/kotlin/com/acme/shop/orders/views/order_list/OrderListProjection.kt",
+          "file": "src/main/kotlin/com/example/shop/orders/views/order_list/OrderListProjection.kt",
           "line": 29,
           "annotationLine": 28,
           "message": {
             "written": "Placed",
             "name": "OrderPlaced",
-            "fqn": "com.acme.shop.orders.events.OrderPlaced",
+            "fqn": "com.example.shop.orders.events.OrderPlaced",
             "resolvedBy": "alias"
           },
           "params": [
@@ -479,19 +479,19 @@
           "annotation": "MessageHandler",
           "annotationFqn": "dk.trustworks.essentials.components.foundation.messaging.MessageHandler",
           "role": "event",
-          "file": "src/main/kotlin/com/acme/shop/orders/views/order_list/OrderListProjection.kt",
+          "file": "src/main/kotlin/com/example/shop/orders/views/order_list/OrderListProjection.kt",
           "line": 36,
           "annotationLine": 35,
           "message": {
-            "written": "com.acme.shop.orders.events.OrderCancelled",
+            "written": "com.example.shop.orders.events.OrderCancelled",
             "name": "OrderCancelled",
-            "fqn": "com.acme.shop.orders.events.OrderCancelled",
+            "fqn": "com.example.shop.orders.events.OrderCancelled",
             "resolvedBy": "fqn"
           },
           "params": [
             {
               "name": "event",
-              "type": "com.acme.shop.orders.events.OrderCancelled"
+              "type": "com.example.shop.orders.events.OrderCancelled"
             },
             {
               "name": "message",
@@ -508,7 +508,7 @@
         {
           "aggregateType": "Orders",
           "written": "OrdersConfiguration.AGGREGATE_TYPE",
-          "file": "src/main/kotlin/com/acme/shop/orders/views/order_list/OrderListProjection.kt",
+          "file": "src/main/kotlin/com/example/shop/orders/views/order_list/OrderListProjection.kt",
           "line": 25
         }
       ],
@@ -516,7 +516,7 @@
         {
           "class": "OrderListAPI",
           "method": "list",
-          "file": "src/main/kotlin/com/acme/shop/orders/views/order_list/OrderListAPI.kt",
+          "file": "src/main/kotlin/com/example/shop/orders/views/order_list/OrderListAPI.kt",
           "line": 16,
           "annotationLine": 15,
           "annotation": "GetMapping",
@@ -543,7 +543,7 @@
         {
           "class": "OrderListAPI",
           "method": "between",
-          "file": "src/main/kotlin/com/acme/shop/orders/views/order_list/OrderListAPI.kt",
+          "file": "src/main/kotlin/com/example/shop/orders/views/order_list/OrderListAPI.kt",
           "line": 21,
           "annotationLine": 20,
           "annotation": "GetMapping",
@@ -573,7 +573,7 @@
         {
           "class": "OrderListAPI",
           "method": "shipped",
-          "file": "src/main/kotlin/com/acme/shop/orders/views/order_list/OrderListAPI.kt",
+          "file": "src/main/kotlin/com/example/shop/orders/views/order_list/OrderListAPI.kt",
           "line": 25,
           "annotationLine": 24,
           "annotation": "RequestMapping",
@@ -593,7 +593,7 @@
         {
           "class": "OrderListAPI",
           "method": "search",
-          "file": "src/main/kotlin/com/acme/shop/orders/views/order_list/OrderListAPI.kt",
+          "file": "src/main/kotlin/com/example/shop/orders/views/order_list/OrderListAPI.kt",
           "line": 29,
           "annotationLine": 28,
           "annotation": "GetMapping",
@@ -647,7 +647,7 @@
               "note": null
             }
           ],
-          "declaredIn": "src/main/kotlin/com/acme/shop/orders/views/order_list/OrderListView.kt",
+          "declaredIn": "src/main/kotlin/com/example/shop/orders/views/order_list/OrderListView.kt",
           "line": 12,
           "matchedBy": [
             "annotation",
@@ -669,7 +669,7 @@
         "id: OrderId",
         "reason: String"
       ],
-      "declaredIn": "src/main/kotlin/com/acme/shop/orders/use_cases/cancel_order/CancelOrder.kt",
+      "declaredIn": "src/main/kotlin/com/example/shop/orders/use_cases/cancel_order/CancelOrder.kt",
       "line": 6,
       "alsoDeclaredIn": []
     },
@@ -683,7 +683,7 @@
         "id: OrderId",
         "reason: String?"
       ],
-      "declaredIn": "src/main/kotlin/com/acme/shop/orders/events/OrderCancelled.kt",
+      "declaredIn": "src/main/kotlin/com/example/shop/orders/events/OrderCancelled.kt",
       "line": 5,
       "alsoDeclaredIn": []
     },
@@ -698,7 +698,7 @@
         "sku: String",
         "quantity: Int"
       ],
-      "declaredIn": "src/main/kotlin/com/acme/shop/orders/events/OrderPlaced.kt",
+      "declaredIn": "src/main/kotlin/com/example/shop/orders/events/OrderPlaced.kt",
       "line": 5,
       "alsoDeclaredIn": []
     },
@@ -713,7 +713,7 @@
         "sku: String",
         "quantity: Int"
       ],
-      "declaredIn": "src/main/kotlin/com/acme/shop/orders/use_cases/place_order/PlaceOrder.kt",
+      "declaredIn": "src/main/kotlin/com/example/shop/orders/use_cases/place_order/PlaceOrder.kt",
       "line": 6,
       "alsoDeclaredIn": []
     }

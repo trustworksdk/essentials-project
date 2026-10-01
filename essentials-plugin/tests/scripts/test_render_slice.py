@@ -24,7 +24,7 @@ if spec is None or spec.loader is None:
 rs = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(rs)
 
-BASE = {"packagePath": "com.acme.shop", "bc": "orders", "Aggregate": "Order", "AggregateType": "Orders"}
+BASE = {"packagePath": "com.example.shop", "bc": "orders", "Aggregate": "Order", "AggregateType": "Orders"}
 PLACE = {"slice": "place_order", "Command": "PlaceOrder", "Event": "OrderPlaced"}
 
 
@@ -48,7 +48,7 @@ class Project:
         self.lang = lang
         self.main = self.root / "src" / "main" / lang
         self.test = self.root / "src" / "test" / lang
-        self.bc = self.main / "com" / "acme" / "shop" / "orders"
+        self.bc = self.main / "com" / "example" / "shop" / "orders"
 
     def render(self, kind: str, lane: str, values: dict[str, str], *flags: str) -> tuple[int, str, str]:
         return run("render", "--lang", self.lang, "--kind", kind, "--lane", lane,
@@ -251,9 +251,9 @@ class RenderAndWireTest(unittest.TestCase):
         code, out, err = self.p.render("command", "service-entity", {**BASE, **PLACE}, "--new-bc")
         self.assertEqual(code, 0, err)
         written = json.loads(out)["written"]
-        self.assertIn("src/test/java/com/acme/shop/orders/entities/PlaceOrderTest.java", written)
-        self.assertIn("src/main/java/com/acme/shop/orders/entities/CLAUDE.md", written)
-        self.assertNotIn("src/main/java/com/acme/shop/orders/routing/OrderCommand.java", written)
+        self.assertIn("src/test/java/com/example/shop/orders/entities/PlaceOrderTest.java", written)
+        self.assertIn("src/main/java/com/example/shop/orders/entities/CLAUDE.md", written)
+        self.assertNotIn("src/main/java/com/example/shop/orders/routing/OrderCommand.java", written)
 
     def test_state_templates_only_on_request(self):
         code, out, _ = self.p.render("command", "decider", {**BASE, **PLACE}, "--new-bc", "--dry-run")
@@ -274,7 +274,7 @@ class RenderAndWireTest(unittest.TestCase):
         _, out, _ = self.p.render("command", "decider", {**BASE, **PLACE}, "--new-bc", "--wire")
         self.assertEqual([w["status"] for w in json.loads(out)["wiring"]], ["applied", "applied", "present"])
         config = self.p.bc / "config" / "OrdersConfiguration.java"
-        self.assertIn("import com.acme.shop.orders.use_cases.place_order.PlaceOrderDecider;", config.read_text())
+        self.assertIn("import com.example.shop.orders.use_cases.place_order.PlaceOrderDecider;", config.read_text())
         # Re-wiring the same slice changes nothing.
         values = rs.derive({**BASE, **PLACE}, "decider")
         self.assertEqual([w["status"] for w in rs.wire("java", "command", "decider", values, self.p.main)],
@@ -291,23 +291,23 @@ class RenderAndWireTest(unittest.TestCase):
 
     def test_app_wiring_is_created_once_and_never_overwritten(self):
         _, out, _ = self.p.render("command", "decider", {**BASE, **PLACE}, "--new-bc", "--wire")
-        app = self.p.main / "com" / "acme" / "shop" / "DeciderWiring.java"
-        self.assertIn("src/main/java/com/acme/shop/DeciderWiring.java", json.loads(out)["written"])
+        app = self.p.main / "com" / "example" / "shop" / "DeciderWiring.java"
+        self.assertIn("src/main/java/com/example/shop/DeciderWiring.java", json.loads(out)["written"])
         app.write_text(app.read_text() + "// user edit\n")
-        payments = {"packagePath": "com.acme.shop", "bc": "payments", "Aggregate": "Payment",
+        payments = {"packagePath": "com.example.shop", "bc": "payments", "Aggregate": "Payment",
                     "AggregateType": "Payments", "slice": "request_payment", "Command": "RequestPayment",
                     "Event": "PaymentRequested"}
         code, out, err = self.p.render("command", "decider", payments, "--new-bc", "--wire")
         self.assertEqual(code, 0, err)
         rep = json.loads(out)
-        self.assertNotIn("src/main/java/com/acme/shop/DeciderWiring.java", rep["written"])
+        self.assertNotIn("src/main/java/com/example/shop/DeciderWiring.java", rep["written"])
         self.assertEqual(rep["wiring"][0]["status"], "present")
         self.assertTrue(app.read_text().endswith("// user edit\n"))
 
     def test_a_second_configurator_is_reported(self):
         # A project scaffolded with a configurator per BC: nothing new is written, and the count is flagged.
         self.p.render("command", "decider", {**BASE, **PLACE}, "--new-bc")
-        legacy = self.p.main / "com" / "acme" / "shop" / "billing" / "config" / "BillingConfiguration.java"
+        legacy = self.p.main / "com" / "example" / "shop" / "billing" / "config" / "BillingConfiguration.java"
         legacy.parent.mkdir(parents=True)
         legacy.write_text("class BillingConfiguration { Object c() { return new "
                           "EventStreamDeciderAndAggregateTypeConfigurator(null, null, null, null); } }\n")

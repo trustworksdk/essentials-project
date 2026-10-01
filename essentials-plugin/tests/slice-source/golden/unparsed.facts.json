@@ -8,9 +8,9 @@
   "bcs": [
     {
       "name": "inbox",
-      "path": "src/main/*/com/acme/inbox",
+      "path": "src/main/*/com/example/inbox",
       "dirs": [
-        "src/main/kotlin/com/acme/inbox"
+        "src/main/kotlin/com/example/inbox"
       ],
       "languages": [
         "java",
@@ -39,13 +39,13 @@
       "id": "inbox.relay",
       "idSource": "manifest",
       "bc": "inbox",
-      "bcPath": "src/main/*/com/acme/inbox",
-      "dir": "src/main/kotlin/com/acme/inbox/automations/relay",
+      "bcPath": "src/main/*/com/example/inbox",
+      "dir": "src/main/kotlin/com/example/inbox/automations/relay",
       "role": "automations",
       "kind": "automation",
-      "manifest": "src/main/kotlin/com/acme/inbox/automations/relay/slice.yaml",
+      "manifest": "src/main/kotlin/com/example/inbox/automations/relay/slice.yaml",
       "language": "kotlin",
-      "package": "com.acme.inbox.automations.relay",
+      "package": "com.example.inbox.automations.relay",
       "files": [
         "RelayProcessor.kt"
       ],
@@ -53,7 +53,7 @@
         {
           "class": "RelayProcessor",
           "base": "EventProcessor",
-          "file": "src/main/kotlin/com/acme/inbox/automations/relay/RelayProcessor.kt",
+          "file": "src/main/kotlin/com/example/inbox/automations/relay/RelayProcessor.kt",
           "line": 8
         }
       ],
@@ -64,13 +64,13 @@
           "annotation": "MessageHandler",
           "annotationFqn": "dk.trustworks.essentials.components.foundation.messaging.MessageHandler",
           "role": "event",
-          "file": "src/main/kotlin/com/acme/inbox/automations/relay/RelayProcessor.kt",
+          "file": "src/main/kotlin/com/example/inbox/automations/relay/RelayProcessor.kt",
           "line": 11,
           "annotationLine": 10,
           "message": {
             "written": "MessageReceived",
             "name": "MessageReceived",
-            "fqn": "com.acme.inbox.events.MessageReceived",
+            "fqn": "com.example.inbox.events.MessageReceived",
             "resolvedBy": "import"
           },
           "params": [
@@ -87,7 +87,7 @@
           "annotation": "MessageHandler",
           "annotationFqn": "dk.trustworks.essentials.components.foundation.messaging.MessageHandler",
           "role": "event",
-          "file": "src/main/kotlin/com/acme/inbox/automations/relay/RelayProcessor.kt",
+          "file": "src/main/kotlin/com/example/inbox/automations/relay/RelayProcessor.kt",
           "line": 18,
           "annotationLine": 17,
           "message": null,
@@ -107,8 +107,8 @@
       "id": "inbox.legacy",
       "idSource": "directory",
       "bc": "inbox",
-      "bcPath": "src/main/*/com/acme/inbox",
-      "dir": "src/main/kotlin/com/acme/inbox/external_systems/legacy",
+      "bcPath": "src/main/*/com/example/inbox",
+      "dir": "src/main/kotlin/com/example/inbox/external_systems/legacy",
       "role": "external_systems",
       "kind": "translation",
       "manifest": null,
@@ -131,11 +131,11 @@
       "id": "inbox.broken_view",
       "idSource": "manifest",
       "bc": "inbox",
-      "bcPath": "src/main/*/com/acme/inbox",
-      "dir": "src/main/kotlin/com/acme/inbox/views/broken_view",
+      "bcPath": "src/main/*/com/example/inbox",
+      "dir": "src/main/kotlin/com/example/inbox/views/broken_view",
       "role": "views",
       "kind": "view",
-      "manifest": "src/main/kotlin/com/acme/inbox/views/broken_view/slice.yaml",
+      "manifest": "src/main/kotlin/com/example/inbox/views/broken_view/slice.yaml",
       "language": "java",
       "package": null,
       "files": [
@@ -156,13 +156,13 @@
       "id": "inbox.templated",
       "idSource": "manifest",
       "bc": "inbox",
-      "bcPath": "src/main/*/com/acme/inbox",
-      "dir": "src/main/kotlin/com/acme/inbox/views/templated",
+      "bcPath": "src/main/*/com/example/inbox",
+      "dir": "src/main/kotlin/com/example/inbox/views/templated",
       "role": "views",
       "kind": "view",
-      "manifest": "src/main/kotlin/com/acme/inbox/views/templated/slice.yaml",
+      "manifest": "src/main/kotlin/com/example/inbox/views/templated/slice.yaml",
       "language": "kotlin",
-      "package": "com.acme.inbox.views.templated",
+      "package": "com.example.inbox.views.templated",
       "files": [
         "TemplatedAPI.kt"
       ],
@@ -176,7 +176,7 @@
         {
           "class": "TemplatedAPI",
           "method": "messages",
-          "file": "src/main/kotlin/com/acme/inbox/views/templated/TemplatedAPI.kt",
+          "file": "src/main/kotlin/com/example/inbox/views/templated/TemplatedAPI.kt",
           "line": 12,
           "annotationLine": 11,
           "annotation": "GetMapping",
@@ -206,32 +206,32 @@
         "messageId: String",
         "body: String"
       ],
-      "declaredIn": "src/main/kotlin/com/acme/inbox/events/MessageReceived.kt",
+      "declaredIn": "src/main/kotlin/com/example/inbox/events/MessageReceived.kt",
       "line": 3,
       "alsoDeclaredIn": []
     }
   ],
   "unparsed": [
     {
-      "file": "src/main/kotlin/com/acme/inbox/automations/relay/RelayProcessor.kt",
+      "file": "src/main/kotlin/com/example/inbox/automations/relay/RelayProcessor.kt",
       "line": 18,
       "what": "@MessageHandler RelayProcessor.heartbeat",
       "reason": "handler with no readable first parameter"
     },
     {
-      "file": "src/main/kotlin/com/acme/inbox/external_systems/legacy/LegacyClient.kt",
+      "file": "src/main/kotlin/com/example/inbox/external_systems/legacy/LegacyClient.kt",
       "line": 5,
       "what": "source file",
       "reason": "unterminated string literal"
     },
     {
-      "file": "src/main/kotlin/com/acme/inbox/views/broken_view/BrokenProjection.java",
+      "file": "src/main/kotlin/com/example/inbox/views/broken_view/BrokenProjection.java",
       "line": 7,
       "what": "source file",
       "reason": "unclosed '{'"
     },
     {
-      "file": "src/main/kotlin/com/acme/inbox/views/templated/TemplatedAPI.kt",
+      "file": "src/main/kotlin/com/example/inbox/views/templated/TemplatedAPI.kt",
       "line": 11,
       "what": "@GetMapping path on messages",
       "reason": "not a readable string: \"$BASE/messages\""
@@ -239,7 +239,7 @@
   ],
   "unresolved": [
     {
-      "file": "src/main/kotlin/com/acme/inbox/automations/relay/RelayProcessor.kt",
+      "file": "src/main/kotlin/com/example/inbox/automations/relay/RelayProcessor.kt",
       "line": 13,
       "what": "dispatch argument",
       "reason": "type not statically known: translator.toCommand(event)"

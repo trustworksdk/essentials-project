@@ -1,6 +1,6 @@
 # `aggregate-lane` — the §R5 aggregate write style
 
-A synthetic Java bounded context (`com.acme.billing`) on the **aggregate lane**: one aggregate type
+A synthetic Java bounded context (`com.example.billing`) on the **aggregate lane**: one aggregate type
 per BC, reached through a repository wrapper, with per-slice command handlers that delegate to it,
 plus a view and an automation reading the aggregate's stream.
 
@@ -19,7 +19,7 @@ Eval: `evals/slice-check-aggregate-lane/` — graders generated from `expected.y
 ## Layout
 
 ```
-src/main/java/com/acme/billing/
+src/main/java/com/example/billing/
   aggregates/Invoice.java             the consistency boundary — extends AggregateRoot
   aggregates/Invoices.java            repository wrapper + the AggregateType constant
   events/                             sealed parent + two variants

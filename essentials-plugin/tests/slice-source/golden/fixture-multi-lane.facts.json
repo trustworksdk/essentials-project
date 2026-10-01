@@ -8,9 +8,9 @@
   "bcs": [
     {
       "name": "catalog",
-      "path": "src/main/*/com/acme/multi/catalog",
+      "path": "src/main/*/com/example/multi/catalog",
       "dirs": [
-        "src/main/java/com/acme/multi/catalog"
+        "src/main/java/com/example/multi/catalog"
       ],
       "languages": [
         "java"
@@ -24,17 +24,17 @@
           "decider": [],
           "aggregates": null,
           "entities": {
-            "dir": "src/main/*/com/acme/multi/catalog/entities",
+            "dir": "src/main/*/com/example/multi/catalog/entities",
             "files": 2
           },
           "eventStore": [
             {
-              "file": "src/main/java/com/acme/multi/catalog/use_cases/reprice_product/RepriceProductHandler.java",
+              "file": "src/main/java/com/example/multi/catalog/use_cases/reprice_product/RepriceProductHandler.java",
               "line": 16,
               "symbol": "AggregateType"
             },
             {
-              "file": "src/main/java/com/acme/multi/catalog/use_cases/reprice_product/RepriceProductHandler.java",
+              "file": "src/main/java/com/example/multi/catalog/use_cases/reprice_product/RepriceProductHandler.java",
               "line": 20,
               "symbol": "EventStore"
             }
@@ -44,12 +44,12 @@
           {
             "slice": "catalog.list_product",
             "lane": "service-entity",
-            "file": "src/main/java/com/acme/multi/catalog/use_cases/list_product/slice.yaml"
+            "file": "src/main/java/com/example/multi/catalog/use_cases/list_product/slice.yaml"
           },
           {
             "slice": "catalog.reprice_product",
             "lane": "service-entity",
-            "file": "src/main/java/com/acme/multi/catalog/use_cases/reprice_product/slice.yaml"
+            "file": "src/main/java/com/example/multi/catalog/use_cases/reprice_product/slice.yaml"
           }
         ],
         "detected": "conflict"
@@ -57,9 +57,9 @@
     },
     {
       "name": "inventory",
-      "path": "src/main/*/com/acme/multi/inventory",
+      "path": "src/main/*/com/example/multi/inventory",
       "dirs": [
-        "src/main/java/com/acme/multi/inventory"
+        "src/main/java/com/example/multi/inventory"
       ],
       "languages": [
         "java"
@@ -72,7 +72,7 @@
           "decider": [],
           "aggregates": null,
           "entities": {
-            "dir": "src/main/*/com/acme/multi/inventory/entities",
+            "dir": "src/main/*/com/example/multi/inventory/entities",
             "files": 2
           },
           "eventStore": []
@@ -81,7 +81,7 @@
           {
             "slice": "inventory.adjust_stock",
             "lane": "service-entity",
-            "file": "src/main/java/com/acme/multi/inventory/use_cases/adjust_stock/slice.yaml"
+            "file": "src/main/java/com/example/multi/inventory/use_cases/adjust_stock/slice.yaml"
           }
         ],
         "detected": "service-entity?"
@@ -89,9 +89,9 @@
     },
     {
       "name": "ledger",
-      "path": "src/main/*/com/acme/multi/ledger",
+      "path": "src/main/*/com/example/multi/ledger",
       "dirs": [
-        "src/main/java/com/acme/multi/ledger"
+        "src/main/java/com/example/multi/ledger"
       ],
       "languages": [
         "java"
@@ -104,25 +104,25 @@
         "signals": {
           "decider": [
             {
-              "file": "src/main/java/com/acme/multi/ledger/use_cases/open_account/OpenAccountDecider.java",
+              "file": "src/main/java/com/example/multi/ledger/use_cases/open_account/OpenAccountDecider.java",
               "line": 10,
               "symbol": "OpenAccountDecider",
               "via": "EventStreamDecider"
             }
           ],
           "aggregates": {
-            "dir": "src/main/*/com/acme/multi/ledger/aggregates",
+            "dir": "src/main/*/com/example/multi/ledger/aggregates",
             "files": 2
           },
           "entities": null,
           "eventStore": [
             {
-              "file": "src/main/java/com/acme/multi/ledger/aggregates/Accounts.java",
+              "file": "src/main/java/com/example/multi/ledger/aggregates/Accounts.java",
               "line": 15,
               "symbol": "AggregateType"
             },
             {
-              "file": "src/main/java/com/acme/multi/ledger/aggregates/Accounts.java",
+              "file": "src/main/java/com/example/multi/ledger/aggregates/Accounts.java",
               "line": 19,
               "symbol": "ConfigurableEventStore"
             }
@@ -132,12 +132,12 @@
           {
             "slice": "ledger.open_account",
             "lane": "decider",
-            "file": "src/main/java/com/acme/multi/ledger/use_cases/open_account/slice.yaml"
+            "file": "src/main/java/com/example/multi/ledger/use_cases/open_account/slice.yaml"
           },
           {
             "slice": "ledger.post_entry",
             "lane": "aggregate",
-            "file": "src/main/java/com/acme/multi/ledger/use_cases/post_entry/slice.yaml"
+            "file": "src/main/java/com/example/multi/ledger/use_cases/post_entry/slice.yaml"
           }
         ],
         "detected": "conflict"
@@ -145,9 +145,9 @@
     },
     {
       "name": "payments",
-      "path": "src/main/*/com/acme/multi/payments",
+      "path": "src/main/*/com/example/multi/payments",
       "dirs": [
-        "src/main/java/com/acme/multi/payments"
+        "src/main/java/com/example/multi/payments"
       ],
       "languages": [
         "java"
@@ -160,13 +160,13 @@
         "signals": {
           "decider": [
             {
-              "file": "src/main/java/com/acme/multi/payments/use_cases/capture_payment/CapturePaymentDecider.java",
+              "file": "src/main/java/com/example/multi/payments/use_cases/capture_payment/CapturePaymentDecider.java",
               "line": 11,
               "symbol": "CapturePaymentDecider",
               "via": "EventStreamDecider"
             },
             {
-              "file": "src/main/java/com/acme/multi/payments/use_cases/request_payment/RequestPaymentDecider.java",
+              "file": "src/main/java/com/example/multi/payments/use_cases/request_payment/RequestPaymentDecider.java",
               "line": 10,
               "symbol": "RequestPaymentDecider",
               "via": "EventStreamDecider"
@@ -176,7 +176,7 @@
           "entities": null,
           "eventStore": [
             {
-              "file": "src/main/java/com/acme/multi/payments/config/PaymentsConfiguration.java",
+              "file": "src/main/java/com/example/multi/payments/config/PaymentsConfiguration.java",
               "line": 18,
               "symbol": "AggregateType"
             }
@@ -186,12 +186,12 @@
           {
             "slice": "payments.capture_payment",
             "lane": "aggregate",
-            "file": "src/main/java/com/acme/multi/payments/use_cases/capture_payment/slice.yaml"
+            "file": "src/main/java/com/example/multi/payments/use_cases/capture_payment/slice.yaml"
           },
           {
             "slice": "payments.request_payment",
             "lane": "decider",
-            "file": "src/main/java/com/acme/multi/payments/use_cases/request_payment/slice.yaml"
+            "file": "src/main/java/com/example/multi/payments/use_cases/request_payment/slice.yaml"
           }
         ],
         "detected": "decider"
@@ -203,13 +203,13 @@
       "id": "catalog.list_product",
       "idSource": "manifest",
       "bc": "catalog",
-      "bcPath": "src/main/*/com/acme/multi/catalog",
-      "dir": "src/main/java/com/acme/multi/catalog/use_cases/list_product",
+      "bcPath": "src/main/*/com/example/multi/catalog",
+      "dir": "src/main/java/com/example/multi/catalog/use_cases/list_product",
       "role": "use_cases",
       "kind": "command",
-      "manifest": "src/main/java/com/acme/multi/catalog/use_cases/list_product/slice.yaml",
+      "manifest": "src/main/java/com/example/multi/catalog/use_cases/list_product/slice.yaml",
       "language": "java",
-      "package": "com.acme.multi.catalog.use_cases.list_product",
+      "package": "com.example.multi.catalog.use_cases.list_product",
       "files": [
         "ListProduct.java",
         "ListProductAPI.java",
@@ -223,13 +223,13 @@
           "annotation": "CmdHandler",
           "annotationFqn": "dk.trustworks.essentials.reactive.command.CmdHandler",
           "role": "command",
-          "file": "src/main/java/com/acme/multi/catalog/use_cases/list_product/ListProductHandler.java",
+          "file": "src/main/java/com/example/multi/catalog/use_cases/list_product/ListProductHandler.java",
           "line": 23,
           "annotationLine": 22,
           "message": {
             "written": "ListProduct",
             "name": "ListProduct",
-            "fqn": "com.acme.multi.catalog.use_cases.list_product.ListProduct",
+            "fqn": "com.example.multi.catalog.use_cases.list_product.ListProduct",
             "resolvedBy": "same-package"
           },
           "params": [
@@ -244,20 +244,20 @@
       "handles": [
         {
           "name": "ListProduct",
-          "fqn": "com.acme.multi.catalog.use_cases.list_product.ListProduct",
+          "fqn": "com.example.multi.catalog.use_cases.list_product.ListProduct",
           "resolvedBy": "same-package",
           "via": "CmdHandler",
-          "file": "src/main/java/com/acme/multi/catalog/use_cases/list_product/ListProductHandler.java",
+          "file": "src/main/java/com/example/multi/catalog/use_cases/list_product/ListProductHandler.java",
           "line": 23
         }
       ],
       "dispatches": [
         {
           "name": "ListProduct",
-          "fqn": "com.acme.multi.catalog.use_cases.list_product.ListProduct",
+          "fqn": "com.example.multi.catalog.use_cases.list_product.ListProduct",
           "resolvedBy": "same-package",
           "via": "send",
-          "file": "src/main/java/com/acme/multi/catalog/use_cases/list_product/ListProductAPI.java",
+          "file": "src/main/java/com/example/multi/catalog/use_cases/list_product/ListProductAPI.java",
           "line": 21,
           "own": true
         }
@@ -265,10 +265,10 @@
       "publishes": [
         {
           "name": "ProductListed",
-          "fqn": "com.acme.multi.catalog.events.ProductListed",
+          "fqn": "com.example.multi.catalog.events.ProductListed",
           "resolvedBy": "import",
           "via": "eventBus.publish",
-          "file": "src/main/java/com/acme/multi/catalog/use_cases/list_product/ListProductHandler.java",
+          "file": "src/main/java/com/example/multi/catalog/use_cases/list_product/ListProductHandler.java",
           "line": 29
         }
       ],
@@ -277,7 +277,7 @@
         {
           "class": "ListProductAPI",
           "method": "listProduct",
-          "file": "src/main/java/com/acme/multi/catalog/use_cases/list_product/ListProductAPI.java",
+          "file": "src/main/java/com/example/multi/catalog/use_cases/list_product/ListProductAPI.java",
           "line": 20,
           "annotationLine": 18,
           "annotation": "PostMapping",
@@ -292,7 +292,7 @@
           "queryParams": [],
           "requestBody": {
             "name": "ListProduct",
-            "fqn": "com.acme.multi.catalog.use_cases.list_product.ListProduct",
+            "fqn": "com.example.multi.catalog.use_cases.list_product.ListProduct",
             "resolvedBy": "same-package"
           }
         }
@@ -304,13 +304,13 @@
       "id": "catalog.reprice_product",
       "idSource": "manifest",
       "bc": "catalog",
-      "bcPath": "src/main/*/com/acme/multi/catalog",
-      "dir": "src/main/java/com/acme/multi/catalog/use_cases/reprice_product",
+      "bcPath": "src/main/*/com/example/multi/catalog",
+      "dir": "src/main/java/com/example/multi/catalog/use_cases/reprice_product",
       "role": "use_cases",
       "kind": "command",
-      "manifest": "src/main/java/com/acme/multi/catalog/use_cases/reprice_product/slice.yaml",
+      "manifest": "src/main/java/com/example/multi/catalog/use_cases/reprice_product/slice.yaml",
       "language": "java",
-      "package": "com.acme.multi.catalog.use_cases.reprice_product",
+      "package": "com.example.multi.catalog.use_cases.reprice_product",
       "files": [
         "RepriceProduct.java",
         "RepriceProductAPI.java",
@@ -324,13 +324,13 @@
           "annotation": "CmdHandler",
           "annotationFqn": "dk.trustworks.essentials.reactive.command.CmdHandler",
           "role": "command",
-          "file": "src/main/java/com/acme/multi/catalog/use_cases/reprice_product/RepriceProductHandler.java",
+          "file": "src/main/java/com/example/multi/catalog/use_cases/reprice_product/RepriceProductHandler.java",
           "line": 29,
           "annotationLine": 28,
           "message": {
             "written": "RepriceProduct",
             "name": "RepriceProduct",
-            "fqn": "com.acme.multi.catalog.use_cases.reprice_product.RepriceProduct",
+            "fqn": "com.example.multi.catalog.use_cases.reprice_product.RepriceProduct",
             "resolvedBy": "same-package"
           },
           "params": [
@@ -345,20 +345,20 @@
       "handles": [
         {
           "name": "RepriceProduct",
-          "fqn": "com.acme.multi.catalog.use_cases.reprice_product.RepriceProduct",
+          "fqn": "com.example.multi.catalog.use_cases.reprice_product.RepriceProduct",
           "resolvedBy": "same-package",
           "via": "CmdHandler",
-          "file": "src/main/java/com/acme/multi/catalog/use_cases/reprice_product/RepriceProductHandler.java",
+          "file": "src/main/java/com/example/multi/catalog/use_cases/reprice_product/RepriceProductHandler.java",
           "line": 29
         }
       ],
       "dispatches": [
         {
           "name": "RepriceProduct",
-          "fqn": "com.acme.multi.catalog.use_cases.reprice_product.RepriceProduct",
+          "fqn": "com.example.multi.catalog.use_cases.reprice_product.RepriceProduct",
           "resolvedBy": "same-package",
           "via": "send",
-          "file": "src/main/java/com/acme/multi/catalog/use_cases/reprice_product/RepriceProductAPI.java",
+          "file": "src/main/java/com/example/multi/catalog/use_cases/reprice_product/RepriceProductAPI.java",
           "line": 22,
           "own": true
         }
@@ -366,10 +366,10 @@
       "publishes": [
         {
           "name": "ProductRepriced",
-          "fqn": "com.acme.multi.catalog.events.ProductRepriced",
+          "fqn": "com.example.multi.catalog.events.ProductRepriced",
           "resolvedBy": "import",
           "via": "eventBus.publish",
-          "file": "src/main/java/com/acme/multi/catalog/use_cases/reprice_product/RepriceProductHandler.java",
+          "file": "src/main/java/com/example/multi/catalog/use_cases/reprice_product/RepriceProductHandler.java",
           "line": 35
         }
       ],
@@ -378,7 +378,7 @@
         {
           "class": "RepriceProductAPI",
           "method": "repriceProduct",
-          "file": "src/main/java/com/acme/multi/catalog/use_cases/reprice_product/RepriceProductAPI.java",
+          "file": "src/main/java/com/example/multi/catalog/use_cases/reprice_product/RepriceProductAPI.java",
           "line": 21,
           "annotationLine": 20,
           "annotation": "PutMapping",
@@ -393,7 +393,7 @@
           "queryParams": [],
           "requestBody": {
             "name": "RepriceProductRequest",
-            "fqn": "com.acme.multi.catalog.use_cases.reprice_product.RepriceProductAPI.RepriceProductRequest",
+            "fqn": "com.example.multi.catalog.use_cases.reprice_product.RepriceProductAPI.RepriceProductRequest",
             "resolvedBy": "same-file"
           }
         }
@@ -405,13 +405,13 @@
       "id": "inventory.adjust_stock",
       "idSource": "manifest",
       "bc": "inventory",
-      "bcPath": "src/main/*/com/acme/multi/inventory",
-      "dir": "src/main/java/com/acme/multi/inventory/use_cases/adjust_stock",
+      "bcPath": "src/main/*/com/example/multi/inventory",
+      "dir": "src/main/java/com/example/multi/inventory/use_cases/adjust_stock",
       "role": "use_cases",
       "kind": "command",
-      "manifest": "src/main/java/com/acme/multi/inventory/use_cases/adjust_stock/slice.yaml",
+      "manifest": "src/main/java/com/example/multi/inventory/use_cases/adjust_stock/slice.yaml",
       "language": "java",
-      "package": "com.acme.multi.inventory.use_cases.adjust_stock",
+      "package": "com.example.multi.inventory.use_cases.adjust_stock",
       "files": [
         "AdjustStock.java",
         "AdjustStockAPI.java",
@@ -425,13 +425,13 @@
           "annotation": "CmdHandler",
           "annotationFqn": "dk.trustworks.essentials.reactive.command.CmdHandler",
           "role": "command",
-          "file": "src/main/java/com/acme/multi/inventory/use_cases/adjust_stock/AdjustStockHandler.java",
+          "file": "src/main/java/com/example/multi/inventory/use_cases/adjust_stock/AdjustStockHandler.java",
           "line": 23,
           "annotationLine": 22,
           "message": {
             "written": "AdjustStock",
             "name": "AdjustStock",
-            "fqn": "com.acme.multi.inventory.use_cases.adjust_stock.AdjustStock",
+            "fqn": "com.example.multi.inventory.use_cases.adjust_stock.AdjustStock",
             "resolvedBy": "same-package"
           },
           "params": [
@@ -446,20 +446,20 @@
       "handles": [
         {
           "name": "AdjustStock",
-          "fqn": "com.acme.multi.inventory.use_cases.adjust_stock.AdjustStock",
+          "fqn": "com.example.multi.inventory.use_cases.adjust_stock.AdjustStock",
           "resolvedBy": "same-package",
           "via": "CmdHandler",
-          "file": "src/main/java/com/acme/multi/inventory/use_cases/adjust_stock/AdjustStockHandler.java",
+          "file": "src/main/java/com/example/multi/inventory/use_cases/adjust_stock/AdjustStockHandler.java",
           "line": 23
         }
       ],
       "dispatches": [
         {
           "name": "AdjustStock",
-          "fqn": "com.acme.multi.inventory.use_cases.adjust_stock.AdjustStock",
+          "fqn": "com.example.multi.inventory.use_cases.adjust_stock.AdjustStock",
           "resolvedBy": "same-package",
           "via": "send",
-          "file": "src/main/java/com/acme/multi/inventory/use_cases/adjust_stock/AdjustStockAPI.java",
+          "file": "src/main/java/com/example/multi/inventory/use_cases/adjust_stock/AdjustStockAPI.java",
           "line": 22,
           "own": true
         }
@@ -467,10 +467,10 @@
       "publishes": [
         {
           "name": "StockAdjusted",
-          "fqn": "com.acme.multi.inventory.events.StockAdjusted",
+          "fqn": "com.example.multi.inventory.events.StockAdjusted",
           "resolvedBy": "import",
           "via": "eventBus.publish",
-          "file": "src/main/java/com/acme/multi/inventory/use_cases/adjust_stock/AdjustStockHandler.java",
+          "file": "src/main/java/com/example/multi/inventory/use_cases/adjust_stock/AdjustStockHandler.java",
           "line": 32
         }
       ],
@@ -479,7 +479,7 @@
         {
           "class": "AdjustStockAPI",
           "method": "adjustStock",
-          "file": "src/main/java/com/acme/multi/inventory/use_cases/adjust_stock/AdjustStockAPI.java",
+          "file": "src/main/java/com/example/multi/inventory/use_cases/adjust_stock/AdjustStockAPI.java",
           "line": 21,
           "annotationLine": 20,
           "annotation": "PostMapping",
@@ -494,7 +494,7 @@
           "queryParams": [],
           "requestBody": {
             "name": "AdjustStockRequest",
-            "fqn": "com.acme.multi.inventory.use_cases.adjust_stock.AdjustStockAPI.AdjustStockRequest",
+            "fqn": "com.example.multi.inventory.use_cases.adjust_stock.AdjustStockAPI.AdjustStockRequest",
             "resolvedBy": "same-file"
           }
         }
@@ -506,13 +506,13 @@
       "id": "ledger.open_account",
       "idSource": "manifest",
       "bc": "ledger",
-      "bcPath": "src/main/*/com/acme/multi/ledger",
-      "dir": "src/main/java/com/acme/multi/ledger/use_cases/open_account",
+      "bcPath": "src/main/*/com/example/multi/ledger",
+      "dir": "src/main/java/com/example/multi/ledger/use_cases/open_account",
       "role": "use_cases",
       "kind": "command",
-      "manifest": "src/main/java/com/acme/multi/ledger/use_cases/open_account/slice.yaml",
+      "manifest": "src/main/java/com/example/multi/ledger/use_cases/open_account/slice.yaml",
       "language": "java",
-      "package": "com.acme.multi.ledger.use_cases.open_account",
+      "package": "com.example.multi.ledger.use_cases.open_account",
       "files": [
         "OpenAccount.java",
         "OpenAccountAPI.java",
@@ -523,20 +523,20 @@
       "handles": [
         {
           "name": "OpenAccount",
-          "fqn": "com.acme.multi.ledger.use_cases.open_account.OpenAccount",
+          "fqn": "com.example.multi.ledger.use_cases.open_account.OpenAccount",
           "resolvedBy": "same-package",
           "via": "EventStreamDecider",
-          "file": "src/main/java/com/acme/multi/ledger/use_cases/open_account/OpenAccountDecider.java",
+          "file": "src/main/java/com/example/multi/ledger/use_cases/open_account/OpenAccountDecider.java",
           "line": 10
         }
       ],
       "dispatches": [
         {
           "name": "OpenAccount",
-          "fqn": "com.acme.multi.ledger.use_cases.open_account.OpenAccount",
+          "fqn": "com.example.multi.ledger.use_cases.open_account.OpenAccount",
           "resolvedBy": "same-package",
           "via": "send",
-          "file": "src/main/java/com/acme/multi/ledger/use_cases/open_account/OpenAccountAPI.java",
+          "file": "src/main/java/com/example/multi/ledger/use_cases/open_account/OpenAccountAPI.java",
           "line": 21,
           "own": true
         }
@@ -544,10 +544,10 @@
       "publishes": [
         {
           "name": "AccountOpened",
-          "fqn": "com.acme.multi.ledger.events.AccountOpened",
+          "fqn": "com.example.multi.ledger.events.AccountOpened",
           "resolvedBy": "import",
           "via": "decider",
-          "file": "src/main/java/com/acme/multi/ledger/use_cases/open_account/OpenAccountDecider.java",
+          "file": "src/main/java/com/example/multi/ledger/use_cases/open_account/OpenAccountDecider.java",
           "line": 20
         }
       ],
@@ -556,7 +556,7 @@
         {
           "class": "OpenAccountAPI",
           "method": "openAccount",
-          "file": "src/main/java/com/acme/multi/ledger/use_cases/open_account/OpenAccountAPI.java",
+          "file": "src/main/java/com/example/multi/ledger/use_cases/open_account/OpenAccountAPI.java",
           "line": 20,
           "annotationLine": 18,
           "annotation": "PostMapping",
@@ -571,7 +571,7 @@
           "queryParams": [],
           "requestBody": {
             "name": "OpenAccount",
-            "fqn": "com.acme.multi.ledger.use_cases.open_account.OpenAccount",
+            "fqn": "com.example.multi.ledger.use_cases.open_account.OpenAccount",
             "resolvedBy": "same-package"
           }
         }
@@ -583,13 +583,13 @@
       "id": "ledger.post_entry",
       "idSource": "manifest",
       "bc": "ledger",
-      "bcPath": "src/main/*/com/acme/multi/ledger",
-      "dir": "src/main/java/com/acme/multi/ledger/use_cases/post_entry",
+      "bcPath": "src/main/*/com/example/multi/ledger",
+      "dir": "src/main/java/com/example/multi/ledger/use_cases/post_entry",
       "role": "use_cases",
       "kind": "command",
-      "manifest": "src/main/java/com/acme/multi/ledger/use_cases/post_entry/slice.yaml",
+      "manifest": "src/main/java/com/example/multi/ledger/use_cases/post_entry/slice.yaml",
       "language": "java",
-      "package": "com.acme.multi.ledger.use_cases.post_entry",
+      "package": "com.example.multi.ledger.use_cases.post_entry",
       "files": [
         "PostEntry.java",
         "PostEntryAPI.java",
@@ -603,13 +603,13 @@
           "annotation": "CmdHandler",
           "annotationFqn": "dk.trustworks.essentials.reactive.command.CmdHandler",
           "role": "command",
-          "file": "src/main/java/com/acme/multi/ledger/use_cases/post_entry/PostEntryHandler.java",
+          "file": "src/main/java/com/example/multi/ledger/use_cases/post_entry/PostEntryHandler.java",
           "line": 15,
           "annotationLine": 14,
           "message": {
             "written": "PostEntry",
             "name": "PostEntry",
-            "fqn": "com.acme.multi.ledger.use_cases.post_entry.PostEntry",
+            "fqn": "com.example.multi.ledger.use_cases.post_entry.PostEntry",
             "resolvedBy": "same-package"
           },
           "params": [
@@ -624,20 +624,20 @@
       "handles": [
         {
           "name": "PostEntry",
-          "fqn": "com.acme.multi.ledger.use_cases.post_entry.PostEntry",
+          "fqn": "com.example.multi.ledger.use_cases.post_entry.PostEntry",
           "resolvedBy": "same-package",
           "via": "CmdHandler",
-          "file": "src/main/java/com/acme/multi/ledger/use_cases/post_entry/PostEntryHandler.java",
+          "file": "src/main/java/com/example/multi/ledger/use_cases/post_entry/PostEntryHandler.java",
           "line": 15
         }
       ],
       "dispatches": [
         {
           "name": "PostEntry",
-          "fqn": "com.acme.multi.ledger.use_cases.post_entry.PostEntry",
+          "fqn": "com.example.multi.ledger.use_cases.post_entry.PostEntry",
           "resolvedBy": "same-package",
           "via": "send",
-          "file": "src/main/java/com/acme/multi/ledger/use_cases/post_entry/PostEntryAPI.java",
+          "file": "src/main/java/com/example/multi/ledger/use_cases/post_entry/PostEntryAPI.java",
           "line": 22,
           "own": true
         }
@@ -648,7 +648,7 @@
         {
           "class": "PostEntryAPI",
           "method": "postEntry",
-          "file": "src/main/java/com/acme/multi/ledger/use_cases/post_entry/PostEntryAPI.java",
+          "file": "src/main/java/com/example/multi/ledger/use_cases/post_entry/PostEntryAPI.java",
           "line": 21,
           "annotationLine": 20,
           "annotation": "PostMapping",
@@ -663,7 +663,7 @@
           "queryParams": [],
           "requestBody": {
             "name": "PostEntryRequest",
-            "fqn": "com.acme.multi.ledger.use_cases.post_entry.PostEntryAPI.PostEntryRequest",
+            "fqn": "com.example.multi.ledger.use_cases.post_entry.PostEntryAPI.PostEntryRequest",
             "resolvedBy": "same-file"
           }
         }
@@ -675,13 +675,13 @@
       "id": "payments.capture_payment",
       "idSource": "manifest",
       "bc": "payments",
-      "bcPath": "src/main/*/com/acme/multi/payments",
-      "dir": "src/main/java/com/acme/multi/payments/use_cases/capture_payment",
+      "bcPath": "src/main/*/com/example/multi/payments",
+      "dir": "src/main/java/com/example/multi/payments/use_cases/capture_payment",
       "role": "use_cases",
       "kind": "command",
-      "manifest": "src/main/java/com/acme/multi/payments/use_cases/capture_payment/slice.yaml",
+      "manifest": "src/main/java/com/example/multi/payments/use_cases/capture_payment/slice.yaml",
       "language": "java",
-      "package": "com.acme.multi.payments.use_cases.capture_payment",
+      "package": "com.example.multi.payments.use_cases.capture_payment",
       "files": [
         "CapturePayment.java",
         "CapturePaymentAPI.java",
@@ -692,20 +692,20 @@
       "handles": [
         {
           "name": "CapturePayment",
-          "fqn": "com.acme.multi.payments.use_cases.capture_payment.CapturePayment",
+          "fqn": "com.example.multi.payments.use_cases.capture_payment.CapturePayment",
           "resolvedBy": "same-package",
           "via": "EventStreamDecider",
-          "file": "src/main/java/com/acme/multi/payments/use_cases/capture_payment/CapturePaymentDecider.java",
+          "file": "src/main/java/com/example/multi/payments/use_cases/capture_payment/CapturePaymentDecider.java",
           "line": 11
         }
       ],
       "dispatches": [
         {
           "name": "CapturePayment",
-          "fqn": "com.acme.multi.payments.use_cases.capture_payment.CapturePayment",
+          "fqn": "com.example.multi.payments.use_cases.capture_payment.CapturePayment",
           "resolvedBy": "same-package",
           "via": "send",
-          "file": "src/main/java/com/acme/multi/payments/use_cases/capture_payment/CapturePaymentAPI.java",
+          "file": "src/main/java/com/example/multi/payments/use_cases/capture_payment/CapturePaymentAPI.java",
           "line": 19,
           "own": true
         }
@@ -713,10 +713,10 @@
       "publishes": [
         {
           "name": "PaymentCaptured",
-          "fqn": "com.acme.multi.payments.events.PaymentCaptured",
+          "fqn": "com.example.multi.payments.events.PaymentCaptured",
           "resolvedBy": "import",
           "via": "decider",
-          "file": "src/main/java/com/acme/multi/payments/use_cases/capture_payment/CapturePaymentDecider.java",
+          "file": "src/main/java/com/example/multi/payments/use_cases/capture_payment/CapturePaymentDecider.java",
           "line": 21
         }
       ],
@@ -725,7 +725,7 @@
         {
           "class": "CapturePaymentAPI",
           "method": "capturePayment",
-          "file": "src/main/java/com/acme/multi/payments/use_cases/capture_payment/CapturePaymentAPI.java",
+          "file": "src/main/java/com/example/multi/payments/use_cases/capture_payment/CapturePaymentAPI.java",
           "line": 18,
           "annotationLine": 17,
           "annotation": "PostMapping",
@@ -748,13 +748,13 @@
       "id": "payments.request_payment",
       "idSource": "manifest",
       "bc": "payments",
-      "bcPath": "src/main/*/com/acme/multi/payments",
-      "dir": "src/main/java/com/acme/multi/payments/use_cases/request_payment",
+      "bcPath": "src/main/*/com/example/multi/payments",
+      "dir": "src/main/java/com/example/multi/payments/use_cases/request_payment",
       "role": "use_cases",
       "kind": "command",
-      "manifest": "src/main/java/com/acme/multi/payments/use_cases/request_payment/slice.yaml",
+      "manifest": "src/main/java/com/example/multi/payments/use_cases/request_payment/slice.yaml",
       "language": "java",
-      "package": "com.acme.multi.payments.use_cases.request_payment",
+      "package": "com.example.multi.payments.use_cases.request_payment",
       "files": [
         "RequestPayment.java",
         "RequestPaymentAPI.java",
@@ -765,20 +765,20 @@
       "handles": [
         {
           "name": "RequestPayment",
-          "fqn": "com.acme.multi.payments.use_cases.request_payment.RequestPayment",
+          "fqn": "com.example.multi.payments.use_cases.request_payment.RequestPayment",
           "resolvedBy": "same-package",
           "via": "EventStreamDecider",
-          "file": "src/main/java/com/acme/multi/payments/use_cases/request_payment/RequestPaymentDecider.java",
+          "file": "src/main/java/com/example/multi/payments/use_cases/request_payment/RequestPaymentDecider.java",
           "line": 10
         }
       ],
       "dispatches": [
         {
           "name": "RequestPayment",
-          "fqn": "com.acme.multi.payments.use_cases.request_payment.RequestPayment",
+          "fqn": "com.example.multi.payments.use_cases.request_payment.RequestPayment",
           "resolvedBy": "same-package",
           "via": "send",
-          "file": "src/main/java/com/acme/multi/payments/use_cases/request_payment/RequestPaymentAPI.java",
+          "file": "src/main/java/com/example/multi/payments/use_cases/request_payment/RequestPaymentAPI.java",
           "line": 21,
           "own": true
         }
@@ -786,10 +786,10 @@
       "publishes": [
         {
           "name": "PaymentRequested",
-          "fqn": "com.acme.multi.payments.events.PaymentRequested",
+          "fqn": "com.example.multi.payments.events.PaymentRequested",
           "resolvedBy": "import",
           "via": "decider",
-          "file": "src/main/java/com/acme/multi/payments/use_cases/request_payment/RequestPaymentDecider.java",
+          "file": "src/main/java/com/example/multi/payments/use_cases/request_payment/RequestPaymentDecider.java",
           "line": 20
         }
       ],
@@ -798,7 +798,7 @@
         {
           "class": "RequestPaymentAPI",
           "method": "requestPayment",
-          "file": "src/main/java/com/acme/multi/payments/use_cases/request_payment/RequestPaymentAPI.java",
+          "file": "src/main/java/com/example/multi/payments/use_cases/request_payment/RequestPaymentAPI.java",
           "line": 20,
           "annotationLine": 18,
           "annotation": "PostMapping",
@@ -813,7 +813,7 @@
           "queryParams": [],
           "requestBody": {
             "name": "RequestPayment",
-            "fqn": "com.acme.multi.payments.use_cases.request_payment.RequestPayment",
+            "fqn": "com.example.multi.payments.use_cases.request_payment.RequestPayment",
             "resolvedBy": "same-package"
           }
         }
@@ -833,7 +833,7 @@
         "id: AccountId",
         "currency: String"
       ],
-      "declaredIn": "src/main/java/com/acme/multi/ledger/events/AccountOpened.java",
+      "declaredIn": "src/main/java/com/example/multi/ledger/events/AccountOpened.java",
       "line": 5,
       "alsoDeclaredIn": []
     },
@@ -847,7 +847,7 @@
         "sku: Sku",
         "delta: long"
       ],
-      "declaredIn": "src/main/java/com/acme/multi/inventory/use_cases/adjust_stock/AdjustStock.java",
+      "declaredIn": "src/main/java/com/example/multi/inventory/use_cases/adjust_stock/AdjustStock.java",
       "line": 5,
       "alsoDeclaredIn": []
     },
@@ -860,7 +860,7 @@
       "fields": [
         "id: PaymentId"
       ],
-      "declaredIn": "src/main/java/com/acme/multi/payments/use_cases/capture_payment/CapturePayment.java",
+      "declaredIn": "src/main/java/com/example/multi/payments/use_cases/capture_payment/CapturePayment.java",
       "line": 6,
       "alsoDeclaredIn": []
     },
@@ -874,7 +874,7 @@
         "id: AccountId",
         "amountMinor: long"
       ],
-      "declaredIn": "src/main/java/com/acme/multi/ledger/events/EntryPosted.java",
+      "declaredIn": "src/main/java/com/example/multi/ledger/events/EntryPosted.java",
       "line": 5,
       "alsoDeclaredIn": []
     },
@@ -889,7 +889,7 @@
         "name: String",
         "priceMinor: long"
       ],
-      "declaredIn": "src/main/java/com/acme/multi/catalog/use_cases/list_product/ListProduct.java",
+      "declaredIn": "src/main/java/com/example/multi/catalog/use_cases/list_product/ListProduct.java",
       "line": 5,
       "alsoDeclaredIn": []
     },
@@ -903,7 +903,7 @@
         "id: AccountId",
         "currency: String"
       ],
-      "declaredIn": "src/main/java/com/acme/multi/ledger/use_cases/open_account/OpenAccount.java",
+      "declaredIn": "src/main/java/com/example/multi/ledger/use_cases/open_account/OpenAccount.java",
       "line": 6,
       "alsoDeclaredIn": []
     },
@@ -916,7 +916,7 @@
       "fields": [
         "id: PaymentId"
       ],
-      "declaredIn": "src/main/java/com/acme/multi/payments/events/PaymentCaptured.java",
+      "declaredIn": "src/main/java/com/example/multi/payments/events/PaymentCaptured.java",
       "line": 5,
       "alsoDeclaredIn": []
     },
@@ -930,7 +930,7 @@
         "id: PaymentId",
         "amountMinor: long"
       ],
-      "declaredIn": "src/main/java/com/acme/multi/payments/events/PaymentRequested.java",
+      "declaredIn": "src/main/java/com/example/multi/payments/events/PaymentRequested.java",
       "line": 5,
       "alsoDeclaredIn": []
     },
@@ -944,7 +944,7 @@
         "id: AccountId",
         "amountMinor: long"
       ],
-      "declaredIn": "src/main/java/com/acme/multi/ledger/use_cases/post_entry/PostEntry.java",
+      "declaredIn": "src/main/java/com/example/multi/ledger/use_cases/post_entry/PostEntry.java",
       "line": 5,
       "alsoDeclaredIn": []
     },
@@ -959,7 +959,7 @@
         "name: String",
         "priceMinor: long"
       ],
-      "declaredIn": "src/main/java/com/acme/multi/catalog/events/ProductListed.java",
+      "declaredIn": "src/main/java/com/example/multi/catalog/events/ProductListed.java",
       "line": 5,
       "alsoDeclaredIn": []
     },
@@ -973,7 +973,7 @@
         "id: ProductId",
         "priceMinor: long"
       ],
-      "declaredIn": "src/main/java/com/acme/multi/catalog/events/ProductRepriced.java",
+      "declaredIn": "src/main/java/com/example/multi/catalog/events/ProductRepriced.java",
       "line": 5,
       "alsoDeclaredIn": []
     },
@@ -987,7 +987,7 @@
         "id: ProductId",
         "priceMinor: long"
       ],
-      "declaredIn": "src/main/java/com/acme/multi/catalog/use_cases/reprice_product/RepriceProduct.java",
+      "declaredIn": "src/main/java/com/example/multi/catalog/use_cases/reprice_product/RepriceProduct.java",
       "line": 5,
       "alsoDeclaredIn": []
     },
@@ -1001,7 +1001,7 @@
         "id: PaymentId",
         "amountMinor: long"
       ],
-      "declaredIn": "src/main/java/com/acme/multi/payments/use_cases/request_payment/RequestPayment.java",
+      "declaredIn": "src/main/java/com/example/multi/payments/use_cases/request_payment/RequestPayment.java",
       "line": 6,
       "alsoDeclaredIn": []
     },
@@ -1015,7 +1015,7 @@
         "sku: Sku",
         "onHand: long"
       ],
-      "declaredIn": "src/main/java/com/acme/multi/inventory/events/StockAdjusted.java",
+      "declaredIn": "src/main/java/com/example/multi/inventory/events/StockAdjusted.java",
       "line": 5,
       "alsoDeclaredIn": []
     }

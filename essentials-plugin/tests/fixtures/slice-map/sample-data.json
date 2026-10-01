@@ -1,6 +1,6 @@
 {
   "meta": {
-    "root": "backend/src/main/kotlin/com/acme/shop",
+    "root": "backend/src/main/kotlin/com/example/shop",
     "sha": "a1b2c3d",
     "project": "shop",
     "scope": "full",
@@ -35,7 +35,7 @@
       ],
       "sliceIds": [
         "billing.invoice_list",
-        "billing.acme_gateway",
+        "billing.example_gateway",
         "billing.payment_policy",
         "billing.issue_invoice"
       ]
@@ -52,7 +52,7 @@
       "summary": "Accept a new order",
       "language": "kotlin",
       "tier": "cqrs-es",
-      "package": "com.acme.shop.orders.use_cases.place_order",
+      "package": "com.example.shop.orders.use_cases.place_order",
       "path": "orders/use_cases/place_order",
       "files": [
         "PlaceOrder.kt",
@@ -113,7 +113,7 @@
       "summary": "Cancel an order before dispatch",
       "language": "kotlin",
       "tier": "cqrs-es",
-      "package": "com.acme.shop.orders.use_cases.cancel_order",
+      "package": "com.example.shop.orders.use_cases.cancel_order",
       "path": "orders/use_cases/cancel_order",
       "files": [
         "CancelOrder.kt",
@@ -175,7 +175,7 @@
       "summary": "Orders by customer",
       "language": "kotlin",
       "tier": "cqrs-es",
-      "package": "com.acme.shop.orders.views.order_list",
+      "package": "com.example.shop.orders.views.order_list",
       "path": "orders/views/order_list",
       "files": [
         "OrderListProjector.kt",
@@ -272,7 +272,7 @@
       "summary": "Outstanding invoices",
       "language": "java",
       "tier": "service-entity",
-      "package": "com.acme.shop.billing.views.invoice_list",
+      "package": "com.example.shop.billing.views.invoice_list",
       "path": "billing/views/invoice_list",
       "files": [
         "InvoiceListAPI.java",
@@ -342,21 +342,21 @@
       ]
     },
     {
-      "id": "billing.acme_gateway",
+      "id": "billing.example_gateway",
       "bc": "billing",
-      "name": "acme_gateway",
+      "name": "example_gateway",
       "kind": "translation",
       "status": "planned",
       "owner": "billing-team",
-      "summary": "ACL to the ACME payment gateway",
+      "summary": "ACL to the Example payment gateway",
       "language": "java",
       "tier": "service-entity",
-      "package": "com.acme.shop.billing.external_systems.acme_gateway",
-      "path": "billing/external_systems/acme_gateway",
+      "package": "com.example.shop.billing.external_systems.example_gateway",
+      "path": "billing/external_systems/example_gateway",
       "files": [
-        "AcmeGatewayTranslator.java",
-        "AcmeGatewayClient.java",
-        "AcmeInboundHandler.java"
+        "ExampleGatewayTranslator.java",
+        "ExampleGatewayClient.java",
+        "ExampleInboundHandler.java"
       ],
       "handles": [],
       "serves": [],
@@ -371,7 +371,7 @@
       "reads": [],
       "endpoints": [],
       "invariants": [],
-      "externalSystem": "acme_gateway",
+      "externalSystem": "example_gateway",
       "direction": "both",
       "supersedes": null,
       "tests": [
@@ -389,7 +389,7 @@
       "summary": "Invoice an order once it is placed",
       "language": "java",
       "tier": "service-entity",
-      "package": "com.acme.shop.billing.automations.payment_policy",
+      "package": "com.example.shop.billing.automations.payment_policy",
       "path": "billing/automations/payment_policy",
       "files": [
         "PaymentPolicy.java"
@@ -433,7 +433,7 @@
       "summary": "Issue an invoice for a placed order",
       "language": "java",
       "tier": "service-entity",
-      "package": "com.acme.shop.billing.use_cases.issue_invoice",
+      "package": "com.example.shop.billing.use_cases.issue_invoice",
       "path": "billing/use_cases/issue_invoice",
       "files": [
         "IssueInvoice.java",
@@ -513,7 +513,7 @@
       "bc": "billing",
       "from": [],
       "to": [
-        "billing.acme_gateway"
+        "billing.example_gateway"
       ],
       "crossContext": true,
       "dangling": true
@@ -566,7 +566,7 @@
       "declared": true
     },
     {
-      "from": "billing.acme_gateway",
+      "from": "billing.example_gateway",
       "toBc": "orders",
       "model": "Order",
       "via": null,
@@ -658,7 +658,7 @@
       "identity": null,
       "fields": [],
       "declaredIn": null,
-      "summary": "Declared by acme_gateway consumes: \u2014 no producer in scope, so no declaration to read."
+      "summary": "Declared by example_gateway consumes: \u2014 no producer in scope, so no declaration to read."
     }
   ]
 }

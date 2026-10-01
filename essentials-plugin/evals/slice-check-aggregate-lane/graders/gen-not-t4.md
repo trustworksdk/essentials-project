@@ -5,7 +5,7 @@ type: llm
 
 The agent's final message is the report `/essentials:slice-check` printed for a test project. Paths in it are relative to the project root, and a report may cite a file by path, by `path:line`, or by its type or directory name.
 
-PASS unless the report raises a finding under gate 5 (§R1) about `src/main/java/com/acme/billing/aggregates/Invoice.java`.
+PASS unless the report raises a finding under gate 5 (§R1) about `src/main/java/com/example/billing/aggregates/Invoice.java`.
 Why that would be wrong: The rehydration constructor Essentials requires.
 A mention that is not a finding does not fail this check: the file listed as passing, cited as evidence for a different finding, or named in a lane or inventory summary.
 These are tolerated and do not fail this check either:

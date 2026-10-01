@@ -6,7 +6,7 @@ type: llm
 The agent's final message is the report `/essentials:slice-check` printed for a test project. Paths in it are relative to the project root, and a report may cite a file by path, by `path:line`, or by its type or directory name.
 
 PASS if the report contains a finding that matches all of:
-- it concerns `src/main/java/com/acme/shipping/persistence/ShippingOrders.java`
+- it concerns `src/main/java/com/example/shipping/persistence/ShippingOrders.java`
 - it is filed under gate 15c (Write-repository purity and placement), id ESS-G15c, or plainly describes that check
 - its severity is Should-fix
 - its substance: The write repository is not in entities/, beside its entity. persistence/ is not on gate 2's list: if gate 2 reports this instead, the wrong gate fired.

@@ -12,7 +12,7 @@
   "lanes": [
     {
       "bc": "inbox",
-      "path": "src/main/*/com/acme/inbox",
+      "path": "src/main/*/com/example/inbox",
       "detected": "undetermined",
       "signals": {
         "decider": 0,
@@ -38,45 +38,45 @@
       "slice": "inbox.broken_view",
       "gate": "11(b) handled events",
       "id": "ESS-G11b",
-      "file": "src/main/kotlin/com/acme/inbox/views/broken_view/slice.yaml",
-      "reason": "source not readable, so the check ran on the rest of the slice only: src/main/kotlin/com/acme/inbox/views/broken_view/BrokenProjection.java"
+      "file": "src/main/kotlin/com/example/inbox/views/broken_view/slice.yaml",
+      "reason": "source not readable, so the check ran on the rest of the slice only: src/main/kotlin/com/example/inbox/views/broken_view/BrokenProjection.java"
     },
     {
       "slice": "inbox.broken_view",
       "gate": "6 endpoint route",
       "id": "ESS-G6",
-      "file": "src/main/kotlin/com/acme/inbox/views/broken_view/slice.yaml",
-      "reason": "source not readable, so the check ran on the rest of the slice only: src/main/kotlin/com/acme/inbox/views/broken_view/BrokenProjection.java"
+      "file": "src/main/kotlin/com/example/inbox/views/broken_view/slice.yaml",
+      "reason": "source not readable, so the check ran on the rest of the slice only: src/main/kotlin/com/example/inbox/views/broken_view/BrokenProjection.java"
     },
     {
       "slice": "inbox.templated",
       "gate": "6 endpoint route",
       "id": "ESS-G6",
-      "file": "src/main/kotlin/com/acme/inbox/views/templated/slice.yaml",
+      "file": "src/main/kotlin/com/example/inbox/views/templated/slice.yaml",
       "reason": "endpoints not checked: a request mapping's path is not a readable literal"
     }
   ],
   "unparsed": [
     {
-      "file": "src/main/kotlin/com/acme/inbox/automations/relay/RelayProcessor.kt",
+      "file": "src/main/kotlin/com/example/inbox/automations/relay/RelayProcessor.kt",
       "line": 18,
       "what": "@MessageHandler RelayProcessor.heartbeat",
       "reason": "handler with no readable first parameter"
     },
     {
-      "file": "src/main/kotlin/com/acme/inbox/external_systems/legacy/LegacyClient.kt",
+      "file": "src/main/kotlin/com/example/inbox/external_systems/legacy/LegacyClient.kt",
       "line": 5,
       "what": "source file",
       "reason": "unterminated string literal"
     },
     {
-      "file": "src/main/kotlin/com/acme/inbox/views/broken_view/BrokenProjection.java",
+      "file": "src/main/kotlin/com/example/inbox/views/broken_view/BrokenProjection.java",
       "line": 7,
       "what": "source file",
       "reason": "unclosed '{'"
     },
     {
-      "file": "src/main/kotlin/com/acme/inbox/views/templated/TemplatedAPI.kt",
+      "file": "src/main/kotlin/com/example/inbox/views/templated/TemplatedAPI.kt",
       "line": 11,
       "what": "@GetMapping path on messages",
       "reason": "not a readable string: \"$BASE/messages\""

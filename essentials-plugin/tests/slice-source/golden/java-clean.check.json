@@ -10,7 +10,7 @@
   "lanes": [
     {
       "bc": "orders",
-      "path": "src/main/*/com/acme/shop/orders",
+      "path": "src/main/*/com/example/shop/orders",
       "detected": "decider",
       "signals": {
         "decider": 2,

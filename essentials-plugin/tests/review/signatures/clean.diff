@@ -4,8 +4,8 @@
 # expect-not: backend/src/main/resources/application.yml:6 ess-088-mongo-key
 # expect-not: docs/upgrade-notes.md:3 ess-088-mongo-key
 # expect-not: docs/upgrade-notes.md:4 ess-089-reactive-bpp-disabled
-# expect-not: backend/src/main/kotlin/com/acme/shop/orders/PlaceOrderAPI.kt:4 ess-021-j2-databind-annotation
-# expect-not: backend/src/main/kotlin/com/acme/shop/orders/PlaceOrderAPI.kt:7 ess-016-local-command-bus
+# expect-not: backend/src/main/kotlin/com/example/shop/orders/PlaceOrderAPI.kt:4 ess-021-j2-databind-annotation
+# expect-not: backend/src/main/kotlin/com/example/shop/orders/PlaceOrderAPI.kt:7 ess-016-local-command-bus
 diff --git a/backend/src/main/resources/application.yml b/backend/src/main/resources/application.yml
 --- a/backend/src/main/resources/application.yml
 +++ b/backend/src/main/resources/application.yml
@@ -29,12 +29,12 @@ new file mode 100644
 +
 +We renamed `spring.data.mongodb.uri` to `spring.mongodb.uri`.
 +`essentials.reactive-bean-post-processor-enabled=false` must never be set.
-diff --git a/backend/src/main/kotlin/com/acme/shop/orders/PlaceOrderAPI.kt b/backend/src/main/kotlin/com/acme/shop/orders/PlaceOrderAPI.kt
+diff --git a/backend/src/main/kotlin/com/example/shop/orders/PlaceOrderAPI.kt b/backend/src/main/kotlin/com/example/shop/orders/PlaceOrderAPI.kt
 new file mode 100644
 --- /dev/null
-+++ b/backend/src/main/kotlin/com/acme/shop/orders/PlaceOrderAPI.kt
++++ b/backend/src/main/kotlin/com/example/shop/orders/PlaceOrderAPI.kt
 @@ -0,0 +1,10 @@
-+package com.acme.shop.orders
++package com.example.shop.orders
 +
 +import dk.trustworks.essentials.components.foundation.reactive.command.DurableLocalCommandBus
 +import tools.jackson.databind.annotation.JsonSerialize

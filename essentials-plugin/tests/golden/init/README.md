@@ -9,7 +9,7 @@ unseen.
 |---|---|
 | `cells.json` | The 9 golden answer sets (package `com.example.golden`, which the CI overlays in `tests/init-overlay/` assume): a pairwise covering array over language × db × web × frontend × compose (every pair of values appears in some cell). `defaults` holds the shared, obviously synthetic coordinates. |
 | `<cell>.tree` | The rendered project of one cell, one file per cell. Generated — never edit by hand. |
-| `hosts.json` | The 6 slice-compile hosts, language × db, all backend-only WebFlux with Compose off and no lint gate. Rendered on demand (`--host`), not golden; the slice templates compile against exactly what a user receives. Package `com.acme.shop`, which the slice compositions assume. |
+| `hosts.json` | The 6 slice-compile hosts, language × db, all backend-only WebFlux with Compose off and no lint gate. Rendered on demand (`--host`), not golden; the slice templates compile against exactly what a user receives. Package `com.example.shop`, which the slice compositions assume. |
 
 `lintGate` is spread over the cells so each value is rendered in three of them; it is not part of the
 covering array (the pairs embedded × none and standalone × hook have no cell — the lint-gate files do

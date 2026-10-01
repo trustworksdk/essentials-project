@@ -7,7 +7,7 @@ The agent's final message is the report `/essentials:slice-discover` printed for
 
 PASS if the report's bounded-context pass proposes (names may differ slightly):
 - exactly 2 candidate bounded contexts — not one per package or layer
-- `orders` owning Order, OrderLine, OrderRepository; its counter-evidence must be reported: BillingService.payInvoice also writes Order (`src/main/java/com/acme/shop/service/BillingService.java`)
-- `billing` owning Invoice, InvoiceRepository; its counter-evidence must be reported: Invoice.orderId references the other context (`src/main/java/com/acme/shop/model/Invoice.java`)
+- `orders` owning Order, OrderLine, OrderRepository; its counter-evidence must be reported: BillingService.payInvoice also writes Order (`src/main/java/com/example/shop/service/BillingService.java`)
+- `billing` owning Invoice, InvoiceRepository; its counter-evidence must be reported: Invoice.orderId references the other context (`src/main/java/com/example/shop/model/Invoice.java`)
 - confidence no higher than medium
 FAIL if the count differs, a context is missing, or the counter-evidence is absent.

@@ -62,7 +62,7 @@ heuristics do not fire wrongly. This one is exemplary code used as realistic inp
 bounded context's `config/` never declares one.
 
 Sources carry `{{packagePath}}` placeholders, and the manifest-reading commands do not care. With
-`{{packagePath}}` replaced by a real package (for example `com.acme.shop`), every source compiles
+`{{packagePath}}` replaced by a real package (for example `com.example.shop`), every source compiles
 against the Essentials reactor with Kotlin 2.4 and the `pg-event-sourced` module set
 (`kotlin-eventsourcing`, `postgresql-document-db`, the event-store starter); no CI job does that yet.
 If you substitute, do it once and completely, so the tree does not end up half-rendered.

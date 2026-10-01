@@ -6,7 +6,7 @@ type: llm
 The agent's final message is the report `/essentials:slice-discover` printed for a test project. Paths in it are relative to the project root, and a report may cite a file by path, by `path:line`, or by its type or directory name.
 
 PASS if the report contains a finding that matches all of:
-- it concerns `src/main/java/com/acme/shop/controller/OrderController.java`
+- it concerns `src/main/java/com/example/shop/controller/OrderController.java`
 - it is a entity-returned-from-api finding
 - its substance: The controllers return Order / Invoice directly.
 FAIL if no finding matches. Ignore formatting, ordering and other findings.

@@ -8,9 +8,9 @@
   "bcs": [
     {
       "name": "orders",
-      "path": "src/main/*/com/acme/shop/orders",
+      "path": "src/main/*/com/example/shop/orders",
       "dirs": [
-        "src/main/kotlin/com/acme/shop/orders"
+        "src/main/kotlin/com/example/shop/orders"
       ],
       "languages": [
         "kotlin"
@@ -31,17 +31,17 @@
           {
             "slice": "orders.notify_customer",
             "lane": "decider",
-            "file": "src/main/kotlin/com/acme/shop/orders/automations/notify_customer/slice.yaml"
+            "file": "src/main/kotlin/com/example/shop/orders/automations/notify_customer/slice.yaml"
           },
           {
             "slice": "orders.order_board",
             "lane": "decider",
-            "file": "src/main/kotlin/com/acme/shop/orders/views/order_board/slice.yaml"
+            "file": "src/main/kotlin/com/example/shop/orders/views/order_board/slice.yaml"
           },
           {
             "slice": "orders.order_feed",
             "lane": "decider",
-            "file": "src/main/kotlin/com/acme/shop/orders/views/order_feed/slice.yaml"
+            "file": "src/main/kotlin/com/example/shop/orders/views/order_feed/slice.yaml"
           }
         ],
         "detected": "undetermined"
@@ -53,13 +53,13 @@
       "id": "orders.notify_customer",
       "idSource": "manifest",
       "bc": "orders",
-      "bcPath": "src/main/*/com/acme/shop/orders",
-      "dir": "src/main/kotlin/com/acme/shop/orders/automations/notify_customer",
+      "bcPath": "src/main/*/com/example/shop/orders",
+      "dir": "src/main/kotlin/com/example/shop/orders/automations/notify_customer",
       "role": "automations",
       "kind": "automation",
-      "manifest": "src/main/kotlin/com/acme/shop/orders/automations/notify_customer/slice.yaml",
+      "manifest": "src/main/kotlin/com/example/shop/orders/automations/notify_customer/slice.yaml",
       "language": "kotlin",
-      "package": "com.acme.shop.orders.automations.notify_customer",
+      "package": "com.example.shop.orders.automations.notify_customer",
       "files": [
         "NotifyCustomerProcessor.kt"
       ],
@@ -67,7 +67,7 @@
         {
           "class": "NotifyCustomerProcessor",
           "base": "EventProcessor",
-          "file": "src/main/kotlin/com/acme/shop/orders/automations/notify_customer/NotifyCustomerProcessor.kt",
+          "file": "src/main/kotlin/com/example/shop/orders/automations/notify_customer/NotifyCustomerProcessor.kt",
           "line": 8
         }
       ],
@@ -78,13 +78,13 @@
           "annotation": "MessageHandler",
           "annotationFqn": "dk.trustworks.essentials.components.foundation.messaging.MessageHandler",
           "role": "event",
-          "file": "src/main/kotlin/com/acme/shop/orders/automations/notify_customer/NotifyCustomerProcessor.kt",
+          "file": "src/main/kotlin/com/example/shop/orders/automations/notify_customer/NotifyCustomerProcessor.kt",
           "line": 15,
           "annotationLine": 14,
           "message": {
             "written": "Placed",
             "name": "OrderPlaced",
-            "fqn": "com.acme.shop.orders.events.OrderPlaced",
+            "fqn": "com.example.shop.orders.events.OrderPlaced",
             "resolvedBy": "alias"
           },
           "params": [
@@ -101,19 +101,19 @@
           "annotation": "MessageHandler",
           "annotationFqn": "dk.trustworks.essentials.components.foundation.messaging.MessageHandler",
           "role": "event",
-          "file": "src/main/kotlin/com/acme/shop/orders/automations/notify_customer/NotifyCustomerProcessor.kt",
+          "file": "src/main/kotlin/com/example/shop/orders/automations/notify_customer/NotifyCustomerProcessor.kt",
           "line": 20,
           "annotationLine": 19,
           "message": {
-            "written": "com.acme.shop.orders.events.OrderCancelled",
+            "written": "com.example.shop.orders.events.OrderCancelled",
             "name": "OrderCancelled",
-            "fqn": "com.acme.shop.orders.events.OrderCancelled",
+            "fqn": "com.example.shop.orders.events.OrderCancelled",
             "resolvedBy": "fqn"
           },
           "params": [
             {
               "name": "event",
-              "type": "com.acme.shop.orders.events.OrderCancelled"
+              "type": "com.example.shop.orders.events.OrderCancelled"
             }
           ],
           "envelope": false
@@ -131,13 +131,13 @@
       "id": "orders.order_board",
       "idSource": "manifest",
       "bc": "orders",
-      "bcPath": "src/main/*/com/acme/shop/orders",
-      "dir": "src/main/kotlin/com/acme/shop/orders/views/order_board",
+      "bcPath": "src/main/*/com/example/shop/orders",
+      "dir": "src/main/kotlin/com/example/shop/orders/views/order_board",
       "role": "views",
       "kind": "view",
-      "manifest": "src/main/kotlin/com/acme/shop/orders/views/order_board/slice.yaml",
+      "manifest": "src/main/kotlin/com/example/shop/orders/views/order_board/slice.yaml",
       "language": "kotlin",
-      "package": "com.acme.shop.orders.views.order_board",
+      "package": "com.example.shop.orders.views.order_board",
       "files": [
         "OrderBoardAPI.kt",
         "OrderBoardProjection.kt"
@@ -146,7 +146,7 @@
         {
           "class": "OrderBoardProjection",
           "base": "ViewEventProcessor",
-          "file": "src/main/kotlin/com/acme/shop/orders/views/order_board/OrderBoardProjection.kt",
+          "file": "src/main/kotlin/com/example/shop/orders/views/order_board/OrderBoardProjection.kt",
           "line": 8
         }
       ],
@@ -157,13 +157,13 @@
           "annotation": "MessageHandler",
           "annotationFqn": "dk.trustworks.essentials.components.foundation.messaging.MessageHandler",
           "role": "event",
-          "file": "src/main/kotlin/com/acme/shop/orders/views/order_board/OrderBoardProjection.kt",
+          "file": "src/main/kotlin/com/example/shop/orders/views/order_board/OrderBoardProjection.kt",
           "line": 12,
           "annotationLine": 11,
           "message": {
             "written": "Placed",
             "name": "OrderPlaced",
-            "fqn": "com.acme.shop.orders.events.OrderPlaced",
+            "fqn": "com.example.shop.orders.events.OrderPlaced",
             "resolvedBy": "alias"
           },
           "params": [
@@ -180,13 +180,13 @@
           "annotation": "MessageHandler",
           "annotationFqn": "dk.trustworks.essentials.components.foundation.messaging.MessageHandler",
           "role": "event",
-          "file": "src/main/kotlin/com/acme/shop/orders/views/order_board/OrderBoardProjection.kt",
+          "file": "src/main/kotlin/com/example/shop/orders/views/order_board/OrderBoardProjection.kt",
           "line": 17,
           "annotationLine": 16,
           "message": {
             "written": "Shipped",
             "name": "OrderShipped",
-            "fqn": "com.acme.shop.orders.events.OrderShipped",
+            "fqn": "com.example.shop.orders.events.OrderShipped",
             "resolvedBy": "alias"
           },
           "params": [
@@ -206,7 +206,7 @@
         {
           "class": "OrderBoardAPI",
           "method": "board",
-          "file": "src/main/kotlin/com/acme/shop/orders/views/order_board/OrderBoardAPI.kt",
+          "file": "src/main/kotlin/com/example/shop/orders/views/order_board/OrderBoardAPI.kt",
           "line": 13,
           "annotationLine": 12,
           "annotation": "GetMapping",
@@ -224,7 +224,7 @@
         {
           "class": "OrderBoardAPI",
           "method": "filtered",
-          "file": "src/main/kotlin/com/acme/shop/orders/views/order_board/OrderBoardAPI.kt",
+          "file": "src/main/kotlin/com/example/shop/orders/views/order_board/OrderBoardAPI.kt",
           "line": 17,
           "annotationLine": 16,
           "annotation": "GetMapping",
@@ -249,7 +249,7 @@
         {
           "class": "OrderBoardAPI",
           "method": "open",
-          "file": "src/main/kotlin/com/acme/shop/orders/views/order_board/OrderBoardAPI.kt",
+          "file": "src/main/kotlin/com/example/shop/orders/views/order_board/OrderBoardAPI.kt",
           "line": 21,
           "annotationLine": 20,
           "annotation": "GetMapping",
@@ -269,7 +269,7 @@
         {
           "class": "OrderBoardAPI",
           "method": "between",
-          "file": "src/main/kotlin/com/acme/shop/orders/views/order_board/OrderBoardAPI.kt",
+          "file": "src/main/kotlin/com/example/shop/orders/views/order_board/OrderBoardAPI.kt",
           "line": 25,
           "annotationLine": 24,
           "annotation": "GetMapping",
@@ -305,13 +305,13 @@
       "id": "orders.order_feed",
       "idSource": "manifest",
       "bc": "orders",
-      "bcPath": "src/main/*/com/acme/shop/orders",
-      "dir": "src/main/kotlin/com/acme/shop/orders/views/order_feed",
+      "bcPath": "src/main/*/com/example/shop/orders",
+      "dir": "src/main/kotlin/com/example/shop/orders/views/order_feed",
       "role": "views",
       "kind": "view",
-      "manifest": "src/main/kotlin/com/acme/shop/orders/views/order_feed/slice.yaml",
+      "manifest": "src/main/kotlin/com/example/shop/orders/views/order_feed/slice.yaml",
       "language": "kotlin",
-      "package": "com.acme.shop.orders.views.order_feed",
+      "package": "com.example.shop.orders.views.order_feed",
       "files": [
         "OrderFeedRoutes.kt"
       ],
@@ -325,7 +325,7 @@
       "schedules": [],
       "notAnalysed": [
         {
-          "file": "src/main/kotlin/com/acme/shop/orders/views/order_feed/OrderFeedRoutes.kt",
+          "file": "src/main/kotlin/com/example/shop/orders/views/order_feed/OrderFeedRoutes.kt",
           "line": 5,
           "kind": "routes",
           "reason": "WebFlux RouterFunction routes are not analysed"
@@ -344,7 +344,7 @@
       "fields": [
         "orderId: OrderId"
       ],
-      "declaredIn": "src/main/kotlin/com/acme/shop/orders/events/OrderCancelled.kt",
+      "declaredIn": "src/main/kotlin/com/example/shop/orders/events/OrderCancelled.kt",
       "line": 5,
       "alsoDeclaredIn": []
     },
@@ -357,7 +357,7 @@
       "fields": [
         "orderId: OrderId"
       ],
-      "declaredIn": "src/main/kotlin/com/acme/shop/orders/events/OrderPlaced.kt",
+      "declaredIn": "src/main/kotlin/com/example/shop/orders/events/OrderPlaced.kt",
       "line": 5,
       "alsoDeclaredIn": []
     },
@@ -370,7 +370,7 @@
       "fields": [
         "orderId: OrderId"
       ],
-      "declaredIn": "src/main/kotlin/com/acme/shop/orders/events/OrderShipped.kt",
+      "declaredIn": "src/main/kotlin/com/example/shop/orders/events/OrderShipped.kt",
       "line": 5,
       "alsoDeclaredIn": []
     },

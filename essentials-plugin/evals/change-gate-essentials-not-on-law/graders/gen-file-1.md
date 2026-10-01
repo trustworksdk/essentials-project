@@ -6,5 +6,5 @@ match: contains
 flags: i
 target:
   source: file
-  path: src/main/java/com/acme/crm/controller/CustomerController.java
+  path: src/main/java/com/example/crm/controller/CustomerController.java
 ---

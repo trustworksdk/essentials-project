@@ -5,7 +5,7 @@ type: llm
 
 The agent's final message is the report `/essentials:slice-check` printed for a test project. Paths in it are relative to the project root, and a report may cite a file by path, by `path:line`, or by its type or directory name.
 
-PASS unless the report raises a finding under gate 14 (Write-style lane (§R5)) about `src/main/java/com/acme/multi/ledger/use_cases/post_entry/slice.yaml`.
+PASS unless the report raises a finding under gate 14 (Write-style lane (§R5)) about `src/main/java/com/example/multi/ledger/use_cases/post_entry/slice.yaml`.
 Why that would be wrong: The tier: aggregate value is ML-5 (a tier finding). It must not be read as a lane signal, and no lane finding may cite a manifest field as its evidence: detection reads code.
 A mention that is not a finding does not fail this check: the file listed as passing, cited as evidence for a different finding, or named in a lane or inventory summary.
 These are tolerated and do not fail this check either:

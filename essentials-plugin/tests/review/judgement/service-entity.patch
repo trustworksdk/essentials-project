@@ -13,13 +13,13 @@ index 15e6fd5..1f16ba3 100644
          <dependency>
              <groupId>org.springframework.boot</groupId>
              <artifactId>spring-boot-starter-data-jpa</artifactId>
-diff --git a/src/main/java/com/acme/shipping/_loadtest/LoadHarness.java b/src/main/java/com/acme/shipping/_loadtest/LoadHarness.java
+diff --git a/src/main/java/com/example/shipping/_loadtest/LoadHarness.java b/src/main/java/com/example/shipping/_loadtest/LoadHarness.java
 index 45f755f..c38f806 100644
---- a/src/main/java/com/acme/shipping/_loadtest/LoadHarness.java
-+++ b/src/main/java/com/acme/shipping/_loadtest/LoadHarness.java
-@@ -3,6 +3,9 @@ package com.acme.shipping._loadtest;
- import com.acme.shipping.types.OrderId;
- import com.acme.shipping.use_cases.register_shipping_order.RegisterShippingOrder;
+--- a/src/main/java/com/example/shipping/_loadtest/LoadHarness.java
++++ b/src/main/java/com/example/shipping/_loadtest/LoadHarness.java
+@@ -3,6 +3,9 @@ package com.example.shipping._loadtest;
+ import com.example.shipping.types.OrderId;
+ import com.example.shipping.use_cases.register_shipping_order.RegisterShippingOrder;
  import dk.trustworks.essentials.reactive.command.CommandBus;
 +import org.jdbi.v3.core.Jdbi;
 +
@@ -40,13 +40,13 @@ index 45f755f..c38f806 100644
 +                      .one());
 +    }
  }
-diff --git a/src/main/java/com/acme/shipping/config/CommandBusConfig.java b/src/main/java/com/acme/shipping/config/CommandBusConfig.java
+diff --git a/src/main/java/com/example/shipping/config/CommandBusConfig.java b/src/main/java/com/example/shipping/config/CommandBusConfig.java
 new file mode 100644
 index 0000000..1137b3d
 --- /dev/null
-+++ b/src/main/java/com/acme/shipping/config/CommandBusConfig.java
++++ b/src/main/java/com/example/shipping/config/CommandBusConfig.java
 @@ -0,0 +1,15 @@
-+package com.acme.shipping.config;
++package com.example.shipping.config;
 +
 +import dk.trustworks.essentials.reactive.command.LocalCommandBus;
 +import org.springframework.context.annotation.Bean;
@@ -61,10 +61,10 @@ index 0000000..1137b3d
 +        return new LocalCommandBus();
 +    }
 +}
-diff --git a/src/main/java/com/acme/shipping/entities/ShippingOrder.java b/src/main/java/com/acme/shipping/entities/ShippingOrder.java
+diff --git a/src/main/java/com/example/shipping/entities/ShippingOrder.java b/src/main/java/com/example/shipping/entities/ShippingOrder.java
 index a082b5c..afcd2e5 100644
---- a/src/main/java/com/acme/shipping/entities/ShippingOrder.java
-+++ b/src/main/java/com/acme/shipping/entities/ShippingOrder.java
+--- a/src/main/java/com/example/shipping/entities/ShippingOrder.java
++++ b/src/main/java/com/example/shipping/entities/ShippingOrder.java
 @@ -14,6 +14,7 @@ public class ShippingOrder {
      private String orderId;
      private String destination;
@@ -96,33 +96,33 @@ index a082b5c..afcd2e5 100644
      public String getOrderId() {
          return orderId;
      }
-diff --git a/src/main/java/com/acme/shipping/events/ShipmentCancelled.java b/src/main/java/com/acme/shipping/events/ShipmentCancelled.java
+diff --git a/src/main/java/com/example/shipping/events/ShipmentCancelled.java b/src/main/java/com/example/shipping/events/ShipmentCancelled.java
 new file mode 100644
 index 0000000..123d725
 --- /dev/null
-+++ b/src/main/java/com/acme/shipping/events/ShipmentCancelled.java
++++ b/src/main/java/com/example/shipping/events/ShipmentCancelled.java
 @@ -0,0 +1,4 @@
-+package com.acme.shipping.events;
++package com.example.shipping.events;
 +
 +public record ShipmentCancelled(String orderId) implements ShippingEvent {
 +}
-diff --git a/src/main/java/com/acme/shipping/events/ShippingEvent.java b/src/main/java/com/acme/shipping/events/ShippingEvent.java
+diff --git a/src/main/java/com/example/shipping/events/ShippingEvent.java b/src/main/java/com/example/shipping/events/ShippingEvent.java
 index 2c81e9d..fd6d563 100644
---- a/src/main/java/com/acme/shipping/events/ShippingEvent.java
-+++ b/src/main/java/com/acme/shipping/events/ShippingEvent.java
+--- a/src/main/java/com/example/shipping/events/ShippingEvent.java
++++ b/src/main/java/com/example/shipping/events/ShippingEvent.java
 @@ -1,6 +1,6 @@
- package com.acme.shipping.events;
+ package com.example.shipping.events;
  
  /** Integration facts published on the EventBus. */
 -public sealed interface ShippingEvent permits ShippingOrderRegistered, OrderShipped {
 +public sealed interface ShippingEvent permits ShippingOrderRegistered, OrderShipped, ShipmentCancelled {
      String orderId();
  }
-diff --git a/src/main/java/com/acme/shipping/use_cases/cancel_shipment/CLAUDE.md b/src/main/java/com/acme/shipping/use_cases/cancel_shipment/CLAUDE.md
+diff --git a/src/main/java/com/example/shipping/use_cases/cancel_shipment/CLAUDE.md b/src/main/java/com/example/shipping/use_cases/cancel_shipment/CLAUDE.md
 new file mode 100644
 index 0000000..08fddfd
 --- /dev/null
-+++ b/src/main/java/com/acme/shipping/use_cases/cancel_shipment/CLAUDE.md
++++ b/src/main/java/com/example/shipping/use_cases/cancel_shipment/CLAUDE.md
 @@ -0,0 +1,11 @@
 +# Slice: shipping.cancel_shipment
 +
@@ -135,27 +135,27 @@ index 0000000..08fddfd
 +## Boundaries
 +**Writes:** the `ShippingOrder` entity, through `persistence/ShippingOrders`.
 +**Publishes:** `ShipmentCancelled` on the `EventBus`, only when the state actually changed.
-diff --git a/src/main/java/com/acme/shipping/use_cases/cancel_shipment/CancelShipment.java b/src/main/java/com/acme/shipping/use_cases/cancel_shipment/CancelShipment.java
+diff --git a/src/main/java/com/example/shipping/use_cases/cancel_shipment/CancelShipment.java b/src/main/java/com/example/shipping/use_cases/cancel_shipment/CancelShipment.java
 new file mode 100644
 index 0000000..ff7e3d8
 --- /dev/null
-+++ b/src/main/java/com/acme/shipping/use_cases/cancel_shipment/CancelShipment.java
++++ b/src/main/java/com/example/shipping/use_cases/cancel_shipment/CancelShipment.java
 @@ -0,0 +1,6 @@
-+package com.acme.shipping.use_cases.cancel_shipment;
++package com.example.shipping.use_cases.cancel_shipment;
 +
-+import com.acme.shipping.types.OrderId;
++import com.example.shipping.types.OrderId;
 +
 +public record CancelShipment(OrderId orderId) {
 +}
-diff --git a/src/main/java/com/acme/shipping/use_cases/cancel_shipment/CancelShipmentAPI.java b/src/main/java/com/acme/shipping/use_cases/cancel_shipment/CancelShipmentAPI.java
+diff --git a/src/main/java/com/example/shipping/use_cases/cancel_shipment/CancelShipmentAPI.java b/src/main/java/com/example/shipping/use_cases/cancel_shipment/CancelShipmentAPI.java
 new file mode 100644
 index 0000000..0d8bd87
 --- /dev/null
-+++ b/src/main/java/com/acme/shipping/use_cases/cancel_shipment/CancelShipmentAPI.java
++++ b/src/main/java/com/example/shipping/use_cases/cancel_shipment/CancelShipmentAPI.java
 @@ -0,0 +1,24 @@
-+package com.acme.shipping.use_cases.cancel_shipment;
++package com.example.shipping.use_cases.cancel_shipment;
 +
-+import com.acme.shipping.types.OrderId;
++import com.example.shipping.types.OrderId;
 +import dk.trustworks.essentials.reactive.command.CommandBus;
 +import org.springframework.web.bind.annotation.PathVariable;
 +import org.springframework.web.bind.annotation.PostMapping;
@@ -177,16 +177,16 @@ index 0000000..0d8bd87
 +        commandBus.send(new CancelShipment(OrderId.of(orderId)));
 +    }
 +}
-diff --git a/src/main/java/com/acme/shipping/use_cases/cancel_shipment/CancelShipmentHandler.java b/src/main/java/com/acme/shipping/use_cases/cancel_shipment/CancelShipmentHandler.java
+diff --git a/src/main/java/com/example/shipping/use_cases/cancel_shipment/CancelShipmentHandler.java b/src/main/java/com/example/shipping/use_cases/cancel_shipment/CancelShipmentHandler.java
 new file mode 100644
 index 0000000..c23b3e5
 --- /dev/null
-+++ b/src/main/java/com/acme/shipping/use_cases/cancel_shipment/CancelShipmentHandler.java
++++ b/src/main/java/com/example/shipping/use_cases/cancel_shipment/CancelShipmentHandler.java
 @@ -0,0 +1,31 @@
-+package com.acme.shipping.use_cases.cancel_shipment;
++package com.example.shipping.use_cases.cancel_shipment;
 +
-+import com.acme.shipping.events.ShipmentCancelled;
-+import com.acme.shipping.persistence.ShippingOrders;
++import com.example.shipping.events.ShipmentCancelled;
++import com.example.shipping.persistence.ShippingOrders;
 +import dk.trustworks.essentials.reactive.EventBus;
 +import dk.trustworks.essentials.reactive.command.AnnotatedCommandHandler;
 +import dk.trustworks.essentials.reactive.command.CmdHandler;
@@ -214,11 +214,11 @@ index 0000000..c23b3e5
 +        }
 +    }
 +}
-diff --git a/src/main/java/com/acme/shipping/use_cases/cancel_shipment/slice.yaml b/src/main/java/com/acme/shipping/use_cases/cancel_shipment/slice.yaml
+diff --git a/src/main/java/com/example/shipping/use_cases/cancel_shipment/slice.yaml b/src/main/java/com/example/shipping/use_cases/cancel_shipment/slice.yaml
 new file mode 100644
 index 0000000..f891497
 --- /dev/null
-+++ b/src/main/java/com/acme/shipping/use_cases/cancel_shipment/slice.yaml
++++ b/src/main/java/com/example/shipping/use_cases/cancel_shipment/slice.yaml
 @@ -0,0 +1,25 @@
 +schemaVersion: "1.2"
 +slice: shipping.cancel_shipment
@@ -245,14 +245,14 @@ index 0000000..f891497
 +  unit: { present: false }
 +  integration: { present: false }
 +  contract: { present: false }
-diff --git a/src/main/java/com/acme/shipping/views/order_status/OrderStatusAPI.java b/src/main/java/com/acme/shipping/views/order_status/OrderStatusAPI.java
+diff --git a/src/main/java/com/example/shipping/views/order_status/OrderStatusAPI.java b/src/main/java/com/example/shipping/views/order_status/OrderStatusAPI.java
 index 114e5e8..e3c82d9 100644
---- a/src/main/java/com/acme/shipping/views/order_status/OrderStatusAPI.java
-+++ b/src/main/java/com/acme/shipping/views/order_status/OrderStatusAPI.java
+--- a/src/main/java/com/example/shipping/views/order_status/OrderStatusAPI.java
++++ b/src/main/java/com/example/shipping/views/order_status/OrderStatusAPI.java
 @@ -1,5 +1,7 @@
- package com.acme.shipping.views.order_status;
+ package com.example.shipping.views.order_status;
  
-+import com.acme.shipping.persistence.ShippingOrders;
++import com.example.shipping.persistence.ShippingOrders;
 +import org.springframework.web.bind.annotation.DeleteMapping;
  import org.springframework.web.bind.annotation.GetMapping;
  import org.springframework.web.bind.annotation.PathVariable;

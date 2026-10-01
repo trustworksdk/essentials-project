@@ -6,7 +6,7 @@ type: llm
 The agent's final message is the report `/essentials:slice-check` printed for a test project. Paths in it are relative to the project root, and a report may cite a file by path, by `path:line`, or by its type or directory name.
 
 PASS if the report contains a finding that matches all of:
-- it concerns `src/main/java/com/acme/billing/use_cases/pay_invoice/PayInvoiceHandler.java` (symbol `PayInvoiceHandler.handle`)
+- it concerns `src/main/java/com/example/billing/use_cases/pay_invoice/PayInvoiceHandler.java` (symbol `PayInvoiceHandler.handle`)
 - it rests on rules/slice-design.md § The aggregate's own bar of the slice law
 - its severity is Should-fix
 - its substance: The domain rule is in the handler; Invoice.pay() already guards it, so the aggregate is no longer the sole enforcer. Blocking is also acceptable (the law's 'code cannot be correct' row).

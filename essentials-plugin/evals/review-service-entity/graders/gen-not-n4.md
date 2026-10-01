@@ -5,7 +5,7 @@ type: llm
 
 The agent's final message is the report `/essentials:review` printed for a test project. Paths in it are relative to the project root, and a report may cite a file by path, by `path:line`, or by its type or directory name.
 
-PASS unless the report raises a finding under gate 8 (§R4) or gate 8d (§R4) about `src/main/java/com/acme/shipping/entities/ShippingOrder.java` (symbol `ShippingOrder.<init>(RegisterShippingOrder)`).
+PASS unless the report raises a finding under gate 8 (§R4) or gate 8d (§R4) about `src/main/java/com/example/shipping/entities/ShippingOrder.java` (symbol `ShippingOrder.<init>(RegisterShippingOrder)`).
 Why that would be wrong: The command-typed constructor is pre-existing, on lines the patch did not change.
 A mention that is not a finding does not fail this check: the file listed as passing, cited as evidence for a different finding, or named in a lane or inventory summary.
 FAIL only if such a finding is present.

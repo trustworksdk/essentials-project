@@ -6,7 +6,7 @@ type: llm
 The agent's final message is the report `/essentials:slice-check` printed for a test project. Paths in it are relative to the project root, and a report may cite a file by path, by `path:line`, or by its type or directory name.
 
 PASS if the report contains a finding that matches all of:
-- it concerns `src/main/java/com/acme/billing/views/invoice_list/slice.yaml`
+- it concerns `src/main/java/com/example/billing/views/invoice_list/slice.yaml`
 - it rests on rules/slice-design.md § Reporting severities (a view slice with no test) of the slice law
 - its severity is Should-fix
 - its substance: A view slice with no test.

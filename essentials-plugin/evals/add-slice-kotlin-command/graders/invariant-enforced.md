@@ -1,6 +1,6 @@
 ---
 type: llm
-focus: { source: file, path: "backend/src/main/kotlin/com/acme/shop/orders/use_cases/place_order/PlaceOrderDecider.kt" }
+focus: { source: file, path: "backend/src/main/kotlin/com/example/shop/orders/use_cases/place_order/PlaceOrderDecider.kt" }
 ---
 
 The file is the decider of a `place_order` command slice. The user asked for one invariant: a PlaceOrder whose

@@ -37,7 +37,7 @@ lanes:
     detected: service-entity
     signals:
     - kind: entities-dir
-      file: src/main/java/com/acme/shipping/entities/ShippingOrder.java
+      file: src/main/java/com/example/shipping/entities/ShippingOrder.java
       line: 11
       anchor: public class ShippingOrder {
     declared:
@@ -52,7 +52,7 @@ must_find:
   gate: 8d
   ess: ESS-G8d
   severity: Blocking
-  file: src/main/java/com/acme/shipping/events/ShippingOrderRegistered.java
+  file: src/main/java/com/example/shipping/events/ShippingOrderRegistered.java
   line: 7
   anchor: public static ShippingOrderRegistered from(RegisterShippingOrder cmd) {
   symbol: ShippingOrderRegistered.from
@@ -63,7 +63,7 @@ must_find:
   gate: 8d
   ess: ESS-G8d
   severity: Blocking
-  file: src/main/java/com/acme/shipping/entities/ShippingOrder.java
+  file: src/main/java/com/example/shipping/entities/ShippingOrder.java
   line: 18
   anchor: public ShippingOrder(RegisterShippingOrder cmd) {
   symbol: ShippingOrder.<init>(RegisterShippingOrder)
@@ -72,7 +72,7 @@ must_find:
   gate: 15b
   ess: ESS-G15b
   severity: Should-fix
-  file: src/main/java/com/acme/shipping/persistence/ShippingOrders.java
+  file: src/main/java/com/example/shipping/persistence/ShippingOrders.java
   line: 16
   anchor: List<ShippingOrder> findByShipped(boolean shipped);
   symbol: ShippingOrders.findByShipped
@@ -81,7 +81,7 @@ must_find:
   gate: 15c
   ess: ESS-G15c
   severity: Should-fix
-  file: src/main/java/com/acme/shipping/persistence/ShippingOrders.java
+  file: src/main/java/com/example/shipping/persistence/ShippingOrders.java
   line: 10
   anchor: public interface ShippingOrders extends JpaRepository<ShippingOrder, String> {
   what: >-
@@ -91,7 +91,7 @@ must_find:
   gate: '16'
   ess: ESS-G16
   severity: Should-fix
-  file: src/main/java/com/acme/shipping/entities/ShippingOrder.java
+  file: src/main/java/com/example/shipping/entities/ShippingOrder.java
   line: 36
   anchor: public void setShipped(boolean shipped) {
   symbol: ShippingOrder.setShipped
@@ -100,7 +100,7 @@ must_find:
   gate: '16'
   ess: ESS-G16
   severity: Should-fix
-  file: src/main/java/com/acme/shipping/use_cases/register_shipping_order/RegisterShippingOrderAPI.java
+  file: src/main/java/com/example/shipping/use_cases/register_shipping_order/RegisterShippingOrderAPI.java
   line: 25
   anchor: public ShippingOrder register(@RequestBody Body body) {
   symbol: RegisterShippingOrderAPI.register
@@ -109,7 +109,7 @@ must_find:
   gate: '17'
   ess: ESS-G17
   severity: Should-fix
-  file: src/main/java/com/acme/shipping/routing/ShippingCommand.java
+  file: src/main/java/com/example/shipping/routing/ShippingCommand.java
   line: 5
   anchor: public interface ShippingCommand {
   what: A routing marker on a lane with no decider to filter and no stream to select; nothing implements it.
@@ -117,7 +117,7 @@ must_find:
   gate: 18c
   ess: ESS-G18c
   severity: Blocking
-  file: src/main/java/com/acme/shipping/views/order_status/OrderStatusQueries.java
+  file: src/main/java/com/example/shipping/views/order_status/OrderStatusQueries.java
   line: 18
   anchor: Optional<OrderStatusView> findById(String orderId);
   symbol: OrderStatusQueries.findById
@@ -128,7 +128,7 @@ must_find:
   gate: 18a
   ess: ESS-G18a
   severity: Should-fix
-  file: src/main/java/com/acme/shipping/persistence/ShippingOrders.java
+  file: src/main/java/com/example/shipping/persistence/ShippingOrders.java
   line: 10
   anchor: public interface ShippingOrders extends JpaRepository<ShippingOrder, String> {
   what: The write repository extends JpaRepository rather than the bare Repository marker.
@@ -138,7 +138,7 @@ must_not_find:
   - '5'
   - 15b
   - '16'
-  file: src/main/java/com/acme/shipping/entities/ShippingOrder.java
+  file: src/main/java/com/example/shipping/entities/ShippingOrder.java
   line: 40
   anchor: public String getOrderId() {
   symbol: ShippingOrder.getOrderId
@@ -148,14 +148,14 @@ must_not_find:
   not_gates:
   - '5'
   - '16'
-  file: src/main/java/com/acme/shipping/entities/ShippingOrder.java
+  file: src/main/java/com/example/shipping/entities/ShippingOrder.java
   line: 24
   anchor: protected ShippingOrder() {
   why: Persistence-mandated no-arg constructor, not a method that only assigns fields.
 - id: T3
   not_gates:
   - 15b
-  file: src/main/java/com/acme/shipping/persistence/ShippingOrders.java
+  file: src/main/java/com/example/shipping/persistence/ShippingOrders.java
   line: 14
   anchor: List<ShippingOrder> findByIdIn(List<String> ids);
   symbol: ShippingOrders.findByIdIn
@@ -164,7 +164,7 @@ must_not_find:
   not_gates:
   - 15c
   - '15'
-  file: src/main/java/com/acme/shipping/views/order_status/OrderStatusQueries.java
+  file: src/main/java/com/example/shipping/views/order_status/OrderStatusQueries.java
   line: 10
   anchor: public interface OrderStatusQueries extends Repository<ShippingOrder, String> {
   why: >-
@@ -173,16 +173,16 @@ must_not_find:
   not_gates:
   - '8'
   - 8a
-  file: src/main/java/com/acme/shipping/automations/auto_ship/AutoShipProcessor.java
+  file: src/main/java/com/example/shipping/automations/auto_ship/AutoShipProcessor.java
   line: 6
-  anchor: import com.acme.shipping.use_cases.ship_order.ShipOrder;
+  anchor: import com.example.shipping.use_cases.ship_order.ShipOrder;
   why: 'The §R4 carve-out: ShipOrder is only constructed and handed to commandBus.sendAndDontWait.'
 - id: T5
   not_gates:
   - '2'
   - '15'
   - 18a
-  file: src/main/java/com/acme/shipping/views/order_status/OrderStatusQueries.java
+  file: src/main/java/com/example/shipping/views/order_status/OrderStatusQueries.java
   line: 10
   anchor: public interface OrderStatusQueries extends Repository<ShippingOrder, String> {
   why: >-
@@ -191,7 +191,7 @@ must_not_find:
 - id: T6
   not_gates:
   - '6'
-  file: src/main/java/com/acme/shipping/views/order_status/OrderStatusAPI.java
+  file: src/main/java/com/example/shipping/views/order_status/OrderStatusAPI.java
   line: 13
   anchor: public class OrderStatusAPI {
   why: Three @GetMapping methods on a view API over its own read model; all declared in slice.yaml.
@@ -199,7 +199,7 @@ must_not_find:
   not_gates:
   - '6'
   - 11a
-  file: src/main/java/com/acme/shipping/views/order_status/OrderStatusAPI.java
+  file: src/main/java/com/example/shipping/views/order_status/OrderStatusAPI.java
   line: 26
   anchor: '@GetMapping(params = "status")'
   why: >-
@@ -209,21 +209,21 @@ must_not_find:
   not_gates:
   - '6'
   - 11a
-  file: src/main/java/com/acme/shipping/views/order_status/OrderStatusAPI.java
+  file: src/main/java/com/example/shipping/views/order_status/OrderStatusAPI.java
   line: 22
   anchor: '@RequestParam(defaultValue = "false") boolean shipped'
   why: An optional filter with a default is not a discriminator and needs no endpoint entry.
 - id: T7
   not_gates:
   - '*'
-  file: src/main/java/com/acme/shipping/_loadtest/LoadHarness.java
+  file: src/main/java/com/example/shipping/_loadtest/LoadHarness.java
   line: 7
   anchor: public class LoadHarness {
   why: _-prefixed directories are not slices; it carries the required one-line CLAUDE.md.
 - id: T8
   not_gates:
   - '10'
-  file: src/main/java/com/acme/shipping/views/order_status/slice.yaml
+  file: src/main/java/com/example/shipping/views/order_status/slice.yaml
   line: 19
   anchor: 'projections: []'
   why: No versioned read model on this lane.
@@ -232,7 +232,7 @@ must_not_find:
   - '1'
   - '11'
   - '13'
-  file: src/main/java/com/acme/shipping/views/order_status/slice.yaml
+  file: src/main/java/com/example/shipping/views/order_status/slice.yaml
   line: 19
   anchor: 'projections: []'
   why: An empty projections list is correct on this lane; the view owns a query, not a projector.
@@ -240,14 +240,14 @@ must_not_find:
   not_gates:
   - '2'
   - '16'
-  file: src/main/java/com/acme/shipping/use_cases/
+  file: src/main/java/com/example/shipping/use_cases/
   why: There is no use_cases/_shared/ here.
 - id: T11
   not_gates:
   - 8c
   - '2'
   - '14'
-  file: src/main/java/com/acme/shipping/routing/ShippingCommand.java
+  file: src/main/java/com/example/shipping/routing/ShippingCommand.java
   line: 5
   anchor: public interface ShippingCommand {
   why: >-
@@ -256,7 +256,7 @@ must_not_find:
 - id: T12
   not_gates:
   - 18c
-  file: src/main/java/com/acme/shipping/persistence/ShippingOrders.java
+  file: src/main/java/com/example/shipping/persistence/ShippingOrders.java
   line: 12
   anchor: Optional<ShippingOrder> findById(String id);
   symbol: ShippingOrders.findById
@@ -264,7 +264,7 @@ must_not_find:
 - id: T13
   not_gates:
   - 18c
-  file: src/main/java/com/acme/shipping/views/order_status/OrderStatusQueries.java
+  file: src/main/java/com/example/shipping/views/order_status/OrderStatusQueries.java
   line: 16
   anchor: Optional<OrderStatusView> findByOrderId(String orderId);
   symbol: OrderStatusQueries.findByOrderId
@@ -272,14 +272,14 @@ must_not_find:
 - id: T14
   not_gates:
   - 18a
-  file: src/main/java/com/acme/shipping/views/order_status/OrderStatusQueries.java
+  file: src/main/java/com/example/shipping/views/order_status/OrderStatusQueries.java
   line: 10
   anchor: public interface OrderStatusQueries extends Repository<ShippingOrder, String> {
   why: It already extends the bare Repository marker; finding 9 is on ShippingOrders.
 - id: T15
   not_gates:
   - 18b
-  file: src/main/java/com/acme/shipping/persistence/ShippingOrders.java
+  file: src/main/java/com/example/shipping/persistence/ShippingOrders.java
   line: 16
   anchor: List<ShippingOrder> findByShipped(boolean shipped);
   why: 'Findings 3 and 6 must not be re-reported under 18(b): one defect, one finding, most specific gate.'
@@ -291,7 +291,7 @@ manifests:
   valid: 4
   tier: service-entity
   reads_via:
-    file: src/main/java/com/acme/shipping/views/order_status/slice.yaml
+    file: src/main/java/com/example/shipping/views/order_status/slice.yaml
     line: 18
     anchor: '- { name: ShippingOrder, via: OrderStatusQueries }'
     why: reads[].via is the existing property for a reader interface; suggesting a new readsVia is wrong
@@ -299,7 +299,7 @@ reader:
   conventions: mapping lines are the method-name line
   handlers:
   - slice: shipping.auto_ship
-    file: src/main/java/com/acme/shipping/automations/auto_ship/AutoShipProcessor.java
+    file: src/main/java/com/example/shipping/automations/auto_ship/AutoShipProcessor.java
     line: 25
     anchor: public void on(ShippingOrderRegistered event) {
     event: ShippingOrderRegistered
@@ -308,7 +308,7 @@ reader:
   dispatches:
   - slice: shipping.auto_ship
     command: ShipOrder
-    file: src/main/java/com/acme/shipping/automations/auto_ship/AutoShipProcessor.java
+    file: src/main/java/com/example/shipping/automations/auto_ship/AutoShipProcessor.java
     line: 26
     anchor: commandBus.sendAndDontWait(new ShipOrder(OrderId.of(event.orderId())));
   mappings:
@@ -318,7 +318,7 @@ reader:
     params: []
     optional_params:
     - shipped
-    file: src/main/java/com/acme/shipping/views/order_status/OrderStatusAPI.java
+    file: src/main/java/com/example/shipping/views/order_status/OrderStatusAPI.java
     line: 22
     anchor: public List<OrderStatusView> list(
   - slice: shipping.order_status
@@ -326,13 +326,13 @@ reader:
     route: /api/shipping/order-status
     params:
     - status
-    file: src/main/java/com/acme/shipping/views/order_status/OrderStatusAPI.java
+    file: src/main/java/com/example/shipping/views/order_status/OrderStatusAPI.java
     line: 27
     anchor: public List<OrderStatusView> byStatus(
   - slice: shipping.order_status
     method: GET
     route: /api/shipping/order-status/{orderId}
     params: []
-    file: src/main/java/com/acme/shipping/views/order_status/OrderStatusAPI.java
+    file: src/main/java/com/example/shipping/views/order_status/OrderStatusAPI.java
     line: 32
     anchor: public OrderStatusView get(

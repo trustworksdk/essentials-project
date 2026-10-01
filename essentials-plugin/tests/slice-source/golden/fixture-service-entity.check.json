@@ -10,7 +10,7 @@
   "lanes": [
     {
       "bc": "shipping",
-      "path": "src/main/*/com/acme/shipping",
+      "path": "src/main/*/com/example/shipping",
       "detected": "service-entity?",
       "signals": {
         "decider": 0,

@@ -306,7 +306,7 @@ class Behaviour(unittest.TestCase):
             "bcs": [{"name": "orders", "lane": {"detected": "decider"}}],
             "slices": [
                 {"id": "orders.place_order", "dir": "orders/use_cases/place_order",
-                 "package": "com.acme.orders.use_cases.place_order", "files": ["PlaceOrder.kt"]},
+                 "package": "com.example.orders.use_cases.place_order", "files": ["PlaceOrder.kt"]},
                 {"id": "orders.order_list", "dir": "elsewhere", "package": "p", "files": [],
                  "readModels": [{"name": "order_list", "store": None, "declaredIn": "x.kt", "line": 3,
                                  "columns": [{"name": "id", "type": "OrderId"}]}]},
@@ -338,7 +338,7 @@ class Behaviour(unittest.TestCase):
         data = json.loads(r.stdout)
         self.assertEqual(data["contexts"][0]["lane"], "decider")  # no manifest declares one
         place = next(s for s in data["slices"] if s["id"] == "orders.place_order")
-        self.assertEqual(place["package"], "com.acme.orders.use_cases.place_order")
+        self.assertEqual(place["package"], "com.example.orders.use_cases.place_order")
         self.assertNotIn("readModels", place)
         view = next(s for s in data["slices"] if s["id"] == "orders.order_list")
         self.assertEqual(view["readModels"], [{"name": "order_list", "store": None,

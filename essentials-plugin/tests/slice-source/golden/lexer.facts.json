@@ -8,10 +8,10 @@
   "bcs": [
     {
       "name": "edge",
-      "path": "src/main/*/com/acme/edge",
+      "path": "src/main/*/com/example/edge",
       "dirs": [
-        "src/main/java/com/acme/edge",
-        "src/main/kotlin/com/acme/edge"
+        "src/main/java/com/example/edge",
+        "src/main/kotlin/com/example/edge"
       ],
       "languages": [
         "java",
@@ -38,13 +38,13 @@
       "id": "edge.java_edge",
       "idSource": "directory",
       "bc": "edge",
-      "bcPath": "src/main/*/com/acme/edge",
-      "dir": "src/main/java/com/acme/edge/views/java_edge",
+      "bcPath": "src/main/*/com/example/edge",
+      "dir": "src/main/java/com/example/edge/views/java_edge",
       "role": "views",
       "kind": "view",
       "manifest": null,
       "language": "java",
-      "package": "com.acme.edge.views.java_edge",
+      "package": "com.example.edge.views.java_edge",
       "files": [
         "JavaEdge.java"
       ],
@@ -56,13 +56,13 @@
           "annotation": "MessageHandler",
           "annotationFqn": "dk.trustworks.essentials.components.foundation.messaging.MessageHandler",
           "role": "event",
-          "file": "src/main/java/com/acme/edge/views/java_edge/JavaEdge.java",
+          "file": "src/main/java/com/example/edge/views/java_edge/JavaEdge.java",
           "line": 51,
           "annotationLine": 50,
           "message": {
             "written": "Ponged",
             "name": "Ponged",
-            "fqn": "com.acme.edge.events.Ponged",
+            "fqn": "com.example.edge.events.Ponged",
             "resolvedBy": "import"
           },
           "params": [
@@ -82,7 +82,7 @@
         {
           "class": "JavaEdge",
           "method": "edge",
-          "file": "src/main/java/com/acme/edge/views/java_edge/JavaEdge.java",
+          "file": "src/main/java/com/example/edge/views/java_edge/JavaEdge.java",
           "line": 44,
           "annotationLine": 43,
           "annotation": "GetMapping",
@@ -101,7 +101,7 @@
       "schedules": [],
       "notAnalysed": [
         {
-          "file": "src/main/java/com/acme/edge/views/java_edge/JavaEdge.java",
+          "file": "src/main/java/com/example/edge/views/java_edge/JavaEdge.java",
           "line": 28,
           "kind": "handlers",
           "reason": "@MessageHandler in an anonymous class or object expression is not attributed to a class of the slice"
@@ -113,13 +113,13 @@
       "id": "edge.kotlin_edge",
       "idSource": "directory",
       "bc": "edge",
-      "bcPath": "src/main/*/com/acme/edge",
-      "dir": "src/main/kotlin/com/acme/edge/views/kotlin_edge",
+      "bcPath": "src/main/*/com/example/edge",
+      "dir": "src/main/kotlin/com/example/edge/views/kotlin_edge",
       "role": "views",
       "kind": "view",
       "manifest": null,
       "language": "kotlin",
-      "package": "com.acme.edge.views.kotlin_edge",
+      "package": "com.example.edge.views.kotlin_edge",
       "files": [
         "KotlinEdge.kt"
       ],
@@ -131,13 +131,13 @@
           "annotation": "MessageHandler",
           "annotationFqn": "dk.trustworks.essentials.components.foundation.messaging.MessageHandler",
           "role": "event",
-          "file": "src/main/kotlin/com/acme/edge/views/kotlin_edge/KotlinEdge.kt",
+          "file": "src/main/kotlin/com/example/edge/views/kotlin_edge/KotlinEdge.kt",
           "line": 76,
           "annotationLine": 75,
           "message": {
             "written": "Handled",
             "name": "Pinged",
-            "fqn": "com.acme.edge.events.Pinged",
+            "fqn": "com.example.edge.events.Pinged",
             "resolvedBy": "typealias"
           },
           "params": [
@@ -154,13 +154,13 @@
           "annotation": "MessageHandler",
           "annotationFqn": "dk.trustworks.essentials.components.foundation.messaging.MessageHandler",
           "role": "event",
-          "file": "src/main/kotlin/com/acme/edge/views/kotlin_edge/KotlinEdge.kt",
+          "file": "src/main/kotlin/com/example/edge/views/kotlin_edge/KotlinEdge.kt",
           "line": 53,
           "annotationLine": 52,
           "message": {
             "written": "Pong",
             "name": "Ponged",
-            "fqn": "com.acme.edge.events.Ponged",
+            "fqn": "com.example.edge.events.Ponged",
             "resolvedBy": "alias"
           },
           "params": [
@@ -180,7 +180,7 @@
         {
           "class": "KotlinEdge",
           "method": "edge",
-          "file": "src/main/kotlin/com/acme/edge/views/kotlin_edge/KotlinEdge.kt",
+          "file": "src/main/kotlin/com/example/edge/views/kotlin_edge/KotlinEdge.kt",
           "line": 43,
           "annotationLine": 42,
           "annotation": "GetMapping",
@@ -199,7 +199,7 @@
       "schedules": [],
       "notAnalysed": [
         {
-          "file": "src/main/kotlin/com/acme/edge/views/kotlin_edge/KotlinEdge.kt",
+          "file": "src/main/kotlin/com/example/edge/views/kotlin_edge/KotlinEdge.kt",
           "line": 25,
           "kind": "handlers",
           "reason": "@MessageHandler in an anonymous class or object expression is not attributed to a class of the slice"
@@ -218,7 +218,7 @@
       "fields": [
         "pingId: String"
       ],
-      "declaredIn": "src/main/java/com/acme/edge/events/Pinged.java",
+      "declaredIn": "src/main/java/com/example/edge/events/Pinged.java",
       "line": 3,
       "alsoDeclaredIn": []
     },
@@ -231,7 +231,7 @@
       "fields": [
         "pongId: String"
       ],
-      "declaredIn": "src/main/java/com/acme/edge/events/Ponged.java",
+      "declaredIn": "src/main/java/com/example/edge/events/Ponged.java",
       "line": 3,
       "alsoDeclaredIn": []
     }

@@ -30,7 +30,7 @@
 fixture: worked-example
 language: kotlin
 placeholders:
-  packagePath: rendered to com.acme.shop only in a compile overlay; left as is here
+  packagePath: rendered to com.example.shop only in a compile overlay; left as is here
 runs:
 - command: /essentials:slice-check
   args: essentials-plugin/tests/fixtures/worked-example

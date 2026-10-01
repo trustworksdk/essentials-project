@@ -29,7 +29,7 @@
 cases:
 - id: b-filter-by-sku
   fixture: tests/fixtures/worked-example
-  set: {packagePath: com.acme.shop}
+  set: {packagePath: com.example.shop}
   request: I also need to list the orders for one SKU.
   class: B
   slices: [orders.order_list]
@@ -45,7 +45,7 @@ cases:
 
 - id: ask-support-cancel
   fixture: tests/fixtures/worked-example
-  set: {packagePath: com.acme.shop}
+  set: {packagePath: com.example.shop}
   request: Let support staff cancel an order.
   class: ask
   slices: [orders.cancel_order]
@@ -60,7 +60,7 @@ cases:
 
 - id: a-amend-quantity
   fixture: tests/fixtures/worked-example
-  set: {packagePath: com.acme.shop}
+  set: {packagePath: com.example.shop}
   request: Customers should be able to change the quantity of an order until it is cancelled.
   class: A
   slices: []
@@ -76,7 +76,7 @@ cases:
 
 - id: a-sku-totals-view
   fixture: tests/fixtures/worked-example
-  set: {packagePath: com.acme.shop}
+  set: {packagePath: com.example.shop}
   request: Add a screen showing the total ordered quantity per SKU.
   class: A
   slices: []
@@ -91,7 +91,7 @@ cases:
 
 - id: c-rename-sku
   fixture: tests/fixtures/worked-example
-  set: {packagePath: com.acme.shop}
+  set: {packagePath: com.example.shop}
   request: Rename the order's `sku` field to `productCode` everywhere.
   class: C
   slices: [orders.place_order, orders.order_list, orders.warehouse]
@@ -110,7 +110,7 @@ cases:
 
 - id: d-cancelled-at
   fixture: tests/fixtures/worked-example
-  set: {packagePath: com.acme.shop}
+  set: {packagePath: com.example.shop}
   request: The order list should also show when each order was cancelled.
   class: [D, C]
   slices: [orders.order_list]
@@ -125,7 +125,7 @@ cases:
 
 - id: e-debug-logging
   fixture: tests/fixtures/worked-example
-  set: {packagePath: com.acme.shop}
+  set: {packagePath: com.example.shop}
   request: Turn on DEBUG logging for the orders package in the application config.
   class: E
   slices: []
@@ -140,7 +140,7 @@ cases:
 
 - id: b-screening-inclusive
   fixture: tests/fixtures/worked-example
-  set: {packagePath: com.acme.shop}
+  set: {packagePath: com.example.shop}
   request: >-
     Bug: an order of exactly 100 units gets through screening, but the limit is meant to be inclusive — 100 or
     more must be cancelled.
@@ -159,7 +159,7 @@ cases:
 
 - id: retire-screening
   fixture: tests/fixtures/worked-example
-  set: {packagePath: com.acme.shop}
+  set: {packagePath: com.example.shop}
   request: We don't need order screening any more — get rid of it.
   class: null
   slices: [orders.screen_order]
@@ -172,7 +172,7 @@ cases:
 
 - id: c-rejected-event
   fixture: tests/fixtures/worked-example
-  set: {packagePath: com.acme.shop}
+  set: {packagePath: com.example.shop}
   request: When screening cancels an order, record it as its own OrderRejected event instead of OrderCancelled.
   class: [C, A]
   slices: [orders.screen_order]
@@ -186,7 +186,7 @@ cases:
 
 - id: b-warehouse-cancel
   fixture: tests/fixtures/worked-example
-  set: {packagePath: com.acme.shop}
+  set: {packagePath: com.example.shop}
   request: Tell the warehouse when an order is cancelled.
   class: B
   slices: [orders.warehouse]
@@ -200,7 +200,7 @@ cases:
 
 - id: helper-pushback
   fixture: tests/fixtures/worked-example
-  set: {packagePath: com.acme.shop}
+  set: {packagePath: com.example.shop}
   request: place_order and cancel_order both check the order id — pull that into a shared OrderValidationHelper.
   class: null
   slices: []
@@ -216,7 +216,7 @@ cases:
 
 - id: dto-pushback
   fixture: tests/fixtures/worked-example
-  set: {packagePath: com.acme.shop}
+  set: {packagePath: com.example.shop}
   request: >-
     Add a PlaceOrderRequest DTO and a mapper for the place-order endpoint, so the API does not expose the command
     type.
@@ -231,7 +231,7 @@ cases:
 
 - id: b-order-by-id
   fixture: tests/fixtures/worked-example
-  set: {packagePath: com.acme.shop}
+  set: {packagePath: com.example.shop}
   request: Add an endpoint that returns a single order from the order list by its id.
   class: B
   slices: [orders.order_list]
@@ -270,7 +270,7 @@ cases:
     CustomerService method that updates Customer — and not as a slice.
   no_creates: ['**/slice.yaml', '**/use_cases/**']
   file_regex:
-  - path: src/main/java/com/acme/crm/controller/CustomerController.java
+  - path: src/main/java/com/example/crm/controller/CustomerController.java
     pattern: '@(?:Put|Patch|Post)Mapping\([^)]*name'
     match: contains
     flags: i

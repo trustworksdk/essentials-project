@@ -6,7 +6,7 @@ type: llm
 The agent's final message is the report `/essentials:slice-check` printed for a test project. Paths in it are relative to the project root, and a report may cite a file by path, by `path:line`, or by its type or directory name.
 
 PASS if the report contains a finding that matches all of:
-- it concerns `src/main/java/com/acme/shipping/persistence/ShippingOrders.java`
+- it concerns `src/main/java/com/example/shipping/persistence/ShippingOrders.java`
 - it is filed under gate 18a (Spring Data repository surface), id ESS-G18a, or plainly describes that check
 - its severity is Should-fix
 - its substance: The write repository extends JpaRepository rather than the bare Repository marker.
