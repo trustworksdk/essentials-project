@@ -9,6 +9,7 @@
 - **Key class**: `SpringTransactionAwareEventStoreUnitOfWorkFactory`
 - **Enables**: EventStore operations participate in `@Transactional` boundaries
 - **Status**: WORK-IN-PROGRESS
+- **Gap handling**: not wired here - this module only adds Spring transaction integration. The gap handler bean and its overrides are in the starter: [LLM-spring-boot-starter-modules.md](./LLM-spring-boot-starter-modules.md#gap-handling)
 
 ```xml
 <dependency>

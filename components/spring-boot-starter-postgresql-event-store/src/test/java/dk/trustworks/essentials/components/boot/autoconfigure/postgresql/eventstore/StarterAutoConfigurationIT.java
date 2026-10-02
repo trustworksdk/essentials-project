@@ -16,7 +16,11 @@
 
 package dk.trustworks.essentials.components.boot.autoconfigure.postgresql.eventstore;
 
-import dk.trustworks.essentials.components.boot.autoconfigure.postgresql.EssentialsComponentsConfiguration;
+import dk.trustworks.essentials.components.boot.autoconfigure.postgresql.*;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.gap.*;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.persistence.table_per_aggregate_type.SeparateTablePerAggregateEventStreamConfiguration;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.transaction.*;
+import org.springframework.context.annotation.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.cdc.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.api.*;
@@ -248,6 +252,45 @@ public class StarterAutoConfigurationIT {
                     assertThat(eventStore).isSameAs(ctx.getBean("essentialsEventStore"));
                     assertThat(ctx.getBean(ConfigurableEventStore.class)).isSameAs(eventStore);
                 });
+    }
+
+    @Test
+    void the_default_event_stream_gap_handler_is_the_postgresql_one() {
+        contextRunner.run(ctx -> assertThat(ctx.getBean(EventStreamGapHandler.class)).isInstanceOf(PostgresqlEventStreamGapHandler.class));
+    }
+
+    /**
+     * Pins the override documented in the starter README ("Gap handling"): a consumer-supplied
+     * {@code EventStreamGapHandler<SeparateTablePerAggregateEventStreamConfiguration>} bean replaces the default and is
+     * the one the event store is built on.
+     */
+    @Test
+    void a_consumer_event_stream_gap_handler_bean_replaces_the_default() {
+        contextRunner
+                .withUserConfiguration(CustomGapHandlerConfiguration.class)
+                .run(ctx -> {
+                    var gapHandler = ctx.getBean(EventStreamGapHandler.class);
+                    assertThat(ctx.getBeansOfType(EventStreamGapHandler.class)).hasSize(1);
+                    assertThat(gapHandler).isSameAs(CustomGapHandlerConfiguration.INSTANCE.get());
+                });
+    }
+
+    @Configuration(proxyBeanMethods = false)
+    static class CustomGapHandlerConfiguration {
+        static final java.util.concurrent.atomic.AtomicReference<EventStreamGapHandler<SeparateTablePerAggregateEventStreamConfiguration>> INSTANCE = new java.util.concurrent.atomic.AtomicReference<>();
+
+        @Bean
+        EventStreamGapHandler<SeparateTablePerAggregateEventStreamConfiguration> eventStreamGapHandler(EventStoreUnitOfWorkFactory<? extends EventStoreUnitOfWork> unitOfWorkFactory,
+                                                                                                         EssentialsComponentsProperties properties) {
+            var gapHandler = new PostgresqlEventStreamGapHandler<SeparateTablePerAggregateEventStreamConfiguration>(
+                    unitOfWorkFactory,
+                    Duration.ofSeconds(60),
+                    (aggregateType, queryRange, allTransientGaps) -> allTransientGaps.stream().map(gap -> gap._1).limit(50).toList(),
+                    PostgresqlEventStreamGapHandler.ResolveTransientGapsToPermanentGapsPromotionStrategy.thresholdBased(300),
+                    properties.getSchema().getMode().schemaOwnership());
+            INSTANCE.set(gapHandler);
+            return gapHandler;
+        }
     }
 
     @Test

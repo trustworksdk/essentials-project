@@ -353,6 +353,38 @@ Prefix: `essentials.eventstore`
 
 See [postgresql-event-store: Flush Publishing](https://github.com/trustworksdk/essentials-project/blob/0.60.0/components/postgresql-event-store/README.md#flush-publishing)
 
+#### Gap Handling
+
+Full section: [starter README: Gap Handling](https://github.com/trustworksdk/essentials-project/blob/0.60.0/components/spring-boot-starter-postgresql-event-store/README.md#gap-handling). Mechanics, gap types: [postgresql-event-store README](https://github.com/trustworksdk/essentials-project/blob/0.60.0/components/postgresql-event-store/README.md#gap-handling), [LLM-postgresql-event-store.md](LLM-postgresql-event-store.md#gap-handling). `spring-postgresql-event-store` wires no gap handling.
+
+- `use-event-stream-gap-handler=true` (default): `PostgresqlEventStore` is built on the `EventStreamGapHandler` bean; `false`: on `NoEventStreamGapHandler` (bean still created, CDC beans take it)
+- Default bean `EventStreamGapHandler<SeparateTablePerAggregateEventStreamConfiguration>` is `@ConditionalOnMissingBean`: `PostgresqlEventStreamGapHandler(unitOfWorkFactory, schemaOwnership)` = 60 s transient-gap cache refresh, 120 s permanent-gap threshold, default per-poll selection
+- Per poll (default selection): every open transient gap up to 50; beyond that the 20 highest + 10 lowest + rotating window of 20. Transient gaps are per subscriber, permanent gaps per `AggregateType`. Tenant-filtered subscriptions filter in memory, so other tenants' orders are never gaps
+- A gap is resolved only once its filling event was handled: `EventStoreSubscriptionManager` subscriptions acknowledge via `SubscriberAcknowledgement` inside the handler's unit of work, so a stop or crash redelivers the fill. **Handlers must tolerate redelivery**
+- `GlobalEventOrder` is not delivered in strict sequence. Never dedupe by "highest seen" (trap `ESS-116` in [LLM-traps.md](LLM-traps.md))
+- Gap statistics: `SubscriptionStatistics.gaps()` (`newTransientGaps`, `resolvedTransientGaps`, `promotedToPermanentGaps`) while `subscription-manager.statistics.enabled=true` (default)
+- Reset permanent gaps: `eventStreamGapHandler.resetPermanentGapsFor(AggregateType)` (overloads: `LongRange`, `List<GlobalEventOrder>`)
+
+Override (consumer bean replaces the default; the event store, `CdcDispatcher` and `CdcEventStore` all use it). `ResolveTransientGapsToIncludeInQueryStrategy` and `ResolveTransientGapsToPermanentGapsPromotionStrategy` are nested in `PostgresqlEventStreamGapHandler`:
+
+```java
+@Bean
+EventStreamGapHandler<SeparateTablePerAggregateEventStreamConfiguration> eventStreamGapHandler(
+        EventStoreUnitOfWorkFactory<? extends EventStoreUnitOfWork> unitOfWorkFactory,
+        EssentialsComponentsProperties properties) {
+    return new PostgresqlEventStreamGapHandler<>(
+            unitOfWorkFactory,
+            Duration.ofSeconds(60),   // transient-gap cache refresh
+            (aggregateType, queryRange, allTransientGaps) -> allTransientGaps.stream().map(gap -> gap._1).limit(50).toList(),
+            PostgresqlEventStreamGapHandler.ResolveTransientGapsToPermanentGapsPromotionStrategy.thresholdBased(300),
+            properties.getSchema().getMode().schemaOwnership());   // never omit: shorter constructors run DDL even in schema.mode=validate
+}
+```
+
+#### CDC
+
+Prefix: `essentials.eventstore.cdc`. **Disabled by default** (`enabled=false`; every CDC bean is gated on `enabled=true`, no `matchIfMissing`): no slot, no publication changes, no tailer, polling as before. Opt in with `essentials.eventstore.cdc.enabled=true`; then `mode=auto` (falls back to polling if CDC cannot start), `delivery-mode=inbox`, `plugin=pgoutput`. All properties carry descriptions and defaults in the starter's `spring-configuration-metadata.json`. Details: [starter README: CDC Configuration](https://github.com/trustworksdk/essentials-project/blob/0.60.0/components/spring-boot-starter-postgresql-event-store/README.md#cdc-configuration-hybrid-logical-replication), [LLM-postgresql-event-store.md](LLM-postgresql-event-store.md).
+
 #### Subscription Manager
 
 Prefix: `essentials.eventstore.subscription-manager`

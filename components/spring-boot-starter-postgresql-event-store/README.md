@@ -14,7 +14,8 @@ Spring Boot auto-configuration for the PostgreSQL Event Store and all PostgreSQL
 - [Auto-Configured Beans](#auto-configured-beans)
 - [Configuration Properties](#configuration-properties)
   - [Event Store Configuration](#event-store-configuration)
-  - [CDC Configuration (Hybrid wal2json)](#cdc-configuration-hybrid-wal2json)
+  - [Gap Handling](#gap-handling)
+  - [CDC Configuration (Hybrid Logical Replication)](#cdc-configuration-hybrid-logical-replication)
   - [Subscription Manager Configuration](#subscription-manager-configuration)
   - [Subscription Monitor Configuration](#subscription-monitor-configuration)
   - [Event Store Metrics Configuration](#event-store-metrics-configuration)
@@ -170,7 +171,7 @@ essentials.eventstore.auto-flush-and-publish-after-append-to-stream=false
 |----------|---------|----------------------------------------------------------------------------------------------------------------------------------------------------------------------|
 | `identifier-column-type` | `text` | How aggregate IDs are stored: `text` (any string) or `uuid` (optimized for UUID values)                                                                              |
 | `json-column-type` | `jsonb` | How events are stored: `jsonb` (queryable, slightly slower writes) or `json` (faster writes, no indexing)                                                            |
-| `use-event-stream-gap-handler` | `true` | Whether to detect and handle gaps in event sequences (can happen during concurrent writes). Disable only if you don't need strict ordering guarantees                |
+| `use-event-stream-gap-handler` | `true` | Whether to detect and handle gaps in `GlobalEventOrder` (can happen during concurrent writes). See [Gap Handling](#gap-handling) before turning it off                |
 | `verbose-tracing` | `false` | When `true`, traces include low-level operations. When `false`, only high-level operations are traced                                                                |
 | `add-annotation-based-in-memory-projector` | `true` | Auto-register the projector that supports `@EventHandler` methods on POJOs - See [In-Memory Projections](../eventsourced-aggregates/README.md#in-memory-projections) |
 | `auto-flush-and-publish-after-append-to-stream` | `false` | **Flush Publishing** - Publish events immediately after `appendToStream()` instead of waiting for commit. See [Flush Publishing](#flush-publishing)                  |
@@ -184,6 +185,55 @@ Controls *when* in-transaction subscribers receive events. See [postgresql-event
 | `false` (default) | Events published at `BeforeCommit` and `AfterCommit`. Subscribers receive all events from a transaction together, just before it commits |
 | `true` | Events *also* published immediately after each `appendToStream()` call. Use this when subscribers need to react to each event individually within the same transaction (e.g., saga coordination) |
 
+### Gap Handling
+
+A **gap** is a `GlobalEventOrder` that is missing from what a subscription just read, typically because the transaction that took it has not committed yet. A **transient** gap may still be filled when that transaction commits; one that stays open past the promotion threshold (120 seconds by default) becomes **permanent** (the transaction was most likely rolled back) and is no longer waited for. The mechanics, the gap types and their behavior are documented in [postgresql-event-store: Gap Handling](../postgresql-event-store/README.md#gap-handling) (see "Gap Types" and "Behavior"); this section covers what the starter wires and how to change it. `spring-postgresql-event-store` only adds Spring transaction integration and wires no gap handling itself.
+
+**What the starter wires**
+
+| Piece | Default | Notes |
+|-------|---------|-------|
+| `essentials.eventstore.use-event-stream-gap-handler` | `true` | `true`: the `PostgresqlEventStore` is built on the `EventStreamGapHandler` bean. `false`: it is built on `NoEventStreamGapHandler`, so polling subscriptions track no gaps at all. The `EventStreamGapHandler` bean itself is still created (the CDC beans take it) |
+| `EventStreamGapHandler<SeparateTablePerAggregateEventStreamConfiguration>` bean | `PostgresqlEventStreamGapHandler`, 60 s refresh of its transient-gap cache, 120 s permanent-gap threshold, default per-poll gap selection | `@ConditionalOnMissingBean`. Schema ownership follows `essentials.schema.mode` |
+| Gap statistics | collected | Per subscription, as `SubscriptionStatistics.gaps()` (`newTransientGaps`, `resolvedTransientGaps`, `promotedToPermanentGaps`), while `essentials.eventstore.subscription-manager.statistics.enabled` is `true` (the default). Also exposed through the admin API |
+
+**How gaps are handled in 0.60**
+
+- Each poll asks again for the subscriber's open transient gaps. With the default handler that is every open gap up to 50; beyond 50, the 20 highest, the 10 lowest and a rotating window of 20 in between, so a poll never carries more than 50 gap orders.
+- Transient gaps are per subscriber; permanent gaps are shared by every subscriber of the `AggregateType` (and can be reset, see below).
+- A tenant-filtered subscription loads every tenant's events in the polled range and filters by tenant in memory, so other tenants' global orders are never mistaken for gaps. This holds for polling and for CDC.
+- A gap is resolved only once the event that fills it has been **handled**. Subscriptions created by the `EventStoreSubscriptionManager` acknowledge each event through a `SubscriberAcknowledgement`, and the gap is deleted inside the handler's own unit of work, so a rolled-back handler leaves the gap open and a subscription that stops or crashes before handling the fill gets the event again after the restart.
+
+**Consequences for your handlers**
+
+- Handlers must tolerate redelivery of a gap-filling event.
+- `GlobalEventOrder` is **not** delivered in strict sequence across aggregates (polling when a gap fills, CDC whenever a lower order commits after a higher one). Never deduplicate in a handler by "the highest `GlobalEventOrder` seen so far": that drops exactly the late events. Deduplicate by event id, or rely on `EventOrder` per aggregate. This is trap `ESS-116` in [LLM-traps.md](../../LLM/LLM-traps.md).
+
+**Customizing**
+
+Define your own `EventStreamGapHandler<SeparateTablePerAggregateEventStreamConfiguration>` bean and the starter's default backs off. The event store, the CDC dispatcher and `CdcEventStore` then all use your bean. The `PostgresqlEventStreamGapHandler` constructor takes the strategies:
+
+```java
+@Bean
+EventStreamGapHandler<SeparateTablePerAggregateEventStreamConfiguration> eventStreamGapHandler(
+        EventStoreUnitOfWorkFactory<? extends EventStoreUnitOfWork> unitOfWorkFactory,
+        EssentialsComponentsProperties properties) {
+    return new PostgresqlEventStreamGapHandler<>(
+            unitOfWorkFactory,
+            Duration.ofSeconds(60),    // how often the transient-gap cache is refreshed from the database
+            // which transient gaps each poll asks for again (this one is deliberately naive: the first 50)
+            (aggregateType, queryRange, allTransientGaps) -> allTransientGaps.stream().map(gap -> gap._1).limit(50).toList(),
+            // when a transient gap is given up on and becomes permanent
+            PostgresqlEventStreamGapHandler.ResolveTransientGapsToPermanentGapsPromotionStrategy.thresholdBased(300),
+            properties.getSchema().getMode().schemaOwnership());   // keeps essentials.schema.mode honoured
+}
+```
+
+- `ResolveTransientGapsToIncludeInQueryStrategy` decides which transient gaps a poll asks for; `ResolveTransientGapsToPermanentGapsPromotionStrategy` decides when a gap becomes permanent (`thresholdBased(seconds)` is the built-in). Both are nested in `PostgresqlEventStreamGapHandler`. Keep the promotion threshold longer than your longest transaction.
+- Always pass `properties.getSchema().getMode().schemaOwnership()`; the shorter constructors default to `SchemaOwnership.COMPONENT` and would run DDL even in `essentials.schema.mode=validate`.
+- Reset permanent gaps (for example after data recovery) with `eventStreamGapHandler.resetPermanentGapsFor(AggregateType.of("Orders"))`; the overloads take a `LongRange` or a list of `GlobalEventOrder`.
+- Gaps are also covered by [LLM-postgresql-event-store.md](../../LLM/LLM-postgresql-event-store.md#gap-handling).
+
 ### CDC Configuration (Hybrid Logical Replication)
 
 > **Which delivery mechanism should I use?** Subscribers are always correct regardless —
@@ -191,29 +241,26 @@ Controls *when* in-transaction subscribers receive events. See [postgresql-event
 > See **[cdc.md §12.6 "Choosing a delivery mechanism"](../../docs/cdc.md)**
 > for the full comparison (plain/jittered/notify polling vs CDC INBOX/DIRECT, with indicative
 > latency and DB-load numbers). Quick guide:
-> - **Simplest, any Postgres, new project** → leave defaults (CDC `AUTO`, falls back to
->   jittered polling automatically if logical replication is unavailable).
+> - **Simplest, any Postgres, new project** → leave CDC off (the default) and run polling
+>   (jittered by default).
 > - **Latency-sensitive read models / high fan-out / want audit trail or replica-offload** →
->   CDC `INBOX` (the default).
-> - **Don't control the DB / no `wal_level=logical` / want minimal moving parts** → disable
->   CDC and run polling (see the upgrade note below).
+>   opt in with `essentials.eventstore.cdc.enabled=true`; the delivery mode is then `INBOX` (the
+>   default) and the startup mode `AUTO` (falls back to polling if CDC cannot start).
+> - **Don't control the DB / no `wal_level=logical` / want minimal moving parts** → leave CDC
+>   disabled.
 
-> **⚠️ Upgrade note (existing users).** CDC is **enabled by default**
-> (`essentials.eventstore.cdc.enabled` defaults to `true` — it starts unless you explicitly set
-> it `false`). Before this version the default delivery was **polling with jitter**. On upgrade:
-> - If your database does **not** have `wal_level=logical` (or you can't create slots), `mode=auto`
->   transparently falls back to the previous polling-with-jitter behaviour — no action needed, no
->   events lost.
-> - If your database **does** support logical replication, the app will now create a **replication
->   slot** and stream WAL — a real operational change (slot/publication management and WAL-retention
->   risk; see [cdc.md §5](../../docs/cdc.md)).
->
-> **To keep the pre-upgrade behaviour (polling with jitter), set:**
+> **CDC is disabled by default.** `essentials.eventstore.cdc.enabled` defaults to `false`, and
+> every CDC bean is gated on it being `true` with no `matchIfMissing`. An application that says
+> nothing about CDC gets no replication slot, no publication changes and no tailer: the event store
+> polls, exactly as before CDC existed. CDC's operational surface (replication slot, publication,
+> WAL retention; see [cdc.md §5](../../docs/cdc.md)) is heavier than polling, so adopt it
+> deliberately:
 > ```properties
-> essentials.eventstore.cdc.enabled=false
+> essentials.eventstore.cdc.enabled=true
 > ```
-> CDC's operational surface (replication slot, publication, WAL retention) is heavier than polling,
-> so adopt it deliberately rather than inheriting it on upgrade.
+> Once enabled, if your database does **not** have `wal_level=logical` (or you can't create slots),
+> `mode=auto` keeps the application up with subscribers on polling - no events are lost, but check
+> `/actuator/health/cdc` so a broken CDC setup does not go unnoticed.
 
 Hybrid CDC can run in durable inbox mode (`INBOX`) or direct publish mode (`DIRECT`):
 
@@ -235,12 +282,12 @@ Tuning baseline (good starting point from perf-lab runs):
 essentials.eventstore.cdc.cdc-event-store-backfill-batch-size=1000
 essentials.eventstore.cdc.cdc-dispatcher.batch-size=200
 essentials.eventstore.cdc.cdc-dispatcher.poll-interval=PT0.05S
-essentials.eventstore.cdc.wal2-json-tailer.poll-interval=PT0.025S
+essentials.eventstore.cdc.wal-replication-tailer.poll-interval=PT0.025S
 ```
 
 | Property | Default | What It Controls |
 |----------|---------|------------------|
-| `essentials.eventstore.cdc.enabled` | `true` | Enables CDC beans (`WalReplicationTailer`, `CdcDispatcher`, `CdcEventStore`) |
+| `essentials.eventstore.cdc.enabled` | `false` | Opt-in. Enables CDC beans (`WalReplicationTailer`, `CdcDispatcher`, `CdcEventStore`) |
 | `essentials.eventstore.cdc.mode` | `auto` | `auto`: fallback to polling if CDC cannot start. `require`: fail startup if CDC cannot start |
 | `essentials.eventstore.cdc.delivery-mode` | `inbox` | `inbox`: durable inbox + dispatcher. `direct`: tailer converts and publishes directly (no inbox persistence, dispatcher idle) |
 | `essentials.eventstore.cdc.plugin` | `pgoutput` | Logical decoding plugin. `pgoutput` is the default; `wal2json` remains available for explicit use |

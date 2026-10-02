@@ -30,6 +30,7 @@ import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.ob
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.persistence.table_per_aggregate_type.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.subscription.*;
 import org.springframework.boot.context.properties.ConfigurationProperties;
+import org.springframework.boot.context.properties.NestedConfigurationProperty;
 import org.springframework.context.annotation.Configuration;
 
 import java.time.Duration;
@@ -268,6 +269,10 @@ public class EssentialsEventStoreProperties {
      *
      * @return the {@link CdcProperties} that contains the CDC configuration.
      */
+    // CdcProperties lives in postgresql-event-store, a dependency jar. spring-boot-configuration-processor only
+    // descends into a nested type from outside this compilation when told to, so without this annotation not a single
+    // essentials.eventstore.cdc.* property reaches META-INF/spring-configuration-metadata.json.
+    @NestedConfigurationProperty
     public CdcProperties getCdc() {
         return cdc;
     }
