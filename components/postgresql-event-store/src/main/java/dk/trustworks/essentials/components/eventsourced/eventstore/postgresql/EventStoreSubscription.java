@@ -117,8 +117,15 @@ public interface EventStoreSubscription extends Lifecycle, Subscription {
      * is started again (application restart, fenced-lock hand-over, {@link #resetFrom(GlobalEventOrder, Consumer)}, or
      * unsubscribe + subscribe), which resets it to false.
      * <p>
-     * This is the signal to alert on - a stopped subscription is otherwise indistinguishable from a healthy one with no
-     * new events. {@link #isActive()} deliberately stays unchanged by the stop: it answers "is the subscription running
+     * This is the state to alert on - a stopped subscription is otherwise indistinguishable from a healthy one with no
+     * new events. It is exported as the level-triggered gauge
+     * {@value dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.subscription.monitoring.SubscriptionStoppedMicrometerMonitor#SUBSCRIPTION_STOPPED_METRIC}
+     * ({@code 1} while stopped) by
+     * {@link dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.subscription.monitoring.SubscriptionStoppedMicrometerMonitor};
+     * alert on that gauge, not on the
+     * {@value dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.observability.micrometer.MeasurementEventStoreSubscriptionObserver#SUBSCRIPTION_STOPPED_BY_ERROR_POLICY_METRIC}
+     * counter, which only records that a stop happened.
+     * {@link #isActive()} deliberately stays unchanged by the stop: it answers "is the subscription running
      * in this instance" (for an exclusive subscription "does it hold the fenced lock"), and a stopped subscription still
      * is - it keeps its lock on purpose, so the event does not flap to another node that would fail the same way, and
      * the subscription manager's periodic checkpoint saves the resume points of active subscriptions only - it is what

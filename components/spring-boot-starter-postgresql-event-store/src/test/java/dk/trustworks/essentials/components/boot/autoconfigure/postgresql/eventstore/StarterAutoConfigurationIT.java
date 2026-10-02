@@ -23,6 +23,7 @@ import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.ap
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.observability.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.observability.micrometer.MeasurementEventStoreSubscriptionObserver;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.subscription.*;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.subscription.monitoring.*;
 import dk.trustworks.essentials.shared.security.EssentialsSecurityProvider;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
@@ -288,6 +289,23 @@ public class StarterAutoConfigurationIT {
                     assertThat(health.getStatus()).isEqualTo(Status.DOWN);
                     assertThat(health.getDetails()).containsEntry("state", CdcAvailability.State.FAILED.name());
                     assertThat(health.getDetails()).containsEntry("mode", CdcMode.REQUIRE.name());
+                });
+    }
+
+    /**
+     * The stopped-subscription gauge is the alerting signal for a halted projection, so - like the
+     * {@code stopped_by_error_policy} counter - it must not depend on {@code management.tracing.enabled}, which gates
+     * {@link SubscriberGlobalOrderMicrometerMonitor}.
+     */
+    @Test
+    void the_subscription_stopped_monitor_is_wired_without_tracing() {
+        contextRunner
+                .withBean(MeterRegistry.class, SimpleMeterRegistry::new)
+                .run(ctx -> {
+                    assertThat(ctx).hasSingleBean(SubscriptionStoppedMicrometerMonitor.class);
+                    assertThat(ctx).doesNotHaveBean(SubscriberGlobalOrderMicrometerMonitor.class);
+                    assertThat(ctx.getBeansOfType(EventStoreSubscriptionMonitor.class).values())
+                            .containsExactly(ctx.getBean(SubscriptionStoppedMicrometerMonitor.class));
                 });
     }
 

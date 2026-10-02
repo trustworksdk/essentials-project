@@ -61,10 +61,15 @@ public class MeasurementEventStoreSubscriptionObserver implements EventStoreSubs
     public static final  String           HANDLE_EVENT_TRANSACTIONAL_FAILED_METRIC = "essentials.eventstore.subscription.handle_event_transactional_failed";
     /**
      * Counter of asynchronous subscriptions that stopped handling events because their {@link SubscriptionErrorPolicy} is
-     * {@link SubscriptionErrorPolicy.Mode#STOP} - one per stop. A stopped subscription stays stopped until it is started
-     * again, so any increase means a projection has halted. Tags: {@code subscriber_id}, {@code aggregate_type} and the
-     * optional {@value #MODULE_TAG_NAME}. Whether a subscription is stopped right now is
-     * {@link EventStoreSubscription#isStoppedByErrorPolicy()}
+     * {@link SubscriptionErrorPolicy.Mode#STOP} - one per stop. Tags: {@code subscriber_id}, {@code aggregate_type} and the
+     * optional {@value #MODULE_TAG_NAME}.
+     * <p>
+     * Not the signal to alert on: a counter records that a stop happened, not that a subscription is stopped now -
+     * {@code increase(...) > 0} resolves while the subscription is still stopped, and {@code > 0} keeps firing after it has
+     * been started again. Whether a subscription is stopped right now is {@link EventStoreSubscription#isStoppedByErrorPolicy()},
+     * exported as the level-triggered gauge
+     * {@value dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.subscription.monitoring.SubscriptionStoppedMicrometerMonitor#SUBSCRIPTION_STOPPED_METRIC}
+     * by {@link dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.subscription.monitoring.SubscriptionStoppedMicrometerMonitor}
      */
     public static final  String           SUBSCRIPTION_STOPPED_BY_ERROR_POLICY_METRIC = "essentials.eventstore.subscription.stopped_by_error_policy";
 

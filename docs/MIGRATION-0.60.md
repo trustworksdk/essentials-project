@@ -781,8 +781,11 @@ subscription logs a non-I/O handler failure at ERROR and moves past the event fo
 `stop()` per `EventStoreSubscriptionManager` (Spring Boot:
 `essentials.eventstore.subscription-manager.error-policy.mode=retry-n-then-skip|stop`) where a missed event matters.
 
-**What to do:** alert on `essentials.eventstore.subscription.handle_event_failed`, and with `stop()` on
-`essentials.eventstore.subscription.stopped_by_error_policy` or `EventStoreSubscription#isStoppedByErrorPolicy()`.
+**What to do:** alert on `essentials.eventstore.subscription.handle_event_failed`, and with `stop()` on the gauge
+`essentials.eventstore.subscription.stopped` (`1` while stopped; outside Spring Boot add a
+`SubscriptionStoppedMicrometerMonitor` to your `EventStoreSubscriptionMonitorManager`) or
+`EventStoreSubscription#isStoppedByErrorPolicy()` - not on the `stopped_by_error_policy` counter, which only records
+that a stop happened.
 Don't use `isActive()` to detect a stopped subscription: it stays `true`. If you construct
 `MeasurementEventStoreSubscriptionObserver` yourself, use the 3-argument constructor with your `MeterRegistry` to get
 the counters. Details: [README § Subscription Error Policy](../components/postgresql-event-store/README.md#subscription-error-policy).

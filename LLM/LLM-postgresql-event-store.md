@@ -1012,7 +1012,7 @@ Observability for `EventStore` operations and subscription lifecycle.
 | `handleEventFailed(PersistedEvent, PersistedEventHandler, Throwable, EventStoreSubscription)` | Async `PersistedEventHandler` failed and the `SubscriptionErrorPolicy` gave up (event about to be skipped, or stopped at) |
 | `handleEventBatchFailed(List<PersistedEvent>, BatchedPersistedEventHandler, Throwable, EventStoreSubscription)` | Same for a `BatchedPersistedEventHandler` - batch failures arrive **here, not** in `handleEventFailed`. Default no-op |
 | `handleEventFailed(PersistedEvent, TransactionalPersistedEventHandler, Throwable, EventStoreSubscription)` | In-transaction handler failed (the exception then rolls back the caller) |
-| `subscriptionStoppedByErrorPolicy(GlobalEventOrder stoppedAtGlobalEventOrder, Throwable cause, EventStoreSubscription)` | A `stop()` policy halted an async subscription. Once per stop, after the failure callback, with `isStoppedByErrorPolicy()` already `true`; for a batch, `stoppedAtGlobalEventOrder` is the batch's first event. Default no-op. The alertable signal - the failure callbacks also fire for skipped events |
+| `subscriptionStoppedByErrorPolicy(GlobalEventOrder stoppedAtGlobalEventOrder, Throwable cause, EventStoreSubscription)` | A `stop()` policy halted an async subscription. Once per stop, after the failure callback, with `isStoppedByErrorPolicy()` already `true`; for a batch, `stoppedAtGlobalEventOrder` is the batch's first event. Default no-op. Unlike the failure callbacks it fires for stops only, never for skipped events. To alert, use the `essentials.eventstore.subscription.stopped` gauge (below) |
 
 None of them fires for an event whose retries were abandoned because the subscription was being stopped - it is handled again on restart.
 
@@ -1045,7 +1045,29 @@ the Spring Boot starter always passes its `MeterRegistry`.
 |---------|--------|------|
 | `essentials.eventstore.subscription.handle_event_failed` | Async events given up on - skipped or stopped at, see [Direct async subscribers skip a failing event by default](#direct-async-subscribers-skip-a-failing-event-by-default). A failed batch counts each event | `subscriber_id`, `aggregate_type`, `event_handler`, `event_type`, optional `Module` |
 | `essentials.eventstore.subscription.handle_event_transactional_failed` | In-transaction handler failures | same |
-| `essentials.eventstore.subscription.stopped_by_error_policy` | Async subscriptions halted by a `stop()` policy, one per stop | `subscriber_id`, `aggregate_type`, optional `Module` |
+| `essentials.eventstore.subscription.stopped_by_error_policy` | Async subscriptions halted by a `stop()` policy, one per stop - a history, **not** the alerting signal | `subscriber_id`, `aggregate_type`, optional `Module` |
+
+**Alert on the gauge, not the counter.** A counter records that a stop happened, not that a subscription is stopped
+now: `increase(...[window]) > 0` resolves while the projection is still halted, raw `> 0` keeps firing after a
+restart, `resetFrom` or fenced-lock hand-over started it again. `SubscriptionStoppedMicrometerMonitor` publishes the
+level-triggered gauge `essentials.eventstore.subscription.stopped` - `1` while `isStoppedByErrorPolicy()`, else `0`;
+tags `subscriber_id`, `aggregate_type`, optional `Module`. It is an `EventStoreSubscriptionMonitor`, so it is
+registered by `EventStoreSubscriptionMonitorManager` within one monitoring interval of the subscription becoming
+active, and read live on every scrape (an unsubscribed subscription reads `0`). Per JVM: an exclusive subscription
+reads `1` only where it holds the lock, so aggregate with `max`, not `sum`.
+
+```java
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.subscription.monitoring.*;
+
+var monitorManager = new EventStoreSubscriptionMonitorManager(
+    true, Duration.ofMinutes(1), subscriptionManager,
+    List.of(new SubscriptionStoppedMicrometerMonitor(subscriptionManager, meterRegistry, null)));  // null = no Module tag
+monitorManager.start();
+// alert: max by (subscriber_id, aggregate_type) (essentials_eventstore_subscription_stopped) == 1
+```
+
+The Spring Boot starter wires it whenever a `MeterRegistry` is present (not gated by `management.tracing.enabled`);
+`essentials.eventstore.subscription-monitor.enabled=false` turns it off together with every other monitor.
 
 The SPI has a single slot, so collecting statistics **composes** with the metrics observer rather than replacing it:
 
@@ -1234,9 +1256,10 @@ subscription handles it again. Stopping also interrupts a handler in progress - 
 batch for a batched subscription - and that event/batch is likewise handled again. Handlers must tolerate the repeat.
 
 **Detect a `stop()` explicitly** - a stopped subscription looks like a healthy one with no new events:
-`EventStoreSubscription#isStoppedByErrorPolicy()` (true until the subscription is started again), observer callback
-`subscriptionStoppedByErrorPolicy(...)`, counter `essentials.eventstore.subscription.stopped_by_error_policy`, and admin API
-`ApiSubscription.stoppedByErrorPolicy`. **`isActive()` stays `true` after a stop, on purpose**: it means "running here" ("holds
+`EventStoreSubscription#isStoppedByErrorPolicy()` (true until the subscription is started again), gauge
+`essentials.eventstore.subscription.stopped` (`1` while stopped - **alert on this**), observer callback
+`subscriptionStoppedByErrorPolicy(...)`, counter `essentials.eventstore.subscription.stopped_by_error_policy` (one per stop -
+records that a stop happened, so not an alert on its own), and admin API `ApiSubscription.stoppedByErrorPolicy`. **`isActive()` stays `true` after a stop, on purpose**: it means "running here" ("holds
 the fenced lock" for exclusive subscriptions), the lock is kept so the event doesn't flap to a node that fails the same way,
 and the manager's periodic checkpoint only saves active subscriptions - which is what persists the held resume point if the
 process later dies without a graceful stop. Never use `isActive()` to detect a stop.

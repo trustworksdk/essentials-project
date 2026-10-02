@@ -600,6 +600,32 @@ public class EventStoreConfiguration {
     }
 
     /**
+     * The {@value SubscriptionStoppedMicrometerMonitor#SUBSCRIPTION_STOPPED_METRIC} gauge - {@code 1} while a subscription
+     * is stopped by its {@link SubscriptionErrorPolicy}, the signal to alert on for a halted projection.
+     * <p>
+     * Deliberately not gated by {@code management.tracing.enabled} like {@link SubscriberGlobalOrderMicrometerMonitor}:
+     * it is an incident signal, recorded whenever a {@link MeterRegistry} is present - the same rule as the
+     * {@value MeasurementEventStoreSubscriptionObserver#SUBSCRIPTION_STOPPED_BY_ERROR_POLICY_METRIC} counter it complements.
+     * It is run by the {@link EventStoreSubscriptionMonitorManager}, so {@code essentials.eventstore.subscription-monitor.enabled=false}
+     * switches it off together with every other monitor.
+     *
+     * @param eventStoreSubscriptionManager the {@link EventStoreSubscriptionManager} the subscriptions' state is read from
+     * @param meterRegistry                 the {@link MeterRegistry} to register the gauge in, if any
+     * @param properties                    {@link EssentialsComponentsProperties} configuration properties
+     * @return the {@link SubscriptionStoppedMicrometerMonitor}
+     */
+    @Bean
+    @ConditionalOnMissingBean
+    public SubscriptionStoppedMicrometerMonitor subscriptionStoppedMicrometerMonitor(EventStoreSubscriptionManager eventStoreSubscriptionManager,
+                                                                                     Optional<MeterRegistry> meterRegistry,
+                                                                                     EssentialsComponentsProperties properties) {
+        // Optional is idiomatic at the @Bean injection point and is unwrapped on the spot
+        return new SubscriptionStoppedMicrometerMonitor(eventStoreSubscriptionManager,
+                                                        meterRegistry.orElse(null),
+                                                        properties.getTracingProperties().getModuleTag());
+    }
+
+    /**
      * The registry holding the in-memory per-subscription runtime statistics that
      * {@link dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.api.EventStoreApi#findAllSubscriptionStatistics(Object)}
      * reports. Only registered when {@code essentials.eventstore.subscription-manager.statistics.enabled} is

@@ -3,6 +3,12 @@
 Each entry is a release, headed by its `plugin.json` version: the Essentials release the plugin
 targets, with a `-N` suffix for plugin-only releases.
 
+## 0.60.0-1 — targets Essentials 0.60.0
+
+- **Bundled docs** — a subscription stopped by its `SubscriptionErrorPolicy` is alerted on through the
+  level-triggered gauge `essentials.eventstore.subscription.stopped`, not the
+  `stopped_by_error_policy` counter (`LLM-postgresql-event-store.md`, `LLM-spring-boot-starter-modules.md`).
+
 ## 0.60.0 — first release, targets Essentials 0.60.0
 
 The first official release of the `essentials` Claude Code plugin, published from the Essentials

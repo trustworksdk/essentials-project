@@ -137,6 +137,7 @@ Subscriptions let you react to events - for building read models, sending notifi
 | `MeasurementEventStoreSubscriptionObserver` | Always | Collects metrics about subscription processing (events/second, lag, etc.) |
 | `EventStoreSubscriptionMonitorManager` | Always | Periodically checks subscription health (enabled by default, runs every minute) |
 | `SubscriberGlobalOrderMicrometerMonitor` | `management.tracing.enabled=true` | Exposes a Micrometer gauge showing each subscriber's current position |
+| `SubscriptionStoppedMicrometerMonitor` | A `MeterRegistry` is present and `essentials.eventstore.subscription-monitor.enabled=true` (default) | Exposes the gauge `essentials.eventstore.subscription.stopped` - `1` while a subscription is stopped by its `SubscriptionErrorPolicy`, else `0`. The signal to alert on for a halted projection (the `stopped_by_error_policy` counter only records that a stop happened) |
 
 ### Admin APIs
 

@@ -135,7 +135,8 @@ See [spring-boot-starter-postgresql-event-store README](https://github.com/trust
 - `RecordExecutionTimeEventStoreInterceptor` - Performance logging
 - `MeasurementEventStoreSubscriptionObserver` - Subscription metrics
 - `EventStoreSubscriptionMonitorManager` - Subscription health monitoring (runs every 1m by default)
-- `SubscriberGlobalOrderMicrometerMonitor` - Micrometer gauge for subscriber position
+- `SubscriberGlobalOrderMicrometerMonitor` - Micrometer gauge for subscriber position (only when `management.tracing.enabled=true`)
+- `SubscriptionStoppedMicrometerMonitor` - gauge `essentials.eventstore.subscription.stopped` (`1` while a subscription is stopped by its `SubscriptionErrorPolicy`) - the alerting signal for a halted projection; wired whenever a `MeterRegistry` is present
 
 **Admin APIs:**
 - `EventStoreApi` - Query events, manage subscriptions

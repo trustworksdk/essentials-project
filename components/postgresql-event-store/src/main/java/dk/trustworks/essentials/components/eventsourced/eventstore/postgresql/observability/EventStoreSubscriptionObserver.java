@@ -290,8 +290,10 @@ public interface EventStoreSubscriptionObserver {
      * <p>
      * The subscription handles no further events until it is started again; its resume point stays at
      * {@code stoppedAtGlobalEventOrder} (or before it, if an earlier event is still unhandled). Unlike the failure
-     * callbacks, which fire for every skipped event too, this marks a subscription that has halted for good - the signal
-     * to alert on. The default does nothing, so existing observers are unaffected.
+     * callbacks, which fire for every skipped event too, this marks a subscription that has halted until it is started
+     * again. It reports the stop as an event; to alert on the state, use the level-triggered gauge
+     * {@value dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.subscription.monitoring.SubscriptionStoppedMicrometerMonitor#SUBSCRIPTION_STOPPED_METRIC},
+     * which reads {@link EventStoreSubscription#isStoppedByErrorPolicy()}. The default does nothing, so existing observers are unaffected.
      *
      * @param stoppedAtGlobalEventOrder the {@link GlobalEventOrder} of the failed event - for a batched subscription the first event of the failed batch
      * @param cause                     the failure that made the subscription stop

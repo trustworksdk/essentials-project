@@ -692,9 +692,13 @@ as the polling path already did for a single event; the batch is handled again f
   means "running here" (for an exclusive subscription "holds the fenced lock"), and the lock is kept so the event does
   not flap to another node that would fail the same way. Tell a halted subscription apart with
   `EventStoreSubscription#isStoppedByErrorPolicy()` (default `false`), the observer callback
-  `subscriptionStoppedByErrorPolicy(GlobalEventOrder, Throwable, EventStoreSubscription)` (default no-op), the counter
-  `essentials.eventstore.subscription.stopped_by_error_policy` (tags `subscriber_id`, `aggregate_type`, optional
-  `Module`), or the admin API field `stoppedByErrorPolicy`. The admin UI shows a "Stopped by error policy" badge in
+  `subscriptionStoppedByErrorPolicy(GlobalEventOrder, Throwable, EventStoreSubscription)` (default no-op), the gauge
+  `essentials.eventstore.subscription.stopped` (`1` while stopped, published by the new
+  `SubscriptionStoppedMicrometerMonitor`; the Spring Boot starter wires it whenever a `MeterRegistry` is present), the
+  counter `essentials.eventstore.subscription.stopped_by_error_policy` (one per stop), or the admin API field
+  `stoppedByErrorPolicy`. Both meters are tagged `subscriber_id`, `aggregate_type`, optional `Module`. Alert on
+  the gauge: the counter records that a stop happened, so `increase(...) > 0` resolves while the subscription is still
+  stopped and `> 0` keeps firing after it has been started again. The admin UI shows a "Stopped by error policy" badge in
   place of "Active".
 
 `ApiSubscription` gains a nullable `stoppedByErrorPolicy` component (`null` when the subscription does not run in the
