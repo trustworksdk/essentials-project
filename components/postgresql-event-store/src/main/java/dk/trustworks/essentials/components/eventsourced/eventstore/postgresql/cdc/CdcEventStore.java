@@ -406,7 +406,9 @@ public class CdcEventStore<CONFIG extends AggregateEventStreamConfiguration> imp
                                                   Optional<SubscriberId> subscriptionId,
                                                   Optional<SubscriptionGapHandler> gapHandler) {
         var name    = subscriptionId.map(Object::toString).orElse("NoSubscriberId") + "-" + aggregateType;
-        var tracker = CdcDeliveryTracker.startingAfter(name, fromInclusiveGlobalOrder - 1);
+        // Gives up on a gap when the subscriber's gap handler would: its own threshold if it states one, else the default
+        var gapTimeout = CdcDeliveryTracker.gapTimeoutFor(gapHandler);
+        var tracker = CdcDeliveryTracker.startingAfter(name, fromInclusiveGlobalOrder - 1, gapTimeout);
         if (gapHandler.isPresent() && recordsGaps()) {
             try {
                 tracker.seedEarlierGaps(gapHandler.get().getTransientGapsFor(aggregateType));
@@ -815,6 +817,10 @@ public class CdcEventStore<CONFIG extends AggregateEventStreamConfiguration> imp
             if (tracker.isAtOrBelowWatermarkAndNotAwaited(event.globalEventOrder().longValue())) {
                 return;
             }
+            // handOver is an unsafe sink: BusHandOver is its only producer, and the Reactive Streams rules (the bus sink
+            // signals one subscriber serially) make every emit below - next, error, complete - happen one at a time, so
+            // the sink cannot see concurrent emission and cannot answer FAIL_NON_SERIALIZED. Nothing else emits on it:
+            // dispose() only cancels
             if (handOver.tryEmitNext(event).isFailure()) {
                 cancel();
                 handOver.tryEmitError(Exceptions.failWithOverflow("The CDC bus hand-over buffer of " + capacity + " events is full"));
@@ -1746,18 +1752,42 @@ public class CdcEventStore<CONFIG extends AggregateEventStreamConfiguration> imp
                 // re-entered when handing on an event makes a synchronous live source deliver the next one. Only one
                 // caller drains at a time - the others count a missed drain, and the one draining goes round again for
                 // it - so the events reach orderedLiveSink one at a time and in the order they leave the buffer.
+                // Everything that is emitted on orderedLiveSink - events, the completion and an error - is emitted by the
+                // one thread that is draining, so the sink (which rejects concurrent emission with FAIL_NON_SERIALIZED)
+                // never sees two emitters. An error used to be emitted straight from liveSub's thread, racing a drain
+                // running on the backfill's: the rejected tryEmitError was ignored, and the error - and with it the
+                // subscription's end - was lost. Now it is only recorded here, and the drain emits it, whoever gets to.
+                AtomicReference<Throwable> liveFailure = new AtomicReference<>();
+                AtomicBoolean              closed      = new AtomicBoolean(false);
+                AtomicBoolean              terminated  = new AtomicBoolean(false);
                 Runnable drain = () -> {
-                    if (!backfillDone.get()) return;
                     if (drainsMissed.getAndIncrement() != 0) return;
                     int missed = 1;
                     while (true) {
-                        Map.Entry<Long, PersistedEvent> next;
-                        while ((next = buffer.pollFirstEntry()) != null) {
-                            if (bufferSizeGauge != null) bufferSizeGauge.decrementAndGet();
-                            emitUnlessDelivered.accept(next.getValue());
-                        }
-                        if (liveDone.get() && buffer.isEmpty()) {
-                            orderedLiveSink.tryEmitComplete();
+                        if (!terminated.get()) {
+                            var failure = liveFailure.get();
+                            if (failure != null) {
+                                terminated.set(true);
+                                buffer.clear();
+                                if (bufferSizeGauge != null) bufferSizeGauge.set(0);
+                                var result = orderedLiveSink.tryEmitError(failure);
+                                if (result.isFailure() && result != Sinks.EmitResult.FAIL_TERMINATED && result != Sinks.EmitResult.FAIL_CANCELLED) {
+                                    LOG.error("Could not pass the live source's failure on to the subscription ({})", result, failure);
+                                }
+                            } else if (closed.get()) {
+                                terminated.set(true);
+                                orderedLiveSink.tryEmitComplete();
+                            } else if (backfillDone.get()) {
+                                Map.Entry<Long, PersistedEvent> next;
+                                while ((next = buffer.pollFirstEntry()) != null) {
+                                    if (bufferSizeGauge != null) bufferSizeGauge.decrementAndGet();
+                                    emitUnlessDelivered.accept(next.getValue());
+                                }
+                                if (liveDone.get() && buffer.isEmpty()) {
+                                    terminated.set(true);
+                                    orderedLiveSink.tryEmitComplete();
+                                }
+                            }
                         }
                         missed = drainsMissed.addAndGet(-missed);
                         if (missed == 0) return;
@@ -1810,7 +1840,9 @@ public class CdcEventStore<CONFIG extends AggregateEventStreamConfiguration> imp
 
                     @Override
                     protected void hookOnError(Throwable err) {
-                        orderedLiveSink.tryEmitError(err);
+                        // Emitted by the drain, never from here - see drain
+                        liveFailure.compareAndSet(null, err);
+                        drain.run();
                     }
 
                     @Override
@@ -1862,7 +1894,9 @@ public class CdcEventStore<CONFIG extends AggregateEventStreamConfiguration> imp
                 return Flux.merge(backfillWithGate, orderedLiveFlux)
                            .doFinally(sig -> {
                                liveSub.dispose();
-                               orderedLiveSink.tryEmitComplete();
+                               // Through the drain, which may be emitting an event on another thread right now
+                               closed.set(true);
+                               drain.run();
                            });
             });
         }

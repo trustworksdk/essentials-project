@@ -16,7 +16,7 @@
 
 package dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.cdc;
 
-import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.gap.PostgresqlEventStreamGapHandler;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.gap.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.types.GlobalEventOrder;
 import org.slf4j.*;
 
@@ -65,10 +65,11 @@ final class CdcDeliveryTracker {
     private static final Logger log = LoggerFactory.getLogger(CdcDeliveryTracker.class);
 
     /**
-     * How long a gap is waited for: the permanent-gap threshold {@link PostgresqlEventStreamGapHandler} promotes transient
-     * gaps after by default ({@code ResolveTransientGapsToPermanentGapsPromotionStrategy.thresholdBased(120)}). Its
-     * promotion strategy is opaque, so a customised one is not reflected here; with a {@code NoEventStreamGapHandler}
-     * this is the only rule
+     * How long a gap is waited for when the subscription's gap handler does not state a threshold: the permanent-gap
+     * threshold {@link PostgresqlEventStreamGapHandler} promotes transient gaps after by default
+     * ({@code ResolveTransientGapsToPermanentGapsPromotionStrategy.thresholdBased(120)}). A gap handler that states one
+     * ({@code SubscriptionGapHandler#transientGapGiveUpThreshold()}) overrides it - see {@link #startingAfter(String, long, Duration)};
+     * with a {@code NoEventStreamGapHandler}, or a promotion strategy that is not a plain age, this is the only rule
      */
     static final Duration DEFAULT_GAP_TIMEOUT      = Duration.ofSeconds(120);
     /**
@@ -139,7 +140,8 @@ final class CdcDeliveryTracker {
         requireNonNull(gapTimeout, "No gapTimeout provided");
         requireTrue(!gapTimeout.isNegative() && !gapTimeout.isZero(), "gapTimeout must be positive");
         requireTrue(maxTrackedGaps > 0, "maxTrackedGaps must be > 0");
-        this.gapTimeoutNanos = gapTimeout.toNanos();
+        // Saturating: a threshold of centuries must not overflow into a negative timeout that gives every gap up at once
+        this.gapTimeoutNanos = gapTimeout.compareTo(Duration.ofNanos(Long.MAX_VALUE)) >= 0 ? Long.MAX_VALUE : gapTimeout.toNanos();
         this.maxTrackedGaps = maxTrackedGaps;
         this.nanoClock = requireNonNull(nanoClock, "No nanoClock provided");
         this.watermark = watermarkInclusive;
@@ -150,7 +152,27 @@ final class CdcDeliveryTracker {
      * A tracker with the default gap timeout and cap, aged by {@link System#nanoTime()}
      */
     static CdcDeliveryTracker startingAfter(String name, long watermarkInclusive) {
-        return new CdcDeliveryTracker(name, watermarkInclusive, DEFAULT_GAP_TIMEOUT, DEFAULT_MAX_TRACKED_GAPS, System::nanoTime);
+        return startingAfter(name, watermarkInclusive, DEFAULT_GAP_TIMEOUT);
+    }
+
+    /**
+     * How long a subscription whose gap handler is this one waits for a gap: what the handler states
+     * ({@link SubscriptionGapHandler#transientGapGiveUpThreshold()}), so a customised promotion threshold is followed;
+     * {@link #DEFAULT_GAP_TIMEOUT} when it states none - a no-op handler, a promotion strategy that is not a plain age,
+     * a handler written before the method existed - or none is in use. The tracker has to give up on a gap by itself
+     * in all those cases: nothing else would end its wait
+     */
+    static Duration gapTimeoutFor(Optional<SubscriptionGapHandler> gapHandler) {
+        return gapHandler.flatMap(SubscriptionGapHandler::transientGapGiveUpThreshold)
+                         .filter(threshold -> !threshold.isNegative() && !threshold.isZero())
+                         .orElse(DEFAULT_GAP_TIMEOUT);
+    }
+
+    /**
+     * A tracker that waits {@code gapTimeout} for a gap, with the default cap, aged by {@link System#nanoTime()}
+     */
+    static CdcDeliveryTracker startingAfter(String name, long watermarkInclusive, Duration gapTimeout) {
+        return new CdcDeliveryTracker(name, watermarkInclusive, gapTimeout, DEFAULT_MAX_TRACKED_GAPS, System::nanoTime);
     }
 
     /**

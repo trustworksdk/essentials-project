@@ -211,9 +211,10 @@ mark:
   lower order that commits late is delivered when it arrives - after the higher one, out
   of global order, exactly as the polling path delivers a gap-filled event. That is why
   a subscriber's resume point only ever advances (`advanceResumeFromAndIncluding`);
-- a gap is waited for until it is **120 s** old - the default permanent-gap threshold of
-  `PostgresqlEventStreamGapHandler` (`thresholdBased(120)`); a customised promotion
-  strategy is not reflected, and with a `NoEventStreamGapHandler` the same 120 s applies.
+- a gap is waited for until it is as old as the subscription's gap handler would promote it to a permanent gap
+  (`SubscriptionGapHandler.transientGapGiveUpThreshold()`): **120 s** for the default `PostgresqlEventStreamGapHandler`
+  (`thresholdBased(120)`), the configured number of seconds for `thresholdBased(n)`. A promotion strategy that is not a plain
+  age (a lambda), a custom gap handler that does not override the method, and a `NoEventStreamGapHandler` fall back to 120 s.
   Then the watermark moves past it: a rolled-back `IDENTITY` value is a gap that never
   fills. An event for a gap given up on is dropped, as polling drops one whose gap was
   promoted to permanent. At most 10 000 gaps are held at once; beyond that the oldest is

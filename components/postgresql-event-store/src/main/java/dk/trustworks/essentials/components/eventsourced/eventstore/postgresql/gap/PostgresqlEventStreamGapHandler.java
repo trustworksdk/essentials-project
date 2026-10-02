@@ -318,6 +318,11 @@ public final class PostgresqlEventStreamGapHandler<CONFIG extends AggregateEvent
         }
 
         @Override
+        public Optional<Duration> transientGapGiveUpThreshold() {
+            return resolveTransientGapsToPermanentGapsPromotionStrategy.permanentGapThreshold();
+        }
+
+        @Override
         public List<GlobalEventOrder> findTransientGapsToIncludeInQuery(AggregateType aggregateType, LongRange globalOrderQueryRange) {
             requireNonNull(aggregateType, "No aggregateType provided");
             requireNonNull(globalOrderQueryRange, "No globalOrderQueryRange provided");
@@ -724,6 +729,18 @@ public final class PostgresqlEventStreamGapHandler<CONFIG extends AggregateEvent
         List<GlobalEventOrder> resolveTransientGapsReadyToBePromotedToPermanentGaps(AggregateType forAggregateType, List<Pair<GlobalEventOrder, OffsetDateTime>> allTransientGaps);
 
         /**
+         * The fixed age after which this strategy promotes a transient gap, if it has one - what
+         * {@link SubscriptionGapHandler#transientGapGiveUpThreshold()} reports, so a subscription that tracks gaps itself
+         * (CDC) gives up on a gap when this handler would. Empty for a strategy whose rule is not a plain age, which is
+         * what a lambda implementing this interface gets; {@link #thresholdBased(int)} returns it
+         *
+         * @return the age after which a transient gap is promoted, or empty if there is no such fixed age
+         */
+        default Optional<Duration> permanentGapThreshold() {
+            return Optional.empty();
+        }
+
+        /**
          * Default strategy where the time between the transient gaps firstDiscoveredTimestamp ({@link Pair#_2}) and now is larger than
          * <code>permanentGapThresholdInSeconds</code> then the transient gap is promoted to a permanent gap
          *
@@ -733,7 +750,14 @@ public final class PostgresqlEventStreamGapHandler<CONFIG extends AggregateEvent
          */
         static ResolveTransientGapsToPermanentGapsPromotionStrategy thresholdBased(int permanentGapThresholdInSeconds) {
             requireTrue(permanentGapThresholdInSeconds > 0, "permanentGapThresholdInSeconds must be > 0");
-            return (forAggregateType, allTransientGaps) -> {
+            return new ResolveTransientGapsToPermanentGapsPromotionStrategy() {
+                @Override
+                public Optional<Duration> permanentGapThreshold() {
+                    return Optional.of(Duration.ofSeconds(permanentGapThresholdInSeconds));
+                }
+
+                @Override
+                public List<GlobalEventOrder> resolveTransientGapsReadyToBePromotedToPermanentGaps(AggregateType forAggregateType, List<Pair<GlobalEventOrder, OffsetDateTime>> allTransientGaps) {
                 var now = now();
                 return allTransientGaps.stream()
                                        .filter(globalEventOrderFirstDiscoveredTimestampPair -> {
@@ -749,7 +773,7 @@ public final class PostgresqlEventStreamGapHandler<CONFIG extends AggregateEvent
                                        })
                                        .map(Pair::_1)
                                        .collect(Collectors.toList());
-
+                }
             };
         }
     }

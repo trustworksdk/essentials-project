@@ -536,6 +536,54 @@ public class BackfillThenLiveOrderedTest {
         assertThat(tracker.watermark()).isGreaterThanOrEqualTo(4);
     }
 
+    /**
+     * The live source fails while another thread is handing an event on to the subscriber. The failure used to be
+     * emitted straight on the ordered sink from the live source's thread, which the sink rejects while another thread is
+     * emitting (FAIL_NON_SERIALIZED); the result was ignored, so the failure - and the end of the subscription - was lost.
+     */
+    @Test
+    void a_live_source_failure_arriving_while_an_event_is_being_handed_on_still_reaches_the_subscriber() throws Exception {
+        Sinks.Many<PersistedEvent> liveSink = Sinks.many().unicast().onBackpressureBuffer();
+        liveSink.tryEmitNext(pe(4));      // held until the back-fill is done
+        var insideHandler  = new CountDownLatch(1);
+        var releaseHandler = new CountDownLatch(1);
+        var error          = new AtomicReference<Throwable>();
+        var failed         = new CountDownLatch(1);
+
+        Sinks.Many<PersistedEvent> backfillSink = Sinks.many().unicast().onBackpressureBuffer();
+        Flux<PersistedEvent> ordered = CdcEventStore.BackfillThenLiveOrdered.orderedWithoutMetrics(backfillSink.asFlux(),
+                                                                                                  liveSink.asFlux(),
+                                                                                                  () -> 3L,
+                                                                                                  new CdcProperties.CdcEventBusProperties());
+        ordered.subscribe(event -> {
+            if (event.globalEventOrder().longValue() == 4) {
+                insideHandler.countDown();
+                try {
+                    releaseHandler.await();
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
+            }
+        }, e -> {
+            error.set(e);
+            failed.countDown();
+        });
+        // The back-fill completes on this thread, which then drains pe(4) into the subscriber and sits in its handler
+        var subscriberThread = new Thread(backfillSink::tryEmitComplete, "backfill");
+        subscriberThread.start();
+        try {
+            assertThat(insideHandler.await(5, TimeUnit.SECONDS)).isTrue();
+            var boom = new IllegalStateException("boom");
+            liveSink.tryEmitError(boom);   // from this thread, while the subscriber's thread is inside the sink
+            releaseHandler.countDown();
+            assertThat(failed.await(5, TimeUnit.SECONDS)).as("the failure reached the subscriber").isTrue();
+            assertThat(error.get()).isSameAs(boom);
+        } finally {
+            releaseHandler.countDown();
+            subscriberThread.join(5_000);
+        }
+    }
+
     private static PersistedEvent pe(long globalOrder) {
         return PersistedEvent.from(
                 EventId.random(),

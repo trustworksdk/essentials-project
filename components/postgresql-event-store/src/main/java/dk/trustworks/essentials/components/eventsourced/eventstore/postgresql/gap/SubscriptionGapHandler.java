@@ -22,7 +22,8 @@ import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.ty
 import dk.trustworks.essentials.components.foundation.types.*;
 import dk.trustworks.essentials.types.LongRange;
 
-import java.util.List;
+import java.time.Duration;
+import java.util.*;
 import java.util.stream.Stream;
 
 /**
@@ -113,6 +114,19 @@ public interface SubscriptionGapHandler {
         var filledGaps = gapFills.stream().map(PersistedEvent::globalEventOrder).toList();
         var highest    = filledGaps.stream().mapToLong(GlobalEventOrder::longValue).max().getAsLong();
         return reconcileGapsAndReport(aggregateType, LongRange.only(highest), gapFills, filledGaps);
+    }
+
+    /**
+     * How long this handler keeps waiting for a transient gap's event before it gives up on it (promotes it to a permanent
+     * gap), when that is a fixed duration it can state. A subscription that tracks gaps itself - the CDC event store's
+     * delivery tracker - waits for a gap that long too, so it follows a customised promotion strategy rather than
+     * assuming the default. The default implementation returns {@link Optional#empty()}: unknown (or no gap handling at
+     * all), and the caller falls back to the default of 120 seconds.
+     *
+     * @return the time after which a transient gap is given up, or empty if this handler does not state one
+     */
+    default Optional<Duration> transientGapGiveUpThreshold() {
+        return Optional.empty();
     }
 
     /**

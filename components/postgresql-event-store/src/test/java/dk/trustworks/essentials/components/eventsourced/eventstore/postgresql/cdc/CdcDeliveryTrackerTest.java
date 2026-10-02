@@ -18,6 +18,10 @@ package dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.c
 
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.cdc.CdcDeliveryTracker.Kind;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.types.GlobalEventOrder;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.*;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.gap.*;
+import dk.trustworks.essentials.components.foundation.types.*;
+import dk.trustworks.essentials.types.LongRange;
 import org.junit.jupiter.api.Test;
 
 import java.time.Duration;
@@ -235,5 +239,86 @@ class CdcDeliveryTrackerTest {
         tracker.seedEarlierGaps(List.of(GlobalEventOrder.of(50), GlobalEventOrder.of(60), GlobalEventOrder.of(70)));
 
         assertThat(tracker.awaitedGaps(100)).extracting(GlobalEventOrder::longValue).containsExactly(60L, 70L);
+    }
+
+    @Test
+    void the_gap_timeout_follows_the_threshold_of_the_gap_handlers_promotion_strategy() {
+        var strategy   = PostgresqlEventStreamGapHandler.ResolveTransientGapsToPermanentGapsPromotionStrategy.thresholdBased(600);
+        var gapHandler = new StubGapHandler(strategy.permanentGapThreshold());
+
+        assertThat(strategy.permanentGapThreshold()).contains(Duration.ofSeconds(600));
+        assertThat(CdcDeliveryTracker.gapTimeoutFor(Optional.of(gapHandler))).isEqualTo(Duration.ofSeconds(600));
+    }
+
+    @Test
+    void the_gap_timeout_is_the_default_when_the_gap_handler_states_none() {
+        PostgresqlEventStreamGapHandler.ResolveTransientGapsToPermanentGapsPromotionStrategy custom = (type, gaps) -> List.of();
+
+        assertThat(custom.permanentGapThreshold()).isEmpty();
+        assertThat(CdcDeliveryTracker.gapTimeoutFor(Optional.empty())).isEqualTo(CdcDeliveryTracker.DEFAULT_GAP_TIMEOUT);
+        assertThat(CdcDeliveryTracker.gapTimeoutFor(Optional.of(new StubGapHandler(custom.permanentGapThreshold())))).isEqualTo(CdcDeliveryTracker.DEFAULT_GAP_TIMEOUT);
+        // A no-op gap handler states none: the tracker's own timeout is then the only rule
+        assertThat(CdcDeliveryTracker.gapTimeoutFor(Optional.of(new NoEventStreamGapHandler<>().gapHandlerFor(SubscriberId.of("s")))))
+                .isEqualTo(CdcDeliveryTracker.DEFAULT_GAP_TIMEOUT);
+        assertThat(CdcDeliveryTracker.gapTimeoutFor(Optional.of(new StubGapHandler(Optional.of(Duration.ZERO))))).isEqualTo(CdcDeliveryTracker.DEFAULT_GAP_TIMEOUT);
+    }
+
+    @Test
+    void a_tracker_gives_up_a_gap_after_the_timeout_it_is_given_not_after_120_seconds() {
+        var tracker = new CdcDeliveryTracker("test", 0, Duration.ofSeconds(10), 100, nanoTime::get);
+        tracker.markDelivered(1);
+        assertThat(tracker.markDelivered(3).kind()).isEqualTo(Kind.OPENED_GAP);
+
+        advanceClock(Duration.ofSeconds(9));
+        assertThat(tracker.markDelivered(2).kind()).isEqualTo(Kind.FILLED_GAP);
+
+        assertThat(tracker.markDelivered(5).kind()).isEqualTo(Kind.OPENED_GAP);
+        advanceClock(Duration.ofSeconds(11));
+        assertThat(tracker.markDelivered(4).kind()).isEqualTo(Kind.DUPLICATE);
+        assertThat(tracker.watermark()).isEqualTo(5);
+    }
+
+    @Test
+    void a_threshold_too_large_for_nanoseconds_does_not_overflow_into_giving_every_gap_up() {
+        var tracker = new CdcDeliveryTracker("test", 0, Duration.ofDays(365L * 1000), 100, nanoTime::get);
+        tracker.markDelivered(2);
+        advanceClock(Duration.ofDays(365));
+        assertThat(tracker.markDelivered(1).kind()).isEqualTo(Kind.FILLED_GAP);
+    }
+
+    private record StubGapHandler(Optional<Duration> threshold) implements SubscriptionGapHandler {
+        @Override
+        public Optional<Duration> transientGapGiveUpThreshold() {
+            return threshold;
+        }
+
+        @Override
+        public SubscriberId subscriberId() {
+            return SubscriberId.of("stub");
+        }
+
+        @Override
+        public List<GlobalEventOrder> findTransientGapsToIncludeInQuery(AggregateType aggregateType, LongRange range) {
+            return List.of();
+        }
+
+        @Override
+        public void reconcileGaps(AggregateType aggregateType, LongRange range, List<PersistedEvent> events, List<GlobalEventOrder> gaps) {
+        }
+
+        @Override
+        public List<GlobalEventOrder> resetTransientGapsFor(AggregateType aggregateType) {
+            return List.of();
+        }
+
+        @Override
+        public List<GlobalEventOrder> getTransientGapsFor(AggregateType aggregateType) {
+            return List.of();
+        }
+
+        @Override
+        public java.util.stream.Stream<GlobalEventOrder> getPermanentGapsFor(AggregateType aggregateType) {
+            return java.util.stream.Stream.empty();
+        }
     }
 }
