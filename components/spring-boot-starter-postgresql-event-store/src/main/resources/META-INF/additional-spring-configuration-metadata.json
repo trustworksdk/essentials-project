@@ -1,0 +1,14 @@
+{
+  "properties": [
+    {
+      "name": "essentials.eventstore.cdc.event-bus.live-drain-stall-threshold",
+      "type": "java.time.Duration",
+      "description": "Has no effect since 0.60.0: a CDC subscription started while CDC is active no longer waits for a missing global order, so there is no stall to bound. Still bound, and still rejected when negative.",
+      "defaultValue": "180s",
+      "deprecation": {
+        "level": "warning",
+        "reason": "Has no effect; remove it from your configuration. Planned for removal in the next major release."
+      }
+    }
+  ]
+}

@@ -233,7 +233,7 @@ public class CdcEventStore<CONFIG extends AggregateEventStreamConfiguration> imp
             // drain of BackfillThenLiveOrdered no longer waits for a missing global order, so there is no stall to
             // detect (see "Why not in global order past the head" on BackfillThenLiveOrdered)
             Counter.builder("essentials.cdc.backfill_live.stall_detected")
-                   .description("Always 0: the BackfillThenLiveOrdered live-tail drain no longer waits for a missing global order, so it cannot stall on one. Kept for compatibility")
+                   .description("Deprecated, always 0: the BackfillThenLiveOrdered live-tail drain no longer waits for a missing global order, so it cannot stall on one. Kept for compatibility; planned for removal in the next major release")
                    .register(this.meterRegistry);
             Gauge.builder("essentials.cdc.backfill_live.buffer.size", backfillLiveBufferSize, AtomicInteger::get)
                  .description("Current size of the in-memory live-event buffer inside BackfillThenLiveOrdered; bounded by eventBus.backpressureBufferSize")
@@ -248,7 +248,15 @@ public class CdcEventStore<CONFIG extends AggregateEventStreamConfiguration> imp
             backfillPageTimer = null;
             backfillToLiveTransitionTimer = null;
         }
-        // No longer read (see CdcEventBusProperties.getLiveDrainStallThreshold), still validated as before
+        validateDeprecatedLiveDrainStallThreshold(eventBusProperties);
+    }
+
+    /**
+     * The threshold is no longer read (see {@link CdcProperties.CdcEventBusProperties#getLiveDrainStallThreshold()}),
+     * but a negative value is still rejected as before, so a configuration that used to fail at startup still does
+     */
+    @SuppressWarnings("removal")
+    private static void validateDeprecatedLiveDrainStallThreshold(CdcProperties.CdcEventBusProperties eventBusProperties) {
         requireTrue(!eventBusProperties.getLiveDrainStallThreshold().isNegative(),
                     "eventBus.liveDrainStallThreshold must not be negative");
     }

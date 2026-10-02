@@ -29,7 +29,10 @@ package dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.c
  * The drain no longer waits for a missing global order: past the head it hands live events on as the CDC bus delivers
  * them, and the subscription's delivery tracker delivers an event whose transaction commits after a higher global order
  * when it arrives, out of global order. There is nothing left to stall on.
+ *
+ * @deprecated never raised; planned for removal in the next major release
  */
+@Deprecated(forRemoval = true)
 public class CdcLiveDrainStalledException extends RuntimeException {
     /**
      * The {@code global_event_order} the live drain was parked on (its {@code expectedNext}) when the

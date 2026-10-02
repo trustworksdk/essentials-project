@@ -977,11 +977,19 @@ public class CdcProperties {
          * arrives, out of global order, as on every other CDC path and on the polling path. There is nothing left to
          * stall on, so nothing reads this value, no {@link CdcLiveDrainStalledException} is raised, and the
          * {@code essentials.cdc.backfill_live.stall_detected} counter stays at {@code 0}.
+         *
+         * @deprecated has no effect; remove it from your configuration. Planned for removal in the next major release
          */
+        @Deprecated(forRemoval = true)
         public Duration getLiveDrainStallThreshold() {
             return liveDrainStallThreshold;
         }
 
+        /**
+         * @param liveDrainStallThreshold ignored, see {@link #getLiveDrainStallThreshold()}
+         * @deprecated has no effect; remove it from your configuration. Planned for removal in the next major release
+         */
+        @Deprecated(forRemoval = true)
         public void setLiveDrainStallThreshold(Duration liveDrainStallThreshold) {
             this.liveDrainStallThreshold = liveDrainStallThreshold;
         }
