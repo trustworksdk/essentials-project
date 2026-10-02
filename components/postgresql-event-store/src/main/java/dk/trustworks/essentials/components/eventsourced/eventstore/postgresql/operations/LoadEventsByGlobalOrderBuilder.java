@@ -31,6 +31,7 @@ public final class LoadEventsByGlobalOrderBuilder {
     private LongRange              globalEventOrderRange;
     private List<GlobalEventOrder> includeAdditionalGlobalOrders       = List.of();
     private Optional<Tenant>       onlyIncludeEventIfItBelongsToTenant = Optional.empty();
+    private Optional<Tenant>       onlyLoadPayloadIfEventBelongsToTenant = Optional.empty();
 
     /**
      * @param aggregateType the aggregate type that the underlying events are associated with
@@ -82,7 +83,17 @@ public final class LoadEventsByGlobalOrderBuilder {
      * Builder an {@link LoadEventsByGlobalOrder} instance from the builder properties
      * @return the {@link LoadEventsByGlobalOrder} instance
      */
+    /**
+     * @param onlyLoadPayloadIfEventBelongsToTenant see {@link LoadEventsByGlobalOrder#getOnlyLoadPayloadIfEventBelongsToTenant()}
+     * @return this builder
+     */
+    public LoadEventsByGlobalOrderBuilder setOnlyLoadPayloadIfEventBelongsToTenant(Tenant onlyLoadPayloadIfEventBelongsToTenant) {
+        this.onlyLoadPayloadIfEventBelongsToTenant = Optional.ofNullable(onlyLoadPayloadIfEventBelongsToTenant);
+        return this;
+    }
+
     public LoadEventsByGlobalOrder build() {
-        return new LoadEventsByGlobalOrder(aggregateType, globalEventOrderRange, includeAdditionalGlobalOrders, onlyIncludeEventIfItBelongsToTenant.orElse(null));
+        return new LoadEventsByGlobalOrder(aggregateType, globalEventOrderRange, includeAdditionalGlobalOrders, onlyIncludeEventIfItBelongsToTenant.orElse(null))
+                .setOnlyLoadPayloadIfEventBelongsToTenant(onlyLoadPayloadIfEventBelongsToTenant.orElse(null));
     }
 }

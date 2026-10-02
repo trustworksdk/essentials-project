@@ -397,6 +397,22 @@ public final class PostgresqlEventStore<CONFIG extends AggregateEventStreamConfi
                                                this);
     }
 
+    private Stream<PersistedEvent> loadEventsByGlobalOrderFromPersistence(LoadEventsByGlobalOrder operation) {
+        var onlyLoadPayloadIfEventBelongsToTenant = operation.getOnlyLoadPayloadIfEventBelongsToTenant();
+        if (onlyLoadPayloadIfEventBelongsToTenant.isPresent() && operation.getOnlyIncludeEventIfItBelongsToTenant().isEmpty()) {
+            return persistenceStrategy.loadEventsByGlobalOrderOmittingOtherTenantsPayloads(unitOfWorkFactory.getRequiredUnitOfWork(),
+                                                                                           operation.aggregateType,
+                                                                                           operation.getGlobalEventOrderRange(),
+                                                                                           operation.getIncludeAdditionalGlobalOrders(),
+                                                                                           onlyLoadPayloadIfEventBelongsToTenant.get());
+        }
+        return persistenceStrategy.loadEventsByGlobalOrder(unitOfWorkFactory.getRequiredUnitOfWork(),
+                                                           operation.aggregateType,
+                                                           operation.getGlobalEventOrderRange(),
+                                                           operation.getIncludeAdditionalGlobalOrders(),
+                                                           operation.getOnlyIncludeEventIfItBelongsToTenant());
+    }
+
     @Override
     public Stream<PersistedEvent> loadEventsByGlobalOrder(LoadEventsByGlobalOrder operation) {
         requireNonNull(operation, "You must supply an LoadEventsByGlobalOrder operation instance");
@@ -405,11 +421,7 @@ public final class PostgresqlEventStore<CONFIG extends AggregateEventStreamConfi
                                                this,
                                                eventStoreInterceptors,
                                                (eventStoreInterceptor, eventStoreInterceptorChain) -> eventStoreInterceptor.intercept(operation, eventStoreInterceptorChain),
-                                               () -> persistenceStrategy.loadEventsByGlobalOrder(unitOfWorkFactory.getRequiredUnitOfWork(),
-                                                                                                 operation.aggregateType,
-                                                                                                 operation.getGlobalEventOrderRange(),
-                                                                                                 operation.getIncludeAdditionalGlobalOrders(),
-                                                                                                 operation.getOnlyIncludeEventIfItBelongsToTenant()))
+                                               () -> loadEventsByGlobalOrderFromPersistence(operation))
                 .proceed();
     }
 
@@ -643,7 +655,7 @@ public final class PostgresqlEventStore<CONFIG extends AggregateEventStreamConfi
 
                 var loadEventsByGlobalOrderTiming = StopWatch.start("loadEventsByGlobalOrder(" + actualSubscriberId + ", " + aggregateType + ")");
                 // Every tenant's events: see loadEventsForPoll
-                var loadedEvents = loadEventsForPoll(aggregateType, globalOrderRange, transientGapsToIncludeInQuery);
+                var loadedEvents = loadEventsForPoll(aggregateType, globalOrderRange, transientGapsToIncludeInQuery, onlyIncludeEventIfItBelongsToTenant);
                 // Without the gap fills handed on before and not acknowledged yet: their gap is open, so they are read again
                 var persistedEvents = notAwaitingAcknowledgement(eventsBelongingToTenant(loadedEvents, onlyIncludeEventIfItBelongsToTenant), awaitingAcknowledgement);
                 eventStoreSubscriptionObserver.eventStorePolled(actualSubscriberId,
@@ -821,7 +833,7 @@ public final class PostgresqlEventStore<CONFIG extends AggregateEventStreamConfi
 //                                                  defaultBatchFetchSize,
 //                                                  highestPersistedGlobalEventOrder.get());
 //                    }
-                    batchSizeForThisQuery = (long) (batchSizeForThisQuery + defaultBatchFetchSize * (currentConsecutiveNoPersistedEventsReturned / 100) * 1.0f);
+                    batchSizeForThisQuery = grownBatchSize(batchSizeForThisQuery, defaultBatchFetchSize * (currentConsecutiveNoPersistedEventsReturned / 100) * 1.0f);
                     if (batchSizeForThisQuery > defaultBatchFetchSize) {
                         eventStoreStreamLog.debug("[{}] loadEventsByGlobalOrder temporarily INCREASED query batchSize to {} from {} instead of default {} since number of consecutiveNoPersistedEventsReturned was {}",
                                                   eventStreamLogName,
@@ -839,8 +851,23 @@ public final class PostgresqlEventStore<CONFIG extends AggregateEventStreamConfi
                 batchSizeForThisQuery = 0;
             }
         } else if (currentConsecutiveNoPersistedEventsReturned > 0 && currentConsecutiveNoPersistedEventsReturned % 10 == 0) {
-            batchSizeForThisQuery = (long) (batchSizeForThisQuery + defaultBatchFetchSize * (currentConsecutiveNoPersistedEventsReturned / 10) * 0.5f);
+            batchSizeForThisQuery = grownBatchSize(batchSizeForThisQuery, defaultBatchFetchSize * (currentConsecutiveNoPersistedEventsReturned / 10) * 0.5f);
             if (batchSizeForThisQuery > defaultBatchFetchSize) {
+                eventStoreStreamLog.debug("[{}] loadEventsByGlobalOrder temporarily INCREASED query batchSize to {} from {} instead of default {} since number of consecutiveNoPersistedEventsReturned was {}",
+                                          eventStreamLogName,
+                                          batchSizeForThisQuery,
+                                          lastBatchSizeForThisQuery,
+                                          defaultBatchFetchSize,
+                                          currentConsecutiveNoPersistedEventsReturned);
+            }
+        } else if (currentConsecutiveNoPersistedEventsReturned > 0) {
+            // A hole at the read position - global orders that will never be committed, such as rolled-back appends - is
+            // only passed once the range covers it. The first empty polls therefore double the range, so a hole is passed
+            // within a few polls rather than after the slow growth every 10th and 100th empty poll brings. An idle
+            // subscriber pays for it with an empty range scan of a few more global orders
+            var maxBatchSizeWhenDoubling = Math.max(defaultBatchFetchSize * 10, 100);
+            if (batchSizeForThisQuery < maxBatchSizeWhenDoubling) {
+                batchSizeForThisQuery = Math.min(maxBatchSizeWhenDoubling, grownBatchSize(batchSizeForThisQuery, batchSizeForThisQuery));
                 eventStoreStreamLog.debug("[{}] loadEventsByGlobalOrder temporarily INCREASED query batchSize to {} from {} instead of default {} since number of consecutiveNoPersistedEventsReturned was {}",
                                           eventStreamLogName,
                                           batchSizeForThisQuery,
@@ -859,6 +886,14 @@ public final class PostgresqlEventStore<CONFIG extends AggregateEventStreamConfi
             }
         }
         return batchSizeForThisQuery;
+    }
+
+    /**
+     * {@code batchSize} plus {@code growth} - but by at least one: a growth that rounds down to nothing (a batch size
+     * of 1 grown by 0.5) would otherwise leave the batch size, and a hole of that size at the read position, unchanged
+     */
+    private static long grownBatchSize(long batchSize, float growth) {
+        return Math.max(batchSize + 1, (long) (batchSize + growth));
     }
 
     @Override
@@ -977,9 +1012,14 @@ public final class PostgresqlEventStore<CONFIG extends AggregateEventStreamConfi
                 if (numberOfEventsPublished == 0 && !lastPollConsumedEvents) {
                     pollingOptimizer.eventStorePollingReturnedNoEvents();
                     eventStoreStreamLog.trace("[{}] Skipping polling cycle based on optimizer", eventStreamLogName);
-                    if (pollingOptimizer.currentDelayMs() > 0) {
+                    // An optimizer that never delays leaves nothing between one empty poll and the next - wait the polling interval
+                    var delayMs = pollingOptimizer.currentDelayMs();
+                    if (delayMs <= 0 && pollingOptimizer instanceof NoEventStorePollingOptimizer) {
+                        delayMs = pollingSleep;
+                    }
+                    if (delayMs > 0) {
                         try {
-                            Thread.sleep(pollingOptimizer.currentDelayMs());
+                            Thread.sleep(delayMs);
                         } catch (InterruptedException e) {
                             Thread.currentThread().interrupt();
                         }
@@ -1076,7 +1116,7 @@ public final class PostgresqlEventStore<CONFIG extends AggregateEventStreamConfi
 
                 var loadEventsByGlobalOrderTiming = StopWatch.start("loadEventsByGlobalOrder(" + subscriberId + ", " + aggregateType + ")");
                 // Every tenant's events: see loadEventsForPoll
-                var loadedEvents = loadEventsForPoll(aggregateType, globalOrderRange, transientGapsToIncludeInQuery);
+                var loadedEvents = loadEventsForPoll(aggregateType, globalOrderRange, transientGapsToIncludeInQuery, onlyIncludeEventIfItBelongsToTenant);
                 eventStoreSubscriptionObserver.eventStorePolled(subscriberId,
                                                                 aggregateType,
                                                                 globalOrderRange,
@@ -1247,15 +1287,22 @@ public final class PostgresqlEventStore<CONFIG extends AggregateEventStreamConfi
      * The events a poll reads: the global order range and the transient gaps asked for again, for <b>every</b> tenant.
      * A tenant-filtered subscription filters them in memory, after the gap handler has seen them: filtered in SQL,
      * other tenants' events would be missing global orders, recorded as transient gaps and later promoted to permanent
-     * ones - and the read position could not move past them. Costs a tenant-filtered subscription the transfer of
-     * other tenants' rows in its range; the payload is not deserialized for them. {@link dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.cdc.CdcEventStore}
+     * ones - and the read position could not move past them. The other tenants' rows are still read, but without their
+     * payload and metadata (see {@link LoadEventsByGlobalOrder#getOnlyLoadPayloadIfEventBelongsToTenant()}), so only
+     * their global order, tenant and a few small columns are transferred; they are never deserialized, nor published.
+     * {@link dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.cdc.CdcEventStore}
      * loads every tenant for the same reason.
      */
-    private List<PersistedEvent> loadEventsForPoll(AggregateType aggregateType, LongRange globalOrderRange, List<GlobalEventOrder> transientGapsToIncludeInQuery) {
-        return loadEventsByGlobalOrder(aggregateType,
-                                       globalOrderRange,
-                                       transientGapsToIncludeInQuery,
-                                       Optional.empty()).toList();
+    private List<PersistedEvent> loadEventsForPoll(AggregateType aggregateType,
+                                                   LongRange globalOrderRange,
+                                                   List<GlobalEventOrder> transientGapsToIncludeInQuery,
+                                                   Optional<Tenant> onlyIncludeEventIfItBelongsToTenant) {
+        var operation = new LoadEventsByGlobalOrder(aggregateType,
+                                                    globalOrderRange,
+                                                    transientGapsToIncludeInQuery,
+                                                    null);
+        onlyIncludeEventIfItBelongsToTenant.ifPresent(operation::setOnlyLoadPayloadIfEventBelongsToTenant);
+        return loadEventsByGlobalOrder(operation).toList();
     }
 
     /**

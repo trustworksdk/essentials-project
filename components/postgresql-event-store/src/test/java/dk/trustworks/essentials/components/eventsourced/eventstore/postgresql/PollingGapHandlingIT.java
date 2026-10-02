@@ -30,6 +30,7 @@ import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.ty
 import dk.trustworks.essentials.components.distributed.fencedlock.postgresql.PostgresqlFencedLockManager;
 import dk.trustworks.essentials.components.foundation.transaction.UnitOfWork;
 import dk.trustworks.essentials.components.foundation.types.*;
+import dk.trustworks.essentials.types.LongRange;
 import org.jdbi.v3.core.Jdbi;
 import org.jdbi.v3.postgres.PostgresPlugin;
 import org.junit.jupiter.api.*;
@@ -98,6 +99,14 @@ class PollingGapHandlingIT {
      * The tenant {@link TenantPersistableEventMapper} stamps on the next event appended; {@code null} = no tenant
      */
     private volatile TenantId                                                       tenantOfNextEvent;
+    /**
+     * Every event the polling loop handed to the gap reconciliation - all tenants' - see {@link EventStoreSubscriptionObserver#reconciledGaps}
+     */
+    private final List<PersistedEvent>                                              reconciled = new CopyOnWriteArrayList<>();
+    /**
+     * The number of polls, empty or not - see {@link EventStoreSubscriptionObserver#resolvedBatchSizeForEventStorePoll}
+     */
+    private final AtomicInteger                                                     polls      = new AtomicInteger();
 
     @BeforeEach
     void setup() {
@@ -130,11 +139,23 @@ class PollingGapHandlingIT {
                                              public void publishEvent(SubscriberId subscriberId, AggregateType aggregateType, PersistedEvent persistedEvent, Duration publishEventDuration) {
                                                  published.add(persistedEvent.globalEventOrder().longValue());
                                              }
+
+                                             @Override
+                                             public void reconciledGaps(SubscriberId subscriberId, AggregateType aggregateType, LongRange globalOrderRange, List<GlobalEventOrder> transientGapsToInclude, List<PersistedEvent> persistedEvents, Duration reconcileGapsDuration) {
+                                                 reconciled.addAll(persistedEvents);
+                                             }
+
+                                             @Override
+                                             public void resolvedBatchSizeForEventStorePoll(SubscriberId subscriberId, AggregateType aggregateType, long defaultBatchFetchSize, long remainingDemandForEvents, long lastBatchSizeForEventStorePoll, int consecutiveNoPersistedEventsReturned, long nextFromInclusiveGlobalOrder, long batchSizeForThisEventStorePoll, Duration resolveBatchSizeDuration) {
+                                                 polls.incrementAndGet();
+                                             }
                                          })
                                          .build();
         executor = Executors.newCachedThreadPool();
         tenantOfNextEvent = null;
         published.clear();
+        reconciled.clear();
+        polls.set(0);
         subscriptionManager = null;
     }
 
@@ -668,23 +689,98 @@ class PollingGapHandlingIT {
         };
     }
 
+    /**
+     * A hole at the read position (here a rolled-back append) with a batch size of 1: the polled range holds nothing,
+     * and used to stay that way until the batch size grew - after 100 empty polls, and then only by a truncated 0.5.
+     */
+    @ParameterizedTest
+    @EnumSource(PollingMode.class)
+    void a_hole_at_the_read_position_does_not_stall_a_subscription_with_a_batch_size_of_one(PollingMode pollingMode) {
+        var subscriberId = SubscriberId.of("hole-batch-size-one-" + pollingMode);
+        var received     = new CopyOnWriteArrayList<Long>();
+
+        // Wider than a range of batch size 1, and than the first few growths of it
+        var holeSize = 10;
+        for (var i = 0; i < holeSize; i++) {
+            appendRolledBack();
+        }
+        var committed = appendCommitted();
+        assertThat(committed).isEqualTo(holeSize + 1);
+
+        subscription = poll(pollingMode, subscriberId, GlobalEventOrder.FIRST_GLOBAL_EVENT_ORDER.longValue(), Optional.empty(), 1)
+                .subscribe(event -> received.add(event.globalEventOrder().longValue()));
+        // Growing the batch size every 10th empty poll takes 70 polls at 50 ms, 3.5 s, to span the hole - the stall
+        Awaitility.waitAtMost(Duration.ofSeconds(2)).untilAsserted(() -> assertThat(received).containsExactly(committed));
+    }
+
+    @Test
+    void an_empty_poll_without_a_polling_optimizer_still_waits_the_polling_interval() throws Exception {
+        var subscriberId = SubscriberId.of("no-optimizer-busy-loop");
+
+        subscription = eventStore.pollEvents(aggregateType,
+                                             GlobalEventOrder.FIRST_GLOBAL_EVENT_ORDER.longValue(),
+                                             Optional.of(10),
+                                             Optional.of(Duration.ofMillis(100)),
+                                             Optional.empty(),
+                                             Optional.of(subscriberId),
+                                             Optional.empty())
+                                 .subscribe(event -> {});
+        Thread.sleep(1000);
+        subscription.dispose();
+
+        // ~10 at one poll per 100 ms, thousands when the worker loops without waiting
+        assertThat(polls.get()).isBetween(1, 20);
+    }
+
+    @ParameterizedTest
+    @EnumSource(PollingMode.class)
+    void a_tenant_filtered_poll_does_not_transfer_other_tenants_payloads(PollingMode pollingMode) {
+        var subscriberId = SubscriberId.of("tenant-payload-" + pollingMode);
+        var received     = new CopyOnWriteArrayList<Long>();
+
+        var ours   = appendCommitted(TENANT_A);
+        var theirs = appendCommitted(TENANT_B);
+        var shared = appendCommitted(null);
+
+        subscription = subscribe(pollingMode, subscriberId, Optional.of(TENANT_A), received);
+        Awaitility.waitAtMost(Duration.ofSeconds(10)).untilAsserted(() -> assertThat(received).containsExactly(ours, shared));
+        Awaitility.waitAtMost(Duration.ofSeconds(10)).untilAsserted(() -> assertThat(reconciled).extracting(e -> e.globalEventOrder().longValue()).contains(ours, theirs, shared));
+
+        // Every tenant's global order is still read - the gap handler needs them - but only ours carries its payload
+        assertThat(reconciled).filteredOn(e -> e.globalEventOrder().longValue() == theirs)
+                              .isNotEmpty()
+                              .allSatisfy(e -> {
+                                  assertThat(e.tenant().map(Object::toString)).contains(TENANT_B.toString());
+                                  assertThat(e.event().getJson()).doesNotContain("orderId");
+                                  assertThat(e.metaData().getJson()).isEqualTo("{}");
+                              });
+        assertThat(reconciled).filteredOn(e -> e.globalEventOrder().longValue() == ours || e.globalEventOrder().longValue() == shared)
+                              .isNotEmpty()
+                              .allSatisfy(e -> assertThat(e.event().getJson()).contains("orderId"));
+        assertThat(transientGapsOf(subscriberId)).isEmpty();
+    }
+
     private Disposable subscribe(PollingMode pollingMode, SubscriberId subscriberId, Optional<Tenant> tenant, List<Long> received) {
         return poll(pollingMode, subscriberId, GlobalEventOrder.FIRST_GLOBAL_EVENT_ORDER.longValue(), tenant)
                 .subscribe(event -> received.add(event.globalEventOrder().longValue()));
     }
 
     private Flux<PersistedEvent> poll(PollingMode pollingMode, SubscriberId subscriberId, long fromInclusiveGlobalOrder, Optional<Tenant> tenant) {
+        return poll(pollingMode, subscriberId, fromInclusiveGlobalOrder, tenant, 10);
+    }
+
+    private Flux<PersistedEvent> poll(PollingMode pollingMode, SubscriberId subscriberId, long fromInclusiveGlobalOrder, Optional<Tenant> tenant, int batchSize) {
         return switch (pollingMode) {
             case POLL_EVENTS -> eventStore.pollEvents(aggregateType,
                                                       fromInclusiveGlobalOrder,
-                                                      Optional.of(10),
+                                                      Optional.of(batchSize),
                                                       Optional.of(POLLING_INTERVAL),
                                                       tenant,
                                                       Optional.of(subscriberId),
                                                       Optional.empty());
             case UNBOUNDED_POLL_FOR_EVENTS -> eventStore.unboundedPollForEvents(aggregateType,
                                                                                 fromInclusiveGlobalOrder,
-                                                                                Optional.of(10),
+                                                                                Optional.of(batchSize),
                                                                                 Optional.of(POLLING_INTERVAL),
                                                                                 tenant,
                                                                                 Optional.of(subscriberId));

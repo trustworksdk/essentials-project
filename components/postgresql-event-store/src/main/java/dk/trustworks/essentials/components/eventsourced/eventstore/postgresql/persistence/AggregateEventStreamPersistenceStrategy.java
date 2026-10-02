@@ -274,6 +274,25 @@ public interface AggregateEventStreamPersistenceStrategy<CONFIG extends Aggregat
     Stream<PersistedEvent> loadEventsByGlobalOrder(EventStoreUnitOfWork unitOfWork, AggregateType aggregateType, LongRange globalOrderRange, List<GlobalEventOrder> includeAdditionalGlobalOrders, Optional<Tenant> onlyIncludeEventsIfTheyBelongToTenant);
 
     /**
+     * Like {@link #loadEventsByGlobalOrder(EventStoreUnitOfWork, AggregateType, LongRange, List, Optional)} for <b>every</b> tenant's events,
+     * but only the events belonging to <code>onlyLoadPayloadIfEventBelongsToTenant</code> - or to no tenant at all - need carry their payload
+     * and metadata. The other tenants' events must still be returned, as a polling subscription needs their global orders to tell them from gaps,
+     * but their payload and metadata may be left out (an empty JSON object), sparing the database from reading and the connection from transferring them.<br>
+     * The default implementation loads every payload, which is always correct, only not as cheap.
+     *
+     * @param unitOfWork                              the current unit of work
+     * @param aggregateType                           the aggregate type that the underlying {@link AggregateEventStream} is associated with
+     * @param globalOrderRange                        the range of {@link PersistedEvent#globalEventOrder()}'s we want Events for
+     * @param includeAdditionalGlobalOrders           a list of additional global orders (typically outside the <code>globalOrderRange</code>) that you want to include additionally<br>
+     *                                                May be null or empty if no additional events should be loaded outside the <code>globalOrderRange</code>
+     * @param onlyLoadPayloadIfEventBelongsToTenant   the tenant whose events (and those without a tenant) must carry their payload and metadata
+     * @return the {@link PersistedEvent}'s of every tenant
+     */
+    default Stream<PersistedEvent> loadEventsByGlobalOrderOmittingOtherTenantsPayloads(EventStoreUnitOfWork unitOfWork, AggregateType aggregateType, LongRange globalOrderRange, List<GlobalEventOrder> includeAdditionalGlobalOrders, Tenant onlyLoadPayloadIfEventBelongsToTenant) {
+        return loadEventsByGlobalOrder(unitOfWork, aggregateType, globalOrderRange, includeAdditionalGlobalOrders, Optional.empty());
+    }
+
+    /**
      * Load the event belonging to the given <code>configuration</code> and having the specified <code>eventId</code>
      *
      * @param unitOfWork    the current unit of work

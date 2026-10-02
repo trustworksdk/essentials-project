@@ -23,32 +23,14 @@ package dk.trustworks.essentials.components.eventsourced.eventstore.postgresql;
  * manage polling efficiency and load on the system.
  */
 public interface EventStorePollingOptimizer {
+    /**
+     * An optimizer that never skips or delays polling of its own. A polling worker using it still waits the
+     * polling interval after a poll that returned no events - without that it would poll again at once, in a busy
+     * loop. Use {@link SimpleEventStorePollingOptimizer} or {@link JitteredEventStorePollingOptimizer} to back off
+     * further while the event store is idle.
+     */
     static EventStorePollingOptimizer None() {
-        return new EventStorePollingOptimizer() {
-
-            @Override
-            public void eventStorePollingReturnedNoEvents() {
-            }
-
-            @Override
-            public void eventStorePollingReturnedEvents() {
-            }
-
-            @Override
-            public boolean shouldSkipPolling() {
-                return false;
-            }
-
-            @Override
-            public long currentDelayMs() {
-                return 0L;
-            }
-
-            @Override
-            public String toString() {
-                return "NoEventStorePollingOptimizer";
-            }
-        };
+        return new NoEventStorePollingOptimizer();
     }
 
     void eventStorePollingReturnedNoEvents();
