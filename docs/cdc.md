@@ -21,8 +21,10 @@ What CDC delivers:
   to bootstrap a subscription's resume point and as a fallback whenever CDC is unhealthy.
 - **Ordered handover**: `BackfillThenLiveOrdered` snapshots the head global-order at
   subscription time, polls `[resume … head]`, then gates live emissions until the
-  backfill catches up — so subscribers see a strictly monotonic global-order stream
-  across the boundary.
+  backfill catches up — so subscribers see a global-order stream across the boundary.
+  The one exception is an event whose transaction commits *after* one holding a higher
+  global order: it is delivered when it commits, after the higher one (see
+  "Commit order, not global order" in §2).
 
 What CDC does **not** change:
 
@@ -156,8 +158,9 @@ and holds the ones its handler has not reached yet in a buffer of its own, one p
 page deep (the subscription manager's `eventStorePollingBatchSize`). When a subscription
 falls further behind than that - a handler in a long `SubscriptionErrorPolicy` backoff,
 or a slow call - only that subscription leaves the bus: it is handed what it buffered,
-then catches up from the event store from the event after the last one it was handed,
-and rejoins the bus (see the catch-up below). Nothing is lost, repeated or reordered.
+then catches up from the event store from the event after the highest one it was handed
+(and the gaps below it), and rejoins the bus (see the catch-up below). Nothing is lost
+or repeated.
 Each such overflow logs one WARN naming the subscriber and aggregate type and counts
 `essentials.cdc.eventstore.live_source.overflow.count`, and the catch-up logs one INFO
 once the subscription is back on the bus; it is not a CDC fallback and does not touch
@@ -177,8 +180,9 @@ the switch back after an outage, and the recovery from an overflow - it:
 
 1. attaches to the bus, holding what the bus delivers in its own buffer;
 2. only then reads the highest persisted global order (the head);
-3. loads everything from the event after the last one it handled up to that head, page
-   by page, on its `Cdc-<subscriber>-<aggregateType>` thread, gap handler included;
+3. loads everything from the event after the highest one it delivered up to that head,
+   page by page, on its `Cdc-<subscriber>-<aggregateType>` thread, gap handler included -
+   and, on the first page, the gaps below it that it still waits for, by order;
 4. then drains its buffer and carries on from the bus.
 
 An event the bus published before the attach was committed before it, so the catch-up
@@ -190,6 +194,59 @@ bus had published that polling had not yet fetched - since polling's last fetch,
 the `activeCutbackDebounce` window, and while the switch waited for an event still in
 the handler. A catch-up that fails (database unreachable) is retried a second later,
 logged at WARN; it does not end the subscription.
+
+**Commit order, not global order.** A transaction takes its `global_event_order` when it
+inserts, and the bus delivers events in the order their transactions *commit*. Two
+transactions appending to the same aggregate type can therefore reach the bus out of
+global order: the one holding the lower order commits second. The polling path sees the
+same thing as a transient gap that its gap handler re-queries and fills later. Each CDC
+subscription keeps a delivery tracker (`CdcDeliveryTracker`) rather than a high-water
+mark:
+
+- a contiguous **watermark** - everything at or below it was delivered or is known not
+  to be coming - and the global orders delivered **above** it; the orders in between are
+  **gaps**;
+- an event passes if its order is above the watermark and was not delivered yet, so a
+  lower order that commits late is delivered when it arrives - after the higher one, out
+  of global order, exactly as the polling path delivers a gap-filled event. That is why
+  a subscriber's resume point only ever advances (`advanceResumeFromAndIncluding`);
+- a gap is waited for until it is **120 s** old - the default permanent-gap threshold of
+  `PostgresqlEventStreamGapHandler` (`thresholdBased(120)`); a customised promotion
+  strategy is not reflected, and with a `NoEventStreamGapHandler` the same 120 s applies.
+  Then the watermark moves past it: a rolled-back `IDENTITY` value is a gap that never
+  fills. An event for a gap given up on is dropped, as polling drops one whose gap was
+  promoted to permanent. At most 10 000 gaps are held at once; beyond that the oldest is
+  given up at once and one WARN is logged;
+- polling resumes right after the watermark, so it reads the gaps again; a catch-up
+  reads forward from the highest order delivered and asks for up to 1 000 of the gaps by
+  order. What was delivered already is dropped.
+
+A high-water mark used to drop such an event for good - on the bus, and when
+polling's gap handler fetched it late (the gap handler then resolved the gap as found).
+A subscription served by `BackfillThenLiveOrdered` parked its strict drain on it until
+`liveDrainStallThreshold` (three minutes by default) instead, or - for an event at or
+below the head its backfill read - dropped it as already back-filled.
+
+*Restarts.* A subscriber's resume point moves past a gap, which is safe only while the
+gap is recorded durably. The polling path and every back-fill page record the gaps in
+what they load as transient gaps with the gap handler; an event from the bus is not
+loaded, so a delivered event that opens a gap records it - synchronously, before the
+event reaches the handler - and one that fills a gap resolves it, each in a short unit
+of work of its own (reported as a gap reconciliation, like a poll's). When a subscription
+starts, its tracker is seeded with the transient gaps the gap handler still has for the
+subscriber, so an event filling one of them below the resume point is still delivered
+after a restart or a fenced-lock hand-over to another node. Only with a subscriber id and
+a gap handler that records gaps; an in-order event costs nothing extra.
+
+*Tenants.* The tracker has to see every global order, so a CDC subscription's polling,
+catch-ups and backfill load all tenants and filter by the subscriber's tenant on the way
+out. Filtered in SQL, another tenant's events would be gaps it waits for.
+
+*`BackfillThenLiveOrdered`.* Its drain stays strict past the head. A late commit no longer
+parks it - the event now reaches the drain - but a rolled-back `IDENTITY` value in its
+live tail still does, until `liveDrainStallThreshold`, after which it back-fills past it:
+correct, but slow for that subscription. An event at or below the head that the backfill
+could not see is delivered once the backfill is done.
 
 ### Logical decoding plugins
 

@@ -431,6 +431,84 @@ public class BackfillThenLiveOrderedTest {
                     .verify();
     }
 
+    /**
+     * A transaction that took global order 2 commits after the one that took 3: the backfill (head 3) cannot see 2, and
+     * the bus delivers it once it commits - after the drain has moved past the head. It used to be dropped there as
+     * "already back-filled"; it is delivered, late and out of global order, and the drain carries on.
+     */
+    @Test
+    void a_live_event_at_or_below_the_head_the_backfill_could_not_see_is_delivered_once_the_backfill_is_done() {
+        Sinks.Many<PersistedEvent> liveSink = Sinks.many().unicast().onBackpressureBuffer();
+        Flux<PersistedEvent> backfill = Flux.just(pe(1), pe(3));
+
+        Flux<PersistedEvent> ordered = CdcEventStore.BackfillThenLiveOrdered.orderedWithoutMetrics(backfill, liveSink.asFlux(), 3, new CdcProperties.CdcEventBusProperties());
+
+        StepVerifier.create(ordered.map(e -> e.globalEventOrder().longValue()).take(4))
+                    .expectNext(1L, 3L)
+                    .then(() -> liveSink.tryEmitNext(pe(2)))
+                    .expectNext(2L)
+                    .then(() -> liveSink.tryEmitNext(pe(4)))
+                    .expectNext(4L)
+                    .expectComplete()
+                    .verify(Duration.ofSeconds(5));
+    }
+
+    /**
+     * The live source hands over an event at or below the head while the backfill still runs - it committed between the
+     * attach and the head read, so the backfill loads it too. Held until the backfill is done, and delivered once.
+     */
+    @Test
+    void a_live_event_the_backfill_also_loads_is_delivered_once_in_order() {
+        Sinks.Many<PersistedEvent> backfillSink = Sinks.many().unicast().onBackpressureBuffer();
+        Sinks.Many<PersistedEvent> liveSink     = Sinks.many().unicast().onBackpressureBuffer();
+
+        Flux<PersistedEvent> ordered = CdcEventStore.BackfillThenLiveOrdered.orderedWithoutMetrics(backfillSink.asFlux(), liveSink.asFlux(), 3, new CdcProperties.CdcEventBusProperties());
+
+        StepVerifier.create(ordered.map(e -> e.globalEventOrder().longValue()).take(4))
+                    .then(() -> {
+                        liveSink.tryEmitNext(pe(3));
+                        liveSink.tryEmitNext(pe(4));
+                        backfillSink.tryEmitNext(pe(1));
+                        backfillSink.tryEmitNext(pe(2));
+                        backfillSink.tryEmitNext(pe(3));
+                        backfillSink.tryEmitComplete();
+                    })
+                    .expectNext(1L, 2L, 3L, 4L)
+                    .expectComplete()
+                    .verify(Duration.ofSeconds(5));
+    }
+
+    /**
+     * Everything handed downstream is recorded, so a live source that hands an event over again after it was delivered
+     * - a catch-up re-reading from the watermark - cannot make it a duplicate
+     */
+    @Test
+    void an_event_handed_over_again_after_it_was_delivered_is_dropped() {
+        var tracker = CdcDeliveryTracker.startingAfter("test", 0);
+        Sinks.Many<PersistedEvent> liveSink = Sinks.many().unicast().onBackpressureBuffer();
+
+        Flux<PersistedEvent> ordered = CdcEventStore.BackfillThenLiveOrdered.orderedWithoutMetrics(Flux.just(pe(1), pe(2)),
+                                                                                                  liveSink.asFlux(),
+                                                                                                  () -> 2L,
+                                                                                                  new CdcProperties.CdcEventBusProperties(),
+                                                                                                  CdcEventStore.DeliveryRecorder.tracking(tracker));
+
+        StepVerifier.create(ordered.map(e -> e.globalEventOrder().longValue()).take(4))
+                    .expectNext(1L, 2L)
+                    .then(() -> {
+                        liveSink.tryEmitNext(pe(3));
+                        liveSink.tryEmitNext(pe(2));
+                        liveSink.tryEmitNext(pe(3));
+                        liveSink.tryEmitNext(pe(1));
+                        liveSink.tryEmitNext(pe(4));
+                        liveSink.tryEmitNext(pe(5));
+                    })
+                    .expectNext(3L, 4L)
+                    .expectComplete()
+                    .verify(Duration.ofSeconds(5));
+        assertThat(tracker.watermark()).isGreaterThanOrEqualTo(4);
+    }
+
     private static PersistedEvent pe(long globalOrder) {
         return PersistedEvent.from(
                 EventId.random(),

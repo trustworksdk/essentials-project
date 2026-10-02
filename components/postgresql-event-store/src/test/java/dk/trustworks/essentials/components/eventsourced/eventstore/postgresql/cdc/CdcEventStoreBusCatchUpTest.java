@@ -203,8 +203,9 @@ class CdcEventStoreBusCatchUpTest {
     }
 
     /**
-     * Tenant filtering: the catch-up filters by the subscriber's tenant in SQL, as polling does, and the bus is filtered
-     * on the way out. An event without a tenant belongs to every tenant.
+     * Tenant filtering: the catch-up loads every tenant's events, as the bus delivers them, and both are filtered by the
+     * subscriber's tenant on the way out. Filtered in SQL instead, another tenant's events would be gaps in the global
+     * order the subscription's delivery tracker waits for. An event without a tenant belongs to every tenant.
      */
     @Test
     void a_tenant_filtered_subscription_catches_up_on_its_own_tenants_events_only() {
@@ -221,7 +222,7 @@ class CdcEventStoreBusCatchUpTest {
         persistAndPublish(store.event(5, Optional.of(otherTenant)), store.event(6, Optional.of(tenant)));
 
         await().atMost(Duration.ofSeconds(5)).untilAsserted(() -> assertThat(received).containsExactly(1L, 3L, 4L, 6L));
-        assertThat(store.loadTenants()).isNotEmpty().allMatch(loadTenant -> loadTenant.map(Object::toString).equals(Optional.of("example")));
+        assertThat(store.loadTenants()).isNotEmpty().allMatch(Optional::isEmpty);
     }
 
     private void subscribe(String subscriberId, Optional<Tenant> tenant, Handler handler) {
