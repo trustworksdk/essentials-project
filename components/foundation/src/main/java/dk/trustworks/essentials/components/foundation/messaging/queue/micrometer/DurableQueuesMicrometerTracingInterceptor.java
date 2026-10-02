@@ -25,6 +25,7 @@ import io.micrometer.tracing.Tracer;
 import io.micrometer.tracing.propagation.Propagator;
 
 import java.util.*;
+import java.util.function.Supplier;
 
 import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 
@@ -199,12 +200,27 @@ public final class DurableQueuesMicrometerTracingInterceptor implements DurableQ
                                             observationRegistry);
         observation.lowCardinalityKeyValue(QUEUE_NAME, queuedMessage.getQueueName().toString());
         observation.highCardinalityKeyValue(QUEUE_ENTRY_ID, queuedMessage.getId().toString());
-        observation.highCardinalityKeyValue("addedTimestamp", queuedMessage.getAddedTimestamp().toString());
-        observation.highCardinalityKeyValue("deliveryTimestamp", queuedMessage.getDeliveryTimestamp() != null ? queuedMessage.getDeliveryTimestamp().toString() : "");
-        observation.highCardinalityKeyValue("totalDeliveryAttempts", Integer.toString(queuedMessage.getTotalDeliveryAttempts()));
-        observation.highCardinalityKeyValue("redeliveryAttempts", Integer.toString(queuedMessage.getRedeliveryAttempts()));
+        tagIfAvailable(observation, "addedTimestamp", () -> String.valueOf(queuedMessage.getAddedTimestamp()));
+        tagIfAvailable(observation, "deliveryTimestamp", () -> queuedMessage.getDeliveryTimestamp() != null ? queuedMessage.getDeliveryTimestamp().toString() : "");
+        tagIfAvailable(observation, "totalDeliveryAttempts", () -> Integer.toString(queuedMessage.getTotalDeliveryAttempts()));
+        tagIfAvailable(observation, "redeliveryAttempts", () -> Integer.toString(queuedMessage.getRedeliveryAttempts()));
         activeObservationScope.set(observation.openScope());
         return queuedMessage;
+    }
+
+    /**
+     * Adds a span attribute the message may not be able to answer. These attributes are decoration, so a missing
+     * value must never fail the delivery they describe: a {@link QueuedMessage} implementation may throw
+     * {@link UnsupportedOperationException} for a value it does not carry - the shard-owned engine's push delivery
+     * path hands its consumers a message without the timestamps and attempt counts, and before this every delivery
+     * on it threw here, before the handler ran, and was dead-lettered once its attempts ran out.
+     */
+    private static void tagIfAvailable(Observation observation, String key, Supplier<String> value) {
+        try {
+            observation.highCardinalityKeyValue(key, value.get());
+        } catch (UnsupportedOperationException notCarriedByThisMessage) {
+            // Left off the span
+        }
     }
 
     private ReceiverContext<MessageMetaData> createTraceContextForMessage(QueuedMessage queuedMessage) {
