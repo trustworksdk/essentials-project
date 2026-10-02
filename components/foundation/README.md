@@ -2181,8 +2181,16 @@ public interface SchedulerApi {
     long getTotalPgCronJobs(Object principal);
     List<ApiPgCronJobRunDetails> getPgCronJobRunDetails(Object principal, Integer jobId, long startIndex, long pageSize);
     List<ApiExecutorJob> getExecutorJobs(Object principal, long startIndex, long pageSize);
+    Optional<ApiScheduledJobRun> runJobNow(Object principal, String jobName);
 }
 ```
+
+`runJobNow` runs a job registered with the scheduler once, now, waits for it and returns the outcome (succeeded,
+duration, error); it needs `SCHEDULER_WRITER` or `ESSENTIALS_ADMIN`. The name may carry the instance suffix the
+scheduler stores it under, so a name from the listings works as it is. An executor job runs only on the instance
+holding the scheduler lock - elsewhere `ScheduledJobNotRunnableHereException` names the holder. A pg_cron job has its
+registered function called directly, from any instance, and the run is not recorded in `cron.job_run_details`. A
+manual run is not coordinated with a scheduled run of the same job.
 
 ### PostgresqlQueryStatisticsApi
 

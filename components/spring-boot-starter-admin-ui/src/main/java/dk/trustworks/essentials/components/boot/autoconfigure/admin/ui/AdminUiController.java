@@ -73,6 +73,7 @@ public class AdminUiController {
         model.addAttribute("canWriteQueues", admin || authenticatedUser.hasQueueWriterRole());
         model.addAttribute("canReadPayloads", admin || authenticatedUser.hasQueuePayloadReaderRole());
         model.addAttribute("canReadScheduler", admin || authenticatedUser.hasSchedulerReaderRole());
+        model.addAttribute("canWriteScheduler", admin || authenticatedUser.hasSchedulerWriterRole());
         model.addAttribute("canReadSubscriptions", admin || authenticatedUser.hasSubscriptionReaderRole());
         model.addAttribute("canReadStatistics", admin || authenticatedUser.hasPostgresqlStatsReaderRole());
 

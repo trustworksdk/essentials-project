@@ -18,7 +18,8 @@ tags:
 - name: fenced-locks
   description: Inspect and release distributed fenced locks.
 - name: scheduler
-  description: "Inspect pg_cron jobs, their run history, and executor jobs."
+  description: "Inspect pg_cron jobs, their run history, and executor jobs, and run\
+    \ a job on demand."
 - name: postgresql-query-statistics
   description: Inspect slow-query statistics from pg_stat_statements.
 - name: postgresql-table-statistics
@@ -424,6 +425,70 @@ paths:
                 $ref: "#/components/schemas/Error"
       x-required-roles:
       - essentials_scheduler_reader
+      - essentials_admin
+  /scheduler/jobs/{jobName}/run:
+    post:
+      tags:
+      - scheduler
+      summary: "Run a job registered with the scheduler once, now, and return the\
+        \ outcome. Its schedule is not changed. A pg_cron job's run is not recorded\
+        \ in pg_cron's run history; a manual run is not coordinated with a scheduled\
+        \ run of the same job."
+      operationId: runJobNow
+      parameters:
+      - name: jobName
+        in: path
+        description: "The job name, as listed by the executor or pg_cron job operations."
+        required: true
+        schema:
+          type: string
+      responses:
+        "200":
+          description: 200 — The outcome of the run.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiScheduledJobRun"
+        "400":
+          description: "Malformed or out-of-range parameter, or invalid request body."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: Unauthenticated.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Caller lacks one of the required roles.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: No value exists for the given identifier.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "409":
+          description: "An executor job runs only on the instance holding the scheduler\
+            \ lock, and this request reached another instance. The message names the\
+            \ instance holding the lock, when one does."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "500":
+          description: Unexpected server error.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+      x-required-roles:
+      - essentials_scheduler_writer
       - essentials_admin
   /postgresql/query-statistics/top-ten-slowest:
     get:
@@ -3427,6 +3492,31 @@ components:
           type: boolean
         isBeingDelivered:
           type: boolean
+    ApiScheduledJobRun:
+      required:
+      - durationMs
+      - jobName
+      - jobType
+      - startedAt
+      - succeeded
+      type: object
+      properties:
+        jobName:
+          type: string
+        jobType:
+          type: string
+        startedAt:
+          type: string
+          format: date-time
+        durationMs:
+          type: integer
+          format: int64
+        succeeded:
+          type: boolean
+        error:
+          type: string
+          description: The exception type and message. Null when the run succeeded.
+          nullable: true
     ApiShardOwnedMessage:
       required:
       - attempts

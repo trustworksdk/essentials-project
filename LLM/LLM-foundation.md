@@ -1264,7 +1264,7 @@ All APIs require `principal` parameter for authorization. Throw `EssentialsSecur
 |-----|-------------|
 | `DBFencedLockApi` | `getAllLocks()`, `releaseLock()` |
 | `DurableQueuesApi` | `getQueueNames()`, `getQueuedMessages()`, `resurrectDeadLetterMessage()`, `deleteMessage()` |
-| `SchedulerApi` | `getPgCronJobs()`, `getExecutorJobs()` |
+| `SchedulerApi` | `getPgCronJobs()`, `getExecutorJobs()`, `runJobNow(principal, jobName)` — runs a registered job once and returns `ApiScheduledJobRun` (succeeded, duration, error); requires `SCHEDULER_WRITER`. An executor job only on the scheduler-lock holder (else `ScheduledJobNotRunnableHereException`, 409 over HTTP, naming the holder); a pg_cron job calls its registered function directly from any instance, not recorded in `cron.job_run_details`. Not coordinated with a scheduled run of the same job |
 | `PostgresqlQueryStatisticsApi` | `getSlowestQueries(principal, QueryStatisticsOrder, limit)`, `getTopTenSlowestQueries()` (requires `pg_stat_statements`: in the server's `shared_preload_libraries`, and created in the database — the API creates it at startup when the server preloads it and the role may create extensions; otherwise it returns an empty list) |
 | `PostgresqlTableStatisticsApi` | `fetchTableStatistics()` — size, activity, dead rows, cache hit and last vacuum/analyze for every table the registered `PostgresqlStatisticsTableProvider`s report, each tagged with a section |
 

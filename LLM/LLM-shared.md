@@ -885,7 +885,7 @@ throw new ValidationException(AMOUNT_TOO_HIGH.create(amount, maxAmount));
 | `LOCK_READER`, `LOCK_WRITER` | FencedLock read/write |
 | `QUEUE_READER`, `QUEUE_WRITER`, `QUEUE_PAYLOAD_READER` | DurableQueues operations |
 | `SUBSCRIPTION_READER`, `SUBSCRIPTION_WRITER` | Subscription management |
-| `SCHEDULER_READER`, `POSTGRESQL_STATS_READER` | Scheduler and stats |
+| `SCHEDULER_READER`, `SCHEDULER_WRITER`, `POSTGRESQL_STATS_READER` | Scheduler (writer: run a job on demand) and stats |
 
 ### EssentialsSecurityValidator
 

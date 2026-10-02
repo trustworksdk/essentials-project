@@ -30,8 +30,10 @@ import dk.trustworks.essentials.shared.concurrent.ThreadFactoryBuilder;
 import dk.trustworks.essentials.shared.network.Network;
 import org.slf4j.*;
 
+import java.time.*;
 import java.util.*;
 import java.util.concurrent.*;
+import java.util.function.Function;
 
 import static dk.trustworks.essentials.shared.FailFast.*;
 
@@ -219,6 +221,62 @@ public class DefaultEssentialsScheduler implements EssentialsScheduler, Lifecycl
             log.warn("Failed to cancel executor job {}", name, e);
         }
         return false;
+    }
+
+    @Override
+    public Optional<ScheduledJobRun> runJobNow(String jobName) {
+        requireNonNull(jobName, "jobName cannot be null");
+        var executorJob = findRegisteredJob(executorJobs, ExecutorJob::name, jobName);
+        if (executorJob.isPresent()) {
+            return Optional.of(runExecutorJobNow(executorJob.get()));
+        }
+        return findRegisteredJob(pgCronJobs, PgCronJob::name, jobName).map(this::runPgCronJobNow);
+    }
+
+    /**
+     * Matches the registered name, or the name the scheduler stored it under - the registered name plus the
+     * {@link JobNameResolver} suffix of whichever instance stored it, not necessarily this one. The longest matching
+     * registered name wins, so {@code ttl_orders} is not taken for a suffixed {@code ttl}.
+     */
+    private static <J> Optional<J> findRegisteredJob(List<J> jobs, Function<J, String> nameOf, String requestedName) {
+        return jobs.stream()
+                   .filter(job -> requestedName.equals(nameOf.apply(job))
+                           || requestedName.startsWith(nameOf.apply(job) + JobNameResolver.UNDER_SCORE))
+                   .max(Comparator.comparingInt(job -> nameOf.apply(job).length()));
+    }
+
+    private ScheduledJobRun runExecutorJobNow(ExecutorJob job) {
+        if (!started || !lockAcquired) {
+            var lockHolder = fencedLockManager.lookupLock(lockName)
+                                              .map(FencedLock::getLockedByLockManagerInstanceId)
+                                              .orElse(null);
+            throw new ScheduledJobNotRunnableHereException(job.name(), lockHolder);
+        }
+        log.info("▶️ Running ExecutorJob '{}' on demand", job.name());
+        return timedRun(job.name(), ScheduledJobRun.JobType.EXECUTOR, () -> job.task().run());
+    }
+
+    /**
+     * Calls the job's function directly. Its statement is built from the registered job - never read back from
+     * {@code cron.job}, which may hold any application's jobs - so only what this scheduler registered can be run
+     */
+    private ScheduledJobRun runPgCronJobNow(PgCronJob job) {
+        log.info("▶️ Running PgCronJob '{}' on demand", job.name());
+        return timedRun(job.name(), ScheduledJobRun.JobType.PG_CRON,
+                        () -> unitOfWorkFactory.usingUnitOfWork(uow -> uow.handle().createQuery(job.functionCallSql()).mapToMap().list()));
+    }
+
+    private static ScheduledJobRun timedRun(String jobName, ScheduledJobRun.JobType jobType, Runnable run) {
+        var startedAt = OffsetDateTime.now(ZoneOffset.UTC);
+        var startNs   = System.nanoTime();
+        String error  = null;
+        try {
+            run.run();
+        } catch (Throwable t) {
+            log.warn("❌ On-demand run of {} job '{}' failed", jobType, jobName, t);
+            error = t.getClass().getName() + (t.getMessage() != null ? ": " + t.getMessage() : "");
+        }
+        return new ScheduledJobRun(jobName, jobType, startedAt, Duration.ofNanos(System.nanoTime() - startNs), error == null, error);
     }
 
     private void scheduleExecutorJobInternal(ExecutorJob job) {

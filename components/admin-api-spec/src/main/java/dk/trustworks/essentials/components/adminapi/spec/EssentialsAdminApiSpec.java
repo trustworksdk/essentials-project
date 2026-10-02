@@ -72,6 +72,7 @@ final class EssentialsAdminApiSpec {
             ApiPgCronJob.class,
             ApiPgCronJobRunDetails.class,
             ApiExecutorJob.class,
+            ApiScheduledJobRun.class,
             ApiQueryStatistics.class,
             ApiTableSizeStatistics.class,
             ApiTableActivityStatistics.class,
@@ -113,7 +114,8 @@ final class EssentialsAdminApiSpec {
                                                 "lifecycle", "eventHandling", "polling", "lock", "reset"),
             "ApiCdcStatus", Set.of("availability", "configuration", "slot"),
             "ApiTableStatistics", Set.of("section", "tableName", "totalSize", "tableSize", "indexSize", "indexes"),
-            "ApiIndexStatistics", Set.of("indexName", "size"));
+            "ApiIndexStatistics", Set.of("indexName", "size"),
+            "ApiScheduledJobRun", Set.of("jobName", "jobType", "startedAt"));
 
     /**
      * DTO properties that are {@code null} by design, with the reason surfaced as the property description.
@@ -129,6 +131,8 @@ final class EssentialsAdminApiSpec {
                             + "requests. Null while there has been no block access since the statistics were reset.",
                     "lastVacuum", "The most recent manual or automatic vacuum. Null if the table was never vacuumed.",
                     "lastAnalyze", "The most recent manual or automatic analyze. Null if the table was never analyzed."),
+            "ApiScheduledJobRun", Map.of(
+                    "error", "The exception type and message. Null when the run succeeded."),
             "ApiIndexStatistics", Map.of(
                     "cacheHitRatio", "Shared-buffer hits as a percentage 0-100 of the index's block requests. Null while "
                             + "there has been no block access since the statistics were reset."),
@@ -155,7 +159,7 @@ final class EssentialsAdminApiSpec {
     /** Tag name &rarr; description, in display order. */
     static final Map<String, String> TAGS = new LinkedHashMap<>() {{
         put("fenced-locks", "Inspect and release distributed fenced locks.");
-        put("scheduler", "Inspect pg_cron jobs, their run history, and executor jobs.");
+        put("scheduler", "Inspect pg_cron jobs, their run history, and executor jobs, and run a job on demand.");
         put("postgresql-query-statistics", "Inspect slow-query statistics from pg_stat_statements.");
         put("postgresql-table-statistics", "Inspect size, activity, and cache-hit statistics for every table the Essentials components own.");
         put("durable-queues", "Inspect and manage durable queue and dead-letter messages.");
@@ -173,6 +177,7 @@ final class EssentialsAdminApiSpec {
     private static final String LOCK_R         = LOCK_READER.getRoleName();
     private static final String LOCK_W         = LOCK_WRITER.getRoleName();
     private static final String SCHEDULER_R    = SCHEDULER_READER.getRoleName();
+    private static final String SCHEDULER_W    = SCHEDULER_WRITER.getRoleName();
     private static final String STATS_R        = POSTGRESQL_STATS_READER.getRoleName();
     private static final String QUEUE_R        = QUEUE_READER.getRoleName();
     private static final String QUEUE_W        = QUEUE_WRITER.getRoleName();
@@ -233,6 +238,17 @@ final class EssentialsAdminApiSpec {
          .summary("Count API executor jobs.")
          .roles(SCHEDULER_R, ADMIN)
          .responseCount();
+
+        b.operation(SchedulerApi.class, "runJobNow")
+         .tag("scheduler").post("/scheduler/jobs/{jobName}/run")
+         .summary("Run a job registered with the scheduler once, now, and return the outcome. Its schedule is not changed. "
+                  + "A pg_cron job's run is not recorded in pg_cron's run history; a manual run is not coordinated with "
+                  + "a scheduled run of the same job.")
+         .roles(SCHEDULER_W, ADMIN)
+         .pathParam("jobName", new StringSchema(), "The job name, as listed by the executor or pg_cron job operations.")
+         .conflict("An executor job runs only on the instance holding the scheduler lock, and this request reached another "
+                   + "instance. The message names the instance holding the lock, when one does.")
+         .responseOptionalRef("ApiScheduledJobRun", "The outcome of the run.");
 
         // ---- postgresql-query-statistics ----
         b.operation(PostgresqlQueryStatisticsApi.class, "getTopTenSlowestQueries")

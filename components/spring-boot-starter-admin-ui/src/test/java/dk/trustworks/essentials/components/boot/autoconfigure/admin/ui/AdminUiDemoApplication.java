@@ -163,6 +163,14 @@ public class AdminUiDemoApplication {
                 new ApiExecutorJob("CdcEffectivenessMonitor", 30, 60, TimeUnit.SECONDS, LocalDateTime.parse("2026-07-31T09:15:00")),
                 new ApiExecutorJob("FencedLockConfirmation", 0, 5, TimeUnit.SECONDS, LocalDateTime.parse("2026-07-31T09:15:00"))));
         when(api.getTotalExecutorJobs(any())).thenReturn(2L);
+        // An executor job that fails, so the console's failed-run notice can be seen; anything else succeeds
+        when(api.runJobNow(any(), any())).thenAnswer(invocation -> {
+            String jobName = invocation.getArgument(1);
+            var failed = jobName.startsWith("FencedLockConfirmation");
+            return Optional.of(new ApiScheduledJobRun(jobName, jobName.contains("Confirmation") || jobName.contains("Monitor") ? "EXECUTOR" : "PG_CRON",
+                                                      OffsetDateTime.now(), failed ? 3 : 184, !failed,
+                                                      failed ? "java.lang.IllegalStateException: lock table unreachable" : null));
+        });
         return api;
     }
 

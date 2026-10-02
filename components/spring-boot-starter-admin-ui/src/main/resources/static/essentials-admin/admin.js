@@ -28,6 +28,7 @@ const API = document.body.dataset.api;
 const CAN = {
     writeLocks: document.body.dataset.canWriteLocks === 'true',
     writeQueues: document.body.dataset.canWriteQueues === 'true',
+    writeScheduler: document.body.dataset.canWriteScheduler === 'true',
     readPayloads: document.body.dataset.canReadPayloads === 'true'
 };
 
@@ -110,6 +111,10 @@ function errorState(err, requiredRole) {
                detail: 'The request was not authenticated. Sign in to the host application, then reload.' },
         403: { cls: 'state-403', icon: '▲', title: 'Not permitted',
                detail: 'Your roles do not cover this operation.' },
+        404: { cls: 'state-403', icon: '▲', title: 'Not found',
+               detail: 'The server has nothing by that name or identifier.' },
+        409: { cls: 'state-403', icon: '▲', title: 'Not possible here',
+               detail: 'The request is valid, but cannot be carried out on the instance it reached.' },
         500: { cls: 'state-5xx', icon: '■', title: 'Server error',
                detail: 'The server failed to answer. No detail is returned on a 5xx by design — check the application logs.' },
         0:   { cls: 'state-5xx', icon: '■', title: 'Cannot reach the server',
@@ -384,6 +389,13 @@ views.subscriptions = async () => {
     ], rows, { empty: 'No active subscriptions' }), 'GET /event-store/subscriptions', true)}`;
 };
 
+/* The outcome of the last on-demand run, shown above the job lists until the next one. Kept across re-renders: the
+   action re-renders the view as soon as the run returns. */
+let lastJobRun = null;
+
+const runNowButton = (name) => `<button class="btn btn-sm" data-act="runJob" data-name="${esc(name)}"
+      ${CAN.writeScheduler ? '' : 'disabled title="Requires essentials_scheduler_writer"'}>Run now</button>`;
+
 views.scheduler = async () => {
     const settled = await Promise.allSettled([
         api('/scheduler/pg-cron-jobs?startIndex=0&pageSize=100'),
@@ -401,7 +413,8 @@ views.scheduler = async () => {
       <td>${esc(j.nodeName)}:${j.nodePort}</td>
       <td>${esc(j.database)}</td>
       <td>${j.active ? badge('good', 'Active') : badge('neutral', 'Paused')}</td>
-      <td class="actions"><button class="btn btn-sm" data-runs="${j.jobId}" data-job="${esc(j.jobName ?? j.jobId)}">Run details</button></td>
+      <td class="actions">${j.jobName ? runNowButton(j.jobName) : ''}
+        <button class="btn btn-sm" data-runs="${j.jobId}" data-job="${esc(j.jobName ?? j.jobId)}">Run details</button></td>
     </tr>`);
 
     const execRows = (execJobs ?? []).map((e) => `<tr>
@@ -410,13 +423,21 @@ views.scheduler = async () => {
       <td class="num">${num(e.period)}</td>
       <td>${esc(e.unit)}</td>
       <td>${ts(e.scheduledAt)}</td>
+      <td class="actions">${runNowButton(e.name)}</td>
     </tr>`);
 
+    const lastRun = lastJobRun && `<div class="notice">
+      <strong>Last on-demand run:</strong> <span class="mono">${esc(lastJobRun.jobName)}</span> (${esc(lastJobRun.jobType)})
+      ${lastJobRun.succeeded ? badge('good', 'Succeeded') : badge('critical', 'Failed')}
+      in ${num(lastJobRun.durationMs)} ms, started ${ts(lastJobRun.startedAt)}
+      ${lastJobRun.error ? `<br><span class="mono" style="font-size:12px">${esc(lastJobRun.error)}</span>` : ''}</div>`;
+
     return `
+    ${lastRun || ''}
     ${card('pg_cron jobs', jobs
         ? table([
             { label: 'Job', num: true }, { label: 'Name' }, { label: 'Schedule' }, { label: 'Command' },
-            { label: 'Node' }, { label: 'Database' }, { label: 'State' }, { label: '', width: '110px', sticky: true }
+            { label: 'Node' }, { label: 'Database' }, { label: 'State' }, { label: '', width: '190px', sticky: true }
         ], jobRows, { empty: 'pg_cron is not installed or exposes no jobs' })
         : errorState(settled[0].reason, 'essentials_scheduler_reader'),
         jobCount ? `${jobCount.total} total` : 'GET /scheduler/pg-cron-jobs', true)}
@@ -426,7 +447,7 @@ views.scheduler = async () => {
     ${card('Executor jobs', execJobs
         ? table([
             { label: 'Name' }, { label: 'Initial delay', num: true }, { label: 'Period', num: true },
-            { label: 'Unit' }, { label: 'Scheduled at' }
+            { label: 'Unit' }, { label: 'Scheduled at' }, { label: '', width: '100px', sticky: true }
         ], execRows, { empty: 'No executor jobs registered' })
         : errorState(settled[2].reason, 'essentials_scheduler_reader'), 'GET /scheduler/executor-jobs', true)}`;
 };
@@ -969,6 +990,17 @@ function closeDialog() {
 }
 
 const actions = {
+    runJob: (name) => ({
+        title: 'Run job now?', danger: false, confirmLabel: 'Run now',
+        body: `<p>Runs <code class="mono">${esc(name)}</code> once, now, and waits for it to finish. Its schedule is not
+           changed, and the run is not coordinated with a scheduled run of the same job.</p>
+           <p>An executor job runs only on the instance holding the scheduler lock - if this request reaches another
+           instance it is refused, naming the one that holds it. A pg_cron job's run is not recorded in its run
+           details. Only jobs this application's scheduler registered can be run.</p>`,
+        run: async () => {
+            lastJobRun = await api(`/scheduler/jobs/${encodeURIComponent(name)}/run`, { method: 'POST' });
+        }
+    }),
     shardRetry: (id) => ({
         title: 'Retry now?', danger: false, confirmLabel: 'Retry',
         body: `<p>Makes <code class="mono">${esc(id)}</code> visible again immediately, ahead of whatever backoff it

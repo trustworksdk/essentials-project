@@ -54,3 +54,12 @@ PostgreSQL statistics, added later in the same unreleased version:
 - **`ApiTableCacheHitRatio.cacheHitRatio` is now a whole percentage.** The server read the 0-1 ratio as
   an integer, so every value below an exact 100% came back as `0`. Tables with no block access yet are
   left out rather than reported as `0`.
+
+Scheduler, added later in the same unreleased version:
+
+- **`POST /scheduler/jobs/{jobName}/run`** (`SchedulerApi.runJobNow`) runs a job registered with the
+  application's scheduler once and returns `ApiScheduledJobRun` (job type, start, duration, succeeded,
+  error). It requires the new `essentials_scheduler_writer` role. `404` for a name the scheduler did not
+  register - another application's `cron.job` row cannot be run; `409` for an executor job when the
+  request reached an instance not holding the scheduler lock. This is the first operation declaring
+  `409`.

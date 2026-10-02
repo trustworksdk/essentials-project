@@ -19,7 +19,7 @@ package dk.trustworks.essentials.components.foundation.scheduler.api;
 import dk.trustworks.essentials.components.foundation.scheduler.EssentialsScheduler;
 import dk.trustworks.essentials.shared.security.EssentialsSecurityProvider;
 
-import java.util.List;
+import java.util.*;
 
 import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 import static dk.trustworks.essentials.shared.security.EssentialsSecurityRoles.*;
@@ -84,5 +84,12 @@ public class DefaultSchedulerApi implements SchedulerApi {
     public long getTotalExecutorJobs(Object principal) {
         validateRoles(principal);
         return essentialsScheduler.getTotalExecutorJobEntries();
+    }
+
+    @Override
+    public Optional<ApiScheduledJobRun> runJobNow(Object principal, String jobName) {
+        validateHasAnyEssentialsSecurityRoles(securityProvider, principal, SCHEDULER_WRITER, ESSENTIALS_ADMIN);
+        requireNonNull(jobName, "jobName cannot be null");
+        return essentialsScheduler.runJobNow(jobName).map(ApiScheduledJobRun::from);
     }
 }

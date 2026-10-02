@@ -46,7 +46,8 @@ public enum EssentialsSecurityRoles {
 
     POSTGRESQL_STATS_READER("essentials_postgresql_stats_reader"),
 
-    SCHEDULER_READER("essentials_scheduler_reader");
+    SCHEDULER_READER("essentials_scheduler_reader"),
+    SCHEDULER_WRITER("essentials_scheduler_writer");
 
     private final String roleName;
 
