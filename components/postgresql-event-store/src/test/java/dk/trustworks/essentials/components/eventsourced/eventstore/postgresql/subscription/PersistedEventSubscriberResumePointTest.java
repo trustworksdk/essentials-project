@@ -185,6 +185,104 @@ class PersistedEventSubscriberResumePointTest {
         verify(observer, never()).handleEventFailed(any(), any(PersistedEventHandler.class), any(), any());
     }
 
+    /**
+     * CdcEventStore's adaptive live source switching a subscription between polling and the CDC bus disposes the thread
+     * the handler runs on, which interrupts its backoff - but nobody stopped the subscriber
+     */
+    @Test
+    void an_interrupted_retry_backoff_without_a_stop_neither_halts_the_subscriber_nor_skips_the_event() {
+        var attemptsAtTwo = new AtomicInteger();
+        var handled       = new CopyOnWriteArrayList<Long>();
+        var subscriber = new PersistedEventSubscriber(event -> {
+            if (event.globalEventOrder().longValue() == 2 && attemptsAtTwo.incrementAndGet() == 1) {
+                throw new IllegalStateException("Intentional failure handling #2");
+            }
+            handled.add(event.globalEventOrder().longValue());
+        },
+                                                      eventStoreSubscription,
+                                                      onErrorHandler,
+                                                      ioRetrySpec(),
+                                                      10,
+                                                      eventStore,
+                                                      SubscriptionErrorPolicy.retryThenSkip(3, Duration.ofSeconds(1), Duration.ofSeconds(1)));
+        subscriber.onSubscribe(mock(Subscription.class));
+        var deliveryThread = Thread.ofPlatform().start(() -> subscriber.onNext(event(2)));
+        threadsToStop.add(deliveryThread);
+        Awaitility.waitAtMost(Duration.ofSeconds(10)).until(() -> attemptsAtTwo.get() == 1);
+
+        // The source switch: the old source's delivery thread is disposed, the subscriber is not
+        deliveryThread.interrupt();
+
+        Awaitility.waitAtMost(Duration.ofSeconds(10)).until(() -> !deliveryThread.isAlive());
+        assertThat(attemptsAtTwo.get()).isEqualTo(2);
+        assertThat(handled).containsExactly(2L);
+        assertThat(resumePoint.getResumeFromAndIncluding()).isEqualTo(GlobalEventOrder.of(3));
+        // The new source's next event is handled, not ignored as by a halted subscriber
+        subscriber.onNext(event(3));
+        assertThat(handled).containsExactly(2L, 3L);
+        assertThat(resumePoint.getResumeFromAndIncluding()).isEqualTo(GlobalEventOrder.of(4));
+        assertThat(subscriber.isStoppedByErrorPolicy()).isFalse();
+        verifyNoInteractions(onErrorHandler);
+        verify(observer, never()).handleEventFailed(any(), any(PersistedEventHandler.class), any(), any());
+    }
+
+    @Test
+    void a_handler_failing_after_the_subscription_restarted_leaves_the_restarted_resume_point_alone() {
+        var mayFail = new CountDownLatch(1);
+        var subscriber = new PersistedEventSubscriber(event -> {
+            awaitQuietly(mayFail);
+            throw new IllegalStateException("Intentional failure handling #" + event.globalEventOrder());
+        },
+                                                      eventStoreSubscription,
+                                                      onErrorHandler,
+                                                      ioRetrySpec(),
+                                                      10,
+                                                      eventStore,
+                                                      SubscriptionErrorPolicy.skip());
+        subscriber.onSubscribe(mock(Subscription.class));
+        // A handler still blocked (say in a slow SQL call) when the subscription is stopped
+        var deliveryThread = Thread.ofPlatform().start(() -> subscriber.onNext(event(2)));
+        threadsToStop.add(deliveryThread);
+        subscriber.dispose();
+        // The restarted subscription (fenced-lock re-acquire, resetFrom) has its own resume point, here reset forward to #10
+        var restartedResumePoint = new SubscriptionResumePoint(SUBSCRIBER_ID, ORDERS, GlobalEventOrder.of(10), OffsetDateTime.now());
+        when(eventStoreSubscription.currentResumePoint()).thenReturn(Optional.of(restartedResumePoint));
+
+        mayFail.countDown();
+
+        Awaitility.waitAtMost(Duration.ofSeconds(10)).until(() -> !deliveryThread.isAlive());
+        assertThat(restartedResumePoint.getResumeFromAndIncluding()).isEqualTo(GlobalEventOrder.of(10));
+        assertThat(resumePoint.getResumeFromAndIncluding()).isEqualTo(GlobalEventOrder.of(2));
+        verifyNoInteractions(onErrorHandler);
+    }
+
+    @Test
+    void batched_final_batch_handled_on_completion_gets_the_error_policy() {
+        var attempts = new AtomicInteger();
+        var subscriber = new BatchedPersistedEventSubscriber(events -> {
+            attempts.incrementAndGet();
+            throw new IllegalStateException("Intentional failure handling the final batch");
+        },
+                                                             eventStoreSubscription,
+                                                             onErrorHandler,
+                                                             ioRetrySpec(),
+                                                             10,
+                                                             eventStore,
+                                                             10,
+                                                             Duration.ofMinutes(1),
+                                                             SubscriptionErrorPolicy.retryThenSkip(2, Duration.ofMillis(50), Duration.ofMillis(50)));
+        subscriber.onSubscribe(mock(Subscription.class));
+        subscriber.onNext(event(2));
+        subscriber.onNext(event(3));
+
+        // Completion marks the subscriber disposed before hookOnComplete handles what is left - that is not a stop
+        subscriber.onComplete();
+
+        verify(onErrorHandler, timeout(10_000)).accept(argThat(e -> e.globalEventOrder().equals(GlobalEventOrder.of(3))), any());
+        assertThat(attempts.get()).isEqualTo(3);
+        verify(observer).handleEventBatchFailed(any(), any(), any(), same(eventStoreSubscription));
+    }
+
     private static RetryBackoffSpec ioRetrySpec() {
         return Retry.backoff(Long.MAX_VALUE, Duration.ofMillis(500))
                     .filter(IOExceptionUtil::isIOException);

@@ -26,7 +26,10 @@ package dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.s
  * <i>at</i> the event, so the restarted subscription handles it again. Treating it as giving up instead would skip
  * the event for good - exactly the loss {@link SubscriptionErrorPolicy.Mode#RETRY_N_THEN_SKIP} exists to prevent.
  * <p>
- * Never carries an I/O failure as its cause, so the subscriber's own I/O {@code RetryBackoffSpec} does not retry it.
+ * Thrown only once the subscriber has actually been stopped: an interrupted retry backoff alone is not a stop, because
+ * {@code CdcEventStore} also interrupts it when it switches a live subscription between polling and the CDC bus (see
+ * {@code SubscriptionErrorPolicyRetries#awaitBackoff}). The subscribers' reactive {@code RetryBackoffSpec} never
+ * retries it, whatever its error filter (see {@code SubscriptionErrorPolicyRetries#neverRetryingAStop}).
  */
 final class SubscriptionStoppedDuringRetryException extends RuntimeException {
     /**

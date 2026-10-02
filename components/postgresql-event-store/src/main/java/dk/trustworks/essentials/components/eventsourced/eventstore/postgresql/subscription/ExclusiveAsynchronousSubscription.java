@@ -218,7 +218,9 @@ public class ExclusiveAsynchronousSubscription extends AbstractEventStoreSubscri
                     n);
             return;
         }
-        if (subscription == null) {
+        // Read once: onLockReleased nulls the field from the fenced-lock thread while the delivery thread is in here
+        var subscriber = subscription;
+        if (subscriber == null) {
             log.info("[{}-{}] Cannot request {} event(s) as the subscriber is null - the exclusive subscription is shutting down",
                     subscriberId,
                     aggregateType,
@@ -231,7 +233,7 @@ public class ExclusiveAsynchronousSubscription extends AbstractEventStoreSubscri
                 aggregateType,
                 n);
         eventStoreSubscriptionObserver.requestingEvents(n, this);
-        subscription.request(n);
+        subscriber.request(n);
     }
 
     /**

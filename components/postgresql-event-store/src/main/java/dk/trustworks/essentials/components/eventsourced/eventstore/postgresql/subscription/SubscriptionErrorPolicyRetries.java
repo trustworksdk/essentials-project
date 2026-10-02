@@ -20,6 +20,7 @@ import reactor.core.Exceptions;
 import reactor.util.retry.RetryBackoffSpec;
 
 import java.time.Duration;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.*;
 
@@ -60,12 +61,13 @@ final class SubscriptionErrorPolicyRetries {
      * @param retriesPerformed the retries already spent on this event. Kept by the caller across reactive resubscriptions, so an I/O error in
      *                         the middle of the retries does not reset the budget
      * @param stopRequested    true once the subscriber has been stopped (disposed). Checked before each retry, so a stop that lands between
-     *                         two attempts abandons the retries instead of running them
+     *                         two attempts abandons the retries instead of running them. The only thing that ends the retries early: an
+     *                         interrupt of the backoff without a stop is waited out (see {@link #awaitBackoff})
      * @param beforeRetry      called before each retry with the 1-based retry number, the wait and the failure being retried
      * @param <T>              the result type
      * @return the result of the first successful attempt
      * @throws SubscriptionStoppedDuringRetryException if the subscriber was stopped while the retries were under way - interrupted in the
-     *                                                 backoff, or found stopped before the next attempt
+     *                                                 backoff and found stopped, or found stopped before the next attempt
      */
     static <T> T callRetryingPerPolicy(Supplier<T> attempt,
                                        SubscriptionErrorPolicy policy,
@@ -73,31 +75,80 @@ final class SubscriptionErrorPolicyRetries {
                                        AtomicInteger retriesPerformed,
                                        BooleanSupplier stopRequested,
                                        RetryListener beforeRetry) {
-        while (true) {
-            try {
-                return attempt.get();
-            } catch (RuntimeException e) {
-                if (retrySpec.errorFilter.test(e) || retriesPerformed.get() >= policy.retriesBeforeGivingUp()) {
-                    throw e;
-                }
-                if (stopRequested.getAsBoolean()) {
-                    throw new SubscriptionStoppedDuringRetryException(e);
-                }
-                var retryNumber = retriesPerformed.incrementAndGet();
-                var backoff     = policy.backoffBeforeRetry(retryNumber);
-                beforeRetry.beforeRetry(retryNumber, backoff, e);
+        var interrupted = false;
+        try {
+            while (true) {
                 try {
-                    Thread.sleep(backoff);
-                } catch (InterruptedException interrupted) {
-                    // Disposing the subscriber shuts its delivery thread down, which is what interrupts the backoff
-                    Thread.currentThread().interrupt();
-                    throw new SubscriptionStoppedDuringRetryException(e);
+                    return attempt.get();
+                } catch (RuntimeException e) {
+                    if (retrySpec.errorFilter.test(e) || retriesPerformed.get() >= policy.retriesBeforeGivingUp()) {
+                        throw e;
+                    }
+                    if (stopRequested.getAsBoolean()) {
+                        throw new SubscriptionStoppedDuringRetryException(e);
+                    }
+                    var retryNumber = retriesPerformed.incrementAndGet();
+                    var backoff     = policy.backoffBeforeRetry(retryNumber);
+                    beforeRetry.beforeRetry(retryNumber, backoff, e);
+                    interrupted |= awaitBackoff(backoff, stopRequested, e);
+                    if (stopRequested.getAsBoolean()) {
+                        throw new SubscriptionStoppedDuringRetryException(e);
+                    }
                 }
+            }
+        } finally {
+            if (interrupted) {
+                // Re-asserted only now, so the retried attempts above didn't run with the interrupt flag set
+                Thread.currentThread().interrupt();
+            }
+        }
+    }
+
+    /**
+     * Wait out the full backoff, unless the subscriber is stopped meanwhile.
+     * <p>
+     * An interrupt alone is <b>not</b> a stop. Stopping the subscriber disposes its delivery thread, which interrupts
+     * the wait - but so does {@code CdcEventStore}'s adaptive live source when it switches a running subscription
+     * between polling and the CDC bus (at boot, and whenever replication drops or recovers): cancelling the old source
+     * disposes the thread this handler runs on while the subscriber stays live. The event has already passed the
+     * source's {@code lastSeen} filter, so the new source will not deliver it again - this invocation has to finish it.
+     * Treating that interrupt as a stop would hold the resume point of a subscriber nobody stopped, which then
+     * silently ignores every later event.
+     *
+     * @return true if the wait was interrupted. The caller re-asserts the interrupt once it is done with the event
+     * @throws SubscriptionStoppedDuringRetryException if the wait was interrupted and the subscriber has been stopped
+     */
+    private static boolean awaitBackoff(Duration backoff, BooleanSupplier stopRequested, RuntimeException failureBeingRetried) {
+        var interrupted = false;
+        var deadline    = System.nanoTime() + backoff.toNanos();
+        while (true) {
+            var remainingNanos = deadline - System.nanoTime();
+            if (remainingNanos <= 0) {
+                return interrupted;
+            }
+            try {
+                TimeUnit.NANOSECONDS.sleep(remainingNanos);
+            } catch (InterruptedException e) {
+                interrupted = true;
                 if (stopRequested.getAsBoolean()) {
-                    throw new SubscriptionStoppedDuringRetryException(e);
+                    Thread.currentThread().interrupt();
+                    throw new SubscriptionStoppedDuringRetryException(failureBeingRetried);
                 }
             }
         }
+    }
+
+    /**
+     * Wrap the subscriber's reactive {@link RetryBackoffSpec} so it never retries a
+     * {@link SubscriptionStoppedDuringRetryException}, whatever error filter the spec was configured with. The guard
+     * that throws it would otherwise be retried for as long as the spec allows - with the usual
+     * {@code Long.MAX_VALUE} attempts, a timer loop on a disposed subscriber that never ends.
+     *
+     * @param retrySpec the spec the subscriber was configured with
+     * @return the spec to use in {@code retryWhen}
+     */
+    static RetryBackoffSpec neverRetryingAStop(RetryBackoffSpec retrySpec) {
+        return retrySpec.modifyErrorFilter(errorFilter -> errorFilter.and(error -> !(error instanceof SubscriptionStoppedDuringRetryException)));
     }
 
     /**

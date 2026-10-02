@@ -71,6 +71,12 @@ public class BatchedPersistedEventSubscriber extends BaseSubscriber<PersistedEve
     private final Duration                              maxLatency;
     private final SubscriptionErrorPolicy               subscriptionErrorPolicy;
     /**
+     * The resume point of the subscription incarnation this subscriber serves - captured once, so a batch of this
+     * (by then disposed) subscriber that completes or fails late cannot move the resume point of a restarted
+     * subscription. See {@code PersistedEventSubscriber#resumePoint}
+     */
+    private final SubscriptionResumePoint               resumePoint;
+    /**
      * Guards the resume point against a batch completing concurrently with {@link #holdResumePointAt(PersistedEvent)}
      */
     private final Object                                resumePointLock = new Object();
@@ -80,6 +86,10 @@ public class BatchedPersistedEventSubscriber extends BaseSubscriber<PersistedEve
      * {@link SubscriptionErrorPolicy.Mode#STOP}, or by a stop that interrupted the handling of a batch
      */
     private volatile boolean                            resumePointHeld;
+    /**
+     * Set when the upstream completed, which also marks this subscriber disposed - see {@link #isStopped()}
+     */
+    private volatile boolean                            completed;
 
     // Thread-safe priority queue of events being collected for a batch, sorted by global event order
     private final ConcurrentLinkedQueue<PersistedEvent> eventQueue;
@@ -187,7 +197,7 @@ public class BatchedPersistedEventSubscriber extends BaseSubscriber<PersistedEve
         this.eventHandler = requireNonNull(eventHandler, "No eventHandler provided");
         this.eventStoreSubscription = requireNonNull(eventStoreSubscription, "No eventStoreSubscription provided");
         this.onErrorHandler = requireNonNull(onErrorHandler, "No errorHandler provided");
-        this.forwardToEventHandlerRetryBackoffSpec = requireNonNull(forwardToEventHandlerRetryBackoffSpec, "No retryBackoffSpec provided");
+        this.forwardToEventHandlerRetryBackoffSpec = SubscriptionErrorPolicyRetries.neverRetryingAStop(requireNonNull(forwardToEventHandlerRetryBackoffSpec, "No retryBackoffSpec provided"));
         this.eventStorePollingBatchSize = eventStorePollingBatchSize;
         this.eventStore = requireNonNull(eventStore, "No eventStore provided");
         this.maxBatchSize = maxBatchSize;
@@ -197,7 +207,7 @@ public class BatchedPersistedEventSubscriber extends BaseSubscriber<PersistedEve
         requireTrue(maxBatchSize > 0, "maxBatchSize must be > 0");
 
         // Verify that the provided eventStoreSubscription supports resume-points
-        eventStoreSubscription.currentResumePoint().orElseThrow(() ->
+        this.resumePoint = eventStoreSubscription.currentResumePoint().orElseThrow(() ->
                                                                         new IllegalArgumentException(msg("The provided {} doesn't support resume-points",
                                                                                                          eventStoreSubscription.getClass().getName())));
 
@@ -267,6 +277,8 @@ public class BatchedPersistedEventSubscriber extends BaseSubscriber<PersistedEve
 
     @Override
     protected void hookOnComplete() {
+        // Before the final batch below: it is handled under the SubscriptionErrorPolicy, not as a stop (see isStopped())
+        completed = true;
         // Process any remaining events in the batch when the stream completes
         if (!eventQueue.isEmpty()) {
             processBatchIfNotAlreadyProcessing();
@@ -300,6 +312,17 @@ public class BatchedPersistedEventSubscriber extends BaseSubscriber<PersistedEve
         batchHandlerScheduler.dispose();
 
         super.hookOnError(throwable);
+    }
+
+    /**
+     * @return true once this subscriber has been stopped: disposed (stop, {@code resetFrom}, unsubscribe) or terminated by
+     * an upstream error. Not {@link #isDisposed()} on its own - that is also true while {@link #hookOnComplete()} handles
+     * the final batch, which must get the {@link SubscriptionErrorPolicy} like any other. Once true it stays true, and it
+     * turns true before {@link #hookOnCancel()} disposes the {@link #batchHandlerScheduler}, i.e. before a batch in its
+     * retry backoff is interrupted
+     */
+    private boolean isStopped() {
+        return isDisposed() && !completed;
     }
 
     /**
@@ -418,7 +441,7 @@ public class BatchedPersistedEventSubscriber extends BaseSubscriber<PersistedEve
         var attemptsStarted        = new AtomicInteger();
         // Process the batch in a unit of work
         Mono.fromCallable(() -> {
-                if (attemptsStarted.getAndIncrement() > 0 && isDisposed()) {
+                if (attemptsStarted.getAndIncrement() > 0 && isStopped()) {
                     // An I/O retry must not outlive the subscriber - it would handle the batch after the stop
                     throw new SubscriptionStoppedDuringRetryException(null);
                 }
@@ -450,7 +473,7 @@ public class BatchedPersistedEventSubscriber extends BaseSubscriber<PersistedEve
                             subscriptionErrorPolicy,
                             forwardToEventHandlerRetryBackoffSpec,
                             policyRetriesPerformed,
-                            this::isDisposed,
+                            this::isStopped,
                             (retryNumber, backoff, failure) -> log.warn("[{}-{}] Handling batch of {} events (global event order: [#{} - #{}]) failed - performing retry {} of {} in {} ms ({} SubscriptionErrorPolicy): {}",
                                                                         eventStoreSubscription.subscriberId(),
                                                                         eventStoreSubscription.aggregateType(),
@@ -491,8 +514,7 @@ public class BatchedPersistedEventSubscriber extends BaseSubscriber<PersistedEve
                     }
                     // Update the resume point to after the last event in the batch - advance (not set),
                     // since gap-filled batches can complete out of order and must not rewind it
-                    eventStoreSubscription.currentResumePoint().get()
-                                          .advanceResumeFromAndIncluding(lastEvent.globalEventOrder().increment());
+                    resumePoint.advanceResumeFromAndIncluding(lastEvent.globalEventOrder().increment());
                 }
 
                 // Reschedule latency check
@@ -515,9 +537,10 @@ public class BatchedPersistedEventSubscriber extends BaseSubscriber<PersistedEve
                        error -> {
                            // Handle errors for the entire batch
                            var failure = SubscriptionErrorPolicyRetries.unwrapRetryExhausted(error);
-                           if (failure instanceof SubscriptionStoppedDuringRetryException || isDisposed()) {
-                               // Not a verdict on the batch - the subscriber was stopped under it (see SubscriptionStoppedDuringRetryException).
-                               // Also covers a batch the stopped batchHandlerScheduler rejected
+                           if (isStopped() || failure instanceof RejectedExecutionException) {
+                               // Not a verdict on the batch - the subscriber was stopped under it (see SubscriptionStoppedDuringRetryException,
+                               // which is only ever thrown once isStopped() is true), or its batchHandlerScheduler was shut down and rejected
+                               // the batch (an I/O retry of the final batch after completion). Either way it is left for the restarted subscription
                                stoppedWhileHandling(firstEvent, lastEvent, failure);
                                return;
                            }
@@ -593,7 +616,6 @@ public class BatchedPersistedEventSubscriber extends BaseSubscriber<PersistedEve
     private GlobalEventOrder holdResumePointAt(PersistedEvent firstEventOfBatch) {
         synchronized (resumePointLock) {
             resumePointHeld = true;
-            var resumePoint = eventStoreSubscription.currentResumePoint().get();
             if (resumePoint.getResumeFromAndIncluding().longValue() > firstEventOfBatch.globalEventOrder().longValue()) {
                 resumePoint.setResumeFromAndIncluding(firstEventOfBatch.globalEventOrder());
             }
