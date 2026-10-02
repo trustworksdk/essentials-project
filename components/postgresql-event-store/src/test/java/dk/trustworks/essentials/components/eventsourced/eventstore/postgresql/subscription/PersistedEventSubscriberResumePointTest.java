@@ -283,6 +283,70 @@ class PersistedEventSubscriberResumePointTest {
         verify(observer).handleEventBatchFailed(any(), any(), any(), same(eventStoreSubscription));
     }
 
+    @Test
+    void a_failed_event_the_handler_takes_over_after_the_retries_is_neither_skipped_nor_reported() {
+        var attempts        = new AtomicInteger();
+        var handedOff       = new CopyOnWriteArrayList<PersistedEvent>();
+        var subscriber = new PersistedEventSubscriber(new PersistedEventHandler() {
+            @Override
+            public void handle(PersistedEvent event) {
+                attempts.incrementAndGet();
+                throw new IllegalStateException("Intentional failure handling #" + event.globalEventOrder());
+            }
+
+            @Override
+            public boolean handOffFailedEvent(PersistedEvent event, Throwable failure) {
+                handedOff.add(event);
+                return true;
+            }
+        },
+                                                      eventStoreSubscription,
+                                                      onErrorHandler,
+                                                      ioRetrySpec(),
+                                                      10,
+                                                      eventStore,
+                                                      SubscriptionErrorPolicy.retryThenSkip(2, Duration.ofMillis(10), Duration.ofMillis(10)));
+        subscriber.onSubscribe(mock(Subscription.class));
+
+        subscriber.onNext(event(2));
+
+        // Offered only once the policy has used up its retries, in place of skipping
+        assertThat(attempts.get()).isEqualTo(3);
+        assertThat(handedOff).extracting(PersistedEvent::globalEventOrder).containsExactly(GlobalEventOrder.of(2));
+        assertThat(resumePoint.getResumeFromAndIncluding()).isEqualTo(GlobalEventOrder.of(3));
+        verify(eventStoreSubscription).request(1);
+        verifyNoInteractions(onErrorHandler);
+        verify(observer, never()).handleEventFailed(any(), any(PersistedEventHandler.class), any(), any());
+    }
+
+    @Test
+    void a_failed_event_the_handler_cannot_take_over_gets_the_error_policy() {
+        var subscriber = new PersistedEventSubscriber(new PersistedEventHandler() {
+            @Override
+            public void handle(PersistedEvent event) {
+                throw new IllegalStateException("Intentional failure handling #" + event.globalEventOrder());
+            }
+
+            @Override
+            public boolean handOffFailedEvent(PersistedEvent event, Throwable failure) {
+                throw new IllegalStateException("Intentional failure taking over #" + event.globalEventOrder());
+            }
+        },
+                                                      eventStoreSubscription,
+                                                      onErrorHandler,
+                                                      ioRetrySpec(),
+                                                      10,
+                                                      eventStore,
+                                                      SubscriptionErrorPolicy.stop());
+        subscriber.onSubscribe(mock(Subscription.class));
+
+        subscriber.onNext(event(2));
+
+        Awaitility.waitAtMost(Duration.ofSeconds(10)).until(subscriber::isStoppedByErrorPolicy);
+        assertThat(resumePoint.getResumeFromAndIncluding()).isEqualTo(GlobalEventOrder.of(2));
+        verify(observer).handleEventFailed(any(), any(PersistedEventHandler.class), argThat(failure -> failure.getSuppressed().length == 1), any());
+    }
+
     private static RetryBackoffSpec ioRetrySpec() {
         return Retry.backoff(Long.MAX_VALUE, Duration.ofMillis(500))
                     .filter(IOExceptionUtil::isIOException);

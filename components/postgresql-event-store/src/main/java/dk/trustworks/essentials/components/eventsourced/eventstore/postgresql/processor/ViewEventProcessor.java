@@ -18,7 +18,7 @@ package dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.p
 
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.*;
-import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.subscription.EventStoreSubscriptionManager;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.subscription.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.transaction.EventStoreUnitOfWork;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.types.GlobalEventOrder;
 import dk.trustworks.essentials.components.foundation.Lifecycle;
@@ -45,9 +45,11 @@ import static dk.trustworks.essentials.shared.MessageFormatter.msg;
  * The direct handling runs under a savepoint in the subscription's transaction: when it fails - a failed SQL statement
  * that aborts the transaction, or an event payload that cannot be deserialized, included - only the handler's own
  * writes are rolled back, and the event is queued in the same transaction. A failed handler that had appended events
- * through the {@link EventStore} or changed an aggregate (state the savepoint cannot undo) is not queued: the
- * subscription's transaction is rolled back and the failure reaches the subscription's {@code SubscriptionErrorPolicy}.
- * A handler that only loaded an aggregate is queued like any other failure.
+ * through the {@link EventStore} or changed an aggregate (state the savepoint cannot undo) is not queued in that
+ * transaction: the subscription's transaction is rolled back, and once its {@code SubscriptionErrorPolicy} has used up
+ * its retries the event is queued in a transaction of its own instead of being skipped or stopping the subscription
+ * (see {@link PersistedEventHandler#handOffFailedEvent(PersistedEvent, Throwable)}). Only if that queueing fails too does
+ * the policy give up on the event. A handler that only loaded an aggregate is queued like any other failure.
  * <p>
  * <h3>Event Queuing</h3>
  * When events from the {@link EventStore} need to be queued for processing, they are converted to {@link OrderedMessage}s where:
@@ -184,7 +186,23 @@ public abstract class ViewEventProcessor extends AbstractEventProcessor {
                                                                         subscriberId,
                                                                         aggregateType,
                                                                         resolveStartSubscriptionFromGlobalEventOrder(),
-                                                                        this::handlePersistedEvent);
+                                                                        new PersistedEventHandler() {
+                                                                            @Override
+                                                                            public void handle(PersistedEvent event) {
+                                                                                handlePersistedEvent(event);
+                                                                            }
+
+                                                                            @Override
+                                                                            public boolean handOffFailedEvent(PersistedEvent event, Throwable failure) {
+                                                                                queueAfterRollback(event, failure);
+                                                                                return true;
+                                                                            }
+
+                                                                            @Override
+                                                                            public String toString() {
+                                                                                return processorName;
+                                                                            }
+                                                                        });
                                                                 logger.info("🎑⚙️ [{}] Created non-exclusive async '{}' subscription: {}",
                                                                             processorName,
                                                                             aggregateType,
@@ -261,6 +279,32 @@ public abstract class ViewEventProcessor extends AbstractEventProcessor {
         }
     }
 
+    /**
+     * Queue an event whose failure could not be queued in the subscription's {@link UnitOfWork} - see
+     * {@link #handleDirectlyUnderSavepoint(OrderedMessage)} - now that the subscriber has rolled that {@link UnitOfWork}
+     * back. Queued in a {@link UnitOfWork} of its own, so the queued message commits on its own; the subscriber only moves
+     * its resume point past the event once this has returned, and applies its {@code SubscriptionErrorPolicy} to the
+     * event if this throws.
+     * <p>
+     * Runs on the subscription's delivery thread before the next event is handled, so a later event for the same
+     * aggregate finds this one queued and is queued behind it.
+     */
+    private void queueAfterRollback(PersistedEvent event, Throwable failure) {
+        var aggregateType = event.aggregateType();
+        var key           = resolveAggregateIdSerializer(aggregateType).serialize(event.aggregateId());
+        MessageMetaData meta;
+        try {
+            meta = new MessageMetaData(event.metaData().deserialize());
+        } catch (RuntimeException e) {
+            meta = new MessageMetaData();
+        }
+        var message = new EventReferenceOrderedMessage(aggregateType, key, event.eventOrder(), meta);
+        eventStore.getUnitOfWorkFactory().usingUnitOfWork(() -> durableQueues.queueMessage(durableQueueName, message));
+        logger.warn(msg("[{}:{}] Direct handling of the '{}' event with event-order '{}' failed and left state in the subscription's UnitOfWork that could not " +
+                        "be committed - the UnitOfWork was rolled back and the event is queued for redelivery instead",
+                        aggregateType, key, event.event().getEventTypeOrNamePersistenceValue(), event.eventOrder()), failure);
+    }
+
     private static final String DIRECT_HANDLING_SAVEPOINT     = "essentials_view_event_processor_direct_handling";
     private static final String UNIT_OF_WORK_UNABLE_TO_COMMIT = "The direct handler's failure left the UnitOfWork unable to commit - the event cannot be queued in it";
 
@@ -278,9 +322,11 @@ public abstract class ViewEventProcessor extends AbstractEventProcessor {
      *     ({@link UnitOfWork#hasLifecycleCallbackResourcesWithPendingChanges()}), such as an aggregate the handler loaded
      *     and applied an event to, would have their callbacks persist the aggregate's uncommitted events</li>
      * </ul>
-     * So when the failed handler left either kind of state behind, the event is not queued: the failure is rethrown as
-     * {@link UnitOfWorkRequiresRollbackException}, the whole {@link UnitOfWork} is rolled back, and the failure reaches
-     * the subscription's {@link dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.subscription.SubscriptionErrorPolicy}.
+     * So when the failed handler left either kind of state behind, the event is not queued here: the failure is rethrown as
+     * {@link UnitOfWorkRequiresRollbackException}, the whole {@link UnitOfWork} is rolled back, the subscription's
+     * {@link SubscriptionErrorPolicy} retries it as it would any failure, and when the policy gives up the subscriber hands
+     * the event back to {@link #queueAfterRollback(PersistedEvent, Throwable)}, which queues it in a {@link UnitOfWork} of
+     * its own.
      * Every registered resource is asked, not only one registered by the handler, because a repository hands out the
      * instance already registered in the {@link UnitOfWork}, so the handler may have changed it without registering
      * anything. A resource without pending changes - an aggregate the handler only loaded - is left alone by the

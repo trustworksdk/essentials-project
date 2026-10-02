@@ -47,6 +47,9 @@ import static dk.trustworks.essentials.shared.MessageFormatter.msg;
  *     <li>{@link SubscriptionErrorPolicy.Mode#STOP} - keeps the resume point at the failed event, logs at ERROR and stops handling events
  *     (see {@link #isStoppedByErrorPolicy()})</li>
  * </ul>
+ * Before the policy skips or stops, the event handler may take the failed event over instead - see
+ * {@link PersistedEventHandler#handOffFailedEvent(PersistedEvent, Throwable)}.
+ * <p>
  * A failure that surfaces after this subscriber was disposed (stop, fenced-lock release, {@code resetFrom}, unsubscribe) is none of these:
  * the retries are abandoned, neither the <code>onErrorHandler</code> nor the observer is told, and the resume point stays at the event, so the
  * restarted subscription handles it again (see {@link SubscriptionStoppedDuringRetryException}).
@@ -364,6 +367,10 @@ public class PersistedEventSubscriber extends BaseSubscriber<PersistedEvent> {
                                 stoppedWhileHandling(e, failure);
                                 return;
                             }
+                            if (handedOffToEventHandler(e, failure)) {
+                                eventStoreSubscription.request(1);
+                                return;
+                            }
                             eventStore.getEventStoreSubscriptionObserver().handleEventFailed(e,
                                     eventHandler,
                                     failure,
@@ -374,6 +381,37 @@ public class PersistedEventSubscriber extends BaseSubscriber<PersistedEvent> {
                                 onErrorHandler.accept(e, failure.getCause());
                             }
                         });
+    }
+
+    /**
+     * Offer the failed event to {@link PersistedEventHandler#handOffFailedEvent(PersistedEvent, Throwable)} before the
+     * {@link SubscriptionErrorPolicy} gives up on it. Runs before the {@code doFinally} that advances the resume point, so
+     * the resume point only moves past the event once the handler has taken it over
+     *
+     * @return true if the handler took the event over
+     */
+    private boolean handedOffToEventHandler(PersistedEvent e, Throwable failure) {
+        try {
+            if (eventHandler.handOffFailedEvent(e, failure)) {
+                log.debug("[{}-{}] (#{}) The {} event handler took over the failed {} event - the {} SubscriptionErrorPolicy does not give up on it",
+                          eventStoreSubscription.subscriberId(),
+                          eventStoreSubscription.aggregateType(),
+                          e.globalEventOrder(),
+                          eventHandler,
+                          e.event().getEventTypeOrName().getValue(),
+                          subscriptionErrorPolicy.mode());
+                return true;
+            }
+        } catch (RuntimeException handOffFailure) {
+            failure.addSuppressed(handOffFailure);
+            log.warn(msg("[{}-{}] (#{}) The event handler failed to take over the failed {} event - the {} SubscriptionErrorPolicy applies",
+                         eventStoreSubscription.subscriberId(),
+                         eventStoreSubscription.aggregateType(),
+                         e.globalEventOrder(),
+                         e.event().getEventTypeOrName().getValue(),
+                         subscriptionErrorPolicy.mode()), handOffFailure);
+        }
+        return false;
     }
 
     /**

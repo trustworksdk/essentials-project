@@ -115,7 +115,6 @@ public class ViewEventProcessorIT {
      * {@link EventStoreSubscriptionObserver}
      */
     private final List<PersistedEvent>    handleEventFailedEvents = new CopyOnWriteArrayList<>();
-    private final List<Throwable>         handleEventFailedCauses = new CopyOnWriteArrayList<>();
 
     /**
      * Runs the annotated test with {@link SubscriptionErrorPolicy#stop()} instead of the default {@link SubscriptionErrorPolicy#skip()}
@@ -162,7 +161,6 @@ public class ViewEventProcessorIT {
                                              @Override
                                              public void handleEventFailed(PersistedEvent event, PersistedEventHandler eventHandler, Throwable cause, EventStoreSubscription eventStoreSubscription) {
                                                  handleEventFailedEvents.add(event);
-                                                 handleEventFailedCauses.add(cause);
                                              }
                                          })
                                          .build();
@@ -380,11 +378,12 @@ public class ViewEventProcessorIT {
      * A savepoint only undoes SQL. Events the failed handler appended through the event store are also registered in
      * the {@link UnitOfWork}, and committing it to queue the event would hand them to the in-transaction subscriptions
      * and publish them on the local event bus, although their rows were rolled back - and the queued retry would
-     * append them once more. So the event is not queued: the whole {@link UnitOfWork} is rolled back and the failure
-     * reaches the subscription's {@link SubscriptionErrorPolicy}.
+     * append them once more. So the event is not queued in it: the whole {@link UnitOfWork} is rolled back, and the
+     * event is then queued in a {@link UnitOfWork} of its own instead of the {@link SubscriptionErrorPolicy} skipping it.
+     * The queued redeliveries fail as well, so it ends up as a dead letter.
      */
     @Test
-    public void verify_a_handler_that_appended_events_before_failing_is_not_queued_and_its_events_are_not_published() {
+    public void verify_a_handler_that_appended_events_before_failing_is_queued_after_the_rollback_and_its_events_are_not_published() {
         var eventsSeenInTransaction    = new CopyOnWriteArrayList<PersistedEvent>();
         var eventsPublishedAfterCommit = new CopyOnWriteArrayList<PersistedEvent>();
         eventStoreSubscriptionManager.subscribeToAggregateEventsInTransaction(SubscriberId.of("InTransactionOrderEventsRecorder"),
@@ -401,30 +400,29 @@ public class ViewEventProcessorIT {
             eventStore.appendToStream(TEST_ORDERS, orderId, List.of(new EventProcessorIT.OrderPlacedEvent(orderId, APPENDS_EVENT_THEN_FAILS)));
         });
 
-        assertFailureReachedTheSubscriptionErrorPolicy(orderId, APPENDS_EVENT_THEN_FAILS);
-        assertThat(testProcessor.getAppendedEventsBeforeFailing()).isEqualTo(1);
+        assertQueuedAfterTheRollbackAndDeadLettered(orderId);
+        // Once directly, then on each queued redelivery
+        assertThat(testProcessor.getAppendedEventsBeforeFailing()).isGreaterThan(1);
         assertThat(orderConfirmedEventsIn(eventsSeenInTransaction)).isEmpty();
         assertThat(orderConfirmedEventsIn(eventsPublishedAfterCommit)).isEmpty();
         assertOnlyTheOrderPlacedEventIsPersisted(orderId);
-        assertNothingIsQueuedFor(orderId);
     }
 
     /**
      * An aggregate the failed handler loaded and changed is registered in the {@link UnitOfWork}, and its
      * {@link UnitOfWorkLifecycleCallback} persists the aggregate's uncommitted events when the {@link UnitOfWork}
-     * commits - which a savepoint does not prevent. So the event is not queued: the whole {@link UnitOfWork} is rolled
-     * back and the failure reaches the subscription's {@link SubscriptionErrorPolicy}.
+     * commits - which a savepoint does not prevent. So the event is not queued in it: the whole {@link UnitOfWork} is
+     * rolled back, and the event is then queued in a {@link UnitOfWork} of its own.
      */
     @Test
-    public void verify_a_handler_that_registered_a_resource_before_failing_is_not_queued_and_the_resource_is_not_committed() {
+    public void verify_a_handler_that_registered_a_resource_before_failing_is_queued_after_the_rollback_and_the_resource_is_not_committed() {
         var orderId = EventProcessorIT.OrderId.random();
         unitOfWorkFactory.usingUnitOfWork(uow -> {
             eventStore.appendToStream(TEST_ORDERS, orderId, List.of(new EventProcessorIT.OrderPlacedEvent(orderId, REGISTERS_RESOURCE_THEN_FAILS)));
         });
 
-        assertFailureReachedTheSubscriptionErrorPolicy(orderId, REGISTERS_RESOURCE_THEN_FAILS);
+        assertQueuedAfterTheRollbackAndDeadLettered(orderId);
         assertOnlyTheOrderPlacedEventIsPersisted(orderId);
-        assertNothingIsQueuedFor(orderId);
     }
 
     /**
@@ -450,44 +448,47 @@ public class ViewEventProcessorIT {
 
     /**
      * A handler that joins the {@link UnitOfWork} through {@code usingUnitOfWork} and fails marks it rollback-only, so
-     * nothing written in it - the queued event included - can commit. The failure must reach the subscription's
-     * {@link SubscriptionErrorPolicy} instead of the queued event being rolled back silently; with
-     * {@link SubscriptionErrorPolicy#stop()} the subscription stays at the event.
+     * nothing written in it - the queued event included - can commit. Instead of being rolled back silently with it, the
+     * event is queued in a {@link UnitOfWork} of its own after the rollback - which takes precedence over
+     * {@link SubscriptionErrorPolicy#stop()}: the subscription carries on with the next event.
      */
     @Test
     @WithSubscriptionErrorPolicyStop
-    public void verify_a_handler_that_marks_the_unit_of_work_rollback_only_is_not_silently_queued() {
+    public void verify_a_handler_that_marks_the_unit_of_work_rollback_only_is_queued_after_the_rollback_instead_of_stopping_the_subscription() {
         var orderId = EventProcessorIT.OrderId.random();
         unitOfWorkFactory.usingUnitOfWork(uow -> {
             eventStore.appendToStream(TEST_ORDERS, orderId, List.of(new EventProcessorIT.OrderPlacedEvent(orderId, JOINS_UNIT_OF_WORK_THEN_FAILS)));
         });
 
-        assertFailureReachedTheSubscriptionErrorPolicy(orderId, JOINS_UNIT_OF_WORK_THEN_FAILS);
-        assertNothingIsQueuedFor(orderId);
+        assertQueuedAfterTheRollbackAndDeadLettered(orderId);
 
-        // STOP: a later event is not handled, and the resume point stays at the failed event (global event order 1)
+        // Not stopped: a later event is handled
         var laterOrderId = EventProcessorIT.OrderId.random();
         unitOfWorkFactory.usingUnitOfWork(uow -> {
             eventStore.appendToStream(TEST_ORDERS, laterOrderId, List.of(new EventProcessorIT.OrderPlacedEvent(laterOrderId, "Load order details")));
         });
         var subscriberId = AbstractEventProcessor.resolveSubscriberId(TEST_ORDERS, testProcessor.getProcessorName());
-        Awaitility.await()
-                  .during(Duration.ofSeconds(2))
-                  .atMost(Duration.ofSeconds(4))
+        Awaitility.waitAtMost(Duration.ofSeconds(10))
                   .untilAsserted(() -> {
-                      assertThat(testProcessor.getOrderPlacedEventCounter().get()).isZero();
+                      assertThat(testProcessor.getOrderPlacedEventCounter().get()).isEqualTo(1);
                       assertThat(eventStoreSubscriptionManager.getCurrentEventOrder(subscriberId, TEST_ORDERS))
-                              .hasValueSatisfying(order -> assertThat(order.longValue()).isEqualTo(1L));
+                              .hasValueSatisfying(order -> assertThat(order.longValue()).isEqualTo(3L));
                   });
-        assertThat(durableSubscriptionRepository.getResumePoint(subscriberId, TEST_ORDERS))
-                .hasValueSatisfying(resumePoint -> assertThat(resumePoint.getResumeFromAndIncluding().longValue()).isEqualTo(1L));
     }
 
-    private void assertFailureReachedTheSubscriptionErrorPolicy(EventProcessorIT.OrderId orderId, String handlerFailureMessage) {
+    /**
+     * The event is queued once, after the subscription's {@link UnitOfWork} was rolled back, and the
+     * {@link SubscriptionErrorPolicy} never gives up on it (the observer is not told of a failure). The queued
+     * redeliveries fail like the direct handling did, so it ends up as a dead letter.
+     */
+    private void assertQueuedAfterTheRollbackAndDeadLettered(EventProcessorIT.OrderId orderId) {
+        var queueName = testProcessor.getDurableQueueName();
         Awaitility.waitAtMost(Duration.ofSeconds(10))
-                  .untilAsserted(() -> assertThat(handleEventFailedEvents).anySatisfy(event -> assertThat(event.aggregateId()).isEqualTo(orderId)));
-        assertThat(handleEventFailedEvents).hasSize(1);
-        assertThat(handleEventFailedCauses.get(0)).hasRootCauseMessage(handlerFailureMessage);
+                  .untilAsserted(() -> assertThat(durableQueues.getTotalDeadLetterMessagesQueuedFor(queueName)).isEqualTo(1));
+        var deadLetterMessages = durableQueues.getDeadLetterMessages(queueName, DurableQueues.QueueingSortOrder.ASC, 0, 10);
+        assertThat(((OrderedMessage) deadLetterMessages.get(0).getMessage()).getKey()).isEqualTo(orderId.toString());
+        assertThat(durableQueues.getTotalMessagesQueuedFor(queueName)).isZero();
+        assertThat(handleEventFailedEvents).isEmpty();
     }
 
     private void assertOnlyTheOrderPlacedEventIsPersisted(EventProcessorIT.OrderId orderId) {
@@ -498,13 +499,6 @@ public class ViewEventProcessorIT {
                                                                                                                    .map(event -> (Object) event.event().getEventTypeAsJavaClass().get())
                                                                                                                    .toList()));
         assertThat(persistedEventTypes).hasValueSatisfying(eventTypes -> assertThat(eventTypes).containsExactly(EventProcessorIT.OrderPlacedEvent.class));
-    }
-
-    private void assertNothingIsQueuedFor(EventProcessorIT.OrderId orderId) {
-        var queueName = testProcessor.getDurableQueueName();
-        assertThat(durableQueues.hasOrderedMessageQueuedForKey(queueName, orderId.toString())).isFalse();
-        assertThat(durableQueues.getTotalMessagesQueuedFor(queueName)).isZero();
-        assertThat(durableQueues.getTotalDeadLetterMessagesQueuedFor(queueName)).isZero();
     }
 
     private static List<PersistedEvent> orderConfirmedEventsIn(List<PersistedEvent> events) {
