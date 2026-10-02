@@ -375,11 +375,15 @@ EventStreamGapHandler<SeparateTablePerAggregateEventStreamConfiguration> eventSt
     return new PostgresqlEventStreamGapHandler<>(
             unitOfWorkFactory,
             Duration.ofSeconds(60),   // transient-gap cache refresh
-            (aggregateType, queryRange, allTransientGaps) -> allTransientGaps.stream().map(gap -> gap._1).limit(50).toList(),
+            PostgresqlEventStreamGapHandler.ResolveTransientGapsToIncludeInQueryStrategy.defaultSelection(),   // or compose it in your own
             PostgresqlEventStreamGapHandler.ResolveTransientGapsToPermanentGapsPromotionStrategy.thresholdBased(300),
             properties.getSchema().getMode().schemaOwnership());   // never omit: shorter constructors run DDL even in schema.mode=validate
 }
 ```
+
+- `defaultSelection()` composed in a custom strategy shares its rotating window across the subscriptions it serves. A poll always also asks for gaps old enough to promote; a gap is promoted only when a poll asked for it and its event was missing
+- CDC gives up a gap at `thresholdBased(n)`'s threshold; a lambda promotion strategy states none (override `permanentGapThreshold()`), so CDC uses 120 s
+- Use the event store's `EventStoreUnitOfWorkFactory`: a foreign one WARNs once and resolves gaps in its own transaction (commits before the handler's)
 
 #### CDC
 

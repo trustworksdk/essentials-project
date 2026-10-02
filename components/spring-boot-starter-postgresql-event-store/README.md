@@ -221,15 +221,18 @@ EventStreamGapHandler<SeparateTablePerAggregateEventStreamConfiguration> eventSt
     return new PostgresqlEventStreamGapHandler<>(
             unitOfWorkFactory,
             Duration.ofSeconds(60),    // how often the transient-gap cache is refreshed from the database
-            // which transient gaps each poll asks for again (this one is deliberately naive: the first 50)
-            (aggregateType, queryRange, allTransientGaps) -> allTransientGaps.stream().map(gap -> gap._1).limit(50).toList(),
-            // when a transient gap is given up on and becomes permanent
+            // which transient gaps each poll asks for again: keep the default selection (or compose it in your own strategy)
+            PostgresqlEventStreamGapHandler.ResolveTransientGapsToIncludeInQueryStrategy.defaultSelection(),
+            // when a transient gap is given up on and becomes permanent (CDC subscriptions give up at the same threshold)
             PostgresqlEventStreamGapHandler.ResolveTransientGapsToPermanentGapsPromotionStrategy.thresholdBased(300),
             properties.getSchema().getMode().schemaOwnership());   // keeps essentials.schema.mode honoured
 }
 ```
 
 - `ResolveTransientGapsToIncludeInQueryStrategy` decides which transient gaps a poll asks for; `ResolveTransientGapsToPermanentGapsPromotionStrategy` decides when a gap becomes permanent (`thresholdBased(seconds)` is the built-in). Both are nested in `PostgresqlEventStreamGapHandler`. Keep the promotion threshold longer than your longest transaction.
+- `ResolveTransientGapsToIncludeInQueryStrategy.defaultSelection()` returns the default selection described above; call it inside your own strategy to add to it or filter it. Composed that way, its rotating window is shared by every subscription your strategy serves. Whatever your strategy returns, a poll also asks for the gaps that are old enough to be promoted, because a gap is only promoted when a poll asked for it and its event was not there.
+- Under CDC a subscription gives up waiting for a gap at the promotion threshold of `thresholdBased(seconds)`. A promotion strategy written as a lambda states no threshold, so CDC then gives up after 120 s; implement `permanentGapThreshold()` on it to change that.
+- Build the gap handler on the event store's `EventStoreUnitOfWorkFactory`. On a different factory it logs a one-time WARN and resolves gaps in a transaction of its own, which commits before the handler's.
 - Always pass `properties.getSchema().getMode().schemaOwnership()`; the shorter constructors default to `SchemaOwnership.COMPONENT` and would run DDL even in `essentials.schema.mode=validate`.
 - Reset permanent gaps (for example after data recovery) with `eventStreamGapHandler.resetPermanentGapsFor(AggregateType.of("Orders"))`; the overloads take a `LongRange` or a list of `GlobalEventOrder`.
 - Gaps are also covered by [LLM-postgresql-event-store.md](../../LLM/LLM-postgresql-event-store.md#gap-handling).

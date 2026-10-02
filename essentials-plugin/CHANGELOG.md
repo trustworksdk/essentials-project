@@ -24,6 +24,11 @@ targets, with a `-N` suffix for plugin-only releases.
   redelivers a gap fill instead of losing it (`LLM-postgresql-event-store.md`).
 - **Bundled docs** — subscribers acknowledge handled gap fills through the new `SubscriberAcknowledgement`, so
   a fill's gap is resolved inside the handler's unit of work (`LLM-postgresql-event-store.md`).
+- **Bundled docs** — custom gap strategies can compose `defaultSelection()`, a gap is promoted only when a
+  poll asked for it, CDC gives up a gap at the gap handler's threshold, and tenant-filtered polls never read
+  other tenants' payloads (`LLM-postgresql-event-store.md`).
+- **Bundled docs** — the Event Store Starter reference gains Gap Handling and CDC sections; CDC is disabled by
+  default (`LLM-spring-boot-starter-modules.md`, `LLM-spring-postgresql-event-store.md`).
 - **New trap `ESS-116`** — a handler that skips everything at or below the highest `GlobalEventOrder` it
   has seen drops late-committed events (`LLM-traps.md`).
 

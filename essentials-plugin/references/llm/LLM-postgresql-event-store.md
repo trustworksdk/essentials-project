@@ -761,7 +761,11 @@ Later TX1 commits → resolves: 1, 2, 3
 
 Each poll re-asks for the subscriber's open transient gaps. Default `PostgresqlEventStreamGapHandler` constructors: all open
 gaps up to 50; beyond that the 20 highest + 10 lowest + a rotating window of 20 (max 50 per poll). A custom
-`ResolveTransientGapsToIncludeInQueryStrategy` (longer constructors) replaces that. Transient gaps are per subscriber;
+`ResolveTransientGapsToIncludeInQueryStrategy` (longer constructors) replaces that; compose
+`ResolveTransientGapsToIncludeInQueryStrategy.defaultSelection()` to keep it (rotation then shared by the subscriptions it
+serves). A gap is promoted only if the poll asked for it and its event was missing; every poll also asks for gaps old
+enough to promote (max 50 more). Build the handler on the event store's `EventStoreUnitOfWorkFactory`: a foreign one WARNs
+once and resolves gaps in its own transaction. Tenant-filtered polls never read other tenants' payloads. Transient gaps are per subscriber;
 permanent gaps are shared by every subscriber of the `AggregateType`. A tenant-filtered subscription loads every tenant's
 events in the polled range and filters in memory (polling and CDC alike), so other tenants' orders are never gaps.
 A gap is resolved only once its event has been handled, so a stop or crash before that redelivers the fill rather
@@ -788,7 +792,8 @@ per subscription, and must not promote a gap whose event is in the events it is 
 above), and under Hybrid CDC whenever a transaction that took a lower order commits after one with a higher order (the
 CDC bus delivers in commit order). Each event is still delivered once. Under CDC the gap a bus event opens is recorded
 with the subscriber's gap handler, so a restart before the late event arrives does not lose it, and it is waited for up
-to 120 s (the default permanent-gap threshold). **Never deduplicate in a handler by "highest `GlobalEventOrder` seen"**:
+to the gap handler's promotion threshold (`thresholdBased(n)`; 120 s by default and when the handler or a lambda
+promotion strategy states none - override `permanentGapThreshold()` on the strategy). **Never deduplicate in a handler by "highest `GlobalEventOrder` seen"**:
 it drops exactly these events. Deduplicate by event id, or rely on `EventOrder` per aggregate.
 
 ### Configuration

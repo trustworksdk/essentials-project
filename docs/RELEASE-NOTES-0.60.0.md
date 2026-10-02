@@ -587,7 +587,9 @@ Since JDK 23, `spring-boot-configuration-processor` had not been running, becaus
 the classpath no longer run without a flag. As a result, no starter shipped
 `META-INF/spring-configuration-metadata.json`. The build now passes `-proc:full`, so every starter ships
 metadata again, which brings back IDE completion and documented defaults for `essentials.*` properties.
-`spring-boot-starter-postgresql` alone documents 50 properties.
+`spring-boot-starter-postgresql` alone documents 50 properties. The `essentials.eventstore.cdc.*` properties of
+`spring-boot-starter-postgresql-event-store` were missing even with the processor running, because they are bound
+from a type in another module; all 52 now have a description and a default.
 
 ### 2.7 Subscription gap statistics
 
@@ -807,6 +809,21 @@ described in [§3](#3-bug-fixes): the gap is resolved once the event is handed o
 → [`postgresql-event-store` README § Gap Types](../components/postgresql-event-store/README.md#gap-types),
 [`docs/MIGRATION-0.60.md` § A gap is resolved only once its event was handled](MIGRATION-0.60.md#a-gap-is-resolved-only-once-its-event-was-handled)
 
+### 2.13 Gap handling extension points
+
+Four additions let a custom gap setup keep what the defaults do. All are additive, in `postgresql-event-store`:
+
+| API | What it is |
+|---|---|
+| `PostgresqlEventStreamGapHandler.ResolveTransientGapsToIncludeInQueryStrategy.defaultSelection()` | The default per-poll selection (every open gap up to 50; beyond that the 20 highest, the 10 lowest and a rotating window of 20), to pass as-is or compose in your own strategy |
+| `SubscriptionGapHandler#transientGapGiveUpThreshold()` and `ResolveTransientGapsToPermanentGapsPromotionStrategy#permanentGapThreshold()` | Default methods returning `Optional<Duration>`. `thresholdBased(n)` returns n seconds and `PostgresqlEventStreamGapHandler` passes it on. A CDC subscription gives up waiting for a gap at that threshold, instead of a hard-coded 120 s |
+| `LoadEventsByGlobalOrder#getOnlyLoadPayloadIfEventBelongsToTenant()` / `setOnlyLoadPayloadIfEventBelongsToTenant(Tenant)`, and the builder setter | The tenant whose events a tenant-filtered poll loads with payload; other tenants' events come without |
+| `AggregateEventStreamPersistenceStrategy#loadEventsByGlobalOrderOmittingOtherTenantsPayloads(...)` | Default method that loads everything; the built-in strategy overrides it so other tenants' payloads are never read |
+
+→ [`docs/MIGRATION-0.60.md` § The default gap handler looks for more gaps per poll](MIGRATION-0.60.md#the-default-gap-handler-looks-for-more-gaps-per-poll),
+[§ CDC gives up waiting for a gap at the gap handler's threshold](MIGRATION-0.60.md#cdc-gives-up-waiting-for-a-gap-at-the-gap-handlers-threshold),
+[`spring-boot-starter-postgresql-event-store` README § Gap Handling](../components/spring-boot-starter-postgresql-event-store/README.md#gap-handling)
+
 ---
 
 ## 3. Bug fixes
@@ -834,6 +851,15 @@ described in [§3](#3-bug-fixes): the gap is resolved once the event is handed o
 | **Polling could miss a late commit behind rolled-back appends for good.** The default `PostgresqlEventStreamGapHandler` asked each poll for only the 2 lowest open gaps, so with rolled-back appends below it a late commit was not looked for until those were promoted to permanent after 120 s - and when it had been found in the same poll as them, it was promoted with them and never delivered. The default now asks for every open gap up to 50, and beyond that for the 20 highest, the 10 lowest and a rotating window of 20 in between. A gap handler built with your own `ResolveTransientGapsToIncludeInQueryStrategy` is unchanged | Polling subscriptions with the default gap handler, the Spring Boot starter included |
 | **A tenant-filtered polling subscription recorded other tenants' events as gaps.** The tenant was filtered in SQL, so their global orders looked missing; they were recorded as transient gaps, promoted to permanent gaps, which every subscriber of the aggregate type shares, and counted in the gap statistics. Polling now loads every tenant's events in its range, reconciles gaps against all of them, and filters by tenant in memory, as the CDC path does. Permanent gaps recorded this way before the upgrade stay until `resetPermanentGapsFor(aggregateType)` is called. A tenant filter on a store without a tenant column used to fail every poll; it now delivers every event, since an event without a tenant belongs to every tenant | Polling subscriptions with `onlyIncludeEventIfItBelongsToTenant` |
 | **A subscription that stopped or crashed could lose a gap fill it had not handled yet.** A gap fill arrives after higher global orders, so the subscriber's resume point is already past it, and the open gap is the only durable record that its event is still owed. Polling and CDC resolved that gap when they loaded the event, before handing it to the subscriber, so a stop (shutdown, fenced-lock hand-over, `resetFrom`, unsubscribe) or a crash in between lost the event for good: the rest of a poll or back-fill page a stop cut short, a fill still waiting in a batched subscription's batch, or a fill whose handler had not committed when the process died. A gap is now resolved only once its event has been handled: for a subscription the `EventStoreSubscriptionManager` creates, inside the handler's own unit of work, so a fill still waiting for its batch, for an I/O retry or for demand is delivered again after a stop or crash, and nothing else is. A caller of `pollEvents` that passes no `SubscriberAcknowledgement` gets the fill resolved once it is handed on, and a stopped batched subscriber built without one keeps its resume point at the lowest fill it had queued, so the events between it and the old resume point are delivered again too. See [2.12](#212-subscribers-acknowledge-the-gap-fills-they-handled) | Subscriptions with a gap handler, on polling and under Hybrid CDC |
+
+| **A gap whose event existed could be promoted to permanent.** With more than 50 open gaps, a reconciler whose query did not include a gap - another node with the same subscriber id, or under CDC the delegate's poll - promoted it once it was old enough, even when its event had committed and was waiting to be acknowledged. A gap is now promoted only when the poll asked for it and its event was missing, and every poll also asks for the gaps old enough to promote | Subscriptions with a gap handler and many open gaps |
+| **A gap handler on a different `UnitOfWorkFactory` than the event store's failed** with `NoActiveUnitOfWorkException`. It now resolves and records gaps in a unit of work of its own and logs a one-time WARN | Custom `PostgresqlEventStreamGapHandler` wiring |
+| **Polling with no optimizer busy-looped.** `pollEvents(...)` without an `EventStorePollingOptimizer`, or with `None()`, re-polled at once after an empty poll. It now waits the polling interval | Direct `pollEvents` callers |
+| **A polling subscription with batch size 1 stalled for seconds** on a hole of rolled-back appends at its read position, because the batch size grew only every tenth empty poll and `1 * 1.5` truncated back to 1. Every growth is now at least one, and the range doubles on each empty poll | Polling subscriptions with a small batch size |
+| **Tenant-filtered polling read other tenants' payloads.** Since loading every tenant's events to detect gaps correctly, a poll fetched the payload and metadata of every tenant's events. Other tenants' events now come without, so those columns are never read or transferred | Tenant-filtered polling subscriptions |
+| **A CDC subscription could hang on a live-source failure.** A failure of the live source while a started-while-ACTIVE subscription was handing on an event was emitted concurrently with that event, rejected as non-serialized and dropped, so the subscription never saw the error. All emissions now go through one drain. A concurrent CDC availability change could likewise be dropped and leave a stale state; that is serialized too | Hybrid CDC |
+| **CDC ignored a custom gap promotion threshold**, giving up on a missing `GlobalEventOrder` after a hard-coded 120 s. It now follows the gap handler's threshold | Hybrid CDC with `thresholdBased(n)` other than 120 |
+| **The starter's README said CDC was enabled by default.** It is disabled unless `essentials.eventstore.cdc.enabled=true`; the README now says so, and gained a Gap Handling section | `spring-boot-starter-postgresql-event-store` |
 
 **The 0.50.1 fixes are all in 0.60,** either merged directly or made unnecessary by other work. The polling
 unit-of-work leak fix came in unchanged. The Jackson 2-specific fixes are no longer needed now that Jackson 2

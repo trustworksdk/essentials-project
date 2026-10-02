@@ -865,8 +865,9 @@ A polling subscription with `onlyIncludeEventIfItBelongsToTenant` used to filter
 tenants' global orders look like gaps: they were recorded as transient gaps and then promoted to permanent gaps, which
 every subscriber of the aggregate type shares. 0.60 loads every tenant's events in the polled range, reconciles gaps
 against all of them and filters by tenant in memory, as the CDC path does. A tenant-filtered subscription therefore
-reads more rows per poll, up to the number of tenants times as many; the payloads of other tenants' events are not
-deserialized.
+reads more rows per poll, up to the number of tenants times as many. Only the subscriber's tenant's events (and events
+without a tenant) come with their payload and metadata; for other tenants' events those columns are neither read from
+the table, transferred nor deserialized.
 
 **What to do:**
 
@@ -876,8 +877,13 @@ deserialized.
 - If you have an `EventStoreInterceptor` that inspects `LoadEventsByGlobalOrder`, note that a polling subscription's
   load now carries no tenant, even when the subscription is tenant-filtered. An interceptor that rejects a load without
   a tenant stops such a subscription.
-- If you have an `EventStoreSubscriptionObserver`, `reconciledGaps(...)` now receives every tenant's loaded events;
-  `eventStorePolled(...)` still receives only the subscriber's tenant's events.
+- If you have an `EventStoreSubscriptionObserver`, `reconciledGaps(...)` now receives every tenant's loaded events,
+  and for other tenants' events `event().getJson()` and `metaData().getJson()` are `"{}"` (tenant, global order and
+  event id are intact); `eventStorePolled(...)` still receives only the subscriber's tenant's events.
+- The tenant whose payloads a poll loads travels in the new `LoadEventsByGlobalOrder#getOnlyLoadPayloadIfEventBelongsToTenant()`.
+  If you implement `AggregateEventStreamPersistenceStrategy` yourself, the new default method
+  `loadEventsByGlobalOrderOmittingOtherTenantsPayloads(...)` loads everything, which is correct; override it to skip
+  other tenants' payloads as the built-in strategy does.
 
 ### The default gap handler looks for more gaps per poll
 
@@ -886,8 +892,46 @@ deserialized.
 be promoted with them and never delivered. The default now asks for every open gap up to 50 and, beyond that, for the 20
 highest, the 10 lowest and a rotating window of 20 in between, so a poll carries at most 50 gap orders instead of 2.
 
-**What to do:** nothing. A gap handler you built with your own `ResolveTransientGapsToIncludeInQueryStrategy` is
-unchanged.
+A transient gap is now promoted to permanent only when the poll's query asked for it and its event was not there.
+Before, a reconciler whose query did not include a gap could promote it once it was old enough, even when its event
+existed and was waiting to be acknowledged. Each poll therefore also asks for the gaps the promotion strategy would
+promote now, on top of what the include strategy returned (at most 50 more, lowest first), and a burst of more than 50
+expired gaps is promoted 50 per poll.
+
+**What to do:**
+
+- Nothing, if you use the default gap handler.
+- If you built a gap handler with your own `ResolveTransientGapsToIncludeInQueryStrategy`, its selection is unchanged;
+  compose `ResolveTransientGapsToIncludeInQueryStrategy.defaultSelection()` in it if you want the new default selection
+  as a base.
+- If you call `reconcileGapsAndReport(...)` yourself, a gap you leave out of `transientGapsIncludedInQuery` is no longer
+  promoted.
+- If you built a `PostgresqlEventStreamGapHandler` on a different `UnitOfWorkFactory` than the event store's: its calls
+  used to fail with `NoActiveUnitOfWorkException`; they now run in a unit of work of their own, which commits
+  independently of the subscriber's, and the handler logs a one-time WARN. Build it on the event store's factory.
+
+### CDC gives up waiting for a gap at the gap handler's threshold
+
+A CDC subscription waited a hard-coded 120 s for a missing `GlobalEventOrder` before giving up, whatever promotion
+threshold the gap handler had. It now waits as long as the subscription's gap handler states through the new
+`SubscriptionGapHandler#transientGapGiveUpThreshold()`. `PostgresqlEventStreamGapHandler` returns the threshold of
+`thresholdBased(n)`.
+
+**What to do:** nothing, if you use the default threshold. A promotion strategy written as a lambda, a custom gap
+handler and `NoEventStreamGapHandler` state no threshold and keep 120 s; implement
+`ResolveTransientGapsToPermanentGapsPromotionStrategy#permanentGapThreshold()` (or override
+`transientGapGiveUpThreshold()` on your handler) to change it.
+
+### Polling without an optimizer waits between empty polls
+
+`pollEvents(...)` with no `EventStorePollingOptimizer`, or with `EventStorePollingOptimizer.None()`, re-polled at once
+after an empty poll, in a tight loop. It now waits the polling interval. With a small batch size, the polled range now
+also grows on every empty poll (doubling, up to ten times the default batch size and at least 100), so a hole of
+rolled-back appends at the read position is passed in a few polls instead of stalling a subscription with batch size 1
+for seconds.
+
+**What to do:** nothing. If you counted on the tight loop for latency, use a `NotifyAwareEventStorePollingOptimizer` or
+a shorter polling interval.
 
 ### A gap is resolved only once its event was handled
 
