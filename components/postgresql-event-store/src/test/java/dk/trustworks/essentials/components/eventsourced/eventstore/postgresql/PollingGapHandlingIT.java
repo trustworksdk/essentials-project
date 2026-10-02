@@ -23,9 +23,11 @@ import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.pe
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.persistence.table_per_aggregate_type.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.serializer.TenantSerializer;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.serializer.json.EssentialsJSONEventSerializers;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.subscription.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.test_data.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.transaction.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.types.*;
+import dk.trustworks.essentials.components.distributed.fencedlock.postgresql.PostgresqlFencedLockManager;
 import dk.trustworks.essentials.components.foundation.transaction.UnitOfWork;
 import dk.trustworks.essentials.components.foundation.types.*;
 import org.jdbi.v3.core.Jdbi;
@@ -38,7 +40,7 @@ import org.testcontainers.postgresql.PostgreSQLContainer;
 import org.reactivestreams.Subscription;
 import org.testcontainers.shaded.org.awaitility.Awaitility;
 import reactor.core.Disposable;
-import reactor.core.publisher.BaseSubscriber;
+import reactor.core.publisher.*;
 
 import java.time.*;
 import java.util.*;
@@ -57,6 +59,9 @@ import static org.assertj.core.api.Assertions.assertThat;
  *     until the holes below it were promoted to permanent gaps (120 s), and was lost when it was promoted with them</li>
  *     <li>a tenant-filtered subscription records no gaps for other tenants' events - they used to be recorded as
  *     transient gaps and promoted to permanent ones</li>
+ *     <li>a gap fill a subscription had not handled when it stopped is delivered once it is restarted from its resume
+ *     point, which lies above the fill - the poll used to resolve the gap before handing the fill on, so a stop in
+ *     between lost it for good</li>
  * </ul>
  */
 @Testcontainers
@@ -82,6 +87,12 @@ class PollingGapHandlingIT {
     private AggregateType                                                           aggregateType;
     private ExecutorService                                                         executor;
     private Disposable                                                              subscription;
+    private Jdbi                                                                    jdbi;
+    private EventStoreSubscriptionManager                                           subscriptionManager;
+    /**
+     * The global orders the event store handed to a subscriber - see {@link EventStoreSubscriptionObserver#publishEvent}
+     */
+    private final List<Long>                                                        published = new CopyOnWriteArrayList<>();
     /**
      * The tenant {@link TenantPersistableEventMapper} stamps on the next event appended; {@code null} = no tenant
      */
@@ -89,7 +100,7 @@ class PollingGapHandlingIT {
 
     @BeforeEach
     void setup() {
-        var jdbi = Jdbi.create(postgreSQLContainer.getJdbcUrl(),
+        jdbi = Jdbi.create(postgreSQLContainer.getJdbcUrl(),
                                postgreSQLContainer.getUsername(),
                                postgreSQLContainer.getPassword());
         jdbi.installPlugin(new PostgresPlugin());
@@ -113,16 +124,26 @@ class PollingGapHandlingIT {
                                          .setPersistenceStrategy(persistenceStrategy)
                                          // The default configuration - it is the default gap query strategy under test
                                          .setEventStreamGapHandlerFactory(store -> new PostgresqlEventStreamGapHandler<>(unitOfWorkFactory))
-                                         .setEventStoreSubscriptionObserver(new EventStoreSubscriptionObserver.NoOpEventStoreSubscriptionObserver())
+                                         .setEventStoreSubscriptionObserver(new EventStoreSubscriptionObserver.NoOpEventStoreSubscriptionObserver() {
+                                             @Override
+                                             public void publishEvent(SubscriberId subscriberId, AggregateType aggregateType, PersistedEvent persistedEvent, Duration publishEventDuration) {
+                                                 published.add(persistedEvent.globalEventOrder().longValue());
+                                             }
+                                         })
                                          .build();
         executor = Executors.newCachedThreadPool();
         tenantOfNextEvent = null;
+        published.clear();
+        subscriptionManager = null;
     }
 
     @AfterEach
     void cleanup() {
         if (subscription != null) {
             subscription.dispose();
+        }
+        if (subscriptionManager != null) {
+            subscriptionManager.stop();
         }
         executor.shutdownNow();
         unitOfWorkFactory.getCurrentUnitOfWork().ifPresent(UnitOfWork::rollback);
@@ -267,25 +288,144 @@ class PollingGapHandlingIT {
         assertThat(unitOfWorkFactory.withUnitOfWork(() -> eventStore.getEventStreamGapHandler().getPermanentGapsFor(aggregateType).toList())).isEmpty();
     }
 
+
+    /**
+     * A poll used to resolve the gaps its events fill before handing those events on. A subscription stopped in between
+     * - here right after it handled the first of two gap fills in one poll - resumes above the fills (its resume point
+     * moved past the higher events it handled before), and the gap was no longer recorded, so the second fill was
+     * never asked for again.
+     */
+    @ParameterizedTest
+    @EnumSource(PollingMode.class)
+    void a_gap_fill_a_stopped_subscription_did_not_get_to_is_delivered_once_it_restarts_from_its_resume_point(PollingMode pollingMode) throws Exception {
+        var subscriberId = SubscriberId.of("gap-fill-after-stop-" + pollingMode);
+
+        // Global orders 1 and 2 are taken by one transaction that commits late, so both gaps fill in the same poll
+        var lateCommit = appendAndHoldOpen(2);
+        var committed  = appendCommitted();
+        assertThat(lateCommit.globalOrder).isEqualTo(1);
+        assertThat(committed).isEqualTo(3);
+
+        var receivedBeforeTheStop = new CopyOnWriteArrayList<Long>();
+        var stoppingSubscriber = new BaseSubscriber<PersistedEvent>() {
+            @Override
+            protected void hookOnSubscribe(Subscription subscription) {
+                requestUnbounded();
+            }
+
+            @Override
+            protected void hookOnNext(PersistedEvent event) {
+                receivedBeforeTheStop.add(event.globalEventOrder().longValue());
+                if (event.globalEventOrder().longValue() < committed) {
+                    // Stopped right after handling the first gap fill - a shutdown, a fenced-lock hand-over, a resetFrom
+                    dispose();
+                }
+            }
+        };
+        subscription = stoppingSubscriber;
+        poll(pollingMode, subscriberId, GlobalEventOrder.FIRST_GLOBAL_EVENT_ORDER.longValue(), Optional.empty()).subscribe(stoppingSubscriber);
+        Awaitility.waitAtMost(Duration.ofSeconds(10)).untilAsserted(() -> assertThat(receivedBeforeTheStop).containsExactly(committed));
+        Awaitility.waitAtMost(Duration.ofSeconds(10)).untilAsserted(() -> assertThat(transientGapsOf(subscriberId)).containsExactly(GlobalEventOrder.of(1), GlobalEventOrder.of(2)));
+
+        lateCommit.commit();
+        Awaitility.waitAtMost(Duration.ofSeconds(10)).until(stoppingSubscriber::isDisposed);
+        assertThat(receivedBeforeTheStop).containsExactly(committed, 1L);
+
+        // Restarted from the resume point the subscriber had reached: past the highest event it handled
+        var receivedAfterTheRestart = new CopyOnWriteArrayList<Long>();
+        subscription = poll(pollingMode, subscriberId, committed + 1, Optional.empty()).subscribe(event -> receivedAfterTheRestart.add(event.globalEventOrder().longValue()));
+        var marker = appendCommitted();
+        Awaitility.waitAtMost(Duration.ofSeconds(10)).untilAsserted(() -> assertThat(receivedAfterTheRestart).contains(2L, marker));
+        assertThat(receivedAfterTheRestart).doesNotContain(committed);
+        Awaitility.waitAtMost(Duration.ofSeconds(10)).untilAsserted(() -> assertThat(transientGapsOf(subscriberId)).isEmpty());
+    }
+
+    /**
+     * A batched subscription holds what the event store hands it until its batch is full or its latency is up, so a
+     * gap fill handed on is not handled yet. Stopped in that window, it used to save a resume point above the fill
+     * while the poll had already resolved the gap - the fill was lost.
+     */
+    @Test
+    void a_gap_fill_still_waiting_for_its_batch_when_the_subscription_stops_is_delivered_once_it_restarts() throws Exception {
+        var subscriberId = SubscriberId.of("batched-gap-fill-after-stop");
+        // A first subscription starts at the lowest global order persisted, so the gap must lie above it
+        var first      = appendCommitted();
+        var lateCommit = appendAndHoldOpen(1);
+        var committed  = appendCommitted();
+        assertThat(List.of(first, lateCommit.globalOrder, committed)).containsExactly(1L, 2L, 3L);
+
+        var durableSubscriptionRepository = new PostgresqlDurableSubscriptionRepository(jdbi, eventStore);
+        subscriptionManager = EventStoreSubscriptionManager.builder()
+                                                           .setEventStore(eventStore)
+                                                           .setEventStorePollingBatchSize(10)
+                                                           .setEventStorePollingInterval(POLLING_INTERVAL)
+                                                           .setFencedLockManager(PostgresqlFencedLockManager.builder()
+                                                                                                            .setJdbi(jdbi)
+                                                                                                            .setUnitOfWorkFactory(unitOfWorkFactory)
+                                                                                                            .setLockManagerInstanceId("node-1")
+                                                                                                            .setLockTimeOut(Duration.ofSeconds(3))
+                                                                                                            .setLockConfirmationInterval(Duration.ofMillis(500))
+                                                                                                            .build())
+                                                           .setSnapshotResumePointsEvery(Duration.ofMillis(100))
+                                                           .setDurableSubscriptionRepository(durableSubscriptionRepository)
+                                                           .build();
+        subscriptionManager.start();
+        var handled = new CopyOnWriteArrayList<Long>();
+        var batchedSubscription = subscriptionManager.batchSubscribeToAggregateEventsAsynchronously(subscriberId,
+                                                                                                     aggregateType,
+                                                                                                     GlobalEventOrder.FIRST_GLOBAL_EVENT_ORDER,
+                                                                                                     Optional.empty(),
+                                                                                                     100,
+                                                                                                     // Long enough for the stop below to come first
+                                                                                                     Duration.ofSeconds(3),
+                                                                                                     events -> {
+                                                                                                         events.forEach(event -> handled.add(event.globalEventOrder().longValue()));
+                                                                                                         return events.size();
+                                                                                                     });
+        Awaitility.waitAtMost(Duration.ofSeconds(15)).untilAsserted(() -> assertThat(handled).containsExactly(first, committed));
+        Awaitility.waitAtMost(Duration.ofSeconds(10)).untilAsserted(() -> assertThat(persistedResumePoint(durableSubscriptionRepository, subscriberId)).isEqualTo(committed + 1));
+        assertThat(transientGapsOf(subscriberId)).containsExactly(GlobalEventOrder.of(lateCommit.globalOrder));
+
+        // The gap fill is handed to the subscription, which holds it for its next batch - and is stopped meanwhile
+        lateCommit.commit();
+        Awaitility.waitAtMost(Duration.ofSeconds(10)).untilAsserted(() -> assertThat(published).contains(lateCommit.globalOrder));
+        batchedSubscription.stop();
+        assertThat(handled).containsExactly(first, committed);
+
+        batchedSubscription.start();
+        Awaitility.waitAtMost(Duration.ofSeconds(15)).untilAsserted(() -> assertThat(handled).contains(lateCommit.globalOrder));
+        Awaitility.waitAtMost(Duration.ofSeconds(10)).untilAsserted(() -> assertThat(transientGapsOf(subscriberId)).isEmpty());
+    }
+
     // -------------------------------------------------------------------------------------------------------------------------------------------------
 
     private Disposable subscribe(PollingMode pollingMode, SubscriberId subscriberId, Optional<Tenant> tenant, List<Long> received) {
-        var flux = switch (pollingMode) {
+        return poll(pollingMode, subscriberId, GlobalEventOrder.FIRST_GLOBAL_EVENT_ORDER.longValue(), tenant)
+                .subscribe(event -> received.add(event.globalEventOrder().longValue()));
+    }
+
+    private Flux<PersistedEvent> poll(PollingMode pollingMode, SubscriberId subscriberId, long fromInclusiveGlobalOrder, Optional<Tenant> tenant) {
+        return switch (pollingMode) {
             case POLL_EVENTS -> eventStore.pollEvents(aggregateType,
-                                                      GlobalEventOrder.FIRST_GLOBAL_EVENT_ORDER,
+                                                      fromInclusiveGlobalOrder,
                                                       Optional.of(10),
                                                       Optional.of(POLLING_INTERVAL),
                                                       tenant,
                                                       Optional.of(subscriberId),
                                                       Optional.empty());
             case UNBOUNDED_POLL_FOR_EVENTS -> eventStore.unboundedPollForEvents(aggregateType,
-                                                                                GlobalEventOrder.FIRST_GLOBAL_EVENT_ORDER.longValue(),
+                                                                                fromInclusiveGlobalOrder,
                                                                                 Optional.of(10),
                                                                                 Optional.of(POLLING_INTERVAL),
                                                                                 tenant,
                                                                                 Optional.of(subscriberId));
         };
-        return flux.subscribe(event -> received.add(event.globalEventOrder().longValue()));
+    }
+
+    private long persistedResumePoint(DurableSubscriptionRepository durableSubscriptionRepository, SubscriberId subscriberId) {
+        return durableSubscriptionRepository.getResumePoint(subscriberId, aggregateType)
+                                            .map(resumePoint -> resumePoint.getResumeFromAndIncluding().longValue())
+                                            .orElse(0L);
     }
 
     private List<GlobalEventOrder> transientGapsOf(SubscriberId subscriberId) {
@@ -317,13 +457,25 @@ class PollingGapHandlingIT {
      * Appends an event in a transaction on another thread and keeps it open until {@link OpenTransaction#commit()}
      */
     private OpenTransaction appendAndHoldOpen() throws Exception {
+        return appendAndHoldOpen(1);
+    }
+
+    /**
+     * Appends {@code numberOfEvents} events in one transaction on another thread and keeps it open until
+     * {@link OpenTransaction#commit()}; {@link OpenTransaction#globalOrder()} is the lowest of their global orders
+     */
+    private OpenTransaction appendAndHoldOpen(int numberOfEvents) throws Exception {
         var appended    = new CompletableFuture<Long>();
         var mayCommit   = new CountDownLatch(1);
         var committed   = new CompletableFuture<Void>();
         executor.execute(() -> {
             try {
                 var unitOfWork = unitOfWorkFactory.getOrCreateNewUnitOfWork();
-                var globalOrder = eventStore.appendToStream(aggregateType, OrderId.random(), List.of(new OrderEvent.OrderAccepted(OrderId.random())))
+                var events = new ArrayList<Object>();
+                for (var i = 0; i < numberOfEvents; i++) {
+                    events.add(new OrderEvent.OrderAccepted(OrderId.random()));
+                }
+                var globalOrder = eventStore.appendToStream(aggregateType, OrderId.random(), events)
                                             .eventList()
                                             .get(0)
                                             .globalEventOrder()

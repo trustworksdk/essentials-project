@@ -43,7 +43,7 @@ import java.util.*;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.*;
 import java.util.function.*;
-import java.util.stream.Stream;
+import java.util.stream.*;
 
 import static dk.trustworks.essentials.shared.FailFast.*;
 
@@ -412,7 +412,10 @@ public class CdcEventStore<CONFIG extends AggregateEventStreamConfiguration> imp
                 live,
                 headSnapshot);
 
-        return filterByTenant(ordered, onlyIncludeEventIfItBelongsToTenant);
+        // BackfillThenLiveOrdered records an event as it emits it - possibly into its ordered live buffer - so a gap
+        // fill's gap is resolved only once the downstream took it from the ordered output (see DeliveryGate). Before
+        // the tenant filter, which hands another tenant's fill on by dropping it
+        return filterByTenant(reportingHandedOn(ordered, deliveryGate), onlyIncludeEventIfItBelongsToTenant);
     }
 
     /**
@@ -596,6 +599,9 @@ public class CdcEventStore<CONFIG extends AggregateEventStreamConfiguration> imp
                                   .filter(forBackfillThenLiveOrdered
                                           ? event -> !tracker.isDelivered(event.globalEventOrder().longValue())
                                           : deliveryGate::deliver)
+                                  // A gap fill's gap is resolved once the downstream took it (see DeliveryGate) - before
+                                  // the tenant gate, which hands another tenant's fill on by dropping it
+                                  .transform(events -> forBackfillThenLiveOrdered ? events : reportingHandedOn(events, deliveryGate))
                                   // Tenant gate (see eventBelongsToTenant), after the tracker. A no-op when this source
                                   // feeds the BackfillThenLiveOrdered drain: pollEvents passes Optional.empty() then and
                                   // filters the ordered OUTPUT instead, as its tracker has to see every global order.
@@ -745,11 +751,17 @@ public class CdcEventStore<CONFIG extends AggregateEventStreamConfiguration> imp
      * path and every back-fill page record the gaps in what they load, but an event from the bus is not loaded: without
      * this, a gap the bus revealed was lost at a restart - or a fenced-lock hand-over - before its event arrived. So an
      * event that opens a gap records it, synchronously and before the event is handed to the subscriber, and one that
-     * fills a gap resolves it (else the gap handler would later promote a gap whose event exists to permanent). This
-     * reconciles as a back-fill page over {@code [gap .. event]} holding just the event would, in a unit of work of its
-     * own, and is reported to the observer like every other gap reconciliation. Only when there is a subscriber id and a
-     * gap handler that records gaps, and only for events that open or fill a gap - an in-order event costs nothing. A
-     * failure is logged and the event delivered regardless: it only weakens the restart guarantee for that gap.
+     * fills a gap resolves it (else the gap handler would later promote a gap whose event exists to permanent) - but only
+     * once the event has been handed on ({@link #handedOn}): the transient gap is the only durable record that the fill
+     * is still owed, as the resume point lies above it, so resolved first, a subscription stopped (or a process that
+     * died) before the fill was handled resumed above it and never asked for it again. A fill whose subscription is
+     * cancelled before it was handed on keeps its gap, and the next subscription waits for it again. Back-fill and
+     * catch-up pages leave the gaps they fill open for the same reason - every event they load passes through a gate.
+     * This reconciles as a back-fill page over {@code [gap .. event]} holding just the event would, in a unit of work of
+     * its own, and is reported to the observer like every other gap reconciliation. Only when there is a subscriber id
+     * and a gap handler that records gaps, and only for events that open or fill a gap - an in-order event costs
+     * nothing. A failure is logged and the event delivered regardless: it only weakens the restart guarantee for that
+     * gap (or, for a fill, leaves the gap open until the gap handler gives up on it).
      * <p>
      * Runs on the delivering thread - the subscription's {@code Cdc-*}, {@code Publish-*} or back-fill thread, never the
      * bus's.
@@ -758,6 +770,10 @@ public class CdcEventStore<CONFIG extends AggregateEventStreamConfiguration> imp
         private final CdcDeliveryTracker               tracker;
         private final AggregateType                    aggregateType;
         private final Optional<SubscriptionGapHandler> gapHandler;
+        /**
+         * The gap fills let through, by global order, whose gap is resolved once they were handed on
+         */
+        private final Map<Long, PersistedEvent>        gapFillsBeingHandedOn = new ConcurrentHashMap<>();
 
         private DeliveryGate(CdcDeliveryTracker tracker, AggregateType aggregateType, Optional<SubscriptionGapHandler> gapHandler) {
             this.tracker = tracker;
@@ -771,11 +787,23 @@ public class CdcEventStore<CONFIG extends AggregateEventStreamConfiguration> imp
             var  delivery    = tracker.markDelivered(globalOrder);
             switch (delivery.kind()) {
                 case OPENED_GAP -> recordWithGapHandler(event, LongRange.between(delivery.gapFromInclusive(), globalOrder), false);
-                case FILLED_GAP -> recordWithGapHandler(event, LongRange.only(globalOrder), true);
+                case FILLED_GAP -> {
+                    if (gapHandler.isPresent()) {
+                        gapFillsBeingHandedOn.put(globalOrder, event);
+                    }
+                }
                 default -> {
                 }
             }
             return delivery.isNew();
+        }
+
+        @Override
+        public void handedOn(PersistedEvent event) {
+            if (gapFillsBeingHandedOn.isEmpty()) return;
+            if (gapFillsBeingHandedOn.remove(event.globalEventOrder().longValue(), event)) {
+                recordWithGapHandler(event, LongRange.only(event.globalEventOrder().longValue()), true);
+            }
         }
 
         @Override
@@ -828,6 +856,75 @@ public class CdcEventStore<CONFIG extends AggregateEventStreamConfiguration> imp
             return source;
         }
         return source.filter(e -> eventBelongsToTenant(e, onlyIncludeEventIfItBelongsToTenant));
+    }
+
+    /**
+     * {@code source}, telling {@code recorder} about each event once the downstream took it: after the downstream's
+     * {@code onNext} returned (see {@link DeliveryRecorder#handedOn}). The subscription manager's subscribers handle an
+     * event synchronously in their {@code onNext}, so by then it was handled - or, stopped mid-handling, the subscriber
+     * holds its resume point at it. Not fusable, so a fusing downstream cannot take events past it.
+     */
+    static Flux<PersistedEvent> reportingHandedOn(Flux<PersistedEvent> source, DeliveryRecorder recorder) {
+        requireNonNull(recorder, "No recorder provided");
+        return source.transform(Operators.<PersistedEvent, PersistedEvent>lift((scannable, actual) -> new HandedOnReporter(actual, recorder)));
+    }
+
+    private static final class HandedOnReporter implements CoreSubscriber<PersistedEvent>, Subscription {
+        private final CoreSubscriber<? super PersistedEvent> actual;
+        private final DeliveryRecorder                       recorder;
+        private       Subscription                           upstream;
+        /**
+         * Once cancelled, an event the downstream is still taking may not get handled - its gap stays open
+         */
+        private volatile boolean                             cancelled;
+
+        private HandedOnReporter(CoreSubscriber<? super PersistedEvent> actual, DeliveryRecorder recorder) {
+            this.actual = actual;
+            this.recorder = recorder;
+        }
+
+        @Override
+        public reactor.util.context.Context currentContext() {
+            return actual.currentContext();
+        }
+
+        @Override
+        public void onSubscribe(Subscription subscription) {
+            if (Operators.validate(upstream, subscription)) {
+                upstream = subscription;
+                // This, not the upstream subscription: a fusing downstream must not poll events past onNext below
+                actual.onSubscribe(this);
+            }
+        }
+
+        @Override
+        public void onNext(PersistedEvent event) {
+            actual.onNext(event);
+            if (!cancelled) {
+                recorder.handedOn(event);
+            }
+        }
+
+        @Override
+        public void onError(Throwable throwable) {
+            actual.onError(throwable);
+        }
+
+        @Override
+        public void onComplete() {
+            actual.onComplete();
+        }
+
+        @Override
+        public void request(long n) {
+            upstream.request(n);
+        }
+
+        @Override
+        public void cancel() {
+            cancelled = true;
+            upstream.cancel();
+        }
     }
 
     /**
@@ -945,7 +1042,8 @@ public class CdcEventStore<CONFIG extends AggregateEventStreamConfiguration> imp
 
     /**
      * Load one page {@code [fromInclusive .. min(head, fromInclusive + pageSize - 1)]}, plus the transient gaps the gap
-     * handler includes and {@code alsoLoad}, by order, and reconcile the gaps in it with the gap handler.
+     * handler includes and {@code alsoLoad}, by order, and reconcile the gaps in it with the gap handler - except the
+     * transient gaps its events fill, which the {@link DeliveryGate} the events pass resolves once they were handed on.
      *
      * @return where the next page starts - right after the highest order loaded <b>within the range</b> (a transient gap
      * or an order in {@code alsoLoad} lies below it, and must not move the next page back), or after the range when it
@@ -992,7 +1090,11 @@ public class CdcEventStore<CONFIG extends AggregateEventStreamConfiguration> imp
                                               : events.stream()
                                                       .filter(event -> range.covers(event.globalEventOrder().longValue()) || transientGaps.contains(event.globalEventOrder()))
                                                       .toList();
-                    gapHandler.ifPresent(h -> gapReconciliation.set(h.reconcileGapsAndReport(aggregateType, range, eventsForGapHandler, transientGaps)));
+                    // ... except that the gaps its events fill stay open: the page is handed on later, as the downstream
+                    // asks, and every event passes a DeliveryGate, which resolves a gap once its fill was handed on
+                    var loadedGlobalOrders = events.stream().map(PersistedEvent::globalEventOrder).collect(Collectors.toSet());
+                    var gapsNotFilled      = transientGaps.stream().filter(gap -> !loadedGlobalOrders.contains(gap)).toList();
+                    gapHandler.ifPresent(h -> gapReconciliation.set(h.reconcileGapsAndReport(aggregateType, range, eventsForGapHandler, gapsNotFilled)));
                     return events;
                 });
         // Reported after the unit of work commits, as the polling path does. Backfill is invisible to the polling
@@ -1194,6 +1296,13 @@ public class CdcEventStore<CONFIG extends AggregateEventStreamConfiguration> imp
          * @return whether the event was handed downstream before (or given up on), without recording anything
          */
         boolean isDelivered(PersistedEvent event);
+
+        /**
+         * Called once the downstream took {@code event} - its {@code onNext} returned - after {@link #deliver} let it
+         * through. Not called for an event the subscription was cancelled under before it got there
+         */
+        default void handedOn(PersistedEvent event) {
+        }
 
         /**
          * Only the tracker - no gap handler

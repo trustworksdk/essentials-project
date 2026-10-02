@@ -93,7 +93,10 @@ public final class SubscriptionResumePoint {
      * handled. Assigning unconditionally would rewind the resume point to that straggler and cause
      * every event in between to be redelivered on the next resume. Advancing past a gap is safe
      * because unfilled gaps are tracked separately (and durably) by the {@code EventStreamGapHandler},
-     * not by the resume point.
+     * not by the resume point - and a gap stays tracked until the event filling it has been handed to
+     * the subscriber, not merely loaded. A subscriber that is handed a gap fill and does not get to
+     * handle it before it stops must therefore hold its resume point at that event instead (see
+     * {@code PersistedEventSubscriber} and {@code BatchedPersistedEventSubscriber}).
      */
     public synchronized SubscriptionResumePoint advanceResumeFromAndIncluding(GlobalEventOrder resumeFromAndIncluding) {
         requireNonNull(resumeFromAndIncluding, "No resumeFromAndIncluding provided");

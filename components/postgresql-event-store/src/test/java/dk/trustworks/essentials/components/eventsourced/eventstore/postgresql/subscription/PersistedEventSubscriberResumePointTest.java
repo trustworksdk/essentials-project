@@ -347,6 +347,95 @@ class PersistedEventSubscriberResumePointTest {
         verify(observer).handleEventFailed(any(), any(PersistedEventHandler.class), argThat(failure -> failure.getSuppressed().length == 1), any());
     }
 
+    /**
+     * A gap fill handed on after a STOP, before the upstream is cancelled, lies below the held resume point: ignored
+     * without lowering the hold, the restarted subscription would resume above it - and the event store resolved its gap
+     * when it handed it on
+     */
+    @Test
+    void a_gap_fill_ignored_after_a_stop_lowers_the_held_resume_point_to_it() {
+        var subscriber = new PersistedEventSubscriber(event -> {
+            if (event.globalEventOrder().longValue() == 5) {
+                throw new IllegalStateException("Intentional failure handling #5");
+            }
+        },
+                                                      eventStoreSubscription,
+                                                      onErrorHandler,
+                                                      ioRetrySpec(),
+                                                      10,
+                                                      eventStore,
+                                                      SubscriptionErrorPolicy.stop());
+        subscriber.onSubscribe(mock(Subscription.class));
+        subscriber.onNext(event(4));
+        subscriber.onNext(event(5));
+        Awaitility.waitAtMost(Duration.ofSeconds(10)).until(subscriber::isStoppedByErrorPolicy);
+        assertThat(resumePoint.getResumeFromAndIncluding()).isEqualTo(GlobalEventOrder.of(5));
+
+        // Ignored, and neither moves the hold up nor leaves a gap fill below it
+        subscriber.onNext(event(6));
+        assertThat(resumePoint.getResumeFromAndIncluding()).isEqualTo(GlobalEventOrder.of(5));
+        subscriber.onNext(event(3));
+        assertThat(resumePoint.getResumeFromAndIncluding()).isEqualTo(GlobalEventOrder.of(3));
+    }
+
+    /**
+     * A batched subscriber stopped while it still collects events for a batch never handles them. Among them, a gap fill
+     * lies below the resume point (later events completed first), so the resume point is held at it
+     */
+    @Test
+    void batched_stop_holds_the_resume_point_at_a_gap_fill_still_collected_for_a_batch() {
+        var handled = new CopyOnWriteArrayList<Long>();
+        var subscriber = new BatchedPersistedEventSubscriber(events -> {
+            events.forEach(event -> handled.add(event.globalEventOrder().longValue()));
+            return events.size();
+        },
+                                                             eventStoreSubscription,
+                                                             onErrorHandler,
+                                                             ioRetrySpec(),
+                                                             10,
+                                                             eventStore,
+                                                             2,
+                                                             Duration.ofMinutes(1),
+                                                             SubscriptionErrorPolicy.skip());
+        subscriber.onSubscribe(mock(Subscription.class));
+        subscriber.onNext(event(4));
+        subscriber.onNext(event(5));
+        Awaitility.waitAtMost(Duration.ofSeconds(10))
+                  .untilAsserted(() -> assertThat(resumePoint.getResumeFromAndIncluding()).isEqualTo(GlobalEventOrder.of(6)));
+
+        // The gap fill #3 waits for the batch to fill up - and the subscriber is stopped meanwhile
+        subscriber.onNext(event(3));
+        subscriber.dispose();
+
+        assertThat(handled).containsExactly(4L, 5L);
+        assertThat(resumePoint.getResumeFromAndIncluding()).isEqualTo(GlobalEventOrder.of(3));
+        verifyNoInteractions(onErrorHandler);
+    }
+
+    @Test
+    void batched_stop_with_events_at_or_above_the_resume_point_still_collected_leaves_the_resume_point_alone() {
+        var subscriber = new BatchedPersistedEventSubscriber(List::size,
+                                                             eventStoreSubscription,
+                                                             onErrorHandler,
+                                                             ioRetrySpec(),
+                                                             10,
+                                                             eventStore,
+                                                             2,
+                                                             Duration.ofMinutes(1),
+                                                             SubscriptionErrorPolicy.skip());
+        subscriber.onSubscribe(mock(Subscription.class));
+        subscriber.onNext(event(4));
+        subscriber.onNext(event(5));
+        Awaitility.waitAtMost(Duration.ofSeconds(10))
+                  .untilAsserted(() -> assertThat(resumePoint.getResumeFromAndIncluding()).isEqualTo(GlobalEventOrder.of(6)));
+
+        // Read again from the resume point anyway
+        subscriber.onNext(event(7));
+        subscriber.dispose();
+
+        assertThat(resumePoint.getResumeFromAndIncluding()).isEqualTo(GlobalEventOrder.of(6));
+    }
+
     private static RetryBackoffSpec ioRetrySpec() {
         return Retry.backoff(Long.MAX_VALUE, Duration.ofMillis(500))
                     .filter(IOExceptionUtil::isIOException);

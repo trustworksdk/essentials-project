@@ -252,14 +252,18 @@ public class PersistedEventSubscriber extends BaseSubscriber<PersistedEvent> {
     @Override
     protected void hookOnNext(PersistedEvent e) {
         if (resumePointHeld) {
-            // Events already requested before the stop still arrive - they are left for the restarted subscription
-            log.debug("[{}-{}] (#{}) Ignoring {} event - the subscriber has stopped (stopped by the {} SubscriptionErrorPolicy: {})",
+            // Events already requested before the stop still arrive - they are left for the restarted subscription. A gap
+            // fill lies below the held resume point, so the hold moves down to it: the event store resolved its gap when
+            // it handed it on, and the restarted subscription would otherwise resume above it and never see it
+            var resumeFrom = holdResumePointAt(e);
+            log.debug("[{}-{}] (#{}) Ignoring {} event - the subscriber has stopped (stopped by the {} SubscriptionErrorPolicy: {}). The resume point stays at #{}",
                       eventStoreSubscription.subscriberId(),
                       eventStoreSubscription.aggregateType(),
                       e.globalEventOrder(),
                       e.event().getEventTypeOrName().getValue(),
                       SubscriptionErrorPolicy.Mode.STOP,
-                      stoppedByErrorPolicy);
+                      stoppedByErrorPolicy,
+                      resumeFrom);
             return;
         }
         // Outside the callable, so an I/O retry (which re-subscribes the callable) doesn't reset the policy's retry budget
@@ -339,7 +343,9 @@ public class PersistedEventSubscriber extends BaseSubscriber<PersistedEvent> {
                     synchronized (resumePointLock) {
                         if (!resumePointHeld) {
                             // advance (not set): gap-filled events are delivered out of order, so an older
-                            // event can complete last and must not rewind the resume point
+                            // event can complete last and must not rewind the resume point. The event store resolves
+                            // a gap fill's gap once hookOnNext returned - after this, unless an I/O retry made the
+                            // handling asynchronous; a stop then holds the resume point at it (stoppedWhileHandling)
                             resumePoint.advanceResumeFromAndIncluding(e.globalEventOrder().increment());
                         }
                     }

@@ -383,7 +383,9 @@ public final class PostgresqlEventStreamGapHandler<CONFIG extends AggregateEvent
                                                      .map(GlobalEventOrder::of)
                                                      .collect(Collectors.toList());
                 // Verify if the transient gap is already marked permanent by another subscriber (permanent gaps are defined across subscribers per aggregate type)
-                var permanentGapsAmongTheNewTransientGaps = getPermanentGapsFor(aggregateType).filter(newTransientGapsToAdd::contains).collect(Collectors.toList());
+                var permanentGapsAmongTheNewTransientGaps = newTransientGapsToAdd.isEmpty()
+                                                            ? List.<GlobalEventOrder>of()
+                                                            : getPermanentGapsFor(aggregateType).filter(newTransientGapsToAdd::contains).collect(Collectors.toList());
                 if (permanentGapsAmongTheNewTransientGaps.size() > 0) {
                     log.debug("[{}] Removed {} permanent gaps among the newly discovered transient gaps for {}: {}",
                               subscriberId,
@@ -408,8 +410,15 @@ public final class PostgresqlEventStreamGapHandler<CONFIG extends AggregateEvent
                       subscriberId,
                       aggregateType,
                       allTransientGaps);
-            var promotableTransientGaps = resolveTransientGapsToPermanentGapsPromotionStrategy.resolveTransientGapsReadyToBePromotedToPermanentGaps(aggregateType,
-                                                                                                                                                    allTransientGaps.get(aggregateType));
+            var promotableTransientGaps = new ArrayList<>(resolveTransientGapsToPermanentGapsPromotionStrategy.resolveTransientGapsReadyToBePromotedToPermanentGaps(aggregateType,
+                                                                                                                                                                     allTransientGaps.get(aggregateType)));
+            // Never a gap whose event is right here: the event store leaves the gap a gap fill fills open until it has
+            // handed the event on (it passes it here without the gap), and resolves it then - promoted now, the gap
+            // would be gone before the event was handled, and recorded as permanent although its event exists
+            if (!promotableTransientGaps.isEmpty() && !persistedEvents.isEmpty()) {
+                var reconciledGlobalOrders = persistedEvents.stream().map(PersistedEvent::globalEventOrder).collect(Collectors.toSet());
+                promotableTransientGaps.removeIf(reconciledGlobalOrders::contains);
+            }
             var promotedCount = promoteTransientGapsToPermanentGaps(aggregateType,
                                                                     promotableTransientGaps);
             return new GapReconciliation(newCount, resolvedCount, promotedCount);

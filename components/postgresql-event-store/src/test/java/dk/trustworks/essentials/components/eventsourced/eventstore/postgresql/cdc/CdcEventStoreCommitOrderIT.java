@@ -31,12 +31,14 @@ import dk.trustworks.essentials.components.foundation.types.SubscriberId;
 import dk.trustworks.essentials.types.LongRange;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.junit.jupiter.api.*;
+import org.reactivestreams.Subscription;
 import reactor.core.Disposable;
+import reactor.core.publisher.BaseSubscriber;
 
 import java.time.Duration;
 import java.util.*;
 import java.util.concurrent.*;
-import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.*;
 
 import static org.assertj.core.api.Assertions.*;
 import static org.awaitility.Awaitility.await;
@@ -64,6 +66,10 @@ class CdcEventStoreCommitOrderIT extends AbstractLogicalReplicationPostgresIT {
     private PostgresqlDurableSubscriptionRepository                                 durableSubscriptionRepository;
     private final List<EventStoreSubscriptionManager>                               managers = new CopyOnWriteArrayList<>();
     private Disposable                                                              bystander;
+    /**
+     * Subscriptions a test made directly on the {@link CdcEventStore} - disposed after it
+     */
+    private final List<Disposable>                                                  subscriptions = new CopyOnWriteArrayList<>();
     private ExecutorService                                                         heldTransactions;
     private SimpleMeterRegistry                                                     meterRegistry;
 
@@ -109,6 +115,8 @@ class CdcEventStoreCommitOrderIT extends AbstractLogicalReplicationPostgresIT {
         if (bystander != null) {
             bystander.dispose();
         }
+        subscriptions.forEach(Disposable::dispose);
+        subscriptions.clear();
         unitOfWorkFactory.getCurrentUnitOfWork().ifPresent(UnitOfWork::rollback);
         managers.forEach(EventStoreSubscriptionManager::stop);
     }
@@ -309,7 +317,115 @@ class CdcEventStoreCommitOrderIT extends AbstractLogicalReplicationPostgresIT {
         assertThat(restarted).doesNotHaveDuplicates().doesNotContain(1L, b);
     }
 
+    /**
+     * The transient gap is the only durable record that a gap fill is still owed - the resume point lies above it. The
+     * bus leg's delivery gate used to resolve the gap right before handing the fill on, so a subscriber that went down
+     * before it had handled the fill (a crash mid-handling, as modelled here) resumed above it and never saw it.
+     */
+    @Test
+    void a_gap_fill_from_the_bus_the_subscriber_went_down_before_handling_is_delivered_once_it_restarts_from_its_resume_point() throws Exception {
+        var subscriberId = SubscriberId.of("bus-fill-not-handled");
+        var handled      = new CopyOnWriteArrayList<Long>();
+        var a            = new AtomicLong(Long.MAX_VALUE);
+        var goingDown = new BaseSubscriber<PersistedEvent>() {
+            @Override
+            protected void hookOnSubscribe(Subscription subscription) {
+                requestUnbounded();
+            }
+
+            @Override
+            protected void hookOnNext(PersistedEvent event) {
+                if (event.globalEventOrder().longValue() == a.get()) {
+                    // Goes down before it has handled the gap fill
+                    dispose();
+                    return;
+                }
+                handled.add(event.globalEventOrder().longValue());
+            }
+        };
+        subscriptions.add(goingDown);
+        cdcEventStore.pollEvents(ORDERS, 1, Optional.of(PAGE_SIZE), Optional.of(POLLING_INTERVAL), Optional.empty(), Optional.of(subscriberId), Optional.empty())
+                     .subscribe(goingDown);
+        publish(appendAndCommit());
+        await().atMost(Duration.ofSeconds(10)).until(() -> handled.size() == 1);
+        availability.active("commit-order-slot");
+        awaitOnTheBus();
+
+        var heldA = holdAppend();
+        a.set(heldA.globalOrder());
+        var b = appendAndCommit();
+        publish(b);
+        await().atMost(Duration.ofSeconds(10)).until(() -> handled.contains(b));
+        await().atMost(Duration.ofSeconds(10)).until(() -> transientGapsOf(subscriberId).equals(List.of(GlobalEventOrder.of(heldA.globalOrder()))));
+        heldA.commit();
+        publish(heldA.globalOrder());
+        await().atMost(Duration.ofSeconds(10)).until(goingDown::isDisposed);
+
+        // Restarted from the resume point it had reached: past B
+        var restarted = new CopyOnWriteArrayList<Long>();
+        subscriptions.add(cdcEventStore.pollEvents(ORDERS, b + 1, Optional.of(PAGE_SIZE), Optional.of(POLLING_INTERVAL), Optional.empty(), Optional.of(subscriberId), Optional.empty())
+                                       .subscribe(event -> restarted.add(event.globalEventOrder().longValue())));
+        await().atMost(Duration.ofSeconds(15)).untilAsserted(() -> assertThat(restarted).contains(heldA.globalOrder()));
+        await().atMost(Duration.ofSeconds(10)).until(() -> transientGapsOf(subscriberId).isEmpty());
+        assertThat(restarted).doesNotHaveDuplicates().doesNotContain(1L, b);
+    }
+
+    /**
+     * A back-fill (or catch-up) page holds what it loaded and hands it on as the subscriber asks. It used to resolve the
+     * gaps its events filled when it loaded them, so a subscriber stopped part-way through the page resumed above the
+     * fills it had not got to, and they were no longer gaps it waited for.
+     */
+    @Test
+    void gap_fills_a_backfill_page_had_not_handed_on_when_the_subscriber_stopped_are_delivered_once_it_restarts() throws Exception {
+        var subscriberId = SubscriberId.of("backfill-fills-not-handed-on");
+        var first        = appendAndCommit();
+        var held         = holdAppends(2);
+        var last         = appendAndCommit();
+        assertThat(List.of(first, held.globalOrder(), held.globalOrder() + 1, last)).containsExactly(1L, 2L, 3L, 4L);
+
+        // A first run (CDC INACTIVE - polling) handles 1 and 4 and records 2 and 3 as transient gaps
+        var firstRun = new CopyOnWriteArrayList<Long>();
+        var firstRunSubscription = cdcEventStore.pollEvents(ORDERS, 1, Optional.of(PAGE_SIZE), Optional.of(POLLING_INTERVAL), Optional.empty(), Optional.of(subscriberId), Optional.empty())
+                                                .subscribe(event -> firstRun.add(event.globalEventOrder().longValue()));
+        await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> assertThat(firstRun).containsExactly(first, last));
+        await().atMost(Duration.ofSeconds(10)).until(() -> transientGapsOf(subscriberId).equals(List.of(GlobalEventOrder.of(2), GlobalEventOrder.of(3))));
+        firstRunSubscription.dispose();
+        held.commit();
+
+        // Restarted past 4 while CDC is ACTIVE: its backfill loads both gap fills in one page - and it is stopped after the first
+        availability.active("commit-order-slot");
+        var secondRun = new CopyOnWriteArrayList<Long>();
+        var stoppedAfterTheFirst = new BaseSubscriber<PersistedEvent>() {
+            @Override
+            protected void hookOnSubscribe(Subscription subscription) {
+                requestUnbounded();
+            }
+
+            @Override
+            protected void hookOnNext(PersistedEvent event) {
+                secondRun.add(event.globalEventOrder().longValue());
+                dispose();
+            }
+        };
+        subscriptions.add(stoppedAfterTheFirst);
+        cdcEventStore.pollEvents(ORDERS, last + 1, Optional.of(PAGE_SIZE), Optional.of(POLLING_INTERVAL), Optional.empty(), Optional.of(subscriberId), Optional.empty())
+                     .subscribe(stoppedAfterTheFirst);
+        await().atMost(Duration.ofSeconds(10)).until(stoppedAfterTheFirst::isDisposed);
+        assertThat(secondRun).containsExactly(2L);
+
+        var thirdRun = new CopyOnWriteArrayList<Long>();
+        subscriptions.add(cdcEventStore.pollEvents(ORDERS, last + 1, Optional.of(PAGE_SIZE), Optional.of(POLLING_INTERVAL), Optional.empty(), Optional.of(subscriberId), Optional.empty())
+                                       .subscribe(event -> thirdRun.add(event.globalEventOrder().longValue())));
+        await().atMost(Duration.ofSeconds(15)).untilAsserted(() -> assertThat(thirdRun).contains(3L));
+        await().atMost(Duration.ofSeconds(10)).until(() -> transientGapsOf(subscriberId).isEmpty());
+        assertThat(thirdRun).doesNotHaveDuplicates().doesNotContain(first, last);
+    }
+
     // ------------------------------------------------------------------------------------------------------------
+
+    private List<GlobalEventOrder> transientGapsOf(SubscriberId subscriberId) {
+        return eventStore.getEventStreamGapHandler().gapHandlerFor(subscriberId).getTransientGapsFor(ORDERS);
+    }
 
     private EventStoreSubscriptionManager startManager(String instanceId) {
         var manager = EventStoreSubscriptionManager.builder()
@@ -393,11 +509,22 @@ class CdcEventStoreCommitOrderIT extends AbstractLogicalReplicationPostgresIT {
      * its global order is taken, the event is not visible yet
      */
     private HeldAppend holdAppend() throws Exception {
+        return holdAppends(1);
+    }
+
+    /**
+     * {@code count} appends in one held transaction - see {@link #holdAppend()}; {@link HeldAppend#globalOrder()} is the
+     * first, the others follow it
+     */
+    private HeldAppend holdAppends(int count) throws Exception {
         var globalOrder = new CompletableFuture<Long>();
         var mayEnd      = new CountDownLatch(1);
         var rollBack    = new AtomicBoolean();
         var ended = heldTransactions.submit(() -> unitOfWorkFactory.usingUnitOfWork(unitOfWork -> {
             globalOrder.complete(appendTo(unitOfWork));
+            for (var i = 1; i < count; i++) {
+                appendTo(unitOfWork);
+            }
             if (!mayEnd.await(30, TimeUnit.SECONDS)) {
                 throw new IllegalStateException("Held transaction was never released");
             }

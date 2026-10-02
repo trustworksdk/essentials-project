@@ -248,13 +248,16 @@ public class BatchedPersistedEventSubscriber extends BaseSubscriber<PersistedEve
     @Override
     protected void hookOnNext(PersistedEvent event) {
         if (resumePointHeld) {
-            // Events already requested before the stop still arrive - they are left for the restarted subscription
-            log.debug("[{}-{}] Ignoring event #{} - the subscriber has stopped (stopped by the {} SubscriptionErrorPolicy: {})",
+            // Events already requested before the stop still arrive - they are left for the restarted subscription, so
+            // the hold moves down to a gap fill below it (see holdResumePointBelow)
+            var resumeFrom = holdResumePointAt(event);
+            log.debug("[{}-{}] Ignoring event #{} - the subscriber has stopped (stopped by the {} SubscriptionErrorPolicy: {}). The resume point stays at #{}",
                       eventStoreSubscription.subscriberId(),
                       eventStoreSubscription.aggregateType(),
                       event.globalEventOrder(),
                       SubscriptionErrorPolicy.Mode.STOP,
-                      stoppedByErrorPolicy);
+                      stoppedByErrorPolicy,
+                      resumeFrom);
             return;
         }
         // Add the event to our queue
@@ -295,6 +298,8 @@ public class BatchedPersistedEventSubscriber extends BaseSubscriber<PersistedEve
 
     @Override
     protected void hookOnCancel() {
+        // What is still collected for a batch is never handled by this subscriber
+        holdResumePointBelow(List.copyOf(eventQueue));
         // Clean up the scheduler
         cancelScheduledProcessing();
         scheduler.shutdown();
@@ -306,6 +311,8 @@ public class BatchedPersistedEventSubscriber extends BaseSubscriber<PersistedEve
 
     @Override
     protected void hookOnError(Throwable throwable) {
+        // As on cancel: what is still collected for a batch is never handled by this subscriber
+        holdResumePointBelow(List.copyOf(eventQueue));
         // Clean up the scheduler
         cancelScheduledProcessing();
         scheduler.shutdown();
@@ -449,7 +456,9 @@ public class BatchedPersistedEventSubscriber extends BaseSubscriber<PersistedEve
                 batchProcessingSequenceLock.lock();
                 try {
                     if (resumePointHeld) {
-                        // A batch collected before an earlier batch stopped the subscriber - left for the restarted subscription
+                        // A batch collected before an earlier batch stopped the subscriber - left for the restarted subscription,
+                        // so the hold moves down to a gap fill in it (see holdResumePointBelow)
+                        holdResumePointAt(firstEvent);
                         log.debug("[{}-{}] Ignoring batch of {} events (global event order: [#{} - #{}]) - the subscriber has stopped (stopped by the {} SubscriptionErrorPolicy: {})",
                                   eventStoreSubscription.subscriberId(),
                                   eventStoreSubscription.aggregateType(),
@@ -620,6 +629,34 @@ public class BatchedPersistedEventSubscriber extends BaseSubscriber<PersistedEve
                 resumePoint.setResumeFromAndIncluding(firstEventOfBatch.globalEventOrder());
             }
             return resumePoint.getResumeFromAndIncluding();
+        }
+    }
+
+    /**
+     * Events this subscriber was handed but will never handle - collected for a batch when it is stopped. One of them
+     * below the resume point is a gap fill: the resume point had moved past it (gap fills are delivered after higher
+     * events), and the event store resolved its gap once it handed the event on, so a restarted subscription resuming
+     * where this one got to would never see it. Then the resume point is held at the lowest of them, as for a batch the
+     * stop interrupted - redelivering what lies between is at-least-once. Events at or above the resume point are read
+     * again anyway; for them nothing changes.
+     */
+    private void holdResumePointBelow(List<PersistedEvent> unhandledEvents) {
+        if (unhandledEvents.isEmpty()) {
+            return;
+        }
+        var lowest = unhandledEvents.stream().min(Comparator.comparing(PersistedEvent::globalEventOrder)).get();
+        synchronized (resumePointLock) {
+            if (resumePoint.getResumeFromAndIncluding().longValue() <= lowest.globalEventOrder().longValue()) {
+                return;
+            }
+            var resumeFrom = holdResumePointAt(lowest);
+            log.info("[{}-{}] The subscriber was stopped with {} event(s) collected for its next batch, among them #{} below its resume point (a gap fill) - " +
+                             "the resume point stays at #{}, so the restarted subscription handles it",
+                     eventStoreSubscription.subscriberId(),
+                     eventStoreSubscription.aggregateType(),
+                     unhandledEvents.size(),
+                     lowest.globalEventOrder(),
+                     resumeFrom);
         }
     }
 }
