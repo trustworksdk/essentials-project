@@ -20,6 +20,8 @@ targets, with a `-N` suffix for plugin-only releases.
 - **Bundled docs** — the default gap handler re-asks for up to 50 open gaps per poll instead of 2, and
   tenant-filtered polling loads every tenant's events so other tenants' orders are never gaps
   (`LLM-postgresql-event-store.md`).
+- **Bundled docs** — a gap is resolved only once its event was handed to the subscriber, so a stop or crash
+  redelivers a gap fill instead of losing it (`LLM-postgresql-event-store.md`).
 - **New trap `ESS-116`** — a handler that skips everything at or below the highest `GlobalEventOrder` it
   has seen drops late-committed events (`LLM-traps.md`).
 

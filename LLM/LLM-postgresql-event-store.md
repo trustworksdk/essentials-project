@@ -764,6 +764,10 @@ gaps up to 50; beyond that the 20 highest + 10 lowest + a rotating window of 20 
 `ResolveTransientGapsToIncludeInQueryStrategy` (longer constructors) replaces that. Transient gaps are per subscriber;
 permanent gaps are shared by every subscriber of the `AggregateType`. A tenant-filtered subscription loads every tenant's
 events in the polled range and filters in memory (polling and CDC alike), so other tenants' orders are never gaps.
+A gap is resolved only once its event has been handed to the subscriber, so a stop or crash before that redelivers the
+fill rather than losing it (a stopped batched subscription holds its resume point at the lowest fill it had queued).
+A custom `SubscriptionGapHandler` gets a second `reconcileGapsAndReport` call for a poll's fills after they are published,
+and must not promote a gap whose event is in the events it is given.
 
 ### Ordering Guarantees
 

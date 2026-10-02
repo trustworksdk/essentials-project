@@ -889,6 +889,22 @@ highest, the 10 lowest and a rotating window of 20 in between, so a poll carries
 **What to do:** nothing. A gap handler you built with your own `ResolveTransientGapsToIncludeInQueryStrategy` is
 unchanged.
 
+### A gap is resolved only once its event was handed to the subscriber
+
+0.50 resolved a transient gap when a poll or a CDC back-fill loaded the event that filled it, before the subscriber
+had it, so a stop or a crash in between lost that event. 0.60 resolves it once the event has been handed on. A fill
+whose poll was cut short, or that a stopped batched subscription still had queued, is delivered again after the
+restart; a stopped batched subscription keeps its resume point at the lowest such fill, so the events after it are
+delivered again too.
+
+**What to do:**
+
+- Make handlers tolerate a redelivered event, as they already must for an event whose handling a stop interrupted.
+- If you implement `SubscriptionGapHandler` yourself: a poll that publishes gap fills now leaves those gaps out of the
+  `transientGapsIncludedInQuery` it passes to `reconcileGapsAndReport(...)` before publishing, and calls
+  `reconcileGapsAndReport(...)` a second time for them once they are published. Do not promote a gap whose event is
+  among the events you are given.
+
 ---
 
 ## Coming from before 0.50
