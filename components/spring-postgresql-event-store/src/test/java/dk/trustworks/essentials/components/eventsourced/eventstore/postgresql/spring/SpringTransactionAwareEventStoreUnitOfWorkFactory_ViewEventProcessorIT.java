@@ -120,7 +120,6 @@ class SpringTransactionAwareEventStoreUnitOfWorkFactory_ViewEventProcessorIT {
      * {@link EventStoreSubscriptionObserver}
      */
     private final List<PersistedEvent>                                              handleEventFailedEvents = new CopyOnWriteArrayList<>();
-    private final List<Throwable>                                                   handleEventFailedCauses = new CopyOnWriteArrayList<>();
 
     @BeforeEach
     void setup() {
@@ -145,7 +144,6 @@ class SpringTransactionAwareEventStoreUnitOfWorkFactory_ViewEventProcessorIT {
                                              @Override
                                              public void handleEventFailed(PersistedEvent event, PersistedEventHandler eventHandler, Throwable cause, EventStoreSubscription eventStoreSubscription) {
                                                  handleEventFailedEvents.add(event);
-                                                 handleEventFailedCauses.add(cause);
                                              }
                                          })
                                          .build();
@@ -213,10 +211,12 @@ class SpringTransactionAwareEventStoreUnitOfWorkFactory_ViewEventProcessorIT {
      * Events the failed handler appended are registered in the {@link UnitOfWork}, and committing it to queue the event would hand
      * them to the in-transaction subscriptions and publish them on the local event bus although their rows were rolled back to the
      * savepoint. {@link SpringTransactionAwareEventStoreUnitOfWorkFactory.SpringTransactionAwareEventStoreUnitOfWork#getNumberOfEventsPersisted()}
-     * must therefore count them, so the event is escalated instead of queued.
+     * must therefore count them, so the event is escalated - the {@link UnitOfWork} rolled back - and only then queued in a
+     * {@link UnitOfWork} of its own. Were it queued in the subscription's {@link UnitOfWork}, the appended event would be
+     * persisted and published.
      */
     @Test
-    void a_handler_that_appended_events_before_failing_is_not_queued_and_its_events_are_not_published() {
+    void a_handler_that_appended_events_before_failing_is_queued_after_the_rollback_and_its_events_are_not_published() {
         var eventsSeenInTransaction    = new CopyOnWriteArrayList<PersistedEvent>();
         var eventsPublishedAfterCommit = new CopyOnWriteArrayList<PersistedEvent>();
         eventStoreSubscriptionManager.subscribeToAggregateEventsInTransaction(SubscriberId.of("InTransactionOrderEventsRecorder"),
@@ -231,27 +231,27 @@ class SpringTransactionAwareEventStoreUnitOfWorkFactory_ViewEventProcessorIT {
         var orderId = OrderId.random();
         appendOrderPlacedEvent(orderId, APPENDS_EVENT_THEN_FAILS);
 
-        assertFailureReachedTheSubscriptionErrorPolicy(orderId, APPENDS_EVENT_THEN_FAILS);
-        assertThat(testProcessor.appendedEventsBeforeFailing).hasSize(1);
+        assertQueuedAfterTheRollbackAndDeadLettered(orderId);
+        // Once directly, then on each queued redelivery
+        assertThat(testProcessor.appendedEventsBeforeFailing).hasSizeGreaterThan(1);
         assertThat(orderConfirmedEventsIn(eventsSeenInTransaction)).isEmpty();
         assertThat(orderConfirmedEventsIn(eventsPublishedAfterCommit)).isEmpty();
         assertOnlyTheOrderPlacedEventIsPersisted(orderId);
-        assertNothingIsQueuedFor(orderId);
     }
 
     /**
      * A resource with pending changes - an aggregate the failed handler loaded and changed - has its {@link UnitOfWorkLifecycleCallback}
      * persist the aggregate's uncommitted events when the {@link UnitOfWork} commits, which a savepoint does not prevent. The Spring
-     * {@link UnitOfWork#hasLifecycleCallbackResourcesWithPendingChanges()} must report it, so the event is escalated instead of queued.
+     * {@link UnitOfWork#hasLifecycleCallbackResourcesWithPendingChanges()} must report it, so the event is escalated - the
+     * {@link UnitOfWork} rolled back - and only then queued in a {@link UnitOfWork} of its own.
      */
     @Test
-    void a_handler_that_registered_a_resource_with_pending_changes_before_failing_is_not_queued_and_the_resource_is_not_committed() {
+    void a_handler_that_registered_a_resource_with_pending_changes_before_failing_is_queued_after_the_rollback_and_the_resource_is_not_committed() {
         var orderId = OrderId.random();
         appendOrderPlacedEvent(orderId, REGISTERS_RESOURCE_THEN_FAILS);
 
-        assertFailureReachedTheSubscriptionErrorPolicy(orderId, REGISTERS_RESOURCE_THEN_FAILS);
+        assertQueuedAfterTheRollbackAndDeadLettered(orderId);
         assertOnlyTheOrderPlacedEventIsPersisted(orderId);
-        assertNothingIsQueuedFor(orderId);
     }
 
     /**
@@ -277,11 +277,18 @@ class SpringTransactionAwareEventStoreUnitOfWorkFactory_ViewEventProcessorIT {
         unitOfWorkFactory.usingUnitOfWork(uow -> eventStore.appendToStream(TEST_ORDERS, orderId, List.of(new OrderPlacedEvent(orderId, orderDetails))));
     }
 
-    private void assertFailureReachedTheSubscriptionErrorPolicy(OrderId orderId, String handlerFailureMessage) {
+    /**
+     * Queued once, after the subscription's {@link UnitOfWork} was rolled back, and the {@link SubscriptionErrorPolicy} never gives up
+     * on it. The queued redeliveries fail as well, so it ends up as a dead letter.
+     */
+    private void assertQueuedAfterTheRollbackAndDeadLettered(OrderId orderId) {
+        var queueName = testProcessor.getDurableQueueName();
         Awaitility.waitAtMost(Duration.ofSeconds(30))
-                  .untilAsserted(() -> assertThat(handleEventFailedEvents).anySatisfy(event -> assertThat(event.aggregateId()).isEqualTo(orderId)));
-        assertThat(handleEventFailedEvents).hasSize(1);
-        assertThat(handleEventFailedCauses.get(0)).hasRootCauseMessage(handlerFailureMessage);
+                  .untilAsserted(() -> assertThat(durableQueues.getTotalDeadLetterMessagesQueuedFor(queueName)).isEqualTo(1));
+        var deadLetterMessages = durableQueues.getDeadLetterMessages(queueName, DurableQueues.QueueingSortOrder.ASC, 0, 10);
+        assertThat(((OrderedMessage) deadLetterMessages.get(0).getMessage()).getKey()).isEqualTo(orderId.toString());
+        assertThat(durableQueues.getTotalMessagesQueuedFor(queueName)).isZero();
+        assertThat(handleEventFailedEvents).isEmpty();
     }
 
     private void assertOnlyTheOrderPlacedEventIsPersisted(OrderId orderId) {
@@ -292,13 +299,6 @@ class SpringTransactionAwareEventStoreUnitOfWorkFactory_ViewEventProcessorIT {
                                                                                                                    .map(event -> (Object) event.event().getEventTypeAsJavaClass().get())
                                                                                                                    .toList()));
         assertThat(persistedEventTypes).hasValueSatisfying(eventTypes -> assertThat(eventTypes).containsExactly(OrderPlacedEvent.class));
-    }
-
-    private void assertNothingIsQueuedFor(OrderId orderId) {
-        var queueName = testProcessor.getDurableQueueName();
-        assertThat(durableQueues.hasOrderedMessageQueuedForKey(queueName, orderId.toString())).isFalse();
-        assertThat(durableQueues.getTotalMessagesQueuedFor(queueName)).isZero();
-        assertThat(durableQueues.getTotalDeadLetterMessagesQueuedFor(queueName)).isZero();
     }
 
     private static List<PersistedEvent> orderConfirmedEventsIn(List<PersistedEvent> events) {
