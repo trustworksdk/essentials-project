@@ -16,6 +16,7 @@
 
 package dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.cdc;
 
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.SubscriberAcknowledgement;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.ConfigurableEventStore;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.EventStore;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.EventStorePollingOptimizer;
@@ -342,7 +343,7 @@ class CdcEventStoreAdaptiveLiveSourceTest {
     }
 
     private static void stubPollingSource(Fixture fx, Flux<PersistedEvent> source) {
-        when(fx.delegate.pollEvents(any(), anyLong(), any(), any(), any(), any(), any()))
+        when(fx.delegate.pollEvents(any(), anyLong(), any(), any(), any(), any(), any(), any(SubscriberAcknowledgement.class)))
                 .thenReturn(source);
     }
 

@@ -133,6 +133,8 @@ public class ExclusiveAsynchronousSubscription extends AbstractEventStoreSubscri
             log.error(msg("FencedLockAwareSubscriber#onLockAcquired failed for lock {} and resumePoint {}", fencedLock.getName(), resumePoint), e);
         }
 
+        // The subscriber reports what it handled, and the event store resolves a gap fill's gap only then
+        var acknowledgement = SubscriberAcknowledgement.create();
         subscription = PersistedEventSubscriber.builder()
                                                .setEventHandler(eventHandler)
                                                .setEventStoreSubscription(ExclusiveAsynchronousSubscription.this)
@@ -140,6 +142,7 @@ public class ExclusiveAsynchronousSubscription extends AbstractEventStoreSubscri
                                                .setEventStorePollingBatchSize(eventStoreSubscriptionManagerSettings.eventStorePollingBatchSize())
                                                .setEventStore(eventStore)
                                                .setSubscriptionErrorPolicy(eventStoreSubscriptionManagerSettings.subscriptionErrorPolicy())
+                                               .setSubscriberAcknowledgement(acknowledgement)
                                                .build();
 
         eventStore.pollEvents(aggregateType,
@@ -148,7 +151,8 @@ public class ExclusiveAsynchronousSubscription extends AbstractEventStoreSubscri
                         Optional.of(eventStoreSubscriptionManagerSettings.eventStorePollingInterval()),
                         onlyIncludeEventsForTenant(),
                         Optional.of(subscriberId),
-                        Optional.of(eventStorePollingOptimizerFactory))
+                        Optional.of(eventStorePollingOptimizerFactory),
+                        acknowledgement)
                 .limitRate(eventStoreSubscriptionManagerSettings.eventStorePollingBatchSize())
                 .subscribe(subscription);
     }

@@ -238,16 +238,31 @@ what they load as transient gaps with the gap handler; an event from the bus is 
 loaded, so a delivered event that opens a gap records it - synchronously, before the
 event reaches the handler - and one that fills a gap resolves it, each in a short unit
 of work of its own (reported as a gap reconciliation, like a poll's). A gap is resolved
-only once the event filling it has been handed to the subscriber - its `onNext`
-returned, which for the subscription manager's subscribers means handled. The transient
-gap is the only durable record that the fill is still owed, as the resume point lies
-above it; resolved first (as the gate and every back-fill page used to), a subscriber
-stopped or crashed before it had handled the fill resumed above it and never saw it.
+only once the subscriber is done with the event filling it. The transient gap is the
+only durable record that the fill is still owed, as the resume point lies above it;
+resolved first (as the gate and every back-fill page used to), a subscriber stopped or
+crashed before it had handled the fill resumed above it and never saw it. Done is:
+
+- for a subscriber that acknowledges what it handled (`SubscriberAcknowledgement`,
+  passed to `pollEvents`; the subscription manager's `PersistedEventSubscriber` and
+  `BatchedPersistedEventSubscriber` do): when it acknowledges the event - inside the
+  unit of work that handled it, so the gap is resolved atomically with the handling,
+  and stays open if that unit of work rolls back. A fill waiting for a batch, for an
+  I/O retry, or in the `limitRate` queue in front of a subscriber that withholds
+  demand is not handled yet, and keeps its gap. Until it is acknowledged the tracker
+  holds it as delivered, so the subscription does not deliver it again, although the
+  polling leg and catch-ups read it again while its gap is open; a restarted
+  subscription is seeded with the gap and is handed it again. Events the subscriber
+  skips or hands off are acknowledged too; one it stops at, or ignores after a stop,
+  is not;
+- for any other subscriber: once the event was handed on - its `onNext` returned.
+
 Back-fill and catch-up pages therefore leave the gaps their events fill open, and the
 delivery gate each event passes resolves them; a subscription cancelled before a fill was
-handed on leaves its gap open, and the next one waits for it again (at the cost of
-delivering a fill it may already have handled twice). The plain polling path does the
-same, per poll. When a subscription
+done with leaves its gap open, and the next one waits for it again (at the cost of
+delivering a fill it may already have handled twice). The delegate's polls are handed an
+acknowledgement the gate acknowledges to, so they leave the gaps of the fills they hand
+on to the gate. The plain polling path does the same, per poll. When a subscription
 starts, its tracker is seeded with the transient gaps the gap handler still has for the
 subscriber, so an event filling one of them below the resume point is still delivered
 after a restart or a fenced-lock hand-over to another node. Only with a subscriber id and

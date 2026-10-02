@@ -19,9 +19,11 @@ package dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.s
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.PersistedEvent;
 import dk.trustworks.essentials.components.foundation.IOExceptionUtil;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.AggregateType;
 import reactor.util.retry.*;
 
 import java.time.Duration;
+import java.util.Optional;
 import java.util.function.BiConsumer;
 
 import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
@@ -41,6 +43,7 @@ public final class PersistedEventSubscriberBuilder {
     private long                                  eventStorePollingBatchSize;
     private EventStore                            eventStore;
     private SubscriptionErrorPolicy               subscriptionErrorPolicy               = SubscriptionErrorPolicy.skip();
+    private SubscriberAcknowledgement             subscriberAcknowledgement;
 
     /**
      * Indefinite retries for exceptions where {@link IOExceptionUtil#isIOException(Throwable)} returns true.
@@ -121,6 +124,20 @@ public final class PersistedEventSubscriberBuilder {
     }
 
     /**
+     * @param subscriberAcknowledgement reports every event the subscriber is done with - pass the same one to the
+     *                                  {@link EventStore#pollEvents(AggregateType, long, Optional, Optional, Optional, Optional, Optional, SubscriberAcknowledgement)}
+     *                                  the subscriber subscribes to, so the event store resolves a gap fill's transient gap
+     *                                  only once the subscriber handled it (see {@link SubscriberAcknowledgement}). Optional:
+     *                                  defaults to a new acknowledgement no event store is told about, so the subscriber
+     *                                  behaves as with an event store that does not honour it
+     * @return this builder instance for fluent chaining
+     */
+    public PersistedEventSubscriberBuilder setSubscriberAcknowledgement(SubscriberAcknowledgement subscriberAcknowledgement) {
+        this.subscriberAcknowledgement = subscriberAcknowledgement;
+        return this;
+    }
+
+    /**
      * Builds the subscriber.
      *
      * @return the subscriber
@@ -132,6 +149,7 @@ public final class PersistedEventSubscriberBuilder {
                                             requireNonNull(forwardToEventHandlerRetryBackoffSpec, "forwardToEventHandlerRetryBackoffSpec cannot be null"),
                                             eventStorePollingBatchSize,
                                             requireNonNull(eventStore, "eventStore cannot be null"),
-                                            requireNonNull(subscriptionErrorPolicy, "subscriptionErrorPolicy cannot be null"));
+                                            requireNonNull(subscriptionErrorPolicy, "subscriptionErrorPolicy cannot be null"),
+                                            subscriberAcknowledgement != null ? subscriberAcknowledgement : SubscriberAcknowledgement.create());
     }
 }

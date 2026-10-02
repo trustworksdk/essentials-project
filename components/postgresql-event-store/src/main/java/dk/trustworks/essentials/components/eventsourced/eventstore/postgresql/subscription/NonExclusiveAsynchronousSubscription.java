@@ -83,6 +83,8 @@ public class NonExclusiveAsynchronousSubscription extends AbstractEventStoreSubs
                     NonExclusiveAsynchronousSubscription.this,
                     resolveResumePointTiming.stop().getDuration());
 
+            // The subscriber reports what it handled, and the event store resolves a gap fill's gap only then
+            var acknowledgement = SubscriberAcknowledgement.create();
             subscription = PersistedEventSubscriber.builder()
                                                    .setEventHandler(eventHandler)
                                                    .setEventStoreSubscription(this)
@@ -90,6 +92,7 @@ public class NonExclusiveAsynchronousSubscription extends AbstractEventStoreSubs
                                                    .setEventStorePollingBatchSize(eventStoreSubscriptionManagerSettings.eventStorePollingBatchSize())
                                                    .setEventStore(eventStore)
                                                    .setSubscriptionErrorPolicy(eventStoreSubscriptionManagerSettings.subscriptionErrorPolicy())
+                                                   .setSubscriberAcknowledgement(acknowledgement)
                                                    .build();
             eventStore.pollEvents(aggregateType,
                             resumePoint.getResumeFromAndIncluding(),
@@ -97,7 +100,8 @@ public class NonExclusiveAsynchronousSubscription extends AbstractEventStoreSubs
                             Optional.of(eventStoreSubscriptionManagerSettings.eventStorePollingInterval()),
                             onlyIncludeEventsForTenant(),
                             Optional.of(subscriberId),
-                            Optional.of(eventStorePollingOptimizerFactory))
+                            Optional.of(eventStorePollingOptimizerFactory),
+                            acknowledgement)
                     .limitRate(eventStoreSubscriptionManagerSettings.eventStorePollingBatchSize())
                     .subscribe(subscription);
         } else {

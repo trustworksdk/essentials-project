@@ -412,9 +412,10 @@ public final class PostgresqlEventStreamGapHandler<CONFIG extends AggregateEvent
                       allTransientGaps);
             var promotableTransientGaps = new ArrayList<>(resolveTransientGapsToPermanentGapsPromotionStrategy.resolveTransientGapsReadyToBePromotedToPermanentGaps(aggregateType,
                                                                                                                                                                      allTransientGaps.get(aggregateType)));
-            // Never a gap whose event is right here: the event store leaves the gap a gap fill fills open until it has
-            // handed the event on (it passes it here without the gap), and resolves it then - promoted now, the gap
-            // would be gone before the event was handled, and recorded as permanent although its event exists
+            // Never a gap whose event is right here: the event store leaves the gap a gap fill fills open until the
+            // subscriber is done with the event (it passes it here without the gap - and keeps passing the fills awaiting
+            // acknowledgement), and resolves it then - promoted now, the gap would be gone before the event was handled,
+            // and recorded as permanent although its event exists
             if (!promotableTransientGaps.isEmpty() && !persistedEvents.isEmpty()) {
                 var reconciledGlobalOrders = persistedEvents.stream().map(PersistedEvent::globalEventOrder).collect(Collectors.toSet());
                 promotableTransientGaps.removeIf(reconciledGlobalOrders::contains);
@@ -422,6 +423,23 @@ public final class PostgresqlEventStreamGapHandler<CONFIG extends AggregateEvent
             var promotedCount = promoteTransientGapsToPermanentGaps(aggregateType,
                                                                     promotableTransientGaps);
             return new GapReconciliation(newCount, resolvedCount, promotedCount);
+        }
+
+        /**
+         * Only deletes the fills' transient gaps, in the current unit of work: no new gaps, no promotion. Promoting here
+         * would run in the subscriber's unit of work when it acknowledges a fill, and could promote the gap of another
+         * fill this subscriber was handed and has not acknowledged yet.
+         */
+        @Override
+        public GapReconciliation resolveFilledGaps(AggregateType aggregateType, List<PersistedEvent> gapFills) {
+            requireNonNull(aggregateType, "No aggregateType provided");
+            requireNonNull(gapFills, "No gapFills provided");
+            if (gapFills.isEmpty()) {
+                return GapReconciliation.NONE;
+            }
+            var resolvedCount = deleteTransientGaps(aggregateType,
+                                                    gapFills.stream().map(PersistedEvent::globalEventOrder).toList());
+            return new GapReconciliation(0, resolvedCount, 0);
         }
 
         /**

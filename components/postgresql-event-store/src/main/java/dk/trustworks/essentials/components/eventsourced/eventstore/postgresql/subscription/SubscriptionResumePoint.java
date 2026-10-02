@@ -93,9 +93,12 @@ public final class SubscriptionResumePoint {
      * handled. Assigning unconditionally would rewind the resume point to that straggler and cause
      * every event in between to be redelivered on the next resume. Advancing past a gap is safe
      * because unfilled gaps are tracked separately (and durably) by the {@code EventStreamGapHandler},
-     * not by the resume point - and a gap stays tracked until the event filling it has been handed to
-     * the subscriber, not merely loaded. A subscriber that is handed a gap fill and does not get to
-     * handle it before it stops must therefore hold its resume point at that event instead (see
+     * not by the resume point - and a gap stays tracked until the subscriber is done with the event
+     * filling it: until it acknowledged it (see
+     * {@link dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.SubscriberAcknowledgement}),
+     * or, with an event store that does not honour the acknowledgement, until the event was handed to
+     * it. Only in that last case must a subscriber that is handed a gap fill and does not get to
+     * handle it before it stops hold its resume point at that event instead (see
      * {@code PersistedEventSubscriber} and {@code BatchedPersistedEventSubscriber}).
      */
     public synchronized SubscriptionResumePoint advanceResumeFromAndIncluding(GlobalEventOrder resumeFromAndIncluding) {

@@ -918,6 +918,86 @@ public interface EventStore {
                                     Optional<Function<String, EventStorePollingOptimizer>> eventStorePollingOptimizerFactory);
 
     /**
+     * {@link #pollEvents(AggregateType, long, Optional, Optional, Optional, Optional, Optional)}, with the subscriber
+     * reporting through {@code acknowledgement} each event it is done with. The transient gap a gap fill fills - an
+     * event that committed after higher global orders, delivered below the subscriber's resume point - is then resolved
+     * when the subscriber acknowledges the event, in the unit of work it acknowledges it in, rather than once the event
+     * was handed on: an event that waits for a batch, for an I/O retry or for demand, and is never handled because the
+     * subscriber stopped or its process died, keeps its gap and is delivered again to the next subscription. See
+     * {@link SubscriberAcknowledgement} for the contract on both sides.
+     * <p>
+     * The subscriber must acknowledge every event it handles or gives up on: a gap fill handed on and never acknowledged
+     * keeps its transient gap, and this subscription does not hand it on again.
+     * <p>
+     * The default implementation ignores {@code acknowledgement} and calls the overload without it, which resolves a gap
+     * fill's gap once the event was handed on; {@link SubscriberAcknowledgement#isHonoured()} then stays false. The event
+     * stores Essentials provides ({@link PostgresqlEventStore},
+     * {@link dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.cdc.CdcEventStore}) honour it.
+     *
+     * @param aggregateType                       the aggregate type that the underlying events are associated with
+     * @param fromInclusiveGlobalOrder            the first {@link GlobalEventOrder}'s to include in the returned {@link Flux}
+     * @param loadEventsByGlobalOrderBatchSize    how many events should we maximum return from every call to {@link #loadEventsByGlobalOrder(AggregateType, LongRange, List, Tenant)}
+     *                                            Default value is {@link AggregateEventStreamConfiguration#queryFetchSize} or {@link EventStore#DEFAULT_QUERY_BATCH_SIZE}
+     * @param pollingInterval                     how often should the {@link EventStore} be polled for new events. Default value is {@link #DEFAULT_POLLING_INTERVAL_MILLISECONDS}
+     * @param onlyIncludeEventIfItBelongsToTenant if {@link Optional#isPresent()} then only include events that belong to the specified {@link Tenant}, otherwise all Events matching the criteria are returned
+     * @param subscriptionId                      unique subscriber id which is used for creating a unique logger name. If {@link Optional#empty()} then a UUID value is generated and used
+     * @param eventStorePollingOptimizerFactory   factory to create {@link EventStorePollingOptimizer}; Input String parameter is the {@code eventStreamLogName} that is used label for logs (e.g., subscriberId+aggregateType).<br>
+     *                                            If empty {@link EventStorePollingOptimizer#None()} is used.
+     * @param acknowledgement                     the subscriber's acknowledgement of the events it is done with - one per subscription
+     * @return a {@link Flux} that asynchronously will publish events associated with the provided <code>aggregateType</code>
+     */
+    default Flux<PersistedEvent> pollEvents(AggregateType aggregateType,
+                                            long fromInclusiveGlobalOrder,
+                                            Optional<Integer> loadEventsByGlobalOrderBatchSize,
+                                            Optional<Duration> pollingInterval,
+                                            Optional<Tenant> onlyIncludeEventIfItBelongsToTenant,
+                                            Optional<SubscriberId> subscriptionId,
+                                            Optional<Function<String, EventStorePollingOptimizer>> eventStorePollingOptimizerFactory,
+                                            SubscriberAcknowledgement acknowledgement) {
+        requireNonNull(acknowledgement, "No acknowledgement provided");
+        return pollEvents(aggregateType,
+                          fromInclusiveGlobalOrder,
+                          loadEventsByGlobalOrderBatchSize,
+                          pollingInterval,
+                          onlyIncludeEventIfItBelongsToTenant,
+                          subscriptionId,
+                          eventStorePollingOptimizerFactory);
+    }
+
+    /**
+     * {@link #pollEvents(AggregateType, long, Optional, Optional, Optional, Optional, Optional, SubscriberAcknowledgement)}
+     * from a {@link GlobalEventOrder}
+     *
+     * @param aggregateType                       the aggregate type that the underlying events are associated with
+     * @param fromInclusiveGlobalOrder            the first {@link GlobalEventOrder}'s to include in the returned {@link Flux}
+     * @param loadEventsByGlobalOrderBatchSize    how many events should we maximum return from every call to {@link #loadEventsByGlobalOrder(AggregateType, LongRange, List, Tenant)}
+     * @param pollingInterval                     how often should the {@link EventStore} be polled for new events
+     * @param onlyIncludeEventIfItBelongsToTenant if {@link Optional#isPresent()} then only include events that belong to the specified {@link Tenant}
+     * @param subscriptionId                      unique subscriber id
+     * @param eventStorePollingOptimizerFactory   factory to create {@link EventStorePollingOptimizer}
+     * @param acknowledgement                     the subscriber's acknowledgement of the events it is done with - one per subscription
+     * @return a {@link Flux} that asynchronously will publish events associated with the provided <code>aggregateType</code>
+     */
+    default Flux<PersistedEvent> pollEvents(AggregateType aggregateType,
+                                            GlobalEventOrder fromInclusiveGlobalOrder,
+                                            Optional<Integer> loadEventsByGlobalOrderBatchSize,
+                                            Optional<Duration> pollingInterval,
+                                            Optional<Tenant> onlyIncludeEventIfItBelongsToTenant,
+                                            Optional<SubscriberId> subscriptionId,
+                                            Optional<Function<String, EventStorePollingOptimizer>> eventStorePollingOptimizerFactory,
+                                            SubscriberAcknowledgement acknowledgement) {
+        requireNonNull(fromInclusiveGlobalOrder, "No fromInclusiveGlobalOrder value provided");
+        return pollEvents(aggregateType,
+                          fromInclusiveGlobalOrder.longValue(),
+                          loadEventsByGlobalOrderBatchSize,
+                          pollingInterval,
+                          onlyIncludeEventIfItBelongsToTenant,
+                          subscriptionId,
+                          eventStorePollingOptimizerFactory,
+                          acknowledgement);
+    }
+
+    /**
      * Asynchronously poll for new events related to the given <code>aggregateType</code><br>
      * The returned Flux does NOT support backpressure
      *
@@ -964,6 +1044,40 @@ public interface EventStore {
                                                 Optional<Duration> pollingInterval,
                                                 Optional<Tenant> onlyIncludeEventIfItBelongsToTenant,
                                                 Optional<SubscriberId> subscriptionId);
+
+    /**
+     * {@link #unboundedPollForEvents(AggregateType, long, Optional, Optional, Optional, Optional)}, with the subscriber
+     * reporting through {@code acknowledgement} each event it is done with, so a gap fill's transient gap is resolved
+     * when the event is acknowledged rather than once it was handed on - see
+     * {@link #pollEvents(AggregateType, long, Optional, Optional, Optional, Optional, Optional, SubscriberAcknowledgement)}
+     * and {@link SubscriberAcknowledgement}.
+     * <p>
+     * The default implementation ignores {@code acknowledgement} and calls the overload without it.
+     *
+     * @param aggregateType                       the aggregate type that the underlying events are associated with
+     * @param fromInclusiveGlobalOrder            the first {@link GlobalEventOrder}'s to include in the returned {@link Flux}
+     * @param loadEventsByGlobalOrderBatchSize    how many events should we maximum return from every call to {@link #loadEventsByGlobalOrder(AggregateType, LongRange, List, Tenant)}
+     * @param pollingInterval                     how often should the {@link EventStore} be polled for new events
+     * @param onlyIncludeEventIfItBelongsToTenant if {@link Optional#isPresent()} then only include events that belong to the specified {@link Tenant}
+     * @param subscriptionId                      unique subscriber id
+     * @param acknowledgement                     the subscriber's acknowledgement of the events it is done with - one per subscription
+     * @return a {@link Flux} that asynchronously will publish events associated with the provided <code>aggregateType</code>
+     */
+    default Flux<PersistedEvent> unboundedPollForEvents(AggregateType aggregateType,
+                                                        long fromInclusiveGlobalOrder,
+                                                        Optional<Integer> loadEventsByGlobalOrderBatchSize,
+                                                        Optional<Duration> pollingInterval,
+                                                        Optional<Tenant> onlyIncludeEventIfItBelongsToTenant,
+                                                        Optional<SubscriberId> subscriptionId,
+                                                        SubscriberAcknowledgement acknowledgement) {
+        requireNonNull(acknowledgement, "No acknowledgement provided");
+        return unboundedPollForEvents(aggregateType,
+                                      fromInclusiveGlobalOrder,
+                                      loadEventsByGlobalOrderBatchSize,
+                                      pollingInterval,
+                                      onlyIncludeEventIfItBelongsToTenant,
+                                      subscriptionId);
+    }
 
     /**
      * Find the highest {@link GlobalEventOrder} persisted in relation to the given aggregateType

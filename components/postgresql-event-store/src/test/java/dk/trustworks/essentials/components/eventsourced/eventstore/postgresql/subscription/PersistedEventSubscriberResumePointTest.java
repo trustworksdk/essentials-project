@@ -436,6 +436,296 @@ class PersistedEventSubscriberResumePointTest {
         assertThat(resumePoint.getResumeFromAndIncluding()).isEqualTo(GlobalEventOrder.of(6));
     }
 
+    // ------------------------------------------------------------------------------------------------------------
+    // SubscriberAcknowledgement: what the subscriber reports as done with, and where
+    // ------------------------------------------------------------------------------------------------------------
+
+    @Test
+    void a_handled_event_is_acknowledged_inside_the_unit_of_work_that_handled_it() {
+        var acknowledged = honouredAcknowledgement();
+        var subscriber = PersistedEventSubscriber.builder()
+                                                 .setEventHandler(event -> {
+                                                 })
+                                                 .setEventStoreSubscription(eventStoreSubscription)
+                                                 .setOnErrorHandler(onErrorHandler)
+                                                 .setEventStorePollingBatchSize(10)
+                                                 .setEventStore(eventStore)
+                                                 .setSubscriberAcknowledgement(acknowledged.acknowledgement())
+                                                 .build();
+        subscriber.onSubscribe(mock(Subscription.class));
+
+        subscriber.onNext(event(2));
+        subscriber.onNext(event(3));
+
+        assertThat(acknowledged.globalOrders()).containsExactly(2L, 3L);
+        assertThat(acknowledged.insideAUnitOfWork()).containsOnly(true);
+    }
+
+    /**
+     * An I/O failure is retried asynchronously: the subscriber returns from onNext before the event is handled - it is
+     * acknowledged only once a retry handled it
+     */
+    @Test
+    void an_event_handled_by_an_io_retry_is_acknowledged_only_once_the_retry_handled_it() {
+        var acknowledged  = honouredAcknowledgement();
+        var mayHandle     = new CountDownLatch(1);
+        var attemptsAtTwo = new AtomicInteger();
+        var subscriber = new PersistedEventSubscriber(event -> {
+            if (attemptsAtTwo.incrementAndGet() == 1) {
+                throw new UncheckedIOException(new IOException("Intentional I/O failure handling #2"));
+            }
+            awaitQuietly(mayHandle);
+        },
+                                                      eventStoreSubscription,
+                                                      onErrorHandler,
+                                                      ioRetrySpec(),
+                                                      10,
+                                                      eventStore,
+                                                      SubscriptionErrorPolicy.skip(),
+                                                      acknowledged.acknowledgement());
+        subscriber.onSubscribe(mock(Subscription.class));
+
+        subscriber.onNext(event(2));
+        assertThat(acknowledged.globalOrders()).isEmpty();
+        mayHandle.countDown();
+
+        Awaitility.waitAtMost(Duration.ofSeconds(10)).untilAsserted(() -> assertThat(acknowledged.globalOrders()).containsExactly(2L));
+        assertThat(acknowledged.insideAUnitOfWork()).containsOnly(true);
+    }
+
+    @Test
+    void an_event_the_policy_skips_is_acknowledged_outside_the_unit_of_work_that_rolled_back() {
+        var acknowledged = honouredAcknowledgement();
+        var subscriber = new PersistedEventSubscriber(event -> {
+            throw new IllegalStateException("Intentional failure handling #" + event.globalEventOrder());
+        },
+                                                      eventStoreSubscription,
+                                                      onErrorHandler,
+                                                      ioRetrySpec(),
+                                                      10,
+                                                      eventStore,
+                                                      SubscriptionErrorPolicy.retryThenSkip(1, Duration.ofMillis(10), Duration.ofMillis(10)),
+                                                      acknowledged.acknowledgement());
+        subscriber.onSubscribe(mock(Subscription.class));
+
+        subscriber.onNext(event(2));
+
+        assertThat(acknowledged.globalOrders()).containsExactly(2L);
+        assertThat(acknowledged.insideAUnitOfWork()).containsOnly(false);
+        verify(onErrorHandler).accept(argThat(e -> e.globalEventOrder().equals(GlobalEventOrder.of(2))), any());
+    }
+
+    @Test
+    void a_failed_event_the_handler_takes_over_is_acknowledged() {
+        var acknowledged = honouredAcknowledgement();
+        var subscriber = new PersistedEventSubscriber(new PersistedEventHandler() {
+            @Override
+            public void handle(PersistedEvent event) {
+                throw new IllegalStateException("Intentional failure handling #" + event.globalEventOrder());
+            }
+
+            @Override
+            public boolean handOffFailedEvent(PersistedEvent event, Throwable failure) {
+                return true;
+            }
+        },
+                                                      eventStoreSubscription,
+                                                      onErrorHandler,
+                                                      ioRetrySpec(),
+                                                      10,
+                                                      eventStore,
+                                                      SubscriptionErrorPolicy.stop(),
+                                                      acknowledged.acknowledgement());
+        subscriber.onSubscribe(mock(Subscription.class));
+
+        subscriber.onNext(event(2));
+
+        assertThat(acknowledged.globalOrders()).containsExactly(2L);
+        assertThat(subscriber.isStoppedByErrorPolicy()).isFalse();
+    }
+
+    /**
+     * An event the subscriber stops at, or ignores after it stopped, is owed to the restarted subscription. With an event
+     * store that honours the acknowledgement a gap fill among them keeps its gap, so the held resume point is not lowered
+     * to it - that would deliver every event in between again
+     */
+    @Test
+    void neither_the_event_a_stop_stops_at_nor_the_events_ignored_after_it_are_acknowledged_nor_lower_the_held_resume_point() {
+        var acknowledged = honouredAcknowledgement();
+        var subscriber = new PersistedEventSubscriber(event -> {
+            if (event.globalEventOrder().longValue() == 5) {
+                throw new IllegalStateException("Intentional failure handling #5");
+            }
+        },
+                                                      eventStoreSubscription,
+                                                      onErrorHandler,
+                                                      ioRetrySpec(),
+                                                      10,
+                                                      eventStore,
+                                                      SubscriptionErrorPolicy.stop(),
+                                                      acknowledged.acknowledgement());
+        subscriber.onSubscribe(mock(Subscription.class));
+        subscriber.onNext(event(4));
+        subscriber.onNext(event(5));
+        Awaitility.waitAtMost(Duration.ofSeconds(10)).until(subscriber::isStoppedByErrorPolicy);
+
+        subscriber.onNext(event(6));
+        subscriber.onNext(event(3));
+
+        assertThat(acknowledged.globalOrders()).containsExactly(4L);
+        assertThat(resumePoint.getResumeFromAndIncluding()).isEqualTo(GlobalEventOrder.of(5));
+    }
+
+    @Test
+    void an_event_whose_retry_the_stop_interrupts_is_not_acknowledged() {
+        var acknowledged = honouredAcknowledgement();
+        var attempts     = new AtomicInteger();
+        var subscriber = new PersistedEventSubscriber(event -> {
+            attempts.incrementAndGet();
+            throw new IllegalStateException("Intentional failure handling #" + event.globalEventOrder());
+        },
+                                                      eventStoreSubscription,
+                                                      onErrorHandler,
+                                                      ioRetrySpec(),
+                                                      10,
+                                                      eventStore,
+                                                      SubscriptionErrorPolicy.retryThenSkip(5, Duration.ofSeconds(5), Duration.ofSeconds(5)),
+                                                      acknowledged.acknowledgement());
+        subscriber.onSubscribe(mock(Subscription.class));
+        var deliveryThread = Thread.ofPlatform().start(() -> subscriber.onNext(event(2)));
+        threadsToStop.add(deliveryThread);
+        Awaitility.waitAtMost(Duration.ofSeconds(10)).until(() -> attempts.get() == 1);
+
+        subscriber.dispose();
+        deliveryThread.interrupt();
+
+        Awaitility.waitAtMost(Duration.ofSeconds(10)).until(() -> !deliveryThread.isAlive());
+        assertThat(acknowledged.globalOrders()).isEmpty();
+        verifyNoInteractions(onErrorHandler);
+    }
+
+    @Test
+    void batched_a_handled_batch_is_acknowledged_inside_the_unit_of_work_that_handled_it() {
+        var acknowledged = honouredAcknowledgement();
+        var subscriber = BatchedPersistedEventSubscriber.builder()
+                                                        .setEventHandler(List::size)
+                                                        .setEventStoreSubscription(eventStoreSubscription)
+                                                        .setOnErrorHandler(onErrorHandler)
+                                                        .setEventStorePollingBatchSize(10)
+                                                        .setEventStore(eventStore)
+                                                        .setMaxBatchSize(2)
+                                                        .setMaxLatency(Duration.ofMinutes(1))
+                                                        .setSubscriberAcknowledgement(acknowledged.acknowledgement())
+                                                        .build();
+        subscriber.onSubscribe(mock(Subscription.class));
+
+        subscriber.onNext(event(3));
+        subscriber.onNext(event(2));
+
+        Awaitility.waitAtMost(Duration.ofSeconds(10)).untilAsserted(() -> assertThat(acknowledged.globalOrders()).containsExactly(2L, 3L));
+        assertThat(acknowledged.insideAUnitOfWork()).containsOnly(true);
+        assertThat(acknowledged.calls()).isEqualTo(1);
+        subscriber.dispose();
+    }
+
+    @Test
+    void batched_a_batch_the_policy_skips_is_acknowledged() {
+        var acknowledged = honouredAcknowledgement();
+        var subscriber = new BatchedPersistedEventSubscriber(events -> {
+            throw new IllegalStateException("Intentional failure handling the batch");
+        },
+                                                             eventStoreSubscription,
+                                                             onErrorHandler,
+                                                             ioRetrySpec(),
+                                                             10,
+                                                             eventStore,
+                                                             2,
+                                                             Duration.ofMinutes(1),
+                                                             SubscriptionErrorPolicy.skip(),
+                                                             acknowledged.acknowledgement());
+        subscriber.onSubscribe(mock(Subscription.class));
+
+        subscriber.onNext(event(2));
+        subscriber.onNext(event(3));
+
+        verify(onErrorHandler, timeout(10_000)).accept(argThat(e -> e.globalEventOrder().equals(GlobalEventOrder.of(3))), any());
+        assertThat(acknowledged.globalOrders()).containsExactly(2L, 3L);
+        assertThat(acknowledged.insideAUnitOfWork()).containsOnly(false);
+        subscriber.dispose();
+    }
+
+    /**
+     * With an event store that honours the acknowledgement, a gap fill still collected for a batch when the subscriber
+     * stops keeps its gap - it is not acknowledged - so the resume point need not be held at it
+     */
+    @Test
+    void batched_stop_with_a_gap_fill_collected_for_a_batch_acknowledges_nothing_and_leaves_the_resume_point_when_the_acknowledgement_is_honoured() {
+        var acknowledged = honouredAcknowledgement();
+        var subscriber = new BatchedPersistedEventSubscriber(List::size,
+                                                             eventStoreSubscription,
+                                                             onErrorHandler,
+                                                             ioRetrySpec(),
+                                                             10,
+                                                             eventStore,
+                                                             2,
+                                                             Duration.ofMinutes(1),
+                                                             SubscriptionErrorPolicy.skip(),
+                                                             acknowledged.acknowledgement());
+        subscriber.onSubscribe(mock(Subscription.class));
+        subscriber.onNext(event(4));
+        subscriber.onNext(event(5));
+        Awaitility.waitAtMost(Duration.ofSeconds(10))
+                  .untilAsserted(() -> assertThat(resumePoint.getResumeFromAndIncluding()).isEqualTo(GlobalEventOrder.of(6)));
+
+        subscriber.onNext(event(3));
+        subscriber.dispose();
+
+        assertThat(acknowledged.globalOrders()).containsExactly(4L, 5L);
+        assertThat(resumePoint.getResumeFromAndIncluding()).isEqualTo(GlobalEventOrder.of(6));
+    }
+
+    /**
+     * Records what a subscriber acknowledges - and, as an event store that honours the acknowledgement does, registers
+     * with it
+     */
+    private record RecordedAcknowledgements(SubscriberAcknowledgement acknowledgement,
+                                            List<Long> globalOrders,
+                                            List<Boolean> insideAUnitOfWork,
+                                            AtomicInteger callCount) {
+        int calls() {
+            return callCount.get();
+        }
+    }
+
+    private final ThreadLocal<Boolean> insideAUnitOfWork = ThreadLocal.withInitial(() -> false);
+
+    @SuppressWarnings("unchecked")
+    private RecordedAcknowledgements honouredAcknowledgement() {
+        // The unit of work the subscriber handles in - so an acknowledgement can tell whether it is inside it
+        EventStoreUnitOfWorkFactory<EventStoreUnitOfWork> unitOfWorkFactory = mock(EventStoreUnitOfWorkFactory.class);
+        when(unitOfWorkFactory.withUnitOfWork(any(CheckedFunction.class))).thenAnswer(invocation -> {
+            insideAUnitOfWork.set(true);
+            try {
+                return ((CheckedFunction<Object, Object>) invocation.getArgument(0)).apply(null);
+            } finally {
+                insideAUnitOfWork.set(false);
+            }
+        });
+        when(eventStore.getUnitOfWorkFactory()).thenReturn(unitOfWorkFactory);
+
+        var acknowledgement = SubscriberAcknowledgement.create();
+        var recorded = new RecordedAcknowledgements(acknowledgement, new CopyOnWriteArrayList<>(), new CopyOnWriteArrayList<>(), new AtomicInteger());
+        acknowledgement.onAcknowledge(events -> {
+            recorded.callCount().incrementAndGet();
+            events.forEach(event -> {
+                recorded.globalOrders().add(event.globalEventOrder().longValue());
+                recorded.insideAUnitOfWork().add(insideAUnitOfWork.get());
+            });
+        });
+        assertThat(acknowledgement.isHonoured()).isTrue();
+        return recorded;
+    }
+
     private static RetryBackoffSpec ioRetrySpec() {
         return Retry.backoff(Long.MAX_VALUE, Duration.ofMillis(500))
                     .filter(IOExceptionUtil::isIOException);

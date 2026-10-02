@@ -93,6 +93,8 @@ public class NonExclusiveBatchedAsynchronousSubscription extends AbstractEventSt
                     NonExclusiveBatchedAsynchronousSubscription.this,
                     resolveResumePointTiming.stop().getDuration());
 
+            // The subscriber reports what it handled, and the event store resolves a gap fill's gap only then
+            var acknowledgement = SubscriberAcknowledgement.create();
             subscription = BatchedPersistedEventSubscriber.builder()
                                                           .setEventHandler(eventHandler)
                                                           .setEventStoreSubscription(this)
@@ -102,6 +104,7 @@ public class NonExclusiveBatchedAsynchronousSubscription extends AbstractEventSt
                                                           .setMaxBatchSize(maxBatchSize)
                                                           .setMaxLatency(maxLatency)
                                                           .setSubscriptionErrorPolicy(eventStoreSubscriptionManagerSettings.subscriptionErrorPolicy())
+                                                          .setSubscriberAcknowledgement(acknowledgement)
                                                           .build();
             eventStore.pollEvents(aggregateType,
                             resumePoint.getResumeFromAndIncluding(),
@@ -109,7 +112,8 @@ public class NonExclusiveBatchedAsynchronousSubscription extends AbstractEventSt
                             Optional.of(eventStoreSubscriptionManagerSettings.eventStorePollingInterval()),
                             onlyIncludeEventsForTenant(),
                             Optional.of(subscriberId),
-                            Optional.of(eventStorePollingOptimizerFactory))
+                            Optional.of(eventStorePollingOptimizerFactory),
+                            acknowledgement)
                     .limitRate(eventStoreSubscriptionManagerSettings.eventStorePollingBatchSize())
                     .subscribe(subscription);
         } else {

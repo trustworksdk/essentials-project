@@ -57,6 +57,16 @@ import static dk.trustworks.essentials.shared.MessageFormatter.msg;
  * A failure that surfaces after this subscriber was disposed (stop, {@code resetFrom}, unsubscribe) is not a verdict on
  * the batch: neither the <code>onErrorHandler</code> nor the observer is told, and the resume point stays at the batch,
  * so the restarted subscription handles it again (see {@link SubscriptionStoppedDuringRetryException}).
+ * <p>
+ * Acknowledgement: the subscriber acknowledges a batch through its {@link SubscriberAcknowledgement} (see
+ * {@link BatchedPersistedEventSubscriberBuilder#setSubscriberAcknowledgement(SubscriberAcknowledgement)}) inside the unit of
+ * work that handled it, after {@link BatchedPersistedEventHandler#handleBatch(List)} returned - so an event store that
+ * honours the acknowledgement resolves the transient gaps of the gap fills in it atomically with the batch - and a batch
+ * the {@link SubscriptionErrorPolicy} skips once that is decided. Events still collected for a batch, a batch it stops at
+ * or was stopped while handling, and events it ignores because it has stopped are not acknowledged: they are owed to the
+ * restarted subscription, and a gap fill among them keeps its gap. Only while the event store does not honour the
+ * acknowledgement ({@link SubscriberAcknowledgement#isHonoured()} is false - it resolves a gap fill's gap once it handed the
+ * event on) does the subscriber protect such a gap fill by holding its resume point at it instead.
  */
 public class BatchedPersistedEventSubscriber extends BaseSubscriber<PersistedEvent> {
     private static final Logger log = LoggerFactory.getLogger(BatchedPersistedEventSubscriber.class);
@@ -70,6 +80,10 @@ public class BatchedPersistedEventSubscriber extends BaseSubscriber<PersistedEve
     private final int                                   maxBatchSize;
     private final Duration                              maxLatency;
     private final SubscriptionErrorPolicy               subscriptionErrorPolicy;
+    /**
+     * Reports every batch this subscriber is done with - see the class javadoc
+     */
+    private final SubscriberAcknowledgement             acknowledgement;
     /**
      * The resume point of the subscription incarnation this subscriber serves - captured once, so a batch of this
      * (by then disposed) subscriber that completes or fails late cannot move the resume point of a restarted
@@ -193,7 +207,37 @@ public class BatchedPersistedEventSubscriber extends BaseSubscriber<PersistedEve
                                     int maxBatchSize,
                                     Duration maxLatency,
                                     SubscriptionErrorPolicy subscriptionErrorPolicy) {
+        this(eventHandler,
+             eventStoreSubscription,
+             onErrorHandler,
+             forwardToEventHandlerRetryBackoffSpec,
+             eventStorePollingBatchSize,
+             eventStore,
+             maxBatchSize,
+             maxLatency,
+             subscriptionErrorPolicy,
+             SubscriberAcknowledgement.create());
+    }
+
+    /**
+     * Target of {@link BatchedPersistedEventSubscriberBuilder#build()}. The other parameters are described on
+     * {@link #BatchedPersistedEventSubscriber(BatchedPersistedEventHandler, EventStoreSubscription, BiConsumer, RetryBackoffSpec, long, EventStore, int, Duration, SubscriptionErrorPolicy)}
+     *
+     * @param acknowledgement reports every batch this subscriber is done with - pass the same one to the event store's
+     *                        poll this subscriber subscribes to
+     */
+    BatchedPersistedEventSubscriber(BatchedPersistedEventHandler eventHandler,
+                                    EventStoreSubscription eventStoreSubscription,
+                                    BiConsumer<PersistedEvent, Throwable> onErrorHandler,
+                                    RetryBackoffSpec forwardToEventHandlerRetryBackoffSpec,
+                                    long eventStorePollingBatchSize,
+                                    EventStore eventStore,
+                                    int maxBatchSize,
+                                    Duration maxLatency,
+                                    SubscriptionErrorPolicy subscriptionErrorPolicy,
+                                    SubscriberAcknowledgement acknowledgement) {
         this.subscriptionErrorPolicy = requireNonNull(subscriptionErrorPolicy, "No subscriptionErrorPolicy provided");
+        this.acknowledgement = requireNonNull(acknowledgement, "No acknowledgement provided");
         this.eventHandler = requireNonNull(eventHandler, "No eventHandler provided");
         this.eventStoreSubscription = requireNonNull(eventStoreSubscription, "No eventStoreSubscription provided");
         this.onErrorHandler = requireNonNull(onErrorHandler, "No errorHandler provided");
@@ -248,9 +292,10 @@ public class BatchedPersistedEventSubscriber extends BaseSubscriber<PersistedEve
     @Override
     protected void hookOnNext(PersistedEvent event) {
         if (resumePointHeld) {
-            // Events already requested before the stop still arrive - they are left for the restarted subscription, so
-            // the hold moves down to a gap fill below it (see holdResumePointBelow)
-            var resumeFrom = holdResumePointAt(event);
+            // Events already requested before the stop still arrive - they are left for the restarted subscription, and not
+            // acknowledged. Only if the event store does not honour the acknowledgement does the hold move down to a gap
+            // fill below it (see holdResumePointBelow)
+            var resumeFrom = acknowledgement.isHonoured() ? currentResumePoint() : holdResumePointAt(event);
             log.debug("[{}-{}] Ignoring event #{} - the subscriber has stopped (stopped by the {} SubscriptionErrorPolicy: {}). The resume point stays at #{}",
                       eventStoreSubscription.subscriberId(),
                       eventStoreSubscription.aggregateType(),
@@ -298,7 +343,7 @@ public class BatchedPersistedEventSubscriber extends BaseSubscriber<PersistedEve
 
     @Override
     protected void hookOnCancel() {
-        // What is still collected for a batch is never handled by this subscriber
+        // What is still collected for a batch is never handled by this subscriber - nor acknowledged
         holdResumePointBelow(List.copyOf(eventQueue));
         // Clean up the scheduler
         cancelScheduledProcessing();
@@ -457,8 +502,11 @@ public class BatchedPersistedEventSubscriber extends BaseSubscriber<PersistedEve
                 try {
                     if (resumePointHeld) {
                         // A batch collected before an earlier batch stopped the subscriber - left for the restarted subscription,
-                        // so the hold moves down to a gap fill in it (see holdResumePointBelow)
-                        holdResumePointAt(firstEvent);
+                        // and not acknowledged. Only if the event store does not honour the acknowledgement does the hold move
+                        // down to a gap fill in it (see holdResumePointBelow)
+                        if (!acknowledgement.isHonoured()) {
+                            holdResumePointAt(firstEvent);
+                        }
                         log.debug("[{}-{}] Ignoring batch of {} events (global event order: [#{} - #{}]) - the subscriber has stopped (stopped by the {} SubscriptionErrorPolicy: {})",
                                   eventStoreSubscription.subscriberId(),
                                   eventStoreSubscription.aggregateType(),
@@ -478,7 +526,13 @@ public class BatchedPersistedEventSubscriber extends BaseSubscriber<PersistedEve
 
                     return SubscriptionErrorPolicyRetries.callRetryingPerPolicy(
                             () -> eventStore.getUnitOfWorkFactory()
-                                            .withUnitOfWork(unitOfWork -> eventHandler.handleBatch(immutableBatch)),
+                                            .withUnitOfWork(unitOfWork -> {
+                                                var requestSize = eventHandler.handleBatch(immutableBatch);
+                                                // In the unit of work that handled it: the gaps of the gap fills in the batch are
+                                                // resolved atomically with it, and stay open if this unit of work rolls back
+                                                acknowledgement.acknowledge(immutableBatch);
+                                                return requestSize;
+                                            }),
                             subscriptionErrorPolicy,
                             forwardToEventHandlerRetryBackoffSpec,
                             policyRetriesPerformed,
@@ -558,11 +612,37 @@ public class BatchedPersistedEventSubscriber extends BaseSubscriber<PersistedEve
                                                                                                  failure,
                                                                                                  eventStoreSubscription);
                            if (subscriptionErrorPolicy.stopsOnError()) {
+                               // Not acknowledged: the restarted subscription resumes at the batch
                                stopAt(firstEvent, failure.getCause() != null ? failure.getCause() : failure);
                            } else {
+                               // Skipped - done with
+                               acknowledgeGivenUp(immutableBatch);
                                onErrorHandler.accept(lastEvent, failure.getCause());
                            }
                        });
+    }
+
+    /**
+     * Acknowledge a batch the {@link SubscriptionErrorPolicy} skipped - outside any unit of work: the one that handled it
+     * rolled back. A failure only leaves the gaps of gap fills in it open, which delivers those events again to a later
+     * subscription, so it is logged rather than stopping the subscriber.
+     */
+    private void acknowledgeGivenUp(List<PersistedEvent> batch) {
+        try {
+            acknowledgement.acknowledge(batch);
+        } catch (RuntimeException acknowledgementFailure) {
+            log.warn(msg("[{}-{}] Could not acknowledge the skipped batch [#{} - #{}] - the gaps of gap fills in it stay open, and a later subscription is handed those events again",
+                         eventStoreSubscription.subscriberId(),
+                         eventStoreSubscription.aggregateType(),
+                         batch.getFirst().globalEventOrder(),
+                         batch.getLast().globalEventOrder()), acknowledgementFailure);
+        }
+    }
+
+    private GlobalEventOrder currentResumePoint() {
+        synchronized (resumePointLock) {
+            return resumePoint.getResumeFromAndIncluding();
+        }
     }
 
     /**
@@ -635,13 +715,16 @@ public class BatchedPersistedEventSubscriber extends BaseSubscriber<PersistedEve
     /**
      * Events this subscriber was handed but will never handle - collected for a batch when it is stopped. One of them
      * below the resume point is a gap fill: the resume point had moved past it (gap fills are delivered after higher
-     * events), and the event store resolved its gap once it handed the event on, so a restarted subscription resuming
-     * where this one got to would never see it. Then the resume point is held at the lowest of them, as for a batch the
-     * stop interrupted - redelivering what lies between is at-least-once. Events at or above the resume point are read
-     * again anyway; for them nothing changes.
+     * events), and an event store that does not honour the {@link SubscriberAcknowledgement} resolved its gap once it
+     * handed the event on, so a restarted subscription resuming where this one got to would never see it. Then the resume
+     * point is held at the lowest of them, as for a batch the stop interrupted - redelivering what lies between is
+     * at-least-once. Events at or above the resume point are read again anyway; for them nothing changes. An event store
+     * that honours the acknowledgement keeps the gap of such a fill open instead, so nothing is held then.
      */
     private void holdResumePointBelow(List<PersistedEvent> unhandledEvents) {
-        if (unhandledEvents.isEmpty()) {
+        if (unhandledEvents.isEmpty() || acknowledgement.isHonoured()) {
+            // Honoured: the event store resolves a gap fill's gap only once it was acknowledged, so the gap of one never
+            // handled here stays open and the restarted subscription is handed it again
             return;
         }
         var lowest = unhandledEvents.stream().min(Comparator.comparing(PersistedEvent::globalEventOrder)).get();

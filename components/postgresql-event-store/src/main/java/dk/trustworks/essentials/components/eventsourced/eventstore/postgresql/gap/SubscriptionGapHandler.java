@@ -84,6 +84,38 @@ public interface SubscriptionGapHandler {
     }
 
     /**
+     * Resolve the transient gaps that the given <b>gap fills</b> fill - and change nothing else: no new gaps are recorded
+     * and no gap is promoted to a permanent one.
+     * <p>
+     * A gap fill is an event whose global order this subscriber recorded as a transient gap - it committed after events
+     * with a higher global order had been delivered. The event store leaves such a gap open while it delivers the fill,
+     * and resolves it through this method once the subscriber is done with the event: when it acknowledged it (see
+     * {@link dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.SubscriberAcknowledgement}), or, for
+     * a subscriber that does not acknowledge, once the event was handed on. An acknowledged fill is resolved in the
+     * subscriber's unit of work, atomically with its handling, so this method runs inside whatever unit of work is
+     * current - possibly on the subscriber's thread while the poll that delivered the fill reconciles on its own. The
+     * event store serializes its calls to one {@link SubscriptionGapHandler}.
+     * <p>
+     * The default implementation reconciles as a query over the highest of the fills, that asked for exactly their gaps,
+     * would: {@link #reconcileGapsAndReport(AggregateType, LongRange, List, List)} with {@link LongRange#only(long)} of the
+     * highest fill, the fills, and their global orders - which, as every reconciliation, may also promote gaps.
+     * The {@link PostgresqlEventStreamGapHandler}'s handlers override it to only delete the fills' transient gaps.
+     *
+     * @param aggregateType the aggregate type the fills belong to
+     * @param gapFills      the gap fills the subscriber is done with - events whose global order is (or was) a transient gap
+     *                      of this subscriber
+     * @return what the resolution changed for this subscriber - the number of transient gaps it resolved
+     */
+    default GapReconciliation resolveFilledGaps(AggregateType aggregateType, List<PersistedEvent> gapFills) {
+        if (gapFills.isEmpty()) {
+            return GapReconciliation.NONE;
+        }
+        var filledGaps = gapFills.stream().map(PersistedEvent::globalEventOrder).toList();
+        var highest    = filledGaps.stream().mapToLong(GlobalEventOrder::longValue).max().getAsLong();
+        return reconcileGapsAndReport(aggregateType, LongRange.only(highest), gapFills, filledGaps);
+    }
+
+    /**
      * Reset all transient gaps registered by this subscription handler for the given aggregate type
      *
      * @param aggregateType the aggregate type we want to reset transient gaps for

@@ -53,6 +53,16 @@ import static dk.trustworks.essentials.shared.MessageFormatter.msg;
  * A failure that surfaces after this subscriber was disposed (stop, fenced-lock release, {@code resetFrom}, unsubscribe) is none of these:
  * the retries are abandoned, neither the <code>onErrorHandler</code> nor the observer is told, and the resume point stays at the event, so the
  * restarted subscription handles it again (see {@link SubscriptionStoppedDuringRetryException}).
+ * <p>
+ * Acknowledgement: the subscriber reports every event it is done with through its {@link SubscriberAcknowledgement}
+ * (see {@link PersistedEventSubscriberBuilder#setSubscriberAcknowledgement(SubscriberAcknowledgement)}) - an event it handled inside the
+ * unit of work that handled it, after the event handler returned, so an event store that honours the acknowledgement resolves a gap fill's
+ * transient gap atomically with the handling; an event the {@link SubscriptionErrorPolicy} skips, or the event handler takes over
+ * ({@link PersistedEventHandler#handOffFailedEvent}), once that is decided. An event it stops at ({@link SubscriptionErrorPolicy.Mode#STOP}),
+ * was stopped while handling or retrying, or ignores because it has stopped, is not acknowledged: it is owed to the restarted subscription,
+ * and a gap fill among them keeps its gap. Only while the event store does not honour the acknowledgement ({@link SubscriberAcknowledgement#isHonoured()}
+ * is false - it resolves a gap fill's gap once it handed the event on) does an event ignored after a stop lower the held resume point to it,
+ * as the only way to have the restarted subscription handle a gap fill below it.
  */
 public class PersistedEventSubscriber extends BaseSubscriber<PersistedEvent> {
     private static final Logger log = LoggerFactory.getLogger(PersistedEventSubscriber.class);
@@ -64,6 +74,10 @@ public class PersistedEventSubscriber extends BaseSubscriber<PersistedEvent> {
     private final long eventStorePollingBatchSize;
     private final EventStore eventStore;
     private final SubscriptionErrorPolicy subscriptionErrorPolicy;
+    /**
+     * Reports every event this subscriber is done with - see the class javadoc
+     */
+    private final SubscriberAcknowledgement acknowledgement;
     /**
      * The resume point of the subscription incarnation this subscriber serves. Captured once, rather than read from
      * {@link EventStoreSubscription#currentResumePoint()} each time: a restarted subscription (fenced-lock re-acquire,
@@ -203,6 +217,31 @@ public class PersistedEventSubscriber extends BaseSubscriber<PersistedEvent> {
                              long eventStorePollingBatchSize,
                              EventStore eventStore,
                              SubscriptionErrorPolicy subscriptionErrorPolicy) {
+        this(eventHandler,
+             eventStoreSubscription,
+             onErrorHandler,
+             forwardToEventHandlerRetryBackoffSpec,
+             eventStorePollingBatchSize,
+             eventStore,
+             subscriptionErrorPolicy,
+             SubscriberAcknowledgement.create());
+    }
+
+    /**
+     * Target of {@link PersistedEventSubscriberBuilder#build()}. The other parameters are described on
+     * {@link #PersistedEventSubscriber(PersistedEventHandler, EventStoreSubscription, BiConsumer, RetryBackoffSpec, long, EventStore, SubscriptionErrorPolicy)}
+     *
+     * @param acknowledgement reports every event this subscriber is done with - pass the same one to the event store's
+     *                        poll this subscriber subscribes to
+     */
+    PersistedEventSubscriber(PersistedEventHandler eventHandler,
+                             EventStoreSubscription eventStoreSubscription,
+                             BiConsumer<PersistedEvent, Throwable> onErrorHandler,
+                             RetryBackoffSpec forwardToEventHandlerRetryBackoffSpec,
+                             long eventStorePollingBatchSize,
+                             EventStore eventStore,
+                             SubscriptionErrorPolicy subscriptionErrorPolicy,
+                             SubscriberAcknowledgement acknowledgement) {
         this.eventHandler = requireNonNull(eventHandler, "No eventHandler provided");
         this.eventStoreSubscription = requireNonNull(eventStoreSubscription, "No eventStoreSubscription provided");
         this.onErrorHandler = requireNonNull(onErrorHandler, "No errorHandler provided");
@@ -210,6 +249,7 @@ public class PersistedEventSubscriber extends BaseSubscriber<PersistedEvent> {
         this.eventStorePollingBatchSize = eventStorePollingBatchSize;
         this.eventStore = requireNonNull(eventStore, "No eventStore provided");
         this.subscriptionErrorPolicy = requireNonNull(subscriptionErrorPolicy, "No subscriptionErrorPolicy provided");
+        this.acknowledgement = requireNonNull(acknowledgement, "No acknowledgement provided");
         // Verify that the provided eventStoreSubscription supports resume-points
         this.resumePoint = eventStoreSubscription.currentResumePoint().orElseThrow(() -> new IllegalArgumentException(msg("The provided {} doesn't support resume-points", eventStoreSubscription.getClass().getName())));
     }
@@ -252,10 +292,11 @@ public class PersistedEventSubscriber extends BaseSubscriber<PersistedEvent> {
     @Override
     protected void hookOnNext(PersistedEvent e) {
         if (resumePointHeld) {
-            // Events already requested before the stop still arrive - they are left for the restarted subscription. A gap
-            // fill lies below the held resume point, so the hold moves down to it: the event store resolved its gap when
-            // it handed it on, and the restarted subscription would otherwise resume above it and never see it
-            var resumeFrom = holdResumePointAt(e);
+            // Events already requested before the stop still arrive - they are left for the restarted subscription, and
+            // not acknowledged: a gap fill among them keeps its gap, so the restarted subscription is handed it again.
+            // Unless the event store resolved the gap when it handed the fill on (it does not honour the acknowledgement):
+            // then the hold moves down to the fill, or the restarted subscription would resume above it and never see it
+            var resumeFrom = acknowledgement.isHonoured() ? currentResumePoint() : holdResumePointAt(e);
             log.debug("[{}-{}] (#{}) Ignoring {} event - the subscriber has stopped (stopped by the {} SubscriptionErrorPolicy: {}). The resume point stays at #{}",
                       eventStoreSubscription.subscriberId(),
                       eventStoreSubscription.aggregateType(),
@@ -293,6 +334,9 @@ public class PersistedEventSubscriber extends BaseSubscriber<PersistedEvent> {
                                                         eventStoreSubscription,
                                                         handleEventTiming.stop().getDuration()
                                                 );
+                                                // In the unit of work that handled it: a gap fill's gap is resolved atomically with the
+                                                // handling, and stays open if this unit of work rolls back
+                                                acknowledgement.acknowledge(e);
                                                 return result;
                                             }),
                             subscriptionErrorPolicy,
@@ -343,9 +387,9 @@ public class PersistedEventSubscriber extends BaseSubscriber<PersistedEvent> {
                     synchronized (resumePointLock) {
                         if (!resumePointHeld) {
                             // advance (not set): gap-filled events are delivered out of order, so an older
-                            // event can complete last and must not rewind the resume point. The event store resolves
-                            // a gap fill's gap once hookOnNext returned - after this, unless an I/O retry made the
-                            // handling asynchronous; a stop then holds the resume point at it (stoppedWhileHandling)
+                            // event can complete last and must not rewind the resume point. A gap fill's gap was
+                            // resolved with its acknowledgement, in the unit of work that handled it (or, by an event
+                            // store that does not honour the acknowledgement, once hookOnNext returned)
                             resumePoint.advanceResumeFromAndIncluding(e.globalEventOrder().increment());
                         }
                     }
@@ -374,6 +418,8 @@ public class PersistedEventSubscriber extends BaseSubscriber<PersistedEvent> {
                                 return;
                             }
                             if (handedOffToEventHandler(e, failure)) {
+                                // Taken over by the event handler - done with here
+                                acknowledgeGivenUp(e);
                                 eventStoreSubscription.request(1);
                                 return;
                             }
@@ -382,11 +428,37 @@ public class PersistedEventSubscriber extends BaseSubscriber<PersistedEvent> {
                                     failure,
                                     eventStoreSubscription);
                             if (subscriptionErrorPolicy.stopsOnError()) {
+                                // Not acknowledged: the restarted subscription resumes at it
                                 stopAt(e, failure.getCause() != null ? failure.getCause() : failure);
                             } else {
+                                // Skipped - done with
+                                acknowledgeGivenUp(e);
                                 onErrorHandler.accept(e, failure.getCause());
                             }
                         });
+    }
+
+    /**
+     * Acknowledge an event the subscriber gave up on - skipped by the {@link SubscriptionErrorPolicy}, or taken over by the
+     * event handler. Outside any unit of work: the one that handled it rolled back. A failure only leaves a gap fill's gap
+     * open, which delivers the event again to a later subscription, so it is logged rather than stopping the subscriber.
+     */
+    private void acknowledgeGivenUp(PersistedEvent e) {
+        try {
+            acknowledgement.acknowledge(e);
+        } catch (RuntimeException acknowledgementFailure) {
+            log.warn(msg("[{}-{}] (#{}) Could not acknowledge the {} event the subscriber gave up on - if it fills a gap, the gap stays open and a later subscription is handed the event again",
+                         eventStoreSubscription.subscriberId(),
+                         eventStoreSubscription.aggregateType(),
+                         e.globalEventOrder(),
+                         e.event().getEventTypeOrName().getValue()), acknowledgementFailure);
+        }
+    }
+
+    private GlobalEventOrder currentResumePoint() {
+        synchronized (resumePointLock) {
+            return resumePoint.getResumeFromAndIncluding();
+        }
     }
 
     /**

@@ -175,7 +175,7 @@ class CdcEventStoreLiveSourceOverflowTest {
         when(delegate.findHighestGlobalEventOrderPersisted(any())).thenAnswer(inv -> store.head());
         when(delegate.loadEventsByGlobalOrder(any(), any(LongRange.class), anyList(), (Tenant) any()))
                 .thenAnswer(inv -> store.load(inv.getArgument(1), inv.getArgument(3)));
-        when(delegate.pollEvents(any(), anyLong(), any(), any(), any(), any(), any()))
+        when(delegate.pollEvents(any(), anyLong(), any(), any(), any(), any(), any(), any(SubscriberAcknowledgement.class)))
                 .thenAnswer(inv -> store.pollFrom(((Optional<SubscriberId>) inv.getArgument(5)).orElseThrow().toString(), inv.getArgument(1)));
         return new CdcEventStore<>(delegate,
                                    uowFactory,

@@ -19,9 +19,11 @@ package dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.s
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.PersistedEvent;
 import dk.trustworks.essentials.components.foundation.IOExceptionUtil;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.AggregateType;
 import reactor.util.retry.RetryBackoffSpec;
 
 import java.time.Duration;
+import java.util.Optional;
 import java.util.function.BiConsumer;
 
 import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
@@ -43,6 +45,7 @@ public final class BatchedPersistedEventSubscriberBuilder {
     private int                                   maxBatchSize;
     private Duration                              maxLatency;
     private SubscriptionErrorPolicy               subscriptionErrorPolicy               = SubscriptionErrorPolicy.skip();
+    private SubscriberAcknowledgement             subscriberAcknowledgement;
 
     /**
      * @param eventHandler the handler that batches of {@link PersistedEvent}s are forwarded to. Required
@@ -128,6 +131,20 @@ public final class BatchedPersistedEventSubscriberBuilder {
     }
 
     /**
+     * @param subscriberAcknowledgement reports every batch the subscriber is done with - pass the same one to the
+     *                                  {@link EventStore#pollEvents(AggregateType, long, Optional, Optional, Optional, Optional, Optional, SubscriberAcknowledgement)}
+     *                                  the subscriber subscribes to, so the event store resolves a gap fill's transient gap
+     *                                  only once the batch holding it was handled (see {@link SubscriberAcknowledgement}).
+     *                                  Optional: defaults to a new acknowledgement no event store is told about, so the
+     *                                  subscriber behaves as with an event store that does not honour it
+     * @return this builder instance for fluent chaining
+     */
+    public BatchedPersistedEventSubscriberBuilder setSubscriberAcknowledgement(SubscriberAcknowledgement subscriberAcknowledgement) {
+        this.subscriberAcknowledgement = subscriberAcknowledgement;
+        return this;
+    }
+
+    /**
      * Builds the subscriber.
      *
      * @return the subscriber
@@ -141,6 +158,7 @@ public final class BatchedPersistedEventSubscriberBuilder {
                                                    requireNonNull(eventStore, "eventStore cannot be null"),
                                                    maxBatchSize,
                                                    requireNonNull(maxLatency, "maxLatency cannot be null"),
-                                                   requireNonNull(subscriptionErrorPolicy, "subscriptionErrorPolicy cannot be null"));
+                                                   requireNonNull(subscriptionErrorPolicy, "subscriptionErrorPolicy cannot be null"),
+                                                   subscriberAcknowledgement != null ? subscriberAcknowledgement : SubscriberAcknowledgement.create());
     }
 }

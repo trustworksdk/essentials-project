@@ -41,7 +41,7 @@ import java.time.Duration;
 import java.util.*;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.*;
-import java.util.function.Function;
+import java.util.function.*;
 import java.util.stream.*;
 
 import static dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.interceptor.EventStoreInterceptorChain.newInterceptorChainForOperation;
@@ -421,6 +421,47 @@ public final class PostgresqlEventStore<CONFIG extends AggregateEventStreamConfi
                                            Optional<Tenant> onlyIncludeEventIfItBelongsToTenant,
                                            Optional<SubscriberId> subscriberId,
                                            Optional<Function<String, EventStorePollingOptimizer>> eventStorePollingOptimizerFactory) {
+        return pollEvents(aggregateType,
+                          fromInclusiveGlobalOrder,
+                          loadEventsByGlobalOrderBatchSize,
+                          pollingInterval,
+                          onlyIncludeEventIfItBelongsToTenant,
+                          subscriberId,
+                          eventStorePollingOptimizerFactory,
+                          Optional.empty());
+    }
+
+    /**
+     * Honours the acknowledgement: a gap fill's transient gap is resolved when the subscriber acknowledges the event, not
+     * once a poll handed it on - see {@link GapFillsAwaitingAcknowledgement}
+     */
+    @Override
+    public Flux<PersistedEvent> pollEvents(AggregateType aggregateType,
+                                           long fromInclusiveGlobalOrder,
+                                           Optional<Integer> loadEventsByGlobalOrderBatchSize,
+                                           Optional<Duration> pollingInterval,
+                                           Optional<Tenant> onlyIncludeEventIfItBelongsToTenant,
+                                           Optional<SubscriberId> subscriberId,
+                                           Optional<Function<String, EventStorePollingOptimizer>> eventStorePollingOptimizerFactory,
+                                           SubscriberAcknowledgement acknowledgement) {
+        return pollEvents(aggregateType,
+                          fromInclusiveGlobalOrder,
+                          loadEventsByGlobalOrderBatchSize,
+                          pollingInterval,
+                          onlyIncludeEventIfItBelongsToTenant,
+                          subscriberId,
+                          eventStorePollingOptimizerFactory,
+                          Optional.of(requireNonNull(acknowledgement, "No acknowledgement provided")));
+    }
+
+    private Flux<PersistedEvent> pollEvents(AggregateType aggregateType,
+                                            long fromInclusiveGlobalOrder,
+                                            Optional<Integer> loadEventsByGlobalOrderBatchSize,
+                                            Optional<Duration> pollingInterval,
+                                            Optional<Tenant> onlyIncludeEventIfItBelongsToTenant,
+                                            Optional<SubscriberId> subscriberId,
+                                            Optional<Function<String, EventStorePollingOptimizer>> eventStorePollingOptimizerFactory,
+                                            Optional<SubscriberAcknowledgement> acknowledgement) {
         requireNonNull(aggregateType, "You must supply an aggregateType");
         requireNonNull(pollingInterval, "You must supply a pollingInterval option");
         requireNonNull(onlyIncludeEventIfItBelongsToTenant, "You must supply a onlyIncludeEventIfItBelongsToTenant option");
@@ -443,8 +484,11 @@ public final class PostgresqlEventStore<CONFIG extends AggregateEventStreamConfi
         var eventStoreOptimizer = eventStorePollingOptimizerFactory.map(pollingOptimizerFactory -> pollingOptimizerFactory.apply(eventStreamLogName)).orElse(EventStorePollingOptimizer.None());
 
         return Flux.create((FluxSink<PersistedEvent> sink) -> {
-            var actualSubscriberId = subscriberId.orElse(NO_SUBSCRIBER_ID);
-            var scheduler          = Schedulers.newSingle("Publish-" + actualSubscriberId + "-" + aggregateType, true);
+            var actualSubscriberId      = subscriberId.orElse(NO_SUBSCRIBER_ID);
+            var scheduler               = Schedulers.newSingle("Publish-" + actualSubscriberId + "-" + aggregateType, true);
+            // One per subscription. Registered before the first request, so the subscriber can acknowledge whatever it is handed
+            var awaitingAcknowledgement = awaitingAcknowledgement(acknowledgement, subscriptionGapHandler, aggregateType, eventStreamLogName);
+            acknowledgement.ifPresent(ack -> registerWith(ack, awaitingAcknowledgement));
             sink.onRequest(eventDemandSize -> {
                 eventStoreStreamLog.debug("[{}] Received demand for {} events",
                                           eventStreamLogName,
@@ -462,7 +506,8 @@ public final class PostgresqlEventStore<CONFIG extends AggregateEventStreamConfi
                                                           nextFromInclusiveGlobalOrder,
                                                           subscriptionGapHandler,
                                                           actualSubscriberId,
-                                                          eventStoreOptimizer));
+                                                          eventStoreOptimizer,
+                                                          awaitingAcknowledgement));
             });
 
             sink.onCancel(scheduler);
@@ -477,6 +522,43 @@ public final class PostgresqlEventStore<CONFIG extends AggregateEventStreamConfi
                                                        Optional<Duration> pollingInterval,
                                                        Optional<Tenant> onlyIncludeEventIfItBelongsToTenant,
                                                        Optional<SubscriberId> subscriberId) {
+        return unboundedPollForEvents(aggregateType,
+                                      fromInclusiveGlobalOrder,
+                                      loadEventsByGlobalOrderBatchSize,
+                                      pollingInterval,
+                                      onlyIncludeEventIfItBelongsToTenant,
+                                      subscriberId,
+                                      Optional.empty());
+    }
+
+    /**
+     * Honours the acknowledgement: a gap fill's transient gap is resolved when the subscriber acknowledges the event, not
+     * once a poll emitted it - see {@link GapFillsAwaitingAcknowledgement}
+     */
+    @Override
+    public Flux<PersistedEvent> unboundedPollForEvents(AggregateType aggregateType,
+                                                       long fromInclusiveGlobalOrder,
+                                                       Optional<Integer> loadEventsByGlobalOrderBatchSize,
+                                                       Optional<Duration> pollingInterval,
+                                                       Optional<Tenant> onlyIncludeEventIfItBelongsToTenant,
+                                                       Optional<SubscriberId> subscriberId,
+                                                       SubscriberAcknowledgement acknowledgement) {
+        return unboundedPollForEvents(aggregateType,
+                                      fromInclusiveGlobalOrder,
+                                      loadEventsByGlobalOrderBatchSize,
+                                      pollingInterval,
+                                      onlyIncludeEventIfItBelongsToTenant,
+                                      subscriberId,
+                                      Optional.of(requireNonNull(acknowledgement, "No acknowledgement provided")));
+    }
+
+    private Flux<PersistedEvent> unboundedPollForEvents(AggregateType aggregateType,
+                                                        long fromInclusiveGlobalOrder,
+                                                        Optional<Integer> loadEventsByGlobalOrderBatchSize,
+                                                        Optional<Duration> pollingInterval,
+                                                        Optional<Tenant> onlyIncludeEventIfItBelongsToTenant,
+                                                        Optional<SubscriberId> subscriberId,
+                                                        Optional<SubscriberAcknowledgement> acknowledgement) {
         requireNonNull(aggregateType, "You must supply an aggregateType");
         requireNonNull(pollingInterval, "You must supply a pollingInterval option");
         requireNonNull(onlyIncludeEventIfItBelongsToTenant, "You must supply a onlyIncludeEventIfItBelongsToTenant option");
@@ -496,6 +578,7 @@ public final class PostgresqlEventStore<CONFIG extends AggregateEventStreamConfi
         var nextFromInclusiveGlobalOrder         = new AtomicLong(fromInclusiveGlobalOrder);
         var subscriptionGapHandler               = subscriberId.map(eventStreamGapHandler::gapHandlerFor);
         var actualSubscriberId                   = subscriberId.orElse(NO_SUBSCRIBER_ID);
+        var awaitingAcknowledgement              = awaitingAcknowledgement(acknowledgement, subscriptionGapHandler, aggregateType, eventStreamLogName);
 
         var persistedEventsFlux = Flux.defer(() -> {
             // The first poll runs on the subscribing thread, which may already be inside a UnitOfWork. The poll then
@@ -555,13 +638,14 @@ public final class PostgresqlEventStore<CONFIG extends AggregateEventStreamConfi
                 }
 
                 var globalOrderRange = LongRange.from(nextFromInclusiveGlobalOrder.get(), batchSizeForThisQuery);
-                var transientGapsToIncludeInQuery = subscriptionGapHandler.map(gapHandler -> gapHandler.findTransientGapsToIncludeInQuery(aggregateType, globalOrderRange))
+                var transientGapsToIncludeInQuery = subscriptionGapHandler.map(gapHandler -> findTransientGapsToIncludeInQuery(gapHandler, aggregateType, globalOrderRange))
                                                                           .orElse(null);
 
                 var loadEventsByGlobalOrderTiming = StopWatch.start("loadEventsByGlobalOrder(" + actualSubscriberId + ", " + aggregateType + ")");
                 // Every tenant's events: see loadEventsForPoll
                 var loadedEvents = loadEventsForPoll(aggregateType, globalOrderRange, transientGapsToIncludeInQuery);
-                var persistedEvents = eventsBelongingToTenant(loadedEvents, onlyIncludeEventIfItBelongsToTenant);
+                // Without the gap fills handed on before and not acknowledged yet: their gap is open, so they are read again
+                var persistedEvents = notAwaitingAcknowledgement(eventsBelongingToTenant(loadedEvents, onlyIncludeEventIfItBelongsToTenant), awaitingAcknowledgement);
                 eventStoreSubscriptionObserver.eventStorePolled(actualSubscriberId,
                                                                 aggregateType,
                                                                 globalOrderRange,
@@ -573,10 +657,11 @@ public final class PostgresqlEventStore<CONFIG extends AggregateEventStreamConfi
                 var gapFillsToEmit = gapFillsAmong(persistedEvents, transientGapsToIncludeInQuery);
                 var gapReconciliation = subscriptionGapHandler.map(gapHandler -> {
                     var reconcileGapsTiming = StopWatch.start("reconcileGaps(" + actualSubscriberId + ", " + aggregateType + ")");
-                    var outcome = gapHandler.reconcileGapsAndReport(aggregateType,
-                                                                    globalOrderRange,
-                                                                    loadedEvents,
-                                                                    gapsResolvedBeforePublishing(transientGapsToIncludeInQuery, gapFillsToEmit));
+                    var outcome = reconcileGaps(gapHandler,
+                                                aggregateType,
+                                                globalOrderRange,
+                                                eventsToReconcile(loadedEvents, awaitingAcknowledgement),
+                                                gapsResolvedBeforePublishing(transientGapsToIncludeInQuery, gapFillsToEmit, awaitingAcknowledgement));
                     eventStoreSubscriptionObserver.reconciledGaps(actualSubscriberId,
                                                                   aggregateType,
                                                                   globalOrderRange,
@@ -616,8 +701,10 @@ public final class PostgresqlEventStore<CONFIG extends AggregateEventStreamConfi
                                               transientGapsToIncludeInQuery);
                 }
 
+                // Right before they are emitted - once the reconciliation committed - so the subscriber can acknowledge them
+                awaitingAcknowledgement.ifPresent(awaiting -> awaiting.awaitAcknowledgement(gapFillsToEmit));
                 var emitted = Flux.fromIterable(persistedEvents);
-                if (subscriptionGapHandler.isPresent() && !gapFillsToEmit.isEmpty()) {
+                if (awaitingAcknowledgement.isEmpty() && subscriptionGapHandler.isPresent() && !gapFillsToEmit.isEmpty()) {
                     // Subscribed only once every event was emitted, and not at all when the subscriber cancels first:
                     // then the gaps stay open, and the next subscription asks for them again
                     var gapHandler = subscriptionGapHandler.get();
@@ -664,10 +751,16 @@ public final class PostgresqlEventStore<CONFIG extends AggregateEventStreamConfi
             return Flux.empty();
         });
 
-        return persistedEventsFlux
+        var polling = persistedEventsFlux
                 .repeatWhen(longFlux -> Flux.interval(pollingInterval.orElse(Duration.ofMillis(DEFAULT_POLLING_INTERVAL_MILLISECONDS)))
                                             .onBackpressureDrop()
                                             .publishOn(Schedulers.newSingle("Publish-" + subscriberId.orElse(NO_SUBSCRIBER_ID) + "-" + aggregateType, true)));
+        // Registered when subscribed, before the first poll
+        return acknowledgement.map(ack -> Flux.defer(() -> {
+                                  registerWith(ack, awaitingAcknowledgement);
+                                  return polling;
+                              }))
+                              .orElse(polling);
     }
 
     /**
@@ -820,6 +913,10 @@ public final class PostgresqlEventStore<CONFIG extends AggregateEventStreamConfi
         private final SubscriberId                     subscriberId;
         private final EventStorePollingOptimizer       pollingOptimizer;
         /**
+         * Present when the subscriber acknowledges what it handled - see {@link GapFillsAwaitingAcknowledgement}
+         */
+        private final Optional<GapFillsAwaitingAcknowledgement> awaitingAcknowledgement;
+        /**
          * Whether the latest {@link #pollForEvents} read any event, whether or not it belonged to the subscriber's tenant.
          * Only touched by the thread running this task.
          */
@@ -841,7 +938,8 @@ public final class PostgresqlEventStore<CONFIG extends AggregateEventStreamConfi
                                   AtomicLong nextFromInclusiveGlobalOrder,
                                   Optional<SubscriptionGapHandler> subscriptionGapHandler,
                                   SubscriberId subscriberId,
-                                  EventStorePollingOptimizer pollingOptimizer) {
+                                  EventStorePollingOptimizer pollingOptimizer,
+                                  Optional<GapFillsAwaitingAcknowledgement> awaitingAcknowledgement) {
             this.demandForEvents = demandForEvents;
             this.sink = sink;
             this.aggregateType = aggregateType;
@@ -856,6 +954,7 @@ public final class PostgresqlEventStore<CONFIG extends AggregateEventStreamConfi
             this.subscriptionGapHandler = subscriptionGapHandler;
             this.subscriberId = subscriberId;
             this.pollingOptimizer = pollingOptimizer;
+            this.awaitingAcknowledgement = awaitingAcknowledgement;
         }
 
         @Override
@@ -972,7 +1071,7 @@ public final class PostgresqlEventStore<CONFIG extends AggregateEventStreamConfi
                 }
 
                 var globalOrderRange = LongRange.from(nextFromInclusiveGlobalOrder.get(), batchSizeForThisQuery);
-                var transientGapsToIncludeInQuery = subscriptionGapHandler.map(gapHandler -> gapHandler.findTransientGapsToIncludeInQuery(aggregateType, globalOrderRange))
+                var transientGapsToIncludeInQuery = subscriptionGapHandler.map(gapHandler -> findTransientGapsToIncludeInQuery(gapHandler, aggregateType, globalOrderRange))
                                                                           .orElse(null);
 
                 var loadEventsByGlobalOrderTiming = StopWatch.start("loadEventsByGlobalOrder(" + subscriberId + ", " + aggregateType + ")");
@@ -989,9 +1088,10 @@ public final class PostgresqlEventStore<CONFIG extends AggregateEventStreamConfi
                 // No more than demanded is published, and this poll only consumes - reconciles, and moves the read
                 // position past - the events up to the last one it publishes. The rest are read again by the next poll:
                 // the range events from the read position, and the gap fills (lowest, so first in the result) because
-                // they are still transient gaps - resolving one that is then not published would lose its event
+                // they are still transient gaps - resolving one that is then not published would lose its event. A gap
+                // fill handed on before and not acknowledged yet is read again too (its gap is open), and not published again
                 var consumedEvents = eventsWithinDemand(loadedEvents, remainingDemandForEvents);
-                var eventsToPublish = eventsBelongingToTenant(consumedEvents, onlyIncludeEventIfItBelongsToTenant);
+                var eventsToPublish = notAwaitingAcknowledgement(eventsBelongingToTenant(consumedEvents, onlyIncludeEventIfItBelongsToTenant), awaitingAcknowledgement);
                 if (consumedEvents.size() < loadedEvents.size()) {
                     eventStoreStreamLog.debug("[{}] Polling worker - Loaded {} event(s), but will only publish {} event(s), as this matches the remainingDemandForEvents {}",
                                               eventStreamLogName,
@@ -1004,10 +1104,11 @@ public final class PostgresqlEventStore<CONFIG extends AggregateEventStreamConfi
 
                 var gapReconciliation = subscriptionGapHandler.map(gapHandler -> {
                     var reconcileGapsTiming = StopWatch.start("reconcileGaps(" + subscriberId + ", " + aggregateType + ")");
-                    var outcome = gapHandler.reconcileGapsAndReport(aggregateType,
-                                                                    globalOrderRange,
-                                                                    consumedEvents,
-                                                                    gapsResolvedBeforePublishing(transientGapsToIncludeInQuery, gapFillsToPublish));
+                    var outcome = reconcileGaps(gapHandler,
+                                                aggregateType,
+                                                globalOrderRange,
+                                                eventsToReconcile(consumedEvents, awaitingAcknowledgement),
+                                                gapsResolvedBeforePublishing(transientGapsToIncludeInQuery, gapFillsToPublish, awaitingAcknowledgement));
                     eventStoreSubscriptionObserver.reconciledGaps(subscriberId,
                                                                   aggregateType,
                                                                   globalOrderRange,
@@ -1023,7 +1124,8 @@ public final class PostgresqlEventStore<CONFIG extends AggregateEventStreamConfi
                 }
                 if (!loadedEvents.isEmpty()) {
                     consecutiveNoPersistedEventsReturned.set(0);
-                    lastPollConsumedEvents = !consumedEvents.isEmpty();
+                    // Not by reading the gap fills still awaiting acknowledgement again - that moves nothing forward
+                    lastPollConsumedEvents = consumedEvents.stream().anyMatch(event -> !isAwaitingAcknowledgement(event));
                     if (log.isTraceEnabled()) {
                         eventStoreStreamLog.debug("[{}] Polling worker - loadEventsByGlobalOrder using globalOrderRange {} and transientGapsToIncludeInQuery {} returned {} events: {}",
                                                   eventStreamLogName,
@@ -1039,6 +1141,8 @@ public final class PostgresqlEventStore<CONFIG extends AggregateEventStreamConfi
                                                   loadedEvents.size());
                     }
 
+                    // Right before they are published - once the reconciliation committed - so the subscriber can acknowledge them
+                    awaitingAcknowledgement.ifPresent(awaiting -> awaiting.awaitAcknowledgement(gapFillsToPublish));
                     for (int index = 0; index < eventsToPublish.size(); index++) {
                         if (sink.isCancelled()) {
                             // The gaps its gap fills fill stay open: the next subscription asks for them again
@@ -1050,7 +1154,9 @@ public final class PostgresqlEventStore<CONFIG extends AggregateEventStreamConfi
                         }
                         publishEventToSink(eventsToPublish.get(index));
                     }
-                    if (!sink.isCancelled()) {
+                    if (awaitingAcknowledgement.isPresent()) {
+                        // Resolved as the subscriber acknowledges them
+                    } else if (!sink.isCancelled()) {
                         subscriptionGapHandler.ifPresent(gapHandler -> resolveGapsFilledByPublishedEvents(gapHandler, subscriberId, aggregateType, gapFillsToPublish, eventStreamLogName));
                     } else if (!gapFillsToPublish.isEmpty()) {
                         eventStoreStreamLog.debug("[{}] Polling worker - Is Cancelled: true. Leaving the gaps filled by {} open - the subscriber may not have handled them",
@@ -1114,14 +1220,19 @@ public final class PostgresqlEventStore<CONFIG extends AggregateEventStreamConfi
             nextFromInclusiveGlobalOrder.accumulateAndGet(nextGlobalOrder, Math::max);
         }
 
+        private boolean isAwaitingAcknowledgement(PersistedEvent event) {
+            return awaitingAcknowledgement.isPresent() && awaitingAcknowledgement.get().isAwaiting(event);
+        }
+
         /**
          * The leading events of a poll's result that fit within the demand: up to, and not including, the first event of
-         * the subscriber's tenant beyond it. Other tenants' events in between are consumed too - not published, but read.
+         * the subscriber's tenant beyond it. Other tenants' events in between are consumed too - not published, but read -
+         * and so are the gap fills still awaiting acknowledgement, which are not published again.
          */
         private List<PersistedEvent> eventsWithinDemand(List<PersistedEvent> loadedEvents, long remainingDemandForEvents) {
             var published = 0L;
             for (var index = 0; index < loadedEvents.size(); index++) {
-                if (eventBelongsToTenant(loadedEvents.get(index), onlyIncludeEventIfItBelongsToTenant)) {
+                if (eventBelongsToTenant(loadedEvents.get(index), onlyIncludeEventIfItBelongsToTenant) && !isAwaitingAcknowledgement(loadedEvents.get(index))) {
                     if (published == remainingDemandForEvents) {
                         return loadedEvents.subList(0, index);
                     }
@@ -1150,16 +1261,21 @@ public final class PostgresqlEventStore<CONFIG extends AggregateEventStreamConfi
     /**
      * The events among {@code eventsToPublish} that fill one of the transient gaps the poll asked for again.
      * <p>
-     * A poll resolves such a gap only once the event filling it has been handed to the subscriber - not when it reconciles
-     * the poll's gaps, before handing anything on. The subscriber's resume point lies above a gap fill (it moved past the
-     * higher events handled before the gap filled), so the transient gap is the only durable record that the fill is still
-     * owed: resolved first, a subscription stopped - or a process that died - before the fill was handled resumed above
-     * it and never asked for it again. Handing on is publishing to the sink: the subscription manager's subscriber
-     * handles an event synchronously on the publishing thread, so by then it was handled (or, stopped mid-handling, holds
-     * its resume point at the event). A poll that was cancelled before it handed all of its events on resolves none of its
-     * gap fills: the subscriber may not have handled them, and the next subscription asks for them again - at the cost
-     * of delivering a fill it did handle twice.
-     * <p>
+     * A poll resolves such a gap only once the subscriber is done with the event filling it - not when it reconciles the
+     * poll's gaps, before handing anything on. The subscriber's resume point lies above a gap fill (it moved past the
+     * higher events handled before the gap filled), so the transient gap is the only durable record that the fill is
+     * still owed: resolved first, a subscription stopped - or a process that died - before the fill was handled resumed
+     * above it and never asked for it again.
+     * <ul>
+     *     <li>A subscriber that acknowledges what it handled ({@link SubscriberAcknowledgement}) gets the fill's gap
+     *     resolved when it acknowledges the fill, in its own unit of work - see {@link GapFillsAwaitingAcknowledgement}.
+     *     That covers a subscriber that handles asynchronously: a batch collected, an I/O retry in its backoff, an event
+     *     waiting for demand in a {@code limitRate} queue.</li>
+     *     <li>For any other subscriber, done is handed on: publishing to the sink, after which the poll resolves the gaps
+     *     of the fills it published. A poll that was cancelled before it handed all of its events on resolves none of
+     *     its gap fills: the subscriber may not have handled them, and the next subscription asks for them again - at
+     *     the cost of delivering a fill it did handle twice.</li>
+     * </ul>
      * Other tenants' gap fills are not handed on, so the reconciliation resolves them as before.
      *
      * @param transientGapsIncludedInQuery the gaps the poll asked for again - may be null
@@ -1176,24 +1292,117 @@ public final class PostgresqlEventStore<CONFIG extends AggregateEventStreamConfi
 
     /**
      * The transient gaps a poll's reconciliation is told it asked for: all but those filled by an event it is about to
-     * publish, which stay open until it has (see {@link #gapFillsAmong}). The gap handler does not count a gap whose event
-     * it is given as a new gap, and does not promote it either.
+     * publish, which stay open until the subscriber is done with it (see {@link #gapFillsAmong}), and those filled by a
+     * gap fill handed on before and not acknowledged yet. The gap handler does not count a gap whose event it is given
+     * as a new gap, and does not promote it either.
      */
-    private static List<GlobalEventOrder> gapsResolvedBeforePublishing(List<GlobalEventOrder> transientGapsIncludedInQuery, List<PersistedEvent> gapFillsToPublish) {
-        if (gapFillsToPublish.isEmpty()) {
+    private static List<GlobalEventOrder> gapsResolvedBeforePublishing(List<GlobalEventOrder> transientGapsIncludedInQuery,
+                                                                       List<PersistedEvent> gapFillsToPublish,
+                                                                       Optional<GapFillsAwaitingAcknowledgement> awaitingAcknowledgement) {
+        var stillAwaiting = awaitingAcknowledgement.map(GapFillsAwaitingAcknowledgement::awaitingEvents).orElse(List.of());
+        if (gapFillsToPublish.isEmpty() && stillAwaiting.isEmpty()) {
             return transientGapsIncludedInQuery;
         }
-        var filled = gapFillsToPublish.stream().map(PersistedEvent::globalEventOrder).collect(Collectors.toSet());
+        var leftOpen = new HashSet<GlobalEventOrder>();
+        gapFillsToPublish.forEach(event -> leftOpen.add(event.globalEventOrder()));
+        stillAwaiting.forEach(event -> leftOpen.add(event.globalEventOrder()));
         return transientGapsIncludedInQuery.stream()
-                                           .filter(gap -> !filled.contains(gap))
+                                           .filter(gap -> !leftOpen.contains(gap))
                                            .toList();
     }
 
     /**
-     * Resolve the gaps the published {@code gapFills} fill, in a unit of work of their own (joining the caller's, if
-     * there is one), reconciled as a query over the highest of them that also asked for exactly these gaps would be.
-     * Only polls that published a gap fill do this, once per poll. A failure is logged and leaves the gaps open, so a
-     * later poll delivers those events again rather than losing them.
+     * The events a poll's reconciliation is given: those it read, plus the gap fills handed on before and still awaiting
+     * acknowledgement that it did not read again - the gap handler promotes no gap whose event it is given, and the gap
+     * of an unacknowledged fill must stay open. They lie below the poll's range, so they are no new gaps either.
+     */
+    private static List<PersistedEvent> eventsToReconcile(List<PersistedEvent> events, Optional<GapFillsAwaitingAcknowledgement> awaitingAcknowledgement) {
+        var stillAwaiting = awaitingAcknowledgement.map(GapFillsAwaitingAcknowledgement::awaitingEvents).orElse(List.of());
+        if (stillAwaiting.isEmpty()) {
+            return events;
+        }
+        var read = events.stream().map(PersistedEvent::globalEventOrder).collect(Collectors.toSet());
+        var eventsToReconcile = new ArrayList<>(events);
+        stillAwaiting.stream()
+                     .filter(event -> !read.contains(event.globalEventOrder()))
+                     .forEach(eventsToReconcile::add);
+        return eventsToReconcile;
+    }
+
+    /**
+     * {@code events} without the gap fills handed on before and not acknowledged yet - a poll reads them again while
+     * their gap is open, and must not hand them on again
+     */
+    private static List<PersistedEvent> notAwaitingAcknowledgement(List<PersistedEvent> events, Optional<GapFillsAwaitingAcknowledgement> awaitingAcknowledgement) {
+        if (awaitingAcknowledgement.isEmpty() || events.isEmpty()) {
+            return events;
+        }
+        var awaiting = awaitingAcknowledgement.get();
+        return events.stream()
+                     .filter(event -> !awaiting.isAwaiting(event))
+                     .toList();
+    }
+
+    /**
+     * Calls to a subscription's gap handler hold its monitor: an acknowledging subscriber resolves gaps on its own thread
+     * (see {@link GapFillsAwaitingAcknowledgement}). Never held across a commit.
+     */
+    private static List<GlobalEventOrder> findTransientGapsToIncludeInQuery(SubscriptionGapHandler gapHandler, AggregateType aggregateType, LongRange globalOrderRange) {
+        synchronized (gapHandler) {
+            return gapHandler.findTransientGapsToIncludeInQuery(aggregateType, globalOrderRange);
+        }
+    }
+
+    /**
+     * See {@link #findTransientGapsToIncludeInQuery(SubscriptionGapHandler, AggregateType, LongRange)}
+     */
+    private static GapReconciliation reconcileGaps(SubscriptionGapHandler gapHandler,
+                                                   AggregateType aggregateType,
+                                                   LongRange globalOrderRange,
+                                                   List<PersistedEvent> persistedEvents,
+                                                   List<GlobalEventOrder> transientGapsIncludedInQuery) {
+        synchronized (gapHandler) {
+            return gapHandler.reconcileGapsAndReport(aggregateType, globalOrderRange, persistedEvents, transientGapsIncludedInQuery);
+        }
+    }
+
+    /**
+     * @return the gap fills one subscription hands on and its subscriber has not acknowledged yet - when it acknowledges,
+     * and there is a gap handler; otherwise none, and gap fills are resolved once they were handed on
+     */
+    private Optional<GapFillsAwaitingAcknowledgement> awaitingAcknowledgement(Optional<SubscriberAcknowledgement> acknowledgement,
+                                                                              Optional<SubscriptionGapHandler> subscriptionGapHandler,
+                                                                              AggregateType aggregateType,
+                                                                              String eventStreamLogName) {
+        if (acknowledgement.isEmpty() || subscriptionGapHandler.isEmpty()) {
+            return Optional.empty();
+        }
+        return Optional.of(new GapFillsAwaitingAcknowledgement(subscriptionGapHandler.get(),
+                                                               aggregateType,
+                                                               unitOfWorkFactory,
+                                                               eventStoreSubscriptionObserver,
+                                                               eventStreamLogName));
+    }
+
+    /**
+     * Register with the subscriber's acknowledgement - also without a gap handler (then there is nothing to resolve), so
+     * {@link SubscriberAcknowledgement#isHonoured()} tells the subscriber that handing on does not resolve anything here.
+     * Not disposed when the subscription ends: an event whose handling completes while the subscription is being stopped
+     * was handled, and acknowledging it still resolves its gap in the unit of work that handled it - instead of leaving it
+     * open, which would hand the event to the next subscription again. The registration lives as long as the
+     * acknowledgement, which belongs to the one subscription.
+     */
+    private static void registerWith(SubscriberAcknowledgement acknowledgement, Optional<GapFillsAwaitingAcknowledgement> awaitingAcknowledgement) {
+        acknowledgement.onAcknowledge(awaitingAcknowledgement.<Consumer<List<PersistedEvent>>>map(awaiting -> awaiting::acknowledged)
+                                                                    .orElse(events -> {
+                                                                    }));
+    }
+
+    /**
+     * Resolve the gaps the published {@code gapFills} fill - for a subscriber that does not acknowledge what it handled -
+     * in a unit of work of their own (joining the caller's, if there is one), with
+     * {@link SubscriptionGapHandler#resolveFilledGaps}. Only polls that published a gap fill do this, once per poll. A
+     * failure is logged and leaves the gaps open, so a later poll delivers those events again rather than losing them.
      */
     private void resolveGapsFilledByPublishedEvents(SubscriptionGapHandler gapHandler,
                                                     SubscriberId subscriberId,
@@ -1203,13 +1412,12 @@ public final class PostgresqlEventStore<CONFIG extends AggregateEventStreamConfi
         if (gapFills.isEmpty()) {
             return;
         }
-        var filledGaps = gapFills.stream().map(PersistedEvent::globalEventOrder).toList();
         try {
-            var highestFilledGap = filledGaps.stream().mapToLong(GlobalEventOrder::longValue).max().getAsLong();
-            var outcome = unitOfWorkFactory.withUnitOfWork(unitOfWork -> gapHandler.reconcileGapsAndReport(aggregateType,
-                                                                                                         LongRange.only(highestFilledGap),
-                                                                                                         gapFills,
-                                                                                                         filledGaps));
+            var outcome = unitOfWorkFactory.withUnitOfWork(unitOfWork -> {
+                synchronized (gapHandler) {
+                    return gapHandler.resolveFilledGaps(aggregateType, gapFills);
+                }
+            });
             // After its unit of work committed (unless it joined the caller's), as for every other gap reconciliation.
             // Not a reconciledGaps pass: those stay one per poll
             if (!outcome.isEmpty()) {
@@ -1218,7 +1426,7 @@ public final class PostgresqlEventStore<CONFIG extends AggregateEventStreamConfi
         } catch (RuntimeException e) {
             log.warn(msg("[{}] Could not resolve the gaps filled by the published event(s) {} - they stay transient gaps, so a later poll delivers those events again",
                          eventStreamLogName,
-                         filledGaps),
+                         gapFills.stream().map(PersistedEvent::globalEventOrder).toList()),
                      e);
         }
     }
