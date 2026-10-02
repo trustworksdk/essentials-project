@@ -839,6 +839,18 @@ handler is retried in place before it is queued, and under `stop` the subscripti
 
 Details: [README § ViewEventProcessor](../components/postgresql-event-store/README.md#vieweventprocessor).
 
+### Under CDC, an event that commits late is delivered instead of dropped
+
+With Hybrid CDC, 0.50 dropped an event whose transaction committed after a transaction holding a higher
+`GlobalEventOrder` of the same aggregate type, and could lose the events published while a subscription moved from
+polling onto the CDC bus (at startup and after a replication outage). 0.60 delivers both. A late-committing event
+therefore arrives after events with a higher `GlobalEventOrder`, as a gap filled on the polling path always has.
+
+**What to do:** nothing, if your handlers follow the documented contract that `GlobalEventOrder` is not delivered in
+strict sequence. A handler that ignores every event at or below the highest `GlobalEventOrder` it has seen drops these
+events; deduplicate by event id instead. Details:
+[README § Out-of-Order Delivery Is Expected](../components/postgresql-event-store/README.md#out-of-order-delivery-is-expected).
+
 ---
 
 ## Coming from before 0.50

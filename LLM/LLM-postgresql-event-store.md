@@ -768,6 +768,13 @@ Later TX1 commits → resolves: 1, 2, 3
 
 **Per-aggregate ordering is always preserved** - gaps only affect `GlobalEventOrder` across different aggregates.
 
+**A subscriber can receive an event below a `GlobalEventOrder` it already handled** - on polling when a gap fills (TX1
+above), and under Hybrid CDC whenever a transaction that took a lower order commits after one with a higher order (the
+CDC bus delivers in commit order). Each event is still delivered once. Under CDC the gap a bus event opens is recorded
+with the subscriber's gap handler, so a restart before the late event arrives does not lose it, and it is waited for up
+to 120 s (the default permanent-gap threshold). **Never deduplicate in a handler by "highest `GlobalEventOrder` seen"**:
+it drops exactly these events. Deduplicate by event id, or rely on `EventOrder` per aggregate.
+
 ### Configuration
 
 ```java
@@ -1254,11 +1261,12 @@ events in order), and every async subscription has its own: polling `Publish-<su
 `Cdc-<subscriber>-<aggregateType>` (handed over from the shared `cdc-dispatcher` thread, which a handler never holds), batched
 `BatchedEventSubscriber-<subscriber>-<aggregateType>-Handler`. Under CDC a subscription never back-pressures the CDC bus:
 its hand-over buffers one polling page (`eventStorePollingBatchSize`), and a subscription further behind than that leaves
-the bus on its own and continues on polling from the next event it has not been handed - nothing lost or reordered - until
-CDC availability next changes. Each such overflow logs a WARN and counts `essentials.cdc.eventstore.live_source.overflow.count`;
-the other CDC subscriptions of its `AggregateType` and the dispatcher are not held up, under either
-`essentials.eventstore.cdc.event-bus.overflow-policy`. Size `eventStorePollingBatchSize` to absorb an ordinary burst, or a
-burst moves the subscription to polling too.
+the bus on its own, catches up from the database and rejoins the bus - nothing lost or delivered twice. Each such overflow
+logs a WARN and counts `essentials.cdc.eventstore.live_source.overflow.count` (not a CDC fallback), and rejoining logs
+`Caught up after falling behind the CDC bus` at INFO; the other CDC subscriptions of its `AggregateType` and the dispatcher
+are not held up, under either `essentials.eventstore.cdc.event-bus.overflow-policy`. Size `eventStorePollingBatchSize` to
+absorb an ordinary burst; a larger one costs the subscription a catch-up. Every move onto the bus (warm-up, recovery from a
+replication outage, after an overflow) catches up the same way first, so it is gap-free.
 
 **Stopping during retries does not skip.** A stop while a retry is under way (shutdown, fenced-lock hand-over, `resetFrom`,
 unsubscribe) abandons the retries: no failure callback, no ERROR, the resume point stays at the event, and the restarted

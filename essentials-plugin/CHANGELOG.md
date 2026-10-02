@@ -14,6 +14,11 @@ targets, with a `-N` suffix for plugin-only releases.
   The trap for the lost event is retired (`LLM-traps.md`, `LLM-postgresql-event-store.md`, `LLM-foundation.md`).
 - **Bundled docs** — a switch between polling and the CDC bus no longer counts as a stop for a retry in
   progress (`LLM-postgresql-event-store.md`).
+- **Bundled docs** — a CDC subscription that falls behind catches up from the database and rejoins the bus
+  instead of staying on polling, and a late-committing event is delivered under CDC after events with a
+  higher `GlobalEventOrder` (`LLM-postgresql-event-store.md`).
+- **New trap `ESS-116`** — a handler that skips everything at or below the highest `GlobalEventOrder` it
+  has seen drops late-committed events (`LLM-traps.md`).
 
 ## 0.60.0 — first release, targets Essentials 0.60.0
 

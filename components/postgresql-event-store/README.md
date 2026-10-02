@@ -1476,8 +1476,10 @@ Every asynchronous subscription has a delivery thread of its own, whichever way 
 | [Hybrid CDC](#hybrid-cdc-logical-replication) | `Cdc-<subscriberId>-<aggregateType>` - the events are handed over from the shared CDC dispatcher thread, which is never held by a handler |
 | Batched subscription | `BatchedEventSubscriber-<subscriberId>-<aggregateType>-Handler` |
 
-One limit applies under CDC: the hand-over to a subscription's thread buffers up to `essentials.eventstore.cdc.event-bus.backpressure-buffer-size` events (default 8192).
-A subscription that falls further behind than that - for example because it has been retrying for a long time on a busy aggregate type - back-pressures the other CDC subscriptions of the same `AggregateType`, through the CDC event bus's overflow handling.
+Under CDC a subscription never back-pressures the shared CDC bus: the hand-over to its thread buffers one polling page (`eventStorePollingBatchSize`).
+A subscription that falls further behind than that - for example because it has been retrying for a long time on a busy aggregate type - leaves the bus on its own, logs a WARN and counts `essentials.cdc.eventstore.live_source.overflow.count`, then catches up from the database and rejoins the bus, logging `Caught up after falling behind the CDC bus` at INFO.
+Nothing is lost or delivered twice, and the other CDC subscriptions of the same `AggregateType` are not held up.
+Size `eventStorePollingBatchSize` to absorb an ordinary burst; a larger one only costs the subscription a catch-up.
 
 #### Stopping a subscription while it retries
 
@@ -1975,6 +1977,10 @@ GlobalEventOrder  AggregateId   EventOrder
 
 GlobalEventOrder is out of sequence (2, 3, 1, 4), but per-aggregate ordering is always preserved.
 ```
+
+The same holds under [Hybrid CDC](#hybrid-cdc-logical-replication), where it is more frequent: the CDC bus delivers events in the order their transactions commit, so the event of a transaction that took a lower `GlobalEventOrder` but committed later arrives after the higher ones.
+Each event is still delivered once. The gap a CDC event opens is recorded with the subscriber's gap handler, so a restart before the late event arrives does not lose it, and it is waited for up to 120 seconds (the default permanent-gap threshold).
+Never deduplicate in a handler by "the highest `GlobalEventOrder` seen so far" - that drops exactly these events.
 
 **Why per-aggregate ordering is guaranteed:**
 

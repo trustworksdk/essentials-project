@@ -599,7 +599,7 @@ there was a gap, so it could not show whether a subscriber was finding gaps or g
 now documented as what it is, and no longer shown in the admin UI.
 
 The new counts cover every path that reconciles gaps, including the CDC catch-up (backfill) that the polling
-statistics do not see. They come from the rows each reconciliation actually changed, and are recorded only after
+statistics do not see, and the gaps a CDC subscription opens and fills on the live bus. They come from the rows each reconciliation actually changed, and are recorded only after
 its unit of work commits. A rising `promotedToPermanentGaps` is the one to watch: each is a global event order the
 subscriber stopped waiting for.
 
@@ -688,9 +688,13 @@ those paths used to share one:
   `BatchedEventSubscriber-<subscriber>-<aggregateType>-Handler` thread.
 - **Under CDC** the handlers ran on the shared `cdc-dispatcher-<slot>` thread (the tailer's thread in `DIRECT`
   mode), so one slow handler held every CDC subscription on the slot. `CdcEventStore` now hands each subscription's
-  live events over to a `Cdc-<subscriber>-<aggregateType>` thread. Order is kept. A subscription more than
-  `essentials.eventstore.cdc.event-bus.backpressure-buffer-size` events (default 8192) behind still back-pressures
-  the other CDC subscriptions of its aggregate type, through the bus's existing overflow handling.
+  live events over to a `Cdc-<subscriber>-<aggregateType>` thread. Order is kept, and a subscription never
+  back-pressures the shared CDC bus: its hand-over buffers one polling page (`eventStorePollingBatchSize`). A
+  subscription that falls further behind than that logs a WARN, counts
+  `essentials.cdc.eventstore.live_source.overflow.count`, catches up from the database and rejoins the bus, logging
+  `Caught up after falling behind the CDC bus` at INFO. Nothing is lost or delivered twice, and it is not counted as
+  a CDC fallback. Size `eventStorePollingBatchSize` to absorb an ordinary burst; a larger burst only costs the
+  subscription a catch-up.
 
 **Stopping a subscription never skips an event.** A stop while a retry is under way (shutdown, fenced-lock hand-over,
 `resetFrom`, unsubscribe) abandons the retries without reporting a failure, and the resume point stays at the event, so
@@ -793,6 +797,10 @@ place the docs are edited; see the root README's [Editing the LLM docs](../READM
 | **Slow-query statistics were always empty, and `pg_cron` was never created by the framework.** The check before the best-effort `CREATE EXTENSION` read `pg_extension` (installed) instead of `pg_available_extensions` (installable), so the create only ran when the extension already existed. `pg_stat_statements` is now created at startup when the server preloads it and the role may create extensions, and `pg_cron` when the server offers it; a refusal is logged and treated as unavailable without failing the start | Admin API query statistics, the Essentials scheduler |
 | **A `ViewEventProcessor` skipped an event whose direct handling failed on SQL or deserialization, instead of queueing it.** The handler runs in the subscription's transaction, so a failed SQL statement aborted it and the fallback `queueMessage` failed with "current transaction is aborted"; and a payload that could not be deserialized failed before the fallback was reached. The direct handler now runs under a savepoint, which rolls back only its own writes, and deserialization happens inside the failure handling, so both are queued - an undeserializable event ends up as a visible dead letter. A handler that appended events or changed an aggregate is queued only after its `UnitOfWork` was rolled back, see [§1.1.8](#118-a-failed-vieweventprocessor-handler-that-appended-events-or-changed-an-aggregate-is-queued-only-after-a-rollback) | `ViewEventProcessor` users |
 | **The queue statistics trigger counted a purge as a delivery.** Fixed by the replacement in [§2.4](#24-durable-queue-observability) | Statistics consumers |
+| **A CDC subscription lost events when it moved from polling onto the CDC bus.** The bus replays nothing to a subscriber that attaches late, so the events published while the subscription was still on polling - after its last poll, during the `activeCutbackDebounce` window, or while its handler finished an event - never reached it, and the next bus event moved it past them. This hit every subscription started before CDC was active and every subscription after a replication outage. One started while CDC was active instead stalled on the first missing event until `liveDrainStallThreshold`. Every move onto the bus now first reads from the database everything up to the current head, then continues from the bus, so the hand-over is gap-free | `postgresql-event-store` with Hybrid CDC enabled |
+| **A CDC subscription dropped an event whose transaction committed after a transaction holding a higher global order.** Two transactions appending to the same aggregate type reach the CDC bus in commit order, not in global order, and each subscription only let through events above the highest global order it had delivered. The late event is now delivered when it arrives, after the higher ones, which is the order polling already delivers gap-filled events in. A gap first seen on the bus is now also recorded with the subscriber's gap handler, so a restart or fenced-lock hand-over before the late event arrives no longer loses it. A gap is waited for up to 120 s, the gap handler's default permanent-gap threshold. See [MIGRATION-0.60.md § Under CDC, an event that commits late is delivered instead of dropped](MIGRATION-0.60.md#under-cdc-an-event-that-commits-late-is-delivered-instead-of-dropped) | `postgresql-event-store` with Hybrid CDC enabled and concurrent writers to an aggregate type |
+| **A batched CDC subscription could stop receiving events while staying active.** A subscription started while CDC was active asked for more live events before its subscriber had taken the previous ones, so a `BatchedPersistedEventHandler` busy with a batch let the internal buffer overflow, which ended the subscription's event stream without a stop or a failure callback. It now asks for one more event each time its subscriber takes one | Batched subscriptions under Hybrid CDC |
+| **Every CDC back-fill left its `CDC-Backfill-<aggregateType>` thread running.** The thread was disposed only when the subscription was cancelled, not when the back-fill completed, so each subscription start and each stall recovery under CDC added one | `postgresql-event-store` with Hybrid CDC enabled |
 
 **The 0.50.1 fixes are all in 0.60,** either merged directly or made unnecessary by other work. The polling
 unit-of-work leak fix came in unchanged. The Jackson 2-specific fixes are no longer needed now that Jackson 2
