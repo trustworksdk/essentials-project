@@ -23,6 +23,7 @@ import dk.trustworks.essentials.components.foundation.fencedlock.api.*;
 import dk.trustworks.essentials.components.foundation.messaging.queue.*;
 import dk.trustworks.essentials.components.foundation.messaging.queue.DurableQueues.QueueingSortOrder;
 import dk.trustworks.essentials.components.foundation.messaging.queue.api.*;
+import dk.trustworks.essentials.components.foundation.postgresql.api.*;
 import dk.trustworks.essentials.shared.security.*;
 import org.junit.jupiter.api.*;
 import org.springframework.http.MediaType;
@@ -55,6 +56,7 @@ class AdminApiEndpointsTest {
     private final DurableQueuesApi durableQueuesApi = mock(DurableQueuesApi.class);
     private final AggregateLifecycleApi aggregateLifecycleApi = mock(AggregateLifecycleApi.class);
     private final AggregateArchiveApi   aggregateArchiveApi   = mock(AggregateArchiveApi.class);
+    private final PostgresqlQueryStatisticsApi queryStatisticsApi = mock(PostgresqlQueryStatisticsApi.class);
 
     private final TestAuthenticatedUser authenticatedUser = new TestAuthenticatedUser();
 
@@ -68,7 +70,8 @@ class AdminApiEndpointsTest {
         mockMvc = MockMvcBuilders.standaloneSetup(new FencedLocksController(dbFencedLockApi, principalResolver),
                                                  new DurableQueuesController(durableQueuesApi, principalResolver),
                                                  new AggregateLifecycleController(aggregateLifecycleApi, principalResolver),
-                                                 new AggregateArchiveController(aggregateArchiveApi, principalResolver))
+                                                 new AggregateArchiveController(aggregateArchiveApi, principalResolver),
+                                                 new PostgresqlQueryStatisticsController(queryStatisticsApi, principalResolver))
                                  .setControllerAdvice(new AdminApiExceptionHandler())
                                  .setMessageConverters(new JacksonJsonHttpMessageConverter(jsonMapper))
                                  .addPlaceholderValue(AdminApiPaths.BASE_PATH_PROPERTY, BASE)
@@ -110,6 +113,37 @@ class AdminApiEndpointsTest {
             mockMvc.perform(get(BASE + "/durable-queues/queues/orders/messages/count"))
                    .andExpect(status().isOk())
                    .andExpect(jsonPath("$.total").value(42));
+        }
+
+        @Test
+        void the_slowest_queries_fall_back_to_the_contract_defaults() throws Exception {
+            when(queryStatisticsApi.getSlowestQueries(any(), any(), anyInt())).thenReturn(List.of());
+
+            mockMvc.perform(get(BASE + "/postgresql/query-statistics/slowest"))
+                   .andExpect(status().isOk());
+
+            verify(queryStatisticsApi).getSlowestQueries(any(), eq(QueryStatisticsOrder.TOTAL_TIME), eq(10));
+        }
+
+        @Test
+        void the_slowest_queries_order_and_limit_are_passed_through() throws Exception {
+            when(queryStatisticsApi.getSlowestQueries(any(), any(), anyInt()))
+                    .thenReturn(List.of(new ApiQueryStatistics("SELECT 1", 10.0, 2, 5.0, 2, 4.0, 6.0, 1.0, 8, 2, 80.0)));
+
+            mockMvc.perform(get(BASE + "/postgresql/query-statistics/slowest")
+                                    .param("orderBy", "MEAN_TIME")
+                                    .param("limit", "25"))
+                   .andExpect(status().isOk())
+                   .andExpect(jsonPath("$[0].maxTime").value(6.0))
+                   .andExpect(jsonPath("$[0].cacheHitRatio").value(80.0));
+
+            verify(queryStatisticsApi).getSlowestQueries(any(), eq(QueryStatisticsOrder.MEAN_TIME), eq(25));
+        }
+
+        @Test
+        void an_unknown_slowest_queries_order_is_a_bad_request() throws Exception {
+            mockMvc.perform(get(BASE + "/postgresql/query-statistics/slowest").param("orderBy", "NOPE"))
+                   .andExpect(status().isBadRequest());
         }
 
         @Test

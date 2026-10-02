@@ -27,6 +27,7 @@ import dk.trustworks.essentials.components.foundation.postgresql.api.*;
 import dk.trustworks.essentials.components.foundation.scheduler.api.*;
 import io.swagger.v3.oas.models.media.*;
 
+import java.math.BigDecimal;
 import java.util.*;
 
 import static dk.trustworks.essentials.shared.security.EssentialsSecurityRoles.*;
@@ -54,6 +55,7 @@ final class EssentialsAdminApiSpec {
             DBFencedLockApi.class,
             SchedulerApi.class,
             PostgresqlQueryStatisticsApi.class,
+            PostgresqlTableStatisticsApi.class,
             DurableQueuesApi.class,
             EventStoreApi.class,
             CdcApi.class,
@@ -74,6 +76,8 @@ final class EssentialsAdminApiSpec {
             ApiTableSizeStatistics.class,
             ApiTableActivityStatistics.class,
             ApiTableCacheHitRatio.class,
+            ApiTableStatistics.class,
+            ApiIndexStatistics.class,
             ApiQueuedMessage.class,
             ApiShardOwnedMessage.class,
             ApiShardOwnedQueueStatus.class,
@@ -107,7 +111,9 @@ final class EssentialsAdminApiSpec {
             "ApiSubscription", Set.of("subscriberId", "aggregateType"),
             "ApiSubscriptionStatistics", Set.of("subscriberId", "aggregateType", "statisticsSince",
                                                 "lifecycle", "eventHandling", "polling", "lock", "reset"),
-            "ApiCdcStatus", Set.of("availability", "configuration", "slot"));
+            "ApiCdcStatus", Set.of("availability", "configuration", "slot"),
+            "ApiTableStatistics", Set.of("section", "tableName", "totalSize", "tableSize", "indexSize", "indexes"),
+            "ApiIndexStatistics", Set.of("indexName", "size"));
 
     /**
      * DTO properties that are {@code null} by design, with the reason surfaced as the property description.
@@ -115,6 +121,17 @@ final class EssentialsAdminApiSpec {
      * in the queried instance.
      */
     static final Map<String, Map<String, String>> NULLABLE_PROPERTIES = Map.of(
+            "ApiQueryStatistics", Map.of(
+                    "cacheHitRatio", "Shared-buffer hits as a percentage 0-100 of all shared blocks the statement "
+                            + "accessed. Null when it accessed no shared blocks."),
+            "ApiTableStatistics", Map.of(
+                    "cacheHitRatio", "Shared-buffer hits as a percentage 0-100 of the table's and its indexes' block "
+                            + "requests. Null while there has been no block access since the statistics were reset.",
+                    "lastVacuum", "The most recent manual or automatic vacuum. Null if the table was never vacuumed.",
+                    "lastAnalyze", "The most recent manual or automatic analyze. Null if the table was never analyzed."),
+            "ApiIndexStatistics", Map.of(
+                    "cacheHitRatio", "Shared-buffer hits as a percentage 0-100 of the index's block requests. Null while "
+                            + "there has been no block access since the statistics were reset."),
             "ApiQueuedMessage", Map.of(
                     "payload", "The raw message payload. Null unless the caller holds the QUEUE_PAYLOAD_READER "
                             + "or ESSENTIALS_ADMIN role."),
@@ -140,6 +157,7 @@ final class EssentialsAdminApiSpec {
         put("fenced-locks", "Inspect and release distributed fenced locks.");
         put("scheduler", "Inspect pg_cron jobs, their run history, and executor jobs.");
         put("postgresql-query-statistics", "Inspect slow-query statistics from pg_stat_statements.");
+        put("postgresql-table-statistics", "Inspect size, activity, and cache-hit statistics for every table the Essentials components own.");
         put("durable-queues", "Inspect and manage durable queue and dead-letter messages.");
         put("event-store", "Inspect event-store subscriptions and persisted event order.");
         put("cdc", "Inspect Change Data Capture runtime state and effective configuration.");
@@ -222,6 +240,25 @@ final class EssentialsAdminApiSpec {
          .summary("Return the ten slowest queries from pg_stat_statements.")
          .roles(STATS_R, ADMIN)
          .responseArray("ApiQueryStatistics");
+
+        b.operation(PostgresqlQueryStatisticsApi.class, "getSlowestQueries")
+         .tag("postgresql-query-statistics").get("/postgresql/query-statistics/slowest")
+         .summary("Return the statements recorded by pg_stat_statements for the current database, ranked by the chosen order.")
+         .roles(STATS_R, ADMIN)
+         .queryParam("orderBy", queryStatisticsOrderSchema(), false,
+                     "What to rank by. TOTAL_TIME favours cheap statements that run constantly; MEAN_TIME and MAX_TIME "
+                             + "surface statements that are slow per call.")
+         .queryParam("limit", new IntegerSchema()._default(10).minimum(BigDecimal.ONE)
+                                                 .maximum(BigDecimal.valueOf(PostgresqlQueryStatisticsApi.MAX_SLOWEST_QUERIES_LIMIT)), false,
+                     "Maximum number of statements to return. A value above the maximum is capped.")
+         .responseArray("ApiQueryStatistics");
+
+        // ---- postgresql-table-statistics ----
+        b.operation(PostgresqlTableStatisticsApi.class, "fetchTableStatistics")
+         .tag("postgresql-table-statistics").get("/postgresql/table-statistics")
+         .summary("Return size, activity, and cache-hit statistics per Essentials table, grouped by section.")
+         .roles(STATS_R, ADMIN)
+         .responseArray("ApiTableStatistics");
 
         // ---- durable-queues ----
         b.operation(DurableQueuesApi.class, "getQueueNames")
@@ -551,6 +588,15 @@ final class EssentialsAdminApiSpec {
          .summary("Return aggregate archive statistics per aggregate type.")
          .roles(SUBSCRIPTION_R, ADMIN)
          .responseArray("ApiAggregateArchiveStatistics");
+    }
+
+    private static StringSchema queryStatisticsOrderSchema() {
+        var schema = new StringSchema();
+        for (QueryStatisticsOrder value : QueryStatisticsOrder.values()) {
+            schema.addEnumItem(value.name());
+        }
+        schema._default(QueryStatisticsOrder.TOTAL_TIME.name());
+        return schema;
     }
 
     private static StringSchema sortOrderSchema() {

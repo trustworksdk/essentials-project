@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+
 package dk.trustworks.essentials.components.adminapi.rest;
 
 import dk.trustworks.essentials.components.foundation.postgresql.api.*;
@@ -24,30 +25,24 @@ import java.util.List;
 import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 
 /**
- * HTTP surface for {@link PostgresqlQueryStatisticsApi}, implementing the contract's
- * {@code postgresql-query-statistics} tag.
+ * HTTP surface for {@link PostgresqlTableStatisticsApi}, implementing the contract's
+ * {@code postgresql-table-statistics} tag.
  */
 @RestController
 @RequestMapping(AdminApiPaths.BASE_PATH_PLACEHOLDER)
-public class PostgresqlQueryStatisticsController {
+public class PostgresqlTableStatisticsController {
 
-    private final PostgresqlQueryStatisticsApi postgresqlQueryStatisticsApi;
+    private final PostgresqlTableStatisticsApi tableStatisticsApi;
     private final AdminApiPrincipalResolver    principalResolver;
 
-    public PostgresqlQueryStatisticsController(PostgresqlQueryStatisticsApi postgresqlQueryStatisticsApi,
+    public PostgresqlTableStatisticsController(PostgresqlTableStatisticsApi tableStatisticsApi,
                                                AdminApiPrincipalResolver principalResolver) {
-        this.postgresqlQueryStatisticsApi = requireNonNull(postgresqlQueryStatisticsApi, "No postgresqlQueryStatisticsApi provided");
+        this.tableStatisticsApi = requireNonNull(tableStatisticsApi, "No tableStatisticsApi provided");
         this.principalResolver = requireNonNull(principalResolver, "No principalResolver provided");
     }
 
-    @GetMapping("/postgresql/query-statistics/top-ten-slowest")
-    public List<ApiQueryStatistics> getTopTenSlowestQueries() {
-        return postgresqlQueryStatisticsApi.getTopTenSlowestQueries(principalResolver.requireAuthenticatedPrincipal());
-    }
-
-    @GetMapping("/postgresql/query-statistics/slowest")
-    public List<ApiQueryStatistics> getSlowestQueries(@RequestParam(defaultValue = "TOTAL_TIME") QueryStatisticsOrder orderBy,
-                                                      @RequestParam(defaultValue = "10") int limit) {
-        return postgresqlQueryStatisticsApi.getSlowestQueries(principalResolver.requireAuthenticatedPrincipal(), orderBy, limit);
+    @GetMapping("/postgresql/table-statistics")
+    public List<ApiTableStatistics> fetchTableStatistics() {
+        return tableStatisticsApi.fetchTableStatistics(principalResolver.requireAuthenticatedPrincipal());
     }
 }

@@ -39,8 +39,10 @@ import org.springframework.context.annotation.*;
 import java.time.*;
 import java.util.*;
 import java.util.concurrent.TimeUnit;
+import java.util.function.ToDoubleFunction;
 
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.Mockito.*;
 
 /**
@@ -167,11 +169,83 @@ public class AdminUiDemoApplication {
     @Bean
     PostgresqlQueryStatisticsApi postgresqlQueryStatisticsApi() {
         var api = mock(PostgresqlQueryStatisticsApi.class);
-        when(api.getTopTenSlowestQueries(any())).thenReturn(List.of(
-                new ApiQueryStatistics("SELECT * FROM orders_events WHERE global_order > $1 ORDER BY global_order LIMIT $2", 184203.44, 91204, 2.02),
-                new ApiQueryStatistics("INSERT INTO orders_events (global_order, aggregate_id, …) VALUES ($1, $2, …)", 92044.10, 918204, 0.10),
-                new ApiQueryStatistics("DELETE FROM eventstore_cdc_inbox WHERE received_at < $1", 21044.55, 8841, 2.38)));
+        var queries = List.of(
+                new ApiQueryStatistics("SELECT * FROM shard_queue_unordered WHERE queue_id = $1 AND shard = $2 LIMIT $3",
+                                       412044.10, 2940211, 0.14, 0, 0.02, 41.20, 0.31, 18820441, 0, 100.0),
+                new ApiQueryStatistics("SELECT * FROM orders_events WHERE global_order > $1 ORDER BY global_order LIMIT $2",
+                                       184203.44, 91204, 2.02, 4410221, 0.40, 912.04, 6.12, 9120442, 88120, 99.0),
+                new ApiQueryStatistics("INSERT INTO orders_events (global_order, aggregate_id, …) VALUES ($1, $2, …)",
+                                       92044.10, 918204, 0.10, 918204, 0.04, 88.10, 0.22, 4120441, 1022, 100.0),
+                new ApiQueryStatistics("DELETE FROM eventstore_cdc_inbox WHERE received_at < $1",
+                                       21044.55, 8841, 2.38, 812044, 0.88, 1204.55, 14.02, 220441, 61204, 78.3));
+        when(api.getTopTenSlowestQueries(any())).thenReturn(queries);
+        when(api.getSlowestQueries(any(), any(), anyInt())).thenAnswer(invocation -> {
+            QueryStatisticsOrder orderBy = invocation.getArgument(1);
+            ToDoubleFunction<ApiQueryStatistics> rank = switch (orderBy) {
+                case TOTAL_TIME -> ApiQueryStatistics::totalTime;
+                case MEAN_TIME -> ApiQueryStatistics::meanTime;
+                case MAX_TIME -> ApiQueryStatistics::maxTime;
+                case CALLS -> ApiQueryStatistics::calls;
+                case BLOCKS_READ -> ApiQueryStatistics::sharedBlksRead;
+            };
+            return queries.stream()
+                          .sorted(Comparator.comparingDouble(rank).reversed())
+                          .limit(invocation.<Integer>getArgument(2))
+                          .toList();
+        });
         return api;
+    }
+
+    @Bean
+    PostgresqlTableStatisticsApi postgresqlTableStatisticsApi() {
+        var api = mock(PostgresqlTableStatisticsApi.class);
+        when(api.fetchTableStatistics(any())).thenReturn(List.of(
+                tableStatistics("event-store", "orders_events", 4_423_000_000L, 3_252_000_000L, 1_170_000_000L,
+                                918204, 120, 12, 4210394, 918204, 0, 0, 99.4),
+                tableStatistics("event-store", "payments_events", 512_000_000L, 401_000_000L, 111_000_000L,
+                                45219, 0, 3, 210394, 45219, 0, 0, 97.1),
+                tableStatistics("subscriptions", "durable_subscriptions", 98_304L, 8_192L, 32_768L,
+                                12, 140, 2, 412044, 12, 918204, 0, 100.0),
+                tableStatistics("subscriptions", "transient_subscriber_gaps", 49_152L, 8_192L, 16_384L,
+                                3, 41, 0, 41204, 27, 0, 24, null),
+                tableStatistics("cdc", "eventstore_cdc_inbox", 221_000_000L, 180_000_000L, 41_000_000L,
+                                40210, 8841, 881, 120394, 963414, 920114, 923204, 71.2),
+                tableStatistics("durable-queues", "durable_queues", 222_000_000L, 162_000_000L, 60_000_000L,
+                                1204, 92044, 881, 9204113, 184331, 368662, 184203, 92.0),
+                tableStatistics("fenced-locks", "fenced_locks", 65_536L, 8_192L, 16_384L,
+                                6, 4, 0, 1844201, 6, 921004, 0, 100.0),
+                tableStatistics("aggregates", "aggregate_snapshots", 12_000_000L, 9_000_000L, 3_000_000L,
+                                1820, 12, 0, 41204, 1832, 0, 12, 98.8),
+                tableStatistics("infrastructure", "essentials_schema_history", 49_152L, 8_192L, 16_384L,
+                                31, 0, 2, 0, 31, 0, 0, 100.0)));
+        return api;
+    }
+
+    private static ApiTableStatistics tableStatistics(String section, String table, long totalBytes, long tableBytes, long indexBytes,
+                                                      long liveRows, long deadRows, long seqScan, long idxScan,
+                                                      long inserted, long updated, long deleted, Double cacheHitRatio) {
+        // Fixture shape: a primary key carrying most lookups, and on the busier tables a secondary index - unused on
+        // the CDC inbox, so the console has something to flag. Updates are mostly HOT except on the queue table.
+        var indexes = new ArrayList<ApiIndexStatistics>();
+        indexes.add(new ApiIndexStatistics(table + "_pkey", indexBytes * 2 / 3, pretty(indexBytes * 2 / 3),
+                                           idxScan, idxScan * 2, idxScan, true, true, true, cacheHitRatio));
+        if (indexBytes > 1_000_000L) {
+            var unused = table.equals("eventstore_cdc_inbox");
+            indexes.add(new ApiIndexStatistics(table + (unused ? "_received_at_idx" : "_status_idx"), indexBytes / 3, pretty(indexBytes / 3),
+                                               unused ? 0 : idxScan / 4, unused ? 0 : idxScan / 2, unused ? 0 : idxScan / 4,
+                                               false, false, true, unused ? null : cacheHitRatio));
+        }
+        var hotUpdated = table.equals("durable_queues") ? updated / 5 : updated * 9 / 10;
+        return new ApiTableStatistics(section, table, totalBytes, tableBytes, indexBytes,
+                                      pretty(totalBytes), pretty(tableBytes), pretty(indexBytes),
+                                      liveRows, deadRows, seqScan, seqScan * liveRows, idxScan, idxScan,
+                                      inserted, updated, hotUpdated, deleted, cacheHitRatio,
+                                      OffsetDateTime.parse("2026-07-31T11:02:14Z"), OffsetDateTime.parse("2026-07-31T11:02:15Z"),
+                                      indexes);
+    }
+
+    private static String pretty(long bytes) {
+        return bytes >= 1_048_576L ? bytes / 1_048_576 + " MB" : bytes / 1024 + " kB";
     }
 
     @Bean

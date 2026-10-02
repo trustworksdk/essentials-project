@@ -248,7 +248,7 @@ the committed YAML, and nothing in the build fails if they lag behind it.
 
 > **Migrating off the Vaadin admin UI.** The views mapped onto the API as follows: Locks →
 > `/fenced-locks`, Queues → `/durable-queues/**`, Subscriptions → `/event-store/subscriptions`,
-> Scheduler → `/scheduler/**`, PostgreSQL statistics → `/postgresql/query-statistics/top-ten-slowest`
-> and `/event-store/statistics/**`. The EventProcessors view was a placeholder stub with no backing
+> Scheduler → `/scheduler/**`, PostgreSQL statistics → `/postgresql/query-statistics/slowest`
+> and `/postgresql/table-statistics`. The EventProcessors view was a placeholder stub with no backing
 > SPI and has no equivalent. `EssentialsAuthenticatedUser` is still the SPI that identifies the
 > caller, so an existing implementation carries over unchanged.

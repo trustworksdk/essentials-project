@@ -35,7 +35,7 @@ Single package: `dk.trustworks.essentials.components.boot.autoconfigure.postgres
 12. `LifecycleManager` (`DefaultLifecycleManager`) — triggers `JdbiConfigurationCallback` on `ContextRefreshedEvent`
 13. `EssentialsScheduler` (`DefaultEssentialsScheduler`) — optional; gated on `essentials.scheduler.enabled=true`
 14. `PostgresqlTTLManager` + `TTLJobBeanPostProcessor` — only when scheduler present
-15. API beans: `DBFencedLockApi`, `DurableQueuesApi`, `PostgresqlQueryStatisticsApi`, `SchedulerApi`
+15. API beans: `DBFencedLockApi`, `DurableQueuesApi`, `PostgresqlQueryStatisticsApi`, `PostgresqlTableStatisticsApi`, `SchedulerApi`. `PostgresqlTableStatisticsApi` collects every `PostgresqlStatisticsTableProvider` bean; this starter contributes durable-queues (only while `DurableQueues` is `PostgresqlDurableQueues`), fenced-locks and infrastructure providers
 16. Security defaults: `NoAccessSecurityProvider` + `NoAccessAuthenticatedUser` — override in app to grant real access
 17. Micrometer interceptors: `RecordExecutionTimeMessageHandlerInterceptor`, `RecordExecutionTimeCommandBusInterceptor`, `RecordExecutionTimeDurableQueueInterceptor`
 18. Tracing: `DurableQueuesMicrometerTracingInterceptor` + `DurableQueuesMicrometerInterceptor` — conditional on `management.tracing.enabled=true`

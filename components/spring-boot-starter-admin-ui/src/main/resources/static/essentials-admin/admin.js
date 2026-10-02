@@ -431,70 +431,183 @@ views.scheduler = async () => {
         : errorState(settled[2].reason, 'essentials_scheduler_reader'), 'GET /scheduler/executor-jobs', true)}`;
 };
 
+/* What the slowest queries are ranked by, and how many are shown. TOTAL_TIME is the default, but on a busy system it
+   is dominated by cheap statements that run constantly - queue polling above all - so the ranking is selectable. */
+let pgState = { orderBy: 'TOTAL_TIME', limit: 10 };
+
+const QUERY_ORDERS = {
+    TOTAL_TIME: ['Total time', 'Where the database spends its time. Favours cheap statements that run constantly, such as queue polling.'],
+    MEAN_TIME: ['Mean time', 'Statements that are slow each time they run, however rarely.'],
+    MAX_TIME: ['Max time', 'The slowest single execution - outliers such as lock waits.'],
+    CALLS: ['Calls', 'The busiest statements.'],
+    BLOCKS_READ: ['Blocks read', 'Statements reading the most blocks from outside shared buffers.']
+};
+
+/* Section ids are stable identifiers from the API; anything unknown is shown as reported. */
+const TABLE_SECTIONS = {
+    'event-store': 'Event store',
+    subscriptions: 'Event subscriptions and gaps',
+    cdc: 'CDC inbox',
+    'durable-queues': 'Durable queues',
+    'shard-owned-queues': 'Shard-owned queues',
+    'fenced-locks': 'Fenced locks',
+    aggregates: 'Aggregates',
+    infrastructure: 'Infrastructure'
+};
+
+const pct = (v) => (v == null ? nil('n/a') : `${Number(v).toFixed(1)}%`);
+const cacheCell = (v) => (v == null ? nil('n/a') : v < 90 ? badge('warning', pct(v)) : pct(v));
+
 views.postgresql = async () => {
+    const { orderBy, limit } = pgState;
     const settled = await Promise.allSettled([
-        api('/postgresql/query-statistics/top-ten-slowest'),
-        api('/event-store/statistics/table-sizes'),
-        api('/event-store/statistics/table-activity'),
-        api('/event-store/statistics/table-cache-hit-ratio')
+        api(`/postgresql/query-statistics/slowest?orderBy=${orderBy}&limit=${limit}`),
+        api('/postgresql/table-statistics')
     ]);
-    const [slow, sizes, activity, cacheHit] = settled.map((r) => (r.status === 'fulfilled' ? r.value : null));
+    const [slow, tables] = settled.map((r) => (r.status === 'fulfilled' ? r.value : null));
 
-    const maxMean = slow?.length ? Math.max(...slow.map((q) => q.meanTime)) : 0;
+    const rankValue = {
+        TOTAL_TIME: (q) => q.totalTime, MEAN_TIME: (q) => q.meanTime, MAX_TIME: (q) => q.maxTime,
+        CALLS: (q) => q.calls, BLOCKS_READ: (q) => q.sharedBlksRead
+    }[orderBy];
+    const maxRank = slow?.length ? Math.max(...slow.map(rankValue)) : 0;
+    const ms = (v) => `${Number(v).toLocaleString('en-US', { maximumFractionDigits: v < 10 ? 2 : 0 })} ms`;
+    const ranked = (q, formatted) => bar(rankValue(q), maxRank, formatted);
     const qRows = (slow ?? []).map((q) => `<tr>
-      <td class="truncate mono" title="${esc(q.query)}">${esc(q.query)}</td>
-      <td class="num">${num(q.calls)}</td>
-      <td class="num">${q.totalTime.toLocaleString('en-US', { maximumFractionDigits: 0 })} ms</td>
-      <td>${bar(q.meanTime, maxMean, q.meanTime.toFixed(2) + ' ms')}</td>
+      <td class="truncate mono" title="${esc(q.query ?? '')}">${q.query == null ? nil() : esc(q.query)}</td>
+      <td class="num">${orderBy === 'CALLS' ? ranked(q, num(q.calls)) : num(q.calls)}</td>
+      <td class="num">${orderBy === 'TOTAL_TIME' ? ranked(q, ms(q.totalTime)) : ms(q.totalTime)}</td>
+      <td class="num">${orderBy === 'MEAN_TIME' ? ranked(q, ms(q.meanTime)) : ms(q.meanTime)}</td>
+      <td class="num">${orderBy === 'MAX_TIME' ? ranked(q, ms(q.maxTime)) : ms(q.maxTime)}</td>
+      <td class="num">${num(q.rows)}</td>
+      <td class="num">${orderBy === 'BLOCKS_READ' ? ranked(q, num(q.sharedBlksRead)) : num(q.sharedBlksRead)}</td>
+      <td class="num">${cacheCell(q.cacheHitRatio)}</td>
     </tr>`);
 
-    const mb = (s) => parseFloat(s) || 0;
-    const maxSize = sizes ? Math.max(...Object.values(sizes).map((v) => mb(v.totalSize))) : 0;
-    const sRows = Object.entries(sizes ?? {}).map(([t, v]) => `<tr>
-      <td class="mono">${esc(t)}</td>
-      <td>${bar(mb(v.totalSize), maxSize, esc(v.totalSize))}</td>
-      <td class="num">${esc(v.tableSize)}</td>
-      <td class="num">${esc(v.indexSize)}</td>
-    </tr>`);
+    const toolbar = `
+    <div class="toolbar">
+      <label>Rank queries by
+        <select id="pgOrderSelect">${Object.entries(QUERY_ORDERS)
+            .map(([k, [label]]) => `<option value="${k}" ${k === orderBy ? 'selected' : ''}>${esc(label)}</option>`).join('')}</select>
+      </label>
+      <label>Show
+        <select id="pgLimitSelect">${[10, 25, 50, 100]
+            .map((n) => `<option ${n === limit ? 'selected' : ''}>${n}</option>`).join('')}</select>
+      </label>
+    </div>`;
 
-    const aRows = Object.entries(activity ?? {}).map(([t, v]) => `<tr>
-      <td class="mono">${esc(t)}</td>
-      <td class="num">${num(v.seq_scan)}</td>
-      <td class="num">${num(v.idx_scan)}</td>
-      <td class="num">${num(v.idx_tup_fetch)}</td>
-      <td class="num">${num(v.n_tup_ins)}</td>
-      <td class="num">${num(v.n_tup_upd)}</td>
-      <td class="num">${num(v.n_tup_del)}</td>
-    </tr>`);
-
-    return `
-    ${card('Ten slowest queries', slow
-        ? table([{ label: 'Query' }, { label: 'Calls', num: true }, { label: 'Total time', num: true }, { label: 'Mean time', num: true }],
-                qRows, { empty: 'pg_stat_statements is not enabled' })
+    const slowCard = card(`Slowest queries by ${QUERY_ORDERS[orderBy][0].toLowerCase()}`, slow
+        ? table([{ label: 'Query' }, { label: 'Calls', num: true }, { label: 'Total', num: true }, { label: 'Mean', num: true },
+                 { label: 'Max', num: true }, { label: 'Rows', num: true }, { label: 'Blocks read', num: true }, { label: 'Cache hit', num: true }],
+                qRows, { empty: 'pg_stat_statements is not enabled, or has recorded nothing for this database yet' })
         : errorState(settled[0].reason, 'essentials_postgresql_stats_reader'),
-        'GET /postgresql/query-statistics/top-ten-slowest', true)}
+        QUERY_ORDERS[orderBy][1], true);
 
-    <div class="grid-2">
-      ${card('Table sizes', sizes
-        ? table([{ label: 'Table' }, { label: 'Total', num: true }, { label: 'Heap', num: true }, { label: 'Indexes', num: true }], sRows)
-        : errorState(settled[1].reason, 'essentials_postgresql_stats_reader'), 'table-sizes', true)}
+    if (!tables) {
+        return toolbar + slowCard + card('Table statistics', errorState(settled[1].reason, 'essentials_postgresql_stats_reader'),
+                                         'GET /postgresql/table-statistics', true);
+    }
 
-      ${card('Cache hit ratio', cacheHit
-        ? Object.entries(cacheHit).map(([t, v]) => {
-            const low = v.cacheHitRatio < 90;
-            return `<div class="meter-row"><span class="mono">${esc(t)} ${low ? badge('warning', 'low') : ''}</span>
-              <span class="meter-track" role="img" aria-label="${v.cacheHitRatio}%"><span class="meter-fill" style="width:${v.cacheHitRatio}%"></span></span>
-              <span class="meter-val">${v.cacheHitRatio}%</span></div>`;
-          }).join('')
-        : errorState(settled[3].reason, 'essentials_postgresql_stats_reader'), 'table-cache-hit-ratio')}
+    /* Sizes are compared in bytes - the pretty-printed sizes mix units ("12 kB" against "4 MB") */
+    const maxSize = tables.length ? Math.max(...tables.map((t) => t.totalSizeBytes)) : 0;
+    const totalBytes = tables.reduce((sum, t) => sum + t.totalSizeBytes, 0);
+    const withRatio = tables.filter((t) => t.cacheHitRatio != null);
+    const lowest = withRatio.length ? withRatio.reduce((a, b) => (b.cacheHitRatio < a.cacheHitRatio ? b : a)) : null;
+    const prettyBytes = (b) => {
+        const units = ['B', 'kB', 'MB', 'GB', 'TB'];
+        let i = 0;
+        while (b >= 1024 && i < units.length - 1) { b /= 1024; i++; }
+        return `${b.toLocaleString('en-US', { maximumFractionDigits: i ? 1 : 0 })} ${units[i]}`;
+    };
+    /* Dead rows worth a look: a fifth of the live rows or more, ignoring tables too small to matter. Queue tables
+       churn constantly, so this is the bloat signal that matters most there. */
+    const bloated = (t) => t.deadRows > 1000 && t.deadRows >= t.liveRows / 5;
+    /* HOT updates touch no index. A frequently updated table with a low share points at an index on an updated
+       column, or too little free space per page (fillfactor). */
+    const hotRatio = (t) => (t.rowsUpdated ? (100 * t.rowsHotUpdated) / t.rowsUpdated : null);
+    const hotCell = (t) => {
+        const r = hotRatio(t);
+        return r == null ? nil('n/a') : t.rowsUpdated > 1000 && r < 50 ? badge('warning', pct(r)) : pct(r);
+    };
+    /* Unique and primary-key indexes do their job without being scanned, so only the others count as unused */
+    const unusedIndex = (i) => i.idxScan === 0 && !i.unique && !i.primary;
+    const allIndexes = tables.flatMap((t) => (t.indexes ?? []).map((i) => ({ ...i, tableName: t.tableName })));
+    const unused = allIndexes.filter(unusedIndex);
+    const invalid = allIndexes.filter((i) => !i.valid);
+    const maxIndexSize = allIndexes.length ? Math.max(...allIndexes.map((i) => i.sizeBytes)) : 0;
+    const indexFlags = (i) => [
+        i.primary ? badge('neutral', 'primary key') : i.unique ? badge('neutral', 'unique') : '',
+        unusedIndex(i) ? badge('warning', 'unused') : '',
+        i.valid ? '' : badge('critical', 'invalid')
+    ].join(' ');
+    const indexDetails = (rows) => {
+        const indexes = rows.flatMap((t) => (t.indexes ?? []).map((i) => ({ ...i, tableName: t.tableName })));
+        if (!indexes.length) return '';
+        const sectionUnused = indexes.filter(unusedIndex).length;
+        return `<details class="index-details"><summary>Indexes (${indexes.length})${sectionUnused ? ` · ${badge('warning', `${sectionUnused} unused`)}` : ''}</summary>
+          ${table([
+              { label: 'Table' }, { label: 'Index' }, { label: 'Size', num: true }, { label: 'Scans', num: true },
+              { label: 'Entries read', num: true }, { label: 'Rows fetched', num: true }, { label: 'Cache hit', num: true }, { label: '' }
+          ], indexes.map((i) => `<tr>
+            <td class="mono">${esc(i.tableName)}</td>
+            <td class="mono">${esc(i.indexName)}</td>
+            <td>${bar(i.sizeBytes, maxIndexSize, esc(i.size))}</td>
+            <td class="num">${num(i.idxScan)}</td>
+            <td class="num">${num(i.idxTupRead)}</td>
+            <td class="num">${num(i.idxTupFetch)}</td>
+            <td class="num">${cacheCell(i.cacheHitRatio)}</td>
+            <td>${indexFlags(i)}</td>
+          </tr>`))}</details>`;
+    };
+
+    const bySection = new Map();
+    tables.forEach((t) => bySection.set(t.section, [...(bySection.get(t.section) ?? []), t]));
+
+    const sectionCards = [...bySection.entries()].map(([section, rows]) => card(TABLE_SECTIONS[section] ?? section,
+        table([
+            { label: 'Table' }, { label: 'Total', num: true }, { label: 'Heap', num: true }, { label: 'Indexes', num: true },
+            { label: 'Live rows', num: true }, { label: 'Dead rows', num: true }, { label: 'Seq scans', num: true },
+            { label: 'Index scans', num: true }, { label: 'Inserts', num: true }, { label: 'Updates', num: true },
+            { label: 'HOT', num: true }, { label: 'Deletes', num: true }, { label: 'Cache hit', num: true }, { label: 'Last vacuum' }
+        ], rows.map((t) => `<tr>
+          <td class="mono">${esc(t.tableName)}</td>
+          <td>${bar(t.totalSizeBytes, maxSize, esc(t.totalSize))}</td>
+          <td class="num">${esc(t.tableSize)}</td>
+          <td class="num">${esc(t.indexSize)}</td>
+          <td class="num">${num(t.liveRows)}</td>
+          <td class="num">${bloated(t) ? badge('warning', num(t.deadRows)) : num(t.deadRows)}</td>
+          <td class="num">${num(t.seqScan)}</td>
+          <td class="num">${num(t.idxScan)}</td>
+          <td class="num">${num(t.rowsInserted)}</td>
+          <td class="num">${num(t.rowsUpdated)}</td>
+          <td class="num">${hotCell(t)}</td>
+          <td class="num">${num(t.rowsDeleted)}</td>
+          <td class="num">${cacheCell(t.cacheHitRatio)}</td>
+          <td>${ts(t.lastVacuum)}</td>
+        </tr>`)) + indexDetails(rows),
+        `${rows.length} ${rows.length === 1 ? 'table' : 'tables'}`, true)).join('');
+
+    return `${toolbar}
+    <div class="kpi-row">
+      ${tile('Essentials tables', num(tables.length), 'that exist in this database')}
+      ${tile('Total size', prettyBytes(totalBytes), 'tables, indexes and TOAST')}
+      ${tile('Lowest cache hit', lowest ? pct(lowest.cacheHitRatio) : nil(), lowest ? esc(lowest.tableName) : 'no block access yet',
+             !!(lowest && lowest.cacheHitRatio < 90))}
+      ${tile('Dead-row bloat', num(tables.filter(bloated).length), 'tables with many dead rows', tables.some(bloated))}
+      ${tile('Unused indexes', num(unused.length),
+             unused.length ? `${prettyBytes(unused.reduce((sum, i) => sum + i.sizeBytes, 0))} written for nothing` : 'every non-unique index is scanned',
+             unused.length > 0)}
+      ${invalid.length ? tile('Invalid indexes', num(invalid.length), 'maintained but never used - drop or rebuild', true) : ''}
     </div>
 
-    ${card('Table activity', activity
-        ? table([
-            { label: 'Table' }, { label: 'Seq scans', num: true }, { label: 'Index scans', num: true },
-            { label: 'Index tuples', num: true }, { label: 'Inserts', num: true }, { label: 'Updates', num: true }, { label: 'Deletes', num: true }
-        ], aRows)
-        : errorState(settled[2].reason, 'essentials_postgresql_stats_reader'), 'table-activity', true)}`;
+    ${slowCard}
+
+    <div class="notice">Table counters are cumulative since PostgreSQL's statistics were last reset, not since this
+      application started. Cache hit is the share of block requests served from shared buffers. HOT is the share of
+      updates that touched no index. An index counts as unused when nothing on this server has scanned it since the
+      reset - check that the statistics cover a representative period, and any read replicas, before dropping one.</div>
+
+    ${sectionCards || card('Table statistics', table([], [], { empty: 'None of the Essentials tables exist yet' }), null, true)}`;
 };
 
 views.cdc = async () => {
@@ -1627,6 +1740,8 @@ document.addEventListener('change', (e) => {
     if (e.target.id === 'queueSelect') { queueState.queue = e.target.value; render('queues'); }
     if (e.target.id === 'shardQueueSelect') { shardOwnedState.queue = e.target.value; render('shardOwnedQueues'); }
     if (e.target.id === 'sortSelect') { queueState.sortOrder = e.target.value; render('queues'); }
+    if (e.target.id === 'pgOrderSelect') { pgState.orderBy = e.target.value; render('postgresql'); }
+    if (e.target.id === 'pgLimitSelect') { pgState.limit = Number(e.target.value); render('postgresql'); }
 });
 
 /*

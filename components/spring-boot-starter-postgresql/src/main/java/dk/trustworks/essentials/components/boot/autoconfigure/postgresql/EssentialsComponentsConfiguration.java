@@ -39,11 +39,13 @@ import dk.trustworks.essentials.components.foundation.messaging.queue.micrometer
 import dk.trustworks.essentials.components.foundation.postgresql.*;
 import dk.trustworks.essentials.components.foundation.schema.SchemaMode;
 import dk.trustworks.essentials.components.foundation.postgresql.api.*;
+import dk.trustworks.essentials.components.foundation.postgresql.stats.*;
 import dk.trustworks.essentials.components.foundation.postgresql.micrometer.RecordSqlExecutionTimeLogger;
 import dk.trustworks.essentials.components.foundation.postgresql.ttl.PostgresqlTTLManager;
 import dk.trustworks.essentials.components.foundation.reactive.command.*;
 import dk.trustworks.essentials.components.foundation.scheduler.*;
 import dk.trustworks.essentials.components.foundation.scheduler.api.*;
+import dk.trustworks.essentials.components.foundation.scheduler.executor.ExecutorScheduledJobRepository;
 import dk.trustworks.essentials.components.foundation.transaction.*;
 import dk.trustworks.essentials.components.foundation.transaction.jdbi.*;
 import dk.trustworks.essentials.components.foundation.transaction.spring.jdbi.SpringTransactionAwareJdbiUnitOfWorkFactory;
@@ -63,6 +65,7 @@ import io.micrometer.tracing.propagation.Propagator;
 import org.jdbi.v3.core.Jdbi;
 import org.jdbi.v3.postgres.PostgresPlugin;
 import org.slf4j.*;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.config.ConfigurableListableBeanFactory;
 import org.springframework.boot.autoconfigure.AutoConfiguration;
 import org.springframework.boot.autoconfigure.condition.*;
@@ -624,6 +627,50 @@ public class EssentialsComponentsConfiguration {
                                                                      HandleAwareUnitOfWorkFactory<? extends HandleAwareUnitOfWork> unitOfWorkFactory) {
         return new DefaultPostgresqlQueryStatisticsApi(securityProvider,
                 unitOfWorkFactory);
+    }
+
+    /**
+     * Reports the tables of every {@link PostgresqlStatisticsTableProvider} bean - this starter's own, and those
+     * of the event store and shard-owned queue starters when they are present. An application can report tables
+     * of its own by declaring a provider bean.
+     */
+    @Bean
+    @ConditionalOnMissingBean
+    public PostgresqlTableStatisticsApi postgresqlTableStatisticsApi(EssentialsSecurityProvider securityProvider,
+                                                                     HandleAwareUnitOfWorkFactory<? extends HandleAwareUnitOfWork> unitOfWorkFactory,
+                                                                     List<PostgresqlStatisticsTableProvider> tableProviders) {
+        return new DefaultPostgresqlTableStatisticsApi(securityProvider, unitOfWorkFactory, tableProviders);
+    }
+
+    /**
+     * The shared queue table - only while {@link DurableQueues} is backed by {@link PostgresqlDurableQueues}; the
+     * shard-owned adapter replaces it with an engine that reports its own tables. Resolved per request, so asking
+     * for the table never forces the queues to be created
+     */
+    @Bean
+    public PostgresqlStatisticsTableProvider essentialsDurableQueuesStatisticsTables(ObjectProvider<DurableQueues> durableQueues) {
+        return () -> durableQueues.getIfAvailable() instanceof PostgresqlDurableQueues postgresqlDurableQueues
+                     ? List.of(new PostgresqlStatisticsTable(PostgresqlStatisticsTable.SECTION_DURABLE_QUEUES, postgresqlDurableQueues.getSharedQueueTableName()))
+                     : List.of();
+    }
+
+    @Bean
+    public PostgresqlStatisticsTableProvider essentialsFencedLocksStatisticsTables(ObjectProvider<FencedLockManager> fencedLockManager,
+                                                                                   EssentialsComponentsProperties properties) {
+        return () -> fencedLockManager.getIfAvailable() instanceof PostgresqlFencedLockManager
+                     ? List.of(new PostgresqlStatisticsTable(PostgresqlStatisticsTable.SECTION_FENCED_LOCKS, properties.getFencedLockManager().getFencedLocksTableName()))
+                     : List.of();
+    }
+
+    /**
+     * The schema history and the scheduler's executor jobs. Either may be absent - no history in the {@code external}
+     * schema mode, no job table while the scheduler is disabled - and an absent table is simply not reported
+     */
+    @Bean
+    public PostgresqlStatisticsTableProvider essentialsInfrastructureStatisticsTables(EssentialsComponentsProperties properties) {
+        return PostgresqlStatisticsTableProvider.of(PostgresqlStatisticsTable.SECTION_INFRASTRUCTURE,
+                                                    properties.getSchema().getHistoryTableName(),
+                                                    ExecutorScheduledJobRepository.DEFAULT_SCHEDULED_JOBS_TABLE_NAME);
     }
 
     @Bean

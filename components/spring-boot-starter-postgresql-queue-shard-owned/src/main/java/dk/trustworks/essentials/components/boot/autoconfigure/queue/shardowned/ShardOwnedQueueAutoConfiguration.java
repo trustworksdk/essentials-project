@@ -18,6 +18,7 @@ package dk.trustworks.essentials.components.boot.autoconfigure.queue.shardowned;
 
 import dk.trustworks.essentials.components.adminapi.rest.AdminApiPrincipalResolver;
 import dk.trustworks.essentials.components.foundation.json.JSONSerializer;
+import dk.trustworks.essentials.components.foundation.postgresql.stats.*;
 // Single-type imports, not the package: foundation...queue and shardowned.spi both export QueueName,
 // and this class imports the spi package wholesale.
 import dk.trustworks.essentials.components.foundation.messaging.queue.DurableQueues;
@@ -80,6 +81,20 @@ import dk.trustworks.essentials.shared.network.Network;
 @EnableConfigurationProperties(ShardOwnedQueueProperties.class)
 public class ShardOwnedQueueAutoConfiguration {
     private static final Logger log = LoggerFactory.getLogger(ShardOwnedQueueAutoConfiguration.class);
+
+    /**
+     * The engine's tables, reported by the PostgreSQL table statistics. Its table names are fixed
+     */
+    @Bean
+    public PostgresqlStatisticsTableProvider essentialsShardOwnedQueuesStatisticsTables() {
+        return PostgresqlStatisticsTableProvider.of(PostgresqlStatisticsTable.SECTION_SHARD_OWNED_QUEUES,
+                                                    ShardOwnedSchema.UNORDERED_TABLE,
+                                                    ShardOwnedSchema.ORDERED_TABLE,
+                                                    ShardOwnedSchema.DLQ_TABLE,
+                                                    ShardOwnedSchema.LEASE_TABLE,
+                                                    ShardOwnedSchema.INSTANCE_TABLE,
+                                                    ShardOwnedSchema.REGISTRY_TABLE);
+    }
 
     /**
      * The engine's tuning, as one object, so a queue and the runtime cannot be configured from

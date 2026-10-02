@@ -124,6 +124,14 @@ public class StarterAutoConfigurationIT {
             assertThat(ctx).hasSingleBean(PostgresqlEventStoreStatisticsApi.class);
             PostgresqlEventStoreStatisticsApi postgresqlEventStoreStatisticsApi = ctx.getBean(PostgresqlEventStoreStatisticsApi.class);
             assertThat(postgresqlEventStoreStatisticsApi.fetchTableActivityStatistics("principal")).isNotNull();
+            assertThat(postgresqlEventStoreStatisticsApi.fetchTableCacheHitRatio("principal").values())
+                    .allSatisfy(ratio -> assertThat(ratio.cacheHitRatio()).isBetween(0L, 100L));
+
+            var tableStatistics = ctx.getBean(dk.trustworks.essentials.components.foundation.postgresql.api.PostgresqlTableStatisticsApi.class)
+                                     .fetchTableStatistics("principal");
+            assertThat(tableStatistics).extracting(table -> table.section() + "/" + table.tableName())
+                                       .contains("subscriptions/durable_subscriptions",
+                                                 "cdc/eventstore_cdc_inbox");
 
             assertThat(ctx).hasSingleBean(dk.trustworks.essentials.components.eventsourced.aggregates.api.AggregateLifecycleApi.class);
             assertThat(ctx).hasSingleBean(dk.trustworks.essentials.components.eventsourced.aggregates.api.AggregateLifecycleStatisticsApi.class);

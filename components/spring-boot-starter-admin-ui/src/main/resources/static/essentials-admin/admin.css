@@ -448,3 +448,8 @@ tbody tr.is-selected { background: color-mix(in oklab, var(--accent) 9%, transpa
 .section.is-active { display: block; }
 .grid-2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 16px; align-items: start; }
 h3.sub { font-size: 13px; margin: 0 0 8px; color: var(--ink-secondary); font-weight: 500; }
+
+/* Per-section index list on the PostgreSQL statistics view, collapsed by default */
+.index-details { border-top: 1px solid var(--gridline); }
+.index-details > summary { cursor: pointer; padding: 10px 14px; color: var(--ink-secondary); }
+.index-details[open] > summary { border-bottom: 1px solid var(--gridline); }

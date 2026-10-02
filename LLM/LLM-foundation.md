@@ -1265,7 +1265,37 @@ All APIs require `principal` parameter for authorization. Throw `EssentialsSecur
 | `DBFencedLockApi` | `getAllLocks()`, `releaseLock()` |
 | `DurableQueuesApi` | `getQueueNames()`, `getQueuedMessages()`, `resurrectDeadLetterMessage()`, `deleteMessage()` |
 | `SchedulerApi` | `getPgCronJobs()`, `getExecutorJobs()` |
-| `PostgresqlQueryStatisticsApi` | `getTopTenSlowestQueries()` (requires `pg_stat_statements`: in the server's `shared_preload_libraries`, and created in the database — the API creates it at startup when the server preloads it and the role may create extensions; otherwise it returns an empty list) |
+| `PostgresqlQueryStatisticsApi` | `getSlowestQueries(principal, QueryStatisticsOrder, limit)`, `getTopTenSlowestQueries()` (requires `pg_stat_statements`: in the server's `shared_preload_libraries`, and created in the database — the API creates it at startup when the server preloads it and the role may create extensions; otherwise it returns an empty list) |
+| `PostgresqlTableStatisticsApi` | `fetchTableStatistics()` — size, activity, dead rows, cache hit and last vacuum/analyze for every table the registered `PostgresqlStatisticsTableProvider`s report, each tagged with a section |
+
+**Ranking slow queries.** `getTopTenSlowestQueries()` ranks by cumulative time (`TOTAL_TIME`), which a busy system's
+cheap, constantly running statements dominate — queue polling above all. Use `getSlowestQueries(...)` with
+`MEAN_TIME` or `MAX_TIME` to find statements that are slow per call; `CALLS` and `BLOCKS_READ` rank by load and I/O.
+Only statements for the current database are returned (`pg_stat_statements` is cluster-wide), and `limit` is capped
+at `MAX_SLOWEST_QUERIES_LIMIT` (100).
+
+**Reporting tables.** `DefaultPostgresqlTableStatisticsApi` reports what its `PostgresqlStatisticsTableProvider`s
+contribute, asked on every request. A `PostgresqlStatisticsTable` is `(section, tableName)`; the `SECTION_*` constants
+cover the Essentials components, and any other section id is reported after them. Names resolve through
+`to_regclass`, so a table that does not exist yet is left out rather than failing. The Spring Boot starters register a
+provider per component with its configured table names; add a provider bean to report your own tables:
+
+```java
+@Bean
+PostgresqlStatisticsTableProvider orderTables() {
+    return PostgresqlStatisticsTableProvider.of("orders", "order_view", "order_lines_view");
+}
+```
+
+`cacheHitRatio` is a percentage 0-100 (one decimal), `null` until the table has had block access.
+
+Index tuning signals on `ApiTableStatistics`:
+- `rowsHotUpdated` / `hotUpdateRatio()` — share of updates that touched no index. Low on a frequently updated table
+  means an index covers an updated column, or pages lack free space (`fillfactor`).
+- `indexes` — one `ApiIndexStatistics` per index: size, `idxScan`, entries read, rows fetched, cache hit, and
+  `unique` / `primary` / `valid`. `unused()` is `idxScan == 0` on a non-unique, non-primary index: a drop candidate
+  once the statistics cover a representative period. Scans on read replicas are not counted. `valid == false` is a
+  leftover of a failed `CREATE INDEX CONCURRENTLY`, maintained on every write and never used.
 
 ## Common Patterns
 

@@ -21,6 +21,9 @@ tags:
   description: "Inspect pg_cron jobs, their run history, and executor jobs."
 - name: postgresql-query-statistics
   description: Inspect slow-query statistics from pg_stat_statements.
+- name: postgresql-table-statistics
+  description: "Inspect size, activity, and cache-hit statistics for every table the\
+    \ Essentials components own."
 - name: durable-queues
   description: Inspect and manage durable queue and dead-letter messages.
 - name: event-store
@@ -437,6 +440,113 @@ paths:
                 type: array
                 items:
                   $ref: "#/components/schemas/ApiQueryStatistics"
+        "401":
+          description: Unauthenticated.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Caller lacks one of the required roles.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "500":
+          description: Unexpected server error.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+      x-required-roles:
+      - essentials_postgresql_stats_reader
+      - essentials_admin
+  /postgresql/query-statistics/slowest:
+    get:
+      tags:
+      - postgresql-query-statistics
+      summary: "Return the statements recorded by pg_stat_statements for the current\
+        \ database, ranked by the chosen order."
+      operationId: getSlowestQueries
+      parameters:
+      - name: orderBy
+        in: query
+        description: What to rank by. TOTAL_TIME favours cheap statements that run
+          constantly; MEAN_TIME and MAX_TIME surface statements that are slow per
+          call.
+        required: false
+        schema:
+          type: string
+          default: TOTAL_TIME
+          enum:
+          - TOTAL_TIME
+          - MEAN_TIME
+          - MAX_TIME
+          - CALLS
+          - BLOCKS_READ
+      - name: limit
+        in: query
+        description: Maximum number of statements to return. A value above the maximum
+          is capped.
+        required: false
+        schema:
+          maximum: 100
+          minimum: 1
+          type: integer
+          format: int32
+          default: 10
+      responses:
+        "200":
+          description: 200 — The matching items.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/ApiQueryStatistics"
+        "400":
+          description: "Malformed or out-of-range parameter, or invalid request body."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: Unauthenticated.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Caller lacks one of the required roles.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "500":
+          description: Unexpected server error.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+      x-required-roles:
+      - essentials_postgresql_stats_reader
+      - essentials_admin
+  /postgresql/table-statistics:
+    get:
+      tags:
+      - postgresql-table-statistics
+      summary: "Return size, activity, and cache-hit statistics per Essentials table,\
+        \ grouped by section."
+      operationId: fetchTableStatistics
+      responses:
+        "200":
+          description: 200 — The matching items.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/ApiTableStatistics"
         "401":
           description: Unauthenticated.
           content:
@@ -3093,6 +3203,48 @@ components:
         scheduledAt:
           type: string
           format: date-time
+    ApiIndexStatistics:
+      required:
+      - idxScan
+      - idxTupFetch
+      - idxTupRead
+      - indexName
+      - primary
+      - size
+      - sizeBytes
+      - unique
+      - valid
+      type: object
+      properties:
+        indexName:
+          type: string
+        sizeBytes:
+          type: integer
+          format: int64
+        size:
+          type: string
+        idxScan:
+          type: integer
+          format: int64
+        idxTupRead:
+          type: integer
+          format: int64
+        idxTupFetch:
+          type: integer
+          format: int64
+        unique:
+          type: boolean
+        primary:
+          type: boolean
+        valid:
+          type: boolean
+        cacheHitRatio:
+          type: number
+          description: Shared-buffer hits as a percentage 0-100 of the index's block
+            requests. Null while there has been no block access since the statistics
+            were reset.
+          format: double
+          nullable: true
     ApiPersistedEvent:
       type: object
       properties:
@@ -3178,7 +3330,13 @@ components:
     ApiQueryStatistics:
       required:
       - calls
+      - maxTime
       - meanTime
+      - minTime
+      - rows
+      - sharedBlksHit
+      - sharedBlksRead
+      - stddevTime
       - totalTime
       type: object
       properties:
@@ -3193,6 +3351,30 @@ components:
         meanTime:
           type: number
           format: double
+        rows:
+          type: integer
+          format: int64
+        minTime:
+          type: number
+          format: double
+        maxTime:
+          type: number
+          format: double
+        stddevTime:
+          type: number
+          format: double
+        sharedBlksHit:
+          type: integer
+          format: int64
+        sharedBlksRead:
+          type: integer
+          format: int64
+        cacheHitRatio:
+          type: number
+          description: Shared-buffer hits as a percentage 0-100 of all shared blocks
+            the statement accessed. Null when it accessed no shared blocks.
+          format: double
+          nullable: true
     ApiQueueStatistics:
       required:
       - depth
@@ -3682,6 +3864,101 @@ components:
           type: string
         indexSize:
           type: string
+    ApiTableStatistics:
+      required:
+      - deadRows
+      - idxScan
+      - idxTupFetch
+      - indexSize
+      - indexSizeBytes
+      - indexes
+      - liveRows
+      - rowsDeleted
+      - rowsHotUpdated
+      - rowsInserted
+      - rowsUpdated
+      - section
+      - seqScan
+      - seqTupRead
+      - tableName
+      - tableSize
+      - tableSizeBytes
+      - totalSize
+      - totalSizeBytes
+      type: object
+      properties:
+        section:
+          type: string
+        tableName:
+          type: string
+        totalSizeBytes:
+          type: integer
+          format: int64
+        tableSizeBytes:
+          type: integer
+          format: int64
+        indexSizeBytes:
+          type: integer
+          format: int64
+        totalSize:
+          type: string
+        tableSize:
+          type: string
+        indexSize:
+          type: string
+        liveRows:
+          type: integer
+          format: int64
+        deadRows:
+          type: integer
+          format: int64
+        seqScan:
+          type: integer
+          format: int64
+        seqTupRead:
+          type: integer
+          format: int64
+        idxScan:
+          type: integer
+          format: int64
+        idxTupFetch:
+          type: integer
+          format: int64
+        rowsInserted:
+          type: integer
+          format: int64
+        rowsUpdated:
+          type: integer
+          format: int64
+        rowsHotUpdated:
+          type: integer
+          format: int64
+        rowsDeleted:
+          type: integer
+          format: int64
+        cacheHitRatio:
+          type: number
+          description: Shared-buffer hits as a percentage 0-100 of the table's and
+            its indexes' block requests. Null while there has been no block access
+            since the statistics were reset.
+          format: double
+          nullable: true
+        lastVacuum:
+          type: string
+          description: The most recent manual or automatic vacuum. Null if the table
+            was never vacuumed.
+          format: date-time
+          nullable: true
+        lastAnalyze:
+          type: string
+          description: The most recent manual or automatic analyze. Null if the table
+            was never analyzed.
+          format: date-time
+          nullable: true
+        indexes:
+          type: array
+          items:
+            $ref: "#/components/schemas/ApiIndexStatistics"
     ApiTimedMetricStatistics:
       type: object
       properties:

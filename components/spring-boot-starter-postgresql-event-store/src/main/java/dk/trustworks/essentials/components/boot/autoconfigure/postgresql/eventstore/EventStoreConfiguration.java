@@ -19,6 +19,8 @@ package dk.trustworks.essentials.components.boot.autoconfigure.postgresql.events
 import dk.trustworks.essentials.shared.measurement.*;
 import dk.trustworks.essentials.components.boot.autoconfigure.postgresql.*;
 import dk.trustworks.essentials.components.eventsourced.aggregates.EventHandler;
+import dk.trustworks.essentials.components.eventsourced.aggregates.archive.PostgresqlAggregateArchiveRegistry;
+import dk.trustworks.essentials.components.eventsourced.aggregates.closingbooks.PostgresqlClosingBooksGenerationRepository;
 import dk.trustworks.essentials.components.eventsourced.aggregates.projection.AnnotationBasedInMemoryProjector;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.api.*;
@@ -51,6 +53,7 @@ import dk.trustworks.essentials.components.foundation.fencedlock.FencedLockManag
 import dk.trustworks.essentials.components.foundation.messaging.MessageHandler;
 import dk.trustworks.essentials.components.foundation.postgresql.MultiTableChangeListener;
 import dk.trustworks.essentials.components.foundation.postgresql.TableChangeNotification;
+import dk.trustworks.essentials.components.foundation.postgresql.stats.*;
 import dk.trustworks.essentials.components.foundation.messaging.eip.store_and_forward.*;
 import dk.trustworks.essentials.components.foundation.messaging.queue.DurableQueues;
 import dk.trustworks.essentials.components.foundation.reactive.command.DurableLocalCommandBus;
@@ -1116,6 +1119,52 @@ public class EventStoreConfiguration {
                             .setTailer(tailer)
                             .setDispatcher(dispatcher)
                             .build();
+    }
+
+    /**
+     * The event-stream tables, resolved per request: the event store adds a table for every aggregate type it is
+     * configured with, also after start-up
+     */
+    @Bean
+    public PostgresqlStatisticsTableProvider essentialsEventStoreStatisticsTables(@Qualifier("essentialsEventStore") ConfigurableEventStore<SeparateTablePerAggregateEventStreamConfiguration> eventStore) {
+        var persistenceStrategy = ((PostgresqlEventStore<?>) eventStore).getPersistenceStrategy();
+        return () -> persistenceStrategy.getSeparateTablePerAggregateEventStreamTableNames()
+                                        .values()
+                                        .stream()
+                                        .sorted()
+                                        .map(tableName -> new PostgresqlStatisticsTable(PostgresqlStatisticsTable.SECTION_EVENT_STORE, tableName))
+                                        .toList();
+    }
+
+    /**
+     * Durable subscription resume points and the subscription gap tables. The gap tables exist only where gap
+     * handling is in use; an absent table is simply not reported
+     */
+    @Bean
+    public PostgresqlStatisticsTableProvider essentialsSubscriptionsStatisticsTables() {
+        return PostgresqlStatisticsTableProvider.of(PostgresqlStatisticsTable.SECTION_SUBSCRIPTIONS,
+                                                    PostgresqlDurableSubscriptionRepository.DEFAULT_DURABLE_SUBSCRIPTIONS_TABLE_NAME,
+                                                    PostgresqlEventStreamGapHandler.TRANSIENT_SUBSCRIBER_GAPS_TABLE_NAME,
+                                                    PostgresqlEventStreamGapHandler.PERMANENT_GAPS_TABLE_NAME);
+    }
+
+    @Bean
+    @ConditionalOnProperty(prefix = "essentials.eventstore.cdc", name = "enabled", havingValue = "true")
+    public PostgresqlStatisticsTableProvider essentialsCdcStatisticsTables(EssentialsEventStoreProperties properties) {
+        return PostgresqlStatisticsTableProvider.of(PostgresqlStatisticsTable.SECTION_CDC, properties.getCdc().getInboxTableName());
+    }
+
+    /**
+     * Snapshots, snapshot jobs, closing-books generations and archives. Each exists only where its feature is in
+     * use; an absent table is simply not reported
+     */
+    @Bean
+    public PostgresqlStatisticsTableProvider essentialsAggregatesStatisticsTables(EssentialsEventStoreProperties properties) {
+        return PostgresqlStatisticsTableProvider.of(PostgresqlStatisticsTable.SECTION_AGGREGATES,
+                                                    properties.getSnapshots().getSnapshotTableName(),
+                                                    properties.getSnapshots().getDurable().getJobTableName(),
+                                                    PostgresqlClosingBooksGenerationRepository.DEFAULT_TABLE_NAME,
+                                                    PostgresqlAggregateArchiveRegistry.DEFAULT_TABLE_NAME);
     }
 
     @Bean

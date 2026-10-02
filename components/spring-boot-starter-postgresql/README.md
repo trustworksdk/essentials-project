@@ -154,7 +154,8 @@ Service-layer APIs designed to support Admin REST endpoints or Admin UI integrat
 |------|-------------|
 | `DBFencedLockApi` | Fenced lock management (list locks, release locks, etc.) |
 | `DurableQueuesApi` | Queue management (inspect queues, retry/delete messages, etc.) |
-| `PostgresqlQueryStatisticsApi` | PostgreSQL query statistics and diagnostics |
+| `PostgresqlQueryStatisticsApi` | PostgreSQL query statistics and diagnostics, ranked by total, mean or max time, calls or blocks read |
+| `PostgresqlTableStatisticsApi` | Size, activity and cache statistics for every table reported by a `PostgresqlStatisticsTableProvider` bean |
 | `SchedulerApi` | Scheduler management (list/pause/resume scheduled tasks) |
 
 ### Lifecycle

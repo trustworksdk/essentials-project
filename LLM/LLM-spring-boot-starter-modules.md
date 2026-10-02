@@ -80,7 +80,9 @@ See [spring-boot-starter-postgresql README](../components/spring-boot-starter-po
 - Performance logging interceptors
 
 **Admin APIs:**
-- `DBFencedLockApi`, `DurableQueuesApi`, `PostgresqlQueryStatisticsApi`, `SchedulerApi`
+- `DBFencedLockApi`, `DurableQueuesApi`, `PostgresqlQueryStatisticsApi`, `PostgresqlTableStatisticsApi`, `SchedulerApi`
+- `PostgresqlStatisticsTableProvider` beans for the durable queues, fenced lock and infrastructure tables. The event
+  store and shard-owned queue starters add their own; declare one to report application tables too
 
 **Lifecycle:**
 - `DefaultLifecycleManager` - Manages Lifecycle beans

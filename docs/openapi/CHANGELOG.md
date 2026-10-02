@@ -38,3 +38,19 @@ Contract conventions settled before release:
 - **Conservative `required`.** Primitive-typed properties plus verified always-present reference
   properties are required; the rest stay optional. Properties that are null by design carry
   `nullable: true` and the reason as their description.
+
+PostgreSQL statistics, added later in the same unreleased version:
+
+- **`PostgresqlTableStatisticsApi` → `postgresql-table-statistics`.** `GET /postgresql/table-statistics`
+  reports size, activity, dead rows, cache hit and last vacuum/analyze for every table the Essentials
+  components own, each tagged with a section. The three `event-store-statistics` operations cover only
+  the event-stream tables; they remain for existing clients. Each table also carries `rowsHotUpdated` and
+  its `indexes` (`ApiIndexStatistics`: size, scans, entries read, rows fetched, cache hit, and whether the
+  index is unique, primary or valid), for spotting unused indexes and updates that cannot be HOT.
+- **`GET /postgresql/query-statistics/slowest`** ranks `pg_stat_statements` by `orderBy`
+  (`TOTAL_TIME`, `MEAN_TIME`, `MAX_TIME`, `CALLS`, `BLOCKS_READ`) with a `limit` of 1-100, for the current
+  database only. `ApiQueryStatistics` gains `rows`, `minTime`, `maxTime`, `stddevTime`,
+  `sharedBlksHit`, `sharedBlksRead` and a nullable `cacheHitRatio`.
+- **`ApiTableCacheHitRatio.cacheHitRatio` is now a whole percentage.** The server read the 0-1 ratio as
+  an integer, so every value below an exact 100% came back as `0`. Tables with no block access yet are
+  left out rather than reported as `0`.

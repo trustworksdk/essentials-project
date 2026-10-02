@@ -23,6 +23,7 @@ import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.ap
 import dk.trustworks.essentials.components.foundation.fencedlock.api.DBFencedLockApi;
 import dk.trustworks.essentials.components.foundation.messaging.queue.api.DurableQueuesApi;
 import dk.trustworks.essentials.components.foundation.postgresql.api.PostgresqlQueryStatisticsApi;
+import dk.trustworks.essentials.components.foundation.postgresql.api.PostgresqlTableStatisticsApi;
 import dk.trustworks.essentials.components.foundation.scheduler.api.SchedulerApi;
 import dk.trustworks.essentials.shared.security.*;
 import org.slf4j.*;
@@ -172,6 +173,14 @@ public class EssentialsAdminApiAutoConfiguration {
     public PostgresqlQueryStatisticsController essentialsPostgresqlQueryStatisticsController(PostgresqlQueryStatisticsApi postgresqlQueryStatisticsApi,
                                                                                             AdminApiPrincipalResolver principalResolver) {
         return new PostgresqlQueryStatisticsController(postgresqlQueryStatisticsApi, principalResolver);
+    }
+
+    @Bean
+    @ConditionalOnBean(PostgresqlTableStatisticsApi.class)
+    @ConditionalOnMissingBean
+    public PostgresqlTableStatisticsController essentialsPostgresqlTableStatisticsController(PostgresqlTableStatisticsApi tableStatisticsApi,
+                                                                                            AdminApiPrincipalResolver principalResolver) {
+        return new PostgresqlTableStatisticsController(tableStatisticsApi, principalResolver);
     }
 
     @Bean

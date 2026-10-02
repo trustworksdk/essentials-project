@@ -2191,10 +2191,35 @@ public interface SchedulerApi {
 ```java
 public interface PostgresqlQueryStatisticsApi {
     List<ApiQueryStatistics> getTopTenSlowestQueries(Object principal);
+    List<ApiQueryStatistics> getSlowestQueries(Object principal, QueryStatisticsOrder orderBy, int limit);
 }
 ```
 
 Requires the PostgreSQL `pg_stat_statements` extension. Returns normalized SQL (literals replaced with placeholders for security – only for internal use).
+
+`getTopTenSlowestQueries` ranks by cumulative time, which cheap statements that run constantly - queue polling above
+all - dominate on a busy system. `getSlowestQueries` ranks by `TOTAL_TIME`, `MEAN_TIME`, `MAX_TIME`, `CALLS` or
+`BLOCKS_READ`, returns up to `limit` (capped at 100) statements for the current database only, and adds rows,
+min/max/stddev execution time and shared-buffer hits/reads per statement.
+
+### PostgresqlTableStatisticsApi
+
+**Package:** `dk.trustworks.essentials.components.foundation.postgresql.api`
+
+```java
+public interface PostgresqlTableStatisticsApi {
+    List<ApiTableStatistics> fetchTableStatistics(Object principal);
+}
+```
+
+Reports size (bytes and human-readable), live/dead rows, scans, inserts/updates/deletes, cache hit ratio (percentage,
+`null` before any block access) and last vacuum/analyze for each table contributed by a
+`PostgresqlStatisticsTableProvider`, tagged with its section (`PostgresqlStatisticsTable.SECTION_*`). Each table also
+reports its HOT-update count and per-index statistics (`ApiIndexStatistics`: size, scans, cache hit, unique/primary/
+valid, and `unused()` for non-unique indexes never scanned since the statistics were reset). Tables that do
+not exist are left out. The Spring Boot starters register providers for the event store, subscriptions and gap
+tables, CDC inbox, durable and shard-owned queues, fenced locks, aggregate snapshot/closing-books/archive tables, and
+the schema history and scheduler tables.
 
 ### Authorization
 
