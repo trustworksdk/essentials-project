@@ -57,7 +57,18 @@ public final class PostgresqlEventStreamGapHandler<CONFIG extends AggregateEvent
     private              long                                                 refreshTransientGapsFromStorageEverySeconds;
 
     /**
-     * Default configuration that includes the earliest 10 transient gaps and which will promote transient gaps to permanent gaps after 120 seconds.
+     * The default {@link ResolveTransientGapsToIncludeInQueryStrategy}: every open transient gap while there are at most
+     * 50, and beyond that the 20 highest, the 10 lowest and a window of 20 of the ones in between that rotates on every
+     * poll. A subscription keeps its own rotation, which is why the {@link PostgresqlSubscriptionGapHandler} recognises
+     * this instance rather than calling it - see {@link TransientGapsQuerySelection}.
+     */
+    private static final ResolveTransientGapsToIncludeInQueryStrategy DEFAULT_RESOLVE_TRANSIENT_GAPS_TO_INCLUDE_IN_QUERY_STRATEGY = new DefaultResolveTransientGapsToIncludeInQueryStrategy();
+
+    /**
+     * Default configuration, which promotes transient gaps to permanent gaps after 120 seconds, and asks each poll for
+     * a bounded selection of a subscriber's transient gaps again: all of them while there are at most 50, beyond that
+     * the 20 highest (where a late commit lands), the 10 lowest (the next to be promoted) and a rotating window of 20 of
+     * the ones in between - so every open gap is asked for again well before it is promoted, however many are open.
      *
      * @param unitOfWorkFactory the unit of work factory that coordinates the event store {@link UnitOfWork}
      */
@@ -76,14 +87,7 @@ public final class PostgresqlEventStreamGapHandler<CONFIG extends AggregateEvent
     public PostgresqlEventStreamGapHandler(EventStoreUnitOfWorkFactory<?> unitOfWorkFactory, SchemaOwnership schemaOwnership) {
         this(unitOfWorkFactory,
              Duration.ofSeconds(60),
-             (forAggregateType, globalOrderQueryRange, allTransientGaps) -> {
-                 var numberOfGaps          = allTransientGaps.size();
-                 var numberOfGapsToInclude = Math.min(numberOfGaps, 2);
-                 return numberOfGapsToInclude > 0 ? allTransientGaps.subList(0, numberOfGapsToInclude)
-                                                                    .stream()
-                                                                    .map(Pair::_1)
-                                                                    .collect(Collectors.toList()) : NO_GAPS;
-             },
+             DEFAULT_RESOLVE_TRANSIENT_GAPS_TO_INCLUDE_IN_QUERY_STRATEGY,
              ResolveTransientGapsToPermanentGapsPromotionStrategy.thresholdBased(120),
              schemaOwnership);
     }
@@ -299,6 +303,10 @@ public final class PostgresqlEventStreamGapHandler<CONFIG extends AggregateEvent
         private final SubscriberId                                                               subscriberId;
         private       OffsetDateTime                                                             transientGapsLastRefreshedFromStorage;
         private       ConcurrentMap<AggregateType, List<Pair<GlobalEventOrder, OffsetDateTime>>> allTransientGaps = new ConcurrentHashMap<>();
+        /**
+         * Used with the default {@link ResolveTransientGapsToIncludeInQueryStrategy} only
+         */
+        private final ConcurrentMap<AggregateType, TransientGapsQuerySelection>                  transientGapsQuerySelections = new ConcurrentHashMap<>();
 
         public PostgresqlSubscriptionGapHandler(SubscriberId subscriberId) {
             this.subscriberId = requireNonNull(subscriberId, "No subscriberId provided");
@@ -319,6 +327,10 @@ public final class PostgresqlEventStreamGapHandler<CONFIG extends AggregateEvent
             var transientGapsFor = allTransientGaps.get(aggregateType);
             if (transientGapsFor.isEmpty()) {
                 return NO_GAPS;
+            } else if (resolveTransientGapsToIncludeInQueryStrategy == DEFAULT_RESOLVE_TRANSIENT_GAPS_TO_INCLUDE_IN_QUERY_STRATEGY) {
+                // The default rotates through the gaps, and the rotation belongs to this subscription
+                return transientGapsQuerySelections.computeIfAbsent(aggregateType, type -> new TransientGapsQuerySelection())
+                                                   .select(transientGapsFor);
             } else {
                 return resolveTransientGapsToIncludeInQueryStrategy.resolveTransientGaps(aggregateType,
                                                                                          globalOrderQueryRange,
@@ -712,6 +724,18 @@ public final class PostgresqlEventStreamGapHandler<CONFIG extends AggregateEvent
                                        .collect(Collectors.toList());
 
             };
+        }
+    }
+
+    /**
+     * See {@link #DEFAULT_RESOLVE_TRANSIENT_GAPS_TO_INCLUDE_IN_QUERY_STRATEGY}. The {@link PostgresqlSubscriptionGapHandler}
+     * runs the selection itself, with the rotation of its own subscription; called directly, this one starts a fresh
+     * rotation every time.
+     */
+    private static final class DefaultResolveTransientGapsToIncludeInQueryStrategy implements ResolveTransientGapsToIncludeInQueryStrategy {
+        @Override
+        public List<GlobalEventOrder> resolveTransientGaps(AggregateType forAggregateType, LongRange globalOrderQueryRange, List<Pair<GlobalEventOrder, OffsetDateTime>> allTransientGaps) {
+            return new TransientGapsQuerySelection().select(allTransientGaps);
         }
     }
 

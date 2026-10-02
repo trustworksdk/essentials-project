@@ -19,7 +19,6 @@ package dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.c
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.PostgresqlEventStore;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.PersistedEvent;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.gap.PostgresqlEventStreamGapHandler;
-import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.gap.PostgresqlEventStreamGapHandler.ResolveTransientGapsToPermanentGapsPromotionStrategy;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.persistence.table_per_aggregate_type.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.processor.EventProcessorIT;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.serializer.json.EssentialsJSONEventSerializers;
@@ -27,7 +26,6 @@ import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.te
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.types.*;
 import dk.trustworks.essentials.components.foundation.transaction.UnitOfWork;
 import dk.trustworks.essentials.components.foundation.types.SubscriberId;
-import dk.trustworks.essentials.shared.functional.tuple.Pair;
 import dk.trustworks.essentials.types.LongRange;
 import org.junit.jupiter.api.*;
 import org.slf4j.*;
@@ -75,14 +73,10 @@ class CdcEventStoreConcurrentWritersIT extends AbstractLogicalReplicationPostgre
                 SeparateTablePerAggregateTypeEventStreamConfigurationFactory.defaultConfiguration(EssentialsJSONEventSerializers.create())
         );
         persistenceStrategy.addAggregateEventStreamConfiguration(ORDERS, OrderId.class);
-        // Every transient gap is re-queried on every poll. The default includes only the two lowest, so a rolled-back
-        // hole would keep the polling subscription from re-querying any later late commit until the hole is promoted
-        // to permanent (two minutes) - a limit of that strategy, not of what is under test
-        var gapHandler = new PostgresqlEventStreamGapHandler<SeparateTablePerAggregateEventStreamConfiguration>(
-                unitOfWorkFactory,
-                Duration.ofSeconds(60),
-                (aggregateType, globalOrderQueryRange, allTransientGaps) -> allTransientGaps.stream().map(Pair::_1).toList(),
-                ResolveTransientGapsToPermanentGapsPromotionStrategy.thresholdBased(120));
+        // The default configuration. Its gap query strategy used to include only the two lowest transient gaps, so a
+        // rolled-back hole kept the polling subscription from re-querying any later late commit until the hole was
+        // promoted to permanent (two minutes); this test had to re-query every gap on every poll instead
+        var gapHandler = new PostgresqlEventStreamGapHandler<SeparateTablePerAggregateEventStreamConfiguration>(unitOfWorkFactory);
         eventStore = PostgresqlEventStore.<SeparateTablePerAggregateEventStreamConfiguration>builder()
                                          .setUnitOfWorkFactory(unitOfWorkFactory)
                                          .setPersistenceStrategy(persistenceStrategy)

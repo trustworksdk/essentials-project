@@ -245,7 +245,9 @@ a gap handler that records gaps; an in-order event costs nothing extra.
 
 *Tenants.* The tracker has to see every global order, so a CDC subscription's polling,
 catch-ups and backfill load all tenants and filter by the subscriber's tenant on the way
-out. Filtered in SQL, another tenant's events would be gaps it waits for.
+out. Filtered in SQL, another tenant's events would be gaps it waits for. The plain
+polling path (`PostgresqlEventStore.pollEvents` / `unboundedPollForEvents`) loads all
+tenants for the same reason, so that its gap handler does not record them as gaps.
 
 *`BackfillThenLiveOrdered`.* Once its backfill is done, it hands on the live events that
 arrived meanwhile in global order, and from then on each live event as it arrives - the

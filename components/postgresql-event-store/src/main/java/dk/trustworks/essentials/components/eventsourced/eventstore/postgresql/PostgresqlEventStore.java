@@ -559,10 +559,9 @@ public final class PostgresqlEventStore<CONFIG extends AggregateEventStreamConfi
                                                                           .orElse(null);
 
                 var loadEventsByGlobalOrderTiming = StopWatch.start("loadEventsByGlobalOrder(" + actualSubscriberId + ", " + aggregateType + ")");
-                var persistedEvents = loadEventsByGlobalOrder(aggregateType,
-                                                              globalOrderRange,
-                                                              transientGapsToIncludeInQuery,
-                                                              onlyIncludeEventIfItBelongsToTenant).collect(Collectors.toList());
+                // Every tenant's events: see loadEventsForPoll
+                var loadedEvents = loadEventsForPoll(aggregateType, globalOrderRange, transientGapsToIncludeInQuery);
+                var persistedEvents = eventsBelongingToTenant(loadedEvents, onlyIncludeEventIfItBelongsToTenant);
                 eventStoreSubscriptionObserver.eventStorePolled(actualSubscriberId,
                                                                 aggregateType,
                                                                 globalOrderRange,
@@ -574,12 +573,12 @@ public final class PostgresqlEventStore<CONFIG extends AggregateEventStreamConfi
                     var reconcileGapsTiming = StopWatch.start("reconcileGaps(" + actualSubscriberId + ", " + aggregateType + ")");
                     var outcome = gapHandler.reconcileGapsAndReport(aggregateType,
                                                                     globalOrderRange,
-                                                                    persistedEvents,
+                                                                    loadedEvents,
                                                                     transientGapsToIncludeInQuery);
                     eventStoreSubscriptionObserver.reconciledGaps(actualSubscriberId,
                                                                   aggregateType,
                                                                   globalOrderRange,
-                                                                  transientGapsToIncludeInQuery, persistedEvents,
+                                                                  transientGapsToIncludeInQuery, loadedEvents,
                                                                   reconcileGapsTiming.stop().getDuration());
                     return outcome;
                 }).orElse(GapReconciliation.NONE);
@@ -589,7 +588,9 @@ public final class PostgresqlEventStore<CONFIG extends AggregateEventStreamConfi
                 if (!gapReconciliation.isEmpty()) {
                     eventStoreSubscriptionObserver.gapReconciliationOutcome(actualSubscriberId, aggregateType, gapReconciliation);
                 }
-                if (persistedEvents.size() > 0) {
+                // Past every event loaded - including other tenants' events, which are not emitted - once all were emitted
+                var nextGlobalOrderAfterThisPoll = nextGlobalOrderAfter(loadedEvents);
+                if (loadedEvents.size() > 0) {
                     consecutiveNoPersistedEventsReturned.set(0);
                     if (log.isTraceEnabled()) {
                         eventStoreStreamLog.debug("[{}] loadEventsByGlobalOrder using globalOrderRange {} and transientGapsToIncludeInQuery {} returned {} events: {}",
@@ -613,7 +614,8 @@ public final class PostgresqlEventStore<CONFIG extends AggregateEventStreamConfi
                                               transientGapsToIncludeInQuery);
                 }
 
-                return Flux.fromIterable(persistedEvents);
+                return Flux.fromIterable(persistedEvents)
+                           .doOnComplete(() -> nextFromInclusiveGlobalOrder.accumulateAndGet(nextGlobalOrderAfterThisPoll, Math::max));
             } catch (RuntimeException e) {
                 log.error(msg("[{}] Polling failed", eventStreamLogName), e);
                 if (unitOfWork != null) {
@@ -635,12 +637,14 @@ public final class PostgresqlEventStore<CONFIG extends AggregateEventStreamConfi
                 }
             }
         }).doOnNext(event -> {
+            // Never backwards: an event filling a gap lies below the read position, and moving back to it would deliver
+            // every event above it again
             final long nextGlobalOrder = event.globalEventOrder().longValue() + 1L;
-            eventStoreStreamLog.trace("[{}] Updating nextFromInclusiveGlobalOrder from {} to {}",
+            eventStoreStreamLog.trace("[{}] Updating nextFromInclusiveGlobalOrder from {} to at least {}",
                                       eventStreamLogName,
                                       nextFromInclusiveGlobalOrder.get(),
                                       nextGlobalOrder);
-            nextFromInclusiveGlobalOrder.set(nextGlobalOrder);
+            nextFromInclusiveGlobalOrder.accumulateAndGet(nextGlobalOrder, Math::max);
         }).onErrorResume(throwable -> {
             if (isCriticalError(throwable)) {
                 return Flux.error(throwable);
@@ -807,6 +811,11 @@ public final class PostgresqlEventStore<CONFIG extends AggregateEventStreamConfi
         private final Optional<SubscriptionGapHandler> subscriptionGapHandler;
         private final SubscriberId                     subscriberId;
         private final EventStorePollingOptimizer       pollingOptimizer;
+        /**
+         * Whether the latest {@link #pollForEvents} read any event, whether or not it belonged to the subscriber's tenant.
+         * Only touched by the thread running this task.
+         */
+        private       boolean                          lastPollConsumedEvents;
 
         // private, not public: PollEventStoreTask is itself a private inner class, so a public constructor was
         // reachable by nobody and only served to trip the construction-ergonomics ceiling. Narrowing it is not an
@@ -857,7 +866,8 @@ public final class PostgresqlEventStore<CONFIG extends AggregateEventStreamConfi
                                           eventStreamLogName,
                                           numberOfEventsPublished,
                                           remainingDemandForEvents);
-                if (numberOfEventsPublished == 0) {
+                // A poll that only moved past other tenants' events published nothing, but there may be more to read
+                if (numberOfEventsPublished == 0 && !lastPollConsumedEvents) {
                     pollingOptimizer.eventStorePollingReturnedNoEvents();
                     eventStoreStreamLog.trace("[{}] Skipping polling cycle based on optimizer", eventStreamLogName);
                     if (pollingOptimizer.currentDelayMs() > 0) {
@@ -887,6 +897,7 @@ public final class PostgresqlEventStore<CONFIG extends AggregateEventStreamConfi
             eventStoreStreamLog.trace("[{}] Polling worker - Polling for {} events",
                                       eventStreamLogName,
                                       remainingDemandForEvents);
+            lastPollConsumedEvents = false;
             var                  startedUnitOfWork = unitOfWorkFactory.getCurrentUnitOfWork().isEmpty();
             EventStoreUnitOfWork unitOfWork;
             try {
@@ -957,29 +968,40 @@ public final class PostgresqlEventStore<CONFIG extends AggregateEventStreamConfi
                                                                           .orElse(null);
 
                 var loadEventsByGlobalOrderTiming = StopWatch.start("loadEventsByGlobalOrder(" + subscriberId + ", " + aggregateType + ")");
-                var persistedEvents = loadEventsByGlobalOrder(aggregateType,
-                                                              globalOrderRange,
-                                                              transientGapsToIncludeInQuery,
-                                                              onlyIncludeEventIfItBelongsToTenant)
-                        .toList();
+                // Every tenant's events: see loadEventsForPoll
+                var loadedEvents = loadEventsForPoll(aggregateType, globalOrderRange, transientGapsToIncludeInQuery);
                 eventStoreSubscriptionObserver.eventStorePolled(subscriberId,
                                                                 aggregateType,
                                                                 globalOrderRange,
                                                                 transientGapsToIncludeInQuery,
                                                                 onlyIncludeEventIfItBelongsToTenant,
-                                                                persistedEvents,
+                                                                eventsBelongingToTenant(loadedEvents, onlyIncludeEventIfItBelongsToTenant),
                                                                 loadEventsByGlobalOrderTiming.stop().getDuration());
+
+                // No more than demanded is published, and this poll only consumes - reconciles, and moves the read
+                // position past - the events up to the last one it publishes. The rest are read again by the next poll:
+                // the range events from the read position, and the gap fills (lowest, so first in the result) because
+                // they are still transient gaps - resolving one that is then not published would lose its event
+                var consumedEvents = eventsWithinDemand(loadedEvents, remainingDemandForEvents);
+                var eventsToPublish = eventsBelongingToTenant(consumedEvents, onlyIncludeEventIfItBelongsToTenant);
+                if (consumedEvents.size() < loadedEvents.size()) {
+                    eventStoreStreamLog.debug("[{}] Polling worker - Loaded {} event(s), but will only publish {} event(s), as this matches the remainingDemandForEvents {}",
+                                              eventStreamLogName,
+                                              loadedEvents.size(),
+                                              eventsToPublish.size(),
+                                              remainingDemandForEvents);
+                }
 
                 var gapReconciliation = subscriptionGapHandler.map(gapHandler -> {
                     var reconcileGapsTiming = StopWatch.start("reconcileGaps(" + subscriberId + ", " + aggregateType + ")");
                     var outcome = gapHandler.reconcileGapsAndReport(aggregateType,
                                                                     globalOrderRange,
-                                                                    persistedEvents,
+                                                                    consumedEvents,
                                                                     transientGapsToIncludeInQuery);
                     eventStoreSubscriptionObserver.reconciledGaps(subscriberId,
                                                                   aggregateType,
                                                                   globalOrderRange,
-                                                                  transientGapsToIncludeInQuery, persistedEvents,
+                                                                  transientGapsToIncludeInQuery, consumedEvents,
                                                                   reconcileGapsTiming.stop().getDuration());
                     return outcome;
                 }).orElse(GapReconciliation.NONE);
@@ -989,42 +1011,36 @@ public final class PostgresqlEventStore<CONFIG extends AggregateEventStreamConfi
                 if (!gapReconciliation.isEmpty()) {
                     eventStoreSubscriptionObserver.gapReconciliationOutcome(subscriberId, aggregateType, gapReconciliation);
                 }
-                if (!persistedEvents.isEmpty()) {
+                if (!loadedEvents.isEmpty()) {
                     consecutiveNoPersistedEventsReturned.set(0);
+                    lastPollConsumedEvents = !consumedEvents.isEmpty();
                     if (log.isTraceEnabled()) {
                         eventStoreStreamLog.debug("[{}] Polling worker - loadEventsByGlobalOrder using globalOrderRange {} and transientGapsToIncludeInQuery {} returned {} events: {}",
                                                   eventStreamLogName,
                                                   globalOrderRange,
                                                   transientGapsToIncludeInQuery,
-                                                  persistedEvents.size(),
-                                                  persistedEvents.stream().map(PersistedEvent::globalEventOrder).collect(Collectors.toList()));
+                                                  loadedEvents.size(),
+                                                  loadedEvents.stream().map(PersistedEvent::globalEventOrder).collect(Collectors.toList()));
                     } else {
                         eventStoreStreamLog.debug("[{}] Polling worker - loadEventsByGlobalOrder using globalOrderRange {} and transientGapsToIncludeInQuery {} returned {} events",
                                                   eventStreamLogName,
                                                   globalOrderRange,
                                                   transientGapsToIncludeInQuery,
-                                                  persistedEvents.size());
-                    }
-
-                    var eventsToPublish = persistedEvents;
-                    if (persistedEvents.size() > remainingDemandForEvents) {
-                        eventStoreStreamLog.debug("[{}] Polling worker - Found {} event(s) to publish, but will only publish {} of the found event(s) as this matches with the remainingDemandForEvents",
-                                                  eventStreamLogName,
-                                                  persistedEvents.size(),
-                                                  remainingDemandForEvents);
-                        eventsToPublish = persistedEvents.subList(0, (int) remainingDemandForEvents);
+                                                  loadedEvents.size());
                     }
 
                     for (int index = 0; index < eventsToPublish.size(); index++) {
                         if (sink.isCancelled()) {
                             eventStoreStreamLog.debug("[{}] Polling worker - Is Cancelled: true. Skipping publishing further events (has only published {} out of the planned {} events)",
                                                       eventStreamLogName,
-                                                      index + 1,
+                                                      index,
                                                       eventsToPublish.size());
                             return index;
                         }
                         publishEventToSink(eventsToPublish.get(index));
                     }
+                    // Also past the consumed events of other tenants, which were not published
+                    nextFromInclusiveGlobalOrder.accumulateAndGet(nextGlobalOrderAfter(consumedEvents), Math::max);
                     return eventsToPublish.size();
                 } else {
                     consecutiveNoPersistedEventsReturned.incrementAndGet();
@@ -1070,12 +1086,77 @@ public final class PostgresqlEventStore<CONFIG extends AggregateEventStreamConfi
                                                         aggregateType,
                                                         persistedEvent,
                                                         publishEventTiming.stop().getDuration());
+            // Never backwards: an event filling a gap lies below the read position, and moving back to it would deliver
+            // every event above it again
             var nextGlobalOrder = persistedEvent.globalEventOrder().longValue() + 1L;
-            eventStoreStreamLog.trace("[{}] Polling worker - Updating nextFromInclusiveGlobalOrder from {} to {}",
+            eventStoreStreamLog.trace("[{}] Polling worker - Updating nextFromInclusiveGlobalOrder from {} to at least {}",
                                       eventStreamLogName,
                                       nextFromInclusiveGlobalOrder.get(),
                                       nextGlobalOrder);
-            nextFromInclusiveGlobalOrder.set(nextGlobalOrder);
+            nextFromInclusiveGlobalOrder.accumulateAndGet(nextGlobalOrder, Math::max);
         }
+
+        /**
+         * The leading events of a poll's result that fit within the demand: up to, and not including, the first event of
+         * the subscriber's tenant beyond it. Other tenants' events in between are consumed too - not published, but read.
+         */
+        private List<PersistedEvent> eventsWithinDemand(List<PersistedEvent> loadedEvents, long remainingDemandForEvents) {
+            var published = 0L;
+            for (var index = 0; index < loadedEvents.size(); index++) {
+                if (eventBelongsToTenant(loadedEvents.get(index), onlyIncludeEventIfItBelongsToTenant)) {
+                    if (published == remainingDemandForEvents) {
+                        return loadedEvents.subList(0, index);
+                    }
+                    published++;
+                }
+            }
+            return loadedEvents;
+        }
+    }
+
+    /**
+     * The events a poll reads: the global order range and the transient gaps asked for again, for <b>every</b> tenant.
+     * A tenant-filtered subscription filters them in memory, after the gap handler has seen them: filtered in SQL,
+     * other tenants' events would be missing global orders, recorded as transient gaps and later promoted to permanent
+     * ones - and the read position could not move past them. Costs a tenant-filtered subscription the transfer of
+     * other tenants' rows in its range; the payload is not deserialized for them. {@link dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.cdc.CdcEventStore}
+     * loads every tenant for the same reason.
+     */
+    private List<PersistedEvent> loadEventsForPoll(AggregateType aggregateType, LongRange globalOrderRange, List<GlobalEventOrder> transientGapsToIncludeInQuery) {
+        return loadEventsByGlobalOrder(aggregateType,
+                                       globalOrderRange,
+                                       transientGapsToIncludeInQuery,
+                                       Optional.empty()).toList();
+    }
+
+    private static List<PersistedEvent> eventsBelongingToTenant(List<PersistedEvent> events, Optional<Tenant> onlyIncludeEventIfItBelongsToTenant) {
+        if (onlyIncludeEventIfItBelongsToTenant.isEmpty()) {
+            return events;
+        }
+        return events.stream()
+                     .filter(event -> eventBelongsToTenant(event, onlyIncludeEventIfItBelongsToTenant))
+                     .toList();
+    }
+
+    /**
+     * The in-memory equivalent of the SQL tenant filter {@code (tenant IS NULL OR tenant = :tenant)}: an event without a
+     * tenant belongs to every tenant, and no tenant filter keeps every event. The same predicate as the
+     * {@link dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.cdc.CdcEventStore}'s.
+     */
+    private static boolean eventBelongsToTenant(PersistedEvent event, Optional<Tenant> onlyIncludeEventIfItBelongsToTenant) {
+        return onlyIncludeEventIfItBelongsToTenant.map(tenant -> event.tenant()
+                                                                      .map(eventTenant -> eventTenant.toString().equals(tenant.toString()))
+                                                                      .orElse(true))
+                                                  .orElse(true);
+    }
+
+    /**
+     * @return the global order right after the highest one among {@code events}, or {@link Long#MIN_VALUE} when there are none
+     */
+    private static long nextGlobalOrderAfter(List<PersistedEvent> events) {
+        return events.stream()
+                     .mapToLong(event -> event.globalEventOrder().longValue() + 1L)
+                     .max()
+                     .orElse(Long.MIN_VALUE);
     }
 }
