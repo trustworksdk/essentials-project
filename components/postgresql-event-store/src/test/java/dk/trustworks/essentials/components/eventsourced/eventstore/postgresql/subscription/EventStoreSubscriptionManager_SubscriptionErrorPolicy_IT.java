@@ -49,7 +49,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  * keeps the pre-policy behaviour, {@code RETRY_N_THEN_SKIP} retries N times and then skips, {@code STOP} does not
  * advance past the failed event - including across a restart of the subscription manager - and is visible through
  * {@link EventStoreSubscription#isStoppedByErrorPolicy()} and the observer. Stopping the manager while a retry is backing
- * off must not skip the event either.
+ * off must not skip the event (or batch) either, and a batched subscription backing off must not hold up another one.
  * <p>
  * Each test appends three events (global orders 1, 2 and 3) to its own aggregate type and fails the handler on #2.
  */
@@ -317,6 +317,75 @@ class EventStoreSubscriptionManager_SubscriptionErrorPolicy_IT {
         awaitDurableResumePoint(4);
     }
 
+    @Test
+    void batched_stopping_the_subscription_during_a_retry_backoff_does_not_skip_the_batch() {
+        var failing = new AtomicBoolean(true);
+        // A retry budget of about 9 seconds, far more than the test takes to stop the manager in the middle of it
+        var policy = SubscriptionErrorPolicy.retryThenSkip(5, Duration.ofSeconds(1), Duration.ofSeconds(2));
+        eventStoreSubscriptionManager = startSubscriptionManager(policy);
+        var batchAttempts = new AtomicInteger();
+        var handled       = new CopyOnWriteArrayList<Long>();
+        appendThreeEvents();
+
+        batchSubscribe(batchAttempts, handled, failing::get);
+        Awaitility.waitAtMost(Duration.ofSeconds(10))
+                  .untilAsserted(() -> assertThat(batchAttempts.get()).isGreaterThanOrEqualTo(1));
+
+        // Stops (disposes) the subscription while the batch sleeps in its backoff - disposing the subscriber's
+        // batchHandlerScheduler interrupts the backoff
+        eventStoreSubscriptionManager.stop();
+        eventStoreSubscriptionManager = null;
+
+        // Abandoned, not given up on: not skipped, not reported as failed, and the durable resume point stays at the batch's first event
+        assertThat(batchAttempts.get()).isLessThan(1 + policy.maxRetries());
+        assertThat(handled).isEmpty();
+        assertThat(handleEventFailedCount()).isZero();
+        awaitDurableResumePoint(1);
+
+        // A restarted manager handles the batch again, and then continues
+        var attemptsBeforeRestart = batchAttempts.get();
+        failing.set(false);
+        eventStoreSubscriptionManager = startSubscriptionManager(policy);
+        batchSubscribe(batchAttempts, handled, failing::get);
+        Awaitility.waitAtMost(Duration.ofSeconds(10))
+                  .untilAsserted(() -> assertThat(handled).containsExactly(1L, 2L, 3L));
+        assertThat(batchAttempts.get()).isEqualTo(attemptsBeforeRestart + 1);
+        assertThat(handleEventFailedCount()).isZero();
+        awaitDurableResumePoint(4);
+    }
+
+    /**
+     * Each batched subscriber handles its batches - and sleeps out its {@link SubscriptionErrorPolicy.Mode#RETRY_N_THEN_SKIP}
+     * backoffs - on a thread of its own. Were that thread shared (e.g. {@code Schedulers.single()}), the second
+     * subscription's batch would queue behind the first one's backoff.
+     */
+    @Test
+    void batched_subscription_in_its_retry_backoff_does_not_stall_another_batched_subscription() {
+        var backoff = Duration.ofSeconds(10);
+        eventStoreSubscriptionManager = startSubscriptionManager(SubscriptionErrorPolicy.retryThenSkip(1, backoff, backoff));
+        var failingBatchAttempts = new AtomicInteger();
+        var failingHandled       = new CopyOnWriteArrayList<Long>();
+        appendThreeEvents();
+
+        batchSubscribe(subscriberId, failingBatchAttempts, failingHandled, () -> true);
+        // The first attempt has failed, so the batch is now sleeping out its 10 second backoff
+        Awaitility.waitAtMost(Duration.ofSeconds(10))
+                  .untilAsserted(() -> assertThat(failingBatchAttempts.get()).isEqualTo(1));
+
+        // Subscribed only now, so its batch is handled while the first subscription's batch is in its backoff
+        var otherSubscriberId  = SubscriberId.of(subscriberId + "-Other");
+        var otherBatchAttempts = new AtomicInteger();
+        var otherHandled       = new CopyOnWriteArrayList<Long>();
+        batchSubscribe(otherSubscriberId, otherBatchAttempts, otherHandled, () -> false);
+
+        Awaitility.waitAtMost(backoff.dividedBy(2))
+                  .untilAsserted(() -> assertThat(otherHandled).containsExactly(1L, 2L, 3L));
+        // Still in the backoff: the other subscription was not waiting for it to end
+        assertThat(failingBatchAttempts.get()).isEqualTo(1);
+        assertThat(failingHandled).isEmpty();
+        assertThat(otherBatchAttempts.get()).isEqualTo(1);
+    }
+
     // ------------------------------------------------------------------------------------------------------- Helpers
 
     private EventStoreSubscriptionManager startSubscriptionManager(SubscriptionErrorPolicy subscriptionErrorPolicy) {
@@ -362,7 +431,18 @@ class EventStoreSubscriptionManager_SubscriptionErrorPolicy_IT {
     }
 
     private EventStoreSubscription batchSubscribe(AtomicInteger batchAttempts, List<Long> handled, java.util.function.BooleanSupplier failBatchContainingFailingEvent) {
-        return eventStoreSubscriptionManager.batchSubscribeToAggregateEventsAsynchronously(subscriberId,
+        return batchSubscribe(subscriberId, batchAttempts, handled, failBatchContainingFailingEvent);
+    }
+
+    /**
+     * @param batchSubscriberId               the subscriber to subscribe as
+     * @param batchAttempts                   handling attempts of a batch containing #2
+     * @param handled                         global orders of the batches handled successfully, in handling order
+     * @param failBatchContainingFailingEvent whether an attempt at a batch containing #2 fails, asked after the attempt has been counted
+     */
+    private EventStoreSubscription batchSubscribe(SubscriberId batchSubscriberId, AtomicInteger batchAttempts, List<Long> handled,
+                                                  java.util.function.BooleanSupplier failBatchContainingFailingEvent) {
+        return eventStoreSubscriptionManager.batchSubscribeToAggregateEventsAsynchronously(batchSubscriberId,
                                                                                     aggregateType,
                                                                                     GlobalEventOrder.FIRST_GLOBAL_EVENT_ORDER,
                                                                                     Optional.empty(),
