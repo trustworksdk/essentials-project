@@ -48,9 +48,9 @@ modulets egen pptx (se `images/README.md`).
 |---|---|---|---|---|
 | 1 | Et event er et faktum | slide 2 — ikke-foreskrivende, datid, publisher kender ikke sine subscribers | `sealed interface ProductEvent`, `events/` som eksporteret kontrakt | 2,5 |
 | 2–4 | At opdage og modellere → de tre mønstre → slices og capabilities | slides 3–18 — fortalt som én historie, tre grå slides i træk | ét svar for 2–3 (én slice = én mappe, mønster = basistype), ét for 4 (banerne) | 5,75 |
-| 5 | Test kommer fra modellen | slides 14, 20 — Given/When/Then, skrevet før koden | `GivenWhenThenScenario`; 43 tests, 0,3 s, ingen Docker | 2,25 |
-| 6 | Command + tilstand = event | slides 24–25 — formlen, og "aggregates bruges mindre og mindre" | formlen *er* `handle(cmd, events)`; hele decideren | 2,75 |
-| 7 | Decideren | slide 26 — mønstret, defineret, med modulets Kotlin | én bean pr. aggregate type, `@Service` på decideren, intet andet | 2,25 |
+| 5 | Command + tilstand = event | slides 24–25 — formlen, og "aggregates bruges mindre og mindre" | formlen *er* `handle(cmd, events)`; hele decideren | 2,75 |
+| 6 | Decideren | slide 26 — mønstret, defineret, med modulets Kotlin | én bean pr. aggregate type, `@Service` på decideren, intet andet | 2,25 |
+| 7 | Test kommer fra modellen | slides 14, 20 — Given/When/Then, skrevet før koden | `GivenWhenThenScenario`; 43 tests, 0,3 s, ingen Docker | 2,25 |
 | 8 | Event store og replay | slides 27–33 — kurven, animeret over seks slides | `fetchStream` / `appendToStream`, og de to ordninger | 2,5 |
 | 9 | Tilstand i en beslutning | slides 68–69 — Evolver-mønstret, modulets egen kode | `Evolver.applyEvents`, én foldning pr. spørgsmål | 2,25 |
 | 10 | Hvorfor view-projektioner | slides 39, 61 — Greg Young, og de tre fordele | `ViewEventProcessor` plus en JPA-tabel | 2,25 |
@@ -74,7 +74,7 @@ capture, derefter snapshots. Behold at lukke bøgerne (det besvarer replay-spør
 admin-konsollen (den indløser advarslen om dead letters). Først derefter par 11
 (rækkefølge/levering/idempotens) og par 12's begrebsslide. Drop ikke par 13 eller dual write — dér gør Essentials mest arbejde for dig.
 
-**Er du foran**, er de to slides der belønner ekstra tid par 6's svar (decideren) og par 13's svar
+**Er du foran**, er de to slides der belønner ekstra tid par 5's svar (decideren) og par 13's svar
 (automatiseringen, og fejlen i dens gloss).
 
 ## Slide 2 — spørgsmålet
@@ -139,17 +139,17 @@ Spørger nogen hvordan `shipping` overhovedet kender event-klassen, så tag det 
 spørgsmål. Der sker to forskellige krydsninger: den *importerer* klassen på compile-tidspunktet, og
 *modtager* værdien på kørselstidspunktet fra store'en. Det den aldrig gør, er at **kalde** `sales`.
 
-**5 — Test kommer fra modellen.** Læs modulets Given/When/Then, derefter testen, og lad rummet bemærke at
-det er samme sætning. Tal: 43 tests, 0,3 sekunder, intet startet.
-
-**6 — Command + tilstand = event.** Modulets formel, derefter metodesignaturen der *er* formlen. Gennemgå
+**5 — Command + tilstand = event.** Modulets formel, derefter metodesignaturen der *er* formlen. Gennemgå
 de tre udfald. Sig så hvad der mangler — ingen aggregate-klasse, ingen repository, ingen database, ingen
 mocks. Det er hvad "aggregates bruges mindre og mindre" betyder i praksis.
 
-**7 — Decideren.** Modulet definerer mønstret; svarsliden viser wiringen det ikke viser. Én
+**6 — Decideren.** Modulet definerer mønstret; svarsliden viser wiringen det ikke viser. Én
 `AggregateTypeConfiguration` pr. aggregate type, én configurator for hele applikationen, og `@Service` på
 decideren. Derefter den ærlige halvdel: `kotlin-eventsourcing` er eksperimentel, og én beslutning giver
 højst ét event.
+
+**7 — Test kommer fra modellen.** Læs modulets Given/When/Then, derefter testen, og lad rummet bemærke at
+det er samme sætning. Tal: 43 tests, 0,3 sekunder, intet startet.
 
 **8 — Event store og replay.** Modulet animerer kurven over seks slides; begrebssliden komprimerer det til
 én tabel med den resulterende kurv i marginen. Peg på de to order-kolonner og navngiv dem præcist. Sig

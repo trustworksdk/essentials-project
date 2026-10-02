@@ -121,6 +121,14 @@ html[data-lang="da"] [lang="en"] { display: none; }
   overflow-y: auto;
 }
 .slide.on { display: flex; }
+/* Title slide: the PostgreSQL elephant, small, bottom right. */
+.title-mark {
+  position: absolute;
+  right: 5cqw;
+  bottom: 9cqh;
+  height: 16cqh;
+  width: auto;
+}
 
 @keyframes rise {
   from { opacity: 0; transform: translateY(0.8cqh); }
@@ -554,6 +562,7 @@ svg .dgm-xm   { stroke: var(--cost); stroke-width: 2; }
   <p class="lede" lang="en">The concepts of event modeling, event sourcing and CQRS &mdash; each one next to the code that implements it, in one running webshop.</p>
   <p class="lede" lang="da">Begreberne i event modeling, event sourcing og CQRS &mdash; hvert af dem ved siden af koden der implementerer det, i én kørende webshop.</p>
   <div class="spread"></div>
+  <img class="title-mark" src="images/postgresql-elephant.svg" alt="PostgreSQL">
   <div class="kicker"><span lang="en">50 minutes, then questions</span><span lang="da">50 minutter, derefter spørgsmål</span></div>
 </section>
 
@@ -587,8 +596,8 @@ PRD-7f3a     LG Superview   <span class="tok-num">1999.50</span></code></pre>
   <div class="eyebrow"><span lang="en">Where we are going</span><span lang="da">Hvor vi skal hen</span></div>
   <h2><span lang="en">Four questions, in the order you hit them</span><span lang="da">Fire spørgsmål, i den rækkefølge man møder dem</span></h2>
   <ol class="questions grow">
-    <li><span class="n">1&ndash;5</span><span lang="en">How do we agree what the system does?</span><span lang="da">Hvordan bliver vi enige om hvad systemet gør?</span></li>
-    <li><span class="n">6&ndash;9</span><span lang="en">How does a write happen?</span><span lang="da">Hvordan sker en skrivning?</span></li>
+    <li><span class="n">1&ndash;4</span><span lang="en">How do we agree what the system does?</span><span lang="da">Hvordan bliver vi enige om hvad systemet gør?</span></li>
+    <li><span class="n">5&ndash;9</span><span lang="en">How does a write happen?</span><span lang="da">Hvordan sker en skrivning?</span></li>
     <li><span class="n">10&ndash;12</span><span lang="en">How does anyone read it back?</span><span lang="da">Hvordan læser nogen det tilbage?</span></li>
     <li><span class="n">13</span><span lang="en">How does it reach the rest of the world?</span><span lang="da">Hvordan når det ud til resten af verden?</span></li>
   </ol>
@@ -1066,79 +1075,11 @@ sales/views/products_for_sale/ <span class="tok-com">← the view, its own slice
   <p class="small" lang="da"><strong>Der er ingen pil tilbage</strong> &mdash; intet på skrivesiden ved at der findes en skærm. De <em>orange pile</em> er dem der skal følges: <code>order_summary</code> er én række foldet af fire streams på tværs af alle tre kontekster.</p>
 </section>
 
-<section class="slide" data-side="concept" data-act="5/13 &mdash; Tests come from the model" data-min="1"
-  data-note-en="The module's claim is strong: tests are central to specifying behaviour, and they are written before implementation. The example is straight from its slide 20 - given a customer is registered and a room added, when the customer books, then RoomBooked. Say that this is written with the business, on the wall, not derived from code afterwards."
-  data-note-da="Modulets paastand er staerk: tests er centrale for at specificere adfaerd, og de skrives foer implementeringen. Eksemplet er direkte fra dets slide 20. Sig at det skrives sammen med forretningen, paa vaeggen, ikke udledt af koden bagefter.">
-  <div class="eyebrow concept"><span class="num">5 / 13</span><span class="sep">&middot;</span><span lang="en">The concept</span><span lang="da">Begrebet</span></div>
-  <h2><span lang="en">Given / When / Then, read off the model</span><span lang="da">Given / When / Then, læst af modellen</span></h2>
-  <div class="row grow" style="align-items:stretch">
-    <div class="col" style="flex:1 1 0">
-      <div class="chain" style="flex-direction:column; align-items:stretch">
-        <div class="node"><b>GIVEN</b><span lang="en">a CustomerIsRegistered and a RoomAdded</span><span lang="da">en CustomerIsRegistered og en RoomAdded</span></div>
-        <div class="node"><b>WHEN</b><span lang="en">the customer tries to BookRoom</span><span lang="da">kunden forsøger at BookRoom</span></div>
-        <div class="node"><b>THEN</b><span lang="en">a RoomBooked event is emitted, with the right details</span><span lang="da">et RoomBooked event udsendes, med de rigtige detaljer</span></div>
-      </div>
-    </div>
-    <div class="col" style="flex:1 1 0">
-      <ul class="tight">
-        <li lang="en"><strong>Given is a list of past events</strong>, not a database fixture. Nothing has to be inserted, and no state has to be faked.</li>
-        <li lang="da"><strong>Given er en liste af tidligere events</strong>, ikke en database-fixture. Intet skal indsættes, og ingen tilstand skal simuleres.</li>
-        <li lang="en"><strong>Each slice has its own acceptance criteria</strong>, written before the implementation.</li>
-        <li lang="da"><strong>Hver slice har sine egne acceptkriterier</strong>, skrevet før implementeringen.</li>
-        <li lang="en"><strong>Quality is not added later.</strong> It is the same sentence the business said, kept executable.</li>
-        <li lang="da"><strong>Kvalitet tilføjes ikke senere.</strong> Det er samme sætning forretningen sagde, holdt eksekverbar.</li>
-      </ul>
-    </div>
-  </div>
-</section>
-
-<!-- =================================================================== 11 — C5 answer -->
-<section class="slide" data-side="answer" data-act="5/13 &mdash; Tests come from the model" data-min="1.25"
-  data-note-en="Read the first test aloud and let the room notice it is the same sentence. Then the numbers: forty-three of these, three tenths of a second, nothing started."
-  data-note-da="Laes foerste test hoejt og lad rummet bemaerke at det er samme saetning. Derefter tallene: treogfyrre af dem, tre tiendedele sekund, intet startet.">
-  <div class="eyebrow"><span lang="en">With Essentials</span><span lang="da">Med Essentials</span></div>
-  <h2><span lang="en">The same sentence, <em>executable</em> &mdash; no database, no Spring</span><span lang="da">Samme sætning, <em>eksekverbar</em> &mdash; ingen database, ingen Spring</span></h2>
-  <div class="row grow" style="align-items:stretch">
-    <figure class="panel sm" style="flex:1.25 1 0">
-      <figcaption><span>three of the 43</span><span class="path">change_product_price/ChangeProductPriceDeciderTest.kt</span></figcaption>
-      <pre><code class="kotlin">@Test
-fun `Changing the price`() {
-    scenario
-        .given(ProductAdded(productId, "Test product", Amount.of("125.95")))
-        .when_(ChangeProductPrice(productId, Amount.of("100.00")))
-        .then_(ProductPriceChanged(productId, Amount.of("100.00")))
-}
-
-@Test
-fun `Changing the price to the existing price results in no change`() {
-    scenario
-        .given(ProductAdded(productId, "Test product", price))
-        .when_(ChangeProductPrice(productId, price))
-        .thenExpectNoEvent()
-}
-
-@Test
-fun `Changing the price on an empty event stream fails`() {
-    scenario
-        .given()
-        .when_(ChangeProductPrice(productId, price))
-        .thenFailsWithException(ProductHasNotBeenAddedException(productId))
-}</code></pre>
-    </figure>
-    <div class="col" style="flex:0.8 1 0">
-      <p lang="en"><code>GivenWhenThenScenario</code> takes a decider and nothing else. <strong>43 tests, 0.3 seconds, no Docker</strong> &mdash; so they run on every save, not on every push.</p>
-      <p lang="da"><code>GivenWhenThenScenario</code> tager en decider og intet andet. <strong>43 tests, 0,3 sekunder, ingen Docker</strong> &mdash; så de kører ved hver gemning, ikke ved hvert push.</p>
-      <p lang="en">Three assertions cover the three things a decision can do: <code>then_</code> an event, <code>thenExpectNoEvent</code>, <code>thenFailsWithException</code>.</p>
-      <p lang="da">Tre assertions dækker de tre ting en beslutning kan gøre: <code>then_</code> et event, <code>thenExpectNoEvent</code>, <code>thenFailsWithException</code>.</p>
-    </div>
-  </div>
-</section>
-
-<!-- =================================================================== 12 — C6 concept -->
-<section class="slide" data-side="concept" data-act="6/13 &mdash; Command + state = event" data-min="1"
+<!-- =================================================================== C5 concept -->
+<section class="slide" data-side="concept" data-act="5/13 &mdash; Command + state = event" data-min="1"
   data-note-en="The module's own formula, and its own aside: aggregates are used less and less. Read the four benefits - they are what a business person will repeat back to you. Then the pattern line at the bottom, which is the entire write model of an event-sourced system."
   data-note-da="Modulets egen formel, og dets egen bemaerkning: aggregates bruges mindre og mindre. Laes de fire fordele - det er hvad en forretningsperson gentager tilbage. Derefter moenster-linjen nederst, som er hele skrivemodellen i et event-sourced system.">
-  <div class="eyebrow concept"><span class="num">6 / 13</span><span class="sep">&middot;</span><span lang="en">The concept</span><span lang="da">Begrebet</span></div>
+  <div class="eyebrow concept"><span class="num">5 / 13</span><span class="sep">&middot;</span><span lang="en">The concept</span><span lang="da">Begrebet</span></div>
   <h2><span lang="en">Command + state (previous events) = event(s)</span><span lang="da">Command + tilstand (tidligere events) = event(s)</span></h2>
   <div class="row grow" style="align-items:stretch">
     <div class="col" style="flex:1 1 0">
@@ -1170,8 +1111,8 @@ fun `Changing the price on an empty event stream fails`() {
   </div>
 </section>
 
-<!-- =================================================================== 13 — C6 answer -->
-<section class="slide" data-side="answer" data-act="6/13 &mdash; Command + state = event" data-min="1.75"
+<!-- =================================================================== C5 answer -->
+<section class="slide" data-side="answer" data-act="5/13 &mdash; Command + state = event" data-min="1.75"
   data-note-en="This is the slide to slow down on. The formula from the previous slide is literally the method signature. Walk the three outcomes. Then say what is absent - no repository, no aggregate class, no database, no mocks - and that this is what the module means by aggregates used less and less."
   data-note-da="Denne slide skal have tid. Formlen fra forrige slide er bogstaveligt metodesignaturen. Gennemgaa de tre udfald. Sig derefter hvad der mangler - ingen repository, ingen aggregate-klasse, ingen database, ingen mocks - og at det er hvad modulet mener med at aggregates bruges mindre og mindre.">
   <div class="eyebrow"><span lang="en">With Essentials</span><span lang="da">Med Essentials</span></div>
@@ -1211,11 +1152,11 @@ class ChangeProductPriceDecider : Decider&lt;ChangeProductPrice, ProductEvent&gt
   </div>
 </section>
 
-<!-- =================================================================== 14 — C7 concept -->
-<section class="slide" data-side="concept" data-act="7/13 &mdash; The decider" data-min="0.75"
+<!-- =================================================================== C6 concept -->
+<section class="slide" data-side="concept" data-act="6/13 &mdash; The decider" data-min="0.75"
   data-note-en="The module introduces the decider as a named pattern with a Kotlin example, so this slide is its definition and its own code. The banking example is theirs too. The thing to draw out: a decider decides, and applying events to state is part of deciding - it is not a separate layer."
   data-note-da="Modulet introducerer decideren som et navngivet moenster med et Kotlin-eksempel, saa denne slide er dets definition og dets egen kode. Bank-eksemplet er ogsaa deres. Pointen: en decider beslutter, og at anvende events paa tilstand er en del af at beslutte - ikke et separat lag.">
-  <div class="eyebrow concept"><span class="num">7 / 13</span><span class="sep">&middot;</span><span lang="en">The concept</span><span lang="da">Begrebet</span></div>
+  <div class="eyebrow concept"><span class="num">6 / 13</span><span class="sep">&middot;</span><span lang="en">The concept</span><span lang="da">Begrebet</span></div>
   <h2><span lang="en">The DECIDER pattern</span><span lang="da">DECIDER-mønstret</span></h2>
   <div class="row grow" style="align-items:stretch">
     <div class="col" style="flex:1 1 0">
@@ -1237,8 +1178,8 @@ class ChangeProductPriceDecider : Decider&lt;ChangeProductPrice, ProductEvent&gt
   </div>
 </section>
 
-<!-- =================================================================== 15 — C7 answer -->
-<section class="slide" data-side="answer" data-act="7/13 &mdash; The decider" data-min="1.5"
+<!-- =================================================================== C6 answer -->
+<section class="slide" data-side="answer" data-act="6/13 &mdash; The decider" data-min="1.5"
   data-note-en="The module defines the pattern; this is what the framework does around it, which the module does not show. One bean per aggregate type, at-service on the decider, and one configurator for the whole app. Then the honest half: the Kotlin module is experimental and yields at most one event - say why that constraint is mostly a gift."
   data-note-da="Modulet definerer moenstret; dette er hvad frameworket goer omkring det, hvilket modulet ikke viser. Én bean pr. aggregate type, @Service paa decideren, og én configurator for hele appen. Derefter den aerlige halvdel: Kotlin-modulet er eksperimentelt og giver hoejst ét event.">
   <div class="eyebrow"><span lang="en">With Essentials</span><span lang="da">Med Essentials</span></div>
@@ -1270,6 +1211,75 @@ fun productsAggregateTypeConfiguration() = AggregateTypeConfiguration(
       <p lang="da">Én bean mere for hele applikationen samler hver konfiguration og hver decider. Derefter er <strong>en ny use case en mappe med <code>@Service</code> på decideren</strong> &mdash; ingen registrering at glemme, og ingen <code>@Transactional</code>, fordi command bus'en ejer UnitOfWork.</p>
       <p class="small" lang="en"><strong>Honestly:</strong> <code>kotlin-eventsourcing</code> is marked experimental, and one decision yields at most one event. That pushes you towards <code>CheckOutRequested</code> instead of three technical events &mdash; but a decision that genuinely needs two must use the Java <code>EventStreamDecider</code>.</p>
       <p class="small" lang="da"><strong>Ærligt:</strong> <code>kotlin-eventsourcing</code> er markeret eksperimentel, og én beslutning giver højst ét event. Det skubber mod <code>CheckOutRequested</code> frem for tre tekniske events &mdash; men en beslutning der reelt kræver to skal bruge Java'ens <code>EventStreamDecider</code>.</p>
+    </div>
+  </div>
+</section>
+
+<!-- =================================================================== C7 concept (tests) -->
+<section class="slide" data-side="concept" data-act="7/13 &mdash; Tests come from the model" data-min="1"
+  data-note-en="The module's claim is strong: tests are central to specifying behaviour, and they are written before implementation. The example is straight from its slide 20 - given a customer is registered and a room added, when the customer books, then RoomBooked. Say that this is written with the business, on the wall, not derived from code afterwards."
+  data-note-da="Modulets paastand er staerk: tests er centrale for at specificere adfaerd, og de skrives foer implementeringen. Eksemplet er direkte fra dets slide 20. Sig at det skrives sammen med forretningen, paa vaeggen, ikke udledt af koden bagefter.">
+  <div class="eyebrow concept"><span class="num">7 / 13</span><span class="sep">&middot;</span><span lang="en">The concept</span><span lang="da">Begrebet</span></div>
+  <h2><span lang="en">Given / When / Then, read off the model</span><span lang="da">Given / When / Then, læst af modellen</span></h2>
+  <div class="row grow" style="align-items:stretch">
+    <div class="col" style="flex:1 1 0">
+      <div class="chain" style="flex-direction:column; align-items:stretch">
+        <div class="node"><b>GIVEN</b><span lang="en">a CustomerIsRegistered and a RoomAdded</span><span lang="da">en CustomerIsRegistered og en RoomAdded</span></div>
+        <div class="node"><b>WHEN</b><span lang="en">the customer tries to BookRoom</span><span lang="da">kunden forsøger at BookRoom</span></div>
+        <div class="node"><b>THEN</b><span lang="en">a RoomBooked event is emitted, with the right details</span><span lang="da">et RoomBooked event udsendes, med de rigtige detaljer</span></div>
+      </div>
+    </div>
+    <div class="col" style="flex:1 1 0">
+      <ul class="tight">
+        <li lang="en"><strong>Given is a list of past events</strong>, not a database fixture. Nothing has to be inserted, and no state has to be faked.</li>
+        <li lang="da"><strong>Given er en liste af tidligere events</strong>, ikke en database-fixture. Intet skal indsættes, og ingen tilstand skal simuleres.</li>
+        <li lang="en"><strong>Each slice has its own acceptance criteria</strong>, written before the implementation.</li>
+        <li lang="da"><strong>Hver slice har sine egne acceptkriterier</strong>, skrevet før implementeringen.</li>
+        <li lang="en"><strong>Quality is not added later.</strong> It is the same sentence the business said, kept executable.</li>
+        <li lang="da"><strong>Kvalitet tilføjes ikke senere.</strong> Det er samme sætning forretningen sagde, holdt eksekverbar.</li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<!-- =================================================================== C7 answer (tests) -->
+<section class="slide" data-side="answer" data-act="7/13 &mdash; Tests come from the model" data-min="1.25"
+  data-note-en="This is how you test the decider from three slides back: the scenario takes ChangeProductPriceDecider and nothing else, and the three tests are its three outcomes. Read the first test aloud and let the room notice it is the same sentence. Then the numbers: forty-three of these, three tenths of a second, nothing started."
+  data-note-da="Saadan tester man decideren fra tre slides tilbage: scenariet tager ChangeProductPriceDecider og intet andet, og de tre tests er dens tre udfald. Laes foerste test hoejt og lad rummet bemaerke at det er samme saetning. Derefter tallene: treogfyrre af dem, tre tiendedele sekund, intet startet.">
+  <div class="eyebrow"><span lang="en">With Essentials</span><span lang="da">Med Essentials</span></div>
+  <h2><span lang="en">The same sentence, <em>executable</em> &mdash; no database, no Spring</span><span lang="da">Samme sætning, <em>eksekverbar</em> &mdash; ingen database, ingen Spring</span></h2>
+  <div class="row grow" style="align-items:stretch">
+    <figure class="panel sm" style="flex:1.25 1 0">
+      <figcaption><span>three of the 43</span><span class="path">change_product_price/ChangeProductPriceDeciderTest.kt</span></figcaption>
+      <pre><code class="kotlin">@Test
+fun `Changing the price`() {
+    scenario
+        .given(ProductAdded(productId, "Test product", Amount.of("125.95")))
+        .when_(ChangeProductPrice(productId, Amount.of("100.00")))
+        .then_(ProductPriceChanged(productId, Amount.of("100.00")))
+}
+
+@Test
+fun `Changing the price to the existing price results in no change`() {
+    scenario
+        .given(ProductAdded(productId, "Test product", price))
+        .when_(ChangeProductPrice(productId, price))
+        .thenExpectNoEvent()
+}
+
+@Test
+fun `Changing the price on an empty event stream fails`() {
+    scenario
+        .given()
+        .when_(ChangeProductPrice(productId, price))
+        .thenFailsWithException(ProductHasNotBeenAddedException(productId))
+}</code></pre>
+    </figure>
+    <div class="col" style="flex:0.8 1 0">
+      <p lang="en"><code>GivenWhenThenScenario</code> takes a decider and nothing else. <strong>43 tests, 0.3 seconds, no Docker</strong> &mdash; so they run on every save, not on every push.</p>
+      <p lang="da"><code>GivenWhenThenScenario</code> tager en decider og intet andet. <strong>43 tests, 0,3 sekunder, ingen Docker</strong> &mdash; så de kører ved hver gemning, ikke ved hvert push.</p>
+      <p lang="en">Three assertions cover the three things a decision can do: <code>then_</code> an event, <code>thenExpectNoEvent</code>, <code>thenFailsWithException</code>.</p>
+      <p lang="da">Tre assertions dækker de tre ting en beslutning kan gøre: <code>then_</code> et event, <code>thenExpectNoEvent</code>, <code>thenFailsWithException</code>.</p>
     </div>
   </div>
 </section>

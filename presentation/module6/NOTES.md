@@ -51,9 +51,9 @@ the module's own pptx (see `images/README.md`). The two web fonts degrade to sys
 |---|---|---|---|---|
 | 1 | An event is a fact | slide 2 — non-prescriptive, past tense, publisher does not know its subscribers | `sealed interface ProductEvent`, `events/` as the exported contract | 2.5 |
 | 2–4 | Discovering and modeling → the three patterns → slices and capabilities | slides 3–18 — told as one story, three grey slides back to back | one answer for 2–3 (one slice = one directory, pattern = base type), one for 4 (the lanes) | 5.75 |
-| 5 | Tests come from the model | slides 14, 20 — Given/When/Then, written before the code | `GivenWhenThenScenario`; 43 tests, 0.3 s, no Docker | 2.25 |
-| 6 | Command + state = event | slides 24–25 — the formula, and "aggregates used less and less" | the formula *is* `handle(cmd, events)`; the whole decider | 2.75 |
-| 7 | The decider | slide 26 — the pattern, defined, with the module's Kotlin | one bean per aggregate type, `@Service` on the decider, nothing else | 2.25 |
+| 5 | Command + state = event | slides 24–25 — the formula, and "aggregates used less and less" | the formula *is* `handle(cmd, events)`; the whole decider | 2.75 |
+| 6 | The decider | slide 26 — the pattern, defined, with the module's Kotlin | one bean per aggregate type, `@Service` on the decider, nothing else | 2.25 |
+| 7 | Tests come from the model | slides 14, 20 — Given/When/Then, written before the code | `GivenWhenThenScenario`; 43 tests, 0.3 s, no Docker | 2.25 |
 | 8 | Event store and replay | slides 27–33 — the basket, animated over six slides | `fetchStream` / `appendToStream`, and the two orderings | 2.5 |
 | 9 | State inside a decision | slides 68–69 — the Evolver pattern, the module's own code | `Evolver.applyEvents`, one fold per question | 2.25 |
 | 10 | Why view projections | slides 39, 61 — Greg Young, and the three advantages | `ViewEventProcessor` plus a JPA table | 2.25 |
@@ -78,7 +78,7 @@ everyone asks) and the admin console (it pays off the dead-letter warning). Only
 (order/delivery/idempotence) and pair 12's concept slide. Do not drop pair 13 or the dual write — they are where Essentials does the
 most work for you.
 
-**If you are ahead**, the slides that reward extra time are pair 6's answer (the decider), pair 13's answer
+**If you are ahead**, the slides that reward extra time are pair 5's answer (the decider), pair 13's answer
 (the automation, and the mistake in its gloss), and the admin console — opened live on the webshop.
 
 ## Slide 2 — the question
@@ -152,18 +152,18 @@ slide. Two different crossings are happening: it *imports* the class at compile 
 value at runtime from the store. What it never does is **call** `sales`. The diagram draws the second
 crossing and the dashed blocks imply the first.
 
-**5 — Tests come from the model.** Read the module's Given/When/Then, then the test, and let the room
-notice they are the same sentence. Numbers: 43 tests, 0.3 seconds, nothing started.
-
-**6 — Command + state = event.** The module's formula, then the method signature that *is* the formula.
+**5 — Command + state = event.** The module's formula, then the method signature that *is* the formula.
 Walk the three outcomes: an event, no event, an exception. Then say what is missing — no aggregate class,
 no repository, no database, no mocks. That is what "aggregates used less and less" means in practice.
 
-**7 — The decider.** The module defines the pattern; the answer slide shows the wiring it does not. One
+**6 — The decider.** The module defines the pattern; the answer slide shows the wiring it does not. One
 `AggregateTypeConfiguration` bean per aggregate type, one configurator for the whole application, and
 `@Service` on the decider. Then the honest half: `kotlin-eventsourcing` is experimental, and one decision
 yields at most one event — mostly a gift, because it forces `CheckOutRequested` rather than three
 technical events, but a decision that genuinely needs two must use the Java `EventStreamDecider`.
+
+**7 — Tests come from the model.** Read the module's Given/When/Then, then the test, and let the room
+notice they are the same sentence. Numbers: 43 tests, 0.3 seconds, nothing started.
 
 **8 — Event store and replay.** The module animates the basket over six slides; the concept slide
 compresses that to one table with the resulting basket in the margin. Point at the two order columns and

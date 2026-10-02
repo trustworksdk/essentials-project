@@ -12,6 +12,7 @@ knows. Trustworks' own artwork.
 | `wireframe-checkout.png` | 18, 22, 70, 72 | "Complete Order" — invoice address and payment details |
 | `composite-ui.png` | 72, 73 | Order confirmation, with each region colour-boxed by the view it comes from |
 | `dual-write.png` | 87 | EventStore → SubscriptionManager → Outbox → Kafka topic, both backed by PostgreSQL |
+| `postgresql-elephant.svg` | — | The PostgreSQL "Slonik" logo on the title slide. Not from the module: the official artwork, under the PostgreSQL Licence, taken from Wikimedia Commons |
 
 The module's **swimlane timelines** (slides 18, 22, 70–72) are not here: they are drawn with PowerPoint
 shapes rather than embedded images, so only the wireframes inside them could be extracted. The deck

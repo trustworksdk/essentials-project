@@ -175,9 +175,9 @@ on-screen timer reads them, so this table and the deck cannot drift.
 | 9 | **2–3** answer: one slice = one directory, the pattern you drew = the base type you extend | 2 |
 | 10 | **4** answer: the lanes are the top-level directories; only `events/` and `types/` cross | 1.5 |
 | 11 | The map of the app, as the payoff of 2–4: buttons → streams → read models → panels | 1.5 |
-| 12–13 | **5** Tests come from the model → `GivenWhenThenScenario` | 2.25 |
-| 14–15 | **6** Command + state = event → the formula is the signature | 2.75 |
-| 16–17 | **7** The decider → one bean per aggregate type | 2.25 |
+| 12–13 | **5** Command + state = event → the formula is the signature | 2.75 |
+| 14–15 | **6** The decider → one bean per aggregate type | 2.25 |
+| 16–17 | **7** Tests come from the model → `GivenWhenThenScenario` | 2.25 |
 | 18–19 | **8** Event store and replay → two orderings, neither a clock | 2.5 |
 | 20–21 | **9** State inside a decision → `Evolver.applyEvents` | 2.25 |
 | 22–23 | **10** Why view projections → a processor and a table | 2.25 |
@@ -273,7 +273,7 @@ replaces.
   the application because the upstream module declares it `provided`.
 - **`kotlin-eventsourcing` is experimental and one decision yields at most one event.** `place_order` must be
   modelled as a single `OrderPlaced` rather than a sequence, which is the right modelling answer anyway but needs
-  saying on pair 7's answer slide rather than discovering mid-demo.
+  saying on pair 6's answer slide rather than discovering mid-demo.
 - **Compression loss.** Seventeen CQRS slides become one pair, and the latency arithmetic survives only as a
   bullet on its concept slide. Everything cut is named on the "left out on purpose" slide and in the notes, so a
   question can be answered from them rather than deflected.
