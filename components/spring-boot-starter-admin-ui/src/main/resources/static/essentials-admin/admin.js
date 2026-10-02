@@ -522,8 +522,8 @@ views.postgresql = async () => {
     /* Dead rows worth a look: a fifth of the live rows or more, ignoring tables too small to matter. Queue tables
        churn constantly, so this is the bloat signal that matters most there. */
     const bloated = (t) => t.deadRows > 1000 && t.deadRows >= t.liveRows / 5;
-    /* HOT updates touch no index. A frequently updated table with a low share points at an index on an updated
-       column, or too little free space per page (fillfactor). */
+    /* HOT updates touch no index. A low share on a frequently updated table means an update changes an indexed
+       column - often by design, as with a status flag - or, only when none does, too little free space per page. */
     const hotRatio = (t) => (t.rowsUpdated ? (100 * t.rowsHotUpdated) / t.rowsUpdated : null);
     const hotCell = (t) => {
         const r = hotRatio(t);
@@ -540,6 +540,44 @@ views.postgresql = async () => {
         unusedIndex(i) ? badge('warning', 'unused') : '',
         i.valid ? '' : badge('critical', 'invalid')
     ].join(' ');
+    /* One place naming everything the tiles and badges flag, so a count is never the end of the trail */
+    const sectionOf = (t) => TABLE_SECTIONS[t.section] ?? t.section;
+    const showLink = (target) => `<button class="link" data-scroll="${target}">show</button>`;
+    const bloatedTables = tables.filter(bloated).sort((a, b) => b.deadRows - a.deadRows);
+    const lowCacheTables = withRatio.filter((t) => t.cacheHitRatio < 90).sort((a, b) => a.cacheHitRatio - b.cacheHitRatio);
+    const lowHotTables = tables.filter((t) => t.rowsUpdated > 1000 && hotRatio(t) < 50).sort((a, b) => hotRatio(a) - hotRatio(b));
+    const attentionPart = (id, title, hint, cols, rows) => (rows.length
+        ? `<div class="attention-part" id="${id}"><div class="attention-title">${esc(title)} <span class="card-note">${esc(hint)}</span></div>${table(cols, rows)}</div>`
+        : '');
+    const attention = [
+        attentionPart('pg-attention-bloat', 'Dead-row bloat', 'vacuum is not keeping up, or something holds it back',
+            [{ label: 'Table' }, { label: 'Section' }, { label: 'Live rows', num: true }, { label: 'Dead rows', num: true },
+             { label: 'Dead / live', num: true }, { label: 'Last vacuum' }],
+            bloatedTables.map((t) => `<tr><td class="mono">${esc(t.tableName)}</td><td>${esc(sectionOf(t))}</td>
+              <td class="num">${num(t.liveRows)}</td><td class="num">${num(t.deadRows)}</td>
+              <td class="num">${t.liveRows ? pct((100 * t.deadRows) / t.liveRows) : nil('n/a')}</td><td>${ts(t.lastVacuum)}</td></tr>`)),
+        attentionPart('pg-attention-unused', 'Unused indexes', 'never scanned since the statistics reset - drop candidates',
+            [{ label: 'Table' }, { label: 'Index' }, { label: 'Size', num: true }, { label: 'Entries read', num: true }],
+            [...unused].sort((a, b) => b.sizeBytes - a.sizeBytes).map((i) => `<tr><td class="mono">${esc(i.tableName)}</td>
+              <td class="mono">${esc(i.indexName)}</td><td class="num">${esc(i.size)}</td><td class="num">${num(i.idxTupRead)}</td></tr>`)),
+        attentionPart('pg-attention-invalid', 'Invalid indexes', 'left by a failed CREATE INDEX CONCURRENTLY - drop or rebuild',
+            [{ label: 'Table' }, { label: 'Index' }, { label: 'Size', num: true }],
+            invalid.map((i) => `<tr><td class="mono">${esc(i.tableName)}</td><td class="mono">${esc(i.indexName)}</td>
+              <td class="num">${esc(i.size)}</td></tr>`)),
+        attentionPart('pg-attention-cache', 'Low cache hit', 'under 90% of block requests served from shared buffers',
+            [{ label: 'Table' }, { label: 'Section' }, { label: 'Cache hit', num: true }, { label: 'Total size', num: true }],
+            lowCacheTables.map((t) => `<tr><td class="mono">${esc(t.tableName)}</td><td>${esc(sectionOf(t))}</td>
+              <td class="num">${pct(t.cacheHitRatio)}</td><td class="num">${esc(t.totalSize)}</td></tr>`)),
+        /* Usually by design: an update that changes an indexed column - a status flag in an index, as on the CDC inbox
+           and the queue tables - can never be HOT, and fillfactor does not change that. It only helps when no indexed
+           column changes and the page is merely full. The table's indexes are listed so the cause can be read off. */
+        attentionPart('pg-attention-hot', 'Few HOT updates',
+            'expected when updates change an indexed column, such as a status in an index - fillfactor helps only when they do not',
+            [{ label: 'Table' }, { label: 'Section' }, { label: 'Updates', num: true }, { label: 'HOT', num: true }, { label: 'Indexes' }],
+            lowHotTables.map((t) => `<tr><td class="mono">${esc(t.tableName)}</td><td>${esc(sectionOf(t))}</td>
+              <td class="num">${num(t.rowsUpdated)}</td><td class="num">${pct(hotRatio(t))}</td>
+              <td class="mono">${(t.indexes ?? []).map((i) => esc(i.indexName)).join('<br>') || nil()}</td></tr>`))
+    ].join('');
     const indexDetails = (rows) => {
         const indexes = rows.flatMap((t) => (t.indexes ?? []).map((i) => ({ ...i, tableName: t.tableName })));
         if (!indexes.length) return '';
@@ -591,14 +629,19 @@ views.postgresql = async () => {
     <div class="kpi-row">
       ${tile('Essentials tables', num(tables.length), 'that exist in this database')}
       ${tile('Total size', prettyBytes(totalBytes), 'tables, indexes and TOAST')}
-      ${tile('Lowest cache hit', lowest ? pct(lowest.cacheHitRatio) : nil(), lowest ? esc(lowest.tableName) : 'no block access yet',
+      ${tile('Lowest cache hit', lowest ? pct(lowest.cacheHitRatio) : nil(),
+             lowest ? `${esc(lowest.tableName)}${lowCacheTables.length ? ` · ${showLink('pg-attention-cache')}` : ''}` : 'no block access yet',
              !!(lowest && lowest.cacheHitRatio < 90))}
-      ${tile('Dead-row bloat', num(tables.filter(bloated).length), 'tables with many dead rows', tables.some(bloated))}
+      ${tile('Dead-row bloat', num(bloatedTables.length),
+             `tables with many dead rows${bloatedTables.length ? ` · ${showLink('pg-attention-bloat')}` : ''}`, bloatedTables.length > 0)}
       ${tile('Unused indexes', num(unused.length),
-             unused.length ? `${prettyBytes(unused.reduce((sum, i) => sum + i.sizeBytes, 0))} written for nothing` : 'every non-unique index is scanned',
+             unused.length ? `${prettyBytes(unused.reduce((sum, i) => sum + i.sizeBytes, 0))} written for nothing · ${showLink('pg-attention-unused')}`
+                           : 'every non-unique index is scanned',
              unused.length > 0)}
-      ${invalid.length ? tile('Invalid indexes', num(invalid.length), 'maintained but never used - drop or rebuild', true) : ''}
+      ${invalid.length ? tile('Invalid indexes', num(invalid.length), `maintained but never used · ${showLink('pg-attention-invalid')}`, true) : ''}
     </div>
+
+    ${attention ? `<div id="pg-attention">${card('Needs attention', attention, 'what the tiles and badges flag', true)}</div>` : ''}
 
     ${slowCard}
 
@@ -1719,6 +1762,12 @@ document.addEventListener('click', async (e) => {
         } catch (err) {
             host.innerHTML = card('Run details', errorState(err, 'essentials_scheduler_reader'), null, true);
         }
+        return;
+    }
+
+    const scrollTarget = e.target.closest('[data-scroll]');
+    if (scrollTarget) {
+        document.getElementById(scrollTarget.dataset.scroll)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
         return;
     }
 

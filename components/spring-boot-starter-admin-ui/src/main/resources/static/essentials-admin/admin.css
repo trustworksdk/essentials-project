@@ -453,3 +453,8 @@ h3.sub { font-size: 13px; margin: 0 0 8px; color: var(--ink-secondary); font-wei
 .index-details { border-top: 1px solid var(--gridline); }
 .index-details > summary { cursor: pointer; padding: 10px 14px; color: var(--ink-secondary); }
 .index-details[open] > summary { border-bottom: 1px solid var(--gridline); }
+
+/* "Needs attention" card on the PostgreSQL statistics view: one titled table per kind of finding */
+.attention-part + .attention-part { border-top: 1px solid var(--gridline); }
+.attention-title { padding: 10px 14px 4px; font-weight: 600; }
+.attention-part { scroll-margin-top: 16px; }
