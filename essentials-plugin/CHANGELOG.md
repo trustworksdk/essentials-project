@@ -22,6 +22,8 @@ targets, with a `-N` suffix for plugin-only releases.
   (`LLM-postgresql-event-store.md`).
 - **Bundled docs** — a gap is resolved only once its event was handed to the subscriber, so a stop or crash
   redelivers a gap fill instead of losing it (`LLM-postgresql-event-store.md`).
+- **Bundled docs** — subscribers acknowledge handled gap fills through the new `SubscriberAcknowledgement`, so
+  a fill's gap is resolved inside the handler's unit of work (`LLM-postgresql-event-store.md`).
 - **New trap `ESS-116`** — a handler that skips everything at or below the highest `GlobalEventOrder` it
   has seen drops late-committed events (`LLM-traps.md`).
 

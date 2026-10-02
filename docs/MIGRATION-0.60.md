@@ -889,21 +889,36 @@ highest, the 10 lowest and a rotating window of 20 in between, so a poll carries
 **What to do:** nothing. A gap handler you built with your own `ResolveTransientGapsToIncludeInQueryStrategy` is
 unchanged.
 
-### A gap is resolved only once its event was handed to the subscriber
+### A gap is resolved only once its event was handled
 
 0.50 resolved a transient gap when a poll or a CDC back-fill loaded the event that filled it, before the subscriber
-had it, so a stop or a crash in between lost that event. 0.60 resolves it once the event has been handed on. A fill
-whose poll was cut short, or that a stopped batched subscription still had queued, is delivered again after the
-restart; a stopped batched subscription keeps its resume point at the lowest such fill, so the events after it are
-delivered again too.
+had it, so a stop or a crash in between lost that event. 0.60 resolves it only once the event has been handled. A
+subscription the `EventStoreSubscriptionManager` creates resolves it inside the handler's own unit of work, so a fill
+that was still waiting for its batch, for an I/O retry or for demand when the subscription stopped or the process
+died is delivered again after the restart.
+
+Code that calls `pollEvents(...)` or `unboundedPollForEvents(...)` directly keeps the gap open only until the event
+is handed on, unless it passes a `SubscriberAcknowledgement` (new in 0.60, see
+[release notes 2.12](RELEASE-NOTES-0.60.0.md#212-subscribers-acknowledge-the-gap-fills-they-handled)). A
+`BatchedPersistedEventSubscriber` built without an acknowledgement keeps its resume point at the lowest fill it had
+queued when stopped, so the events after that fill are delivered again too.
 
 **What to do:**
 
 - Make handlers tolerate a redelivered event, as they already must for an event whose handling a stop interrupted.
-- If you implement `SubscriptionGapHandler` yourself: a poll that publishes gap fills now leaves those gaps out of the
-  `transientGapsIncludedInQuery` it passes to `reconcileGapsAndReport(...)` before publishing, and calls
-  `reconcileGapsAndReport(...)` a second time for them once they are published. Do not promote a gap whose event is
-  among the events you are given.
+- If you poll the event store yourself and want the same guarantee: create a `SubscriberAcknowledgement` per
+  subscription, pass it to the `pollEvents(...)` overload that takes one (and to
+  `PersistedEventSubscriberBuilder`/`BatchedPersistedEventSubscriberBuilder.setSubscriberAcknowledgement(..)` if you
+  use them), and acknowledge every event you handled or gave up on, inside the unit of work you handled it in. Do not
+  acknowledge an event you did not handle because you stopped.
+- If you implement `SubscriptionGapHandler` yourself: calls to it are now serialized per subscription, and may run on
+  the subscriber's thread inside its unit of work. The new default `resolveFilledGaps(...)` resolves an acknowledged
+  fill's gap by calling `reconcileGapsAndReport(...)`; override it with a plain delete of those gaps if your handler
+  can. A poll that publishes gap fills leaves those gaps out of the `transientGapsIncludedInQuery` it passes to
+  `reconcileGapsAndReport(...)`, and adds the fills still awaiting acknowledgement to the events it passes. Do not
+  promote a gap whose event is among the events you are given.
+- If you mock an event store that `CdcEventStore` wraps, stub the `pollEvents(...)` overload that takes a
+  `SubscriberAcknowledgement`: that is the one `CdcEventStore` now calls.
 
 ---
 

@@ -779,6 +779,34 @@ place the docs are edited; see the root README's [Editing the LLM docs](../READM
 → [`essentials-plugin/README.md`](../essentials-plugin/README.md),
 [`essentials-plugin/CHANGELOG.md`](../essentials-plugin/CHANGELOG.md)
 
+### 2.12 Subscribers acknowledge the gap fills they handled
+
+A gap fill arrives after higher global orders, so a subscriber's resume point is already past it and its open
+transient gap is the only durable record that the event is still owed. 0.60 resolves that gap only once the
+subscriber has handled the event, so a stop or a crash before then delivers the event again instead of losing it.
+Subscriptions created by the `EventStoreSubscriptionManager` do this out of the box, and resolve the gap inside the
+handler's own unit of work, atomically with the handling. A rolled-back handler leaves the gap open.
+
+The hook is a new, opt-in API in `postgresql-event-store`. Everything in it is additive:
+
+| API | What it is |
+|---|---|
+| `SubscriberAcknowledgement` | One per subscription. `create()`, then the subscriber calls `acknowledge(event)` / `acknowledge(events)` for every event it handled or gave up on. `isHonoured()` tells it whether the event store resolves gap fills on acknowledgement |
+| `EventStore.pollEvents(..., SubscriberAcknowledgement)` (for a `long` and a `GlobalEventOrder` start) and `EventStore.unboundedPollForEvents(..., SubscriberAcknowledgement)` | New default methods. The defaults ignore the acknowledgement and call the existing overload; `PostgresqlEventStore` and `CdcEventStore` override them |
+| `SubscriptionGapHandler.resolveFilledGaps(AggregateType, List<PersistedEvent>)` | New default method that resolves the transient gaps of the given fills. The default calls `reconcileGapsAndReport(...)`; `PostgresqlEventStreamGapHandler` overrides it with a plain delete that never records or promotes a gap |
+| `PersistedEventSubscriberBuilder.setSubscriberAcknowledgement(..)`, `BatchedPersistedEventSubscriberBuilder.setSubscriberAcknowledgement(..)` | Optional. Hand the subscriber the acknowledgement you pass to `pollEvents` |
+
+A subscriber that opts in must acknowledge each event once it has handled it, ideally inside the unit of work it
+handled it in, and each event it gives up on (skipped, or handed off). It must not acknowledge an event it did not
+handle because it stopped: that event is owed to the next subscription. While a fill is unacknowledged the same
+subscription is not handed it again, however often a poll reads it.
+
+A direct caller of `pollEvents` or `unboundedPollForEvents` that passes no acknowledgement keeps the behaviour
+described in [§3](#3-bug-fixes): the gap is resolved once the event is handed on.
+
+→ [`postgresql-event-store` README § Gap Types](../components/postgresql-event-store/README.md#gap-types),
+[`docs/MIGRATION-0.60.md` § A gap is resolved only once its event was handled](MIGRATION-0.60.md#a-gap-is-resolved-only-once-its-event-was-handled)
+
 ---
 
 ## 3. Bug fixes
@@ -805,7 +833,7 @@ place the docs are edited; see the root README's [Editing the LLM docs](../READM
 | **Polling delivered events again after a gap was filled.** Each delivered event set the next read position to its global order + 1, so a poll that returned only the late event of a filled gap moved the read position back, and the next poll delivered everything above it a second time. The read position now only moves forward. A poll that returned more gap fills than its subscriber asked for also resolved those gaps without delivering the extra events, which only the re-read used to cover; such a gap now stays open until a later poll delivers its event | Polling subscriptions with a gap handler |
 | **Polling could miss a late commit behind rolled-back appends for good.** The default `PostgresqlEventStreamGapHandler` asked each poll for only the 2 lowest open gaps, so with rolled-back appends below it a late commit was not looked for until those were promoted to permanent after 120 s - and when it had been found in the same poll as them, it was promoted with them and never delivered. The default now asks for every open gap up to 50, and beyond that for the 20 highest, the 10 lowest and a rotating window of 20 in between. A gap handler built with your own `ResolveTransientGapsToIncludeInQueryStrategy` is unchanged | Polling subscriptions with the default gap handler, the Spring Boot starter included |
 | **A tenant-filtered polling subscription recorded other tenants' events as gaps.** The tenant was filtered in SQL, so their global orders looked missing; they were recorded as transient gaps, promoted to permanent gaps, which every subscriber of the aggregate type shares, and counted in the gap statistics. Polling now loads every tenant's events in its range, reconciles gaps against all of them, and filters by tenant in memory, as the CDC path does. Permanent gaps recorded this way before the upgrade stay until `resetPermanentGapsFor(aggregateType)` is called. A tenant filter on a store without a tenant column used to fail every poll; it now delivers every event, since an event without a tenant belongs to every tenant | Polling subscriptions with `onlyIncludeEventIfItBelongsToTenant` |
-| **A subscription that stopped or crashed could lose a gap fill it had not handled yet.** A gap fill arrives after higher global orders, so the subscriber's resume point is already past it, and the open gap is the only durable record that its event is still owed. Polling and CDC resolved that gap when they loaded the event, before handing it to the subscriber, so a stop (shutdown, fenced-lock hand-over, `resetFrom`, unsubscribe) or a crash in between lost the event for good: the rest of a poll or back-fill page a stop cut short, a fill still waiting in a batched subscription's batch, or a fill whose handler had not committed when the process died. A gap is now resolved only once its event has been handed to the subscriber, and a stopped batched subscription keeps its resume point at the lowest fill it had queued. Such a fill can therefore be delivered again after the restart, and for a batched subscription so can the events between it and the old resume point | Subscriptions with a gap handler, on polling and under Hybrid CDC |
+| **A subscription that stopped or crashed could lose a gap fill it had not handled yet.** A gap fill arrives after higher global orders, so the subscriber's resume point is already past it, and the open gap is the only durable record that its event is still owed. Polling and CDC resolved that gap when they loaded the event, before handing it to the subscriber, so a stop (shutdown, fenced-lock hand-over, `resetFrom`, unsubscribe) or a crash in between lost the event for good: the rest of a poll or back-fill page a stop cut short, a fill still waiting in a batched subscription's batch, or a fill whose handler had not committed when the process died. A gap is now resolved only once its event has been handled: for a subscription the `EventStoreSubscriptionManager` creates, inside the handler's own unit of work, so a fill still waiting for its batch, for an I/O retry or for demand is delivered again after a stop or crash, and nothing else is. A caller of `pollEvents` that passes no `SubscriberAcknowledgement` gets the fill resolved once it is handed on, and a stopped batched subscriber built without one keeps its resume point at the lowest fill it had queued, so the events between it and the old resume point are delivered again too. See [2.12](#212-subscribers-acknowledge-the-gap-fills-they-handled) | Subscriptions with a gap handler, on polling and under Hybrid CDC |
 
 **The 0.50.1 fixes are all in 0.60,** either merged directly or made unnecessary by other work. The polling
 unit-of-work leak fix came in unchanged. The Jackson 2-specific fixes are no longer needed now that Jackson 2

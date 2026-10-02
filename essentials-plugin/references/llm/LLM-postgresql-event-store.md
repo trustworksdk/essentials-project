@@ -764,10 +764,16 @@ gaps up to 50; beyond that the 20 highest + 10 lowest + a rotating window of 20 
 `ResolveTransientGapsToIncludeInQueryStrategy` (longer constructors) replaces that. Transient gaps are per subscriber;
 permanent gaps are shared by every subscriber of the `AggregateType`. A tenant-filtered subscription loads every tenant's
 events in the polled range and filters in memory (polling and CDC alike), so other tenants' orders are never gaps.
-A gap is resolved only once its event has been handed to the subscriber, so a stop or crash before that redelivers the
-fill rather than losing it (a stopped batched subscription holds its resume point at the lowest fill it had queued).
-A custom `SubscriptionGapHandler` gets a second `reconcileGapsAndReport` call for a poll's fills after they are published,
-and must not promote a gap whose event is in the events it is given.
+A gap is resolved only once its event has been handled, so a stop or crash before that redelivers the fill rather
+than losing it. `EventStoreSubscriptionManager` subscriptions do this out of the box: the subscriber acknowledges each
+event via a `SubscriberAcknowledgement` and the store deletes the fill's gap inside the handler's unit of work.
+Polling yourself: `SubscriberAcknowledgement.create()` per subscription, pass it to the `pollEvents(...)` /
+`unboundedPollForEvents(...)` overload taking one (and `setSubscriberAcknowledgement(..)` on the subscriber builders),
+then `acknowledge(...)` each event handled or given up on - never one skipped because you stopped. Without it the gap
+resolves on hand-on, and a stopped batched subscriber holds its resume point at the lowest fill it had queued.
+A custom `SubscriptionGapHandler` gets default `resolveFilledGaps(AggregateType, List<PersistedEvent>)`, serialized calls
+per subscription, and must not promote a gap whose event is in the events it is given. Mocking a store wrapped by
+`CdcEventStore`? Stub the `pollEvents` overload taking a `SubscriberAcknowledgement`.
 
 ### Ordering Guarantees
 
