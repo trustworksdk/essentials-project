@@ -232,19 +232,18 @@
         "list": [
             {
                 "current": {
-                    "selected": false
+                    "selected": false,
+                    "text": "",
+                    "value": ""
                 },
-                "description": "Trace Id",
+                "description": "Paste a trace id - from Tempo's search, or a log line's TraceID link",
                 "hide": 0,
-                "includeAll": false,
                 "label": "Trace ID",
-                "multi": false,
                 "name": "traceId",
                 "options": [],
                 "query": "",
-                "queryValue": "",
                 "skipUrlSync": false,
-                "type": "custom"
+                "type": "textbox"
             }
         ]
     },

@@ -126,6 +126,12 @@ Grafana from `compose.yml`'s `observability` compose profile; config and dashboa
 - **Export is off in `application.yml`** (`management.otlp.metrics.export.enabled`,
   `management.tracing.export.enabled`) and on only in `application-observability.yml`; otherwise every test
   and plain run spends each export step failing to reach a collector that is not there.
+- **`management.tracing.enabled: true` is an Essentials switch, not a Boot one, and must stay.** The starters
+  register their tracing interceptors (DurableQueues, event store), the DurableQueues operation metrics and the
+  subscriber global-order gauges only when it is `true`. Without it Tempo holds nothing but HTTP-request traces,
+  which the background load never makes, and no log line carries a trace id - so traces and logs look empty.
+- **The Logs/Traces/Metrics dashboard needs a trace id typed into its `traceId` textbox** - copy one from Tempo
+  search. A `custom` variable with no options, which it was, offers an empty dropdown and nothing can be entered.
 - **loki4j 2.x labels are one per line.** The comma-separated form 1.x accepted fails the whole logging
   configuration at start-up (`Unable to split ... to key-value pairs`).
 - **Dashboards query OTLP names** (`..._milliseconds_bucket`, `..._total`), not the Prometheus registry's

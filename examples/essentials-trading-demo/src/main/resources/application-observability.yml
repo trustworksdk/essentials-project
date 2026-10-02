@@ -24,6 +24,11 @@ management:
         url: http://localhost:4318/v1/metrics
         step: 5s
   tracing:
+    # Not a Spring Boot switch: the Essentials starters register their tracing interceptors - spans around
+    # DurableQueues and event store operations, and with them the trace ids in log lines - only when this is
+    # true, and so do the DurableQueues operation metrics and the subscriber global-order gauges. Without it the
+    # only traces are HTTP requests, which the demo's background load does not make.
+    enabled: true
     export:
       enabled: true
     # Every trace. Traces start at HTTP requests - the admin API, the console, the load-generator
