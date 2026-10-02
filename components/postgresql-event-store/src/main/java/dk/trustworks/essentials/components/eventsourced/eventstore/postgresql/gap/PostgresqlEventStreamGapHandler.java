@@ -25,7 +25,7 @@ import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.tr
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.types.GlobalEventOrder;
 import dk.trustworks.essentials.components.foundation.postgresql.*;
 import dk.trustworks.essentials.components.foundation.schema.*;
-import dk.trustworks.essentials.components.foundation.transaction.UnitOfWork;
+import dk.trustworks.essentials.components.foundation.transaction.*;
 import dk.trustworks.essentials.components.foundation.types.*;
 import dk.trustworks.essentials.shared.functional.tuple.Pair;
 import dk.trustworks.essentials.types.LongRange;
@@ -35,6 +35,8 @@ import java.time.*;
 import java.time.temporal.ChronoUnit;
 import java.util.*;
 import java.util.concurrent.*;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.function.Supplier;
 import java.util.stream.*;
 
 import static dk.trustworks.essentials.shared.FailFast.*;
@@ -42,6 +44,15 @@ import static dk.trustworks.essentials.shared.FailFast.*;
 /**
  * Postgresql specific version of the {@link EventStreamGapHandler}, which will maintain per {@link SubscriberId} transient gaps
  * and permanent gaps (across all subscribers) in the {@link #TRANSIENT_SUBSCRIBER_GAPS_TABLE_NAME} and {@link #PERMANENT_GAPS_TABLE_NAME}
+ * <p>
+ * <b>Use the {@link EventStoreUnitOfWorkFactory} the {@link PostgresqlEventStore} uses.</b> A subscriber acknowledges a gap fill
+ * inside its own {@link UnitOfWork}, and the gap handler resolves the fill's transient gap in <i>that</i> unit of work, so that
+ * handling the event and resolving its gap commit or roll back together. That only holds when the unit of work factory given
+ * here is the event store's (or shares its transaction, as two Spring transaction-aware factories on one transaction manager do).
+ * With another factory the gap handler finds no current unit of work of its own and resolves the gap in a separate transaction
+ * that commits <i>before</i> the subscriber's does: a crash in between loses the fill (its gap is gone, the event was not handled).
+ * The handler cannot see the event store at construction, so it detects this the first time it is called outside a unit of work
+ * of its factory, and then logs a one-time WARN.
  *
  * @param <CONFIG> The concrete {@link AggregateEventStreamConfiguration}
  */
@@ -55,6 +66,7 @@ public final class PostgresqlEventStreamGapHandler<CONFIG extends AggregateEvent
     private final        ResolveTransientGapsToIncludeInQueryStrategy         resolveTransientGapsToIncludeInQueryStrategy;
     private final        ResolveTransientGapsToPermanentGapsPromotionStrategy resolveTransientGapsToPermanentGapsPromotionStrategy;
     private              long                                                 refreshTransientGapsFromStorageEverySeconds;
+    private final        AtomicBoolean                                        warnedAboutUnitOfWorkOutsideCurrent  = new AtomicBoolean();
 
     /**
      * The default {@link ResolveTransientGapsToIncludeInQueryStrategy}: every open transient gap while there are at most
@@ -62,7 +74,7 @@ public final class PostgresqlEventStreamGapHandler<CONFIG extends AggregateEvent
      * poll. A subscription keeps its own rotation, which is why the {@link PostgresqlSubscriptionGapHandler} recognises
      * this instance rather than calling it - see {@link TransientGapsQuerySelection}.
      */
-    private static final ResolveTransientGapsToIncludeInQueryStrategy DEFAULT_RESOLVE_TRANSIENT_GAPS_TO_INCLUDE_IN_QUERY_STRATEGY = new DefaultResolveTransientGapsToIncludeInQueryStrategy();
+    private static final ResolveTransientGapsToIncludeInQueryStrategy DEFAULT_RESOLVE_TRANSIENT_GAPS_TO_INCLUDE_IN_QUERY_STRATEGY = ResolveTransientGapsToIncludeInQueryStrategy.defaultSelection();
 
     /**
      * Default configuration, which promotes transient gaps to permanent gaps after 120 seconds, and asks each poll for
@@ -93,7 +105,7 @@ public final class PostgresqlEventStreamGapHandler<CONFIG extends AggregateEvent
     }
 
     /**
-     * @param unitOfWorkFactory                                    the unit of work factory that coordinates the event store {@link UnitOfWork}
+     * @param unitOfWorkFactory                                    the unit of work factory that coordinates the event store {@link UnitOfWork} - must be the event store's own factory (see the class documentation)
      * @param refreshTransientGapsFromStorageInterval              how often should transient gaps be refreshed from database. This is a simple low overhead effort to keep local caches of transient gaps
      *                                                             eventually in sync across multiple nodes. Any new transient gaps detected, resolved/deleted are always reflected in the underlying database which is the ultimate
      *                                                             source of truth. If an event stream subscriber, managed through the {@link EventStoreSubscriptionManager} is using an exclusive (i.e. single node) subscription then
@@ -102,7 +114,9 @@ public final class PostgresqlEventStreamGapHandler<CONFIG extends AggregateEvent
      *                                                             using e.g. {@link EventStreamGapHandler#resetPermanentGapsFor(AggregateType)})
      * @param resolveTransientGapsToIncludeInQueryStrategy         strategy that determines how many and which gaps, among all the transient gaps detected for the given subscriber,
      *                                                             should be included from {@link SubscriptionGapHandler#findTransientGapsToIncludeInQuery(AggregateType, LongRange)}
-     *                                                             (which is called from {@link PostgresqlEventStore#pollEvents(AggregateType, long, Optional, Optional, Optional, Optional, Optional)})
+     *                                                             (which is called from {@link PostgresqlEventStore#pollEvents(AggregateType, long, Optional, Optional, Optional, Optional, Optional)}).
+     *                                                             To keep the default selection of 50 gaps (see {@link ResolveTransientGapsToIncludeInQueryStrategy#defaultSelection()}) pass that, or compose it in your own strategy.
+     *                                                             The gaps the {@code resolveTransientGapsToPermanentGapsPromotionStrategy} is about to promote are always added to the query, whatever this strategy returns
      * @param resolveTransientGapsToPermanentGapsPromotionStrategy strategy for when the {@link PostgresqlEventStreamGapHandler} will promote a transient gap to a permanent gap
      */
     public PostgresqlEventStreamGapHandler(EventStoreUnitOfWorkFactory<?> unitOfWorkFactory,
@@ -332,15 +346,43 @@ public final class PostgresqlEventStreamGapHandler<CONFIG extends AggregateEvent
             var transientGapsFor = allTransientGaps.get(aggregateType);
             if (transientGapsFor.isEmpty()) {
                 return NO_GAPS;
-            } else if (resolveTransientGapsToIncludeInQueryStrategy == DEFAULT_RESOLVE_TRANSIENT_GAPS_TO_INCLUDE_IN_QUERY_STRATEGY) {
-                // The default rotates through the gaps, and the rotation belongs to this subscription
-                return transientGapsQuerySelections.computeIfAbsent(aggregateType, type -> new TransientGapsQuerySelection())
-                                                   .select(transientGapsFor);
-            } else {
-                return resolveTransientGapsToIncludeInQueryStrategy.resolveTransientGaps(aggregateType,
-                                                                                         globalOrderQueryRange,
-                                                                                         Collections.unmodifiableList(transientGapsFor));
             }
+            List<GlobalEventOrder> selected;
+            if (resolveTransientGapsToIncludeInQueryStrategy instanceof DefaultResolveTransientGapsToIncludeInQueryStrategy) {
+                // The default rotates through the gaps, and the rotation belongs to this subscription
+                selected = transientGapsQuerySelections.computeIfAbsent(aggregateType, type -> new TransientGapsQuerySelection())
+                                                       .select(transientGapsFor);
+            } else {
+                selected = resolveTransientGapsToIncludeInQueryStrategy.resolveTransientGaps(aggregateType,
+                                                                                             globalOrderQueryRange,
+                                                                                             Collections.unmodifiableList(transientGapsFor));
+            }
+            return withGapsAboutToBePromoted(aggregateType, transientGapsFor, selected);
+        }
+
+        /**
+         * A gap is only ever promoted to permanent when this subscription's query asked for it and its event was not there
+         * (see {@link #reconcileGapsAndReport}) - the one proof that does not need to know where the events are stored.
+         * Whatever the include strategy returned (the default one asks for a bounded selection, a custom one for anything),
+         * the gaps the promotion strategy would promote now are therefore added, lowest first and at most
+         * {@link TransientGapsQuerySelection#MAX_GAPS_PER_QUERY} of them: with a burst of expired gaps they are
+         * promoted that many per poll. Nothing is added, and nothing costs more than evaluating the promotion strategy
+         * in memory, while no gap is old enough.
+         */
+        private List<GlobalEventOrder> withGapsAboutToBePromoted(AggregateType aggregateType,
+                                                                 List<Pair<GlobalEventOrder, OffsetDateTime>> transientGapsFor,
+                                                                 List<GlobalEventOrder> selected) {
+            var promotable = resolveTransientGapsToPermanentGapsPromotionStrategy.resolveTransientGapsReadyToBePromotedToPermanentGaps(aggregateType,
+                                                                                                                                       Collections.unmodifiableList(transientGapsFor));
+            if (promotable == null || promotable.isEmpty()) {
+                return selected;
+            }
+            var union = new TreeSet<Long>();
+            promotable.stream().map(GlobalEventOrder::longValue).sorted().limit(TransientGapsQuerySelection.MAX_GAPS_PER_QUERY).forEach(union::add);
+            if (selected != null) {
+                selected.forEach(gap -> union.add(gap.longValue()));
+            }
+            return union.stream().map(GlobalEventOrder::of).collect(Collectors.toList());
         }
 
         @Override
@@ -354,6 +396,10 @@ public final class PostgresqlEventStreamGapHandler<CONFIG extends AggregateEvent
             requireNonNull(globalOrderQueryRange, "No globalOrderQueryRange provided");
             requireNonNull(persistedEvents, "No persistedEvents provided");
             requireNonNull(transientGapsIncludedInQuery, "No transientGaps provided");
+            return inUnitOfWorkOfThisGapHandler(() -> doReconcileGapsAndReport(aggregateType, globalOrderQueryRange, persistedEvents, transientGapsIncludedInQuery));
+        }
+
+        private GapReconciliation doReconcileGapsAndReport(AggregateType aggregateType, LongRange globalOrderQueryRange, List<PersistedEvent> persistedEvents, List<GlobalEventOrder> transientGapsIncludedInQuery) {
 
             log.debug("[{}] Reconciling '{}' Gaps for query with globalOrderQueryRange: {},  persistedEvents size: {} and transientGaps size: {}",
                       subscriberId,
@@ -416,7 +462,7 @@ public final class PostgresqlEventStreamGapHandler<CONFIG extends AggregateEvent
                       aggregateType,
                       allTransientGaps);
             var promotableTransientGaps = new ArrayList<>(resolveTransientGapsToPermanentGapsPromotionStrategy.resolveTransientGapsReadyToBePromotedToPermanentGaps(aggregateType,
-                                                                                                                                                                     allTransientGaps.get(aggregateType)));
+                                                                                                                                                                     allTransientGaps.getOrDefault(aggregateType, List.of())));
             // Never a gap whose event is right here: the event store leaves the gap a gap fill fills open until the
             // subscriber is done with the event (it passes it here without the gap - and keeps passing the fills awaiting
             // acknowledgement), and resolves it then - promoted now, the gap would be gone before the event was handled,
@@ -424,6 +470,19 @@ public final class PostgresqlEventStreamGapHandler<CONFIG extends AggregateEvent
             if (!promotableTransientGaps.isEmpty() && !persistedEvents.isEmpty()) {
                 var reconciledGlobalOrders = persistedEvents.stream().map(PersistedEvent::globalEventOrder).collect(Collectors.toSet());
                 promotableTransientGaps.removeIf(reconciledGlobalOrders::contains);
+            }
+            // Nor a gap this query did not ask for: its event may exist - committed after the subscriber that is to deliver it
+            // looked, or delivered by another node or the CDC bus and awaiting acknowledgement there - and only a query that
+            // asked for the gap and did not get it shows it is still missing. findTransientGapsToIncludeInQuery adds the gaps
+            // about to be promoted to its query, so such a gap is promoted by the next poll's reconciliation instead
+            if (!promotableTransientGaps.isEmpty()) {
+                var askedFor = new HashSet<>(transientGapsIncludedInQuery);
+                if (promotableTransientGaps.removeIf(gap -> !askedFor.contains(gap))) {
+                    log.debug("[{}] Not promoting '{}' Transient Gaps this query did not ask for - the next poll asks for them first. Promoting: {}",
+                              subscriberId,
+                              aggregateType,
+                              promotableTransientGaps);
+                }
             }
             var promotedCount = promoteTransientGapsToPermanentGaps(aggregateType,
                                                                     promotableTransientGaps);
@@ -442,9 +501,30 @@ public final class PostgresqlEventStreamGapHandler<CONFIG extends AggregateEvent
             if (gapFills.isEmpty()) {
                 return GapReconciliation.NONE;
             }
-            var resolvedCount = deleteTransientGaps(aggregateType,
-                                                    gapFills.stream().map(PersistedEvent::globalEventOrder).toList());
-            return new GapReconciliation(0, resolvedCount, 0);
+            return inUnitOfWorkOfThisGapHandler(() -> {
+                var resolvedCount = deleteTransientGaps(aggregateType,
+                                                        gapFills.stream().map(PersistedEvent::globalEventOrder).toList());
+                return new GapReconciliation(0, resolvedCount, 0);
+            });
+        }
+
+        /**
+         * Runs in the current unit of work of this gap handler's {@link UnitOfWorkFactory}. Without one the factory is not
+         * the one the caller (the event store, or a subscriber acknowledging a gap fill) is in, so the work gets a unit of
+         * work, and with it a transaction, of its own - that commits independently of the caller's, which is the crash
+         * window the class documentation describes. Said once.
+         */
+        private GapReconciliation inUnitOfWorkOfThisGapHandler(Supplier<GapReconciliation> action) {
+            if (unitOfWorkFactory.getCurrentUnitOfWork().isPresent()) {
+                return action.get();
+            }
+            if (warnedAboutUnitOfWorkOutsideCurrent.compareAndSet(false, true)) {
+                log.warn("[{}] The gap handler was called without a current unit of work of its own UnitOfWorkFactory, so its gap changes run in a separate transaction that commits independently of the caller's. " +
+                                 "This happens when the PostgresqlEventStreamGapHandler was given another UnitOfWorkFactory than the PostgresqlEventStore uses. " +
+                                 "A crash between the two commits can then lose a gap fill that a subscriber acknowledged. Give the gap handler the event store's UnitOfWorkFactory",
+                         subscriberId);
+            }
+            return unitOfWorkFactory.withUnitOfWork(unitOfWork -> action.get());
         }
 
         /**
@@ -705,6 +785,33 @@ public final class PostgresqlEventStreamGapHandler<CONFIG extends AggregateEvent
          * @return a list of {@link GlobalEventOrder} gaps (can be null or empty if no transient gaps exists for this subscriber)
          */
         List<GlobalEventOrder> resolveTransientGaps(AggregateType forAggregateType, LongRange globalOrderQueryRange, List<Pair<GlobalEventOrder, OffsetDateTime>> allTransientGaps);
+
+        /**
+         * The strategy the {@link PostgresqlEventStreamGapHandler} constructors that take no strategy use: every open transient gap
+         * while there are at most 50, and beyond that the 20 highest (where a late commit lands), the 10 lowest (the next to be
+         * promoted) and a window of 20 of the ones in between that rotates on every call - so every open gap is asked for again
+         * well before it is promoted, however many are open. Use it to keep that selection when passing a
+         * {@link ResolveTransientGapsToPermanentGapsPromotionStrategy} or other options to the longer constructors, or compose it
+         * in your own strategy, e.g. to include extra gaps:
+         * <pre>{@code
+         * var defaultSelection = ResolveTransientGapsToIncludeInQueryStrategy.defaultSelection();
+         * ResolveTransientGapsToIncludeInQueryStrategy mine = (type, range, gaps) -> {
+         *     var selected = new ArrayList<>(defaultSelection.resolveTransientGaps(type, range, gaps));
+         *     // ... add or remove gaps ...
+         *     return selected;
+         * };
+         * }</pre>
+         * Every call returns a new instance; the rotation is kept per instance and aggregate type. Passed to the
+         * {@link PostgresqlEventStreamGapHandler} <b>as is</b>, each subscription rotates independently. Called from your own
+         * strategy, the rotation is shared by every subscription that strategy serves (the strategy is not told which one is
+         * asking), so it advances on every call from any of them - still bounded to 50 gaps per query, but one
+         * subscription may then see a rotating window less often than every {@code ceil(gapsInBetween / 20)} polls.
+         *
+         * @return a new default selection strategy
+         */
+        static ResolveTransientGapsToIncludeInQueryStrategy defaultSelection() {
+            return new DefaultResolveTransientGapsToIncludeInQueryStrategy();
+        }
     }
 
     /**
@@ -779,14 +886,16 @@ public final class PostgresqlEventStreamGapHandler<CONFIG extends AggregateEvent
     }
 
     /**
-     * See {@link #DEFAULT_RESOLVE_TRANSIENT_GAPS_TO_INCLUDE_IN_QUERY_STRATEGY}. The {@link PostgresqlSubscriptionGapHandler}
-     * runs the selection itself, with the rotation of its own subscription; called directly, this one starts a fresh
-     * rotation every time.
+     * See {@link ResolveTransientGapsToIncludeInQueryStrategy#defaultSelection()}. The {@link PostgresqlSubscriptionGapHandler}
+     * runs the selection itself, with the rotation of its own subscription; called directly, the rotation is shared by the
+     * callers of this instance.
      */
     private static final class DefaultResolveTransientGapsToIncludeInQueryStrategy implements ResolveTransientGapsToIncludeInQueryStrategy {
+        private final ConcurrentMap<AggregateType, TransientGapsQuerySelection> selections = new ConcurrentHashMap<>();
+
         @Override
         public List<GlobalEventOrder> resolveTransientGaps(AggregateType forAggregateType, LongRange globalOrderQueryRange, List<Pair<GlobalEventOrder, OffsetDateTime>> allTransientGaps) {
-            return new TransientGapsQuerySelection().select(allTransientGaps);
+            return selections.computeIfAbsent(forAggregateType, type -> new TransientGapsQuerySelection()).select(allTransientGaps);
         }
     }
 

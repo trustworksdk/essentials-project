@@ -46,7 +46,7 @@ import java.util.*;
 import java.util.concurrent.*;
 import java.util.stream.Collectors;
 
-import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.*;
 import static dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.gap.PostgresqlEventStreamGapHandler.TRANSIENT_SUBSCRIBER_GAPS_TABLE_NAME;
 
 @Testcontainers
@@ -395,6 +395,131 @@ class PostgresqlEventStreamGapHandlerIT {
         assertThat(promoted.promotedToPermanentGaps()).isEqualTo(1);
         List<GlobalEventOrder> permanentGaps = unitOfWorkFactory.withUnitOfWork(unitOfWork -> gapHandler.getPermanentGapsFor(aggregateType).toList());
         assertThat(permanentGaps).contains(middle.globalEventOrder());
+    }
+
+    /**
+     * A gap is promoted only by a query that asked for it and did not get its event. A reconciler whose query did not
+     * include the gap (a bounded or custom include strategy, another node, the CDC delegate poll) must leave it
+     * transient: its event may exist, delivered and awaiting acknowledgement - promoting it would drop the gap before
+     * the event was handled.
+     */
+    @Test
+    void a_gap_the_query_did_not_ask_for_is_never_promoted_and_is_asked_for_by_the_next_query() throws InterruptedException {
+        var subscriber = SubscriberId.of("gap-promotion-requires-query-sub");
+        // An include strategy that never asks for any gap
+        var gapHandler = new PostgresqlEventStreamGapHandler<SeparateTablePerAggregateEventStreamConfiguration>(unitOfWorkFactory,
+                                                                                                               Duration.ofMillis(1000),
+                                                                                                               (forAggregateType, range, allTransientGaps) -> NO_TRANSIENT_GAPS,
+                                                                                                               ResolveTransientGapsToPermanentGapsPromotionStrategy.thresholdBased(1))
+                .gapHandlerFor(subscriber);
+        var events = unitOfWorkFactory.withUnitOfWork(() -> eventStore.appendToStream(aggregateType,
+                                                                                        OrderId.random(),
+                                                                                        List.of(new OrderEvent.OrderAccepted(OrderId.random()),
+                                                                                                new OrderEvent.OrderAccepted(OrderId.random()),
+                                                                                                new OrderEvent.OrderAccepted(OrderId.random()))))
+                                      .eventList();
+        var first  = events.get(0);
+        var middle = events.get(1);
+        var last   = events.get(2);
+        var range  = LongRange.between(first.globalEventOrder().longValue(), last.globalEventOrder().longValue());
+
+        unitOfWorkFactory.withUnitOfWork(unitOfWork -> gapHandler.reconcileGapsAndReport(aggregateType, range, List.of(first, last), List.of()));
+        assertThat(gapHandler.getTransientGapsFor(aggregateType)).containsExactly(middle.globalEventOrder());
+        Thread.sleep(2_500);
+
+        // Old enough to be promoted, but this query did not ask for it
+        var notAskedFor = unitOfWorkFactory.withUnitOfWork(unitOfWork -> gapHandler.reconcileGapsAndReport(aggregateType, LongRange.from(last.globalEventOrder().longValue() + 1), List.of(), List.of()));
+        assertThat(notAskedFor.promotedToPermanentGaps()).isZero();
+        assertThat(gapHandler.getTransientGapsFor(aggregateType)).containsExactly(middle.globalEventOrder());
+        assertThat(permanentGaps(gapHandler)).doesNotContain(middle.globalEventOrder());
+
+        // ... so the next query asks for it, whatever the include strategy says
+        var queried = unitOfWorkFactory.withUnitOfWork(unitOfWork -> gapHandler.findTransientGapsToIncludeInQuery(aggregateType, range));
+        assertThat(queried).containsExactly(middle.globalEventOrder());
+
+        // If its event is there it is resolved, never promoted
+        var delivered = unitOfWorkFactory.withUnitOfWork(unitOfWork -> gapHandler.reconcileGapsAndReport(aggregateType, LongRange.only(middle.globalEventOrder().longValue()), List.of(middle), queried));
+        assertThat(delivered).isEqualTo(new GapReconciliation(0, 1, 0));
+        assertThat(permanentGaps(gapHandler)).doesNotContain(middle.globalEventOrder());
+    }
+
+    @Test
+    void a_gap_the_query_asked_for_and_did_not_get_is_promoted() throws InterruptedException {
+        var subscriber = SubscriberId.of("gap-promotion-asked-for-sub");
+        var gapHandler = eventStore.getEventStreamGapHandler().gapHandlerFor(subscriber);
+        var events = unitOfWorkFactory.withUnitOfWork(() -> eventStore.appendToStream(aggregateType,
+                                                                                        OrderId.random(),
+                                                                                        List.of(new OrderEvent.OrderAccepted(OrderId.random()),
+                                                                                                new OrderEvent.OrderAccepted(OrderId.random()),
+                                                                                                new OrderEvent.OrderAccepted(OrderId.random()))))
+                                      .eventList();
+        var first  = events.get(0);
+        var middle = events.get(1);
+        var last   = events.get(2);
+        var range  = LongRange.between(first.globalEventOrder().longValue(), last.globalEventOrder().longValue());
+
+        unitOfWorkFactory.withUnitOfWork(unitOfWork -> gapHandler.reconcileGapsAndReport(aggregateType, range, List.of(first, last), List.of()));
+        Thread.sleep(2_500);
+
+        var queried  = unitOfWorkFactory.withUnitOfWork(unitOfWork -> gapHandler.findTransientGapsToIncludeInQuery(aggregateType, range));
+        var promoted = unitOfWorkFactory.withUnitOfWork(unitOfWork -> gapHandler.reconcileGapsAndReport(aggregateType, range, List.of(first, last), queried));
+
+        assertThat(promoted.promotedToPermanentGaps()).isEqualTo(1);
+        assertThat(permanentGaps(gapHandler)).contains(middle.globalEventOrder());
+    }
+
+    /**
+     * A gap handler built on another {@link EventStoreUnitOfWorkFactory} than the event store's resolves in a
+     * transaction of its own: it commits even when the caller's unit of work rolls back. It must work (and warn once)
+     * rather than fail, and the same handler on the event store's factory must roll back with the caller.
+     */
+    @Test
+    void a_gap_handler_on_another_unit_of_work_factory_resolves_in_its_own_transaction() {
+        var subscriber = SubscriberId.of("gap-foreign-uow-sub");
+        var events = unitOfWorkFactory.withUnitOfWork(() -> eventStore.appendToStream(aggregateType,
+                                                                                        OrderId.random(),
+                                                                                        List.of(new OrderEvent.OrderAccepted(OrderId.random()),
+                                                                                                new OrderEvent.OrderAccepted(OrderId.random()),
+                                                                                                new OrderEvent.OrderAccepted(OrderId.random()))))
+                                      .eventList();
+        var first  = events.get(0);
+        var middle = events.get(1);
+        var last   = events.get(2);
+        var range  = LongRange.between(first.globalEventOrder().longValue(), last.globalEventOrder().longValue());
+
+        var sameFactoryHandler    = eventStore.getEventStreamGapHandler().gapHandlerFor(subscriber);
+        var foreignFactoryHandler = new PostgresqlEventStreamGapHandler<SeparateTablePerAggregateEventStreamConfiguration>(new EventStoreManagedUnitOfWorkFactory(jdbi)).gapHandlerFor(subscriber);
+        unitOfWorkFactory.withUnitOfWork(unitOfWork -> sameFactoryHandler.reconcileGapsAndReport(aggregateType, range, List.of(first, last), List.of()));
+        assertThat(sameFactoryHandler.getTransientGapsFor(aggregateType)).containsExactly(middle.globalEventOrder());
+
+        // Same factory: resolved in the caller's unit of work, which rolls back
+        assertThatThrownBy(() -> unitOfWorkFactory.usingUnitOfWork(unitOfWork -> {
+            sameFactoryHandler.resolveFilledGaps(aggregateType, List.of(middle));
+            throw new IllegalStateException("rollback");
+        })).hasRootCauseInstanceOf(IllegalStateException.class);
+        assertThat(currentTransientGaps(subscriber)).containsExactly(middle.globalEventOrder());
+
+        // Another factory: works, but in a transaction of its own - the gap is gone though the caller rolled back
+        assertThatThrownBy(() -> unitOfWorkFactory.usingUnitOfWork(unitOfWork -> {
+            var outcome = foreignFactoryHandler.resolveFilledGaps(aggregateType, List.of(middle));
+            assertThat(outcome.resolvedTransientGaps()).isEqualTo(1);
+            throw new IllegalStateException("rollback");
+        })).hasRootCauseInstanceOf(IllegalStateException.class);
+        assertThat(currentTransientGaps(subscriber)).isEmpty();
+    }
+
+    private List<GlobalEventOrder> permanentGaps(SubscriptionGapHandler gapHandler) {
+        List<GlobalEventOrder> gaps = unitOfWorkFactory.withUnitOfWork(unitOfWork -> gapHandler.getPermanentGapsFor(aggregateType).toList());
+        return gaps;
+    }
+
+    private List<GlobalEventOrder> currentTransientGaps(SubscriberId subscriber) {
+        return unitOfWorkFactory.withUnitOfWork(unitOfWork -> unitOfWork.handle()
+                                                                         .createQuery("SELECT gap_global_event_order FROM " + TRANSIENT_SUBSCRIBER_GAPS_TABLE_NAME + " WHERE aggregate_type = :aggregate_type AND subscriber_id = :subscriber_id")
+                                                                         .bind("aggregate_type", aggregateType)
+                                                                         .bind("subscriber_id", subscriber)
+                                                                         .mapTo(GlobalEventOrder.class)
+                                                                         .list());
     }
 
     private Pair<OrderId, List<? extends OrderEvent>> createTestEvents() {
