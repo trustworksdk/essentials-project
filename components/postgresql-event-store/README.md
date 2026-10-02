@@ -1487,6 +1487,32 @@ The event is **not** skipped and is not reported as a failure: the resume point 
 Stopping a subscription also interrupts a handler that is in progress - a single event on the polling path, and a whole batch for a batched subscription. The event (or the batch, from its first event) is likewise handled again when the subscription is started again.
 Handlers must therefore tolerate being called again for an event whose earlier attempt was interrupted.
 
+Only a real stop counts. Under CDC, a subscription that switches between polling and the CDC bus - at boot, and whenever replication drops or recovers - has its delivery thread interrupted as well, but the subscription keeps running: a retry backoff interrupted that way is waited out and the retries carry on.
+
+#### Handing a failed event back to the handler
+
+Before the policy gives up on an event - skips it, or stops at it - it offers the event back to the handler through `PersistedEventHandler#handOffFailedEvent(PersistedEvent event, Throwable failure)`.
+The default returns `false`, so existing handlers are unaffected.
+It is called on the delivery thread once the policy's retries are used up, after the `UnitOfWork` the event was handled in has been rolled back, so a handler that takes the event over must do so in a `UnitOfWork` of its own - typically by queueing it for redelivery:
+
+```java
+new PersistedEventHandler() {
+    @Override
+    public void handle(PersistedEvent event) { ... }
+
+    @Override
+    public boolean handOffFailedEvent(PersistedEvent event, Throwable failure) {
+        unitOfWorkFactory.usingUnitOfWork(() -> durableQueues.queueMessage(queueName, Message.of(event.eventId())));
+        return true;
+    }
+}
+```
+
+Returning `true` makes the subscription carry on as if the event had been handled: no skip, no stop, no `handleEventFailed` observer callback, and the resume point moves past the event - only after the method returned, so a crash before then redelivers the event.
+Returning `false`, or throwing, lets the policy give up as usual (an exception is logged and added to the failure as suppressed).
+It applies to single-event asynchronous subscriptions; batched and in-transaction subscriptions don't call it.
+[`ViewEventProcessor`](#vieweventprocessor) uses it to queue a failure it could not queue in the subscription's `UnitOfWork`.
+
 #### Observing a stopped subscription
 
 A subscription stopped by `stop()` otherwise looks exactly like a healthy subscription that has no new events, so surface the stop explicitly:
@@ -1743,19 +1769,22 @@ public class OrderDashboardProcessor extends ViewEventProcessor {
 3. If queue already has messages for that aggregate ID, new events are queued to maintain order
 
 The direct handler runs under a savepoint in the subscription's transaction, so a handler that fails - for example on a constraint violation - has only its own SQL writes rolled back, and the event is queued in the same transaction.
-A savepoint only undoes SQL, however. If the failed handler left state in the `UnitOfWork` that a savepoint cannot undo, committing the `UnitOfWork` to queue the event would act on that state although the handler failed. So in these cases the event is **not** queued:
+A savepoint only undoes SQL, however. If the failed handler left state in the `UnitOfWork` that a savepoint cannot undo, committing the `UnitOfWork` to queue the event would act on that state although the handler failed. So in these cases the event is **not** queued in that `UnitOfWork`:
 
 - the handler appended events through the `EventStore` - committing would publish them although their rows were rolled back, and a queued retry would append them again
 - a resource registered in the `UnitOfWork` for commit-time processing has **pending changes** - for example an aggregate the handler applied an event to, whose uncommitted events the repository would persist at commit. Every registered resource is asked through its `UnitOfWorkLifecycleCallback.hasPendingChanges(resource)`, not only one the handler registered itself, because a repository hands out the instance already registered in the `UnitOfWork`
 - the handler marked the `UnitOfWork` rollback-only - e.g. a failure inside a joined `usingUnitOfWork`/`withUnitOfWork` - so nothing written in it can commit
 
-Instead the whole `UnitOfWork` is rolled back and the failure reaches the subscription's [Subscription Error Policy](#subscription-error-policy).
+Instead the whole `UnitOfWork` is rolled back, so nothing the failed handler did is persisted or published, and the subscription's [Subscription Error Policy](#subscription-error-policy) retries the handler as it would any failure.
+When the policy would give up - skip the event, or stop at it - the processor takes the event over instead ([Handing a failed event back to the handler](#handing-a-failed-event-back-to-the-handler)) and queues it in a `UnitOfWork` of its own, logging one WARN line.
+From there the queue's `RedeliveryPolicy` and dead-letter handling apply, as for any other failed event, and later events for the same aggregate are queued behind it.
+Only if that queueing fails as well does the policy give up on the event.
 
 A handler that only **loaded** an aggregate leaves nothing pending, so its failure is queued as before: the stateful, flex and decider repository callbacks report pending changes only while the aggregate has uncommitted events.
-`hasPendingChanges` defaults to `true`, the safe answer, so a resource registered with a custom `UnitOfWorkLifecycleCallback` forces escalation unless that callback overrides `hasPendingChanges` to report when its resource is unchanged.
+`hasPendingChanges` defaults to `true`, the safe answer, so a resource registered with a custom `UnitOfWorkLifecycleCallback` forces the full rollback (and the policy's retries) before the event is queued, unless that callback overrides `hasPendingChanges` to report when its resource is unchanged.
 
-> ⚠️ Under the default `SubscriptionErrorPolicy.skip()` such an event is **skipped**, not queued: logged at ERROR, the resume point advances past it, and the view never sees it.
-> For a `ViewEventProcessor` whose handlers append events or change aggregates, configure `retryThenSkip(...)` or `stop()` (see [Subscription Error Policy](#subscription-error-policy)) - or move that work to an `EventProcessor`, whose Inbox retries and dead-letters it durably.
+> Under every `SubscriptionErrorPolicy` such an event therefore ends up in the view or in the queue.
+> The policy shapes only what happens first: `retryThenSkip(...)` retries the direct handler in place before the event is queued, and `stop()` does not stop the subscription for it.
 
 #### Version = EventOrder Pattern for View Entities
 
@@ -2311,7 +2340,7 @@ Provides Micrometer-based metrics for EventStore and subscription operations:
 **Metrics tracked:**
 - Event handling duration (timers)
 - Event handling failures (counters, see below)
-- Subscriptions stopped by the `SubscriptionErrorPolicy` (counter, see below)
+- Subscriptions stopped by the `SubscriptionErrorPolicy` (gauge and counter, see below)
 - Polling batch sizes and durations
 - Gap reconciliation times
 - Lock acquisition/release events

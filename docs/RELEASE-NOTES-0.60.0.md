@@ -160,15 +160,16 @@ To keep the old timing, use `fixedBackoff` with the old constant value.
 The shard-owned engine's adapter uses the same calculation (see [§2.1](#21-shard-owned-postgresql-queue-engine)).
 → [MIGRATION-0.60 § Redelivery delays now grow](MIGRATION-0.60.md#redelivery-delays-now-grow)
 
-#### 1.1.8 A failed `ViewEventProcessor` handler that appended events or changed an aggregate is no longer queued
+#### 1.1.8 A failed `ViewEventProcessor` handler that appended events or changed an aggregate is queued only after a rollback
 
 In 0.50 a `ViewEventProcessor` caught any failure of its direct handler and queued the event in the same
 `UnitOfWork`, then committed it. **That commit also kept whatever the failed handler had done in the `UnitOfWork`**:
 events it appended through the `EventStore` were persisted and published, and an aggregate it applied an event to had
 its uncommitted events persisted - although the handler failed - and the queued retry did the same work again.
 
-The direct handler now runs under a savepoint (see [§3](#3-bug-fixes)), and a failure is still queued as long as the
-handler left nothing the savepoint cannot undo. It is **not** queued when the handler:
+The direct handler now runs under a savepoint (see [§3](#3-bug-fixes)), and a failure is still queued in the
+subscription's `UnitOfWork` as long as the handler left nothing the savepoint cannot undo. It is **not** queued there
+when the handler:
 
 - appended events through the `EventStore`,
 - left a `UnitOfWork` lifecycle resource with pending changes - typically an aggregate with uncommitted events, or
@@ -177,11 +178,20 @@ handler left nothing the savepoint cannot undo. It is **not** queued when the ha
 - marked the `UnitOfWork` rollback-only (a failure inside a joined `usingUnitOfWork`/`withUnitOfWork`; in 0.50 that
   queued message rolled back silently).
 
-Then the whole `UnitOfWork` rolls back and the failure goes to the subscription's `SubscriptionErrorPolicy`
-([§2.10](#210-choose-what-an-async-subscription-does-with-a-failing-event)). **Under the default `skip()` such an event is
-skipped** - one ERROR line and the `handle_event_failed` counter - where 0.50 queued it. A handler that only loaded an
-aggregate is queued as before. For view processors whose handlers append events or change aggregates, configure
-`retryThenSkip(...)` or `stop()`, or move that work to an `EventProcessor`.
+Then the whole `UnitOfWork` rolls back, so nothing the failed handler did is persisted or published. The
+subscription's `SubscriptionErrorPolicy` ([§2.10](#210-choose-what-an-async-subscription-does-with-a-failing-event))
+retries the handler as it would any failure, and when it would give up, the processor queues the event in a
+`UnitOfWork` of its own instead, through the new `PersistedEventHandler#handOffFailedEvent` hook. From there the
+queue's `RedeliveryPolicy` and dead-letter handling apply as for any other failed event. One WARN line records it. Only
+if that queueing fails too does the policy give up on the event. A handler that only loaded an aggregate is queued in
+the subscription's `UnitOfWork` as before.
+
+What changes compared with 0.50, for such a handler:
+
+- the failed handler's appended events and aggregate changes are no longer committed (the fix);
+- under `retryThenSkip(...)` the direct handler is retried in place first, and only then queued;
+- under `stop()` the subscription does not stop for such an event: it is queued and the subscription carries on,
+  exactly as for every other failure a `ViewEventProcessor` queues.
 
 New, additive API that makes the distinction:
 
@@ -189,10 +199,12 @@ New, additive API that makes the distinction:
   callbacks answer `true` only while the aggregate has uncommitted events.
 - `UnitOfWork#hasLifecycleCallbackResourcesWithPendingChanges()` and `UnitOfWork#getAllUnitOfWorkLifecycleCallbackResources()`.
 - `EventStoreUnitOfWork#getNumberOfEventsPersisted()`, a count that never decreases.
+- `PersistedEventHandler#handOffFailedEvent(event, failure)`, default `false` - see
+  [§2.10](#210-choose-what-an-async-subscription-does-with-a-failing-event).
 
 The `UnitOfWork`/`EventStoreUnitOfWork` defaults throw `UnsupportedOperationException`, which the `ViewEventProcessor`
 reads as "state present"; every Essentials implementation overrides them.
-→ [MIGRATION-0.60 § A failed `ViewEventProcessor` handler that changed state is no longer queued](MIGRATION-0.60.md#a-failed-vieweventprocessor-handler-that-changed-state-is-no-longer-queued)
+→ [MIGRATION-0.60 § A failed `ViewEventProcessor` handler that changed state is queued only after a rollback](MIGRATION-0.60.md#a-failed-vieweventprocessor-handler-that-changed-state-is-queued-only-after-a-rollback)
 
 ---
 
@@ -658,6 +670,15 @@ alert on.
 A batched subscription applies the policy to the batch as a whole. In-transaction subscriptions and subscriptions
 that forward to an `Inbox` are not affected. **Upgrading changes nothing until you configure a policy.**
 
+**A handler can take a failed event over instead of the policy giving up.** The new default method
+`PersistedEventHandler#handOffFailedEvent(PersistedEvent, Throwable)` (default `false`, so nothing changes for existing
+handlers) is called once the policy has used up its retries, in place of skipping or stopping, after the event's
+`UnitOfWork` was rolled back. A handler that returns `true` has taken the event over, typically by queueing it in a
+`UnitOfWork` of its own: the subscription carries on as if the event had been handled, without a failure callback, and
+the resume point moves past the event only after the hand-off returned. Returning `false` or throwing lets the policy
+give up as before. It applies to single-event asynchronous subscriptions. `ViewEventProcessor` uses it
+([§1.1.8](#118-a-failed-vieweventprocessor-handler-that-appended-events-or-changed-an-aggregate-is-queued-only-after-a-rollback)).
+
 **Retries hold up only their own subscription.** They run synchronously on the subscription's delivery thread, which
 is what keeps events in order, and every asynchronous subscription now has a thread of its own on every path. Two of
 those paths used to share one:
@@ -674,7 +695,10 @@ those paths used to share one:
 **Stopping a subscription never skips an event.** A stop while a retry is under way (shutdown, fenced-lock hand-over,
 `resetFrom`, unsubscribe) abandons the retries without reporting a failure, and the resume point stays at the event, so
 the restarted subscription handles it again. Stopping a batched subscription now also interrupts a batch in progress,
-as the polling path already did for a single event; the batch is handled again from its first event. See
+as the polling path already did for a single event; the batch is handled again from its first event. Only a real stop
+counts: under CDC a subscription that switches between polling and the CDC bus (at boot, when replication drops or
+recovers) has its delivery thread interrupted too, but a retry backoff that switch interrupts is waited out and the
+retries carry on. See
 [MIGRATION-0.60.md § Event store subscriptions](MIGRATION-0.60.md#event-store-subscriptions).
 
 **Signals to alert on** (all additive; nothing needs configuring beyond the policy itself):
@@ -767,7 +791,7 @@ place the docs are edited; see the root README's [Editing the LLM docs](../READM
 | **`RedeliveryPolicy.exponentialBackoff` and `linearBackoff` did not back off.** Every redelivery after the first waited the same delay. See [§1.1.7](#117-exponentialbackoff-and-linearbackoff-redelivery-delays-now-grow) | Durable queue consumers, `Inbox`, `EventProcessor`, `DurableLocalCommandBus` |
 | **`AggregateIdSerializer.serializerFor(…)` rejected a Kotlin `StringValueType` id** with `EventStoreException: Couldn't find a matching …AggregateIdSerializer`, so a Kotlin `AggregateTypeConfiguration` built that way failed at context start. It now returns `StringValueTypeAggregateIdSerializer` for such an id, the serializer you could already construct explicitly. The Kotlin type is matched by name, so Java-only classpaths are unaffected | Kotlin deciders on `kotlin-eventsourcing` |
 | **Slow-query statistics were always empty, and `pg_cron` was never created by the framework.** The check before the best-effort `CREATE EXTENSION` read `pg_extension` (installed) instead of `pg_available_extensions` (installable), so the create only ran when the extension already existed. `pg_stat_statements` is now created at startup when the server preloads it and the role may create extensions, and `pg_cron` when the server offers it; a refusal is logged and treated as unavailable without failing the start | Admin API query statistics, the Essentials scheduler |
-| **A `ViewEventProcessor` skipped an event whose direct handling failed on SQL or deserialization, instead of queueing it.** The handler runs in the subscription's transaction, so a failed SQL statement aborted it and the fallback `queueMessage` failed with "current transaction is aborted"; and a payload that could not be deserialized failed before the fallback was reached. The direct handler now runs under a savepoint, which rolls back only its own writes, and deserialization happens inside the failure handling, so both are queued - an undeserializable event ends up as a visible dead letter. A handler that appended events or changed an aggregate is escalated instead, see [§1.1.8](#118-a-failed-vieweventprocessor-handler-that-appended-events-or-changed-an-aggregate-is-no-longer-queued) | `ViewEventProcessor` users |
+| **A `ViewEventProcessor` skipped an event whose direct handling failed on SQL or deserialization, instead of queueing it.** The handler runs in the subscription's transaction, so a failed SQL statement aborted it and the fallback `queueMessage` failed with "current transaction is aborted"; and a payload that could not be deserialized failed before the fallback was reached. The direct handler now runs under a savepoint, which rolls back only its own writes, and deserialization happens inside the failure handling, so both are queued - an undeserializable event ends up as a visible dead letter. A handler that appended events or changed an aggregate is queued only after its `UnitOfWork` was rolled back, see [§1.1.8](#118-a-failed-vieweventprocessor-handler-that-appended-events-or-changed-an-aggregate-is-queued-only-after-a-rollback) | `ViewEventProcessor` users |
 | **The queue statistics trigger counted a purge as a delivery.** Fixed by the replacement in [§2.4](#24-durable-queue-observability) | Statistics consumers |
 
 **The 0.50.1 fixes are all in 0.60,** either merged directly or made unnecessary by other work. The polling

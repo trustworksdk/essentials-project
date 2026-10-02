@@ -101,7 +101,7 @@ public interface UnitOfWorkLifecycleCallback<RESOURCE_TYPE> {
 
     // Would committing make this callback persist/publish something for the resource? Default true (the safe
     // answer). Override it in a custom callback whose registered resources can be unchanged - otherwise every
-    // resource registered with it counts as pending, and e.g. a ViewEventProcessor escalates instead of queueing.
+    // resource registered with it counts as pending, and e.g. a failed ViewEventProcessor handler rolls the whole UnitOfWork back before it is queued.
     // The stateful, flex and decider repository callbacks answer true only while there are uncommitted events.
     default boolean hasPendingChanges(RESOURCE_TYPE resource) { return true; }
 }

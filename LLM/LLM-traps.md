@@ -130,7 +130,6 @@ the number they have where they are defined, never renumbered: `ESS-S<n>` for a 
 - <a id="ess-056"></a>`ESS-056` Concurrent writers silently interleave — `appendToStream` without an expected `EventOrder` skips optimistic concurrency → [LLM-postgresql-event-store.md § Gotchas](LLM-postgresql-event-store.md#gotchas)
 - <a id="ess-057"></a>`ESS-057` Every instance handles the same events — a non-exclusive async subscription runs on each node → [LLM-postgresql-event-store.md § Gotchas](LLM-postgresql-event-store.md#gotchas)
 - <a id="ess-058"></a>`ESS-058` An event a projection never saw, one ERROR line and no retry — direct async subscribers skip a failing event by default (`SubscriptionErrorPolicy`) → [LLM-postgresql-event-store.md § Direct async subscribers skip a failing event by default](LLM-postgresql-event-store.md#direct-async-subscribers-skip-a-failing-event-by-default)
-- <a id="ess-114"></a>`ESS-114` A `ViewEventProcessor` event neither in the view nor in its queue, one ERROR line — a failed handler that appended events or changed an aggregate is not queued but reaches the `SubscriptionErrorPolicy`, whose default `skip()` drops it; use `retryThenSkip`/`stop` → [LLM-postgresql-event-store.md § ViewEventProcessor](LLM-postgresql-event-store.md#vieweventprocessor)
 - <a id="ess-115"></a>`ESS-115` Local `EventBus` subscribers see events that were rolled back, and see them again on a retry — `FlushAndPublishPersistedEventsToEventBusRightAfterAppendToStream` publishes at `Flush`, before commit, and a rollback cannot recall it → [LLM-postgresql-event-store.md § Flush-published events cannot be recalled](LLM-postgresql-event-store.md#flush-published-events-cannot-be-recalled)
 
 ### eventsourced-aggregates ([LLM-eventsourced-aggregates.md](LLM-eventsourced-aggregates.md))
@@ -221,4 +220,6 @@ the number they have where they are defined, never renumbered: `ESS-S<n>` for a 
 ## Retired ids
 
 A retired id keeps its line here, anchor included, so a citation of it still resolves: the old symptom, then
-"retired:", why, and the id that replaced it, if any. No id has been retired.
+"retired:", why, and the id that replaced it, if any.
+
+- <a id="ess-114"></a>`ESS-114` A `ViewEventProcessor` event neither in the view nor in its queue — retired: a failed handler that appended events or changed an aggregate is now queued in a `UnitOfWork` of its own once the subscription's `UnitOfWork` rolled back and the `SubscriptionErrorPolicy` has used up its retries (`PersistedEventHandler#handOffFailedEvent`), so the event is no longer lost under any policy; no replacement → [LLM-postgresql-event-store.md § ViewEventProcessor](LLM-postgresql-event-store.md#vieweventprocessor)

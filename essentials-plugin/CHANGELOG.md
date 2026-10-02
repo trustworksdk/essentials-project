@@ -8,6 +8,12 @@ targets, with a `-N` suffix for plugin-only releases.
 - **Bundled docs** — a subscription stopped by its `SubscriptionErrorPolicy` is alerted on through the
   level-triggered gauge `essentials.eventstore.subscription.stopped`, not the
   `stopped_by_error_policy` counter (`LLM-postgresql-event-store.md`, `LLM-spring-boot-starter-modules.md`).
+- **Bundled docs** — a failed `ViewEventProcessor` handler that appended events or changed an aggregate is
+  queued in a `UnitOfWork` of its own after the rollback, through the new
+  `PersistedEventHandler#handOffFailedEvent` hook, instead of being skipped under the default policy.
+  The trap for the lost event is retired (`LLM-traps.md`, `LLM-postgresql-event-store.md`, `LLM-foundation.md`).
+- **Bundled docs** — a switch between polling and the CDC bus no longer counts as a stop for a retry in
+  progress (`LLM-postgresql-event-store.md`).
 
 ## 0.60.0 — first release, targets Essentials 0.60.0
 

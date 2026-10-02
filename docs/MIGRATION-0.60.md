@@ -809,7 +809,7 @@ skipped: the resume point stays at its first event and the batch is handled agai
 **What to do:** make batch handlers tolerate being interrupted and called again with a batch whose earlier attempt did
 not complete.
 
-### A failed `ViewEventProcessor` handler that changed state is no longer queued
+### A failed `ViewEventProcessor` handler that changed state is queued only after a rollback
 
 0.50's `ViewEventProcessor` queued every failed direct handling in the subscription's `UnitOfWork` and committed it,
 together with whatever the failed handler had left there: events it appended were persisted and published, and an
@@ -818,23 +818,24 @@ aggregate it changed had its uncommitted events persisted. The queued retry then
 0.60 runs the direct handler under a savepoint and still queues a failure that left nothing behind - a failed SQL
 statement included, and a handler that only loaded an aggregate. But when the failed handler appended events through
 the `EventStore`, left a `UnitOfWork` lifecycle resource with pending changes (an aggregate with uncommitted events),
-or marked the `UnitOfWork` rollback-only, the event is **not** queued: the whole `UnitOfWork` rolls back and the failure
-goes to the subscription's `SubscriptionErrorPolicy`. **Under the default `skip()` that event is skipped.**
+or marked the `UnitOfWork` rollback-only, the event is not queued in that `UnitOfWork`: the whole `UnitOfWork` rolls
+back, nothing the failed handler did is committed, the subscription's `SubscriptionErrorPolicy` retries the handler as
+for any failure, and when the policy would give up the event is queued in a `UnitOfWork` of its own instead. The event
+is therefore still queued, as in 0.50, under every policy - with two differences: under `retry-n-then-skip` the direct
+handler is retried in place before it is queued, and under `stop` the subscription does not stop for such an event.
 
 **What to do:**
 
-- For a `ViewEventProcessor` whose handlers append events or change aggregates, set
-  `essentials.eventstore.subscription-manager.error-policy.mode` to `retry-n-then-skip` or `stop` (or call
-  `setSubscriptionErrorPolicy(...)` on the `EventStoreSubscriptionManager` builder), or move that work to an
-  `EventProcessor`, whose Inbox retries and dead-letters durably.
+- Nothing, for the queueing itself. If your handlers relied on a failed attempt's appended events or aggregate changes
+  being committed, they no longer are - which is the fix.
 - If you register resources in a `UnitOfWork` with your own `UnitOfWorkLifecycleCallback`, override the new
   `hasPendingChanges(resource)` to return `false` for a resource that committing would leave untouched. It defaults to
   `true`, so without it any resource registered with your callback makes a failed `ViewEventProcessor` handler
-  escalate instead of being queued.
+  roll the whole `UnitOfWork` back (and wait out the policy's retries) before it is queued.
 - If you implement `UnitOfWork` or `EventStoreUnitOfWork` yourself, implement
   `hasLifecycleCallbackResourcesWithPendingChanges()`, `getAllUnitOfWorkLifecycleCallbackResources()` and
   `getNumberOfEventsPersisted()`. Their defaults throw `UnsupportedOperationException`, which the `ViewEventProcessor`
-  treats as "state present" and so always escalates.
+  treats as "state present", so a failed handler always rolls the whole `UnitOfWork` back before it is queued.
 
 Details: [README § ViewEventProcessor](../components/postgresql-event-store/README.md#vieweventprocessor).
 

@@ -633,13 +633,13 @@ Rejects `@MessageHandler(unitOfWork = UnitOfWorkMode.NONE)` handlers at start-up
 
 The direct handler runs under a savepoint in the subscription's transaction, so a failed SQL statement (e.g. a constraint violation) rolls back only the handler's own writes and the event is still queued; an event whose payload cannot be deserialized is queued too (and dead-lettered there).
 
-A savepoint only undoes SQL. When the failed handler left `UnitOfWork` state that a savepoint cannot undo, committing the `UnitOfWork` to queue the event would act on that state although the handler failed, so the event is **not** queued. That is the case when the handler:
+A savepoint only undoes SQL. When the failed handler left `UnitOfWork` state that a savepoint cannot undo, committing the `UnitOfWork` to queue the event would act on that state although the handler failed, so the event is **not** queued in that `UnitOfWork`. That is the case when the handler:
 
 - appended events through the `EventStore` (committing would publish them although their rows were rolled back, and a queued retry would append them again)
 - left a resource registered for commit-time processing **with pending changes** - e.g. an aggregate it applied an event to, whose uncommitted events the repository's callback persists at commit. Every registered resource is asked (`UnitOfWorkLifecycleCallback.hasPendingChanges(resource)`), not only one the handler registered, since a repository hands out the instance already registered in the `UnitOfWork`. A handler that only **loaded** an aggregate leaves nothing pending and is queued as before. A custom callback that doesn't override `hasPendingChanges` answers `true` (the default), so any resource registered with it forces escalation
 - marked the `UnitOfWork` rollback-only - e.g. a failure inside a joined `usingUnitOfWork`/`withUnitOfWork`
 
-Instead the whole `UnitOfWork` rolls back and the failure reaches the subscription's `SubscriptionErrorPolicy` (see [Direct async subscribers skip a failing event by default](#direct-async-subscribers-skip-a-failing-event-by-default)). **Under the default `skip()` such an event is skipped, not queued** - one ERROR line, and the view never sees it. For a view processor whose handlers append events or change aggregates, configure `retryThenSkip(...)` or `stop()` on the `EventStoreSubscriptionManager`, or move that work to an `EventProcessor` (Inbox: durable retry and dead-lettering). A `UnitOfWork` implementation that cannot report this state (the `EventStoreUnitOfWork.getNumberOfEventsPersisted()` / `UnitOfWork.hasLifecycleCallbackResourcesWithPendingChanges()` defaults throw `UnsupportedOperationException`) is treated as having it; every Essentials implementation reports it. The stateful, flex and decider repository callbacks report pending changes only while there are uncommitted events.
+Instead the whole `UnitOfWork` rolls back - nothing the failed handler did is persisted or published - and the subscription's `SubscriptionErrorPolicy` runs its retries as for any failure (see [Direct async subscribers skip a failing event by default](#direct-async-subscribers-skip-a-failing-event-by-default)). When the policy would give up - skip under `skip()`/`retryThenSkip(...)`, stop under `stop()` - the processor takes the event over instead (`PersistedEventHandler#handOffFailedEvent`) and queues it in a `UnitOfWork` of its own, after the rollback. From there the queue's `RedeliveryPolicy` and dead-letter handling apply, exactly as for any other failed event: **under every policy the event ends up in the view or in the queue, never lost**, and a `stop()` policy does not stop the subscription for it. One WARN line records the hand-off. Only if that queueing itself fails does the policy give up on the event. The subscriber moves its resume point past the event only after the queued message committed, and later events for the same aggregate find it queued and queue behind it. A `UnitOfWork` implementation that cannot report this state (the `EventStoreUnitOfWork.getNumberOfEventsPersisted()` / `UnitOfWork.hasLifecycleCallbackResourcesWithPendingChanges()` defaults throw `UnsupportedOperationException`) is treated as having it; every Essentials implementation reports it. The stateful, flex and decider repository callbacks report pending changes only while there are uncommitted events.
 
 ```java
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.processor.ViewEventProcessor;
@@ -1240,20 +1240,32 @@ to a batch as a whole, and does not touch in-transaction subscriptions (the exce
 subscriptions (the Inbox's `RedeliveryPolicy` applies). Alert on the Micrometer counter
 `essentials.eventstore.subscription.handle_event_failed` (tags `subscriber_id`, `aggregate_type`, `event_handler`,
 `event_type`), which counts every event that exhausted the policy. For durable per-event retry with dead-lettering,
-forward to an `Inbox` (`EventProcessor`) instead. A `ViewEventProcessor` handler that appended events or changed an aggregate
-before failing is not queued but reaches this policy - see [ViewEventProcessor](#vieweventprocessor).
+forward to an `Inbox` (`EventProcessor`) instead.
+
+**A handler can take a failed event over instead of the policy giving up.** `PersistedEventHandler#handOffFailedEvent(event, failure)`
+(default `false`) is called on the delivery thread once the policy has used up its retries, in place of skipping or stopping, after
+the event's `UnitOfWork` was rolled back - so take the event over in a `UnitOfWork` of your own (e.g. queue it). Return `true` and the
+subscription carries on as if the event had been handled: no skip, no stop, no `handleEventFailed` callback, the resume point moves past
+it. Return `false`, or throw, and the policy gives up as usual. Single-event async subscriptions only (not batched, not in-transaction).
+`ViewEventProcessor` uses it to queue failures it could not queue in the subscription's `UnitOfWork` - see [ViewEventProcessor](#vieweventprocessor).
 
 **Retries block only their own subscription.** They are synchronous on the subscription's delivery thread (that is what keeps
 events in order), and every async subscription has its own: polling `Publish-<subscriber>-<aggregateType>`, CDC
 `Cdc-<subscriber>-<aggregateType>` (handed over from the shared `cdc-dispatcher` thread, which a handler never holds), batched
-`BatchedEventSubscriber-<subscriber>-<aggregateType>-Handler`. Under CDC the hand-over buffers
-`essentials.eventstore.cdc.event-bus.backpressure-buffer-size` events (default 8192); a subscription further behind than
-that back-pressures the other CDC subscriptions of its `AggregateType` through the CDC bus's overflow handling.
+`BatchedEventSubscriber-<subscriber>-<aggregateType>-Handler`. Under CDC a subscription never back-pressures the CDC bus:
+its hand-over buffers one polling page (`eventStorePollingBatchSize`), and a subscription further behind than that leaves
+the bus on its own and continues on polling from the next event it has not been handed - nothing lost or reordered - until
+CDC availability next changes. Each such overflow logs a WARN and counts `essentials.cdc.eventstore.live_source.overflow.count`;
+the other CDC subscriptions of its `AggregateType` and the dispatcher are not held up, under either
+`essentials.eventstore.cdc.event-bus.overflow-policy`. Size `eventStorePollingBatchSize` to absorb an ordinary burst, or a
+burst moves the subscription to polling too.
 
 **Stopping during retries does not skip.** A stop while a retry is under way (shutdown, fenced-lock hand-over, `resetFrom`,
 unsubscribe) abandons the retries: no failure callback, no ERROR, the resume point stays at the event, and the restarted
 subscription handles it again. Stopping also interrupts a handler in progress - a single event on the polling path, a whole
 batch for a batched subscription - and that event/batch is likewise handled again. Handlers must tolerate the repeat.
+Only a real stop counts: under CDC a subscription switches between polling and the CDC bus (at boot, when replication drops or
+recovers), which interrupts its delivery thread too, but a retry backoff it interrupts is waited out and the retries continue.
 
 **Detect a `stop()` explicitly** - a stopped subscription looks like a healthy one with no new events:
 `EventStoreSubscription#isStoppedByErrorPolicy()` (true until the subscription is started again), gauge
