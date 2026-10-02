@@ -41,27 +41,22 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.await;
 
 /**
- * End-to-end recovery test for the Tier-1 live-tail stall fix (cdc-improvements.md §P10).
+ * A hole in the live tail of a subscription started while CDC is ACTIVE ({@code BackfillThenLiveOrdered}) must not hold
+ * back the events after it.
  * <p>
- * Reproduces the failure mode against a real Postgres: while a CDC subscription is live, a
- * {@code global_event_order} value is consumed but never committed (a {@code nextval} burn — the
- * deterministic equivalent of a rolled-back {@code IDENTITY}), leaving a <b>permanent hole</b> in the
- * live tail. A subsequent committed event arrives on the live bus <i>above</i> that hole, so the
- * strict-{@code +1} drain parks forever — the silent, self-perpetuating stall.
+ * While the subscription is live, a {@code global_event_order} value is taken but never committed (a {@code nextval}
+ * burn - the deterministic equivalent of a rolled-back {@code IDENTITY}), leaving a hole that never reaches the bus. The
+ * next committed event arrives on the bus <i>above</i> that hole. The drain used to advance strictly by one past the
+ * head, so it parked on the hole until {@code eventBus.liveDrainStallThreshold} (three minutes by default) raised
+ * {@link CdcLiveDrainStalledException} and re-subscribed the subscription through its gap-handler-aware backfill. Now the
+ * event is delivered as soon as it arrives - with the threshold left at its default - and no stall is detected.
  * <p>
- * With {@code eventBus.liveDrainStallThreshold} set low, the detector must fire
- * {@link CdcLiveDrainStalledException}, the {@code pollEvents} {@code retryWhen} must re-subscribe and
- * resume the gap-handler-aware backfill from the hole, and the post-hole event must be delivered
- * (skipping the hole) — proving the stall heals. The {@code essentials.cdc.backfill_live.stall_detected}
- * counter must register the recovery.
- * <p>
- * The CDC bus is fed directly (exactly as {@code CdcDispatcher} would, via {@link CdcEventBus#publish})
- * and availability is forced ACTIVE, so the test is deterministic and does not depend on WAL-replication
- * timing — the WAL tailer/dispatcher path is covered by the other {@code *Wal2JsonIT} tests. What must be
- * real here is the DB-backed backfill + gap classification + sequence allocation, which is what makes
- * the recovery correct.
+ * The CDC bus is fed directly (exactly as {@code CdcDispatcher} would, via {@link CdcEventBus#publish}) and availability
+ * is forced ACTIVE, so the test is deterministic and does not depend on WAL-replication timing - the WAL
+ * tailer/dispatcher path is covered by the other {@code *Wal2JsonIT} tests. A rolled-back transaction committing out of
+ * order with a late one is covered by {@link CdcEventStoreCommitOrderIT}.
  */
-class CdcEventStoreLiveDrainStallRecoveryIT extends AbstractLogicalReplicationPostgresIT {
+class CdcEventStoreLiveTailHoleIT extends AbstractLogicalReplicationPostgresIT {
 
     private PostgresqlEventStore<SeparateTablePerAggregateEventStreamConfiguration> eventStore;
     private CdcEventStore<SeparateTablePerAggregateEventStreamConfiguration> cdcEventStore;
@@ -90,9 +85,8 @@ class CdcEventStoreLiveDrainStallRecoveryIT extends AbstractLogicalReplicationPo
         availability  = new CdcAvailability();
         meterRegistry = new SimpleMeterRegistry();
 
+        // The live-drain stall threshold left at its default (three minutes): the hole must not wait for it
         var cdcProperties = new CdcProperties();
-        // Low threshold so the stall is detected quickly; still > 0 (detection enabled).
-        cdcProperties.getEventBus().setLiveDrainStallThreshold(Duration.ofSeconds(2));
 
         cdcEventStore = new CdcEventStore<>(
                 eventStore,
@@ -104,8 +98,7 @@ class CdcEventStoreLiveDrainStallRecoveryIT extends AbstractLogicalReplicationPo
                 Optional.of(meterRegistry)
         );
 
-        // Force ACTIVE so pollEvents takes the BackfillThenLiveOrdered path (CDC bus as live source),
-        // which is where the strict-+1 drain and the new stall detector live.
+        // Force ACTIVE so pollEvents takes the BackfillThenLiveOrdered path (CDC bus as live source)
         availability.active("it-live-drain-stall-slot");
 
         durableSubscriptionRepository = new PostgresqlDurableSubscriptionRepository(jdbi, cdcEventStore);
@@ -136,9 +129,9 @@ class CdcEventStoreLiveDrainStallRecoveryIT extends AbstractLogicalReplicationPo
     }
 
     @Test
-    void live_tail_permanent_hole_stalls_then_recovers_via_resubscribe_and_delivers_post_hole_event() {
+    void a_permanent_hole_in_the_live_tail_does_not_hold_back_the_event_after_it() {
         var received     = new CopyOnWriteArrayList<Long>();
-        var subscriberId = SubscriberId.of("orders-live-drain-stall-recovery");
+        var subscriberId = SubscriberId.of("orders-live-tail-hole");
 
         // 1) Pre-hole events are committed BEFORE subscribing so they fall in the backfill range. In the
         //    ACTIVE path the live source is the CDC bus (no DB polling), so only ≤ head events are served
@@ -156,12 +149,12 @@ class CdcEventStoreLiveDrainStallRecoveryIT extends AbstractLogicalReplicationPo
                 event -> received.add(event.globalEventOrder().longValue())
         );
 
-        // Subscription catches up via backfill and goes live (expectedNext = head + 1).
+        // Subscription catches up via backfill and goes live.
         await().atMost(Duration.ofSeconds(15)).untilAsserted(() ->
                 assertThat(received).containsExactlyElementsOf(sequence(1L, head)));
 
         // 2) Burn the next global_event_order value (== head+1) without committing an event — a permanent
-        //    hole in the live tail, exactly where the drain's expectedNext is now parked.
+        //    hole in the live tail, right after the head the backfill read.
         long hole = head + 1;
         burnNextGlobalEventOrderValue();
 
@@ -176,18 +169,15 @@ class CdcEventStoreLiveDrainStallRecoveryIT extends AbstractLogicalReplicationPo
         assertThat(postHoleEvent).hasSize(1);
         cdcBus.publish(postHoleEvent);
 
-        // 4) The drain parks on `hole`; after the threshold the stall is detected, the subscription
-        //    re-subscribes, and the gap-aware backfill (now head > hole) delivers the post-hole event,
-        //    skipping the hole.
-        await().atMost(Duration.ofSeconds(20)).untilAsserted(() ->
+        // 4) Delivered at once - well within the stall threshold - past the hole
+        await().atMost(Duration.ofSeconds(5)).untilAsserted(() ->
                 assertThat(received).contains(postHoleOrder));
 
         assertThat(received).as("the burned/never-committed hole must never be delivered").doesNotContain(hole);
-        assertThat(received).as("no event below the hole is lost").containsAll(sequence(1L, head));
-
-        assertThat(stallDetectedCount())
-                .as("recovery must have been driven by stall detection")
-                .isGreaterThanOrEqualTo(1.0);
+        var expected = sequence(1L, head);
+        expected.add(postHoleOrder);
+        assertThat(received).as("each event once").containsExactlyElementsOf(expected);
+        assertThat(stallDetectedCount()).as("no stall to recover from").isZero();
 
         subscription.stop();
         await().atMost(Duration.ofSeconds(5)).untilAsserted(() -> assertThat(subscription.isActive()).isFalse());

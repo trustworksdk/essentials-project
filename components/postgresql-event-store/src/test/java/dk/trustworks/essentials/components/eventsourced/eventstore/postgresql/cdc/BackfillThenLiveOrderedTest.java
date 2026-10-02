@@ -24,6 +24,8 @@ import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.ty
 import dk.trustworks.essentials.components.foundation.types.EventId;
 import org.assertj.core.api.Assertions;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.reactivestreams.Subscription;
 import reactor.core.Disposable;
 import reactor.core.publisher.*;
@@ -34,6 +36,7 @@ import java.time.*;
 import java.util.*;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.*;
+import java.util.concurrent.locks.LockSupport;
 import java.util.function.LongSupplier;
 import java.util.stream.LongStream;
 
@@ -314,8 +317,8 @@ public class BackfillThenLiveOrderedTest {
     /**
      * Race fix: the head snapshot must be taken only AFTER the live source has been subscribed, never
      * before. Reading head first opens a window in which an event published to the hot, no-replay CDC
-     * bus reaches neither backfill (capped at head) nor a late bus subscriber — stalling expectedNext
-     * forever. This pins the read-after-attach ordering.
+     * bus reaches neither backfill (capped at head) nor a late bus subscriber — lost for good. This pins
+     * the read-after-attach ordering.
      */
     @Test
     void head_snapshot_is_taken_only_after_live_source_is_subscribed() {
@@ -350,16 +353,17 @@ public class BackfillThenLiveOrderedTest {
     }
 
     /**
-     * Tier-1 live-tail stall detection (cdc-improvements.md §P10). After backfill completes (head=3,
-     * expectedNext=4), live delivers globalOrder 5 but never 4 — a permanent hole the strict-+1 drain
-     * can never skip. Once no forward progress has happened for liveDrainStallThreshold, the pipeline
-     * must raise a retryable {@link CdcLiveDrainStalledException} carrying the parked order (4) so the
-     * pollEvents-level retryWhen can re-subscribe and route the hole through gap-aware backfill.
+     * A global order that never reaches the bus - most commonly an {@code IDENTITY} value a rolled-back transaction took,
+     * which writes no WAL - must not hold back the live events after it. The drain used to advance strictly by one past
+     * the head, so it parked on such a hole until {@code eventBus.liveDrainStallThreshold} (three minutes by default)
+     * re-subscribed the subscription through its backfill: every rolled-back append stalled it that long. The threshold
+     * no longer plays a part, whatever it is set to - zero included, which used to park the drain for good.
      */
-    @Test
-    void live_tail_drain_stall_on_permanent_hole_signals_recovery_error() {
+    @ParameterizedTest
+    @ValueSource(longs = {0, 200, 180_000})
+    void a_hole_in_the_live_tail_does_not_hold_back_the_live_events_after_it(long liveDrainStallThresholdMs) {
         var props = new CdcProperties.CdcEventBusProperties();
-        props.setLiveDrainStallThreshold(Duration.ofMillis(200));
+        props.setLiveDrainStallThreshold(Duration.ofMillis(liveDrainStallThresholdMs));
 
         Sinks.Many<PersistedEvent> liveSink = Sinks.many().unicast().onBackpressureBuffer();
         Flux<PersistedEvent> backfill = Flux.just(pe(1), pe(2), pe(3));
@@ -367,68 +371,91 @@ public class BackfillThenLiveOrderedTest {
         Flux<PersistedEvent> ordered = CdcEventStore.BackfillThenLiveOrdered.orderedWithoutMetrics(
                 backfill, liveSink.asFlux(), 3, props);
 
-        StepVerifier.create(ordered)
-                    .assertNext(e -> assertThat(e.globalEventOrder().longValue()).isEqualTo(1L))
-                    .assertNext(e -> assertThat(e.globalEventOrder().longValue()).isEqualTo(2L))
-                    .assertNext(e -> assertThat(e.globalEventOrder().longValue()).isEqualTo(3L))
-                    .then(() -> liveSink.tryEmitNext(pe(5)))   // hole at 4 — never delivered
-                    .expectErrorSatisfies(err -> {
-                        assertThat(err).isInstanceOf(CdcLiveDrainStalledException.class);
-                        assertThat(((CdcLiveDrainStalledException) err).stalledAtGlobalOrder()).isEqualTo(4L);
+        StepVerifier.create(ordered.map(e -> e.globalEventOrder().longValue()).take(5))
+                    .expectNext(1L, 2L, 3L)
+                    .then(() -> liveSink.tryEmitNext(pe(5)))   // hole at 4 - never delivered
+                    .expectNext(5L)
+                    .then(() -> liveSink.tryEmitNext(pe(6)))
+                    .expectNext(6L)
+                    .expectComplete()
+                    .verify(Duration.ofSeconds(2));
+    }
+
+    /**
+     * A transaction that took global order 4 commits after the one that took 5: the bus delivers 5 first. 5 is handed on
+     * at once rather than held for 4, and 4 is delivered when it arrives - late and out of global order, once - as on
+     * every other CDC and polling path. Handed over again, neither is delivered twice.
+     */
+    @Test
+    void a_lower_global_order_committing_after_a_higher_one_in_the_live_tail_is_delivered_once_when_it_arrives() {
+        var tracker = CdcDeliveryTracker.startingAfter("test", 0);
+        Sinks.Many<PersistedEvent> liveSink = Sinks.many().unicast().onBackpressureBuffer();
+
+        Flux<PersistedEvent> ordered = CdcEventStore.BackfillThenLiveOrdered.orderedWithoutMetrics(Flux.just(pe(1), pe(2), pe(3)),
+                                                                                                  liveSink.asFlux(),
+                                                                                                  () -> 3L,
+                                                                                                  new CdcProperties.CdcEventBusProperties(),
+                                                                                                  CdcEventStore.DeliveryRecorder.tracking(tracker));
+
+        StepVerifier.create(ordered.map(e -> e.globalEventOrder().longValue()).take(6))
+                    .expectNext(1L, 2L, 3L)
+                    .then(() -> liveSink.tryEmitNext(pe(5)))   // 4 is still in flight
+                    .expectNext(5L)
+                    .then(() -> {
+                        liveSink.tryEmitNext(pe(4));            // ... and commits
+                        liveSink.tryEmitNext(pe(5));
+                        liveSink.tryEmitNext(pe(4));
                     })
-                    .verify(Duration.ofSeconds(5));
+                    .expectNext(4L)
+                    .then(() -> liveSink.tryEmitNext(pe(6)))
+                    .expectNext(6L)
+                    .expectComplete()
+                    .verify(Duration.ofSeconds(2));
+        assertThat(tracker.watermark()).isEqualTo(6);
     }
 
     /**
-     * A genuinely transient gap — an event merely committing late — must NOT trigger recovery: waiting
-     * on it is correct, and skipping it would silently drop the event. Here 4 arrives well within the
-     * threshold after 5, so the drain emits 4 then 5 and completes with no error.
+     * Live events that arrived while the backfill ran are held and handed on in global order once it is done, and only
+     * after every back-filled event - also when the subscriber takes one event at a time, so the back-filled events are
+     * still queued downstream when the live ones are released.
      */
     @Test
-    void live_tail_drain_does_not_signal_when_hole_fills_before_threshold() {
-        var props = new CdcProperties.CdcEventBusProperties();
-        props.setLiveDrainStallThreshold(Duration.ofSeconds(2));
-
+    void every_back_filled_event_is_delivered_before_the_live_events_also_to_a_subscriber_taking_one_event_at_a_time() {
+        int totalBackfill = 100;
+        int totalLive     = 20;
         Sinks.Many<PersistedEvent> liveSink = Sinks.many().unicast().onBackpressureBuffer();
-        Flux<PersistedEvent> backfill = Flux.just(pe(1), pe(2), pe(3));
+        // Out of order, before the backfill is done
+        for (long globalOrder = totalBackfill + totalLive; globalOrder > totalBackfill; globalOrder--) {
+            liveSink.tryEmitNext(pe(globalOrder));
+        }
+        Flux<PersistedEvent> backfill = Flux.range(1, totalBackfill)
+                                            .map(globalOrder -> pe(globalOrder))
+                                            .subscribeOn(Schedulers.newSingle("test-backfill", true));
 
-        Flux<PersistedEvent> ordered = CdcEventStore.BackfillThenLiveOrdered.orderedWithoutMetrics(
-                backfill, liveSink.asFlux(), 3, props);
+        Flux<PersistedEvent> ordered = CdcEventStore.BackfillThenLiveOrdered.orderedWithoutMetrics(backfill,
+                                                                                                  liveSink.asFlux().publishOn(Schedulers.newSingle("test-live", true)),
+                                                                                                  totalBackfill,
+                                                                                                  new CdcProperties.CdcEventBusProperties());
 
-        StepVerifier.create(ordered.take(5))
-                    .assertNext(e -> assertThat(e.globalEventOrder().longValue()).isEqualTo(1L))
-                    .assertNext(e -> assertThat(e.globalEventOrder().longValue()).isEqualTo(2L))
-                    .assertNext(e -> assertThat(e.globalEventOrder().longValue()).isEqualTo(3L))
-                    .then(() -> liveSink.tryEmitNext(pe(5)))   // transient hole at 4
-                    .then(() -> liveSink.tryEmitNext(pe(4)))   // fills quickly, well within threshold
-                    .assertNext(e -> assertThat(e.globalEventOrder().longValue()).isEqualTo(4L))
-                    .assertNext(e -> assertThat(e.globalEventOrder().longValue()).isEqualTo(5L))
-                    .verifyComplete();
-    }
+        var received = new CopyOnWriteArrayList<Long>();
+        var subscriber = new BaseSubscriber<PersistedEvent>() {
+            @Override
+            protected void hookOnSubscribe(Subscription subscription) {
+                request(1);
+            }
 
-    /**
-     * Setting the threshold to {@link Duration#ZERO} disables stall detection, restoring the original
-     * strict-contiguity-only behaviour: a live-tail hole parks the drain indefinitely with no recovery
-     * error.
-     */
-    @Test
-    void live_tail_drain_stall_detection_disabled_when_threshold_is_zero() {
-        var props = new CdcProperties.CdcEventBusProperties();
-        props.setLiveDrainStallThreshold(Duration.ZERO);
+            @Override
+            protected void hookOnNext(PersistedEvent event) {
+                received.add(event.globalEventOrder().longValue());
+                LockSupport.parkNanos(Duration.ofMillis(1).toNanos());
+                request(1);
+            }
+        };
+        ordered.subscribe(subscriber);
 
-        Sinks.Many<PersistedEvent> liveSink = Sinks.many().unicast().onBackpressureBuffer();
-        Flux<PersistedEvent> backfill = Flux.just(pe(1), pe(2), pe(3));
-
-        Flux<PersistedEvent> ordered = CdcEventStore.BackfillThenLiveOrdered.orderedWithoutMetrics(
-                backfill, liveSink.asFlux(), 3, props);
-
-        StepVerifier.create(ordered)
-                    .assertNext(e -> assertThat(e.globalEventOrder().longValue()).isEqualTo(1L))
-                    .assertNext(e -> assertThat(e.globalEventOrder().longValue()).isEqualTo(2L))
-                    .assertNext(e -> assertThat(e.globalEventOrder().longValue()).isEqualTo(3L))
-                    .then(() -> liveSink.tryEmitNext(pe(5)))   // hole at 4, but detection disabled
-                    .expectTimeout(Duration.ofSeconds(1))
-                    .verify();
+        await().atMost(Duration.ofSeconds(10)).until(() -> received.size() >= totalBackfill + totalLive);
+        assertThat(received).containsExactlyElementsOf(LongStream.rangeClosed(1, totalBackfill + totalLive).boxed().toList());
+        subscriber.dispose();
     }
 
     /**

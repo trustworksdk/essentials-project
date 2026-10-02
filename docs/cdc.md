@@ -21,10 +21,11 @@ What CDC delivers:
   to bootstrap a subscription's resume point and as a fallback whenever CDC is unhealthy.
 - **Ordered handover**: `BackfillThenLiveOrdered` snapshots the head global-order at
   subscription time, polls `[resume … head]`, then gates live emissions until the
-  backfill catches up — so subscribers see a global-order stream across the boundary.
-  The one exception is an event whose transaction commits *after* one holding a higher
-  global order: it is delivered when it commits, after the higher one (see
-  "Commit order, not global order" in §2).
+  backfill catches up — so subscribers see everything up to the head before any live
+  event, and the live events that arrived meanwhile in global order. From then on live
+  events are delivered as the bus delivers them, in commit order: an event whose
+  transaction commits *after* one holding a higher global order is delivered when it
+  commits, after the higher one (see "Commit order, not global order" in §2).
 
 What CDC does **not** change:
 
@@ -227,6 +228,10 @@ A subscription served by `BackfillThenLiveOrdered` parked its strict drain on it
 `liveDrainStallThreshold` (three minutes by default) instead, or - for an event at or
 below the head its backfill read - dropped it as already back-filled.
 
+Per aggregate, commit order is event order: an aggregate's next event is appended by a
+transaction that read the previous one committed, so it commits - and reaches the bus -
+after it (and takes a higher global order too).
+
 *Restarts.* A subscriber's resume point moves past a gap, which is safe only while the
 gap is recorded durably. The polling path and every back-fill page record the gaps in
 what they load as transient gaps with the gap handler; an event from the bus is not
@@ -242,11 +247,19 @@ a gap handler that records gaps; an in-order event costs nothing extra.
 catch-ups and backfill load all tenants and filter by the subscriber's tenant on the way
 out. Filtered in SQL, another tenant's events would be gaps it waits for.
 
-*`BackfillThenLiveOrdered`.* Its drain stays strict past the head. A late commit no longer
-parks it - the event now reaches the drain - but a rolled-back `IDENTITY` value in its
-live tail still does, until `liveDrainStallThreshold`, after which it back-fills past it:
-correct, but slow for that subscription. An event at or below the head that the backfill
-could not see is delivered once the backfill is done.
+*`BackfillThenLiveOrdered`.* Once its backfill is done, it hands on the live events that
+arrived meanwhile in global order, and from then on each live event as it arrives - the
+tracker drops what was delivered and lets a gap's event through when it commits, as on
+the bus leg. It used to advance strictly by one past the head, so a global order that
+never arrives - a rolled-back `IDENTITY` value, which writes no WAL - parked it, holding
+back every later event, until `liveDrainStallThreshold` (three minutes by default) raised
+`CdcLiveDrainStalledException` and re-subscribed it through its backfill. Rollbacks are
+routine (an optimistic concurrency conflict is one), so that stalled such subscriptions
+for minutes. Nothing waits for a hole any more: `liveDrainStallThreshold` has no effect,
+`CdcLiveDrainStalledException` is never raised, and `essentials.cdc.backfill_live.stall_detected`
+stays at 0 - all three kept so existing configuration, code and dashboards still work. An
+event at or below the head that the backfill could not see is delivered once the backfill
+is done.
 
 ### Logical decoding plugins
 
@@ -918,6 +931,7 @@ All keys live under `cdc.*` in [`CdcProperties`](../components/postgresql-event-
 | `cdc.eventBus.backpressureBufferSize`             | `8192`         | Per-aggregate Reactor sink buffer size (fills only while an aggregate type has no subscriber), and the per-subscription `BackfillThenLiveOrdered` live events (buffered during backfill, queued for the subscriber, and asked for - together; it asks for more only as the subscriber takes them). Not the per-subscription live hand-over buffer: that is one polling page (see [§2](#2-architecture)). |
 | `cdc.eventBus.nonSerializedMaxRetries`            | `16`           | Spin-retry count on `FAIL_NON_SERIALIZED` emit failures.             |
 | `cdc.eventBus.overflowMaxRetries`                 | `20`           | Backoff retry count on `FAIL_OVERFLOW`.                              |
+| `cdc.eventBus.liveDrainStallThreshold`            | `180s`         | **No effect** - kept so existing configuration still binds (must not be negative). `BackfillThenLiveOrdered` no longer waits for a missing global order, so there is no stall to detect (see "Commit order, not global order" in §2). |
 | `cdc.eventBus.overflowPolicy`                     | `FAIL_FAST`    | `FAIL_FAST` (throw `CdcBusOverflowException`) or `LOG_AND_DROP`, for an event the bus cannot emit. A slow subscription does not lead here - it leaves the bus, catches up from the event store and rejoins it. |
 
 ### 7.7 `cdc.healthCheck` ([`CdcHealthCheckProperties`](../components/postgresql-event-store/src/main/java/dk/trustworks/essentials/components/eventsourced/eventstore/postgresql/cdc/CdcProperties.java))
@@ -1588,8 +1602,11 @@ speed.** Subscribers always see correct, ordered events; CDC determines how fast
 - **At-least-once delivery** to every subscriber. Idempotency is the subscriber's
   responsibility. CDC and polling both rely on the EventStore's `globalOrder`
   cursor for resume.
-- **Strict global-order monotonicity** within a single subscription, across the
-  backfill→live handover, courtesy of `BackfillThenLiveOrdered`.
+- **Backfill before live** within a single subscription, across the backfill→live
+  handover, courtesy of `BackfillThenLiveOrdered`. Global order is not strictly
+  monotonic: live events follow commit order, and an event whose transaction commits
+  after one holding a higher global order is delivered late (the resume point only
+  advances). Per aggregate, event order is kept.
 - **No silent loss on CDC failure.** A FAILED CDC pipeline cuts subscribers over
   to polling at the position they last consumed; no events are skipped.
 - **No silent loss on slot recreation** (manual or via

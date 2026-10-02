@@ -963,22 +963,20 @@ public class CdcProperties {
         }
 
         /**
-         * How long {@code CdcEventStore.BackfillThenLiveOrdered}'s live-tail drain may stay parked on a
-         * missing {@code global_event_order} before it is treated as a stall and the subscription is
-         * recovered (see {@link CdcLiveDrainStalledException} and {@code cdc/cdc-improvements.md} §P10).
+         * <b>No longer has any effect</b> - kept so existing configuration still binds. Must not be negative, as before.
          * <p>
-         * The drain advances {@code expectedNext} strictly by {@code +1}; a permanent hole in the live
-         * tail (e.g. a rolled-back {@code IDENTITY} value that never reaches the WAL) would otherwise
-         * stall the affected subscriber forever. On expiry the pipeline re-subscribes and resumes the
-         * gap-handler-aware backfill from the hole, which classifies it (transient → wait/recover,
-         * permanent → skip).
+         * It bounded how long {@code CdcEventStore.BackfillThenLiveOrdered}'s live-tail drain - for a subscription started
+         * while CDC is ACTIVE - could stay parked on a missing {@code global_event_order}, such as an {@code IDENTITY}
+         * value a rolled-back transaction took, which never reaches the CDC bus. The drain advanced strictly by
+         * {@code +1} past the head, so it waited for every such hole - holding back every later event - until this
+         * threshold (default {@code 180s}) raised a {@link CdcLiveDrainStalledException} and re-subscribed the
+         * subscription through its gap-handler-aware backfill; {@link Duration#ZERO} disabled that recovery.
          * <p>
-         * <b>Must exceed the gap-promotion window</b> (the {@code PostgresqlEventStreamGapHandler}
-         * transient→permanent promotion timeout, default 120s) so a genuinely transient gap — an event
-         * merely committing late — has had its full chance to commit and arrive on the bus before a
-         * restart is triggered; otherwise the recovery would fire on gaps that were about to resolve on
-         * their own. Default {@code 180s}. Set to {@link Duration#ZERO} to disable stall detection
-         * (restores the strict-contiguity-only behaviour).
+         * The drain no longer waits for a missing global order: past the head it hands live events on as the CDC bus
+         * delivers them, and an event whose transaction commits after a higher global order is delivered when it
+         * arrives, out of global order, as on every other CDC path and on the polling path. There is nothing left to
+         * stall on, so nothing reads this value, no {@link CdcLiveDrainStalledException} is raised, and the
+         * {@code essentials.cdc.backfill_live.stall_detected} counter stays at {@code 0}.
          */
         public Duration getLiveDrainStallThreshold() {
             return liveDrainStallThreshold;

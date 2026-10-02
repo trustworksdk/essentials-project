@@ -91,10 +91,8 @@ class CdcEventStoreConcurrentWritersIT extends AbstractLogicalReplicationPostgre
 
         var cdcProperties = new CdcProperties();
         cdcProperties.getHealthCheck().setActiveCutbackDebounce(DEBOUNCE);
-        // BackfillThenLiveOrdered's drain is strict: a rolled-back append is a hole in its live tail it cannot tell from
-        // a late commit, so it waits the stall threshold (three minutes by default) and then back-fills past it. A
-        // lower order committing late is no such hole any more - the tracker lets it through to the drain
-        cdcProperties.getEventBus().setLiveDrainStallThreshold(Duration.ofSeconds(1));
+        // The live-drain stall threshold is left at its default (three minutes) on purpose: the rolled-back appends are
+        // holes in the live tail of the subscription started while CDC is ACTIVE, and they must not hold it back
         cdcBus = new CdcEventBus(cdcProperties.getEventBus());
         availability = new CdcAvailability();
         cdcEventStore = new CdcEventStore<>(eventStore, unitOfWorkFactory, gapHandler, cdcBus, cdcProperties, availability, Optional.empty());

@@ -48,7 +48,7 @@ import static org.awaitility.Awaitility.await;
  * Two subscribers on the same aggregate type: one fails #2 under {@code retryThenSkip}, the other is healthy. While the
  * failing one is backing off, the "dispatcher" must be free to publish the next event and the healthy subscriber must
  * receive it. The bus is fed directly from a single-threaded executor standing in for the {@code CdcDispatcher}, and
- * availability is driven by hand, as in {@link CdcEventStoreLiveDrainStallRecoveryIT}.
+ * availability is driven by hand, as in {@link CdcEventStoreLiveTailHoleIT}.
  * <p>
  * Also pins that a backoff interrupted by the adaptive live source switching a subscription from polling to the CDC bus
  * is waited out, not read as a stop (F-880).

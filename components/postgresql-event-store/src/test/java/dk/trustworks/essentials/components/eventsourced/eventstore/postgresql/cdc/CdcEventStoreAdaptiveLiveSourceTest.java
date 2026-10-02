@@ -257,11 +257,11 @@ class CdcEventStoreAdaptiveLiveSourceTest {
     @Test
     void tenant_filter_excludes_interleaved_other_tenant_events_without_stalling_ordering() throws Exception {
         // Regression: tenant filtering must be applied to the ORDERED OUTPUT, not upstream of
-        // BackfillThenLiveOrdered's strict expectedNext drain. An other-tenant event sitting in the
+        // BackfillThenLiveOrdered and its delivery tracker. An other-tenant event sitting in the
         // MIDDLE of the global-order sequence must be excluded WITHOUT stalling the events after it —
         // the common multi-tenant case where tenants interleave in global_event_order. With the filter
-        // misplaced upstream of the drain, event 3 (example2) would punch a hole and events 4 & 5 would
-        // never be delivered.
+        // misplaced upstream, event 3 (example2) would punch a hole: the drain used to wait for it
+        // (strict +1), and the tracker would record and wait for it as a gap.
         var fx = fixture(Duration.ofMillis(100));
         fx.availability.active("slot");
 

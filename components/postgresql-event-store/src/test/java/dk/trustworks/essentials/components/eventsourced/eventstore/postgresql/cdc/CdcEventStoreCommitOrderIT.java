@@ -36,8 +36,9 @@ import reactor.core.Disposable;
 import java.time.Duration;
 import java.util.*;
 import java.util.concurrent.*;
+import java.util.concurrent.atomic.AtomicBoolean;
 
-import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.*;
 import static org.awaitility.Awaitility.await;
 
 /**
@@ -64,6 +65,7 @@ class CdcEventStoreCommitOrderIT extends AbstractLogicalReplicationPostgresIT {
     private final List<EventStoreSubscriptionManager>                               managers = new CopyOnWriteArrayList<>();
     private Disposable                                                              bystander;
     private ExecutorService                                                         heldTransactions;
+    private SimpleMeterRegistry                                                     meterRegistry;
 
     @BeforeEach
     void setup() {
@@ -86,13 +88,14 @@ class CdcEventStoreCommitOrderIT extends AbstractLogicalReplicationPostgresIT {
         cdcProperties.getHealthCheck().setActiveCutbackDebounce(DEBOUNCE);
         cdcBus = new CdcEventBus(cdcProperties.getEventBus());
         availability = new CdcAvailability();
+        meterRegistry = new SimpleMeterRegistry();
         cdcEventStore = new CdcEventStore<>(eventStore,
                                             unitOfWorkFactory,
                                             gapHandler,
                                             cdcBus,
                                             cdcProperties,
                                             availability,
-                                            Optional.of(new SimpleMeterRegistry()));
+                                            Optional.of(meterRegistry));
         durableSubscriptionRepository = new PostgresqlDurableSubscriptionRepository(jdbi, cdcEventStore);
         bystander = cdcBus.fluxForAggregate(ORDERS).subscribe();
         heldTransactions = Executors.newCachedThreadPool(runnable -> new Thread(runnable, "test-held-transaction"));
@@ -137,9 +140,8 @@ class CdcEventStoreCommitOrderIT extends AbstractLogicalReplicationPostgresIT {
 
     /**
      * (b) {@code BackfillThenLiveOrdered}: the subscription starts while CDC is ACTIVE, so its live tail is the bus. A
-     * holds the order right after the backfill's head. Its drain is strict, so it orders A before B rather than skipping
-     * A - which it used to do only after the live-drain stall threshold (three minutes by default) re-subscribed it,
-     * because the live source had dropped A.
+     * holds the order right after the backfill's head. The live source used to drop A, so the drain - strict past the
+     * head then - waited for it until the live-drain stall threshold (three minutes by default) re-subscribed it.
      */
     @Test
     void an_ordered_subscription_receives_an_event_whose_lower_global_order_committed_last_without_waiting_for_the_stall_threshold() throws Exception {
@@ -156,9 +158,44 @@ class CdcEventStoreCommitOrderIT extends AbstractLogicalReplicationPostgresIT {
         var c = appendAndCommit();
         publish(c);
 
-        // Ordered: the drain held B and C back until A arrived
+        // Past the head, live events are handed on as the bus delivers them - B and A in either order, each once
         assertReceivedExactlyOnce(received, List.of(1L, a.globalOrder(), b, c));
-        assertThat(received).containsExactly(1L, a.globalOrder(), b, c);
+    }
+
+    /**
+     * (b) {@code BackfillThenLiveOrdered}, with a rolled-back append in its live tail: the global order it took is a hole
+     * that never reaches the bus. The drain used to advance strictly by one past the head, so it parked on the hole -
+     * holding back every later event - until the live-drain stall threshold (three minutes by default) re-subscribed the
+     * subscription through its backfill; rollbacks are routine (an optimistic concurrency conflict is one). Now B, which
+     * committed after the hole, arrives at once, and A, which took the order right after the hole and commits last, is
+     * still delivered - once, when it commits.
+     */
+    @Test
+    void an_ordered_subscription_is_not_held_back_by_a_rolled_back_append_and_still_receives_a_lower_global_order_committed_last() throws Exception {
+        var manager = startManager("node-1");
+        availability.active("commit-order-slot");
+        var received = subscribe(manager, "ordered-rolled-back");
+        publishUntilReceived(received, appendAndCommit());
+
+        var rolledBack = holdAppend();
+        var a          = holdAppend();
+        rolledBack.rollBack();
+        var b = appendAndCommit();
+        publish(b);
+
+        // Well within the stall threshold, and while A is still in flight
+        await().atMost(Duration.ofSeconds(5)).until(() -> received.contains(b));
+        assertThat(received).doesNotContain(a.globalOrder());
+
+        a.commit();
+        publish(a.globalOrder());
+        var c = appendAndCommit();
+        publish(c);
+
+        assertReceivedExactlyOnce(received, List.of(1L, b, a.globalOrder(), c));
+        assertThat(received).as("handed on as the bus delivered them").containsExactly(1L, b, a.globalOrder(), c);
+        assertThat(received).as("the rolled-back global order").doesNotContain(rolledBack.globalOrder());
+        assertThat(meterRegistry.find("essentials.cdc.backfill_live.stall_detected").counter().count()).isZero();
     }
 
     /**
@@ -352,19 +389,23 @@ class CdcEventStoreCommitOrderIT extends AbstractLogicalReplicationPostgresIT {
     }
 
     /**
-     * Appends in a transaction of its own that stays open until {@link HeldAppend#commit()}: its global order is taken,
-     * the event is not visible yet
+     * Appends in a transaction of its own that stays open until {@link HeldAppend#commit()} or {@link HeldAppend#rollBack()}:
+     * its global order is taken, the event is not visible yet
      */
     private HeldAppend holdAppend() throws Exception {
         var globalOrder = new CompletableFuture<Long>();
-        var mayCommit   = new CountDownLatch(1);
-        var committed = heldTransactions.submit(() -> unitOfWorkFactory.usingUnitOfWork(unitOfWork -> {
+        var mayEnd      = new CountDownLatch(1);
+        var rollBack    = new AtomicBoolean();
+        var ended = heldTransactions.submit(() -> unitOfWorkFactory.usingUnitOfWork(unitOfWork -> {
             globalOrder.complete(appendTo(unitOfWork));
-            if (!mayCommit.await(30, TimeUnit.SECONDS)) {
+            if (!mayEnd.await(30, TimeUnit.SECONDS)) {
                 throw new IllegalStateException("Held transaction was never released");
             }
+            if (rollBack.get()) {
+                throw new RolledBack();
+            }
         }));
-        return new HeldAppend(globalOrder.get(10, TimeUnit.SECONDS), mayCommit, committed);
+        return new HeldAppend(globalOrder.get(10, TimeUnit.SECONDS), mayEnd, rollBack, ended);
     }
 
     private long appendTo(UnitOfWork unitOfWork) {
@@ -379,10 +420,19 @@ class CdcEventStoreCommitOrderIT extends AbstractLogicalReplicationPostgresIT {
                          .longValue();
     }
 
-    private record HeldAppend(long globalOrder, CountDownLatch mayCommit, Future<?> committed) {
+    private record HeldAppend(long globalOrder, CountDownLatch mayEnd, AtomicBoolean rollBackRequested, Future<?> ended) {
         void commit() throws Exception {
-            mayCommit.countDown();
-            committed.get(10, TimeUnit.SECONDS);
+            mayEnd.countDown();
+            ended.get(10, TimeUnit.SECONDS);
         }
+
+        void rollBack() {
+            rollBackRequested.set(true);
+            mayEnd.countDown();
+            assertThatThrownBy(() -> ended.get(10, TimeUnit.SECONDS)).hasRootCauseInstanceOf(RolledBack.class);
+        }
+    }
+
+    private static final class RolledBack extends RuntimeException {
     }
 }
