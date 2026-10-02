@@ -759,6 +759,12 @@ Later TX1 commits → resolves: 1, 2, 3
 | **Transient** | Concurrent tx not yet committed | Subscription waits/retries |
 | **Permanent** | Tx rolled back (timeout exceeded) | Excluded from queries |
 
+Each poll re-asks for the subscriber's open transient gaps. Default `PostgresqlEventStreamGapHandler` constructors: all open
+gaps up to 50; beyond that the 20 highest + 10 lowest + a rotating window of 20 (max 50 per poll). A custom
+`ResolveTransientGapsToIncludeInQueryStrategy` (longer constructors) replaces that. Transient gaps are per subscriber;
+permanent gaps are shared by every subscriber of the `AggregateType`. A tenant-filtered subscription loads every tenant's
+events in the polled range and filters in memory (polling and CDC alike), so other tenants' orders are never gaps.
+
 ### Ordering Guarantees
 
 | Order Type | Guarantee | Reason |

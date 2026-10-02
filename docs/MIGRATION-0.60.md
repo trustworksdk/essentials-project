@@ -851,6 +851,44 @@ strict sequence. A handler that ignores every event at or below the highest `Glo
 events; deduplicate by event id instead. Details:
 [README § Out-of-Order Delivery Is Expected](../components/postgresql-event-store/README.md#out-of-order-delivery-is-expected).
 
+The same applies to a subscription started while CDC is active, which 0.50 held to strict global order: a rolled-back
+append stalled it for up to three minutes (`live-drain-stall-threshold`). It now receives live events as the CDC bus
+delivers them.
+
+**What to do:** remove `essentials.eventstore.cdc.event-bus.live-drain-stall-threshold` from your configuration. It
+has no effect and is deprecated, as are `CdcLiveDrainStalledException` (never raised) and the metric
+`essentials.cdc.backfill_live.stall_detected` (always 0); drop alerts built on that metric.
+
+### Tenant-filtered polling loads every tenant's events
+
+A polling subscription with `onlyIncludeEventIfItBelongsToTenant` used to filter by tenant in SQL, which made other
+tenants' global orders look like gaps: they were recorded as transient gaps and then promoted to permanent gaps, which
+every subscriber of the aggregate type shares. 0.60 loads every tenant's events in the polled range, reconciles gaps
+against all of them and filters by tenant in memory, as the CDC path does. A tenant-filtered subscription therefore
+reads more rows per poll, up to the number of tenants times as many; the payloads of other tenants' events are not
+deserialized.
+
+**What to do:**
+
+- If you used tenant-filtered polling subscriptions on 0.50, call
+  `EventStreamGapHandler#resetPermanentGapsFor(aggregateType)` once per affected aggregate type to clear the permanent
+  gaps it recorded for other tenants' events.
+- If you have an `EventStoreInterceptor` that inspects `LoadEventsByGlobalOrder`, note that a polling subscription's
+  load now carries no tenant, even when the subscription is tenant-filtered. An interceptor that rejects a load without
+  a tenant stops such a subscription.
+- If you have an `EventStoreSubscriptionObserver`, `reconciledGaps(...)` now receives every tenant's loaded events;
+  `eventStorePolled(...)` still receives only the subscriber's tenant's events.
+
+### The default gap handler looks for more gaps per poll
+
+`PostgresqlEventStreamGapHandler`'s default constructors asked each poll for the 2 lowest open gaps (the javadoc said
+10). A late commit above rolled-back appends was therefore not found until those were promoted to permanent, and could
+be promoted with them and never delivered. The default now asks for every open gap up to 50 and, beyond that, for the 20
+highest, the 10 lowest and a rotating window of 20 in between, so a poll carries at most 50 gap orders instead of 2.
+
+**What to do:** nothing. A gap handler you built with your own `ResolveTransientGapsToIncludeInQueryStrategy` is
+unchanged.
+
 ---
 
 ## Coming from before 0.50

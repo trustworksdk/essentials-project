@@ -17,6 +17,9 @@ targets, with a `-N` suffix for plugin-only releases.
 - **Bundled docs** — a CDC subscription that falls behind catches up from the database and rejoins the bus
   instead of staying on polling, and a late-committing event is delivered under CDC after events with a
   higher `GlobalEventOrder` (`LLM-postgresql-event-store.md`).
+- **Bundled docs** — the default gap handler re-asks for up to 50 open gaps per poll instead of 2, and
+  tenant-filtered polling loads every tenant's events so other tenants' orders are never gaps
+  (`LLM-postgresql-event-store.md`).
 - **New trap `ESS-116`** — a handler that skips everything at or below the highest `GlobalEventOrder` it
   has seen drops late-committed events (`LLM-traps.md`).
 

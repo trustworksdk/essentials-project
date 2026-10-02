@@ -2053,6 +2053,8 @@ var eventStore = PostgresqlEventStore.<SeparateTablePerAggregateEventStreamConfi
 - After a configurable timeout (typically longer than max transaction duration), transient gaps become **permanent**
 - Permanent gaps indicate the inserting transaction was rolled back or failed
 - Permanent gaps are excluded from `loadEventsByGlobalOrder` calls to prevent blocking subscriptions indefinitely
+- Each poll asks again for the subscription's open transient gaps: with the default `PostgresqlEventStreamGapHandler` constructors, every open gap up to 50, and beyond that the 20 highest (where a late commit lands), the 10 lowest (the next to become permanent) and a rotating window of 20 in between, so a poll never carries more than 50 gap orders. Pass your own `ResolveTransientGapsToIncludeInQueryStrategy` to the longer constructors to choose differently
+- A tenant-filtered subscription (`onlyIncludeEventIfItBelongsToTenant`) loads every tenant's events in the polled range and filters by tenant in memory, so other tenants' global orders are never mistaken for gaps. It reads more rows per poll than an unfiltered one would need to deliver, but other tenants' payloads are not deserialized
 - Reset permanent gaps using `dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.gap.EventStreamGapHandler.resetPermanentGapsFor(AggregateType)` if needed (e.g., after data recovery)
 
 ### Disabling Gap Handling
