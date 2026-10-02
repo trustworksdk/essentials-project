@@ -36,8 +36,13 @@ import static dk.trustworks.essentials.shared.FailFast.*;
  * - Providing a reactive stream (Flux) for subscribers interested in a specific
  *   aggregate type.
  * <p>
- * It utilizes Reactor's {@link Sinks.Many} to maintain event streams for each aggregate type
- * and handles backpressure by buffering events for slow consumers.
+ * It utilizes Reactor's {@link Sinks.Many} to maintain event streams for each aggregate type. A multicast sink is
+ * paced by its slowest subscriber, so {@code CdcEventStore} never lets a subscription back-pressure it: each
+ * subscription requests unbounded demand and buffers on its own side, leaving the bus for polling when it falls too
+ * far behind (see {@code CdcEventStore#buildAdaptiveLiveSource}). With only such subscribers the sink's own
+ * {@code backpressureBufferSize} buffer holds events transiently, or while the aggregate type has no subscriber yet;
+ * the {@link CdcOverflowPolicy} applies when an emit still fails. A subscriber of {@link #fluxForAggregate} that
+ * applies backpressure itself paces every other subscriber of the aggregate type.
  */
 public final class CdcEventBus {
 

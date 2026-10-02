@@ -28,6 +28,7 @@ import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.ty
 import dk.trustworks.essentials.components.foundation.transaction.UnitOfWork;
 import dk.trustworks.essentials.components.foundation.types.SubscriberId;
 import dk.trustworks.essentials.types.LongRange;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.junit.jupiter.api.*;
 
 import java.time.Duration;
@@ -47,15 +48,25 @@ import static org.awaitility.Awaitility.await;
  * Two subscribers on the same aggregate type: one fails #2 under {@code retryThenSkip}, the other is healthy. While the
  * failing one is backing off, the "dispatcher" must be free to publish the next event and the healthy subscriber must
  * receive it. The bus is fed directly from a single-threaded executor standing in for the {@code CdcDispatcher}, and
- * availability is forced ACTIVE, as in {@link CdcEventStoreLiveDrainStallRecoveryIT}.
+ * availability is driven by hand, as in {@link CdcEventStoreLiveDrainStallRecoveryIT}.
+ * <p>
+ * Also pins that a backoff interrupted by the adaptive live source switching a subscription from polling to the CDC bus
+ * is waited out, not read as a stop (F-880).
  */
 class CdcEventStoreSubscriptionErrorPolicyIsolationIT extends AbstractLogicalReplicationPostgresIT {
+    private static final String   SLOT          = "it-error-policy-isolation-slot";
     private static final long     FAILING_EVENT = 2;
-    private static final int      MAX_RETRIES   = 3;
-    private static final Duration BACKOFF       = Duration.ofSeconds(1);
+    private static final int      MAX_RETRIES   = 2;
+    /**
+     * Long enough that every "while it is still backing off" assertion below has seconds of slack. Those assertions
+     * are pinned by the failing handler's attempt count, read afterwards, not by sub-second deadlines
+     */
+    private static final Duration BACKOFF       = Duration.ofSeconds(5);
 
     private PostgresqlEventStore<SeparateTablePerAggregateEventStreamConfiguration> eventStore;
     private CdcEventBus                                                             cdcBus;
+    private CdcAvailability                                                         availability;
+    private SimpleMeterRegistry                                                     meterRegistry;
     private EventStoreSubscriptionManager                                           eventStoreSubscriptionManager;
     private ExecutorService                                                         dispatcher;
 
@@ -71,16 +82,18 @@ class CdcEventStoreSubscriptionErrorPolicyIsolationIT extends AbstractLogicalRep
         eventStore = new PostgresqlEventStore<>(unitOfWorkFactory, persistenceStrategy);
 
         cdcBus = new CdcEventBus();
-        var availability = new CdcAvailability();
+        // Starts INACTIVE: each test decides whether its subscriptions start on the CDC bus or on polling
+        availability = new CdcAvailability();
+        meterRegistry = new SimpleMeterRegistry();
+        var cdcProperties = new CdcProperties();
+        cdcProperties.getHealthCheck().setActiveCutbackDebounce(Duration.ofMillis(200));
         var cdcEventStore = new CdcEventStore<>(eventStore,
                                                 unitOfWorkFactory,
                                                 new PostgresqlEventStreamGapHandler<>(unitOfWorkFactory),
                                                 cdcBus,
-                                                new CdcProperties(),
+                                                cdcProperties,
                                                 availability,
-                                                Optional.empty());
-        // Force ACTIVE so pollEvents serves the live tail from the CDC bus
-        availability.active("it-error-policy-isolation-slot");
+                                                Optional.of(meterRegistry));
 
         eventStoreSubscriptionManager = EventStoreSubscriptionManager.builder()
                                                                      .setEventStore(cdcEventStore)
@@ -114,6 +127,8 @@ class CdcEventStoreSubscriptionErrorPolicyIsolationIT extends AbstractLogicalRep
 
     @Test
     void a_subscription_in_its_retry_backoff_does_not_hold_up_the_other_cdc_subscriptions() throws Exception {
+        // ACTIVE before subscribing, so pollEvents serves the live tail from the CDC bus
+        availability.active(SLOT);
         var failingReceived = new CopyOnWriteArrayList<Long>();
         var failingAttempts = new AtomicInteger();
         var healthyReceived = new CopyOnWriteArrayList<Long>();
@@ -146,18 +161,68 @@ class CdcEventStoreSubscriptionErrorPolicyIsolationIT extends AbstractLogicalRep
         var publishingTwo = publishOnDispatcher(appendOrder());
         await().atMost(Duration.ofSeconds(10)).until(() -> failingAttempts.get() >= 1);
 
-        // The failing subscription now sleeps in its backoff for up to MAX_RETRIES x BACKOFF. The dispatcher must be
-        // free to publish, and the healthy subscription must receive, well within that
+        // The failing subscription now sleeps in its backoff. The dispatcher must be free to publish, and the healthy
+        // subscription must receive, before the failing one even makes its first retry. The deadlines are generous; the
+        // attempt count read afterwards is what proves the isolation - before the fix none of this could complete until
+        // the failing subscription had made every retry
         var publishingThree = publishOnDispatcher(appendOrder());
-        publishingTwo.get(BACKOFF.toMillis() / 2, TimeUnit.MILLISECONDS);
-        publishingThree.get(BACKOFF.toMillis() / 2, TimeUnit.MILLISECONDS);
+        publishingTwo.get(BACKOFF.toMillis(), TimeUnit.MILLISECONDS);
+        publishingThree.get(BACKOFF.toMillis(), TimeUnit.MILLISECONDS);
         await().atMost(BACKOFF).untilAsserted(() -> assertThat(healthyReceived).containsExactly(1L, 2L, 3L));
-        assertThat(failingAttempts.get()).as("still retrying #2").isLessThanOrEqualTo(MAX_RETRIES);
+        assertThat(failingAttempts.get()).as("still in the backoff before its first retry of #2").isEqualTo(1);
         assertThat(failingReceived).as("still retrying #2").containsExactly(1L);
 
         // Per-subscription order is kept: the failing subscription gives up on #2 and only then handles #3
-        await().atMost(Duration.ofSeconds(15)).untilAsserted(() -> assertThat(failingReceived).containsExactly(1L, 3L));
+        await().atMost(BACKOFF.multipliedBy(MAX_RETRIES + 2)).untilAsserted(() -> assertThat(failingReceived).containsExactly(1L, 3L));
         assertThat(failingAttempts.get()).isEqualTo(1 + MAX_RETRIES);
+    }
+
+    /**
+     * F-880: once CDC is active, the adaptive live source switches a subscription that started on polling over to the
+     * CDC bus, and cancelling the polling source interrupts the polling thread - here while the handler sits in its
+     * retry backoff. That interrupt is not a stop: the retry still runs, and the subscription keeps handling events
+     */
+    @Test
+    void a_retry_backoff_interrupted_by_the_switch_from_polling_to_the_cdc_bus_is_waited_out_and_the_subscription_keeps_going() throws Exception {
+        // CDC not active yet: the subscription starts on polling, as every subscription started before the tailer does
+        var attemptsAtFailingEvent = new AtomicInteger();
+        var received               = new CopyOnWriteArrayList<Long>();
+        var subscription = eventStoreSubscriptionManager.subscribeToAggregateEventsAsynchronously(SubscriberId.of("orders-switched"),
+                                                                                                  ORDERS,
+                                                                                                  GlobalEventOrder.FIRST_GLOBAL_EVENT_ORDER,
+                                                                                                  Optional.empty(),
+                                                                                                  (PersistedEventHandler) event -> {
+                                                                                                      var globalOrder = event.globalEventOrder().longValue();
+                                                                                                      if (globalOrder == FAILING_EVENT && attemptsAtFailingEvent.incrementAndGet() == 1) {
+                                                                                                          throw new IllegalStateException("Intentional failure handling event #" + globalOrder);
+                                                                                                      }
+                                                                                                      received.add(globalOrder);
+                                                                                                  });
+        appendOrder();
+        await().atMost(Duration.ofSeconds(15)).untilAsserted(() -> assertThat(received).containsExactly(1L));
+        appendOrder();
+        await().atMost(Duration.ofSeconds(10)).until(() -> attemptsAtFailingEvent.get() == 1);
+
+        // CDC becomes active while #2 backs off: once the cut-over debounce has passed, the switch to the bus cancels the
+        // polling source, which interrupts the thread #2 is backing off on
+        availability.active(SLOT);
+
+        // The retry still runs after the backoff and handles #2, instead of abandoning it as if the subscriber had stopped
+        await().atMost(BACKOFF.multipliedBy(2)).untilAsserted(() -> assertThat(received).containsExactly(1L, 2L));
+        assertThat(attemptsAtFailingEvent.get()).isEqualTo(2);
+        // The switch to the bus did happen - its source is subscribed only once #2's handling has returned
+        await().atMost(Duration.ofSeconds(5)).until(() -> meterRegistry.counter("essentials.cdc.eventstore.live_source.switch.count").count() == 2);
+
+        // Events published after the switch are handled. Republished until the bus leg is attached - repeats are filtered
+        var three = appendOrder();
+        var four  = appendOrder();
+        await().atMost(Duration.ofSeconds(15)).untilAsserted(() -> {
+            publishOnDispatcher(three).get(5, TimeUnit.SECONDS);
+            publishOnDispatcher(four).get(5, TimeUnit.SECONDS);
+            assertThat(received).containsExactly(1L, 2L, 3L, 4L);
+        });
+        assertThat(subscription.isStoppedByErrorPolicy()).isFalse();
+        assertThat(subscription.isActive()).isTrue();
     }
 
     private Future<?> publishOnDispatcher(long globalOrder) {

@@ -1246,9 +1246,13 @@ before failing is not queued but reaches this policy - see [ViewEventProcessor](
 **Retries block only their own subscription.** They are synchronous on the subscription's delivery thread (that is what keeps
 events in order), and every async subscription has its own: polling `Publish-<subscriber>-<aggregateType>`, CDC
 `Cdc-<subscriber>-<aggregateType>` (handed over from the shared `cdc-dispatcher` thread, which a handler never holds), batched
-`BatchedEventSubscriber-<subscriber>-<aggregateType>-Handler`. Under CDC the hand-over buffers
-`essentials.eventstore.cdc.event-bus.backpressure-buffer-size` events (default 8192); a subscription further behind than
-that back-pressures the other CDC subscriptions of its `AggregateType` through the CDC bus's overflow handling.
+`BatchedEventSubscriber-<subscriber>-<aggregateType>-Handler`. Under CDC a subscription never back-pressures the CDC bus:
+its hand-over buffers one polling page (`eventStorePollingBatchSize`), and a subscription further behind than that leaves
+the bus on its own and continues on polling from the next event it has not been handed - nothing lost or reordered - until
+CDC availability next changes. Each such overflow logs a WARN and counts `essentials.cdc.eventstore.live_source.overflow.count`;
+the other CDC subscriptions of its `AggregateType` and the dispatcher are not held up, under either
+`essentials.eventstore.cdc.event-bus.overflow-policy`. Size `eventStorePollingBatchSize` to absorb an ordinary burst, or a
+burst moves the subscription to polling too.
 
 **Stopping during retries does not skip.** A stop while a retry is under way (shutdown, fenced-lock hand-over, `resetFrom`,
 unsubscribe) abandons the retries: no failure callback, no ERROR, the resume point stays at the event, and the restarted

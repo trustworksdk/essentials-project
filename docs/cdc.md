@@ -148,11 +148,24 @@ to a single thread owned by that subscription (`Cdc-<subscriber>-<aggregateType>
 so the subscriber's handler - including a synchronous `SubscriptionErrorPolicy` retry
 backoff - never runs on the shared `cdc-dispatcher-<slot>` thread (or the tailer's
 thread in DIRECT mode) and a slow or retrying subscription does not hold up the other
-subscriptions on the slot. Events stay in order. The hand-over buffers up to
-`eventBus.backpressureBufferSize` events per subscription; once a stalled subscription
-is further behind than that, the multicast bus back-pressures the other subscriptions of
-the same aggregate type, and ultimately the dispatcher, through its normal overflow
-handling.
+subscriptions on the slot. Events stay in order.
+
+A subscription never back-pressures the bus. The per-aggregate-type multicast sink is
+paced by its slowest subscriber, so each subscription takes events off it without limit
+and holds the ones its handler has not reached yet in a buffer of its own, one polling
+page deep (the subscription manager's `eventStorePollingBatchSize`). When a subscription
+falls further behind than that - a handler in a long `SubscriptionErrorPolicy` backoff,
+or a slow call - only that subscription leaves the bus: it is handed what it buffered,
+then continues on polling from the event after the last one it was handed, so nothing is
+lost, repeated or reordered. It stays on polling until CDC availability next changes.
+Each such overflow logs one WARN naming the subscriber and aggregate type and counts
+`essentials.cdc.eventstore.live_source.overflow.count`; it is not a CDC fallback and does
+not touch `fallback_total`. The dispatcher, and every other subscription of the aggregate
+type, carry on unaffected - under either `eventBus.overflowPolicy`.
+
+Keep `eventStorePollingBatchSize` large enough to absorb an ordinary burst (a large
+transaction is published to the bus in one go): a subscription that overflows on a
+burst polls until the next availability change.
 
 ### Logical decoding plugins
 
@@ -819,10 +832,10 @@ All keys live under `cdc.*` in [`CdcProperties`](../components/postgresql-event-
 
 | Property                                          | Default        | Purpose                                                              |
 | ------------------------------------------------- | -------------- | -------------------------------------------------------------------- |
-| `cdc.eventBus.backpressureBufferSize`             | `8192`         | Per-aggregate Reactor sink buffer size.                              |
+| `cdc.eventBus.backpressureBufferSize`             | `8192`         | Per-aggregate Reactor sink buffer size (fills only while an aggregate type has no subscriber), and the per-subscription `BackfillThenLiveOrdered` live buffer during catch-up. Not the per-subscription live hand-over buffer: that is one polling page (see [§2](#2-architecture)). |
 | `cdc.eventBus.nonSerializedMaxRetries`            | `16`           | Spin-retry count on `FAIL_NON_SERIALIZED` emit failures.             |
 | `cdc.eventBus.overflowMaxRetries`                 | `20`           | Backoff retry count on `FAIL_OVERFLOW`.                              |
-| `cdc.eventBus.overflowPolicy`                     | `FAIL_FAST`    | `FAIL_FAST` (throw `CdcBusOverflowException`) or `LOG_AND_DROP`.     |
+| `cdc.eventBus.overflowPolicy`                     | `FAIL_FAST`    | `FAIL_FAST` (throw `CdcBusOverflowException`) or `LOG_AND_DROP`, for an event the bus cannot emit. A slow subscription does not lead here - it moves itself to polling. |
 
 ### 7.7 `cdc.healthCheck` ([`CdcHealthCheckProperties`](../components/postgresql-event-store/src/main/java/dk/trustworks/essentials/components/eventsourced/eventstore/postgresql/cdc/CdcProperties.java))
 
@@ -1101,7 +1114,10 @@ Sampled every `cdc.slot.metricsInterval` (default 30s) by `CdcSlotMetrics`. Tagg
 - `essentials.cdc.active` (gauge: 0/1)
 - `essentials.cdc.eventstore.fallback.poll.count` (counter — every poll that took the polling branch, **including
   startup warm-up**; see [Warm-up polls vs fallbacks](#warm-up-polls-vs-fallbacks))
-- `essentials.cdc.eventstore.live_source.switch.count` (counter — mid-stream cutover)
+- `essentials.cdc.eventstore.live_source.switch.count` (counter — mid-stream cutover on an availability change)
+- `essentials.cdc.eventstore.live_source.overflow.count` (counter — a subscription fell more than one polling page
+  behind the bus and moved itself to polling; one per occurrence, with a WARN naming the subscriber. A slow subscriber,
+  not a CDC problem)
 - `essentials.cdc.eventstore.backfill.page.latency` / `.loaded` / `.query_range`
 - `essentials.cdc.backfill_live.buffer.size` (gauge — backfill→live handover buffer)
 - `essentials.cdc.fallback_total` (counter — times a subscription started on, or switched to, polling **after**
@@ -1391,7 +1407,10 @@ Per JVM:
 
 - Per-aggregate Reactor sink buffer: `cdc.eventBus.backpressureBufferSize` × ~1 KB
   per buffered event. With the default `8192` and ~10 aggregate types, ≈80 MB
-  worst case under sustained backpressure.
+  worst case - reached only while an aggregate type has no subscriber, since no
+  subscription back-pressures the bus.
+- Per-subscription live hand-over buffer: one polling page (`eventStorePollingBatchSize`)
+  per CDC subscription; a subscription further behind moves itself to polling.
 - Backfill→live handover buffer: `cdc.cdcEventStoreBackfillBatchSize` rows per
   active subscription, transient.
 - Tailer connection: a single replication connection per slot; negligible.

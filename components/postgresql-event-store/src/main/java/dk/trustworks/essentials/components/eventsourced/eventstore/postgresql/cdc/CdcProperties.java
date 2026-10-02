@@ -890,6 +890,19 @@ public class CdcProperties {
         private CdcOverflowPolicy overflowPolicy          = CdcOverflowPolicy.FAIL_FAST;
         private Duration          liveDrainStallThreshold = Duration.ofSeconds(180);
 
+        /**
+         * Capacity of two buffers, default {@code 8192}:
+         * <ul>
+         *     <li>the {@code CdcEventBus}'s per-aggregate-type multicast sink. A subscription served by
+         *     {@code CdcEventStore} never back-pressures it - it requests unbounded demand and buffers on its own side
+         *     (one polling page: the subscription manager's {@code eventStorePollingBatchSize}), and leaves the bus for polling when that
+         *     overflows - so this buffer only fills while an aggregate type has no subscriber yet.</li>
+         *     <li>per subscription, {@code CdcEventStore.BackfillThenLiveOrdered}'s live-event buffer while a
+         *     subscription catches up (backfill), and its ordered hand-over queue after it.</li>
+         * </ul>
+         * Not the per-subscription CDC hand-over buffer: that is one polling page, so memory no longer grows with
+         * subscriptions × this value.
+         */
         public int getBackpressureBufferSize() {
             return backpressureBufferSize;
         }
@@ -926,6 +939,16 @@ public class CdcProperties {
             this.queuedTaskCapFactor = queuedTaskCapFactor;
         }
 
+        /**
+         * What the {@code CdcEventBus} does with an event it cannot emit once {@link #getOverflowMaxRetries()} /
+         * {@link #getNonSerializedMaxRetries()} are spent: {@link CdcOverflowPolicy#FAIL_FAST} (default) throws, so
+         * the dispatcher retries the inbox row later; {@link CdcOverflowPolicy#LOG_AND_DROP} logs and drops it.
+         * <p>
+         * A slow or stalled subscription does <b>not</b> lead here: it overflows its own hand-over buffer and moves to
+         * polling on its own, without holding up the bus, the dispatcher or the other subscriptions of its aggregate
+         * type (see {@code CdcEventStore#buildAdaptiveLiveSource}). {@code CdcEventStore.BackfillThenLiveOrdered}
+         * always fails fast, whatever this is set to.
+         */
         public CdcOverflowPolicy getOverflowPolicy() {
             return overflowPolicy;
         }
