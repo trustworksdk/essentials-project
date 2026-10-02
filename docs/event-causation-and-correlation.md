@@ -172,9 +172,17 @@ returns, so a binding there misses every lazily appended event.
 
 **Write: a `PersistableEventEnricher` that reads the `ScopedValue`.** It sets `causedByEventId` on the
 `PersistableEvent` *only where the mapper left it empty*, and the starter registers it by default. Nothing in any
-SPI changes: a consumer's own mapper keeps whatever it sets, a consumer who wants none of this unregisters one
-bean, and a mapper stays a pure function that is unit-testable without a runtime. The one component that reads
+SPI changes: a consumer's own mapper keeps whatever it sets, and a mapper stays a pure function that is
+unit-testable without a runtime. The one component that reads
 ambient state is framework-owned and small.
+
+**On by default, one switch to turn it off.** Writing causation costs about 37 bytes per event, in a column that
+already exists, plus one metadata entry per queued message; binding a `ScopedValue` and setting one field cost
+next to nothing. Against that, a cause that was not written at the time can never be recovered, so a default-off
+setting means the data is missing exactly when someone first needs it. The starter therefore writes causation
+unless `essentials.eventstore.causation.enabled=false`. That one property governs every part together — the
+delivery-site bindings, the enricher, the queue interceptor and the `LocalCommandBus` re-binding — so an
+installation cannot end up with causation half on, written in-process but silently dropped at every queue.
 
 **The cause of a join.** A policy that waits for two inputs — `CaptureFundsWhenPackagedPolicy` emits
 `FundsCaptureRequested` when the second of `CreditCardHoldPlaced` and `OrderPackagingRequested` arrives — has two
@@ -261,16 +269,33 @@ generation stream. The admin console does not render it. The whole solution need
 - **A causation walk backward** — "what caused this?" — which has the same problem from the other side:
   `loadEvent` needs the `AggregateType` as well as the `EventId`, and a bare `causedByEventId` does not say which
   table to look in. Either a union lookup by event id, or record the cause's aggregate type alongside its id; the
-  second is a schema change and should be argued for on measured cost, not assumed.
-- **An index on `caused_by_event_id`.** Under the 0.60 schema harness that is a `SchemaChange.repeatable(...)` in
-  `SeparateTablePerAggregateTypePersistenceStrategy.schemaChangesFor`, next to the existing
-  `event-stream-tenant-index`, applied once per stream table. Three costs to weigh, besides the write cost, which
-  should be measured rather than assumed:
-  - the harness runs a contributor's changes in one transaction, so `CREATE INDEX CONCURRENTLY` is not available,
-    and building the index blocks writes to a large existing table;
-  - a deployment in `essentials.schema.mode=validate` fails to start until its DBA applies the emitted script for
-    the new change;
-  - a `once` change can never be edited afterwards, and a `repeatable` one is re-applied when its text changes.
+  second is a schema change and should be argued for on measured cost, not assumed. Each per-table lookup is
+  already indexed: every stream table has `UNIQUE(event_id)`. **The backward walk needs no new index.**
+- **An opt-in index on `caused_by_event_id`, for the forward walk only.** Since the backward walk is served by the
+  existing `event_id` index, the new index is the price of one feature — "what did this event cause?" — not of
+  causation itself, and an installation that never uses that feature should not pay for it. So:
+  - **Off by default**, behind one global property, `essentials.eventstore.causation.index-enabled`. A
+    per-AggregateType setting can follow if someone needs it.
+  - **Harness-managed.** When enabled, `SeparateTablePerAggregateTypePersistenceStrategy.schemaChangesFor` adds a
+    `SchemaChange.repeatable(...)` next to the existing `event-stream-tenant-index`, applied once per stream
+    table. Stream tables are created per AggregateType, including types added after deployment, and a
+    harness-managed index is the only option that covers those automatically — on a new, empty table the build is
+    instant. A DBA-only recipe was rejected because every later AggregateType would silently lack the index;
+    always-on was rejected because it would force a blocking build and, in validate mode, a DBA step on every
+    installation at upgrade, for a feature many will never open.
+  - **Partial**: `CREATE INDEX IF NOT EXISTS … ON <table> (caused_by_event_id) WHERE caused_by_event_id IS NOT
+    NULL`. Historical rows are all null and stay out of it, and so do new events without a cause (anything
+    started by an HTTP command), so both its size and its per-insert cost track only the events that have one.
+  - **A recipe for large existing tables.** The harness runs a contributor's changes in one transaction, so it
+    cannot use `CREATE INDEX CONCURRENTLY`, and enabling the property on a large table blocks writes while the
+    index builds. Because the statement is `IF NOT EXISTS`, the way round is for the DBA to build the same index
+    by hand with `CONCURRENTLY` first, using the exact name and predicate the framework would; enabling the
+    property afterwards then finds it in place and only records the change in the ledger. The migration notes
+    must give that statement verbatim. In `essentials.schema.mode=validate` the property adds a change the
+    deployment does not yet have, so it fails to start until the emitted script is applied — the recipe applies
+    there in the same way.
+  - **The forward walk refuses without it.** With the property off, the forward walk fails with a message naming
+    the property and the recipe, rather than quietly running a sequential scan over every stream table.
 - **Admin API operations and a console view**, remembering the house rule that an admin operation lives in three
   synced places (`*Api` SPI, `EssentialsAdminApiSpec` mapping, controller in `spring-boot-starter-admin-api`).
 
@@ -327,9 +352,12 @@ Nothing breaks, so this can ship in a minor release:
   fills an empty `causedByEventId`; the framework must never overwrite a causation a mapper has already decided.
 - **Persisted data is untouched.** Existing rows keep their nulls and nothing should be backfilled: a causation
   invented after the fact is a lie about what happened, and the whole value of the field is that it is not.
-- **The index is the one operational change** (F5): a new schema change, so validate-mode deployments need the
-  emitted script applied before they upgrade. That belongs in the release's migration notes, in the style of
-  `docs/MIGRATION-0.60.md`.
+- **Causation starts being written on upgrade** (F3). New rows get a `caused_by_event_id` where there is a cause.
+  Nothing reads the column in a way this could break, and `essentials.eventstore.causation.enabled=false`
+  restores today's behaviour.
+- **No schema change unless asked for.** The index is opt-in (F5), so an upgrade alone runs no DDL. Enabling it
+  is the one operational step, and the migration notes — in the style of `docs/MIGRATION-0.60.md` — must carry
+  the concurrent-build recipe for large tables and the validate-mode note.
 
 ## Decided
 
@@ -341,18 +369,19 @@ Nothing breaks, so this can ship in a minor release:
 - **A command carries its cause on every bus** (F4): synchronously by the binding, on the durable bus by the
   queue interceptor, on the plain `LocalCommandBus` by re-binding across the scheduler hop. Deciders never see it;
   other code may read it with `CausationContext.current()`.
+- **Causation is written by default** (F3), with `essentials.eventstore.causation.enabled=false` turning every
+  part of it off together.
+- **The `caused_by_event_id` index is opt-in, harness-managed and partial** (F5): off by default behind
+  `essentials.eventstore.causation.index-enabled`, applied to every stream table including future ones, with a
+  documented concurrent pre-build for large tables. Only the forward walk needs it, and it refuses to run without
+  it.
 - **`eventsourced-aggregates` participates unchanged.** Every one of its repositories appends through
   `EventStore.appendToStream`, so the enricher applies. Its lazy, commit-time appends are what put the binding
   site outside the UnitOfWork (F2, F3).
 
 ## Open questions
 
-1. **Is causation on by default?** It has a per-event storage cost and, until F5, no reader. Default-on means the
-   data is there when someone finally needs it; default-off means it is missing exactly then.
-2. **Is the column indexed by default?** Measurable write cost, a blocking index build on large tables, and a
-   validate-mode upgrade step, against a read path that arrives in the same release. Probably an option first, a
-   default once F5's queries are benchmarked.
-3. **What happens when no cause is bound?** Recommended: always legal, yielding today's behaviour. A framework
+1. **What happens when no cause is bound?** Recommended: always legal, yielding today's behaviour. A framework
    that throws because it cannot determine causation would be worse than one that omits it — but that does mean
    a missing binding fails silently, so the test in the scope below matters more than usual.
 
@@ -365,12 +394,15 @@ Whole solution, in dependency order. Each step is testable on its own, and none 
 2. **Bind it at the event-processor delivery sites**: `EventReferenceResolvingMessageConsumer.accept` (keeping
    the resolved `PersistedEvent` instead of discarding it) and `InTransactionEventProcessor`.
 3. **The causation enricher** in `postgresql-event-store`, registered by the starter, filling only an empty
-   `causedByEventId`; fix the default mapper's javadoc (F1).
+   `causedByEventId`, with `essentials.eventstore.causation.enabled` governing it and every binding; fix the
+   default mapper's javadoc (F1).
 4. **Propagation across hand-offs**: a `DurableQueuesInterceptor` that writes the cause on queueing and re-binds it
    on `HandleQueuedMessage`, and the re-binding in `LocalCommandBus.sendAndDontWait`.
-5. **Read path**: the two causation walks, the index as a schema change, `EventStoreApi` /
-   `EssentialsAdminApiSpec` / controller, console view.
-6. **Migration notes** and a worked example in the webshop demo, including the webhook binding the cause from the
+5. **Read path**: the two causation walks; the opt-in partial index as a harness schema change behind
+   `essentials.eventstore.causation.index-enabled`, with the forward walk refusing when it is off; `EventStoreApi`
+   / `EssentialsAdminApiSpec` / controller, console view.
+6. **Migration notes** — causation on by default, the index property, the verbatim concurrent-build statement —
+   and a worked example in the webshop demo, including the webhook binding the cause from the
    idempotency key.
 
 The test that decides whether this works is not a unit test: a `FundsCaptured` produced through the webhook and
