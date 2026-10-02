@@ -895,10 +895,13 @@ public class CdcProperties {
          * <ul>
          *     <li>the {@code CdcEventBus}'s per-aggregate-type multicast sink. A subscription served by
          *     {@code CdcEventStore} never back-pressures it - it requests unbounded demand and buffers on its own side
-         *     (one polling page: the subscription manager's {@code eventStorePollingBatchSize}), and leaves the bus for polling when that
-         *     overflows - so this buffer only fills while an aggregate type has no subscriber yet.</li>
-         *     <li>per subscription, {@code CdcEventStore.BackfillThenLiveOrdered}'s live-event buffer while a
-         *     subscription catches up (backfill), and its ordered hand-over queue after it.</li>
+         *     (one polling page: the subscription manager's {@code eventStorePollingBatchSize}); when that overflows it
+         *     leaves the bus, catches up from the event store and rejoins it - so this buffer only fills while an
+         *     aggregate type has no subscriber yet.</li>
+         *     <li>per subscription, {@code CdcEventStore.BackfillThenLiveOrdered}'s live events: those it holds while
+         *     the subscription back-fills, those in its ordered hand-over queue after that, and those it has asked the
+         *     live source for, together. It asks for more only as its subscriber takes them, so a subscriber that is
+         *     not asking holds the live source back rather than overflowing that queue.</li>
          * </ul>
          * Not the per-subscription CDC hand-over buffer: that is one polling page, so memory no longer grows with
          * subscriptions × this value.
@@ -944,10 +947,12 @@ public class CdcProperties {
          * {@link #getNonSerializedMaxRetries()} are spent: {@link CdcOverflowPolicy#FAIL_FAST} (default) throws, so
          * the dispatcher retries the inbox row later; {@link CdcOverflowPolicy#LOG_AND_DROP} logs and drops it.
          * <p>
-         * A slow or stalled subscription does <b>not</b> lead here: it overflows its own hand-over buffer and moves to
-         * polling on its own, without holding up the bus, the dispatcher or the other subscriptions of its aggregate
-         * type (see {@code CdcEventStore#buildAdaptiveLiveSource}). {@code CdcEventStore.BackfillThenLiveOrdered}
-         * always fails fast, whatever this is set to.
+         * A slow or stalled subscription does <b>not</b> lead here: it overflows its own hand-over buffer, leaves the
+         * bus, catches up from the event store and rejoins the bus on its own, without holding up the bus, the
+         * dispatcher or the other subscriptions of its aggregate type (see
+         * {@code CdcEventStore#buildAdaptiveLiveSource}). {@code CdcEventStore.BackfillThenLiveOrdered}'s ordered
+         * hand-over takes from the bus only what its subscriber has taken, so it does not overflow; should it, it fails
+         * fast whatever this is set to.
          */
         public CdcOverflowPolicy getOverflowPolicy() {
             return overflowPolicy;
@@ -1169,6 +1174,9 @@ public class CdcProperties {
          * the underlying CDC pipeline oscillates (e.g. pgoutput stalls causing repeat
          * availability flips); each short ACTIVE blip would otherwise tear down polling and
          * resubscribe to a bus that's about to stop emitting again.
+         * <p>
+         * Nothing published during the window is lost: polling keeps delivering until the cutback, and the cutback
+         * attaches to the bus first and then catches up from the event store on whatever polling had not fetched.
          * <p>
          * Default = {@link #interval}, matching the natural rhythm of the effectiveness monitor:
          * we wait one full monitor window of steady ACTIVE before trusting that CDC has

@@ -98,6 +98,12 @@ public class CdcEventStore<CONFIG extends AggregateEventStreamConfiguration> imp
 
     private static final Logger log = LoggerFactory.getLogger(CdcEventStore.class);
 
+    /**
+     * How long a subscription waits before retrying a catch-up onto the CDC bus that failed, typically because the
+     * database was unreachable (see {@link #buildAdaptiveLiveSource})
+     */
+    private static final Duration CATCH_UP_RETRY_DELAY = Duration.ofSeconds(1);
+
     private final ConfigurableEventStore<CONFIG>                              eventStore;
     private final EventStoreUnitOfWorkFactory<? extends EventStoreUnitOfWork> unitOfWorkFactory;
     private final EventStreamGapHandler<?>                                    eventStreamGapHandler;
@@ -260,6 +266,8 @@ public class CdcEventStore<CONFIG extends AggregateEventStreamConfiguration> imp
             return buildAdaptiveLiveSource(
                     aggregateType,
                     fromInclusiveGlobalOrder - 1,
+                    // Should CDC already be ACTIVE by the time the source subscribes, nothing has covered the backlog
+                    false,
                     loadEventsByGlobalOrderBatchSize.orElse(backfillBatchSize),
                     onlyIncludeEventIfItBelongsToTenant,
                     pollingInterval,
@@ -340,6 +348,8 @@ public class CdcEventStore<CONFIG extends AggregateEventStreamConfiguration> imp
             Flux<PersistedEvent> live = buildAdaptiveLiveSource(
                     aggregateType,
                     resumeFrom - 1,
+                    // BackfillThenLiveOrdered attaches it before reading head, and back-fills up to that head
+                    true,
                     pageSize,
                     Optional.empty(),
                     pollingInterval,
@@ -387,25 +397,48 @@ public class CdcEventStore<CONFIG extends AggregateEventStreamConfiguration> imp
      * Build the live-event source for an in-flight CDC subscription. The source transparently
      * switches between the CDC bus (while {@link CdcAvailability} is {@link CdcAvailability.State#ACTIVE
      * ACTIVE}) and classic polling (while availability is not ACTIVE), so that subscribers
-     * established during healthy CDC continue to receive events even when CDC dies mid-stream.
+     * established during healthy CDC continue to receive events even when CDC dies mid-stream, and
+     * subscribers that started on polling (CDC warming up, or down) move onto the bus once it is up.
      * <p>
-     * Ordering + dedup: an {@link AtomicLong} tracks the highest {@code globalEventOrder} the
-     * subscriber has received. On every source cut-over polling resumes from {@code lastSeen+1};
-     * each downstream event is then gated by a {@code > lastSeen} filter so any overlap between
-     * the outgoing source and the incoming one is dropped rather than double-delivered. The CDC
-     * bus is inherently monotonic per aggregate (events published in order), and classic polling
-     * queries {@code global_event_order ≥ resume} — both sources preserve order, and the filter
-     * guarantees no regressions at the boundary.
+     * Ordering + dedup: an {@link AtomicLong} {@code lastSeen} tracks the highest {@code globalEventOrder} handed
+     * downstream. Every source starts from {@code lastSeen + 1}, and each event is gated by a {@code > lastSeen} filter,
+     * so any overlap between the outgoing source and the incoming one is dropped rather than double-delivered, and the
+     * stream stays strictly increasing.
+     * <p>
+     * Gap-free move onto the bus: the bus is a hot multicast that replays nothing to a late subscriber. Attaching to it
+     * on its own used to lose every event it had published before the attach that the previous source had not delivered
+     * yet - committed after polling's last fetch, during the {@link #activeCutbackDebounce} window, or while the switch
+     * waited for an event still in the handler or its retry backoff - and the next bus event moved {@code lastSeen} past
+     * them for good. So every move onto the bus - the switch to ACTIVE at warm-up, the switch back after an outage, and
+     * the recovery from an overflow (see Backpressure) - catches up first ({@link #busLeg}):
+     * <ol>
+     *     <li>attach to the bus, holding what it delivers in the subscription's bounded hand-over buffer;</li>
+     *     <li>only then read the highest persisted global order, the head;</li>
+     *     <li>load {@code [lastSeen + 1 .. head]} page by page, as backfill does (gap handler included);</li>
+     *     <li>then drain the hand-over buffer and carry on from the bus.</li>
+     * </ol>
+     * An event the bus published before the attach was committed before it, so it is at or below a head read after the
+     * attach and the catch-up loads it; one published after the attach is in the hand-over buffer. Anything both hold is
+     * dropped by the {@code > lastSeen} filter. The catch-up ends at the head rather than at "the first buffered bus
+     * event" because global order is not contiguous: a rolled-back {@code IDENTITY} value is a hole that is never
+     * persisted nor published, so reaching a given order cannot be told from the events seen. This is the
+     * read-head-after-attach argument {@link BackfillThenLiveOrdered} makes for a subscription started while CDC is
+     * ACTIVE - which is why the first source of such a subscription skips the catch-up
+     * ({@code backlogCoveredByCaller}): the caller attaches this source before it reads its own head and back-fills up to
+     * it. An event committed after the head read with an order at or below it (a transaction that took its
+     * {@code IDENTITY} value earlier) is behind {@code lastSeen} by the time the bus delivers it, and is dropped like on
+     * every other path that keeps the stream strictly increasing.
      * <p>
      * Cutback debounce: FAILED/INACTIVE transitions cut to polling <b>immediately</b> so
      * subscribers don't stall. Transitions back to ACTIVE are held for
      * {@link #activeCutbackDebounce} with availability staying ACTIVE throughout; if availability
      * flips non-ACTIVE again during the debounce window the pending cutback is cancelled. This
      * prevents thrash when the underlying CDC pipeline oscillates (e.g. pgoutput intermittently
-     * stalling).
+     * stalling). Polling keeps delivering during the window; the catch-up covers whatever it had not fetched yet.
      * <p>
      * The {@code onlyIncludeEventIfItBelongsToTenant} and other downstream filters are applied
-     * uniformly to whichever source is currently active — callers see one consistent stream.
+     * uniformly to whichever source is currently active — callers see one consistent stream. Polling and the catch-up
+     * also filter by tenant in SQL, as backfill does.
      * <p>
      * Delivery thread: the CDC bus emits on the shared {@code cdc-dispatcher-<slot>} thread (or the tailer's, in
      * {@code DIRECT} mode), and everything downstream of it runs synchronously — the
@@ -413,37 +446,52 @@ public class CdcEventStore<CONFIG extends AggregateEventStreamConfiguration> imp
      * {@code SubscriptionErrorPolicy} retry backoff. Handing the bus leg over to a single thread per subscription
      * ({@code Cdc-<subscriber>-<aggregateType>}) keeps one slow or retrying subscription from holding every other CDC
      * subscription on the slot, just as polling delivers on a {@code Publish-<subscriber>-<aggregateType>} thread per
-     * subscription. A single thread, so events stay in order; it is disposed when the subscription is cancelled or
-     * terminates, and disposing it interrupts a handler in its backoff, as on the polling path.
+     * subscription. The catch-up loads its pages and delivers them on that same thread. A single thread, so events stay
+     * in order; it is disposed when the subscription is cancelled or terminates, and disposing it interrupts a handler
+     * in its backoff, as on the polling path.
      * <p>
      * Backpressure: a subscription never back-pressures the shared multicast bus sink. That sink is paced by its slowest
      * subscriber, so a subscription stalled in its handler (a retry backoff, a slow call) used to fill the sink's buffer
      * and turn every later emit into {@code FAIL_OVERFLOW} for all subscriptions of the aggregate type - dropped for
      * the healthy ones too under {@code LOG_AND_DROP}, a {@link CdcBusOverflowException} for the dispatcher for as long
      * as the stall lasted under {@code FAIL_FAST}. Instead, each subscription's bus leg requests unbounded demand from
-     * the bus and holds what its handler has not taken yet in a buffer of its own, bounded to {@code pageSize} (one
-     * polling page) - which also bounds its memory to one page rather than {@code eventBus.backpressureBufferSize}.
-     * When that buffer overflows, only this subscription leaves the bus and continues on polling from
-     * {@code lastSeen + 1}, and stays there until the next availability change re-runs the switch. The Reactor
-     * semantics this relies on, all in the bus leg below:
+     * the bus and holds what its handler has not taken yet in a hand-over buffer of its own, bounded to
+     * {@code pageSize} (one polling page) - which also bounds its memory to one page rather than
+     * {@code eventBus.backpressureBufferSize}. When that buffer overflows, only this subscription leaves the bus: its
+     * handler is handed what was buffered, and the subscription then catches up from {@code lastSeen + 1} and rejoins
+     * the bus, exactly as above. A catch-up that the bus outpaces overflows the buffer again and the next one starts
+     * where it got to; each delivers everything up to its head, and loads a page only when the handler asks for more,
+     * so a subscription that cannot keep up with the bus is in effect polling, at its own pace, until it can. The
+     * Reactor semantics this relies on, all in {@link #busLeg}:
      * <ul>
-     *     <li>{@code onBackpressureBuffer(pageSize)} requests {@code Long.MAX_VALUE} upstream and, on the first element
-     *     that does not fit, cancels its upstream (the bus subscription) at once and signals an overflow error that is
-     *     <b>delayed</b> until everything it buffered has been delivered. {@code publishOn} fuses with it (ASYNC), so
-     *     that buffer is the only queue on the leg.</li>
+     *     <li>{@link BusHandOver} requests {@code Long.MAX_VALUE} from the bus and offers each event to a unicast sink
+     *     over a queue of {@code pageSize}. On the first event that does not fit it cancels the bus subscription at once
+     *     and terminates the sink with an overflow error. A unicast sink delivers its terminal signal only once its
+     *     queue is drained, and {@code publishOn} fuses with it (ASYNC), so that queue is the only one on the leg.</li>
      *     <li>{@code publishOn(..)} (delayError) delivers that error only once the queue is empty, on the delivery
      *     thread, after the last buffered event went through the {@code lastSeen} update below.</li>
-     *     <li>{@code onErrorResume} sits after {@code publishOn}, inside the switch, so it reads {@code lastSeen} once
-     *     every event the bus delivered has been handed downstream: polling from {@code lastSeen + 1} re-reads exactly
-     *     the overflowing event and everything after it, in order. Anything at or below {@code lastSeen} that polling
-     *     returns is dropped by the {@code > lastSeen} filter.</li>
+     *     <li>The {@code retryWhen} sits after {@code publishOn}, inside the switch, so it reads {@code lastSeen} once
+     *     every event the bus delivered has been handed downstream, and re-subscribes on the delivery thread: the next
+     *     catch-up starts exactly at the overflowing event. A retry re-subscribes the same chain rather than nesting a
+     *     new one, so repeated overflows do not grow the pipeline.</li>
      * </ul>
-     * Logged at WARN once per overflow, and counted in {@code essentials.cdc.eventstore.live_source.overflow.count}.
-     * Not a CDC fallback: CDC is healthy, so {@link CdcAvailability#fallbackUsed()} is not called.
+     * Logged at WARN once per overflow, and counted in {@code essentials.cdc.eventstore.live_source.overflow.count};
+     * the catch-up that follows logs at INFO once it is back on the bus. Not a CDC fallback: CDC is healthy, so
+     * {@link CdcAvailability#fallbackUsed()} is not called, and not an availability switch, so
+     * {@code live_source.switch.count} is not incremented either.
+     * <p>
+     * A catch-up that fails - the database unreachable while CDC recovers - is retried from {@code lastSeen + 1} after
+     * {@link #CATCH_UP_RETRY_DELAY}, logged at WARN, rather than ending the subscription.
+     *
+     * @param headInclusive          the highest global order the caller has already covered; the source starts after it
+     * @param backlogCoveredByCaller true when the caller attaches this source before reading its own head and delivers
+     *                               everything up to that head itself ({@link BackfillThenLiveOrdered}): the first move
+     *                               onto the bus then skips the catch-up. Every later one catches up regardless
      */
     private Flux<PersistedEvent> buildAdaptiveLiveSource(
             AggregateType aggregateType,
             long headInclusive,
+            boolean backlogCoveredByCaller,
             int pageSize,
             Optional<Tenant> onlyIncludeEventIfItBelongsToTenant,
             Optional<Duration> pollingInterval,
@@ -469,15 +517,11 @@ public class CdcEventStore<CONFIG extends AggregateEventStreamConfiguration> imp
         // starting on polling after CDC had been active (pollEvents records that case): without recording it, a
         // running subscription that polled through a dropped replication connection left fallbackCount at zero.
         var previousState = new AtomicReference<CdcAvailability.State>(null);
-        LongFunction<Flux<PersistedEvent>> pollingFrom = resumeFrom -> eventStore.pollEvents(aggregateType,
-                                                                                             resumeFrom,
-                                                                                             Optional.of(pageSize),
-                                                                                             pollingInterval,
-                                                                                             onlyIncludeEventIfItBelongsToTenant,
-                                                                                             subscriptionId,
-                                                                                             eventStorePollingOptimizerFactory);
-        var subscriberIdForLog = subscriptionId.map(Object::toString).orElse("NoSubscriberId");
-        return Flux.using(() -> Schedulers.newSingle("Cdc-" + subscriptionId.map(Object::toString).orElse("NoSubscriberId") + "-" + aggregateType, true),
+        // Only the very first source may skip the catch-up, and only when the caller covers the backlog (see javadoc)
+        var catchUpBeforeTheBus = new AtomicBoolean(!backlogCoveredByCaller);
+        var gapHandler          = subscriptionId.map(eventStreamGapHandler::gapHandlerFor);
+        var subscriberIdForLog  = subscriptionId.map(Object::toString).orElse("NoSubscriberId");
+        return Flux.using(() -> Schedulers.newSingle("Cdc-" + subscriberIdForLog + "-" + aggregateType, true),
                           cdcDeliveryScheduler -> gatedStates
                                   .switchMap(state -> {
                                       if (liveSourceSwitchCounter != null) liveSourceSwitchCounter.increment();
@@ -485,35 +529,35 @@ public class CdcEventStore<CONFIG extends AggregateEventStreamConfiguration> imp
                                           availability.fallbackUsed();
                                           if (fallbackPollCounter != null) fallbackPollCounter.increment();
                                       }
-                                      long resumeFrom = lastSeen.get() + 1;
+                                      boolean catchUp    = catchUpBeforeTheBus.getAndSet(true);
+                                      long    resumeFrom = lastSeen.get() + 1;
                                       if (state == CdcAvailability.State.ACTIVE) {
-                                          log.debug("[{}] Adaptive live source switching to CDC bus (resumeFrom={})",
-                                                    aggregateType, resumeFrom);
-                                          return cdcBus.fluxForAggregate(aggregateType)
-                                                       .doOnNext(e -> {
-                                                           if (liveEventsCounter != null) liveEventsCounter.increment();
-                                                       })
-                                                       // Never back-pressures the shared bus sink - see "Backpressure" above
-                                                       .onBackpressureBuffer(pageSize)
-                                                       // Off the shared dispatcher thread - see "Delivery thread" above
-                                                       .publishOn(cdcDeliveryScheduler, pageSize)
-                                                       // After publishOn, so lastSeen covers every event the bus delivered
-                                                       .onErrorResume(Exceptions::isOverflow, overflow -> {
-                                                           long resumeAfterOverflow = lastSeen.get() + 1;
-                                                           log.warn("[{}-{}] Subscription fell more than {} events behind the CDC bus - leaving the bus and continuing on polling from global order {} until CDC availability next changes",
-                                                                    subscriberIdForLog, aggregateType, pageSize, resumeAfterOverflow);
-                                                           if (liveSourceOverflowCounter != null) liveSourceOverflowCounter.increment();
-                                                           return pollingFrom.apply(resumeAfterOverflow);
-                                                       });
+                                          log.debug("[{}] Adaptive live source switching to CDC bus (resumeFrom={}, catchUp={})",
+                                                    aggregateType, resumeFrom, catchUp);
+                                          return busLeg(aggregateType,
+                                                        subscriberIdForLog,
+                                                        lastSeen,
+                                                        catchUp,
+                                                        pageSize,
+                                                        onlyIncludeEventIfItBelongsToTenant,
+                                                        gapHandler,
+                                                        cdcDeliveryScheduler);
                                       }
 
                                       log.debug("[{}] Adaptive live source switching to polling (resumeFrom={}, state={})",
                                                 aggregateType, resumeFrom, state);
-                                      return pollingFrom.apply(resumeFrom);
+                                      return eventStore.pollEvents(aggregateType,
+                                                                   resumeFrom,
+                                                                   Optional.of(pageSize),
+                                                                   pollingInterval,
+                                                                   onlyIncludeEventIfItBelongsToTenant,
+                                                                   subscriptionId,
+                                                                   eventStorePollingOptimizerFactory);
                                   })
                                   // Drop anything at or below the high-water mark. Protects against:
                                   //  - events already delivered via the previous source showing up in the new one
                                   //    (CDC bus may still have buffered events after a cut-over)
+                                  //  - the catch-up and the hand-over buffer both holding an event
                                   //  - polling returning events ≤ headInclusive on the very first query
                                   .filter(e -> e.globalEventOrder().longValue() > lastSeen.get())
                                   .doOnNext(e -> {
@@ -529,6 +573,133 @@ public class CdcEventStore<CONFIG extends AggregateEventStreamConfiguration> imp
                           Scheduler::dispose,
                           // Dispose only after the terminal signal was delivered - it is delivered on the scheduler's own thread
                           false);
+    }
+
+    /**
+     * The bus leg of {@link #buildAdaptiveLiveSource}: attach to the bus, catch up from {@code lastSeen + 1} to a head
+     * read after the attach, then deliver from the bus - and after an overflow of the hand-over buffer, or a failed
+     * catch-up, do it again from where it got to. See "Gap-free move onto the bus" and "Backpressure" there.
+     *
+     * @param catchUpOnFirstAttach false only when the caller covers the backlog of the first attach (see
+     *                             {@code backlogCoveredByCaller}); every retry catches up
+     */
+    private Flux<PersistedEvent> busLeg(AggregateType aggregateType,
+                                        String subscriberIdForLog,
+                                        AtomicLong lastSeen,
+                                        boolean catchUpOnFirstAttach,
+                                        int pageSize,
+                                        Optional<Tenant> onlyIncludeEventIfItBelongsToTenant,
+                                        Optional<SubscriptionGapHandler> gapHandler,
+                                        Scheduler cdcDeliveryScheduler) {
+        var catchUpOnAttach        = new AtomicBoolean(catchUpOnFirstAttach);
+        var recoveringFromOverflow = new AtomicBoolean(false);
+        return Flux.defer(() -> {
+                       boolean catchUp    = catchUpOnAttach.getAndSet(true);
+                       long    resumeFrom = lastSeen.get() + 1;
+                       // 1. Attach first: from here on, everything the bus publishes is in the hand-over buffer. Unsafe
+                       // (unserialized) sink: BusHandOver is its only producer, and it runs serially on the bus's thread
+                       Sinks.Many<PersistedEvent> handOver = Sinks.unsafe()
+                                                                  .many()
+                                                                  .unicast()
+                                                                  .onBackpressureBuffer(new ArrayBlockingQueue<>(pageSize));
+                       var busHandOver = new BusHandOver(handOver, lastSeen, pageSize, liveEventsCounter);
+                       cdcBus.fluxForAggregate(aggregateType).subscribe(busHandOver);
+                       // Off the shared dispatcher thread - see "Delivery thread". Fuses with the hand-over buffer, the only queue on the leg
+                       Flux<PersistedEvent> fromTheBus = handOver.asFlux().publishOn(cdcDeliveryScheduler, pageSize);
+                       if (!catchUp) {
+                           return fromTheBus.doFinally(signal -> busHandOver.dispose());
+                       }
+                       // 2. + 3. The head is read after the attach - by the catch-up's first page load, on the delivery
+                       // thread - and everything up to it is loaded from the event store
+                       LongSupplier headAfterAttach = () -> unitOfWorkFactory.withUnitOfWork(() -> eventStore.findHighestGlobalEventOrderPersisted(aggregateType))
+                                                                              .map(GlobalEventOrder::longValue)
+                                                                              .orElse(resumeFrom - 1);
+                       Flux<PersistedEvent> catchingUp = backfillFlux(aggregateType,
+                                                                      GlobalEventOrder.of(resumeFrom),
+                                                                      headAfterAttach,
+                                                                      pageSize,
+                                                                      onlyIncludeEventIfItBelongsToTenant,
+                                                                      gapHandler,
+                                                                      cdcDeliveryScheduler)
+                               .doOnComplete(() -> {
+                                   if (recoveringFromOverflow.compareAndSet(true, false)) {
+                                       log.info("[{}-{}] Caught up after falling behind the CDC bus - back on the bus after global order {}",
+                                                subscriberIdForLog, aggregateType, lastSeen.get());
+                                   } else {
+                                       log.debug("[{}-{}] Caught up from global order {} to {} - continuing from the CDC bus",
+                                                 subscriberIdForLog, aggregateType, resumeFrom, lastSeen.get());
+                                   }
+                               });
+                       // 4. Then the bus, starting with what it delivered meanwhile
+                       return Flux.concat(catchingUp, fromTheBus)
+                                  .doFinally(signal -> busHandOver.dispose());
+                   })
+                   // After publishOn, so lastSeen covers every event handed downstream - see "Backpressure"
+                   .retryWhen(Retry.from(retrySignals -> retrySignals.concatMap(retrySignal -> {
+                       Throwable failure    = retrySignal.failure();
+                       long      resumeFrom = lastSeen.get() + 1;
+                       if (Exceptions.isOverflow(failure)) {
+                           recoveringFromOverflow.set(true);
+                           log.warn("[{}-{}] Subscription fell more than {} events behind the CDC bus - catching up from global order {} and rejoining the bus",
+                                    subscriberIdForLog, aggregateType, pageSize, resumeFrom);
+                           if (liveSourceOverflowCounter != null) liveSourceOverflowCounter.increment();
+                           return Mono.just(retrySignal);
+                       }
+                       // Without the stack trace: the backfill that failed has logged it
+                       log.warn("[{}-{}] Catching up with the CDC bus from global order {} failed - retrying in {}: {}",
+                                subscriberIdForLog, aggregateType, resumeFrom, CATCH_UP_RETRY_DELAY, failure.toString());
+                       return Mono.delay(CATCH_UP_RETRY_DELAY, cdcDeliveryScheduler).thenReturn(retrySignal);
+                   })));
+    }
+
+    /**
+     * Takes a subscription's events off the shared {@link CdcEventBus} sink without ever back-pressuring it: requests
+     * unbounded demand and offers each event to the subscription's own bounded hand-over buffer. The first event that
+     * does not fit cancels the bus subscription at once and terminates the buffer with an overflow error, which the
+     * buffer delivers only after everything it holds (see "Backpressure" on {@link #buildAdaptiveLiveSource}).
+     */
+    private static final class BusHandOver extends BaseSubscriber<PersistedEvent> {
+        private final Sinks.Many<PersistedEvent> handOver;
+        private final AtomicLong                 lastSeen;
+        private final int                        capacity;
+        /** May be null when no {@link MeterRegistry} is configured */
+        private final Counter                    liveEventsCounter;
+
+        private BusHandOver(Sinks.Many<PersistedEvent> handOver, AtomicLong lastSeen, int capacity, Counter liveEventsCounter) {
+            this.handOver = handOver;
+            this.lastSeen = lastSeen;
+            this.capacity = capacity;
+            this.liveEventsCounter = liveEventsCounter;
+        }
+
+        @Override
+        protected void hookOnSubscribe(Subscription subscription) {
+            requestUnbounded();
+        }
+
+        @Override
+        protected void hookOnNext(PersistedEvent event) {
+            if (liveEventsCounter != null) liveEventsCounter.increment();
+            // Can never get past the > lastSeen filter (lastSeen only grows), so it need not take up room. Also keeps
+            // the events a fresh bus sink retained before its first subscriber from overflowing the buffer on attach
+            if (event.globalEventOrder().longValue() <= lastSeen.get()) {
+                return;
+            }
+            if (handOver.tryEmitNext(event).isFailure()) {
+                cancel();
+                handOver.tryEmitError(Exceptions.failWithOverflow("The CDC bus hand-over buffer of " + capacity + " events is full"));
+            }
+        }
+
+        @Override
+        protected void hookOnError(Throwable throwable) {
+            handOver.tryEmitError(throwable);
+        }
+
+        @Override
+        protected void hookOnComplete() {
+            handOver.tryEmitComplete();
+        }
     }
 
     /**
@@ -556,6 +727,10 @@ public class CdcEventStore<CONFIG extends AggregateEventStreamConfiguration> imp
         return source.filter(e -> eventBelongsToTenant(e, onlyIncludeEventIfItBelongsToTenant));
     }
 
+    /**
+     * Backfill on a thread of its own ({@code CDC-Backfill-<aggregateType>}), disposed once the backfill terminates or
+     * is cancelled - it used to be disposed only on cancel, so every backfill that completed left an idle thread behind.
+     */
     private Flux<PersistedEvent> backfillFlux(
             AggregateType aggregateType,
             GlobalEventOrder fromInclusive,
@@ -564,23 +739,47 @@ public class CdcEventStore<CONFIG extends AggregateEventStreamConfiguration> imp
             Optional<Tenant> tenant,
             Optional<SubscriptionGapHandler> gapHandler
                                              ) {
+        return Flux.using(() -> Schedulers.newSingle("CDC-Backfill-" + aggregateType, true),
+                          scheduler -> backfillFlux(aggregateType, fromInclusive, headInclusive, pageSize, tenant, gapHandler, scheduler),
+                          Scheduler::dispose,
+                          // Dispose only after the terminal signal was delivered - it is delivered on the scheduler's own thread
+                          false);
+    }
+
+    /**
+     * Load {@code [fromInclusive .. head]} page by page, only as far as the downstream has asked, on a worker of the
+     * given scheduler - which also delivers the events. Completes once past the head. Cancelling it from another thread
+     * interrupts a page load, or a handler running on that worker, as disposing a polling scheduler does.
+     *
+     * @param headInclusive read once, by the first page load on the scheduler - never on the subscribing thread. Callers
+     *                      rely on it being read only after they attached their live source; it may be memoized
+     */
+    private Flux<PersistedEvent> backfillFlux(
+            AggregateType aggregateType,
+            GlobalEventOrder fromInclusive,
+            LongSupplier headInclusive,
+            int pageSize,
+            Optional<Tenant> tenant,
+            Optional<SubscriptionGapHandler> gapHandler,
+            Scheduler scheduler
+                                             ) {
         return Flux.create(sink -> {
-            var  next = new AtomicLong(fromInclusive.longValue());
-            // Read at subscription time: by the time backfill is subscribed (via the merge inside
-            // BackfillThenLiveOrdered.ordered), the head snapshot has already been taken AFTER the
-            // live bus attach, and is memoized — so backfill and the ordering boundary agree.
-            long head = headInclusive.getAsLong();
+            var next = new AtomicLong(fromInclusive.longValue());
+            // Page loads run one at a time on the worker, so a plain holder suffices
+            long   noHead = Long.MIN_VALUE;
+            long[] head   = {noHead};
+            var    worker = scheduler.createWorker();
 
-            var scheduler = reactor.core.scheduler.Schedulers
-                    .newSingle("CDC-Backfill-" + aggregateType, true);
-
-            sink.onRequest(demand -> scheduler.schedule(() -> {
+            sink.onRequest(demand -> worker.schedule(() -> {
                 long remaining = demand;
 
                 try {
+                    if (head[0] == noHead) {
+                        head[0] = headInclusive.getAsLong();
+                    }
                     while (remaining > 0 && !sink.isCancelled()) {
                         long start = next.get();
-                        if (start > head) {
+                        if (start > head[0]) {
                             sink.complete();
                             return;
                         }
@@ -591,7 +790,7 @@ public class CdcEventStore<CONFIG extends AggregateEventStreamConfiguration> imp
                                 backfillOnePageAndEmit(
                                         aggregateType,
                                         start,
-                                        head,
+                                        head[0],
                                         batch,
                                         tenant,
                                         gapHandler,
@@ -613,7 +812,8 @@ public class CdcEventStore<CONFIG extends AggregateEventStreamConfiguration> imp
                 }
             }));
 
-            sink.onCancel(scheduler);
+            // On termination too: the worker of a shared scheduler must not keep pending page loads around
+            sink.onDispose(worker);
         }, FluxSink.OverflowStrategy.ERROR);
     }
 
@@ -844,6 +1044,13 @@ public class CdcEventStore<CONFIG extends AggregateEventStreamConfiguration> imp
      * <p>
      * Do NOT simplify buffering, gating, or drain logic.
      * See: cdc/cdc-eventstore.md
+     * <p>
+     * Demand: it passes its subscriber's backpressure on to the live source - live events held, queued for the
+     * subscriber and asked for never exceed {@code eventBus.backpressureBufferSize}, and one more is asked for only as
+     * the subscriber takes one (see "Demand" on {@code liveSub}). A subscriber that stops asking (a busy batch handler,
+     * a handler in a retry backoff on another thread) therefore holds the live source back, whose bus leg then catches
+     * up on its own (see {@code buildAdaptiveLiveSource}), instead of overflowing the ordered hand-over queue and ending
+     * the subscription's flux with a {@link CdcBusOverflowException}.
      */
     static final class BackfillThenLiveOrdered {
         private static final Logger LOG = LoggerFactory.getLogger(BackfillThenLiveOrdered.class);
@@ -924,8 +1131,10 @@ public class CdcEventStore<CONFIG extends AggregateEventStreamConfiguration> imp
                 AtomicLong    lastProgressNs   = new AtomicLong(System.nanoTime());
                 AtomicBoolean stallSignalled   = new AtomicBoolean(false);
 
-                // Bounded queue → tryEmitNext returns FAIL_OVERFLOW when a slow downstream consumer can't keep up.
-                // The shared CdcSinkEmitter then backs off and eventually fails fast per policy.
+                // Bounded queue, and it cannot overflow: liveSub only asks the live source for an event once the
+                // downstream has taken one out of this sink (see "Demand" on liveSub below), so the live events held by
+                // the buffer, this queue and liveSub's outstanding demand together never exceed bufferSize. Should it
+                // overflow nonetheless, the shared CdcSinkEmitter backs off and then fails fast.
                 Sinks.Many<PersistedEvent> orderedLiveSink = Sinks.many()
                                                                   .unicast()
                                                                   .onBackpressureBuffer(new ArrayBlockingQueue<>(bufferSize));
@@ -963,11 +1172,18 @@ public class CdcEventStore<CONFIG extends AggregateEventStreamConfiguration> imp
                     return drained;
                 };
 
-                // BaseSubscriber participates in upstream backpressure: we request at most `bufferSize` outstanding
-                // demand from the live source. If backfill hasn't completed, drain() is a no-op and we do NOT refill
-                // demand — the live source's bus leg then fills its own bounded buffer and, once that overflows,
-                // continues on polling from where it got to (see buildAdaptiveLiveSource). It never back-pressures the
-                // shared bus sink.
+                // Demand: liveSub passes the downstream's backpressure on to the live source. It requests bufferSize
+                // up front and then one more event for each live event that leaves the pipeline - taken out of
+                // orderedLiveSink by the downstream (see orderedLiveFlux below), or dropped here as already emitted -
+                // so live events in `buffer`, in orderedLiveSink's queue and still outstanding never add up to more
+                // than bufferSize. It used to refill demand as soon as drain() moved events into orderedLiveSink,
+                // consumed or not: a subscriber that paused its demand (a batched subscriber's busy batch handler, a
+                // handler in a retry backoff on another thread) let the live source fill that queue until it
+                // overflowed, and the CdcBusOverflowException ended the subscription's flux - or, before the merge
+                // below had subscribed the sink, the events were dropped as FAIL_ZERO_SUBSCRIBER.
+                // While backfill runs nothing leaves, so the live source is held at bufferSize events: its bus leg then
+                // fills its own bounded buffer and, once that overflows, catches up from where it got to (see
+                // buildAdaptiveLiveSource). It never back-pressures the shared bus sink.
                 BaseSubscriber<PersistedEvent> liveSub = new BaseSubscriber<PersistedEvent>() {
                     @Override
                     protected void hookOnSubscribe(Subscription subscription) {
@@ -990,14 +1206,16 @@ public class CdcEventStore<CONFIG extends AggregateEventStreamConfiguration> imp
                             return;
                         }
 
-                        // buffer.put replaces on duplicate key; only count truly-new entries.
-                        if (buffer.put(go, ev) == null && bufferSizeGauge != null) {
-                            bufferSizeGauge.incrementAndGet();
+                        // buffer.put replaces on duplicate key; only count truly-new entries. A replaced one left the
+                        // pipeline, so it is compensated like any other duplicate.
+                        if (buffer.put(go, ev) == null) {
+                            if (bufferSizeGauge != null) bufferSizeGauge.incrementAndGet();
+                        } else {
+                            request(1);
                         }
-                        int drained = drain.getAsInt();
-                        if (drained > 0) {
-                            request(drained);
-                        }
+                        // No request for what this moves into orderedLiveSink: that is requested once the downstream
+                        // has taken it out (see "Demand" above)
+                        drain.getAsInt();
                     }
 
                     @Override
@@ -1062,16 +1280,16 @@ public class CdcEventStore<CONFIG extends AggregateEventStreamConfiguration> imp
                             // legitimately run longer than the stall threshold, and only now can the drain
                             // begin parking on a live-tail hole.
                             lastProgressNs.set(System.nanoTime());
-                            int drained = drain.getAsInt();
-                            if (drained > 0) {
-                                liveSub.request(drained);
-                            }
+                            drain.getAsInt();
                             if (backfillToLiveTransitionTimer != null && transitionRecorded.compareAndSet(false, true)) {
                                 backfillToLiveTransitionTimer.record(System.nanoTime() - backfillToLiveStartNs, java.util.concurrent.TimeUnit.NANOSECONDS);
                             }
                         });
 
-                Flux<PersistedEvent> orderedLiveFlux = orderedLiveSink.asFlux();
+                // Each live event the downstream takes out of orderedLiveSink makes room for one more from the live
+                // source (see "Demand" on liveSub)
+                Flux<PersistedEvent> orderedLiveFlux = orderedLiveSink.asFlux()
+                                                                      .doOnNext(ev -> liveSub.request(1));
 
                 // Use merge (not concat) so the sink has a subscriber attached upfront. With a bounded sink queue,
                 // concat would race: backfill.doOnComplete -> drain emits to sink -> queue fills before concat

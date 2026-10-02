@@ -24,8 +24,10 @@ import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.ty
 import dk.trustworks.essentials.components.foundation.types.EventId;
 import org.assertj.core.api.Assertions;
 import org.junit.jupiter.api.Test;
+import org.reactivestreams.Subscription;
 import reactor.core.Disposable;
 import reactor.core.publisher.*;
+import reactor.core.scheduler.Schedulers;
 import reactor.test.StepVerifier;
 
 import java.time.*;
@@ -33,9 +35,11 @@ import java.util.*;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.*;
 import java.util.function.LongSupplier;
+import java.util.stream.LongStream;
 
 import static dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.cdc.WalReplicationWithEssentialsAggregateWal2JsonIT.ORDERS;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.awaitility.Awaitility.await;
 
 public class BackfillThenLiveOrderedTest {
 
@@ -219,6 +223,92 @@ public class BackfillThenLiveOrderedTest {
         for (int i = 0; i < collected.size(); i++) {
             assertThat(collected.get(i)).isEqualTo((long) (i + 1));
         }
+    }
+
+    /**
+     * The ordered hand-over may only take from the live source what its subscriber has actually taken from it. It used
+     * to re-request from the live source as soon as the drain moved events into its bounded ordered-live sink, whether
+     * or not anyone consumed them. A subscriber that pauses its demand - a batched subscriber whose batch handler is
+     * busy on its own thread, a handler in a retry backoff - then let the live source keep pouring events into that
+     * sink until it overflowed, and the {@link CdcBusOverflowException} ended the subscription's flux: the subscriber
+     * got an error it does not handle and silently received nothing more.
+     */
+    @Test
+    void a_subscriber_that_pauses_its_demand_holds_back_the_live_source_instead_of_overflowing_the_hand_over() {
+        var props = new CdcProperties.CdcEventBusProperties();
+        props.setBackpressureBufferSize(4);
+        // Any overflow of the ordered-live sink fails at once instead of after its back-off
+        props.setOverflowMaxRetries(0);
+        int  totalLive         = 200;
+        long lastGlobalOrder   = 3 + totalLive;
+        var  requestedFromLive = new AtomicLong();
+        // As in production, the backfill and the live source each emit on a thread of their own, so the subscriber's
+        // demand is the only thing that can pace the live source
+        Flux<PersistedEvent> backfill = Flux.just(pe(1), pe(2), pe(3)).subscribeOn(Schedulers.newSingle("test-backfill", true));
+        Flux<PersistedEvent> live = Flux.range(4, totalLive)
+                                        .map(globalOrder -> pe(globalOrder))
+                                        .doOnRequest(requestedFromLive::addAndGet)
+                                        .subscribeOn(Schedulers.newSingle("test-live", true));
+
+        Flux<PersistedEvent> ordered = CdcEventStore.BackfillThenLiveOrdered.orderedWithoutMetrics(backfill, live, 3, props);
+
+        var received = new CopyOnWriteArrayList<Long>();
+        var failure  = new AtomicReference<Throwable>();
+        var subscriber = new BaseSubscriber<PersistedEvent>() {
+            @Override
+            protected void hookOnSubscribe(Subscription subscription) {
+                // The backfill and the first two live events, then the handler is "busy"
+                request(5);
+            }
+
+            @Override
+            protected void hookOnNext(PersistedEvent event) {
+                received.add(event.globalEventOrder().longValue());
+            }
+
+            @Override
+            protected void hookOnError(Throwable throwable) {
+                failure.set(throwable);
+            }
+        };
+        ordered.subscribe(subscriber);
+
+        await().atMost(Duration.ofSeconds(5)).until(() -> received.size() == 5 || failure.get() != null);
+        // Gives the live source every chance to overrun the paused subscriber
+        await().pollDelay(Duration.ofMillis(500)).until(() -> true);
+        assertThat(failure.get()).as("the paused subscriber's flux is still alive").isNull();
+        assertThat(received).containsExactly(1L, 2L, 3L, 4L, 5L);
+        assertThat(requestedFromLive.get()).as("the live source is held back while the subscriber is paused").isLessThan(totalLive);
+
+        // The handler is done: everything follows, once and in order
+        subscriber.request(Long.MAX_VALUE);
+        await().atMost(Duration.ofSeconds(5)).until(() -> received.size() >= lastGlobalOrder || failure.get() != null);
+        assertThat(failure.get()).isNull();
+        assertThat(received).containsExactlyElementsOf(LongStream.rangeClosed(1, lastGlobalOrder).boxed().toList());
+        subscriber.dispose();
+    }
+
+    /**
+     * Same accounting, other symptom: a backfill that completes while it is being subscribed (nothing to back-fill) runs
+     * the drain before the merge has subscribed the ordered-live sink. Every event the live source was asked for beyond
+     * what that sink's queue holds was emitted to a sink without a subscriber - {@code FAIL_ZERO_SUBSCRIBER}, which the
+     * emitter drops at DEBUG - and the subscriber silently skipped them.
+     */
+    @Test
+    void a_backfill_that_completes_before_the_ordered_live_sink_is_subscribed_loses_no_live_event() {
+        var props = new CdcProperties.CdcEventBusProperties();
+        props.setBackpressureBufferSize(4);
+        int totalLive = 200;
+
+        Flux<PersistedEvent> ordered = CdcEventStore.BackfillThenLiveOrdered.orderedWithoutMetrics(
+                Flux.just(pe(1), pe(2), pe(3)),
+                Flux.range(4, totalLive).map(globalOrder -> pe(globalOrder)),
+                3,
+                props);
+
+        StepVerifier.create(ordered.map(event -> event.globalEventOrder().longValue()))
+                    .expectNextSequence(LongStream.rangeClosed(1, 3 + totalLive).boxed().toList())
+                    .verifyComplete();
     }
 
     /**

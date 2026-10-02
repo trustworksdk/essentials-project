@@ -22,8 +22,9 @@ import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.ga
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.persistence.table_per_aggregate_type.SeparateTablePerAggregateEventStreamConfiguration;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.transaction.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.types.GlobalEventOrder;
-import dk.trustworks.essentials.components.foundation.types.SubscriberId;
-import dk.trustworks.essentials.shared.functional.CheckedSupplier;
+import dk.trustworks.essentials.components.foundation.types.*;
+import dk.trustworks.essentials.shared.functional.*;
+import dk.trustworks.essentials.types.LongRange;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -34,12 +35,14 @@ import reactor.core.publisher.Flux;
 import java.time.Duration;
 import java.util.*;
 import java.util.concurrent.*;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.*;
-import java.util.stream.LongStream;
+import java.util.stream.*;
 
 import static org.assertj.core.api.Assertions.*;
 import static org.awaitility.Awaitility.await;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.Mockito.*;
 
@@ -47,11 +50,12 @@ import static org.mockito.Mockito.*;
  * Container-free test of the per-subscription overflow of {@code CdcEventStore}'s adaptive live source: a subscription
  * whose handler stalls must neither back-pressure the shared {@link CdcEventBus} sink (which would hold up the
  * dispatcher and every other subscription of the aggregate type) nor lose or reorder an event. Once its own hand-over
- * buffer of one polling page overflows it leaves the bus and continues on polling from the last event it was handed.
+ * buffer of one polling page overflows it leaves the bus, is handed what it buffered, catches up from the event after
+ * the last one it was handed, and rejoins the bus.
  * <p>
  * The bus is configured so that any backpressure on it fails the publish at once ({@code FAIL_FAST} with no overflow
- * retries and a small sink buffer). Polling is a fake event store over the events "persisted" so far, so the test can
- * see where the stalled subscription resumes polling.
+ * retries and a small sink buffer). The event store is a fake over the events "persisted" so far, so the test can see
+ * where the stalled subscription catches up from, and that it does not poll.
  */
 class CdcEventStoreLiveSourceOverflowTest {
     private static final AggregateType ORDERS         = AggregateType.of("orders");
@@ -69,7 +73,7 @@ class CdcEventStoreLiveSourceOverflowTest {
 
     @ParameterizedTest(name = "subscribed while CDC active: {0}")
     @ValueSource(booleans = {true, false})
-    void a_stalled_subscription_leaves_the_bus_for_polling_without_holding_up_the_bus_or_the_other_subscriptions(boolean subscribedWhileActive) {
+    void a_stalled_subscription_leaves_the_bus_without_holding_up_the_bus_or_the_other_subscriptions_and_rejoins_it_once_caught_up(boolean subscribedWhileActive) {
         var props = new CdcProperties();
         props.getHealthCheck().setActiveCutbackDebounce(Duration.ofMillis(50));
         props.getEventBus().setBackpressureBufferSize(8);
@@ -78,7 +82,7 @@ class CdcEventStoreLiveSourceOverflowTest {
         var availability  = new CdcAvailability();
         var bus           = new CdcEventBus(props.getEventBus());
         var meterRegistry = new SimpleMeterRegistry();
-        var store         = new FakePollingStore();
+        var store         = new FakeEventStore();
         var cdcEventStore = cdcEventStore(store, bus, props, availability, meterRegistry);
 
         if (subscribedWhileActive) {
@@ -120,15 +124,29 @@ class CdcEventStoreLiveSourceOverflowTest {
         assertThat(stalledReceived).containsExactly(1L);
         // The overflow is signalled only once the stalled subscription has taken everything it buffered
         assertThat(meterRegistry.counter(OVERFLOWS).count()).isZero();
+        // At warm-up both moved onto the bus with a catch-up of their own
+        var loadsBeforeTheStallEnded = store.catchUpLoadsFrom().size();
 
         mayHandleStallingEvent.countDown();
 
         await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> assertThat(stalledReceived).containsExactlyElementsOf(globalOrders(1, EVENTS)));
-        // It buffered exactly one page past #2 (#3..#7), was handed all of it, and then polled from right after it
-        assertThat(store.pollsFrom("stalled")).last().isEqualTo(STALLING_EVENT + PAGE_SIZE + 1);
+        // It buffered exactly one page past #2 (#3..#7), was handed all of it, and then caught up from right after it
+        assertThat(store.catchUpLoadsFrom().get(loadsBeforeTheStallEnded)).isEqualTo(STALLING_EVENT + PAGE_SIZE + 1);
         assertThat(meterRegistry.counter(OVERFLOWS).count()).isEqualTo(1);
-        // The healthy subscription stayed on the bus throughout: at most the warm-up poll from before CDC was active
-        assertThat(store.pollsFrom("healthy")).isEqualTo(subscribedWhileActive ? List.of() : List.of(1L));
+
+        // Back on the bus: an event that only the bus has (never "persisted", so no catch-up or poll could return it)
+        // reaches both subscriptions
+        var onlyOnTheBus = store.event(EVENTS + 1);
+        bus.publish(List.of(onlyOnTheBus));
+        await().atMost(Duration.ofSeconds(5)).untilAsserted(() -> {
+            assertThat(stalledReceived).containsExactlyElementsOf(globalOrders(1, EVENTS + 1));
+            assertThat(healthyReceived).containsExactlyElementsOf(globalOrders(1, EVENTS + 1));
+        });
+        assertThat(meterRegistry.counter(OVERFLOWS).count()).isEqualTo(1);
+        // Neither polled after its warm-up: the stalled subscription caught up and rejoined the bus instead
+        var warmUpPolls = subscribedWhileActive ? List.<Long>of() : List.of(1L);
+        assertThat(store.pollsFrom("healthy")).isEqualTo(warmUpPolls);
+        assertThat(store.pollsFrom("stalled")).isEqualTo(warmUpPolls);
         // A slow subscriber is not a CDC fallback
         assertThat(availability.getFallbackCount()).isZero();
     }
@@ -145,16 +163,18 @@ class CdcEventStoreLiveSourceOverflowTest {
     }
 
     @SuppressWarnings("unchecked")
-    private static CdcEventStore<SeparateTablePerAggregateEventStreamConfiguration> cdcEventStore(FakePollingStore store,
-                                                                                                  CdcEventBus bus,
-                                                                                                  CdcProperties props,
-                                                                                                  CdcAvailability availability,
-                                                                                                  SimpleMeterRegistry meterRegistry) {
+    static CdcEventStore<SeparateTablePerAggregateEventStreamConfiguration> cdcEventStore(FakeEventStore store,
+                                                                                          CdcEventBus bus,
+                                                                                          CdcProperties props,
+                                                                                          CdcAvailability availability,
+                                                                                          SimpleMeterRegistry meterRegistry) {
         ConfigurableEventStore<SeparateTablePerAggregateEventStreamConfiguration> delegate   = mock(ConfigurableEventStore.class);
         EventStoreUnitOfWorkFactory<? extends EventStoreUnitOfWork>               uowFactory = mock(EventStoreUnitOfWorkFactory.class);
         when(uowFactory.withUnitOfWork(any(CheckedSupplier.class))).thenAnswer(inv -> ((CheckedSupplier<?>) inv.getArgument(0)).get());
-        // Nothing to back-fill: every event is published after the subscriptions started
-        when(delegate.findHighestGlobalEventOrderPersisted(any())).thenReturn(Optional.of(GlobalEventOrder.of(0)));
+        when(uowFactory.withUnitOfWork(any(CheckedFunction.class))).thenAnswer(inv -> ((CheckedFunction<Object, ?>) inv.getArgument(0)).apply(null));
+        when(delegate.findHighestGlobalEventOrderPersisted(any())).thenAnswer(inv -> store.head());
+        when(delegate.loadEventsByGlobalOrder(any(), any(LongRange.class), anyList(), (Tenant) any()))
+                .thenAnswer(inv -> store.load(inv.getArgument(1), inv.getArgument(3)));
         when(delegate.pollEvents(any(), anyLong(), any(), any(), any(), any(), any()))
                 .thenAnswer(inv -> store.pollFrom(((Optional<SubscriberId>) inv.getArgument(5)).orElseThrow().toString(), inv.getArgument(1)));
         return new CdcEventStore<>(delegate,
@@ -166,7 +186,7 @@ class CdcEventStoreLiveSourceOverflowTest {
                                    Optional.of(meterRegistry));
     }
 
-    private static List<Long> globalOrders(long fromInclusive, long toInclusive) {
+    static List<Long> globalOrders(long fromInclusive, long toInclusive) {
         return LongStream.rangeClosed(fromInclusive, toInclusive).boxed().toList();
     }
 
@@ -179,20 +199,66 @@ class CdcEventStoreLiveSourceOverflowTest {
     }
 
     /**
-     * Stands in for the polling event store: each poll returns the events persisted so far from its resume point, and
-     * records where each subscriber resumed polling
+     * Stands in for the event store: the events "persisted" so far, the head, page loads by global order (a catch-up or
+     * a backfill), and polls. Records where catch-ups loaded from and where each subscriber resumed polling
      */
-    private static final class FakePollingStore {
-        private final List<PersistedEvent>                persisted = new CopyOnWriteArrayList<>();
-        private final ConcurrentMap<String, List<Long>> pollsFrom = new ConcurrentHashMap<>();
+    static final class FakeEventStore {
+        private final List<PersistedEvent>              persisted        = new CopyOnWriteArrayList<>();
+        private final List<Long>                        catchUpLoadsFrom = new CopyOnWriteArrayList<>();
+        private final List<Optional<Tenant>>            loadTenants      = new CopyOnWriteArrayList<>();
+        private final ConcurrentMap<String, List<Long>> pollsFrom        = new ConcurrentHashMap<>();
+        private final AtomicInteger                     failingLoads     = new AtomicInteger();
 
         PersistedEvent persist(long globalOrder) {
+            return persist(event(globalOrder));
+        }
+
+        PersistedEvent persist(PersistedEvent event) {
+            persisted.add(event);
+            return event;
+        }
+
+        PersistedEvent event(long globalOrder) {
+            return event(globalOrder, Optional.empty());
+        }
+
+        PersistedEvent event(long globalOrder, Optional<Tenant> tenant) {
             var event = mock(PersistedEvent.class);
             when(event.globalEventOrder()).thenReturn(GlobalEventOrder.of(globalOrder));
             when(event.aggregateType()).thenReturn(ORDERS);
-            when(event.tenant()).thenReturn(Optional.empty());
-            persisted.add(event);
+            // doReturn avoids the wildcard-capture mismatch on Optional<? extends Tenant>
+            doReturn(tenant).when(event).tenant();
             return event;
+        }
+
+        /**
+         * The next {@code loads} page loads fail, as when the database is unreachable
+         */
+        void failNextLoads(int loads) {
+            failingLoads.set(loads);
+        }
+
+        Optional<GlobalEventOrder> head() {
+            return persisted.stream().map(PersistedEvent::globalEventOrder).max(Comparator.naturalOrder());
+        }
+
+        Stream<PersistedEvent> load(LongRange range, Tenant tenant) {
+            catchUpLoadsFrom.add(range.getFromInclusive());
+            loadTenants.add(Optional.ofNullable(tenant));
+            if (failingLoads.getAndUpdate(remaining -> Math.max(0, remaining - 1)) > 0) {
+                throw new IllegalStateException("Simulated: the database is unreachable");
+            }
+            // As the SQL does: an event without a tenant belongs to every tenant
+            return persisted.stream()
+                            .filter(event -> range.covers(event.globalEventOrder().longValue()))
+                            .filter(event -> tenant == null || event.tenant().map(eventTenant -> eventTenant.toString().equals(tenant.toString())).orElse(true))
+                            .sorted(Comparator.comparing(PersistedEvent::globalEventOrder))
+                            .toList()
+                            .stream();
+        }
+
+        List<Optional<Tenant>> loadTenants() {
+            return loadTenants;
         }
 
         Flux<PersistedEvent> pollFrom(String subscriberId, long fromInclusive) {
@@ -200,6 +266,10 @@ class CdcEventStoreLiveSourceOverflowTest {
             return Flux.defer(() -> Flux.fromIterable(persisted.stream()
                                                                .filter(event -> event.globalEventOrder().longValue() >= fromInclusive)
                                                                .toList()));
+        }
+
+        List<Long> catchUpLoadsFrom() {
+            return catchUpLoadsFrom;
         }
 
         List<Long> pollsFrom(String subscriberId) {

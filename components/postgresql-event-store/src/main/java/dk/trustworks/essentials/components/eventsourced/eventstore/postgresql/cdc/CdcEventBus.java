@@ -38,8 +38,10 @@ import static dk.trustworks.essentials.shared.FailFast.*;
  * <p>
  * It utilizes Reactor's {@link Sinks.Many} to maintain event streams for each aggregate type. A multicast sink is
  * paced by its slowest subscriber, so {@code CdcEventStore} never lets a subscription back-pressure it: each
- * subscription requests unbounded demand and buffers on its own side, leaving the bus for polling when it falls too
- * far behind (see {@code CdcEventStore#buildAdaptiveLiveSource}). With only such subscribers the sink's own
+ * subscription requests unbounded demand and buffers on its own side, leaving the bus to catch up from the event store
+ * when it falls too far behind (see {@code CdcEventStore#buildAdaptiveLiveSource}). The sink replays nothing to a late
+ * subscriber - only what it retained while it had no subscriber at all - so a subscription moving onto the bus catches
+ * up on what it missed itself. With only such subscribers the sink's own
  * {@code backpressureBufferSize} buffer holds events transiently, or while the aggregate type has no subscriber yet;
  * the {@link CdcOverflowPolicy} applies when an emit still fails. A subscriber of {@link #fluxForAggregate} that
  * applies backpressure itself paces every other subscriber of the aggregate type.

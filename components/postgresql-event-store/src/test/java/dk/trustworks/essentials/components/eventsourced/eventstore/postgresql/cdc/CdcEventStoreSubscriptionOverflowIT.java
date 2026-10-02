@@ -18,6 +18,7 @@ package dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.c
 
 import dk.trustworks.essentials.components.distributed.fencedlock.postgresql.PostgresqlFencedLockManager;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.PostgresqlEventStore;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.PersistedEvent;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.gap.PostgresqlEventStreamGapHandler;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.persistence.table_per_aggregate_type.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.processor.EventProcessorIT;
@@ -29,7 +30,7 @@ import dk.trustworks.essentials.components.foundation.transaction.UnitOfWork;
 import dk.trustworks.essentials.components.foundation.types.SubscriberId;
 import dk.trustworks.essentials.types.LongRange;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
-import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.*;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.EnumSource;
 
@@ -51,9 +52,13 @@ import static org.awaitility.Awaitility.await;
  * Two subscriptions on one aggregate type, a small bus buffer and a polling page of 5: one subscription blocks in its
  * handler on #2 while the "dispatcher" publishes far more events than either buffer holds. The healthy subscription
  * must receive every one of them, in order, from the bus, and every publish must go through. Once the stall ends, the
- * stalled subscription - which overflowed its own buffer and moved to polling - must receive every event exactly once,
- * in order. The bus is fed directly from a single-threaded executor standing in for the {@code CdcDispatcher}, as in
- * {@link CdcEventStoreSubscriptionErrorPolicyIsolationIT}.
+ * stalled subscription - which overflowed its own buffer and left the bus - must receive every event exactly once, in
+ * order, and be back on the bus: it catches up from where it got to and rejoins it, rather than polling until CDC
+ * availability next changes. The bus is fed directly from a single-threaded executor standing in for the
+ * {@code CdcDispatcher}, as in {@link CdcEventStoreSubscriptionErrorPolicyIsolationIT}.
+ * <p>
+ * Also: a batched subscription whose batch handler is busy must hold back the ordered backfill-to-live hand-over
+ * rather than overflow it - which ended the subscription's flux, silently.
  */
 class CdcEventStoreSubscriptionOverflowIT extends AbstractLogicalReplicationPostgresIT {
     private static final int    PAGE_SIZE      = 5;
@@ -135,10 +140,11 @@ class CdcEventStoreSubscriptionOverflowIT extends AbstractLogicalReplicationPost
 
     @ParameterizedTest
     @EnumSource(CdcProperties.CdcOverflowPolicy.class)
-    void a_stalled_subscription_neither_holds_up_nor_loses_events_for_the_other_subscriptions_and_catches_up_by_polling(CdcProperties.CdcOverflowPolicy overflowPolicy) throws Exception {
+    void a_stalled_subscription_neither_holds_up_nor_loses_events_for_the_other_subscriptions_and_rejoins_the_bus_once_caught_up(CdcProperties.CdcOverflowPolicy overflowPolicy) throws Exception {
         setup(overflowPolicy);
         mayHandleStallingEvent = new CountDownLatch(1);
         var stalledReceived = new CopyOnWriteArrayList<Long>();
+        var stalledThreads  = new ConcurrentHashMap<Long, String>();
         var healthyReceived = new CopyOnWriteArrayList<Long>();
         eventStoreSubscriptionManager.subscribeToAggregateEventsAsynchronously(SubscriberId.of("orders-stalled"),
                                                                                ORDERS,
@@ -150,6 +156,7 @@ class CdcEventStoreSubscriptionOverflowIT extends AbstractLogicalReplicationPost
                                                                                        // A handler stuck in a slow call, or a long SubscriptionErrorPolicy backoff
                                                                                        awaitQuietly(mayHandleStallingEvent);
                                                                                    }
+                                                                                   stalledThreads.put(globalOrder, Thread.currentThread().getName());
                                                                                    stalledReceived.add(globalOrder);
                                                                                });
         eventStoreSubscriptionManager.subscribeToAggregateEventsAsynchronously(SubscriberId.of("orders-healthy"),
@@ -182,18 +189,75 @@ class CdcEventStoreSubscriptionOverflowIT extends AbstractLogicalReplicationPost
 
         mayHandleStallingEvent.countDown();
 
-        // The stalled subscription catches up on polling: every event exactly once, in order
+        // The stalled subscription catches up: every event exactly once, in order
         await().atMost(Duration.ofSeconds(30)).untilAsserted(() -> assertThat(stalledReceived).containsExactlyElementsOf(globalOrders(1, EVENTS)));
         // Only the stalled subscription left the bus
         assertThat(meterRegistry.counter(OVERFLOWS).count()).isEqualTo(1);
 
-        // Both keep going: the healthy one on the bus, the stalled one on polling until CDC availability next changes
+        // Both keep going on the bus: the stalled one rejoined it once caught up. It used to poll until CDC availability
+        // next changed, which handled the next event on its Publish-* polling thread rather than its Cdc-* bus thread
         var next = appendOrder();
         publishOnDispatcher(next).get(10, TimeUnit.SECONDS);
         await().atMost(Duration.ofSeconds(15)).untilAsserted(() -> {
             assertThat(healthyReceived).containsExactlyElementsOf(globalOrders(1, next));
             assertThat(stalledReceived).containsExactlyElementsOf(globalOrders(1, next));
         });
+        assertThat(stalledThreads.get(next)).startsWith("Cdc-orders-stalled-");
+        assertThat(meterRegistry.counter(OVERFLOWS).count()).isEqualTo(1);
+    }
+
+    /**
+     * A batched subscription asks for more events only once its batch handler - on a thread of its own - is done with
+     * a batch. While that handler was busy, the ordered backfill-to-live hand-over kept taking events from the live source
+     * regardless, until its bounded queue overflowed: the {@link CdcBusOverflowException} ended the subscription's flux,
+     * and the subscription - still reporting itself active - silently received nothing more. It must instead hold the
+     * live source back, and once the handler is done receive every event exactly once and in order.
+     */
+    @Test
+    void a_batched_subscription_with_a_busy_batch_handler_holds_back_the_live_events_instead_of_ending_on_an_overflow() throws Exception {
+        setup(CdcProperties.CdcOverflowPolicy.FAIL_FAST);
+        mayHandleStallingEvent = new CountDownLatch(1);
+        var received = new CopyOnWriteArrayList<Long>();
+        var subscription = eventStoreSubscriptionManager.batchSubscribeToAggregateEventsAsynchronously(
+                SubscriberId.of("orders-batched"),
+                ORDERS,
+                GlobalEventOrder.FIRST_GLOBAL_EVENT_ORDER,
+                Optional.empty(),
+                PAGE_SIZE,
+                Duration.ofMillis(50),
+                new BatchedPersistedEventHandler() {
+                    @Override
+                    public int handleBatch(List<PersistedEvent> events) {
+                        if (events.stream().anyMatch(event -> event.globalEventOrder().longValue() == STALLING_EVENT)) {
+                            // A batch handler stuck in a slow call, or a long SubscriptionErrorPolicy backoff
+                            awaitQuietly(mayHandleStallingEvent);
+                        }
+                        events.forEach(event -> received.add(event.globalEventOrder().longValue()));
+                        return PAGE_SIZE;
+                    }
+                });
+
+        publishOnDispatcher(appendOrder()).get(10, TimeUnit.SECONDS);
+        await().atMost(Duration.ofSeconds(15)).untilAsserted(() -> assertThat(received).containsExactly(1L));
+
+        // Far more than the hand-over holds (BUS_BUFFER) while the batch handler is stuck on the batch with #2
+        for (long expected = STALLING_EVENT; expected <= EVENTS; expected++) {
+            var globalOrder = appendOrder();
+            assertThat(globalOrder).isEqualTo(expected);
+            publishOnDispatcher(globalOrder).get(10, TimeUnit.SECONDS);
+        }
+        // Long enough for the live events to have overrun the hand-over before the fix
+        await().pollDelay(Duration.ofSeconds(1)).until(() -> true);
+        assertThat(subscription.isActive()).isTrue();
+
+        mayHandleStallingEvent.countDown();
+
+        await().atMost(Duration.ofSeconds(30)).untilAsserted(() -> assertThat(received).containsExactlyElementsOf(globalOrders(1, EVENTS)));
+        // And it is still receiving
+        var next = appendOrder();
+        publishOnDispatcher(next).get(10, TimeUnit.SECONDS);
+        await().atMost(Duration.ofSeconds(15)).untilAsserted(() -> assertThat(received).containsExactlyElementsOf(globalOrders(1, next)));
+        assertThat(subscription.isActive()).isTrue();
     }
 
     private static List<Long> globalOrders(long fromInclusive, long toInclusive) {

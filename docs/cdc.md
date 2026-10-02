@@ -156,16 +156,40 @@ and holds the ones its handler has not reached yet in a buffer of its own, one p
 page deep (the subscription manager's `eventStorePollingBatchSize`). When a subscription
 falls further behind than that - a handler in a long `SubscriptionErrorPolicy` backoff,
 or a slow call - only that subscription leaves the bus: it is handed what it buffered,
-then continues on polling from the event after the last one it was handed, so nothing is
-lost, repeated or reordered. It stays on polling until CDC availability next changes.
+then catches up from the event store from the event after the last one it was handed,
+and rejoins the bus (see the catch-up below). Nothing is lost, repeated or reordered.
 Each such overflow logs one WARN naming the subscriber and aggregate type and counts
-`essentials.cdc.eventstore.live_source.overflow.count`; it is not a CDC fallback and does
-not touch `fallback_total`. The dispatcher, and every other subscription of the aggregate
-type, carry on unaffected - under either `eventBus.overflowPolicy`.
+`essentials.cdc.eventstore.live_source.overflow.count`, and the catch-up logs one INFO
+once the subscription is back on the bus; it is not a CDC fallback and does not touch
+`fallback_total` or `live_source.switch.count`. The dispatcher, and every other
+subscription of the aggregate type, carry on unaffected - under either
+`eventBus.overflowPolicy`. A subscription that cannot keep up with the bus at all
+overflows again during or after its catch-up and catches up again from where it got
+to: in effect it polls, at its handler's pace, until it can keep up.
 
-Keep `eventStorePollingBatchSize` large enough to absorb an ordinary burst (a large
-transaction is published to the bus in one go): a subscription that overflows on a
-burst polls until the next availability change.
+`eventStorePollingBatchSize` still sizes that buffer: a subscription that overflows on
+every ordinary burst (a large transaction is published to the bus in one go) spends its
+time catching up from the event store instead of being served from the bus.
+
+**Moving onto the bus is gap-free.** The bus replays nothing to a late subscriber, so
+every time a running subscription moves onto it - the switch to `ACTIVE` at warm-up,
+the switch back after an outage, and the recovery from an overflow - it:
+
+1. attaches to the bus, holding what the bus delivers in its own buffer;
+2. only then reads the highest persisted global order (the head);
+3. loads everything from the event after the last one it handled up to that head, page
+   by page, on its `Cdc-<subscriber>-<aggregateType>` thread, gap handler included;
+4. then drains its buffer and carries on from the bus.
+
+An event the bus published before the attach was committed before it, so the catch-up
+loads it; one published after the attach is in the buffer; what both hold is delivered
+once. The catch-up ends at the head rather than at the first buffered bus event, since
+global order has holes (a rolled-back `IDENTITY` value is never persisted or published).
+Before, the subscription attached to the bus on its own and silently lost whatever the
+bus had published that polling had not yet fetched - since polling's last fetch, during
+the `activeCutbackDebounce` window, and while the switch waited for an event still in
+the handler. A catch-up that fails (database unreachable) is retried a second later,
+logged at WARN; it does not end the subscription.
 
 ### Logical decoding plugins
 
@@ -716,6 +740,8 @@ mid-subscription:
   shouldn't stall on a dead live stream).
 - **FAILED → ACTIVE**: waits `activeCutbackDebounce` (default = monitor interval,
   60s) of steady ACTIVE before switching back. Prevents thrash during oscillation.
+  Polling keeps delivering meanwhile, and the switch back catches up on whatever polling
+  had not fetched before it hands over to the bus (see [§2](#2-architecture)).
 
 ### 6.3 `CdcEffectivenessMonitor`
 
@@ -832,10 +858,10 @@ All keys live under `cdc.*` in [`CdcProperties`](../components/postgresql-event-
 
 | Property                                          | Default        | Purpose                                                              |
 | ------------------------------------------------- | -------------- | -------------------------------------------------------------------- |
-| `cdc.eventBus.backpressureBufferSize`             | `8192`         | Per-aggregate Reactor sink buffer size (fills only while an aggregate type has no subscriber), and the per-subscription `BackfillThenLiveOrdered` live buffer during catch-up. Not the per-subscription live hand-over buffer: that is one polling page (see [§2](#2-architecture)). |
+| `cdc.eventBus.backpressureBufferSize`             | `8192`         | Per-aggregate Reactor sink buffer size (fills only while an aggregate type has no subscriber), and the per-subscription `BackfillThenLiveOrdered` live events (buffered during backfill, queued for the subscriber, and asked for - together; it asks for more only as the subscriber takes them). Not the per-subscription live hand-over buffer: that is one polling page (see [§2](#2-architecture)). |
 | `cdc.eventBus.nonSerializedMaxRetries`            | `16`           | Spin-retry count on `FAIL_NON_SERIALIZED` emit failures.             |
 | `cdc.eventBus.overflowMaxRetries`                 | `20`           | Backoff retry count on `FAIL_OVERFLOW`.                              |
-| `cdc.eventBus.overflowPolicy`                     | `FAIL_FAST`    | `FAIL_FAST` (throw `CdcBusOverflowException`) or `LOG_AND_DROP`, for an event the bus cannot emit. A slow subscription does not lead here - it moves itself to polling. |
+| `cdc.eventBus.overflowPolicy`                     | `FAIL_FAST`    | `FAIL_FAST` (throw `CdcBusOverflowException`) or `LOG_AND_DROP`, for an event the bus cannot emit. A slow subscription does not lead here - it leaves the bus, catches up from the event store and rejoins it. |
 
 ### 7.7 `cdc.healthCheck` ([`CdcHealthCheckProperties`](../components/postgresql-event-store/src/main/java/dk/trustworks/essentials/components/eventsourced/eventstore/postgresql/cdc/CdcProperties.java))
 
@@ -1116,8 +1142,9 @@ Sampled every `cdc.slot.metricsInterval` (default 30s) by `CdcSlotMetrics`. Tagg
   startup warm-up**; see [Warm-up polls vs fallbacks](#warm-up-polls-vs-fallbacks))
 - `essentials.cdc.eventstore.live_source.switch.count` (counter — mid-stream cutover on an availability change)
 - `essentials.cdc.eventstore.live_source.overflow.count` (counter — a subscription fell more than one polling page
-  behind the bus and moved itself to polling; one per occurrence, with a WARN naming the subscriber. A slow subscriber,
-  not a CDC problem)
+  behind the bus, left it, caught up from the event store and rejoined it; one per occurrence, with a WARN naming the
+  subscriber and an INFO once it is back on the bus. A slow subscriber, not a CDC problem. A steadily climbing value
+  for one subscriber means it cannot keep up with the bus and is served by catch-ups)
 - `essentials.cdc.eventstore.backfill.page.latency` / `.loaded` / `.query_range`
 - `essentials.cdc.backfill_live.buffer.size` (gauge — backfill→live handover buffer)
 - `essentials.cdc.fallback_total` (counter — times a subscription started on, or switched to, polling **after**
@@ -1132,8 +1159,9 @@ Sampled every `cdc.slot.metricsInterval` (default 30s) by `CdcSlotMetrics`. Tagg
 
 Availability starts `INACTIVE` and only becomes `ACTIVE` once the WAL tailer has connected and taken the slot.
 The lifecycle starts subscriptions *before* that, so every subscription that comes up during boot legitimately
-begins on the polling path and switches to the CDC bus a few milliseconds later, when
-`CdcEventStore`'s adaptive live source sees the state change.
+begins on the polling path and switches to the CDC bus once `CdcEventStore`'s adaptive live source has seen
+`ACTIVE` last for `activeCutbackDebounce` - catching up first on what polling had not fetched (see
+[§2](#2-architecture)).
 
 Those startup polls are **warm-up polls**, counted by `essentials.cdc.warmup_poll_total` and reported as
 `warmupPollCount`. They are not failures, and how many you get depends on a race between subscription startup
@@ -1410,7 +1438,8 @@ Per JVM:
   worst case - reached only while an aggregate type has no subscriber, since no
   subscription back-pressures the bus.
 - Per-subscription live hand-over buffer: one polling page (`eventStorePollingBatchSize`)
-  per CDC subscription; a subscription further behind moves itself to polling.
+  per CDC subscription; a subscription further behind leaves the bus and catches up from
+  the event store, one page at a time.
 - Backfill→live handover buffer: `cdc.cdcEventStoreBackfillBatchSize` rows per
   active subscription, transient.
 - Tailer connection: a single replication connection per slot; negligible.
