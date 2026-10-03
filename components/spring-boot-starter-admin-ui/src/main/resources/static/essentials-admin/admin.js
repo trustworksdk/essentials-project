@@ -1749,30 +1749,14 @@ views.causation = async () => {
             'GET /event-store/events/{eventId}', true);
     }
 
-    const [chain, caused] = await Promise.allSettled([
-        api(`/event-store/events/${encodeURIComponent(eventId)}/causation-chain?maxDepth=20`),
-        api(`/event-store/events/${encodeURIComponent(eventId)}/caused-events`)
-    ]);
-
-    const chainCard = card('Why did this happen · the event, then its cause, then that cause',
-        chain.status === 'fulfilled'
-            ? table(causationCols('Step'), chain.value.map((ev, i) => causationRow(ev, i)), { empty: 'No events' })
-              + (chain.value.length && chain.value[chain.value.length - 1].causedByEventId
-                 ? `<div class="notice">The chain continues beyond what is shown: the last event's cause was not found in
-                    a registered event stream, or the 20-step limit was reached.</div>` : '')
-            : errorState(chain.reason, 'essentials_subscription_reader'),
-        'GET /event-store/events/{eventId}/causation-chain', true);
-
-    const causedCard = card('What did it cause · direct effects',
-        caused.status === 'fulfilled'
-            ? table(causationCols(''), caused.value.map((ev) => causationRow(ev, null)), { empty: 'This event caused no recorded events' })
-            : caused.reason.status === 409
-                ? `<div class="notice"><strong>Not enabled.</strong> Listing what an event caused needs the caused-by-event-id
-                   index. Enable it with <code class="mono">essentials.eventstore.causation.index-enabled=true</code>;
-                   on large existing event tables, build the index concurrently first.</div>`
-                : errorState(caused.reason, 'essentials_subscription_reader'),
-        'GET /event-store/events/{eventId}/caused-events', true);
-
+    let chain;
+    try {
+        chain = await api(`/event-store/events/${encodeURIComponent(eventId)}/causation-chain?maxDepth=20`);
+    } catch (e) {
+        return toolbar + aggregateCard + card('Causation', errorState(e, 'essentials_subscription_reader'),
+            'GET /event-store/events/{eventId}/causation-chain', true);
+    }
+    const treeCard = await causationTreeCard(eventId, chain);
     return toolbar + aggregateCard + `
     <div class="kpi-row">
       ${tile('Event type', eventTypeLabel(event.eventType), esc(event.aggregateType))}
@@ -1781,9 +1765,88 @@ views.causation = async () => {
       ${tile('Caused by', event.causedByEventId ? causationLink(event.causedByEventId) : nil('none recorded'),
              event.causedByEventId ? 'follow to walk back' : 'started by a request, a schedule or a person')}
     </div>
-    ${chainCard}
-    ${causedCard}`;
+    ${treeCard}`;
 };
+
+/* ── Causation tree ──────────────────────────────────────────────────────────────────────────
+   The whole flow the looked-up event belongs to: rooted at the start of its chain, with the path down to the event
+   expanded and the event highlighted. Every other branch expands on click, one level at a time - a busy event can
+   have caused thousands - and each node's effects are fetched once and kept while the page stays on that event. */
+let causationTree = { forEventId: null, children: new Map(), expanded: new Set(), indexDisabled: false };
+
+const TREE_CHILD_LIMIT = 50;
+
+async function loadCausedEvents(id) {
+    if (causationTree.children.has(id)) return;
+    try {
+        causationTree.children.set(id, await api(`/event-store/events/${encodeURIComponent(id)}/caused-events`));
+    } catch (e) {
+        if (e.status === 409) {
+            causationTree.indexDisabled = true;
+            return;
+        }
+        throw e;
+    }
+}
+
+async function causationTreeCard(eventId, chain) {
+    const path = [...chain].reverse();   // root first, the looked-up event last
+    if (causationTree.forEventId !== eventId) {
+        causationTree = { forEventId: eventId, children: new Map(), expanded: new Set(path.map((ev) => ev.eventId)), indexDisabled: false };
+    }
+    try {
+        // The path's own levels, so the siblings along the way are visible; then whatever the user expanded
+        for (const id of causationTree.expanded) {
+            if (causationTree.indexDisabled) break;
+            await loadCausedEvents(id);
+        }
+    } catch (e) {
+        return card('Causation', errorState(e, 'essentials_subscription_reader'), 'GET /event-store/events/{eventId}/caused-events', true);
+    }
+
+    const onPath = new Map(path.map((ev, i) => [ev.eventId, path[i + 1]]));   // path node -> its child on the path
+    const rows = [];
+    const addRow = (ev, depth) => {
+        const kids = causationTree.indexDisabled ? (onPath.get(ev.eventId) ? [onPath.get(ev.eventId)] : [])
+                                                 : causationTree.children.get(ev.eventId);
+        const open = causationTree.expanded.has(ev.eventId);
+        const toggle = kids && kids.length === 0
+            ? `<span class="tree-leaf" aria-hidden="true">·</span>`
+            : `<button class="tree-toggle" data-causation-expand="${esc(ev.eventId)}" aria-expanded="${open}"
+                       title="${open ? 'Collapse' : 'Show what this event caused'}">${open ? '▾' : '▸'}</button>`;
+        rows.push(`<tr${ev.eventId === eventId ? ' class="is-selected"' : ''}>
+          <td><div class="tree-cell" style="padding-left:${depth * 18}px">${toggle} ${eventTypeLabel(ev.eventType)}</div></td>
+          <td>${esc(ev.aggregateType)}</td>
+          <td class="truncate mono">${esc(ev.aggregateId)}</td>
+          <td class="num">${num(ev.eventOrder)}</td>
+          <td>${ts(ev.timestamp)}</td>
+          <td>${causationLink(ev.eventId)}</td>
+        </tr>`);
+        if (open && kids) {
+            kids.slice(0, TREE_CHILD_LIMIT).forEach((kid) => addRow(kid, depth + 1));
+            if (kids.length > TREE_CHILD_LIMIT) {
+                rows.push(`<tr><td colspan="6"><div class="tree-cell" style="padding-left:${(depth + 1) * 18}px">
+                  <span class="nil">… ${num(kids.length - TREE_CHILD_LIMIT)} more not shown</span></div></td></tr>`);
+            }
+        }
+    };
+    addRow(path[0], 0);
+
+    const notes = [];
+    if (path[0].causedByEventId) {
+        notes.push(`<div class="notice">This is not the root: the first event's cause was not found in a registered event
+          stream, or the chain is longer than 20 steps.</div>`);
+    }
+    if (causationTree.indexDisabled) {
+        notes.push(`<div class="notice"><strong>Only the chain is shown.</strong> Showing everything each event caused needs
+          the caused-by-event-id index. Enable it with <code class="mono">essentials.eventstore.causation.index-enabled=true</code>;
+          on large existing event tables, build the index concurrently first.</div>`);
+    }
+    return card('Causation · from the root of the chain, the selected event highlighted',
+        notes.join('') + table([{ label: 'Event' }, { label: 'Aggregate type' }, { label: 'Aggregate id' },
+                                { label: 'Event order', num: true }, { label: 'Timestamp' }, { label: 'Event id' }], rows),
+        'GET /event-store/events/{eventId}/causation-chain · GET /event-store/events/{eventId}/caused-events', true);
+}
 
 const titles = {
     overview: ['Dashboard', 'Current state of the Essentials infrastructure'],
@@ -1840,6 +1903,14 @@ document.addEventListener('click', async (e) => {
         closeDialog();
         await fn?.();
         return;
+    }
+
+    const expandTarget = e.target.closest('[data-causation-expand]');
+    if (expandTarget) {
+        const id = expandTarget.dataset.causationExpand;
+        if (causationTree.expanded.has(id)) causationTree.expanded.delete(id);
+        else causationTree.expanded.add(id);
+        return render('causation');
     }
 
     const aggregateCausationTarget = e.target.closest('[data-causation-aggregate-type]');

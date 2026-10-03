@@ -461,3 +461,11 @@ h3.sub { font-size: 13px; margin: 0 0 8px; color: var(--ink-secondary); font-wei
 
 /* Event type labels in the causation tables: the simple class name, never truncated mid-word; the full type is the title */
 .badge.event-type { white-space: nowrap; font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; font-size: 12px; }
+
+/* Causation tree: indentation carries the depth; the toggle and the leaf dot share one fixed-width slot so labels line up */
+.tree-cell { display: flex; align-items: center; gap: 6px; white-space: nowrap; }
+.tree-toggle, .tree-leaf { display: inline-flex; justify-content: center; width: 18px; flex: none; }
+.tree-toggle { border: 0; background: none; padding: 0; cursor: pointer; color: var(--ink-secondary); font-size: 12px; }
+.tree-toggle:hover { color: var(--ink-primary); }
+.tree-leaf { color: var(--ink-secondary); }
+

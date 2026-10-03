@@ -755,8 +755,13 @@ percent rather than dismissed as drift.
   - A missing index answers `409` with the property to set. `DefaultEventStoreApi` unwraps it from the
     `UnitOfWorkException` its UnitOfWork wraps it in — without that the adapter answered `500`, which only the
     end-to-end test could see.
-  - Console: an **Event causation** page — look up an event id, see the event, its chain back, and its direct
-    effects; every event id is a link that re-centres the page.
+  - Console: an **Event causation** page — look up an event id and see the whole flow it belongs to as one tree,
+    rooted at the start of its chain, with the path down to the event expanded and the event highlighted. Other
+    branches expand on click, one level at a time (at most 50 children shown per node), and each node's effects are
+    fetched once per page visit. Event types show as their simple class name, the full type on hover. Without the
+    caused-by index the tree degrades to the chain alone, with a notice saying how to enable it. (A first version
+    showed the chain and the direct effects as two tables; trying it on the trading demo showed a flow is hard to read
+    that way.)
   - **Where users get an event id from** was the gap a review found: they know the business id, not an event id, and
     the console showed event ids only for closing-books generations. So `findAggregateEvents` (`GET
     /event-store/aggregate-types/{aggregateType}/aggregates/{aggregateId}/events`, most recent `limit` events, default
