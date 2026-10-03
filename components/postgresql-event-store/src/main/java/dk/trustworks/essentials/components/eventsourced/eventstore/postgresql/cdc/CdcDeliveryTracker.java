@@ -50,9 +50,14 @@ import static dk.trustworks.essentials.shared.FailFast.*;
  * first, measured from when a delivered order above it revealed it - and then given up: W moves past it, and an event
  * for it that shows up later is dropped as a duplicate would be. That is the polling path's rule too: its gap handler
  * stops re-querying a transient gap once it promotes it to permanent. The number of runs and of earlier gaps is capped as
- * well, and hitting the cap gives up the oldest gap at once and logs a WARN. Once {@link #collectGivenUpGaps()} was
- * called, the orders given up on are kept for {@link #drainGivenUpGaps()}, so the subscription can record the give-up
- * with its gap handler.
+ * well, and hitting the cap gives up the oldest gap at once and logs a WARN.
+ * <p>
+ * Once {@link #collectTimedOutGaps()} was called, the orders of the gaps given up after waiting {@code gapTimeout} for
+ * them are kept for {@link #drainTimedOutGaps()}, so the subscription can record the give-up with its gap handler
+ * ({@code SubscriptionGapHandler#giveUpTransientGaps}) - which makes them permanent gaps for every subscriber of the
+ * aggregate type, and may therefore only be told about a gap that was waited for that long. A gap given up because of
+ * the cap was not: its transaction may still be in flight. It is dropped here only, and stays a transient gap with the
+ * gap handler, so a later subscription waits for it again.
  * <p>
  * Delivering a gap's event after events with higher orders is out of global order. That is the existing contract:
  * the polling path delivers gap-filled events late too, which is why a subscriber's resume point only ever advances
@@ -129,8 +134,11 @@ final class CdcDeliveryTracker {
     /** Since when (in {@link #nanoClock} time) the {@link #earlierGaps} have been waited for */
     private long                                    earlierGapsSince;
     private boolean                                 capReachedLogged;
-    /** The orders given up on since the last {@link #drainGivenUpGaps()} - null while they are not collected */
-    private List<GlobalEventOrder>                  givenUp;
+    /**
+     * The orders given up on after {@code gapTimeout} since the last {@link #drainTimedOutGaps()} - null while they are
+     * not collected
+     */
+    private List<GlobalEventOrder>                  timedOut;
 
     /**
      * @param name                    used in log statements, e.g. {@code subscriber-aggregateType}
@@ -184,7 +192,9 @@ final class CdcDeliveryTracker {
      * handler still has recorded from before this subscription started. Its resume point may be past them - it advances
      * past a gap, since gap-filled events arrive late - so without them an event that fills one of those gaps after a
      * restart would be dropped. They are waited for {@code gapTimeout} from now; orders above the watermark are ignored,
-     * as the subscription delivers those anyway. Called once, before anything is delivered.
+     * as the subscription delivers those anyway. Called once, before anything is delivered. The lowest ones beyond the cap
+     * are dropped without being waited for, so they are never collected for {@link #drainTimedOutGaps()}: they stay
+     * transient gaps, and the next subscription waits for them again.
      */
     synchronized void seedEarlierGaps(Collection<GlobalEventOrder> transientGaps) {
         requireNonNull(transientGaps, "No transientGaps provided");
@@ -205,26 +215,43 @@ final class CdcDeliveryTracker {
     }
 
     /**
-     * Keep the orders given up on from now on, until {@link #drainGivenUpGaps()} takes them - for a subscription that
-     * records the give-up with its gap handler. Without it they are not kept at all.
+     * Keep the orders of the gaps given up on after {@code gapTimeout} from now on, until {@link #drainTimedOutGaps()}
+     * takes them - for a subscription that records the give-up with its gap handler. Without it they are not kept at
+     * all.
      */
-    synchronized void collectGivenUpGaps() {
-        if (givenUp == null) {
-            givenUp = new ArrayList<>();
+    synchronized void collectTimedOutGaps() {
+        if (timedOut == null) {
+            timedOut = new ArrayList<>();
         }
     }
 
     /**
-     * @return the orders given up on - the gaps waited for too long or past the cap, and the earlier gaps - since the
-     * last call, lowest gap first; none unless {@link #collectGivenUpGaps()} was called
+     * Gives up first on the gaps whose {@code gapTimeout} has passed, so a subscription that is stopped while idle
+     * drains them too.
+     *
+     * @return the orders given up on after waiting {@code gapTimeout} for them - the gaps below the highest order
+     * delivered, and the earlier gaps - since the last call; none unless {@link #collectTimedOutGaps()} was called.
+     * Never a gap given up because of the cap (see the class javadoc)
      */
-    synchronized List<GlobalEventOrder> drainGivenUpGaps() {
-        if (givenUp == null || givenUp.isEmpty()) {
+    synchronized List<GlobalEventOrder> drainTimedOutGaps() {
+        giveUpExpiredGaps();
+        if (timedOut == null || timedOut.isEmpty()) {
             return List.of();
         }
-        var drained = List.copyOf(givenUp);
-        givenUp.clear();
+        var drained = List.copyOf(timedOut);
+        timedOut.clear();
         return drained;
+    }
+
+    /**
+     * Put back orders {@link #drainTimedOutGaps()} returned that could not be recorded with the gap handler, so the next
+     * drain returns them again
+     */
+    synchronized void requeueTimedOutGaps(List<GlobalEventOrder> orders) {
+        requireNonNull(orders, "No orders provided");
+        if (timedOut != null) {
+            timedOut.addAll(0, orders);
+        }
     }
 
     /**
@@ -366,12 +393,12 @@ final class CdcDeliveryTracker {
     private void giveUpExpiredGaps() {
         long now = nanoClock.getAsLong();
         while (!runsAboveWatermark.isEmpty() && now - runsAboveWatermark.firstEntry().getValue().gapBelowSince >= gapTimeoutNanos) {
-            giveUpLowestGap("it was not delivered within " + Duration.ofNanos(gapTimeoutNanos) + " - most likely its transaction rolled back");
+            giveUpLowestGap("it was not delivered within " + Duration.ofNanos(gapTimeoutNanos) + " - most likely its transaction rolled back", true);
         }
         if (!earlierGaps.isEmpty() && now - earlierGapsSince >= gapTimeoutNanos) {
             log.debug("[{}] Gave up waiting for {} transient gap(s) recorded before this subscription started", name, earlierGaps.size());
-            if (givenUp != null) {
-                earlierGaps.forEach(earlierGap -> givenUp.add(GlobalEventOrder.of(earlierGap)));
+            if (timedOut != null) {
+                earlierGaps.forEach(earlierGap -> timedOut.add(GlobalEventOrder.of(earlierGap)));
             }
             earlierGaps.clear();
         }
@@ -384,16 +411,21 @@ final class CdcDeliveryTracker {
                 log.warn("[{}] Waiting for more than {} gaps in the global order at once - giving up the oldest instead of waiting {} for it. Logged once",
                          name, maxTrackedGaps, Duration.ofNanos(gapTimeoutNanos));
             }
-            giveUpLowestGap("more than " + maxTrackedGaps + " gaps were waited for at once");
+            // Not waited for gapTimeout: not collected, so the gap handler keeps it a transient gap - see the class javadoc
+            giveUpLowestGap("more than " + maxTrackedGaps + " gaps were waited for at once", false);
         }
     }
 
-    private void giveUpLowestGap(String reason) {
+    /**
+     * @param afterTimeout whether the gap was waited for {@code gapTimeout} - only then is it collected for
+     *                     {@link #drainTimedOutGaps()}
+     */
+    private void giveUpLowestGap(String reason, boolean afterTimeout) {
         var lowest = runsAboveWatermark.pollFirstEntry();
         log.debug("[{}] Gave up waiting for global order(s) {}..{} - {}", name, watermark + 1, lowest.getKey() - 1, reason);
-        if (givenUp != null) {
+        if (afterTimeout && timedOut != null) {
             for (long order = watermark + 1; order < lowest.getKey(); order++) {
-                givenUp.add(GlobalEventOrder.of(order));
+                timedOut.add(GlobalEventOrder.of(order));
             }
         }
         watermark = lowest.getValue().end;

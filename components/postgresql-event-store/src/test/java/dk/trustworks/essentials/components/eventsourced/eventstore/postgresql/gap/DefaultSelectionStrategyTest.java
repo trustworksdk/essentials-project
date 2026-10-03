@@ -17,6 +17,7 @@
 package dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.gap;
 
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.gap.PostgresqlEventStreamGapHandler.ResolveTransientGapsToIncludeInQueryStrategy;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.gap.PostgresqlEventStreamGapHandler.RotationKey;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.types.GlobalEventOrder;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.AggregateType;
 import dk.trustworks.essentials.shared.functional.tuple.Pair;
@@ -96,8 +97,8 @@ class DefaultSelectionStrategyTest {
         var defaultSelection = ResolveTransientGapsToIncludeInQueryStrategy.defaultSelection();
         ResolveTransientGapsToIncludeInQueryStrategy wrapping = (type, range, gaps) -> defaultSelection.resolveTransientGaps(type, range, gaps);
         var all                = gaps(LongStream.rangeClosed(1, 500));
-        var firstSubscription  = new ConcurrentHashMap<AggregateType, TransientGapsQuerySelection>();
-        var secondSubscription = new ConcurrentHashMap<AggregateType, TransientGapsQuerySelection>();
+        var firstSubscription  = new ConcurrentHashMap<RotationKey, TransientGapsQuerySelection>();
+        var secondSubscription = new ConcurrentHashMap<RotationKey, TransientGapsQuerySelection>();
         var firstReference     = new TransientGapsQuerySelection();
         var secondReference    = new TransientGapsQuerySelection();
 
@@ -112,6 +113,36 @@ class DefaultSelectionStrategyTest {
         }
         // ... and called directly, the instance rotates with its own, untouched by the subscriptions
         assertThat(wrapping.resolveTransientGaps(ORDERS, LongRange.from(1), all)).isEqualTo(new TransientGapsQuerySelection().select(all));
+    }
+
+    /**
+     * A custom strategy may compose more than one default selection - here one per half of the gaps. Asked by the gap
+     * handler, each keeps a rotation of its own within the subscription's: shared, one cursor would be advanced by both
+     */
+    @Test
+    void two_default_selections_composed_in_one_strategy_keep_a_rotation_each_when_the_gap_handler_asks() {
+        var lowerHalfSelection = ResolveTransientGapsToIncludeInQueryStrategy.defaultSelection();
+        var upperHalfSelection = ResolveTransientGapsToIncludeInQueryStrategy.defaultSelection();
+        var lowerHalf          = gaps(LongStream.rangeClosed(1, 250));
+        var upperHalf          = gaps(LongStream.rangeClosed(251, 500));
+        var selectedByHalf     = new ArrayList<List<GlobalEventOrder>>();
+        ResolveTransientGapsToIncludeInQueryStrategy byHalf = (type, range, gaps) -> {
+            selectedByHalf.clear();
+            selectedByHalf.add(lowerHalfSelection.resolveTransientGaps(type, range, lowerHalf));
+            selectedByHalf.add(upperHalfSelection.resolveTransientGaps(type, range, upperHalf));
+            return selectedByHalf.stream().flatMap(List::stream).toList();
+        };
+        var subscription       = new ConcurrentHashMap<RotationKey, TransientGapsQuerySelection>();
+        var lowerHalfReference = new TransientGapsQuerySelection();
+        var upperHalfReference = new TransientGapsQuerySelection();
+        var all                = gaps(LongStream.rangeClosed(1, 500));
+
+        for (var poll = 0; poll < 5; poll++) {
+            PostgresqlEventStreamGapHandler.withRotationsOf(subscription, () -> byHalf.resolveTransientGaps(ORDERS, LongRange.from(1), all));
+
+            assertThat(selectedByHalf.get(0)).isEqualTo(lowerHalfReference.select(lowerHalf));
+            assertThat(selectedByHalf.get(1)).isEqualTo(upperHalfReference.select(upperHalf));
+        }
     }
 
     private static List<Pair<GlobalEventOrder, OffsetDateTime>> gaps(LongStream orders) {

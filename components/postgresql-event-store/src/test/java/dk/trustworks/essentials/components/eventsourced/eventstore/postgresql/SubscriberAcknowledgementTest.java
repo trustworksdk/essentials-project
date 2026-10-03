@@ -22,8 +22,10 @@ import ch.qos.logback.core.read.ListAppender;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.PersistedEvent;
 import org.junit.jupiter.api.*;
 import org.slf4j.LoggerFactory;
+import reactor.core.Disposable;
 
 import java.util.*;
+import java.util.concurrent.*;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.mock;
@@ -75,16 +77,63 @@ class SubscriberAcknowledgementTest {
     }
 
     @Test
-    void a_disposed_registration_still_counts_as_the_acknowledgements_one_subscription() {
+    void a_disposed_registration_receives_no_acknowledgements_and_disposing_it_again_frees_nothing_more() {
+        var acknowledgement = SubscriberAcknowledgement.create();
+        var disposed        = new ArrayList<PersistedEvent>();
+        var registration    = acknowledgement.onAcknowledge(disposed::addAll);
+        registration.dispose();
+        registration.dispose();
+        assertThat(registration.isDisposed()).isTrue();
+
+        var received = new ArrayList<PersistedEvent>();
+        acknowledgement.onAcknowledge(received::addAll);
+        var event = mock(PersistedEvent.class);
+        acknowledgement.acknowledge(event);
+        assertThat(disposed).isEmpty();
+        assertThat(received).containsExactly(event);
+        assertThat(warnings()).isEmpty();
+
+        // Still two active registrations - the second dispose above did not count the first one out twice
+        acknowledgement.onAcknowledge(received::addAll);
+        assertThat(warnings()).hasSize(1);
+    }
+
+    @Test
+    void a_registration_after_the_previous_one_was_disposed_is_no_second_subscription() {
         var acknowledgement = SubscriberAcknowledgement.create();
         acknowledgement.onAcknowledge(events -> {
         }).dispose();
 
-        // Registering again after the first was disposed is a reuse of the acknowledgement just the same
         acknowledgement.onAcknowledge(events -> {
         });
 
-        assertThat(warnings()).hasSize(1);
+        assertThat(warnings()).isEmpty();
+    }
+
+    @Test
+    void two_concurrent_registrations_log_a_warning() throws Exception {
+        var executor = Executors.newFixedThreadPool(2);
+        try {
+            var attempts = 200;
+            for (var attempt = 0; attempt < attempts; attempt++) {
+                var acknowledgement = SubscriberAcknowledgement.create();
+                var bothReady       = new CyclicBarrier(2);
+                Callable<Disposable> register = () -> {
+                    bothReady.await(10, TimeUnit.SECONDS);
+                    return acknowledgement.onAcknowledge(events -> {
+                    });
+                };
+                var first  = executor.submit(register);
+                var second = executor.submit(register);
+                first.get(10, TimeUnit.SECONDS);
+                second.get(10, TimeUnit.SECONDS);
+            }
+
+            // One per acknowledgement - none of them missed that the other registration was there
+            assertThat(warnings()).hasSize(attempts);
+        } finally {
+            executor.shutdownNow();
+        }
     }
 
     private List<ILoggingEvent> warnings() {

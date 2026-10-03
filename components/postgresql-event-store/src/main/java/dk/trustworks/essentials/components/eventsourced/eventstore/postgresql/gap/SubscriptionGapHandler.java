@@ -117,25 +117,38 @@ public interface SubscriptionGapHandler {
     }
 
     /**
-     * Record that the subscription gave up waiting for these transient gaps' events - so the next subscription of this
-     * subscriber does not wait for them again, and drops an event for one of them that commits late, as the subscription
-     * that gave up does.
+     * Record that the subscription gave up waiting for these transient gaps' events: each of them that is still a
+     * transient gap of this subscriber is promoted to a <b>permanent gap of the aggregate type</b>, as a gap that
+     * {@link #reconcileGapsAndReport(AggregateType, LongRange, List, List)} promotes is.
      * <p>
-     * Called by a subscription that tracks gaps itself - the CDC event store's delivery tracker - once it has waited
-     * {@link #transientGapGiveUpThreshold()} for a gap without its event arriving, from the CDC bus or a poll. That wait
-     * is its proof that the event is missing, standing in for the query that asked for the gap and did not get it, which
-     * is what {@link #reconcileGapsAndReport(AggregateType, LongRange, List, List)} promotes on. The event store calls it
+     * A permanent gap is not this subscriber's alone. Every subscriber of the aggregate type skips it: from then on a
+     * reconciliation, whichever subscriber's, leaves it out of the transient gaps it discovers, so a subscriber that has
+     * not already recorded it as a transient gap of its own never asks for it, and an event that commits late with that
+     * global order is not delivered to a subscriber that has already polled past it. The next subscription of this
+     * subscriber does not wait for it again either, and drops such an event as the subscription that gave up does.
+     * <p>
+     * The caller must therefore have waited at least {@link #transientGapGiveUpThreshold()} for <i>each</i> of these gaps
+     * without its event arriving, from the CDC bus or a poll - or, when that is empty, the default it waits instead. That
+     * wait is its proof that the event is missing, standing in for the query that asked for the gap and did not get it,
+     * which is what {@link #reconcileGapsAndReport(AggregateType, LongRange, List, List)} promotes on. A gap the caller
+     * stops tracking for any other reason - e.g. to bound how many gaps it tracks at once - must not be passed here: it
+     * stays a transient gap, for the handler's own promotion to decide on. An implementation may promote what it is given
+     * without checking how long each gap was waited for.
+     * <p>
+     * Called by a subscription that tracks gaps itself - the CDC event store's delivery tracker. The event store calls it
      * inside a unit of work of its own, holding this handler's monitor, never across the commit.
      * <p>
      * The default implementation reconciles as a query that asked for exactly these gaps and found none of their events
      * would: {@link #reconcileGapsAndReport(AggregateType, LongRange, List, List)} with no events - promoting the ones the
      * handler's own rule considers ready. The {@link PostgresqlEventStreamGapHandler}'s handlers override it to promote
-     * each of them that is still a transient gap, when their promotion strategy states the threshold that was waited.
+     * each of them that is still a transient gap at once when their promotion strategy states its threshold - relying on
+     * the caller having waited it - and otherwise only those the strategy considers ready.
      *
      * @param aggregateType the aggregate type the gaps belong to
-     * @param transientGaps the global orders given up on - transient gaps of this subscriber, unless something else
-     *                      resolved or promoted them meanwhile
-     * @return what recording the give-up changed for this subscriber - the number of transient gaps promoted
+     * @param transientGaps the global orders given up on, each waited for at least {@link #transientGapGiveUpThreshold()} -
+     *                      transient gaps of this subscriber, unless something else resolved or promoted them meanwhile
+     * @return what recording the give-up changed - the number of this subscriber's transient gaps promoted to permanent
+     * gaps of the aggregate type
      */
     default GapReconciliation giveUpTransientGaps(AggregateType aggregateType, List<GlobalEventOrder> transientGaps) {
         if (transientGaps.isEmpty()) {

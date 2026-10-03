@@ -36,6 +36,7 @@ import dk.trustworks.essentials.types.LongRange;
 import org.jdbi.v3.core.Jdbi;
 import org.jdbi.v3.postgres.PostgresPlugin;
 import org.junit.jupiter.api.*;
+import org.slf4j.*;
 import org.testcontainers.postgresql.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.*;
 import org.testcontainers.shaded.org.awaitility.Awaitility;
@@ -45,14 +46,14 @@ import java.util.*;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.stream.*;
 
-import static dk.trustworks.essentials.shared.MessageFormatter.msg;
 import static org.assertj.core.api.Assertions.assertThat;
 
 @Testcontainers
 class MultiTenantPostgresqlEventStoreIT {
-    public static final EventMetaData META_DATA = EventMetaData.of("Key1", "Value1", "Key2", "Value2");
-    public static final AggregateType PRODUCTS  = AggregateType.of("Products");
-    public static final AggregateType ORDERS    = AggregateType.of("Orders");
+    private static final Logger        log       = LoggerFactory.getLogger(MultiTenantPostgresqlEventStoreIT.class);
+    public static final  EventMetaData META_DATA = EventMetaData.of("Key1", "Value1", "Key2", "Value2");
+    public static final  AggregateType PRODUCTS  = AggregateType.of("Products");
+    public static final  AggregateType ORDERS    = AggregateType.of("Orders");
 
 
     private Jdbi                                                                    jdbi;
@@ -281,10 +282,10 @@ class MultiTenantPostgresqlEventStoreIT {
         testEvents.forEach((aggregateType, aggregatesAndEvents) -> {
             tenantId = TenantId.of(aggregateType + "-Tenant");
             aggregatesAndEvents.forEach((aggregateId, events) -> {
-                System.out.println(msg("Persisting {} {} events related to aggregate id {}",
-                                       events.size(),
-                                       aggregateType,
-                                       aggregateId));
+                log.debug("Persisting {} {} events related to aggregate id {}",
+                          events.size(),
+                          aggregateType,
+                          aggregateId);
 
                 var aggregateEventStream = eventStore.appendToStream(aggregateType,
                                                                      aggregateId,
@@ -308,7 +309,7 @@ class MultiTenantPostgresqlEventStoreIT {
                                                    .map(List::size)
                                                    .reduce(Integer::sum)
                                                    .get();
-        System.out.println("Total number of Product Events: " + totalNumberOfProductEvents);
+        log.info("Total number of Product Events: {}", totalNumberOfProductEvents);
         assertThat(persistedProductEvents.size()).isEqualTo(totalNumberOfProductEvents);
         // Verify we only have Product related events
         assertThat(persistedProductEvents.stream().filter(persistedEvent -> !persistedEvent.aggregateType().equals(PRODUCTS)).findAny()).isEmpty();
@@ -333,7 +334,7 @@ class MultiTenantPostgresqlEventStoreIT {
                                                  .map(List::size)
                                                  .reduce(Integer::sum)
                                                  .get();
-        System.out.println("Total number of Order Events: " + totalNumberOfOrderEvents);
+        log.info("Total number of Order Events: {}", totalNumberOfOrderEvents);
 
         // Check we can split the number of order events in two
         assertThat(totalNumberOfOrderEvents % 2).isEqualTo(0);
@@ -399,7 +400,7 @@ class MultiTenantPostgresqlEventStoreIT {
                                                       Optional.of(productsSubscriberId),
                                                       Optional.empty())
                                           .subscribe(e -> {
-                                              System.out.println("Received Product event: " + e);
+                                              log.debug("Received Product event: {}", e);
                                               productEventsReceived.add(e);
                                           });
         var orderEventsReceived = new ArrayList<PersistedEvent>();
@@ -412,7 +413,7 @@ class MultiTenantPostgresqlEventStoreIT {
                                                     Optional.of(ordersSubscriberId),
                                                     Optional.empty())
                                         .subscribe(e -> {
-                                            System.out.println("Received Order event: " + e);
+                                            log.debug("Received Order event: {}", e);
                                             orderEventsReceived.add(e);
                                         });
 
@@ -421,10 +422,10 @@ class MultiTenantPostgresqlEventStoreIT {
             tenantId = TenantId.of(aggregateType + "-Tenant");
             aggregatesAndEvents.forEach((aggregateId, events) -> {
                 var unitOfWork = unitOfWorkFactory.getOrCreateNewUnitOfWork();
-                System.out.println(msg("Persisting {} {} events related to aggregate id {}",
-                                       events.size(),
-                                       aggregateType,
-                                       aggregateId));
+                log.debug("Persisting {} {} events related to aggregate id {}",
+                          events.size(),
+                          aggregateType,
+                          aggregateId);
                 var aggregateEventStream = eventStore.appendToStream(aggregateType,
                                                                      aggregateId,
                                                                      events);
@@ -442,7 +443,7 @@ class MultiTenantPostgresqlEventStoreIT {
                                                  .map(List::size)
                                                  .reduce(Integer::sum)
                                                  .get();
-        System.out.println("Total number of Order Events: " + totalNumberOfOrderEvents);
+        log.info("Total number of Order Events: {}", totalNumberOfOrderEvents);
         Awaitility.waitAtMost(Duration.ofSeconds(2))
                   .untilAsserted(() -> assertThat(orderEventsReceived.size()).isEqualTo(totalNumberOfOrderEvents));
         assertThat(orderEventsReceived.stream().filter(persistedEvent -> !persistedEvent.aggregateType().equals(ORDERS)).findAny()).isEmpty();

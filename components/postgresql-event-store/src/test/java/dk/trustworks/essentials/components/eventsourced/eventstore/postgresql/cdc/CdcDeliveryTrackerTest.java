@@ -279,25 +279,92 @@ class CdcDeliveryTrackerTest {
     }
 
     @Test
-    void the_orders_given_up_on_are_collected_for_the_gap_handler_once_asked_to() {
-        var tracker = tracker(10, 2);
-        tracker.collectGivenUpGaps();
+    void the_orders_given_up_on_after_the_timeout_are_collected_for_the_gap_handler_once_asked_to() {
+        var tracker = tracker(10, 100);
+        tracker.collectTimedOutGaps();
         tracker.seedEarlierGaps(List.of(GlobalEventOrder.of(4)));
         tracker.markDelivered(11);
         // Gaps 12..13 and 15
         tracker.markDelivered(14);
         tracker.markDelivered(16);
-        assertThat(tracker.drainGivenUpGaps()).isEmpty();
+        assertThat(tracker.drainTimedOutGaps()).isEmpty();
 
-        // A third gap is one more than the cap: the oldest, 12..13, is given up at once
-        tracker.markDelivered(18);
-        assertThat(tracker.drainGivenUpGaps()).extracting(GlobalEventOrder::longValue).containsExactly(12L, 13L);
-        assertThat(tracker.drainGivenUpGaps()).as("drained").isEmpty();
-
-        // Too old: the earlier gap, and the gaps 15 and 17
+        // Too old: the earlier gap, and the gaps 12..13 and 15
         advanceClock(GAP_TIMEOUT);
-        assertThat(tracker.resumeFromInclusive()).isEqualTo(19);
-        assertThat(tracker.drainGivenUpGaps()).extracting(GlobalEventOrder::longValue).containsExactlyInAnyOrder(4L, 15L, 17L);
+        assertThat(tracker.resumeFromInclusive()).isEqualTo(17);
+        assertThat(tracker.drainTimedOutGaps()).extracting(GlobalEventOrder::longValue).containsExactlyInAnyOrder(4L, 12L, 13L, 15L);
+        assertThat(tracker.drainTimedOutGaps()).as("drained").isEmpty();
+    }
+
+    /**
+     * Giving a gap up with the gap handler makes it a permanent gap for every subscriber of the aggregate type, so only a
+     * gap that was waited for the timeout may be; one given up because of the cap may belong to a transaction still in
+     * flight, and stays a transient gap
+     */
+    @Test
+    void the_orders_given_up_on_because_of_the_cap_are_not_collected_for_the_gap_handler() {
+        var tracker = tracker(10, 2);
+        tracker.collectTimedOutGaps();
+        tracker.markDelivered(11);
+        // Gaps 12..13 and 15
+        tracker.markDelivered(14);
+        tracker.markDelivered(16);
+        advanceClock(Duration.ofSeconds(60));
+
+        // A third gap, 17, is one more than the cap: the oldest, 12..13, is given up at once
+        tracker.markDelivered(18);
+        assertThat(tracker.watermark()).as("12..13 given up").isEqualTo(14);
+        assertThat(tracker.drainTimedOutGaps()).isEmpty();
+
+        // 15 was revealed 120 s ago, 17 only 60 s ago
+        advanceClock(Duration.ofSeconds(60));
+        assertThat(tracker.drainTimedOutGaps()).extracting(GlobalEventOrder::longValue).containsExactly(15L);
+
+        advanceClock(Duration.ofSeconds(60));
+        assertThat(tracker.drainTimedOutGaps()).extracting(GlobalEventOrder::longValue).containsExactly(17L);
+    }
+
+    @Test
+    void earlier_gaps_beyond_the_cap_are_not_collected_for_the_gap_handler() {
+        var tracker = tracker(100, 2);
+        tracker.collectTimedOutGaps();
+        tracker.seedEarlierGaps(List.of(GlobalEventOrder.of(50), GlobalEventOrder.of(60), GlobalEventOrder.of(70)));
+
+        advanceClock(GAP_TIMEOUT);
+        assertThat(tracker.drainTimedOutGaps()).extracting(GlobalEventOrder::longValue).containsExactlyInAnyOrder(60L, 70L);
+    }
+
+    /**
+     * A subscription that is stopped while idle drains what is due without anything else having asked the tracker
+     */
+    @Test
+    void draining_gives_up_the_gaps_whose_timeout_has_passed() {
+        var tracker = tracker(0, 100);
+        tracker.collectTimedOutGaps();
+        tracker.markDelivered(1);
+        tracker.markDelivered(3);
+
+        advanceClock(GAP_TIMEOUT);
+        assertThat(tracker.drainTimedOutGaps()).extracting(GlobalEventOrder::longValue).containsExactly(2L);
+        assertThat(tracker.watermark()).isEqualTo(3);
+    }
+
+    @Test
+    void orders_put_back_after_a_failed_recording_are_drained_again() {
+        var tracker = tracker(0, 100);
+        tracker.collectTimedOutGaps();
+        tracker.markDelivered(1);
+        tracker.markDelivered(3);
+        advanceClock(GAP_TIMEOUT);
+        var drained = tracker.drainTimedOutGaps();
+        assertThat(drained).extracting(GlobalEventOrder::longValue).containsExactly(2L);
+
+        tracker.markDelivered(5);
+        advanceClock(GAP_TIMEOUT);
+        tracker.requeueTimedOutGaps(drained);
+
+        assertThat(tracker.drainTimedOutGaps()).extracting(GlobalEventOrder::longValue).containsExactly(2L, 4L);
+        assertThat(tracker.drainTimedOutGaps()).isEmpty();
     }
 
     @Test
@@ -308,7 +375,9 @@ class CdcDeliveryTrackerTest {
         advanceClock(GAP_TIMEOUT);
 
         assertThat(tracker.resumeFromInclusive()).as("2 given up").isEqualTo(4);
-        assertThat(tracker.drainGivenUpGaps()).isEmpty();
+        assertThat(tracker.drainTimedOutGaps()).isEmpty();
+        tracker.requeueTimedOutGaps(List.of(GlobalEventOrder.of(2)));
+        assertThat(tracker.drainTimedOutGaps()).isEmpty();
     }
 
     @Test

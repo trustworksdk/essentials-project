@@ -20,6 +20,7 @@ import dk.trustworks.essentials.components.distributed.fencedlock.postgresql.Pos
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.gap.PostgresqlEventStreamGapHandler;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.observability.EventStoreSubscriptionObserver;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.persistence.table_per_aggregate_type.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.processor.EventProcessorIT;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.serializer.json.EssentialsJSONEventSerializers;
@@ -27,7 +28,7 @@ import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.su
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.test_data.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.types.*;
 import dk.trustworks.essentials.components.foundation.transaction.UnitOfWork;
-import dk.trustworks.essentials.components.foundation.types.SubscriberId;
+import dk.trustworks.essentials.components.foundation.types.*;
 import dk.trustworks.essentials.shared.functional.tuple.Pair;
 import dk.trustworks.essentials.types.LongRange;
 import org.junit.jupiter.api.*;
@@ -76,6 +77,7 @@ class CdcEventStoreGapFillAcknowledgementIT extends AbstractLogicalReplicationPo
     private final List<Disposable>                                                  subscriptions = new CopyOnWriteArrayList<>();
     private Disposable                                                              bystander;
     private ExecutorService                                                         heldTransactions;
+    private final RecordingPolls                                                    polls         = new RecordingPolls();
 
     @BeforeEach
     void setup() {
@@ -102,6 +104,7 @@ class CdcEventStoreGapFillAcknowledgementIT extends AbstractLogicalReplicationPo
                                          .setUnitOfWorkFactory(unitOfWorkFactory)
                                          .setPersistenceStrategy(persistenceStrategy)
                                          .setEventStreamGapHandlerFactory(store -> gapHandler)
+                                         .setEventStoreSubscriptionObserver(polls)
                                          .build();
 
         var cdcProperties = new CdcProperties();
@@ -404,16 +407,23 @@ class CdcEventStoreGapFillAcknowledgementIT extends AbstractLogicalReplicationPo
         await().atMost(Duration.ofSeconds(10)).until(() -> transientGapsOf(subscriberId).isEmpty());
         assertThat(permanentGaps()).contains(GlobalEventOrder.of(a.globalOrder()));
 
-        // The delegate's poll still asks for the gap - its gap handler has it cached - and loads the event now
+        // The delegate's poll still asks for the gap - its gap handler has it cached - and loads the event now. The gate
+        // drops it and acknowledges it to the poll, which then stops asking for it: the gate is done with the event
         a.commit();
-        await().pollDelay(Duration.ofSeconds(1)).atMost(Duration.ofSeconds(5)).until(() -> true);
+        await().atMost(Duration.ofSeconds(10)).until(() -> polls.stoppedAskingAfterReading(a.globalOrder()));
         assertThat(handled).doesNotContain(a.globalOrder());
 
+        var pollsBeforeTheRestart = polls.count();
         subscription.stop();
         subscription.start();
         var d = appendAndCommit();
         await().atMost(Duration.ofSeconds(20)).until(() -> handled.contains(d));
-        await().pollDelay(Duration.ofMillis(500)).atMost(Duration.ofSeconds(5)).until(() -> true);
+        // The restarted subscription polls above the gap without asking for it - so no poll of it can read the event
+        await().atMost(Duration.ofSeconds(10)).until(() -> polls.since(pollsBeforeTheRestart)
+                                                                .stream()
+                                                                .anyMatch(poll -> poll.fromInclusive() > a.globalOrder() && poll.transientGapsAskedFor().isEmpty()));
+        assertThat(polls.since(pollsBeforeTheRestart)).noneMatch(poll -> poll.transientGapsAskedFor().contains(GlobalEventOrder.of(a.globalOrder()))
+                                                                         || poll.read().contains(a.globalOrder()));
         assertThat(handled).doesNotContain(a.globalOrder())
                            .doesNotHaveDuplicates();
         assertThat(transientGapsOf(subscriberId)).isEmpty();
@@ -421,6 +431,58 @@ class CdcEventStoreGapFillAcknowledgementIT extends AbstractLogicalReplicationPo
     }
 
     // ------------------------------------------------------------------------------------------------------------
+
+    private record Poll(long fromInclusive, List<GlobalEventOrder> transientGapsAskedFor, List<Long> read) {
+    }
+
+    /**
+     * Records what each poll of the event store (the CDC event store's delegate) asked for and read
+     */
+    private static final class RecordingPolls extends EventStoreSubscriptionObserver.NoOpEventStoreSubscriptionObserver {
+        private final List<Poll> polls = new CopyOnWriteArrayList<>();
+
+        @Override
+        public void eventStorePolled(SubscriberId subscriberId,
+                                     AggregateType aggregateType,
+                                     LongRange globalOrderRange,
+                                     List<GlobalEventOrder> transientGapsToInclude,
+                                     Optional<Tenant> onlyIncludeEventIfItBelongsToTenant,
+                                     List<PersistedEvent> persistedEventsReturnedFromPoll,
+                                     Duration pollDuration) {
+            polls.add(new Poll(globalOrderRange.getFromInclusive(),
+                               transientGapsToInclude == null ? List.of() : List.copyOf(transientGapsToInclude),
+                               globalOrdersOf(persistedEventsReturnedFromPoll)));
+        }
+
+        int count() {
+            return polls.size();
+        }
+
+        /**
+         * @return the polls after the first {@code count} recorded
+         */
+        List<Poll> since(int count) {
+            var snapshot = List.copyOf(polls);
+            return snapshot.subList(count, snapshot.size());
+        }
+
+        /**
+         * @return true once a poll read the event with {@code globalOrder}, as the gap it asked for, and a later poll no
+         * longer asked for it - the poll's gap was resolved, which it is once the event is acknowledged to the poll
+         */
+        boolean stoppedAskingAfterReading(long globalOrder) {
+            var snapshot = List.copyOf(polls);
+            var gap      = GlobalEventOrder.of(globalOrder);
+            for (var read = 0; read < snapshot.size(); read++) {
+                if (snapshot.get(read).transientGapsAskedFor().contains(gap) && snapshot.get(read).read().contains(globalOrder)) {
+                    return snapshot.subList(read + 1, snapshot.size())
+                                   .stream()
+                                   .anyMatch(poll -> !poll.transientGapsAskedFor().contains(gap));
+                }
+            }
+            return false;
+        }
+    }
 
     private List<GlobalEventOrder> permanentGaps() {
         return unitOfWorkFactory.withUnitOfWork(() -> eventStore.getEventStreamGapHandler().getPermanentGapsFor(ORDERS).toList());

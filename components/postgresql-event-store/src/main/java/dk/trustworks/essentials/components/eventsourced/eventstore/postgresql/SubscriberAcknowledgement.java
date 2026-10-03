@@ -25,7 +25,7 @@ import reactor.core.publisher.Flux;
 
 import java.util.*;
 import java.util.concurrent.CopyOnWriteArrayList;
-import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.*;
 import java.util.function.Consumer;
 
 import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
@@ -69,7 +69,10 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
  * {@link #onAcknowledge(Consumer)} when the flux is subscribed. {@link #isHonoured()} then tells the subscriber that the
  * event store resolves gap fills on acknowledgement - an event store that does not override the overloads taking an
  * acknowledgement never registers, and resolves on hand-on as before. One acknowledgement serves one subscription:
- * create a new one for every subscription.
+ * create a new one for every subscription. Subscribing the returned flux again once the previous subscribe ended
+ * ({@code retry()}, {@code repeat()}) is the same subscription: the event store replaces its registration, so
+ * acknowledging a gap fill the previous subscribe handed on no longer resolves its gap - it stays open, and the next
+ * subscribe hands the fill on again.
  *
  * @see EventStore#pollEvents(AggregateType, long, Optional, Optional, Optional, Optional, Optional, SubscriberAcknowledgement)
  * @see SubscriptionGapHandler#resolveFilledGaps(AggregateType, List)
@@ -77,6 +80,10 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 public final class SubscriberAcknowledgement {
     private static final Logger                        log      = LoggerFactory.getLogger(SubscriberAcknowledgement.class);
     private final List<Consumer<List<PersistedEvent>>> listeners = new CopyOnWriteArrayList<>();
+    /**
+     * The registrations not disposed yet - more than one means more than one subscription
+     */
+    private final AtomicInteger                        activeRegistrations           = new AtomicInteger();
     private final AtomicBoolean                        warnedAboutSecondRegistration = new AtomicBoolean();
     private volatile boolean                           honoured;
 
@@ -138,14 +145,20 @@ public final class SubscriberAcknowledgement {
      * Essentials' event stores do not dispose the registration when the subscription ends: an event whose handling
      * completes while the subscription is being stopped was handled, and acknowledging it should still resolve its gap,
      * in the unit of work that handled it - rather than leave it open and hand the event to the next subscription again.
-     * The registration then lives as long as this acknowledgement, which belongs to that one subscription.
+     * The registration then lives as long as this acknowledgement, which belongs to that one subscription. Only when the
+     * same polling flux is subscribed again - {@code retry()}, {@code repeat()} - does the event store dispose the
+     * registration of the subscribe that ended, before it registers the next one.
+     * <p>
+     * A registration while another one is still active - not disposed - logs a one-time WARN: the acknowledgement is
+     * used by more than one subscription.
      *
      * @param listener receives the events acknowledged; resolves the gaps of the gap fills among them
-     * @return disposing it stops passing acknowledgements to {@code listener}
+     * @return disposing it stops passing acknowledgements to {@code listener}; disposing it again does nothing
      */
     public Disposable onAcknowledge(Consumer<List<PersistedEvent>> listener) {
         requireNonNull(listener, "No listener provided");
-        if (honoured && warnedAboutSecondRegistration.compareAndSet(false, true)) {
+        // Decided by the registration itself, so two concurrent registrations cannot both miss the other one
+        if (activeRegistrations.incrementAndGet() > 1 && warnedAboutSecondRegistration.compareAndSet(false, true)) {
             log.warn("A second event store subscription registered with {} - one SubscriberAcknowledgement serves ONE subscription, so every "
                      + "acknowledgement is now passed to all of them and resolves gaps the other subscription's events never filled. Create a new "
                      + "SubscriberAcknowledgement for every subscription",
@@ -153,7 +166,32 @@ public final class SubscriberAcknowledgement {
         }
         listeners.add(listener);
         honoured = true;
-        return () -> listeners.remove(listener);
+        return new Registration(listener);
+    }
+
+    /**
+     * One {@link #onAcknowledge(Consumer)} registration; disposed at most once
+     */
+    private final class Registration implements Disposable {
+        private final Consumer<List<PersistedEvent>> listener;
+        private final AtomicBoolean                  disposed = new AtomicBoolean();
+
+        private Registration(Consumer<List<PersistedEvent>> listener) {
+            this.listener = listener;
+        }
+
+        @Override
+        public void dispose() {
+            if (disposed.compareAndSet(false, true)) {
+                listeners.remove(listener);
+                activeRegistrations.decrementAndGet();
+            }
+        }
+
+        @Override
+        public boolean isDisposed() {
+            return disposed.get();
+        }
     }
 
     @Override

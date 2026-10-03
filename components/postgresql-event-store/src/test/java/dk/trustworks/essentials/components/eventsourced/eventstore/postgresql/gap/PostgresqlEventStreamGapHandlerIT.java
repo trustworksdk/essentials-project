@@ -45,7 +45,7 @@ import org.testcontainers.shaded.org.awaitility.Awaitility;
 import java.time.*;
 import java.util.*;
 import java.util.concurrent.*;
-import java.util.stream.Collectors;
+import java.util.stream.*;
 
 import static org.assertj.core.api.Assertions.*;
 import static dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.gap.PostgresqlEventStreamGapHandler.TRANSIENT_SUBSCRIBER_GAPS_TABLE_NAME;
@@ -521,6 +521,66 @@ class PostgresqlEventStreamGapHandlerIT {
         assertThat(givenUp.promotedToPermanentGaps()).isZero();
         assertThat(currentTransientGaps(subscriber)).containsExactly(events.get(1).globalEventOrder());
         assertThat(permanentGaps(gapHandler)).doesNotContain(events.get(1).globalEventOrder());
+    }
+
+    /**
+     * A wide hole in the global order - a rolled back bulk append - is given up one order per missing event, more than
+     * PostgreSQL binds into one statement (65 535 parameters): the give-up is deleted in chunks, in one transaction, and
+     * recorded in full
+     */
+    @Test
+    void giving_up_more_gaps_than_one_statement_can_bind_promotes_all_of_them() {
+        var subscriber = SubscriberId.of("gap-given-up-wide-hole-sub");
+        var gapHandler = new PostgresqlEventStreamGapHandler<SeparateTablePerAggregateEventStreamConfiguration>(unitOfWorkFactory,
+                                                                                                               Duration.ofSeconds(60),
+                                                                                                               ResolveTransientGapsToIncludeInQueryStrategy.defaultSelection(),
+                                                                                                               ResolveTransientGapsToPermanentGapsPromotionStrategy.thresholdBased(120))
+                .gapHandlerFor(subscriber);
+        var numberOfGaps = 70_000;
+        unitOfWorkFactory.usingUnitOfWork(unitOfWork -> unitOfWork.handle()
+                                                                  .createUpdate("INSERT INTO " + TRANSIENT_SUBSCRIBER_GAPS_TABLE_NAME + " (subscriber_id, aggregate_type, gap_global_event_order, first_discovered) " +
+                                                                                        "SELECT :subscriber_id, :aggregate_type, order_, now() FROM generate_series(1, :number_of_gaps) AS order_")
+                                                                  .bind("subscriber_id", subscriber)
+                                                                  .bind("aggregate_type", aggregateType)
+                                                                  .bind("number_of_gaps", numberOfGaps)
+                                                                  .execute());
+        var givenUp = LongStream.rangeClosed(1, numberOfGaps).mapToObj(GlobalEventOrder::of).toList();
+
+        var outcome = unitOfWorkFactory.withUnitOfWork(unitOfWork -> gapHandler.giveUpTransientGaps(aggregateType, givenUp));
+
+        assertThat(outcome).isEqualTo(new GapReconciliation(0, 0, numberOfGaps));
+        assertThat(currentTransientGaps(subscriber)).isEmpty();
+        assertThat(permanentGaps(gapHandler)).hasSize(numberOfGaps);
+    }
+
+    /**
+     * A give-up records a permanent gap of the aggregate type, as a polling promotion does - not one of the subscriber
+     * that gave up alone: another subscriber that reconciles a range spanning it afterwards does not record it as a
+     * transient gap, so never asks for it. A gap nobody gave up still becomes its transient gap.
+     */
+    @Test
+    void a_gap_one_subscriber_gave_up_is_skipped_by_every_other_subscriber_of_the_aggregate_type() {
+        var eventStreamGapHandler = new PostgresqlEventStreamGapHandler<SeparateTablePerAggregateEventStreamConfiguration>(unitOfWorkFactory,
+                                                                                                                          Duration.ofSeconds(60),
+                                                                                                                          ResolveTransientGapsToIncludeInQueryStrategy.defaultSelection(),
+                                                                                                                          ResolveTransientGapsToPermanentGapsPromotionStrategy.thresholdBased(120));
+        var givingUp    = eventStreamGapHandler.gapHandlerFor(SubscriberId.of("gap-given-up-by-this-sub"));
+        var anotherOne  = eventStreamGapHandler.gapHandlerFor(SubscriberId.of("gap-given-up-by-another-sub"));
+        var events      = appendEvents(4);
+        var first       = events.get(0);
+        var givenUpGap  = events.get(1).globalEventOrder();
+        var keptGap     = events.get(2).globalEventOrder();
+        var last        = events.get(3);
+        var range       = LongRange.between(first.globalEventOrder().longValue(), last.globalEventOrder().longValue());
+        unitOfWorkFactory.withUnitOfWork(unitOfWork -> givingUp.reconcileGapsAndReport(aggregateType, range, List.of(first, last), List.of()));
+
+        unitOfWorkFactory.withUnitOfWork(unitOfWork -> givingUp.giveUpTransientGaps(aggregateType, List.of(givenUpGap)));
+        var reconciled = unitOfWorkFactory.withUnitOfWork(unitOfWork -> anotherOne.reconcileGapsAndReport(aggregateType, range, List.of(first, last), List.of()));
+
+        assertThat(reconciled.newTransientGaps()).isEqualTo(1);
+        assertThat(anotherOne.getTransientGapsFor(aggregateType)).containsExactly(keptGap);
+        assertThat(transientGapsToIncludeInQuery(anotherOne, LongRange.from(last.globalEventOrder().longValue() + 1))).containsExactly(keptGap);
+        assertThat(permanentGaps(anotherOne)).contains(givenUpGap);
     }
 
     /**

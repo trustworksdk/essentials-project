@@ -16,6 +16,9 @@
 
 package dk.trustworks.essentials.components.eventsourced.eventstore.postgresql;
 
+import ch.qos.logback.classic.Level;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.read.ListAppender;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.gap.PostgresqlEventStreamGapHandler;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.gap.PostgresqlEventStreamGapHandler.ResolveTransientGapsToPermanentGapsPromotionStrategy;
@@ -41,6 +44,7 @@ import org.junit.jupiter.params.provider.EnumSource;
 import org.testcontainers.junit.jupiter.*;
 import org.testcontainers.postgresql.PostgreSQLContainer;
 import org.reactivestreams.Subscription;
+import org.slf4j.LoggerFactory;
 import org.testcontainers.shaded.org.awaitility.Awaitility;
 import reactor.core.Disposable;
 import reactor.core.publisher.*;
@@ -625,7 +629,7 @@ class PollingGapHandlingIT {
     /**
      * An acknowledgement held open - the subscriber's unit of work has not committed yet - must not stall the poll: it
      * keeps delivering new events and promoting expired holes while the fill's gap deletion is uncommitted, and the
-     * fill's gap is gone once the unit of work commits (see {@link GapFillsAwaitingAcknowledgement}).
+     * fill's gap is gone once the unit of work commits (see {@link dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.internal.GapFillsAwaitingAcknowledgement}).
      */
     @ParameterizedTest
     @EnumSource(PollingMode.class)
@@ -808,6 +812,134 @@ class PollingGapHandlingIT {
 
         // ~10 at one poll per 100 ms, thousands when the worker loops without waiting
         assertThat(polls.get()).isBetween(1, 20);
+    }
+
+    /**
+     * A decorated {@link EventStorePollingOptimizer#None()} - or any optimizer returning a zero delay without opting in to
+     * {@link EventStorePollingOptimizer#mayRepollImmediatelyAfterAnEmptyPoll()} - must not make the worker poll in a busy
+     * loop either. Only the bare {@code None()} was recognised, by its type, before the opt-in existed.
+     */
+    @Test
+    void an_empty_poll_with_a_decorated_zero_delay_optimizer_still_waits_the_polling_interval() throws Exception {
+        var subscriberId = SubscriberId.of("decorated-optimizer-busy-loop");
+
+        subscription = eventStore.pollEvents(aggregateType,
+                                             GlobalEventOrder.FIRST_GLOBAL_EVENT_ORDER.longValue(),
+                                             Optional.of(10),
+                                             Optional.of(Duration.ofMillis(100)),
+                                             Optional.empty(),
+                                             Optional.of(subscriberId),
+                                             Optional.of(name -> decorated(EventStorePollingOptimizer.None())))
+                                 .subscribe(event -> {});
+        Thread.sleep(1000);
+        subscription.dispose();
+
+        // ~10 at one poll per 100 ms, thousands when the worker loops without waiting
+        assertThat(polls.get()).isBetween(1, 20);
+    }
+
+    /**
+     * Delegates every method to {@code optimizer}, except {@link EventStorePollingOptimizer#mayRepollImmediatelyAfterAnEmptyPoll()}
+     * - left at its default, as a decorator written before it existed does
+     */
+    @SuppressWarnings("deprecation")
+    private static EventStorePollingOptimizer decorated(EventStorePollingOptimizer optimizer) {
+        return new EventStorePollingOptimizer() {
+            @Override
+            public void eventStorePollingReturnedNoEvents() {
+                optimizer.eventStorePollingReturnedNoEvents();
+            }
+
+            @Override
+            public void eventStorePollingReturnedEvents() {
+                optimizer.eventStorePollingReturnedEvents();
+            }
+
+            @Override
+            public boolean shouldSkipPolling() {
+                return optimizer.shouldSkipPolling();
+            }
+
+            @Override
+            public long currentDelayMs() {
+                return optimizer.currentDelayMs();
+            }
+        };
+    }
+
+    /**
+     * A subscriber handling events on the polling worker's thread that interrupts it - or restores an interrupt it
+     * caught - ends the worker. The flux must end with it, or the subscriber waits for the events it requested forever.
+     */
+    @Test
+    void a_polling_worker_interrupted_by_its_subscriber_ends_the_flux_with_an_error() {
+        var subscriberId = SubscriberId.of("interrupted-polling-worker");
+        var received     = new CopyOnWriteArrayList<Long>();
+        var error        = new CompletableFuture<Throwable>();
+        appendCommitted();
+
+        var subscriber = new BaseSubscriber<PersistedEvent>() {
+            @Override
+            protected void hookOnSubscribe(Subscription subscription) {
+                request(10);
+            }
+
+            @Override
+            protected void hookOnNext(PersistedEvent event) {
+                received.add(event.globalEventOrder().longValue());
+                Thread.currentThread().interrupt();
+            }
+
+            @Override
+            protected void hookOnError(Throwable throwable) {
+                error.complete(throwable);
+            }
+        };
+        subscription = subscriber;
+        eventStore.pollEvents(aggregateType,
+                              GlobalEventOrder.FIRST_GLOBAL_EVENT_ORDER.longValue(),
+                              Optional.of(10),
+                              Optional.of(POLLING_INTERVAL),
+                              Optional.empty(),
+                              Optional.of(subscriberId),
+                              Optional.empty())
+                  .subscribe(subscriber);
+
+        Awaitility.waitAtMost(Duration.ofSeconds(10)).untilAsserted(() -> assertThat(error).isCompleted());
+        assertThat(error.join()).isInstanceOf(InterruptedException.class);
+        assertThat(received).containsExactly(1L);
+    }
+
+    /**
+     * Subscribing the flux again - here {@code repeat()} - is the same subscription: the previous subscribe's registration
+     * with the acknowledgement is replaced, not kept for the acknowledgement's lifetime next to the new one, and the
+     * acknowledgement does not warn about a second subscription.
+     */
+    @ParameterizedTest
+    @EnumSource(PollingMode.class)
+    void subscribing_an_acknowledged_flux_again_replaces_its_registration_without_a_warning(PollingMode pollingMode) {
+        var subscriberId    = SubscriberId.of("resubscribed-" + pollingMode);
+        var acknowledgement = SubscriberAcknowledgement.create();
+        var first           = appendCommitted();
+        var second          = appendCommitted();
+        var third           = appendCommitted();
+        var warnings        = new ListAppender<ILoggingEvent>();
+        var logger          = (ch.qos.logback.classic.Logger) LoggerFactory.getLogger(SubscriberAcknowledgement.class);
+        warnings.start();
+        logger.addAppender(warnings);
+        try {
+            var received = poll(pollingMode, subscriberId, GlobalEventOrder.FIRST_GLOBAL_EVENT_ORDER.longValue(), acknowledgement)
+                    .take(1)
+                    .repeat(2)
+                    .collectList()
+                    .block(Duration.ofSeconds(10));
+
+            assertThat(globalOrdersOf(received)).containsExactly(first, second, third);
+            assertThat(acknowledgement.toString()).contains("listeners=1");
+            assertThat(warnings.list).filteredOn(event -> event.getLevel() == Level.WARN).isEmpty();
+        } finally {
+            logger.detachAppender(warnings);
+        }
     }
 
     @ParameterizedTest

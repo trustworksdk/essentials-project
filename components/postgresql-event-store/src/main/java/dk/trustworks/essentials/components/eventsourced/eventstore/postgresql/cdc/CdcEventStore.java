@@ -20,6 +20,7 @@ import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.gap.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.interceptor.EventStoreInterceptor;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.internal.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.observability.EventStoreSubscriptionObserver;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.operations.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.persistence.AggregateEventStreamConfiguration;
@@ -314,6 +315,9 @@ public class CdcEventStore<CONFIG extends AggregateEventStreamConfiguration> imp
                                             Optional<Function<String, EventStorePollingOptimizer>> eventStorePollingOptimizerFactory,
                                             Optional<SubscriberAcknowledgement> acknowledgement) {
         int pageSize = loadEventsByGlobalOrderBatchSize.orElse(backfillBatchSize);
+        // Per call, not per subscribe: a subscribe of this flux again (retry(), repeat()) disposes the registration of the
+        // one before it
+        var acknowledgementRegistrations = acknowledgement.map(AcknowledgementRegistrations::new);
         if (!availability.isActive()) {
             log.debug("Cdc is not active, using polling fallback");
             availability.fallbackUsed();
@@ -334,7 +338,7 @@ public class CdcEventStore<CONFIG extends AggregateEventStreamConfiguration> imp
                               aggregateType,
                               deliveryGate,
                               onlyIncludeEventIfItBelongsToTenant,
-                              acknowledgement);
+                              acknowledgementRegistrations);
             });
         }
 
@@ -346,7 +350,7 @@ public class CdcEventStore<CONFIG extends AggregateEventStreamConfiguration> imp
                                                         pollingInterval,
                                                         subscriptionId,
                                                         eventStorePollingOptimizerFactory,
-                                                        acknowledgement));
+                                                        acknowledgementRegistrations));
     }
 
     /**
@@ -376,7 +380,16 @@ public class CdcEventStore<CONFIG extends AggregateEventStreamConfiguration> imp
                                         AggregateType aggregateType,
                                         DeliveryGate deliveryGate,
                                         Optional<Tenant> onlyIncludeEventIfItBelongsToTenant,
-                                        Optional<SubscriberAcknowledgement> acknowledgement) {
+                                        Optional<AcknowledgementRegistrations> acknowledgement) {
+        return handOnToTheSubscriber(source, aggregateType, deliveryGate, onlyIncludeEventIfItBelongsToTenant, acknowledgement)
+                .doFinally(signal -> deliveryGate.subscriptionEnded());
+    }
+
+    private Flux<PersistedEvent> handOnToTheSubscriber(Flux<PersistedEvent> source,
+                                                       AggregateType aggregateType,
+                                                       DeliveryGate deliveryGate,
+                                                       Optional<Tenant> onlyIncludeEventIfItBelongsToTenant,
+                                                       Optional<AcknowledgementRegistrations> acknowledgement) {
         if (acknowledgement.isEmpty()) {
             return filterByTenant(reportingHandedOn(source, deliveryGate), aggregateType, onlyIncludeEventIfItBelongsToTenant);
         }
@@ -390,12 +403,7 @@ public class CdcEventStore<CONFIG extends AggregateEventStreamConfiguration> imp
                                   deliveryGate.acknowledged(List.of(event));
                                   return false;
                               });
-        // Registered when subscribed, before anything is handed on. Not disposed with the subscription: an event whose
-        // handling completes while it is being stopped was handled, and acknowledging it still resolves its gap
-        return Flux.defer(() -> {
-            acknowledgement.get().onAcknowledge(deliveryGate::acknowledged);
-            return toTheSubscriber;
-        });
+        return acknowledgement.get().registeredOnEverySubscribe(() -> new AcknowledgementRegistrations.PerSubscribe(deliveryGate::acknowledged, toTheSubscriber));
     }
 
     /**
@@ -444,7 +452,7 @@ public class CdcEventStore<CONFIG extends AggregateEventStreamConfiguration> imp
                                                          Optional<Duration> pollingInterval,
                                                          Optional<SubscriberId> subscriptionId,
                                                          Optional<Function<String, EventStorePollingOptimizer>> eventStorePollingOptimizerFactory,
-                                                         Optional<SubscriberAcknowledgement> acknowledgement) {
+                                                         Optional<AcknowledgementRegistrations> acknowledgement) {
         var tracker = deliveryGate.tracker;
         var resume  = GlobalEventOrder.of(fromInclusiveGlobalOrder);
 
@@ -874,9 +882,11 @@ public class CdcEventStore<CONFIG extends AggregateEventStreamConfiguration> imp
      * - every event they load passes through the gate - and, like every reconciliation here, are given the fills still
      * awaiting acknowledgement, so the gap handler never promotes their gaps.
      * <p>
-     * A gap the tracker gives up on is recorded with the gap handler too ({@link #recordGivenUpGaps()}), so the transient
-     * gaps a later subscription waits for agree with what this one stopped waiting for: an event that fills a given-up gap
-     * late is dropped by both.
+     * A gap the tracker gives up on after waiting the gap handler's give-up threshold for it is recorded with the gap
+     * handler too ({@link #recordGivenUpGaps()}), so the transient gaps a later subscription waits for agree with what
+     * this one stopped waiting for: an event that fills a given-up gap late is dropped by both. Recorded with the next
+     * event delivered, and when the subscription ends; a gap the tracker gives up on because it waits for too many at
+     * once is not, as its transaction may still be in flight - a later subscription waits for it again.
      * <p>
      * The delegate's polls (the polling leg) are handed an acknowledgement ({@link #newDelegateAcknowledgement()}) which
      * the gate acknowledges every event the subscriber is done with to, and every event it drops ({@link #dropped}): the
@@ -917,7 +927,7 @@ public class CdcEventStore<CONFIG extends AggregateEventStreamConfiguration> imp
                                                                                                          eventStore.getEventStoreSubscriptionObserver(),
                                                                                                          handler.subscriberId() + "-" + aggregateType));
             if (this.gapHandler.isPresent()) {
-                tracker.collectGivenUpGaps();
+                tracker.collectTimedOutGaps();
             }
         }
 
@@ -952,23 +962,41 @@ public class CdcEventStore<CONFIG extends AggregateEventStreamConfiguration> imp
         }
 
         /**
-         * For a subscriber that does not acknowledge: the downstream took {@code event}, so it is done with
+         * For a subscriber that does not acknowledge: the downstream took {@code event}, so it is done with. Called from
+         * the downstream's {@code onNext}, so a failure is logged rather than thrown - it would end the subscription. One
+         * can only happen inside a unit of work that is current on the delivering thread, and leaves the gap open, so a
+         * later subscription is handed the event again
          */
         @Override
         public void handedOn(PersistedEvent event) {
-            acknowledged(List.of(event));
+            try {
+                acknowledged(List.of(event));
+            } catch (RuntimeException e) {
+                log.warn("[{}] Could not resolve the gap of the gap fill with global order {} - it stays a transient gap, so a later subscription delivers the event again",
+                         aggregateType, event.globalEventOrder(), e);
+            }
         }
 
         /**
          * The subscriber is done with {@code events} - the {@link SubscriberAcknowledgement} listener; also called for
          * another tenant's event the tenant filter drops, and for an event a subscriber that does not acknowledge was
          * handed. Resolves the gaps of the gap fills among them (see {@link GapFillsAwaitingAcknowledgement#acknowledged}),
-         * and acknowledges them to the delegate's polls.
+         * and acknowledges them to the delegate's polls - also when resolving them failed, so the delegate is never left
+         * waiting for a fill it handed on.
          *
          * @throws RuntimeException a failure to resolve them inside the caller's unit of work - the gaps stay open
          */
         void acknowledged(List<PersistedEvent> events) {
-            gapFillsBeingHandedOn.ifPresent(gapFills -> gapFills.acknowledged(events));
+            try {
+                gapFillsBeingHandedOn.ifPresent(gapFills -> gapFills.acknowledged(events));
+            } catch (RuntimeException e) {
+                try {
+                    delegateAcknowledgement.acknowledge(events);
+                } catch (RuntimeException alsoFailed) {
+                    e.addSuppressed(alsoFailed);
+                }
+                throw e;
+            }
             delegateAcknowledgement.acknowledge(events);
         }
 
@@ -1003,17 +1031,39 @@ public class CdcEventStore<CONFIG extends AggregateEventStreamConfiguration> imp
         }
 
         /**
-         * The gaps the tracker gave up on, recorded with the gap handler ({@link SubscriptionGapHandler#giveUpTransientGaps}):
-         * the transient gap is what a later subscription of the subscriber waits for (see {@code newDeliveryTracker}).
-         * Left open, a restarted subscription waited for a gap this one had given up on - and delivered its event, should
-         * its transaction commit late, although this subscription dropped it. Every reconciliation here and in the
-         * delegate's polls is given the gap fills awaiting acknowledgement, and a given-up order is none, so this never
-         * promotes a gap the subscriber is still owed. In a unit of work of its own, holding the gap handler's monitor,
-         * never across the commit; a failure is logged, and a later subscription then waits for those gaps once more.
+         * The subscription ends - cancelled, completed or failed: the gaps the tracker gave up on since the last event
+         * delivered are recorded now ({@link #recordGivenUpGaps()}), or a subscription stopped while idle left them to a
+         * later one to wait for again. Runs on the thread that ends it - for a cancel, the one that stops the
+         * subscription. Should a unit of work be current there, they are left unrecorded rather than written in a unit
+         * of work the gate does not own: a later subscription then waits for those gaps once more, which is safe
+         */
+        void subscriptionEnded() {
+            if (gapHandler.isEmpty()) return;
+            if (unitOfWorkFactory.getCurrentUnitOfWork().isPresent()) {
+                log.debug("[{}-{}] Subscription ended inside a unit of work - not recording the gaps given up on since the last event delivered",
+                          gapHandler.get().subscriberId(), aggregateType);
+                return;
+            }
+            recordGivenUpGaps();
+        }
+
+        /**
+         * The gaps the tracker gave up on after waiting {@code gapTimeout} for them, recorded with the gap handler
+         * ({@link SubscriptionGapHandler#giveUpTransientGaps}): the transient gap is what a later subscription of the
+         * subscriber waits for (see {@code newDeliveryTracker}). Left open, a restarted subscription waited for a gap this
+         * one had given up on - and delivered its event, should its transaction commit late, although this subscription
+         * dropped it. Only gaps waited for that long - the gap handler's {@code transientGapGiveUpThreshold()}, which the
+         * tracker's {@code gapTimeout} follows - as giving a gap up makes it a permanent gap for every subscriber of the
+         * aggregate type; a gap the tracker gives up on because of its cap is never drained (see
+         * {@link CdcDeliveryTracker}). Every reconciliation here and in the delegate's polls is given the gap fills
+         * awaiting acknowledgement, and a given-up order is none, so this never promotes a gap the subscriber is still
+         * owed. In a unit of work of its own, holding the gap handler's monitor, never across the commit; a failure is
+         * logged and the orders are handed back to the tracker, so the next call tries them again.
          */
         private void recordGivenUpGaps() {
-            var givenUp = tracker.drainGivenUpGaps();
-            if (givenUp.isEmpty() || gapHandler.isEmpty()) return;
+            if (gapHandler.isEmpty()) return;
+            var givenUp = tracker.drainTimedOutGaps();
+            if (givenUp.isEmpty()) return;
             var handler = gapHandler.get();
             try {
                 var reconciliation = unitOfWorkFactory.withUnitOfWork(uow -> {
@@ -1025,7 +1075,8 @@ public class CdcEventStore<CONFIG extends AggregateEventStreamConfiguration> imp
                     eventStore.getEventStoreSubscriptionObserver().gapReconciliationOutcome(handler.subscriberId(), aggregateType, reconciliation);
                 }
             } catch (RuntimeException e) {
-                log.warn("[{}-{}] Could not record with the gap handler that the gap(s) {} were given up on - a later subscription waits for them again",
+                tracker.requeueTimedOutGaps(givenUp);
+                log.warn("[{}-{}] Could not record with the gap handler that the gap(s) {} were given up on - trying again with the next event delivered, else a later subscription waits for them again",
                          handler.subscriberId(), aggregateType, givenUp, e);
             }
         }
@@ -1034,7 +1085,8 @@ public class CdcEventStore<CONFIG extends AggregateEventStreamConfiguration> imp
          * No query asked for any transient gap - the event came from the bus or a poll, not from a query of this gap
          * handler's - so none is passed as included in one: the gap handler promotes a gap only when a query that asked
          * for it did not get it, and asked for nothing, it changes no other gap either (it resolves the gaps a query asked
-         * for and got). The gaps the tracker gives up on are promoted through {@link #recordGivenUpGaps()} instead.
+         * for and got). The gaps the tracker gives up on after its timeout are given up through {@link #recordGivenUpGaps()}
+         * instead.
          */
         private void recordOpenedGap(PersistedEvent event, LongRange range) {
             if (gapHandler.isEmpty()) return;
@@ -1068,24 +1120,84 @@ public class CdcEventStore<CONFIG extends AggregateEventStreamConfiguration> imp
      * :tenant)", as {@link PostgresqlEventStore}'s in-memory tenant filter does: a tenant-less event belongs to every
      * tenant (absent event-tenant ⇒ kept), and an event's tenant matches when it serializes to the same column value as
      * the wanted one under the aggregate type's configured {@link TenantSerializer} - so the CDC paths deliver the same
-     * events as polling for a custom serializer. Only without a configuration for the aggregate type (a delegate that
-     * offers none) are the tenants' {@code toString()} compared. An absent subscriber tenant filter keeps everything.
+     * events as polling for a custom serializer. An absent subscriber tenant filter keeps everything. See
+     * {@link TenantFilter} for an aggregate type that has no configuration (yet).
      */
-    @SuppressWarnings({"unchecked", "rawtypes"})
     private Predicate<PersistedEvent> belongsToTenant(AggregateType aggregateType, Optional<Tenant> onlyIncludeEventIfItBelongsToTenant) {
         if (onlyIncludeEventIfItBelongsToTenant.isEmpty()) {
             return event -> true;
         }
-        var wantedTenant = onlyIncludeEventIfItBelongsToTenant.get();
-        Function<Tenant, String> columnValueOf = eventStore.findAggregateEventStreamConfiguration(aggregateType)
-                                                           .<Function<Tenant, String>>map(configuration -> {
-                                                               TenantSerializer tenantSerializer = configuration.tenantSerializer;
-                                                               return tenant -> tenantSerializer.serialize(tenant);
-                                                           })
-                                                           .orElse(Tenant::toString);
-        return event -> event.tenant()
-                             .map(eventTenant -> Objects.equals(columnValueOf.apply(eventTenant), columnValueOf.apply(wantedTenant)))
-                             .orElse(true);
+        return new TenantFilter(aggregateType, onlyIncludeEventIfItBelongsToTenant.get());
+    }
+
+    /**
+     * {@link #belongsToTenant} for one wanted tenant. The aggregate type's {@link TenantSerializer} is looked up when the
+     * first event with a tenant is tested, not when the subscription is built, and kept once found - with the wanted
+     * tenant's column value, serialized once. An aggregate type can be configured at runtime, and the CDC bus delivers
+     * an aggregate type's events whether or not it is configured on this node. While it is not, the tenants'
+     * {@code toString()} are compared - what the default {@code TenantIdSerializer} writes - and a WARN naming the
+     * aggregate type is logged once. Not thrown as the polling path's lookup does: in the filter, that would end the
+     * subscription rather than let it pick up the configuration once it is added.
+     */
+    private final class TenantFilter implements Predicate<PersistedEvent> {
+        /**
+         * The aggregate type's tenant serializer and the wanted tenant's column value under it
+         */
+        @SuppressWarnings("rawtypes")
+        private record Resolved(TenantSerializer tenantSerializer, String wantedColumnValue) {
+            @SuppressWarnings("unchecked")
+            boolean matches(Tenant eventTenant) {
+                return Objects.equals(tenantSerializer.serialize(eventTenant), wantedColumnValue);
+            }
+        }
+
+        private final    AggregateType aggregateType;
+        private final    Tenant        wantedTenant;
+        private final    String        wantedTenantToString;
+        private final    AtomicBoolean noConfigurationLogged = new AtomicBoolean();
+        /** Null until the aggregate type's configuration was found */
+        private volatile Resolved      resolved;
+
+        private TenantFilter(AggregateType aggregateType, Tenant wantedTenant) {
+            this.aggregateType = aggregateType;
+            this.wantedTenant = wantedTenant;
+            this.wantedTenantToString = wantedTenant.toString();
+        }
+
+        @Override
+        public boolean test(PersistedEvent event) {
+            var eventTenant = event.tenant();
+            if (eventTenant.isEmpty()) {
+                return true;
+            }
+            var resolved = resolve();
+            return resolved != null
+                   ? resolved.matches(eventTenant.get())
+                   : Objects.equals(eventTenant.get().toString(), wantedTenantToString);
+        }
+
+        /**
+         * @return null while the aggregate type has no configuration
+         */
+        @SuppressWarnings({"unchecked", "rawtypes"})
+        private Resolved resolve() {
+            var current = resolved;
+            if (current != null) {
+                return current;
+            }
+            var configuration = eventStore.findAggregateEventStreamConfiguration(aggregateType);
+            if (configuration.isEmpty()) {
+                if (noConfigurationLogged.compareAndSet(false, true)) {
+                    log.warn("[{}] No AggregateEventStreamConfiguration for the aggregate type - filtering the events of tenant '{}' by comparing the tenants' toString() until one is added, which a custom TenantSerializer may not agree with",
+                             aggregateType, wantedTenant);
+                }
+                return null;
+            }
+            TenantSerializer tenantSerializer = configuration.get().tenantSerializer;
+            current = new Resolved(tenantSerializer, tenantSerializer.serialize(wantedTenant));
+            resolved = current;
+            return current;
+        }
     }
 
     /**

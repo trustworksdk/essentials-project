@@ -14,8 +14,9 @@
  * limitations under the License.
  */
 
-package dk.trustworks.essentials.components.eventsourced.eventstore.postgresql;
+package dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.internal;
 
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.PersistedEvent;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.gap.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.observability.EventStoreSubscriptionObserver;
@@ -31,8 +32,8 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 import static dk.trustworks.essentials.shared.MessageFormatter.msg;
 
 /**
- * <b>Internal - not part of the public API</b>, and may change in any release: public only so the CDC event store in
- * another package can share it.
+ * <b>Internal - not part of the public API</b>, and may change in any release: public only so the polling event store
+ * and the CDC event store, in two packages, can share it. Everything in the {@code internal} package is internal.
  * <p>
  * The gap fills one subscription handed on and its subscriber has not acknowledged yet (see
  * {@link SubscriberAcknowledgement}) - and the resolution of their gaps once it does. Used by every polling subscription
