@@ -314,6 +314,10 @@ public class AdminUiDemoApplication {
             }
             return chain;
         });
+        when(api.findAggregateEvents(any(), any(), any(), anyInt())).thenAnswer(invocation -> causationEvents.values().stream()
+                                                                                                    .filter(event -> event.aggregateType().equals(invocation.getArgument(1).toString())
+                                                                                                                     && event.aggregateId().equals(invocation.getArgument(2)))
+                                                                                                    .toList());
         when(api.findEventsCausedBy(any(), any())).thenAnswer(invocation -> causationEvents.values().stream()
                                                                                           .filter(event -> invocation.getArgument(1).toString().equals(event.causedByEventId()))
                                                                                           .toList());

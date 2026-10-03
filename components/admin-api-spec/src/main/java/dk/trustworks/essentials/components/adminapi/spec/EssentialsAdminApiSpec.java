@@ -499,6 +499,20 @@ final class EssentialsAdminApiSpec {
          .pathParam("eventId", new StringSchema(), "The event id.")
          .responseOptionalRef("ApiCausationEvent", "The event.");
 
+        b.operation(EventStoreApi.class, "findAggregateEvents")
+         .tag("event-store").get("/event-store/aggregate-types/{aggregateType}/aggregates/{aggregateId}/events")
+         .summary("The most recent events of one aggregate, oldest first - the starting point for walking causation. "
+                  + "Returns each event's identity and recorded cause, not its payload. Empty when the aggregate type is "
+                  + "not registered or the aggregate has no events.")
+         .roles(SUBSCRIPTION_R, ADMIN)
+         .pathParam("aggregateType", new StringSchema(), "The aggregate type.")
+         .pathParam("aggregateId", new StringSchema(), "The aggregate id, as text.")
+         .queryParam("limit", new IntegerSchema().format("int32").minimum(java.math.BigDecimal.ONE)
+                                                  .maximum(java.math.BigDecimal.valueOf(EventStoreApi.MAX_AGGREGATE_EVENTS))
+                                                  ._default(100),
+                     false, "How many of the most recent events to return.")
+         .responseArray("ApiCausationEvent");
+
         b.operation(EventStoreApi.class, "findCausationChain")
          .tag("event-store").get("/event-store/events/{eventId}/causation-chain")
          .summary("Why did this event happen: the event, then the event that caused it, then that event's cause, and so "

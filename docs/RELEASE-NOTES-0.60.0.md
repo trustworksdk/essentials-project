@@ -575,8 +575,10 @@ always had the `caused_by_event_id` column, and the starter's default mapper cla
 - **Looked up** with `EventStore.findEvent(EventId)` ("what caused this?") and `EventStore.loadEventsCausedBy(EventId)`
   ("what did this cause?"); the latter needs the opt-in partial index
   `essentials.eventstore.causation.index-enabled=true`.
-- **Admin API and console**: `GET /event-store/events/{eventId}`, `…/causation-chain` and `…/caused-events`, and an
-  *Event causation* page. They return identity and cause only, no payloads.
+- **Admin API and console**: list an aggregate's recent events (`GET /event-store/aggregate-types/{aggregateType}/aggregates/{aggregateId}/events`),
+  then walk from any of them with `GET /event-store/events/{eventId}`, `…/causation-chain` and `…/caused-events`. The
+  console's *Event causation* page starts from an aggregate type and id, or an event id. Identity and cause only, no
+  payloads.
 - **Cost**, measured in the performance lab: no measurable difference on appends or through an `EventProcessor`;
   WAL grows by the stored id. Across a durable queue, about 116 bytes of WAL per message and 0.5% throughput.
 

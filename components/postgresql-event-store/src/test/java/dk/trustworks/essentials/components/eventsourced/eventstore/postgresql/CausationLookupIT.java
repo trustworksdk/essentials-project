@@ -239,6 +239,24 @@ class CausationLookupIT {
                                                               .endsWith("ShipmentRequested");
     }
 
+    @Test
+    void an_aggregates_most_recent_events_are_listed_oldest_first_with_their_causes() {
+        var placed   = append(Optional.empty(), ORDERS, ORDER_1, new OrderPlaced(ORDER_1));
+        var accepted = append(Optional.of(placed), ORDERS, ORDER_1, new OrderAccepted(ORDER_1));
+        var third    = append(Optional.of(accepted), ORDERS, ORDER_1, new OrderAccepted(ORDER_1));
+
+        assertThat(api().findAggregateEvents("principal", ORDERS, ORDER_1, 100)).extracting(ApiCausationEvent::eventId)
+                                                                              .containsExactly(placed.toString(), accepted.toString(), third.toString());
+        var lastTwo = api().findAggregateEvents("principal", ORDERS, ORDER_1, 2);
+        assertThat(lastTwo).extracting(ApiCausationEvent::eventId).containsExactly(accepted.toString(), third.toString());
+        assertThat(lastTwo).extracting(ApiCausationEvent::causedByEventId).containsExactly(placed.toString(), accepted.toString());
+
+        assertThat(api().findAggregateEvents("principal", ORDERS, "00000000-0000-0000-0000-000000000000", 100)).isEmpty();
+        assertThat(api().findAggregateEvents("principal", AggregateType.of("NotRegistered"), ORDER_1, 100)).isEmpty();
+        assertThatThrownBy(() -> api().findAggregateEvents("principal", ORDERS, ORDER_1, EventStoreApi.MAX_AGGREGATE_EVENTS + 1))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
+
     private EventStoreApi api() {
         return new DefaultEventStoreApi(new EssentialsSecurityProvider.AllAccessSecurityProvider(),
                                         eventStore,

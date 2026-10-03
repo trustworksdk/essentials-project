@@ -66,6 +66,9 @@ Scheduler, added later in the same unreleased version:
 
 Event causation, added later in the same unreleased version (`docs/event-causation.md`):
 
+- **`GET /event-store/aggregate-types/{aggregateType}/aggregates/{aggregateId}/events`**
+  (`EventStoreApi.findAggregateEvents`) lists an aggregate's most recent events (`limit`, default 100, at most
+  1000), oldest first - the place to start, since a user knows the business id rather than an event id.
 - **`GET /event-store/events/{eventId}`** (`EventStoreApi.findEvent`) finds an event by its id alone,
   in whichever registered aggregate type's event stream holds it. `404` when none does.
 - **`GET /event-store/events/{eventId}/causation-chain`** (`EventStoreApi.findCausationChain`) answers
@@ -75,6 +78,6 @@ Event causation, added later in the same unreleased version (`docs/event-causati
   "what did this cause?": the event's direct effects across all registered aggregate types. `409` when
   the opt-in caused-by-event-id index (`essentials.eventstore.causation.index-enabled`) is not enabled.
 
-All three return the new `ApiCausationEvent` - the event's identity, position, timestamp and
+All four return the new `ApiCausationEvent` - the event's identity, position, timestamp and
 `causedByEventId`, deliberately without event or metadata payloads - and require
 `essentials_subscription_reader` or `essentials_admin`.

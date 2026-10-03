@@ -134,6 +134,18 @@ class AdminApiEndpointsTest {
         }
 
         @Test
+        void an_aggregates_events_default_to_the_most_recent_hundred() throws Exception {
+            var eventId = EventId.random();
+            when(eventStoreApi.findAggregateEvents(any(), eq(AggregateType.of("Orders")), eq("order-1"), eq(100)))
+                    .thenReturn(List.of(causationEvent(eventId, null)));
+
+            mockMvc.perform(get(BASE + "/event-store/aggregate-types/Orders/aggregates/order-1/events"))
+                   .andExpect(status().isOk())
+                   .andExpect(jsonPath("$[0].eventId").value(eventId.toString()))
+                   .andExpect(jsonPath("$[0].eventPayload").doesNotExist());
+        }
+
+        @Test
         void the_causation_chain_defaults_to_twenty_events() throws Exception {
             var eventId = EventId.random();
             when(eventStoreApi.findCausationChain(any(), eq(eventId), eq(20)))

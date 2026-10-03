@@ -67,6 +67,13 @@ public class EventStoreController {
                                     "No registered event stream holds an event with id '" + eventId + "'."));
     }
 
+    @GetMapping("/event-store/aggregate-types/{aggregateType}/aggregates/{aggregateId}/events")
+    public List<ApiCausationEvent> findAggregateEvents(@PathVariable String aggregateType,
+                                                       @PathVariable String aggregateId,
+                                                       @RequestParam(defaultValue = "100") int limit) {
+        return eventStoreApi.findAggregateEvents(principalResolver.requireAuthenticatedPrincipal(), AggregateType.of(aggregateType), aggregateId, limit);
+    }
+
     @GetMapping("/event-store/events/{eventId}/causation-chain")
     public List<ApiCausationEvent> findCausationChain(@PathVariable String eventId,
                                                       @RequestParam(defaultValue = "20") int maxDepth) {

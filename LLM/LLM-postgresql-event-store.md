@@ -1004,7 +1004,8 @@ On a large existing table, build it concurrently first with the statement from
 `CREATE INDEX CONCURRENTLY`); enabling the property then finds it in place. In `essentials.schema.mode=validate` the
 index is a schema change to apply first.
 
-The admin API exposes both directions - see [admin API](./LLM-admin-api.md).
+The admin API exposes both directions, and lists an aggregate's recent events as the place to start - see
+[admin API](./LLM-admin-api.md). The console's *Event causation* page takes an aggregate type and id, or an event id.
 
 **Cost** (performance lab, `EventCausationCostIT`): no measurable throughput or latency difference on appends or
 through an `EventProcessor`; WAL grows by the stored id (~40 bytes per event). Across a durable queue, ~116 bytes of

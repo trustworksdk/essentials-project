@@ -1655,7 +1655,7 @@ async function openShardOwnedDrawer(queueName, id) {
    "Why did this happen?" walks back through recorded causes; "what did it cause?" lists direct effects and needs the
    opt-in caused-by-event-id index, so a 409 there is explained rather than shown as a failure. Event ids are links:
    following one re-centres the view on that event. Payloads are deliberately not part of these operations. */
-let causationState = { eventId: '' };
+let causationState = { eventId: '', aggregateType: '', aggregateId: '' };
 
 const causationLink = (id) => (id == null ? nil('none recorded')
     : `<button class="link mono" data-causation-event="${esc(id)}" title="Show causation for this event">${esc(String(id).slice(0, 18))}…</button>`);
@@ -1677,24 +1677,58 @@ const causationCols = (first) => [
 ];
 
 views.causation = async () => {
-    const eventId = causationState.eventId.trim();
+    const eventId       = causationState.eventId.trim();
+    const aggregateType = causationState.aggregateType.trim();
+    const aggregateId   = causationState.aggregateId.trim();
+
+    /* Aggregate type suggestions come from the subscriptions, the one listing of aggregate types the API has. A failure
+       only loses the suggestions - the field still accepts any type. */
+    let knownTypes = [];
+    try {
+        knownTypes = [...new Set((await api('/event-store/subscriptions')).map((s) => s.aggregateType))].sort();
+    } catch (e) { /* suggestions are optional */ }
+
     const toolbar = `
     <div class="toolbar">
-      <label><input type="text" id="causationEventInput" placeholder="Event id" size="40" value="${esc(eventId)}"></label>
+      <label><input type="text" id="causationAggregateType" list="causationAggregateTypes" placeholder="Aggregate type" size="18"
+                    value="${esc(aggregateType)}"></label>
+      <datalist id="causationAggregateTypes">${knownTypes.map((t) => `<option value="${esc(t)}">`).join('')}</datalist>
+      <label><input type="text" id="causationAggregateId" placeholder="Aggregate id" size="26" value="${esc(aggregateId)}"></label>
+      <span class="chip">or</span>
+      <label><input type="text" id="causationEventInput" placeholder="Event id" size="38" value="${esc(eventId)}"></label>
       <div class="spacer"></div>
       <span class="chip">identity and cause only · no payloads</span>
     </div>`;
+
+    let aggregateCard = '';
+    if (aggregateType && aggregateId) {
+        let events = null;
+        let eventsError = null;
+        try {
+            events = await api(`/event-store/aggregate-types/${encodeURIComponent(aggregateType)}/aggregates/${encodeURIComponent(aggregateId)}/events?limit=100`);
+        } catch (e) {
+            eventsError = e;
+        }
+        aggregateCard = card(`Events of ${aggregateType} ${aggregateId} · most recent 100, pick one to walk its causation`,
+            events
+                ? table(causationCols(''), events.map((ev) => causationRow(ev, null)),
+                        { empty: 'No events - check the aggregate type is registered with this event store, and the id' })
+                : errorState(eventsError, 'essentials_subscription_reader'),
+            'GET /event-store/aggregate-types/{aggregateType}/aggregates/{aggregateId}/events', true);
+    }
+
     if (!eventId) {
-        return toolbar + card('Event causation',
+        return toolbar + (aggregateCard || card('Event causation',
             `<div class="empty"><div class="empty-icon" aria-hidden="true">◌</div>
-             <div>Enter an event id to see why it happened and what it caused</div></div>`, null, true);
+             <div>Enter an aggregate type and id to list its events, or an event id, to see why an event happened and
+                  what it caused</div></div>`, null, true));
     }
 
     let event;
     try {
         event = await api(`/event-store/events/${encodeURIComponent(eventId)}`);
     } catch (e) {
-        return toolbar + card('Event causation',
+        return toolbar + aggregateCard + card('Event causation',
             e.status === 404 ? '<div class="empty">No registered event stream holds an event with that id</div>'
                              : errorState(e, 'essentials_subscription_reader'),
             'GET /event-store/events/{eventId}', true);
@@ -1724,7 +1758,7 @@ views.causation = async () => {
                 : errorState(caused.reason, 'essentials_subscription_reader'),
         'GET /event-store/events/{eventId}/caused-events', true);
 
-    return toolbar + `
+    return toolbar + aggregateCard + `
     <div class="kpi-row">
       ${tile('Event type', esc(event.eventType), esc(event.aggregateType))}
       ${tile('Aggregate', `<span class="mono">${esc(String(event.aggregateId).slice(0, 18))}</span>`, `event order ${num(event.eventOrder)}`)}
@@ -1935,6 +1969,14 @@ document.addEventListener('keydown', (e) => {
 document.addEventListener('keydown', (e) => {
     if (e.key !== 'Enter' || e.target.id !== 'causationEventInput') return;
     causationState.eventId = e.target.value;
+    render('causation');
+});
+
+document.addEventListener('keydown', (e) => {
+    if (e.key !== 'Enter' || (e.target.id !== 'causationAggregateType' && e.target.id !== 'causationAggregateId')) return;
+    causationState.aggregateType = document.getElementById('causationAggregateType').value;
+    causationState.aggregateId = document.getElementById('causationAggregateId').value;
+    causationState.eventId = '';
     render('causation');
 });
 

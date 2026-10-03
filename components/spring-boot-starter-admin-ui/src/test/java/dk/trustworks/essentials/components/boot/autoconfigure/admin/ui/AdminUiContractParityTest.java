@@ -71,8 +71,8 @@ class AdminUiContractParityTest {
         // recovered. A literal rather than a computed figure on purpose: it is a tripwire for the
         // contract silently losing paths, which the two parity assertions below cannot see. The ranked
         // slow-query and the table statistics paths bring it to 50, running a scheduler job on demand to 51,
-        // and the three event-causation lookups to 54.
-        assertThat(contractPaths).hasSize(48 + 6);
+        // and the four event-causation lookups to 55.
+        assertThat(contractPaths).hasSize(48 + 7);
         assertThat(calledPaths()).isNotEmpty();
     }
 

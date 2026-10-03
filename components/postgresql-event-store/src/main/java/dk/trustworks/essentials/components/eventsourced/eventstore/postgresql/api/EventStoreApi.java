@@ -93,6 +93,25 @@ public interface EventStoreApi {
     int MAX_CAUSATION_CHAIN_DEPTH = 100;
 
     /**
+     * The largest {@code limit} {@link #findAggregateEvents(Object, AggregateType, String, int)} accepts
+     */
+    int MAX_AGGREGATE_EVENTS = 1000;
+
+    /**
+     * The most recent events of one aggregate, in event order - the starting point for "why is this aggregate in this
+     * state?": pick an event, then walk its causation. Describes each event's identity and cause only - no payloads.
+     *
+     * @param principal     the principal or identity making the request
+     * @param aggregateType the aggregate type
+     * @param aggregateId   the aggregate id, as text; converted with the aggregate type's configured id serializer
+     * @param limit         how many of the most recent events to return, 1 to {@link #MAX_AGGREGATE_EVENTS}
+     * @return the aggregate's most recent events, oldest first; empty if the aggregate type is not registered with this
+     * event store or the aggregate has no events
+     * @throws dk.trustworks.essentials.shared.security.EssentialsSecurityException if the principal is not authorized to access
+     */
+    List<ApiCausationEvent> findAggregateEvents(Object principal, AggregateType aggregateType, String aggregateId, int limit);
+
+    /**
      * Find an event by its id alone, in whichever registered aggregate type's event stream holds it. Describes the
      * event's identity and cause only - no payloads.
      *

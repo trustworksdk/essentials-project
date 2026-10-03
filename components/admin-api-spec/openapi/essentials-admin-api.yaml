@@ -2029,6 +2029,74 @@ paths:
       x-required-roles:
       - essentials_subscription_reader
       - essentials_admin
+  /event-store/aggregate-types/{aggregateType}/aggregates/{aggregateId}/events:
+    get:
+      tags:
+      - event-store
+      summary: "The most recent events of one aggregate, oldest first - the starting\
+        \ point for walking causation. Returns each event's identity and recorded\
+        \ cause, not its payload. Empty when the aggregate type is not registered\
+        \ or the aggregate has no events."
+      operationId: findAggregateEvents
+      parameters:
+      - name: aggregateType
+        in: path
+        description: The aggregate type.
+        required: true
+        schema:
+          type: string
+      - name: aggregateId
+        in: path
+        description: "The aggregate id, as text."
+        required: true
+        schema:
+          type: string
+      - name: limit
+        in: query
+        description: How many of the most recent events to return.
+        required: false
+        schema:
+          maximum: 1000
+          minimum: 1
+          type: integer
+          format: int32
+          default: 100
+      responses:
+        "200":
+          description: 200 — The matching items.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/ApiCausationEvent"
+        "400":
+          description: "Malformed or out-of-range parameter, or invalid request body."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: Unauthenticated.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Caller lacks one of the required roles.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "500":
+          description: Unexpected server error.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+      x-required-roles:
+      - essentials_subscription_reader
+      - essentials_admin
   /event-store/events/{eventId}/causation-chain:
     get:
       tags:

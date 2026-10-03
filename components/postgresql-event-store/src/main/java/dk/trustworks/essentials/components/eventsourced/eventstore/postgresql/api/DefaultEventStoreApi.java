@@ -26,6 +26,7 @@ import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.ty
 import dk.trustworks.essentials.components.foundation.transaction.UnitOfWorkException;
 import dk.trustworks.essentials.components.foundation.types.*;
 import dk.trustworks.essentials.shared.security.EssentialsSecurityProvider;
+import dk.trustworks.essentials.types.LongRange;
 
 import java.util.*;
 
@@ -103,6 +104,35 @@ public class DefaultEventStoreApi implements EventStoreApi {
         validateSubscriptionReaderRoles(principal);
         requireNonNull(eventId, "No eventId provided");
         return eventStore.getUnitOfWorkFactory().withUnitOfWork(uow -> eventStore.findEvent(eventId).map(ApiCausationEvent::from));
+    }
+
+    @Override
+    public List<ApiCausationEvent> findAggregateEvents(Object principal, AggregateType aggregateType, String aggregateId, int limit) {
+        validateSubscriptionReaderRoles(principal);
+        requireNonNull(aggregateType, "No aggregateType provided");
+        requireNonNull(aggregateId, "No aggregateId provided");
+        requireTrue(limit >= 1 && limit <= MAX_AGGREGATE_EVENTS,
+                    msg("limit must be between 1 and {}, was {}", MAX_AGGREGATE_EVENTS, limit));
+        if (!(eventStore instanceof ConfigurableEventStore<?> configurableEventStore)) {
+            throw new UnsupportedOperationException("Listing an aggregate's events needs a ConfigurableEventStore, to convert the aggregate id");
+        }
+        var configuration = configurableEventStore.findAggregateEventStreamConfiguration(aggregateType);
+        if (configuration.isEmpty()) {
+            return List.of();
+        }
+        var typedAggregateId = configuration.get().aggregateIdSerializer.deserialize(aggregateId);
+        return eventStore.getUnitOfWorkFactory().withUnitOfWork(uow -> {
+            var lastEvent = eventStore.loadLastPersistedEventRelatedTo(aggregateType, typedAggregateId);
+            if (lastEvent.isEmpty()) {
+                return List.<ApiCausationEvent>of();
+            }
+            var lastEventOrder = lastEvent.get().eventOrder().longValue();
+            return eventStore.fetchStream(aggregateType,
+                                          typedAggregateId,
+                                          LongRange.between(Math.max(0, lastEventOrder - limit + 1), lastEventOrder))
+                             .map(stream -> stream.eventList().stream().map(ApiCausationEvent::from).toList())
+                             .orElse(List.of());
+        });
     }
 
     @Override
