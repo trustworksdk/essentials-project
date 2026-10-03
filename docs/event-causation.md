@@ -13,6 +13,11 @@ Micrometer tracing interceptors already carry W3C trace context through event me
 the `correlation_id` column; it stays as it is, available to an application whose own `PersistableEventMapper`
 wants to set it.
 
+**Status:** implemented on `feature/event-causation`, cut from `release/0.60`; phases 1–8 are done, phase 9 waits
+for the webshop to reach the release line. 0.60 is not yet tagged, so merging the branch ships it in **0.60.0**; the
+release notes and migration guide carry it there (§2.9, §1.1.7). The paragraph below is the original reasoning, kept
+for the record.
+
 **Not in 0.60, and does not need a breaking release.** An earlier draft targeted "the next major" on two grounds:
 the mapper SPI could take a new parameter, and the JDK 25 baseline would make `ScopedValue` available. 0.60 has
 since shipped the JDK 25 baseline without this work (`docs/platform-upgrade-0.60.md`, D6, deliberately deferred
@@ -788,6 +793,11 @@ and `findEventsCausedBy` finds the forward step. It passes with causation on and
   metadata key; the index property with the verbatim `CREATE INDEX CONCURRENTLY` statement and the validate-mode
   note.
 - Release notes entry.
+- **Done** on `feature/event-causation`: an *Event Causation* section in `LLM/LLM-postgresql-event-store.md`, and
+  causation coverage in `LLM-foundation.md`, `LLM-reactive.md`, `LLM-admin-api.md` and
+  `LLM-spring-boot-starter-modules.md`; an *Event Causation* section in the event store's README; §1.1.7 and §2.9 in
+  `RELEASE-NOTES-0.60.0.md`; an *Event causation* section in `MIGRATION-0.60.md` with the verbatim concurrent-build
+  statement; the OpenAPI changelog; and module `CLAUDE.md` gotchas throughout.
 
 ### Phase 9 — Webshop worked example (when the webshop is on the release line)
 

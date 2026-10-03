@@ -130,7 +130,12 @@ See [spring-boot-starter-postgresql-event-store README](../components/spring-boo
 
 **Event Publishing:**
 - `EventStoreEventBus` - Local event publishing
-- `PersistableEventMapper` - Event metadata mapping
+- `PersistableEventMapper` - Event metadata mapping (sets no correlation id, tenant or cause)
+
+**Event Causation** (unless `essentials.eventstore.causation.enabled=false`):
+- `CausationPersistableEventEnricher` - Writes each event's `causedByEventId`
+- `CausationDurableQueuesInterceptor` - Carries the cause across Inbox/Outbox/durable command bus
+- `CausationCommandContextPropagator` - Added to every command-bus bean, for `sendAsync`/`sendAndDontWait`
 
 **Observability:**
 - `MicrometerTracingEventStoreInterceptor` - Distributed tracing (when enabled)
@@ -357,6 +362,15 @@ Prefix: `essentials.eventstore`
 - `true`: Also published immediately after `appendToStream()` (individual)
 
 See [postgresql-event-store: Flush Publishing](../components/postgresql-event-store/README.md#flush-publishing)
+
+#### Event Causation
+
+Prefix: `essentials.eventstore.causation` - see [event causation](./LLM-postgresql-event-store.md#event-causation)
+
+| Property | Default | Notes |
+|----------|---------|-------|
+| `enabled` | `true` | Record which event caused each event; `false` turns off every part that writes it |
+| `index-enabled` | `false` | Partial index on `caused_by_event_id` in every event-stream table; required by `EventStore.loadEventsCausedBy` and the admin `caused-events` operation. A schema change - pre-build concurrently on large tables |
 
 #### Subscription Manager
 

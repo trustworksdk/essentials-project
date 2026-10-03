@@ -136,6 +136,14 @@ The unified claim query and its flag are gone. If you set the flag to `false`, y
 ordered/unordered queries, which measured 5.4× faster. Setting it to `true`, the default, changes nothing.
 Delete the builder call, constructor argument or property.
 
+#### 1.1.7 Events start recording their cause
+
+With the Spring Boot event-store starter, every event appended in reaction to another event now records that event's
+id in `caused_by_event_id`, and every message queued while a cause is bound carries one more `MessageMetaData`
+entry, `essentials.causedByEventId`. Nothing changes for a `PersistableEventMapper` that sets a cause itself. No
+schema change, and existing rows keep their nulls. `essentials.eventstore.causation.enabled=false` restores the old
+behaviour. See [§2.9](#29-event-causation).
+
 ---
 
 ### 1.2 Platform: Java 25, Spring Boot 4.1, Kotlin 2.3
@@ -549,6 +557,31 @@ Two related corrections:
   nothing.
 - **A dropped replication connection logs one stack trace, not two.** The failed advisory-lock release that
   follows it is now logged at DEBUG, because PostgreSQL releases the lock when the session ends.
+
+### 2.9 Event causation
+
+Every persisted event can now record which event caused it, so "why did this happen?" is a lookup. The event store
+always had the `caused_by_event_id` column, and the starter's default mapper claimed to fill it, but nothing did.
+
+- **Recorded by default.** The framework binds the delivered event as the cause around every handler it calls -
+  `EventProcessor` (both `REQUIRED` and `UnitOfWorkMode.NONE` handlers), `ViewEventProcessor`,
+  `InTransactionEventProcessor`, and async and in-transaction subscriptions - and `CausationPersistableEventEnricher`
+  writes it. Lazily appending repositories record the cause bound when the aggregate joined the UnitOfWork.
+- **Carried across hand-offs**: through `Inbox`, `Outbox` and `DurableLocalCommandBus.sendAndDontWait` in message
+  metadata (`CausationDurableQueuesInterceptor`), and through `sendAsync`/`sendAndDontWait` on a Reactor worker by
+  a new command-bus SPI, `CommandContextPropagator`.
+- **Bound explicitly** where the framework cannot see it - a webhook answering an event it looked up, a batched
+  subscription - with `CausationContext.where(eventId)`.
+- **Looked up** with `EventStore.findEvent(EventId)` ("what caused this?") and `EventStore.loadEventsCausedBy(EventId)`
+  ("what did this cause?"); the latter needs the opt-in partial index
+  `essentials.eventstore.causation.index-enabled=true`.
+- **Admin API and console**: `GET /event-store/events/{eventId}`, `…/causation-chain` and `…/caused-events`, and an
+  *Event causation* page. They return identity and cause only, no payloads.
+- **Cost**, measured in the performance lab: no measurable difference on appends or through an `EventProcessor`;
+  WAL grows by the stored id. Across a durable queue, about 116 bytes of WAL per message and 0.5% throughput.
+
+Correlation ids are still not populated; trace context covers "what did this request do". Design and measurements:
+[event-causation.md](./event-causation.md). How to configure it: [LLM-postgresql-event-store.md](../LLM/LLM-postgresql-event-store.md#event-causation).
 
 ---
 

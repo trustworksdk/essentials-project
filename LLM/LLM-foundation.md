@@ -30,6 +30,7 @@
 - [Inbox/Outbox Patterns](#inboxoutbox-patterns)
 - [Ordered Message Processing](#ordered-message-processing)
 - [DurableLocalCommandBus](#durablelocalcommandbus)
+- [Event Causation](#event-causation)
 - [Database Schema Harness](#database-schema-harness)
 - [Utilities](#utilities)
 - ⚠️ [Security](#security)
@@ -848,6 +849,35 @@ commandBus.sendAndDontWait(new SendReminderCommand(customerId), Duration.ofHours
 // Synchronous (returns result)
 OrderId result = commandBus.send(new CreateOrderCommand(...));
 ```
+
+## Event Causation
+
+`CausationContext` (package `dk.trustworks.essentials.components.foundation.causation`) carries "the event that
+caused the work currently being done" from the place that knows it to the place that writes new events. It is a
+`ScopedValue`: bound for the dynamic extent of a call, never leaking into a pooled thread's next task. What reads and
+writes it in the event store: [postgresql-event-store](./LLM-postgresql-event-store.md#event-causation).
+
+```java
+CausationContext.where(eventId).run(() -> ...);          // bind for a call
+var result = CausationContext.where(eventId).call(() -> ...);
+CausationContext.where(Optional.empty()).run(() -> ...); // bind "no cause" - hides an outer binding
+Optional<EventId> cause = CausationContext.current();     // read
+```
+
+- **Bindings nest; the innermost wins.**
+- **A binding does not cross threads.** Capture `current()` and re-bind on the other side.
+- **Durable queues carry it**: `CausationDurableQueuesInterceptor` writes it into `MessageMetaData` under
+  `MessageMetaData.CAUSED_BY_EVENT_ID` (`essentials.causedByEventId`) when a message is queued - unless the message
+  already carries one - and re-binds it around the handler. So `Inbox.addMessageReceived`, `Outbox.sendMessage` and
+  `DurableLocalCommandBus.sendAndDontWait` carry the sender's cause. It must run outermost
+  (`@InterceptorOrder(1)`), because on PostgreSQL the handler's UnitOfWork is opened by an interceptor.
+- **Command buses carry it**: `send` runs the handler on the caller's thread; `sendAsync` and
+  `LocalCommandBus.sendAndDontWait` run it on a Reactor worker, so `CausationCommandContextPropagator` (a
+  `CommandContextPropagator`, see [reactive](./LLM-reactive.md#localcommandbus-api)) captures it at send.
+- The Spring Boot event-store starter registers the interceptor and the propagator (on every command-bus bean)
+  unless `essentials.eventstore.causation.enabled=false`. Without Spring:
+  `durableQueues.addInterceptor(new CausationDurableQueuesInterceptor())` and
+  `commandBus.addContextPropagator(new CausationCommandContextPropagator())`.
 
 ## Database Schema Harness
 
