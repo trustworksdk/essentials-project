@@ -21,6 +21,7 @@ import dk.trustworks.essentials.components.eventsourced.aggregates.closingbooks.
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.transaction.EventStoreUnitOfWork;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.transaction.EventStoreUnitOfWorkFactory;
 import dk.trustworks.essentials.examples.trading.brokerage.aggregates.Settlements;
+import dk.trustworks.essentials.examples.trading.brokerage.views.trade_settlement_status.TradeSettlementStatusQuery;
 import dk.trustworks.essentials.examples.trading.brokerage.aggregates.TradingAccountClosingBooksPolicy;
 import dk.trustworks.essentials.examples.trading.brokerage.aggregates.TradingAccounts;
 import dk.trustworks.essentials.examples.trading.brokerage.aggregates.Trades;
@@ -62,7 +63,7 @@ import org.springframework.boot.ApplicationArguments;
 import org.springframework.boot.ApplicationRunner;
 
 import java.math.BigDecimal;
-import java.time.Clock;
+import java.time.*;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -114,6 +115,8 @@ public class TradingSimulationRunner implements ApplicationRunner {
     private static final Amount   SETTLEMENT_CASH_DELTA      = Amount.of(BigDecimal.valueOf(-500));
     private static final Amount   SETTLEMENT_REALIZED_PNL    = Amount.of(BigDecimal.valueOf(12));
     private static final Amount   POLICY_DRIVEN_DEPOSIT      = Amount.of(BigDecimal.valueOf(10));
+    /** How long an account waits for the automated lifecycle to settle its trades before carrying on regardless */
+    private static final Duration AUTOMATED_SETTLEMENT_TIMEOUT = Duration.ofSeconds(60);
 
     private final TradingDemoSimulationProperties                     properties;
     private final CommandBus                                          commandBus;
@@ -126,6 +129,7 @@ public class TradingSimulationRunner implements ApplicationRunner {
     private final Trades                                              trades;
     private final Settlements                                         settlements;
     private final Instruments                                         instruments;
+    private final TradeSettlementStatusQuery                          tradeSettlementStatusQuery;
     private final Clock                                               clock;
 
     public TradingSimulationRunner(TradingDemoSimulationProperties properties,
@@ -138,10 +142,11 @@ public class TradingSimulationRunner implements ApplicationRunner {
                                    TradingAccounts tradingAccounts,
                                    Trades trades,
                                    Settlements settlements,
-                                   Instruments instruments) {
+                                   Instruments instruments,
+                                   TradeSettlementStatusQuery tradeSettlementStatusQuery) {
         this(properties, commandBus, closingBooksPolicy, aggregateLifecycleApi, latestPriceQuery,
              directInstrumentPriceService, unitOfWorkFactory, tradingAccounts, trades, settlements, instruments,
-             Clock.systemUTC());
+             tradeSettlementStatusQuery, Clock.systemUTC());
     }
 
     public TradingSimulationRunner(TradingDemoSimulationProperties properties,
@@ -155,6 +160,7 @@ public class TradingSimulationRunner implements ApplicationRunner {
                                    Trades trades,
                                    Settlements settlements,
                                    Instruments instruments,
+                                   TradeSettlementStatusQuery tradeSettlementStatusQuery,
                                    Clock clock) {
         this.properties = requireNonNull(properties, "No properties provided");
         this.commandBus = requireNonNull(commandBus, "No commandBus provided");
@@ -167,6 +173,7 @@ public class TradingSimulationRunner implements ApplicationRunner {
         this.trades = requireNonNull(trades, "No trades provided");
         this.settlements = requireNonNull(settlements, "No settlements provided");
         this.instruments = requireNonNull(instruments, "No instruments provided");
+        this.tradeSettlementStatusQuery = requireNonNull(tradeSettlementStatusQuery, "No tradeSettlementStatusQuery provided");
         this.clock = requireNonNull(clock, "No clock provided");
     }
 
@@ -238,6 +245,7 @@ public class TradingSimulationRunner implements ApplicationRunner {
             commandBus.send(new ReserveFunds(accountId, RESERVED_FUNDS));
             commandBus.send(new ReleaseFunds(accountId, RELEASED_FUNDS));
 
+            var automatedTradeIds = new ArrayList<TradeId>();
             for (int settlementIndex = 0; settlementIndex < properties.getSettlementsPerAccount(); settlementIndex++) {
                 var instrumentSeed = instrumentSeeds.get(settlementIndex % Math.max(1, Math.min(properties.getInstrumentCount(), instrumentSeeds.size())));
                 var instrumentId   = instrumentSeed.instrumentId();
@@ -252,6 +260,13 @@ public class TradingSimulationRunner implements ApplicationRunner {
                                                Quantity.ONE,
                                                TRADE_GROSS_AMOUNT));
                 commandBus.send(new ExecuteTrade(tradeId));
+                if (properties.isTradeLifecycleAutomated()) {
+                    // brokerage.settle_trade takes it from TradeExecuted; the account waits for it below
+                    automatedTradeIds.add(tradeId);
+                    directInstrumentPriceService.updatePrice(instrumentId, updatedPrice);
+                    commandBus.send(new UpdatePrice(instrumentId, updatedPrice));
+                    continue;
+                }
                 commandBus.send(new RequestSettlement(tradeId, settlementId));
                 directInstrumentPriceService.updatePrice(instrumentId, updatedPrice);
                 commandBus.send(new UpdatePrice(instrumentId, updatedPrice));
@@ -269,6 +284,8 @@ public class TradingSimulationRunner implements ApplicationRunner {
                                                          SETTLEMENT_CASH_DELTA,
                                                          SETTLEMENT_REALIZED_PNL));
             }
+
+            awaitAutomatedSettlements(accountId, automatedTradeIds);
 
             switch (role) {
                 case POLICY_DRIVEN -> driveUntilPolicyRollsTheBooks(accountId);
@@ -294,6 +311,37 @@ public class TradingSimulationRunner implements ApplicationRunner {
                  properties.getInstrumentCount(),
                  properties.getSettlementsPerAccount());
         logEndpointHints();
+    }
+
+    /**
+     * With the automated trade lifecycle the account's settlements are applied asynchronously, by the
+     * {@code brokerage.settle_trade} automation; the closing-books step that follows must see them applied, so wait until
+     * the settlement view reports every one of the account's trades settled. Bounded: a lifecycle that does not finish is
+     * reported, not waited for forever.
+     */
+    private void awaitAutomatedSettlements(TradingAccountId accountId, List<TradeId> tradeIds) {
+        if (tradeIds.isEmpty()) {
+            return;
+        }
+        var deadline = System.nanoTime() + AUTOMATED_SETTLEMENT_TIMEOUT.toNanos();
+        while (System.nanoTime() < deadline) {
+            var settled = tradeSettlementStatusQuery.tradeSettlements()
+                                                    .stream()
+                                                    .filter(status -> tradeIds.contains(status.tradeId()) && status.settled())
+                                                    .count();
+            if (settled == tradeIds.size()) {
+                log.info("[{}] AUTOMATED: the settle_trade automation settled all {} trade(s)", accountId, settled);
+                return;
+            }
+            try {
+                Thread.sleep(100);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                return;
+            }
+        }
+        log.warn("[{}] AUTOMATED: not every trade was settled within {} - is the brokerage.settle_trade automation running?",
+                 accountId, AUTOMATED_SETTLEMENT_TIMEOUT);
     }
 
     /**

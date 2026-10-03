@@ -16,7 +16,7 @@ mvn spring-boot:run -pl :essentials-trading-demo        # after `docker compose 
 
 | BC | Aggregates | Slices |
 |---|---|---|
-| `brokerage` | `TradingAccount`, `Trade`, `Settlement` | 19 command, 6 view |
+| `brokerage` | `TradingAccount`, `Trade`, `Settlement` | 19 command, 1 automation, 6 view |
 | `market_data` | `Instrument`, `InstrumentPrice` | 5 command, 1 automation, 2 view |
 
 Both on the **aggregate write style** (§R5) — `AggregateRoot` + `StatefulAggregateRepository`. Sanctioned
@@ -60,8 +60,16 @@ lane. Do **not** convert to `Decider`s.
   this replaced.
 - **Two projections are eventually consistent** (`account_statement`, `trade_settlement_status`). Tests must
   await them. `trade_valuation` likewise.
-- **`market_data.risk_approve_instrument` is the only `UnitOfWorkMode.NONE` handler here**, and the demo's
-  worked example of one. It blocks on a stubbed external risk service with no `UnitOfWork` — hence no pooled
+- **`brokerage.settle_trade` drives the trade lifecycle by default** (`trading-demo.simulation.trade-lifecycle=automated`):
+  the harness only places and executes trades, and the automation issues every settlement step from the previous
+  step's event, so a trade's settlement is one causation tree in the admin console's *Event causation* page. `scripted`
+  turns it off and makes the harness send every step itself, as the benchmark scenarios assume. Tests that send the
+  settlement commands themselves must pin `scripted`, or the automation races them. See that slice's `CLAUDE.md`.
+- **Every `@SpringBootTest` here carries `@DirtiesContext`.** Each class owns a static Postgres container, so a cached
+  context outlives its database; on the next context switch Spring pauses it, and every event-processor subscription's
+  lock release waits out a Hikari connection timeout. Three such classes turned a 30s suite into 25+ minutes.
+- **`market_data.risk_approve_instrument` is the demo's worked example of a `UnitOfWorkMode.NONE` handler**
+  (`brokerage.settle_trade`'s clearing step is a second one). It blocks on a stubbed external risk service with no `UnitOfWork` — hence no pooled
   connection — and wraps its transactional tail in `usingUnitOfWork(...)`. Three constraints travel with the
   mode: the handler must be idempotent (the aggregate's risk methods no-op once a decision exists), the
   blocking call must finish well inside `essentials.durable-queues.message-handling-timeout`

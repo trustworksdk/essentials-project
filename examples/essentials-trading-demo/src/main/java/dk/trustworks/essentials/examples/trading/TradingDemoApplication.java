@@ -28,6 +28,7 @@ import dk.trustworks.essentials.examples.trading._demo_harness.TradingDemoSimula
 import dk.trustworks.essentials.examples.trading._demo_harness.TradingLoadGeneratorManager;
 import dk.trustworks.essentials.examples.trading._demo_harness.TradingSimulationRunner;
 import dk.trustworks.essentials.examples.trading.brokerage.aggregates.Settlements;
+import dk.trustworks.essentials.examples.trading.brokerage.views.trade_settlement_status.TradeSettlementStatusQuery;
 import dk.trustworks.essentials.examples.trading.brokerage.aggregates.TradingAccountClosingBooksPolicy;
 import dk.trustworks.essentials.examples.trading.brokerage.aggregates.TradingAccounts;
 import dk.trustworks.essentials.examples.trading.brokerage.aggregates.Trades;
@@ -101,7 +102,8 @@ public class TradingDemoApplication {
                                                      TradingAccounts tradingAccounts,
                                                      Trades trades,
                                                      Settlements settlements,
-                                                     Instruments instruments) {
+                                                     Instruments instruments,
+                                                     TradeSettlementStatusQuery tradeSettlementStatusQuery) {
         return new TradingSimulationRunner(properties,
                                            commandBus,
                                            closingBooksPolicy,
@@ -112,7 +114,8 @@ public class TradingDemoApplication {
                                            tradingAccounts,
                                            trades,
                                            settlements,
-                                           instruments);
+                                           instruments,
+                                           tradeSettlementStatusQuery);
     }
 
     @Bean
