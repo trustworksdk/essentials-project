@@ -811,7 +811,7 @@ described in [§3](#3-bug-fixes): the gap is resolved once the event is handed o
 
 ### 2.13 Gap handling extension points
 
-Four additions let a custom gap setup keep what the defaults do. All are additive, in `postgresql-event-store`:
+Six additions let a custom gap setup and polling optimizer keep what the defaults do. All are additive, in `postgresql-event-store`:
 
 | API | What it is |
 |---|---|
@@ -819,6 +819,8 @@ Four additions let a custom gap setup keep what the defaults do. All are additiv
 | `SubscriptionGapHandler#transientGapGiveUpThreshold()` and `ResolveTransientGapsToPermanentGapsPromotionStrategy#permanentGapThreshold()` | Default methods returning `Optional<Duration>`. `thresholdBased(n)` returns n seconds and `PostgresqlEventStreamGapHandler` passes it on. A CDC subscription gives up waiting for a gap at that threshold, instead of a hard-coded 120 s |
 | `LoadEventsByGlobalOrder#getOnlyLoadPayloadIfEventBelongsToTenant()` / `setOnlyLoadPayloadIfEventBelongsToTenant(Tenant)`, and the builder setter | The tenant whose events a tenant-filtered poll loads with payload; other tenants' events come without |
 | `AggregateEventStreamPersistenceStrategy#loadEventsByGlobalOrderOmittingOtherTenantsPayloads(...)` | Default method that loads everything; the built-in strategy overrides it so other tenants' payloads are never read |
+| `SubscriptionGapHandler#giveUpTransientGaps(AggregateType, List<GlobalEventOrder>)` | Default method the CDC event store calls when it gives up waiting for a gap's event, so the give-up is recorded durably. `PostgresqlEventStreamGapHandler` promotes the given-up gaps that are still transient |
+| `EventStorePollingOptimizer#mayRepollImmediatelyAfterAnEmptyPoll()` | Default method, `false`. An optimizer that returns a zero delay on purpose overrides it to return `true`; only `NotifyAwareEventStorePollingOptimizer` does |
 
 → [`docs/MIGRATION-0.60.md` § The default gap handler looks for more gaps per poll](MIGRATION-0.60.md#the-default-gap-handler-looks-for-more-gaps-per-poll),
 [§ CDC gives up waiting for a gap at the gap handler's threshold](MIGRATION-0.60.md#cdc-gives-up-waiting-for-a-gap-at-the-gap-handlers-threshold),
@@ -859,6 +861,12 @@ Four additions let a custom gap setup keep what the defaults do. All are additiv
 | **Tenant-filtered polling read other tenants' payloads.** Since loading every tenant's events to detect gaps correctly, a poll fetched the payload and metadata of every tenant's events. Other tenants' events now come without, so those columns are never read or transferred | Tenant-filtered polling subscriptions |
 | **A CDC subscription could hang on a live-source failure.** A failure of the live source while a started-while-ACTIVE subscription was handing on an event was emitted concurrently with that event, rejected as non-serialized and dropped, so the subscription never saw the error. All emissions now go through one drain. A concurrent CDC availability change could likewise be dropped and leave a stale state; that is serialized too | Hybrid CDC |
 | **CDC ignored a custom gap promotion threshold**, giving up on a missing `GlobalEventOrder` after a hard-coded 120 s. It now follows the gap handler's threshold | Hybrid CDC with `thresholdBased(n)` other than 120 |
+| **A CDC gap give-up was not durable.** When the CDC event store gave up waiting for a gap's event, the running subscription dropped a late-committing event for it, but after a restart that event was delivered and its gap never closed. The give-up is now recorded with the gap handler (`giveUpTransientGaps`), so the event is dropped in both cases | Hybrid CDC |
+| **CDC left a gap open when its fill was dropped as a duplicate**, and recording the gap an event from the bus opened claimed the transient gaps had been queried, which could promote an expired gap without proof. Every duplicate the delivery gate drops is now acknowledged to the polling leg (except a fill the subscriber has not handled yet), and the gap an event opens passes no gaps as queried | Hybrid CDC |
+| **Tenant filtering compared tenants by `toString()` in memory**, while the SQL predicates compare the serialized form. Polling and the CDC event store now compare `TenantSerializer.serialize(...)` under the aggregate type's `TenantSerializer`; a custom serializer should round-trip | Tenant-filtered polling and CDC |
+| **A polling worker kept polling back-to-back after its thread was interrupted.** It now exits | Polling subscriptions |
+| **A default gap selection wrapped by a decorator or called from a custom strategy shared one rotation across subscriptions.** Each subscription now keeps its own | Custom `ResolveTransientGapsToIncludeInQueryStrategy` |
+| **Re-subscribing the flux of `unboundedPollForEvents` registered the same acknowledgement state several times,** and a `SubscriberAcknowledgement` reused for a second subscription went unnoticed. State is created per subscribe, and a second registration on one instance logs a one-time WARN | Direct `unboundedPollForEvents` callers |
 | **The starter's README said CDC was enabled by default.** It is disabled unless `essentials.eventstore.cdc.enabled=true`; the README now says so, and gained a Gap Handling section | `spring-boot-starter-postgresql-event-store` |
 
 **The 0.50.1 fixes are all in 0.60,** either merged directly or made unnecessary by other work. The polling

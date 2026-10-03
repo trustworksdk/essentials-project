@@ -880,6 +880,9 @@ the table, transferred nor deserialized.
 - If you have an `EventStoreSubscriptionObserver`, `reconciledGaps(...)` now receives every tenant's loaded events,
   and for other tenants' events `event().getJson()` and `metaData().getJson()` are `"{}"` (tenant, global order and
   event id are intact); `eventStorePolled(...)` still receives only the subscriber's tenant's events.
+- Tenant filtering, polling and CDC, compares tenants by `TenantSerializer.serialize(...)` under the aggregate type's
+  `TenantSerializer`, not by `toString()`. A custom `TenantSerializer` must round-trip: equal tenants must serialize to
+  equal strings.
 - The tenant whose payloads a poll loads travels in the new `LoadEventsByGlobalOrder#getOnlyLoadPayloadIfEventBelongsToTenant()`.
   If you implement `AggregateEventStreamPersistenceStrategy` yourself, the new default method
   `loadEventsByGlobalOrderOmittingOtherTenantsPayloads(...)` loads everything, which is correct; override it to skip
@@ -917,7 +920,13 @@ threshold the gap handler had. It now waits as long as the subscription's gap ha
 `SubscriptionGapHandler#transientGapGiveUpThreshold()`. `PostgresqlEventStreamGapHandler` returns the threshold of
 `thresholdBased(n)`.
 
-**What to do:** nothing, if you use the default threshold. A promotion strategy written as a lambda, a custom gap
+A give-up is now durable: the CDC event store records it through the new default method
+`SubscriptionGapHandler#giveUpTransientGaps(AggregateType, List<GlobalEventOrder>)`, and `PostgresqlEventStreamGapHandler`
+promotes the given-up gaps that are still transient. A late-committing event for a given-up gap is dropped by the running
+subscription and after a restart; before, a restart delivered it and its gap never closed.
+
+**What to do:** nothing, if you use the default threshold. A custom `SubscriptionGapHandler` that wants a give-up to
+survive a restart overrides `giveUpTransientGaps(...)`. A promotion strategy written as a lambda, a custom gap
 handler and `NoEventStreamGapHandler` state no threshold and keep 120 s; implement
 `ResolveTransientGapsToPermanentGapsPromotionStrategy#permanentGapThreshold()` (or override
 `transientGapGiveUpThreshold()` on your handler) to change it.
@@ -931,7 +940,15 @@ rolled-back appends at the read position is passed in a few polls instead of sta
 for seconds.
 
 **What to do:** nothing. If you counted on the tight loop for latency, use a `NotifyAwareEventStorePollingOptimizer` or
-a shorter polling interval.
+a shorter polling interval. A custom or decorated `EventStorePollingOptimizer` that returns a zero `currentDelayMs()` on
+purpose must override the new default method `mayRepollImmediatelyAfterAnEmptyPoll()` to return `true`; otherwise the
+polling worker waits the polling interval after every empty poll.
+
+### One `SubscriberAcknowledgement` per subscription
+
+An instance serves exactly one subscription. If you poll yourself, create one per subscription with
+`SubscriberAcknowledgement.create()`; registering a second event store subscription on the same instance logs a WARN
+once, and its acknowledgements would mix with the first's.
 
 ### A gap is resolved only once its event was handled
 

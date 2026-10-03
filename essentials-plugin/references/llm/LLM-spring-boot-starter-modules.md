@@ -381,7 +381,7 @@ EventStreamGapHandler<SeparateTablePerAggregateEventStreamConfiguration> eventSt
 }
 ```
 
-- `defaultSelection()` composed in a custom strategy shares its rotating window across the subscriptions it serves. A poll always also asks for gaps old enough to promote; a gap is promoted only when a poll asked for it and its event was missing
+- `defaultSelection()` keeps a rotation per subscription whenever the gap handler asks (as is, wrapped or composed in a custom strategy); called directly outside the gap handler, an instance rotates with its own. A poll always also asks for gaps old enough to promote; a gap is promoted only when a poll asked for it and its event was missing
 - CDC gives up a gap at `thresholdBased(n)`'s threshold; a lambda promotion strategy states none (override `permanentGapThreshold()`), so CDC uses 120 s
 - Use the event store's `EventStoreUnitOfWorkFactory`: a foreign one WARNs once and resolves gaps in its own transaction (commits before the handler's)
 

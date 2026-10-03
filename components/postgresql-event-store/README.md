@@ -613,7 +613,7 @@ public class CompanyTenant extends CharSequenceType<CompanyTenant> implements Te
 
 ### TenantSerializer Configuration
 
-The `TenantSerializer` interface handles serialization/deserialization of tenant values to/from the database. Two implementations are provided:
+The `TenantSerializer` interface handles serialization/deserialization of tenant values to/from the database. A custom implementation must round-trip: tenant filtering compares tenants by their serialized form. Two implementations are provided:
 
 | Serializer | Use Case |
 |------------|----------|
@@ -2053,13 +2053,14 @@ var eventStore = PostgresqlEventStore.<SeparateTablePerAggregateEventStreamConfi
 - After a configurable timeout (typically longer than max transaction duration), transient gaps become **permanent**
 - Permanent gaps indicate the inserting transaction was rolled back or failed
 - Permanent gaps are excluded from `loadEventsByGlobalOrder` calls to prevent blocking subscriptions indefinitely
-- Each poll asks again for the subscription's open transient gaps: with the default `PostgresqlEventStreamGapHandler` constructors, every open gap up to 50, and beyond that the 20 highest (where a late commit lands), the 10 lowest (the next to become permanent) and a rotating window of 20 in between, so a poll never carries more than 50 gap orders. Pass your own `ResolveTransientGapsToIncludeInQueryStrategy` to the longer constructors to choose differently; `ResolveTransientGapsToIncludeInQueryStrategy.defaultSelection()` gives you the default to compose in your own (its rotating window is then shared by every subscription your strategy serves)
+- Each poll asks again for the subscription's open transient gaps: with the default `PostgresqlEventStreamGapHandler` constructors, every open gap up to 50, and beyond that the 20 highest (where a late commit lands), the 10 lowest (the next to become permanent) and a rotating window of 20 in between, so a poll never carries more than 50 gap orders. Pass your own `ResolveTransientGapsToIncludeInQueryStrategy` to the longer constructors to choose differently; `ResolveTransientGapsToIncludeInQueryStrategy.defaultSelection()` gives you the default to compose in your own (each subscription keeps its own rotating window, also when the default is wrapped by a decorator or called from your strategy)
 - A transient gap is promoted to permanent only when a poll asked for it and its event was not there. Each poll therefore also asks for the gaps that are old enough to be promoted, whatever the include strategy returned (at most 50 more, lowest first), so a gap whose event exists is never promoted by a reconciler that happened not to look for it
 - Build a `PostgresqlEventStreamGapHandler` on the event store's `EventStoreUnitOfWorkFactory`. On a different factory it logs a one-time WARN and resolves and records gaps in a unit of work of its own, which commits independently of the subscriber's
 - A transient gap is resolved only once the event that fills it has been handled. Subscriptions created by the `EventStoreSubscriptionManager` acknowledge each event through a `SubscriberAcknowledgement`, and the event store resolves a gap fill's gap inside the handler's own unit of work; a rolled-back handler leaves the gap open. A subscription that stops or crashes before then - a fill still waiting for its batch, for an I/O retry or for demand - gets the event again after the restart instead of losing it. Handlers must tolerate the repeat
-- Polling the event store yourself: pass a `SubscriberAcknowledgement` (`SubscriberAcknowledgement.create()`, one per subscription) to the `pollEvents(...)`/`unboundedPollForEvents(...)` overload that takes one, and to `PersistedEventSubscriberBuilder`/`BatchedPersistedEventSubscriberBuilder.setSubscriberAcknowledgement(..)` if you use them, then `acknowledge(...)` every event you handled or gave up on - never one you skipped because you stopped. Without one, the gap is resolved once the event is handed on, and a stopped batched subscriber keeps its resume point at the lowest gap fill it had queued, so the events after that fill are delivered again as well
+- Polling the event store yourself: pass a `SubscriberAcknowledgement` (`SubscriberAcknowledgement.create()`, one per subscription - an instance serves exactly one subscription, and registering a second one logs a WARN once) to the `pollEvents(...)`/`unboundedPollForEvents(...)` overload that takes one, and to `PersistedEventSubscriberBuilder`/`BatchedPersistedEventSubscriberBuilder.setSubscriberAcknowledgement(..)` if you use them, then `acknowledge(...)` every event you handled or gave up on - never one you skipped because you stopped. Without one, the gap is resolved once the event is handed on, and a stopped batched subscriber keeps its resume point at the lowest gap fill it had queued, so the events after that fill are delivered again as well
+- Under [Hybrid CDC](#hybrid-cdc-logical-replication), a subscription that gives up waiting for a gap's event (after the handler's `transientGapGiveUpThreshold()`) records that through `SubscriptionGapHandler#giveUpTransientGaps(AggregateType, List<GlobalEventOrder>)`, in a unit of work of its own. The default reconciles it as a query that asked for exactly those gaps and found none; `PostgresqlEventStreamGapHandler` promotes each given-up gap that is still transient immediately at the give-up when the promotion strategy states a threshold (`thresholdBased(n)` / `permanentGapThreshold()`), otherwise only those the strategy deems ready; a custom `SubscriptionGapHandler` may override the default. CDC records a gap a bus event opens without claiming any transient gap was queried, so on the CDC path promotion happens only through queries on the polling/back-fill leg and the give-up. The give-up is therefore durable: a late-committing event for a given-up gap is dropped by the running subscription and after a restart. Every event the CDC delivery gate drops as a duplicate is acknowledged to the polling leg (except a gap fill the subscriber has not handled yet), so a dropped gap fill does not leave its gap open
 - A custom `SubscriptionGapHandler` gets `resolveFilledGaps(AggregateType, List<PersistedEvent>)` (default: `reconcileGapsAndReport(...)`; `PostgresqlEventStreamGapHandler` deletes the gaps), its calls are serialized per subscription, and it must not promote a gap whose event is among the events it is given
-- A tenant-filtered subscription (`onlyIncludeEventIfItBelongsToTenant`) loads every tenant's events in the polled range and filters by tenant in memory, so other tenants' global orders are never mistaken for gaps. It reads more rows per poll than an unfiltered one would need to deliver, but other tenants' payloads and metadata are not read from the table, transferred or deserialized
+- A tenant-filtered subscription (`onlyIncludeEventIfItBelongsToTenant`) loads every tenant's events in the polled range and filters by tenant in memory (polling and the CDC event store alike), comparing tenants by `TenantSerializer.serialize(...)` under the aggregate type's `TenantSerializer`, so other tenants' global orders are never mistaken for gaps. It reads more rows per poll than an unfiltered one would need to deliver, but other tenants' payloads and metadata are not read from the table, transferred or deserialized
 - Reset permanent gaps using `dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.gap.EventStreamGapHandler.resetPermanentGapsFor(AggregateType)` if needed (e.g., after data recovery)
 
 ### Disabling Gap Handling
@@ -2179,23 +2180,43 @@ Flux<PersistedEvent> eventFlux = eventStore.unboundedPollForEvents(
 The `EventStorePollingOptimizer` provides adaptive polling behavior to reduce database load during idle periods:
 
 ```java
-// No optimization (constant polling interval)
+// No optimizer-driven skipping or delay. The polling worker still waits the polling interval
+// after a poll that returned no events (otherwise it would poll again at once, in a busy loop)
 EventStorePollingOptimizer.None()
 
-// Simple jitter and exponential backoff
-EventStorePollingOptimizer.simpleJitterAndBackoff(logName)
+// Linear backoff while idle: base interval 100ms, +100ms per empty poll, at most 2s
+new SimpleEventStorePollingOptimizer("orders-subscriber", 100, 100, 2000)
 
-// Custom optimizer
+// Linear backoff with +/-20% jitter, so that many pollers don't hit the database in lockstep
+new JitteredEventStorePollingOptimizer("orders-subscriber", 100, 100, 2000, 0.20)
+
+// Custom optimizer: back off by 100ms per empty poll (max 2s), reset as soon as events are found
 new EventStorePollingOptimizer() {
+    private final AtomicLong delayMs = new AtomicLong();
+
     @Override
-    public Duration adjustPollingInterval(Duration baseInterval, boolean eventsFound) {
-        if (eventsFound) {
-            return baseInterval;  // Poll quickly when events are flowing
-        }
-        return baseInterval.multipliedBy(2);  // Back off when idle
+    public void eventStorePollingReturnedNoEvents() {
+        delayMs.updateAndGet(current -> Math.min(2000, current + 100));
+    }
+
+    @Override
+    public void eventStorePollingReturnedEvents() {
+        delayMs.set(0);
+    }
+
+    @Override
+    public boolean shouldSkipPolling() {   // deprecated, kept for compatibility
+        return false;
+    }
+
+    @Override
+    public long currentDelayMs() {
+        return delayMs.get();
     }
 }
 ```
+
+After an empty poll the polling worker waits the polling interval whenever `currentDelayMs()` is 0, so a decorated `None()` or a custom optimizer never busy-loops. An optimizer that returns zero on purpose (the `NotifyAwareEventStorePollingOptimizer` does when a NOTIFY has landed) overrides `mayRepollImmediatelyAfterAnEmptyPoll()` to return `true`; the default is `false`. The polling worker also exits when its thread is interrupted.
 
 ### Polling vs Subscriptions
 

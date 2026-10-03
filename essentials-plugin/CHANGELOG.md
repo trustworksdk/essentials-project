@@ -27,6 +27,10 @@ targets, with a `-N` suffix for plugin-only releases.
 - **Bundled docs** — custom gap strategies can compose `defaultSelection()`, a gap is promoted only when a
   poll asked for it, CDC gives up a gap at the gap handler's threshold, and tenant-filtered polls never read
   other tenants' payloads (`LLM-postgresql-event-store.md`).
+- **Bundled docs** — a CDC gap give-up is durable through `SubscriptionGapHandler#giveUpTransientGaps`, tenant
+  filtering compares serialized tenants (a custom `TenantSerializer` must round-trip), one
+  `SubscriberAcknowledgement` serves one subscription, and an optimizer with a deliberate zero delay overrides
+  `mayRepollImmediatelyAfterAnEmptyPoll()` (`LLM-postgresql-event-store.md`).
 - **Bundled docs** — the Event Store Starter reference gains Gap Handling and CDC sections; CDC is disabled by
   default (`LLM-spring-boot-starter-modules.md`, `LLM-spring-postgresql-event-store.md`).
 - **New trap `ESS-116`** — a handler that skips everything at or below the highest `GlobalEventOrder` it

@@ -762,21 +762,30 @@ Later TX1 commits → resolves: 1, 2, 3
 Each poll re-asks for the subscriber's open transient gaps. Default `PostgresqlEventStreamGapHandler` constructors: all open
 gaps up to 50; beyond that the 20 highest + 10 lowest + a rotating window of 20 (max 50 per poll). A custom
 `ResolveTransientGapsToIncludeInQueryStrategy` (longer constructors) replaces that; compose
-`ResolveTransientGapsToIncludeInQueryStrategy.defaultSelection()` to keep it (rotation then shared by the subscriptions it
-serves). A gap is promoted only if the poll asked for it and its event was missing; every poll also asks for gaps old
+`ResolveTransientGapsToIncludeInQueryStrategy.defaultSelection()` to keep it (each subscription keeps its own rotation,
+also when it is wrapped or called from your strategy). A gap is promoted only if the poll asked for it and its event was missing; every poll also asks for gaps old
 enough to promote (max 50 more). Build the handler on the event store's `EventStoreUnitOfWorkFactory`: a foreign one WARNs
 once and resolves gaps in its own transaction. Tenant-filtered polls never read other tenants' payloads. Transient gaps are per subscriber;
 permanent gaps are shared by every subscriber of the `AggregateType`. A tenant-filtered subscription loads every tenant's
-events in the polled range and filters in memory (polling and CDC alike), so other tenants' orders are never gaps.
+events in the polled range and filters in memory (polling and CDC alike), so other tenants' orders are never gaps. The
+filter compares tenants by `TenantSerializer.serialize(...)` under the aggregate type's `TenantSerializer`, as the SQL
+predicates do, not by `toString()`.
 A gap is resolved only once its event has been handled, so a stop or crash before that redelivers the fill rather
 than losing it. `EventStoreSubscriptionManager` subscriptions do this out of the box: the subscriber acknowledges each
 event via a `SubscriberAcknowledgement` and the store deletes the fill's gap inside the handler's unit of work.
-Polling yourself: `SubscriberAcknowledgement.create()` per subscription, pass it to the `pollEvents(...)` /
+Polling yourself: `SubscriberAcknowledgement.create()` per subscription (one instance serves exactly one subscription; a
+second registration WARNs once), pass it to the `pollEvents(...)` /
 `unboundedPollForEvents(...)` overload taking one (and `setSubscriberAcknowledgement(..)` on the subscriber builders),
 then `acknowledge(...)` each event handled or given up on - never one skipped because you stopped. Without it the gap
 resolves on hand-on, and a stopped batched subscriber holds its resume point at the lowest fill it had queued.
 A custom `SubscriptionGapHandler` gets default `resolveFilledGaps(AggregateType, List<PersistedEvent>)`, serialized calls
-per subscription, and must not promote a gap whose event is in the events it is given. Mocking a store wrapped by
+per subscription, and must not promote a gap whose event is in the events it is given. When a CDC subscription gives up
+waiting for a gap's event (after `transientGapGiveUpThreshold()`) it calls the handler's default
+`giveUpTransientGaps(AggregateType, List<GlobalEventOrder>)`, so the give-up is durable: a late-committing event for that
+gap is dropped by the running subscription and after a restart. `PostgresqlEventStreamGapHandler` promotes those gaps immediately
+at the give-up when the promotion strategy states a threshold (`thresholdBased(n)` / `permanentGapThreshold()`), else only those
+the strategy deems ready; a custom handler may override the default. CDC records a gap a bus event opens without claiming any
+transient gap was queried, so on the CDC path promotion happens only through queries on the polling/back-fill leg and the give-up. Mocking a store wrapped by
 `CdcEventStore`? Stub the `pollEvents` overload taking a `SubscriberAcknowledgement`.
 
 ### Ordering Guarantees
@@ -1014,6 +1023,7 @@ event.tenant().ifPresent(t -> log.info("Tenant: {}", t));
 ```
 
 **Built-in**: `TenantId`, `TenantSerializer.TenantIdSerializer`, `TenantSerializer.NoSupportForMultiTenancySerializer`.
+A custom `TenantSerializer` must round-trip: equal tenants serialize to equal strings, since tenant filtering compares the serialized form.
 
 ## Configuration
 
@@ -1186,6 +1196,9 @@ Flux<PersistedEvent> flux = eventStore.pollEvents(
     Optional.of(SubscriberId.of("custom")),
     Optional.of(EventStorePollingOptimizer.simpleJitterAndBackoff("custom"))
 );
+
+// An EventStorePollingOptimizer whose currentDelayMs() is 0 after an empty poll still waits the polling interval, unless it
+// overrides mayRepollImmediatelyAfterAnEmptyPoll() to return true (only NotifyAwareEventStorePollingOptimizer does)
 
 // No backpressure
 Flux<PersistedEvent> unbounded = eventStore.unboundedPollForEvents(...);
