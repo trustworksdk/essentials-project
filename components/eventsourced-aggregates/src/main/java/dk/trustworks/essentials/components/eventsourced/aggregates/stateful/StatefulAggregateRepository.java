@@ -609,6 +609,11 @@ public interface StatefulAggregateRepository<ID, EVENT_TYPE, AGGREGATE_IMPL_TYPE
         private final StatefulAggregateInstanceFactory                       aggregateRootInstanceFactory;
         private final AggregateType                                          aggregateType;
         private final Optional<AggregateSnapshotRepository>                  aggregateSnapshotRepository;
+        /**
+         * The cause bound when each aggregate joined the UnitOfWork, so its events are appended under that cause rather
+         * than under whatever is bound when the UnitOfWork commits - see {@link CausesCapturedAtRegistration}
+         */
+        private final CausesCapturedAtRegistration<AGGREGATE_IMPL_TYPE>      causesCapturedAtRegistration = new CausesCapturedAtRegistration<>();
 
         /**
          * Create an {@link StatefulAggregateRepository} - the {@link EventStore} will be configured with the supplied <code>eventStreamConfiguration</code>.<br>
@@ -734,8 +739,7 @@ public interface StatefulAggregateRepository<ID, EVENT_TYPE, AGGREGATE_IMPL_TYPE
                 return usableAggregateSnapshot.map(snapshot -> {
                     log.debug("[{}:{}] Returning '{}' SNAPSHOT as it's up-to-date as of eventOrderOfLastIncludedEvent: {}",
                               aggregateType, aggregateId, aggregateImplementationType.getName(), snapshot.eventOrderOfLastIncludedEvent);
-                    return unitOfWork.registerLifecycleCallbackForResource((AGGREGATE_IMPL_TYPE) snapshot.aggregateSnapshot,
-                                                                           unitOfWorkCallback);
+                    return registerWithUnitOfWork(unitOfWork, (AGGREGATE_IMPL_TYPE) snapshot.aggregateSnapshot);
                 });
             } else if (usableAggregateSnapshot.isEmpty() && potentialPersistedEventStream.isEmpty()) {
                 log.debug("[{}:{}] Didn't find any '{}' events using loadMoreEventsWithEventOrderFromAndIncluding: {}",
@@ -761,18 +765,24 @@ public interface StatefulAggregateRepository<ID, EVENT_TYPE, AGGREGATE_IMPL_TYPE
                           aggregateIdType.getName(), aggregateId, aggregateImplementationType.getName(), expectedLatestEventOrder, usableAggregateSnapshot.isPresent());
                 AGGREGATE_IMPL_TYPE aggregate = usableAggregateSnapshot.map(snapshot -> (AGGREGATE_IMPL_TYPE) snapshot.aggregateSnapshot)
                                                                  .orElseGet(() -> aggregateRootInstanceFactory.create(aggregateId, aggregateImplementationType));
-                return Optional.of(unitOfWork.registerLifecycleCallbackForResource(aggregate.rehydrate(persistedEventsStream),
-                                                                                   unitOfWorkCallback));
+                return Optional.of(registerWithUnitOfWork(unitOfWork, aggregate.rehydrate(persistedEventsStream)));
             }
         }
 
         @Override
         public AGGREGATE_IMPL_TYPE save(AGGREGATE_IMPL_TYPE aggregate) {
             log.debug("Adding {} with id '{}' to the current UnitOfWork so it will be persisted at commit time", aggregateImplementationType.getName(), aggregate.aggregateId());
-            eventStore.getUnitOfWorkFactory()
-                      .getRequiredUnitOfWork()
-                      .registerLifecycleCallbackForResource(aggregate, unitOfWorkCallback);
+            registerWithUnitOfWork(eventStore.getUnitOfWorkFactory().getRequiredUnitOfWork(), aggregate);
             return aggregate;
+        }
+
+        /**
+         * Register the aggregate with the UnitOfWork so its changes are appended when it commits, capturing the cause bound
+         * now for that append
+         */
+        private AGGREGATE_IMPL_TYPE registerWithUnitOfWork(UnitOfWork unitOfWork, AGGREGATE_IMPL_TYPE aggregate) {
+            causesCapturedAtRegistration.capture(unitOfWork, aggregate);
+            return unitOfWork.registerLifecycleCallbackForResource(aggregate, unitOfWorkCallback);
         }
 
         @Override
@@ -821,11 +831,13 @@ public interface StatefulAggregateRepository<ID, EVENT_TYPE, AGGREGATE_IMPL_TYPE
                                       aggregate.aggregateId());
                         }
                         aggregate.markChangesAsCommitted();
-                        var persistedEvents = eventStore.appendToStream(aggregateType,
-                                                                        eventsToPersist.aggregateId,
-                                                                        eventsToPersist.eventOrderOfLastRehydratedEvent,
-                                                                        eventsToPersist.events);
-                        aggregateSnapshotRepository.ifPresent(repository -> repository.aggregateUpdated(aggregate, persistedEvents));
+                        causesCapturedAtRegistration.runWithCapturedCause(unitOfWork, aggregate, () -> {
+                            var persistedEvents = eventStore.appendToStream(aggregateType,
+                                                                            eventsToPersist.aggregateId,
+                                                                            eventsToPersist.eventOrderOfLastRehydratedEvent,
+                                                                            eventsToPersist.events);
+                            aggregateSnapshotRepository.ifPresent(repository -> repository.aggregateUpdated(aggregate, persistedEvents));
+                        });
                         processingStatus.set(BeforeCommitProcessingStatus.REQUIRED);
                     }
                 });
@@ -834,7 +846,7 @@ public interface StatefulAggregateRepository<ID, EVENT_TYPE, AGGREGATE_IMPL_TYPE
 
             @Override
             public void afterCommit(UnitOfWork unitOfWork, java.util.List<AGGREGATE_IMPL_TYPE> associatedResources) {
-
+                causesCapturedAtRegistration.release(unitOfWork);
             }
 
             @Override
@@ -844,7 +856,7 @@ public interface StatefulAggregateRepository<ID, EVENT_TYPE, AGGREGATE_IMPL_TYPE
 
             @Override
             public void afterRollback(UnitOfWork unitOfWork, java.util.List<AGGREGATE_IMPL_TYPE> associatedResources, Throwable causeOfTheRollback) {
-
+                causesCapturedAtRegistration.release(unitOfWork);
             }
         }
     }

@@ -586,7 +586,22 @@ Two harness lessons from getting there: with the queue defaults the processor ch
 consumer count and fetcher above. And WAL bytes cannot be held to "overlap": the enabled arm writes one more value
 per event by design, so the check is that the difference is the size of that value.
 
-Phases 4 and 5 rerun this IT (phase 4 changes the processor chain's path) and add the `durable-queues` A/B.
+**Rerun after phase 4** (lazy appends capture the cause at registration), same settings, same day:
+
+| Shape | Arm | Events/s, median [Q1–Q3] | WAL bytes/event |
+|---|---|---|---|
+| Append path | causation off | 5 045 [4 077–6 033] | 678.6 |
+| Append path | causation on | 4 831 [4 293–5 543] | 717.9 |
+| Processor chain | causation off | 1 577 [1 570–1 583] | 2 114.1 |
+| Processor chain | causation on | 1 592 [1 590–1 593] | 2 154.6 |
+
+The append path overlaps again. The processor chain's interquartile ranges do *not* overlap — but the enabled arm
+is the faster one, by 0.9%, with both ranges under 1% wide. A difference that size, pointing the way the added
+work cannot, is drift between interleaved runs that this machine's spread happens to resolve, not a cost; the
+harness reports it as separated because it is, and the reading is recorded rather than smoothed over. WAL still
+grows by the stored value only (+39.3 and +40.5 bytes).
+
+Phase 5 adds the `durable-queues` A/B.
 
 ### Phase 3 — The enricher and the switch (`postgresql-event-store`, starter)
 
@@ -619,6 +634,21 @@ Phases 4 and 5 rerun this IT (phase 4 changes the processor chain's path) and ad
   triggering event's id. And the case that motivated this phase: an in-transaction subscription handler that
   changes an aggregate through `StatefulAggregateRepository` writes the id of the event it was handed, not the id
   of the outer work's cause.
+- **How it landed.** "Into the registered callback state" turned out not to exist for two of the three: the
+  stateful and flex repositories each share *one* callback instance across every aggregate and UnitOfWork, so the
+  callback has nowhere per-aggregate to keep a cause. Giving each registration its own callback instance would
+  have changed how the UnitOfWork groups and orders appends, so instead an internal helper,
+  `CausesCapturedAtRegistration`, keeps the captured cause per (UnitOfWork, resource identity) beside the callback:
+  first registration wins, entries are released in `afterCommit`/`afterRollback`, and the map is weak on the
+  UnitOfWork so an abandoned one — or a read-only Spring transaction, which skips `afterCommit` — cannot leak.
+  The decider's resource is its own private `EventsToAppendToStream` record, so there the cause simply rides on
+  the record. `FlexAggregateRepository`'s resource, `EventsToPersist`, is public API, which is why it uses the
+  helper rather than gaining a field.
+- **Done** on `feature/event-causation`: `CausationCapturedAtRegistrationIT` (9 tests: the cause at registration
+  wins over the one at commit for all three repositories; "no cause" at registration is kept; first registration
+  wins; a loaded aggregate's later changes; the in-transaction case end to end). All nine fail with the phase 4
+  changes reverted. The `EventProcessor` → repository case is covered end to end by the lab's processor chain,
+  which asserts every reaction event carries a cause.
 
 ### Phase 5 — Queue propagation (`foundation`, starter)
 
