@@ -1662,13 +1662,23 @@ async function openShardOwnedDrawer(queueName, id) {
    following one re-centres the view on that event. Payloads are deliberately not part of these operations. */
 let causationState = { eventId: '', aggregateType: '', aggregateId: '' };
 
+/* A persisted event type is "FQCN:" plus the fully qualified class name - far too long for a table cell. The label
+   shows the simple class name (nested-class part included) and keeps the full type in the tooltip. An event *name*
+   (a named, not typed, event) is shown as it is. */
+function eventTypeLabel(eventType) {
+    if (eventType == null) return nil();
+    const full = String(eventType).replace(/^FQCN:/, '');
+    const simple = full.includes('.') ? full.slice(full.lastIndexOf('.') + 1).replace(/\$/g, '.') : full;
+    return `<span class="badge badge-neutral event-type" title="${esc(full)}">${esc(simple)}</span>`;
+}
+
 const causationLink = (id) => (id == null ? nil('none recorded')
     : `<button class="link mono" data-causation-event="${esc(id)}" title="Show causation for this event">${esc(String(id).slice(0, 18))}…</button>`);
 
 const causationRow = (ev, index) => `<tr${index === 0 ? ' class="is-selected"' : ''}>
   <td class="num">${index == null ? '' : num(index)}</td>
   <td>${causationLink(ev.eventId)}</td>
-  <td class="truncate">${esc(ev.eventType)}</td>
+  <td>${eventTypeLabel(ev.eventType)}</td>
   <td>${esc(ev.aggregateType)}</td>
   <td class="truncate mono">${esc(ev.aggregateId)}</td>
   <td class="num">${num(ev.eventOrder)}</td>
@@ -1765,7 +1775,7 @@ views.causation = async () => {
 
     return toolbar + aggregateCard + `
     <div class="kpi-row">
-      ${tile('Event type', esc(event.eventType), esc(event.aggregateType))}
+      ${tile('Event type', eventTypeLabel(event.eventType), esc(event.aggregateType))}
       ${tile('Aggregate', `<span class="mono">${esc(String(event.aggregateId).slice(0, 18))}</span>`, `event order ${num(event.eventOrder)}`)}
       ${tile('Persisted', ts(event.timestamp), `global order ${num(event.globalEventOrder)}`)}
       ${tile('Caused by', event.causedByEventId ? causationLink(event.causedByEventId) : nil('none recorded'),

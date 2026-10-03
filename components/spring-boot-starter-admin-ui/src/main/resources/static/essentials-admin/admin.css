@@ -458,3 +458,6 @@ h3.sub { font-size: 13px; margin: 0 0 8px; color: var(--ink-secondary); font-wei
 .attention-part + .attention-part { border-top: 1px solid var(--gridline); }
 .attention-title { padding: 10px 14px 4px; font-weight: 600; }
 .attention-part { scroll-margin-top: 16px; }
+
+/* Event type labels in the causation tables: the simple class name, never truncated mid-word; the full type is the title */
+.badge.event-type { white-space: nowrap; font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; font-size: 12px; }
