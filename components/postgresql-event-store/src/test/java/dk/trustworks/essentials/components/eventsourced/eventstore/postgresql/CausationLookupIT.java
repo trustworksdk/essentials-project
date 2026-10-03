@@ -16,15 +16,19 @@
 
 package dk.trustworks.essentials.components.eventsourced.eventstore.postgresql;
 
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.api.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.*;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.persistence.CausationIndexNotEnabledException;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.persistence.PersistableEvent;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.persistence.table_per_aggregate_type.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.serializer.AggregateIdSerializer;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.serializer.json.EssentialsJSONEventSerializers;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.subscription.DurableSubscriptionRepository;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.transaction.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.types.EventTypeOrName;
 import dk.trustworks.essentials.components.foundation.causation.CausationContext;
 import dk.trustworks.essentials.components.foundation.types.EventId;
+import dk.trustworks.essentials.shared.security.EssentialsSecurityProvider;
 import org.jdbi.v3.core.Jdbi;
 import org.jdbi.v3.postgres.PostgresPlugin;
 import org.junit.jupiter.api.*;
@@ -187,6 +191,58 @@ class CausationLookupIT {
                                                             .mapTo(Long.class)
                                                             .one());
         assertThat(ordersIndexes).isEqualTo(1);
+    }
+
+    // ---------------------------------------------------------------------------------------- the admin API's walk
+
+    @Test
+    void the_causation_chain_walks_back_from_an_event_to_the_root_of_its_chain() {
+        var root       = append(Optional.empty(), ORDERS, ORDER_1, new OrderPlaced(ORDER_1));
+        var child      = append(Optional.of(root), SHIPMENTS, SHIPMENT_1, new ShipmentRequested(SHIPMENT_1));
+        var grandchild = append(Optional.of(child), SHIPMENTS, SHIPMENT_1, new ShipmentDispatched(SHIPMENT_1));
+
+        var chain = api().findCausationChain("principal", grandchild, 20);
+
+        assertThat(chain).extracting(ApiCausationEvent::eventId).containsExactly(grandchild.toString(), child.toString(), root.toString());
+        assertThat(chain).extracting(ApiCausationEvent::aggregateType).containsExactly("Shipments", "Shipments", "Orders");
+        assertThat(chain.getLast().causedByEventId()).isNull();
+    }
+
+    @Test
+    void the_causation_chain_stops_at_maxDepth_and_at_a_cause_no_registered_event_stream_holds() {
+        var root       = append(Optional.empty(), ORDERS, ORDER_1, new OrderPlaced(ORDER_1));
+        var child      = append(Optional.of(root), SHIPMENTS, SHIPMENT_1, new ShipmentRequested(SHIPMENT_1));
+        var grandchild = append(Optional.of(child), SHIPMENTS, SHIPMENT_1, new ShipmentDispatched(SHIPMENT_1));
+        var orphan     = append(Optional.of(EventId.random()), ORDERS, ORDER_1, new OrderAccepted(ORDER_1));
+
+        assertThat(api().findCausationChain("principal", grandchild, 2)).extracting(ApiCausationEvent::eventId)
+                                                                       .containsExactly(grandchild.toString(), child.toString());
+        assertThat(api().findCausationChain("principal", orphan, 20)).extracting(ApiCausationEvent::eventId)
+                                                                    .containsExactly(orphan.toString());
+        assertThat(api().findCausationChain("principal", EventId.random(), 20)).isEmpty();
+        assertThatThrownBy(() -> api().findCausationChain("principal", root, 0)).isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> api().findCausationChain("principal", root, EventStoreApi.MAX_CAUSATION_CHAIN_DEPTH + 1))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    @Test
+    void the_admin_API_lists_caused_events_once_the_index_is_enabled() {
+        var root = append(Optional.empty(), ORDERS, ORDER_1, new OrderPlaced(ORDER_1));
+        append(Optional.of(root), SHIPMENTS, SHIPMENT_1, new ShipmentRequested(SHIPMENT_1));
+
+        assertThatThrownBy(() -> api().findEventsCausedBy("principal", root)).isInstanceOf(CausationIndexNotEnabledException.class);
+
+        persistenceStrategy.enableCausationIndex();
+        assertThat(api().findEventsCausedBy("principal", root)).extracting(ApiCausationEvent::eventType)
+                                                              .singleElement()
+                                                              .asString()
+                                                              .endsWith("ShipmentRequested");
+    }
+
+    private EventStoreApi api() {
+        return new DefaultEventStoreApi(new EssentialsSecurityProvider.AllAccessSecurityProvider(),
+                                        eventStore,
+                                        org.mockito.Mockito.mock(DurableSubscriptionRepository.class));
     }
 
     // --------------------------------------------------------------------------------------------- unstorable causes

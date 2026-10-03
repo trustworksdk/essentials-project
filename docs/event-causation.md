@@ -740,6 +740,23 @@ percent rather than dismissed as drift.
     from a TEXT-typed stream with custom ids, could have failed a business transaction over diagnostic metadata.
     Such a cause is now dropped with a WARN. (Correlation ids keep the old behaviour; they are outside this work.)
   - Tests: `CausationLookupIT` (9) and a validate-mode test in `EventStoreSchemaModeIT`.
+- **6b — how it landed** on `feature/event-causation`:
+  - `EventStoreApi` gains `findEvent`, `findCausationChain` (walk back to `maxDepth`, default 20, at most 100,
+    stopping at a missing cause or a revisited event) and `findEventsCausedBy`, at `GET /event-store/events/{eventId}`,
+    `…/causation-chain` and `…/caused-events`, guarded by `essentials_subscription_reader` / `essentials_admin`.
+  - They return a new `ApiCausationEvent`: identity, position, timestamp and cause, **without payloads**. Walking
+    causation does not need them, and the admin API otherwise guards payloads with a separate role; they can be
+    added later without breaking anyone.
+  - A missing index answers `409` with the property to set. `DefaultEventStoreApi` unwraps it from the
+    `UnitOfWorkException` its UnitOfWork wraps it in — without that the adapter answered `500`, which only the
+    end-to-end test could see.
+  - Console: an **Event causation** page — look up an event id, see the event, its chain back, and its direct
+    effects; every event id is a link that re-centres the page. The aggregate lookup's event-stream rows gain a
+    *Causation* button. The page's three calls are literal paths, so the parity gate covers them.
+  - Verified: contract drift, validation and compatibility gates; `AdminApiEndpointsTest` and the conformance
+    count; the UI parity gate; and the three endpoints exercised over HTTP against the demo application. **Not
+    verified visually** — no browser is installed in the devcontainer, so the page was syntax-checked but not
+    rendered.
 
 ### Phase 7 — The decisive integration test
 

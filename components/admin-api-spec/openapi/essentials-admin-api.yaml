@@ -28,7 +28,8 @@ tags:
 - name: durable-queues
   description: Inspect and manage durable queue and dead-letter messages.
 - name: event-store
-  description: Inspect event-store subscriptions and persisted event order.
+  description: "Inspect event-store subscriptions and persisted event order, and walk\
+    \ event causation."
 - name: cdc
   description: Inspect Change Data Capture runtime state and effective configuration.
 - name: event-store-statistics
@@ -1973,6 +1974,180 @@ paths:
       x-required-roles:
       - essentials_subscription_reader
       - essentials_admin
+  /event-store/events/{eventId}:
+    get:
+      tags:
+      - event-store
+      summary: "Find an event by its id alone, in whichever registered aggregate type's\
+        \ event stream holds it. Returns the event's identity and recorded cause,\
+        \ not its payload."
+      operationId: findEvent
+      parameters:
+      - name: eventId
+        in: path
+        description: The event id.
+        required: true
+        schema:
+          type: string
+      responses:
+        "200":
+          description: 200 — The event.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiCausationEvent"
+        "400":
+          description: "Malformed or out-of-range parameter, or invalid request body."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: Unauthenticated.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Caller lacks one of the required roles.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: No value exists for the given identifier.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "500":
+          description: Unexpected server error.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+      x-required-roles:
+      - essentials_subscription_reader
+      - essentials_admin
+  /event-store/events/{eventId}/causation-chain:
+    get:
+      tags:
+      - event-store
+      summary: "Why did this event happen: the event, then the event that caused it,\
+        \ then that event's cause, and so on. Stops at an event without a recorded\
+        \ cause, at a cause no registered event stream holds, or after maxDepth events."
+      operationId: findCausationChain
+      parameters:
+      - name: eventId
+        in: path
+        description: The id of the event to start from.
+        required: true
+        schema:
+          type: string
+      - name: maxDepth
+        in: query
+        description: "The most events to return, starting with the event itself."
+        required: false
+        schema:
+          maximum: 100
+          minimum: 1
+          type: integer
+          format: int32
+          default: 20
+      responses:
+        "200":
+          description: 200 — The matching items.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/ApiCausationEvent"
+        "400":
+          description: "Malformed or out-of-range parameter, or invalid request body."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: Unauthenticated.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Caller lacks one of the required roles.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "500":
+          description: Unexpected server error.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+      x-required-roles:
+      - essentials_subscription_reader
+      - essentials_admin
+  /event-store/events/{eventId}/caused-events:
+    get:
+      tags:
+      - event-store
+      summary: "What did this event cause: every event whose recorded cause is this\
+        \ event, across all registered aggregate types. Direct effects only. Requires\
+        \ the opt-in caused-by-event-id index."
+      operationId: findEventsCausedBy
+      parameters:
+      - name: eventId
+        in: path
+        description: The id of the causing event.
+        required: true
+        schema:
+          type: string
+      responses:
+        "200":
+          description: 200 — The matching items.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/ApiCausationEvent"
+        "400":
+          description: "Malformed or out-of-range parameter, or invalid request body."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: Unauthenticated.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Caller lacks one of the required roles.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "409":
+          description: "The caused-by-event-id index is not enabled (essentials.eventstore.causation.index-enabled),\
+            \ and the lookup refuses to scan every event-stream table without it."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "500":
+          description: Unexpected server error.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+      x-required-roles:
+      - essentials_subscription_reader
+      - essentials_admin
   /event-store/subscriptions/{subscriberId}/aggregate-types/{aggregateType}/statistics:
     get:
       tags:
@@ -2910,6 +3085,40 @@ components:
           format: date-time
         archiveError:
           type: string
+    ApiCausationEvent:
+      required:
+      - aggregateId
+      - aggregateType
+      - eventId
+      - eventOrder
+      - eventType
+      - globalEventOrder
+      - timestamp
+      type: object
+      properties:
+        eventId:
+          type: string
+        aggregateType:
+          type: string
+        aggregateId:
+          type: string
+        eventType:
+          type: string
+        eventOrder:
+          type: integer
+          format: int64
+        globalEventOrder:
+          type: integer
+          format: int64
+        timestamp:
+          type: string
+          format: date-time
+        causedByEventId:
+          type: string
+          description: The id of the event that caused this one. Null when no cause
+            was recorded. Events started by a request or a person have none. Neither
+            do events persisted before causation was recorded.
+          nullable: true
     ApiCdcAvailability:
       required:
       - everActive

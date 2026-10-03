@@ -19,7 +19,7 @@ package dk.trustworks.essentials.components.adminapi.rest;
 import dk.trustworks.essentials.components.adminapi.rest.dto.GlobalEventOrderResult;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.api.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.AggregateType;
-import dk.trustworks.essentials.components.foundation.types.SubscriberId;
+import dk.trustworks.essentials.components.foundation.types.*;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
@@ -58,6 +58,24 @@ public class EventStoreController {
     @GetMapping("/event-store/subscriptions/statistics")
     public List<ApiSubscriptionStatistics> findAllSubscriptionStatistics() {
         return eventStoreApi.findAllSubscriptionStatistics(principalResolver.requireAuthenticatedPrincipal());
+    }
+
+    @GetMapping("/event-store/events/{eventId}")
+    public ApiCausationEvent findEvent(@PathVariable String eventId) {
+        return eventStoreApi.findEvent(principalResolver.requireAuthenticatedPrincipal(), EventId.of(eventId))
+                            .orElseThrow(() -> new AdminApiResourceNotFoundException(
+                                    "No registered event stream holds an event with id '" + eventId + "'."));
+    }
+
+    @GetMapping("/event-store/events/{eventId}/causation-chain")
+    public List<ApiCausationEvent> findCausationChain(@PathVariable String eventId,
+                                                      @RequestParam(defaultValue = "20") int maxDepth) {
+        return eventStoreApi.findCausationChain(principalResolver.requireAuthenticatedPrincipal(), EventId.of(eventId), maxDepth);
+    }
+
+    @GetMapping("/event-store/events/{eventId}/caused-events")
+    public List<ApiCausationEvent> findEventsCausedBy(@PathVariable String eventId) {
+        return eventStoreApi.findEventsCausedBy(principalResolver.requireAuthenticatedPrincipal(), EventId.of(eventId));
     }
 
     @GetMapping("/event-store/subscriptions/{subscriberId}/aggregate-types/{aggregateType}/statistics")

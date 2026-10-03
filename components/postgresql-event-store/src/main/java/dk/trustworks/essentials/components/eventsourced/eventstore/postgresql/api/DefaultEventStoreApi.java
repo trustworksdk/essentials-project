@@ -20,14 +20,17 @@ import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.AggregateType;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.observability.SubscriptionStatisticsRegistry;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.observability.SubscriptionStatisticsRegistry.SubscriptionKey;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.persistence.CausationIndexNotEnabledException;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.subscription.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.types.GlobalEventOrder;
-import dk.trustworks.essentials.components.foundation.types.SubscriberId;
+import dk.trustworks.essentials.components.foundation.transaction.UnitOfWorkException;
+import dk.trustworks.essentials.components.foundation.types.*;
 import dk.trustworks.essentials.shared.security.EssentialsSecurityProvider;
 
 import java.util.*;
 
-import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
+import static dk.trustworks.essentials.shared.FailFast.*;
+import static dk.trustworks.essentials.shared.MessageFormatter.msg;
 import static dk.trustworks.essentials.shared.security.EssentialsSecurityRoles.*;
 import static dk.trustworks.essentials.shared.security.EssentialsSecurityValidator.validateHasAnyEssentialsSecurityRoles;
 
@@ -93,6 +96,53 @@ public class DefaultEventStoreApi implements EventStoreApi {
 
     private void validateSubscriptionReaderRoles(Object principal) {
         validateHasAnyEssentialsSecurityRoles(essentialsSecurityProvider, principal, SUBSCRIPTION_READER, ESSENTIALS_ADMIN);
+    }
+
+    @Override
+    public Optional<ApiCausationEvent> findEvent(Object principal, EventId eventId) {
+        validateSubscriptionReaderRoles(principal);
+        requireNonNull(eventId, "No eventId provided");
+        return eventStore.getUnitOfWorkFactory().withUnitOfWork(uow -> eventStore.findEvent(eventId).map(ApiCausationEvent::from));
+    }
+
+    @Override
+    public List<ApiCausationEvent> findCausationChain(Object principal, EventId eventId, int maxDepth) {
+        validateSubscriptionReaderRoles(principal);
+        requireNonNull(eventId, "No eventId provided");
+        requireTrue(maxDepth >= 1 && maxDepth <= MAX_CAUSATION_CHAIN_DEPTH,
+                    msg("maxDepth must be between 1 and {}, was {}", MAX_CAUSATION_CHAIN_DEPTH, maxDepth));
+        return eventStore.getUnitOfWorkFactory().withUnitOfWork(uow -> {
+            var chain   = new ArrayList<ApiCausationEvent>();
+            var visited = new HashSet<EventId>();
+            var next    = Optional.of(eventId);
+            while (next.isPresent() && chain.size() < maxDepth && visited.add(next.get())) {
+                var event = eventStore.findEvent(next.get());
+                if (event.isEmpty()) {
+                    break;
+                }
+                chain.add(ApiCausationEvent.from(event.get()));
+                next = event.get().causedByEventId();
+            }
+            return chain;
+        });
+    }
+
+    @Override
+    public List<ApiCausationEvent> findEventsCausedBy(Object principal, EventId eventId) {
+        validateSubscriptionReaderRoles(principal);
+        requireNonNull(eventId, "No eventId provided");
+        try {
+            return eventStore.getUnitOfWorkFactory().withUnitOfWork(uow -> eventStore.loadEventsCausedBy(eventId)
+                                                                                     .stream()
+                                                                                     .map(ApiCausationEvent::from)
+                                                                                     .toList());
+        } catch (UnitOfWorkException e) {
+            // Surface the missing index as itself, so callers - the admin API's 409 in particular - can recognise it
+            if (e.getCause() instanceof CausationIndexNotEnabledException indexNotEnabled) {
+                throw indexNotEnabled;
+            }
+            throw e;
+        }
     }
 
     @Override
