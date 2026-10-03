@@ -249,6 +249,11 @@ views.queues = async () => {
       <td class="truncate">${m.lastDeliveryError ? badge('serious', m.lastDeliveryError) : nil()}</td>
       <td>${m.isBeingDelivered ? badge('warning', 'Delivering') : m.isDeadLetterMessage ? badge('critical', 'Dead letter') : badge('neutral', 'Queued')}</td>
       <td class="actions">
+        ${m.referencedAggregateType
+            ? `<button class="btn btn-sm" data-causation-aggregate-type="${esc(m.referencedAggregateType)}"
+                       data-causation-aggregate-id="${esc(m.orderedMessageKey)}"
+                       title="The event this message refers to: ${esc(m.referencedAggregateType)} ${esc(m.orderedMessageKey)} #${esc(String(m.orderedMessageOrder))}">Causation</button>`
+            : ''}
         ${m.isDeadLetterMessage
             ? `<button class="btn btn-sm" data-act="resurrect" data-name="${esc(m.id)}" ${CAN.writeQueues ? '' : 'disabled'}>Resurrect</button>`
             : `<button class="btn btn-sm" data-act="dlq" data-name="${esc(m.id)}" ${CAN.writeQueues ? '' : 'disabled'}>Dead-letter</button>`}
@@ -259,7 +264,7 @@ views.queues = async () => {
     const cols = [
         { label: 'Entry id' }, { label: 'Payload' }, { label: 'Added' },
         { label: 'Attempts', num: true }, { label: 'Redel.', num: true }, { label: 'Last error' },
-        { label: 'State' }, { label: '', width: '170px', sticky: true }
+        { label: 'State' }, { label: '', width: '250px', sticky: true }
     ];
 
     return `
@@ -1825,6 +1830,14 @@ document.addEventListener('click', async (e) => {
         closeDialog();
         await fn?.();
         return;
+    }
+
+    const aggregateCausationTarget = e.target.closest('[data-causation-aggregate-type]');
+    if (aggregateCausationTarget) {
+        causationState = { eventId: '',
+                           aggregateType: aggregateCausationTarget.dataset.causationAggregateType,
+                           aggregateId: aggregateCausationTarget.dataset.causationAggregateId };
+        return show('causation');
     }
 
     const causationTarget = e.target.closest('[data-causation-event]');

@@ -43,6 +43,7 @@ notes summarise both and link to them rather than repeating every table.
    - [1.5 Durable queues](#15-durable-queues)
    - [1.6 Database objects changed on first startup](#16-database-objects-changed-on-first-startup)
    - [1.7 Subscription statistics records have a new component](#17-subscription-statistics-records-have-a-new-component)
+   - [1.8 `ApiQueuedMessage` has three new components](#18-apiqueuedmessage-has-three-new-components)
 2. [New features](#2-new-features)
 3. [Bug fixes](#3-bug-fixes)
 4. [Deprecations](#4-deprecations)
@@ -304,6 +305,15 @@ The queue tables keep three indexes: `idx_<table>_ordered_msg`, `idx_<table>_uno
 snapshots itself is affected, such as test fixtures and mocks of `EventStoreApi`; reading them is unaffected. Pass
 `SubscriptionStatistics.Gaps.NONE`, or `ApiSubscriptionGapStatistics.from(SubscriptionStatistics.Gaps.NONE)`, where
 there is no gap activity to report. The admin API response only gains an optional `gaps` field.
+
+### 1.8 `ApiQueuedMessage` has three new components
+
+`ApiQueuedMessage` ends with `orderedMessageKey`, `orderedMessageOrder` and `referencedAggregateType`, so its
+constructor takes three more arguments. Only code that builds it itself is affected, such as test fixtures and mocks
+of `DurableQueuesApi`; pass `null, null, null` for an unordered message. The admin API response only gains three
+optional fields. `referencedAggregateType` is set for messages that refer to a persisted event - an `EventProcessor`'s
+inbox messages - and is what lets the console link a stuck or dead-lettered event message to its causation (see
+[§2.9](#29-event-causation)). It is routing information, not payload, so it is present without the payload role.
 
 ---
 
@@ -577,8 +587,8 @@ always had the `caused_by_event_id` column, and the starter's default mapper cla
   `essentials.eventstore.causation.index-enabled=true`.
 - **Admin API and console**: list an aggregate's recent events (`GET /event-store/aggregate-types/{aggregateType}/aggregates/{aggregateId}/events`),
   then walk from any of them with `GET /event-store/events/{eventId}`, `…/causation-chain` and `…/caused-events`. The
-  console's *Event causation* page starts from an aggregate type and id, or an event id. Identity and cause only, no
-  payloads.
+  console's *Event causation* page starts from an aggregate type and id, or an event id, and a queued or dead-lettered
+  `EventProcessor` inbox message links to it. Identity and cause only, no payloads.
 - **Cost**, measured in the performance lab: no measurable difference on appends or through an `EventProcessor`;
   WAL grows by the stored id. Across a durable queue, about 116 bytes of WAL per message and 0.5% throughput.
 

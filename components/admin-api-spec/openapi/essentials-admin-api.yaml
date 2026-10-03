@@ -3769,6 +3769,21 @@ components:
           type: boolean
         isBeingDelivered:
           type: boolean
+        orderedMessageKey:
+          type: string
+          description: The key of an ordered message. Null for an unordered message.
+          nullable: true
+        orderedMessageOrder:
+          type: integer
+          description: The order of an ordered message. Null for an unordered message.
+          format: int64
+          nullable: true
+        referencedAggregateType:
+          type: string
+          description: Set when the message refers to a persisted event as the inbox
+            messages of an EventProcessor do. It is the aggregate type and orderedMessageKey
+            is the aggregate id. Null for every other message.
+          nullable: true
     ApiScheduledJobRun:
       required:
       - durationMs

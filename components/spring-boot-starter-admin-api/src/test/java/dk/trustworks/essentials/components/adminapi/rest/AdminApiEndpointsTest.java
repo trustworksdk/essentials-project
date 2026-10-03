@@ -360,7 +360,10 @@ class AdminApiEndpointsTest {
                                     1,
                                     0,
                                     false,
-                                    false);
+                                    false,
+                                    null,
+                                    null,
+                                    null);
     }
 
     /** Stands in for the consumer's own {@link EssentialsAuthenticatedUser} implementation. */

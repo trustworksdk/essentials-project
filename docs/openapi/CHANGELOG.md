@@ -78,6 +78,10 @@ Event causation, added later in the same unreleased version (`docs/event-causati
   "what did this cause?": the event's direct effects across all registered aggregate types. `409` when
   the opt-in caused-by-event-id index (`essentials.eventstore.causation.index-enabled`) is not enabled.
 
-All four return the new `ApiCausationEvent` - the event's identity, position, timestamp and
+`ApiQueuedMessage` gains three optional fields, `orderedMessageKey`, `orderedMessageOrder` and
+`referencedAggregateType` - the last set when the message refers to a persisted event, as an `EventProcessor`'s inbox
+messages do, so a client can go from a stuck message to the aggregate's events.
+
+All four causation operations return the new `ApiCausationEvent` - the event's identity, position, timestamp and
 `causedByEventId`, deliberately without event or metadata payloads - and require
 `essentials_subscription_reader` or `essentials_admin`.

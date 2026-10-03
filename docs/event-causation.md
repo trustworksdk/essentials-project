@@ -761,10 +761,10 @@ percent rather than dismissed as drift.
     the console showed event ids only for closing-books generations. So `findAggregateEvents` (`GET
     /event-store/aggregate-types/{aggregateType}/aggregates/{aggregateId}/events`, most recent `limit` events, default
     100) lists an aggregate's events, converting the text id with the type's configured `AggregateIdSerializer`, and
-    the causation page takes an aggregate type (suggested from the subscriptions) and id as its starting point. Linking
-    dead-letter rows on an `EventProcessor` inbox to it was considered and not done: `ApiQueuedMessage` exposes
-    neither the ordered message's key nor its order, so the row cannot say which aggregate it is about without
-    changing that record. The aggregate lookup's event-stream rows gain a
+    the causation page takes an aggregate type (suggested from the subscriptions) and id as its starting point. A queued or
+    dead-lettered `EventProcessor` inbox message links to it too: `ApiQueuedMessage` gained `orderedMessageKey`,
+    `orderedMessageOrder` and `referencedAggregateType` (set when the payload is an `AggregateType`, the shape of an
+    event reference - routing information, so not behind the payload role). The aggregate lookup's event-stream rows gain a
     *Causation* button. The page's three calls are literal paths, so the parity gate covers them.
   - Verified: contract drift, validation and compatibility gates; `AdminApiEndpointsTest` and the conformance
     count; the UI parity gate; and the three endpoints exercised over HTTP against the demo application. **Not

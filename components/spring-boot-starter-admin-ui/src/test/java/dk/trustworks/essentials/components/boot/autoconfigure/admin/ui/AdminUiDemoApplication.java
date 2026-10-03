@@ -131,7 +131,7 @@ public class AdminUiDemoApplication {
         return new ApiQueuedMessage(QueueEntryId.of(id), QueueName.of("OrderEvents"), payload,
                                     OffsetDateTime.parse("2026-07-31T12:04:20Z"),
                                     OffsetDateTime.parse("2026-07-31T12:04:35Z"), null, error,
-                                    attempts, redeliveries, false, delivering);
+                                    attempts, redeliveries, false, delivering, null, null, null);
     }
 
     private static ApiQueuedMessage dead(String id) {
@@ -140,7 +140,9 @@ public class AdminUiDemoApplication {
                                     OffsetDateTime.parse("2026-07-31T08:11:02Z"), null,
                                     OffsetDateTime.parse("2026-07-31T08:44:19Z"),
                                     "PaymentGatewayTimeoutException: no response after 30s\n\tat PaymentGatewayClient.authorize(PaymentGatewayClient.java:88)",
-                                    5, 4, true, false);
+                                    5, 4, true, false,
+                                    // An EventProcessor inbox message: it refers to the persisted event Payments/payment-1042#2
+                                    "payment-1042", 2L, "Payments");
     }
 
     @Bean

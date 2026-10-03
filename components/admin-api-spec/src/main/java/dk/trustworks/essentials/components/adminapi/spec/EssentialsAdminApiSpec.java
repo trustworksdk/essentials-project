@@ -140,7 +140,12 @@ final class EssentialsAdminApiSpec {
                             + "there has been no block access since the statistics were reset."),
             "ApiQueuedMessage", Map.of(
                     "payload", "The raw message payload. Null unless the caller holds the QUEUE_PAYLOAD_READER "
-                            + "or ESSENTIALS_ADMIN role."),
+                            + "or ESSENTIALS_ADMIN role.",
+                    "orderedMessageKey", "The key of an ordered message. Null for an unordered message.",
+                    "orderedMessageOrder", "The order of an ordered message. Null for an unordered message.",
+                    "referencedAggregateType", "Set when the message refers to a persisted event as the inbox messages "
+                            + "of an EventProcessor do. It is the aggregate type and orderedMessageKey is the aggregate id. "
+                            + "Null for every other message."),
             "ApiCdcStatus", Map.of(
                     "tailer", "Null when no WAL replication tailer is running in this instance.",
                     "dispatcher", "Null when no CDC dispatcher is running in this instance."),
