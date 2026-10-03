@@ -539,17 +539,54 @@ measurements document already warns is not a sound comparison — the gate is an
 using `essentials.eventstore.causation.enabled` as the switch (it exists from phase 3):
 
 - **Phase 2** adds one `ScopedValue` binding per delivery and nothing else; it is not measured separately.
-- **Phase 3 (enricher):** the lab's `baseline-polling-vs-cdc` scenario, both arms in one run. The cost to look for is
-  the `PersistableEvent` copy per event and the extra column value written.
-- **Phase 4 (lazy appends):** a new lab scenario, because none exists: an `EventProcessor` whose handler appends
-  through `StatefulAggregateRepository`, measuring end-to-end handled-events/s and append latency.
+- **Phase 3 (enricher):** `EventCausationCostIT`'s append-path test in the lab. The cost to look for is the
+  `PersistableEvent` copy per event and the extra column value written. (The `baseline-polling-vs-cdc` scenario was
+  the first idea, but it compares polling with CDC and has no causation switch to interleave on; a dedicated IT on
+  the lab's `AbRunner` was simpler than adding one.)
+- **Phase 4 (lazy appends):** `EventCausationCostIT`'s processor-chain test, added in phase 3 because no lab
+  scenario drove this path: an `EventProcessor` whose handler saves through `StatefulAggregateRepository`.
 - **Phase 5 (queue interceptor):** the lab's `durable-queues` scenario, both arms, both engines. The cost to look for
   is one metadata entry per queued message, serialized and stored.
 - **Phase 6 (index):** a separate A/B with `index-enabled` on and off, measuring append latency, since the index is
   the one part with a per-insert database cost.
 
-The acceptance bar is "no difference outside the run-to-run noise of the same arm". A result outside it is a design
+The acceptance bar is "no difference outside the run-to-run noise of the same arm" for throughput and latency. WAL
+bytes per event are expected to grow by the size of the value written, and the check is that they grow by no more. A result outside it is a design
 question, not a tuning task, and gets written up next to the numbers in `docs/durable-queue-measurements.md` style.
+
+### Measured
+
+`EventCausationCostIT` in the performance lab (`-Dbenchmark.run=true`), interleaved A/B on whether the enricher is
+registered, run on 2026-10-03 against `58da23de` (phase 3). Bindings are unconditional, so they are in both arms.
+Environment: devcontainer, aarch64, 8-CPU cgroup quota shared by JVM and database (no CPU pinning), PostgreSQL 17.5
+in Testcontainers with `synchronous_commit=on`, JDK 25. **Only the two arms within one table are comparable**;
+absolute numbers are this machine's.
+
+Append path — 5 000 events, one per UnitOfWork, with a cause bound; 7 repetitions per arm:
+
+| Arm | Events/s, median [Q1–Q3] | Append p50 µs, median [Q1–Q3] | WAL bytes/event |
+|---|---|---|---|
+| causation off | 4 798 [4 501–6 013] | 214 [158–225] | 677.8 |
+| causation on | 4 916 [4 673–5 498] | 208 [165–218] | 718.0 |
+
+Processor chain — 3 000 events through an `EventProcessor` (8 inbox consumers, centralized fetcher) whose handler
+saves a new aggregate through `StatefulAggregateRepository`, appended lazily at commit; 7 repetitions per arm:
+
+| Arm | Events/s, median [Q1–Q3] | WAL bytes/event |
+|---|---|---|
+| causation off | 1 576 [1 563–1 580] | 2 108.6 |
+| causation on | 1 586 [1 566–1 590] | 2 153.2 |
+
+Reading: throughput and latency distributions overlap in both shapes, so the run does not separate the arms. WAL
+grows by 40.2 and 44.6 bytes per event, which is the cause value itself (a 36-character id plus its header) — the
+column was already there and null before. Nothing beyond the stored value is visible.
+
+Two harness lessons from getting there: with the queue defaults the processor chain delivered exactly one message per
+20 ms poll, so both arms measured 50 events/s with zero spread — a measurement of configuration, fixed by the
+consumer count and fetcher above. And WAL bytes cannot be held to "overlap": the enabled arm writes one more value
+per event by design, so the check is that the difference is the size of that value.
+
+Phases 4 and 5 rerun this IT (phase 4 changes the processor chain's path) and add the `durable-queues` A/B.
 
 ### Phase 3 — The enricher and the switch (`postgresql-event-store`, starter)
 

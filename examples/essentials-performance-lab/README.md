@@ -240,6 +240,28 @@ mvn -pl examples/essentials-performance-lab -Dtest=BaselineComparisonScenarioSmo
 
 This smoke test does not require `wal2json`; CDC path is exercised in `auto` fallback semantics for robustness.
 
+## Event causation cost (A/B)
+
+`EventCausationCostIT` measures what recording event causation costs, as an interleaved A/B on whether the
+`CausationPersistableEventEnricher` is registered (the starter's `essentials.eventstore.causation.enabled`). It is the
+performance gate for the causation work in `docs/event-causation.md`, and opt-in like every measuring suite:
+
+```bash
+mvn verify -pl examples/essentials-performance-lab -Dit.test=EventCausationCostIT -Dbenchmark.run=true
+```
+
+Two tests, each writing its results to `target/perf-lab-baseline/`:
+
+- **Append path** — events appended one per UnitOfWork with a cause bound.
+- **Processor chain** — an `EventProcessor` whose handler saves a new aggregate through `StatefulAggregateRepository`,
+  so the events are appended lazily when the handler's UnitOfWork commits. No other scenario drives this path.
+
+Sizes and repetitions: `-Dlab.causation.append-events` (default 5 000), `-Dlab.causation.processor-events` (2 000),
+`-Dlab.causation.repetitions` (5), `-Dlab.causation.processor-consumers` (8).
+
+WAL bytes per event are expected to be about 40 bytes higher with causation on — that is the stored cause itself.
+Throughput and append latency are the regression check: the two arms' interquartile ranges should overlap.
+
 ## Benchmark matrix scripts
 
 Helper scripts are included under `examples/essentials-performance-lab/scripts`:
