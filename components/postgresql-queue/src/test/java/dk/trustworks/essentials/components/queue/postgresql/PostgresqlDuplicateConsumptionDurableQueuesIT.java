@@ -88,9 +88,7 @@ abstract class PostgresqlDuplicateConsumptionDurableQueuesIT extends DuplicateCo
                                       .setJsonSerializer(jsonSerializer)
                                       .setUseCentralizedMessageFetcher(useCentralizedMessageFetcher())
                                       .setCentralizedMessageFetcherPollingInterval(Duration.ofMillis(pollingIntervalMillis))
-                                      .setTransactionalMode(TransactionalMode.SingleOperationTransaction)
                                       .setMessageHandlingTimeout(Duration.ofMillis(getMessageHandlingTimeoutMs()))
-                                      .setUseOrderedUnorderedQuery(true)
                                       .setQueuePollingOptimizerFactory(consumeFromQueue -> new SimpleQueuePollingOptimizer(consumeFromQueue,
                                                                                                                            (long) (consumeFromQueue.getPollingInterval().toMillis() * 0.5d),
                                                                                                                            maxPollingIntervalMillis

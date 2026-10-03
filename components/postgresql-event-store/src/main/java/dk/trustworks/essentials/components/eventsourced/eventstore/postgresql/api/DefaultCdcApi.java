@@ -38,17 +38,13 @@ public class DefaultCdcApi implements CdcApi {
     private final Optional<WalReplicationTailer> tailer;
     private final Optional<CdcDispatcher>    dispatcher;
 
-    /**
-     * @deprecated Use {@link #builder()}. This constructor declares an {@code Optional} parameter and/or more than five parameters; the builder names every argument and accepts both plain values and {@code Optional}s. It is unchanged and remains the implementation the builder delegates to.
-     */
-    @Deprecated(forRemoval = true, since = "0.40.x")
-    public DefaultCdcApi(EssentialsSecurityProvider securityProvider,
-                         EventStoreUnitOfWorkFactory<? extends EventStoreUnitOfWork> unitOfWorkFactory,
-                         CdcAvailability availability,
-                         CdcProperties properties,
-                         String configuredSlotName,
-                         Optional<WalReplicationTailer> tailer,
-                         Optional<CdcDispatcher> dispatcher) {
+    DefaultCdcApi(EssentialsSecurityProvider securityProvider,
+                  EventStoreUnitOfWorkFactory<? extends EventStoreUnitOfWork> unitOfWorkFactory,
+                  CdcAvailability availability,
+                  CdcProperties properties,
+                  String configuredSlotName,
+                  Optional<WalReplicationTailer> tailer,
+                  Optional<CdcDispatcher> dispatcher) {
         this.securityProvider = requireNonNull(securityProvider, "securityProvider must not be null");
         this.unitOfWorkFactory = requireNonNull(unitOfWorkFactory, "unitOfWorkFactory must not be null");
         this.availability = requireNonNull(availability, "availability must not be null");
@@ -76,7 +72,8 @@ public class DefaultCdcApi implements CdcApi {
                 ApiCdcConfiguration.from(properties.isEnabled(), effectiveSlotName, properties),
                 slotStatus,
                 tailer.map(WalReplicationTailer::getStatus).map(ApiCdcTailerStatus::from).orElse(null),
-                dispatcher.map(CdcDispatcher::getStatus).map(ApiCdcDispatcherStatus::from).orElse(null)
+                dispatcher.map(CdcDispatcher::getStatus).map(ApiCdcDispatcherStatus::from).orElse(null),
+                ApiCdcInterruptions.from(availability.interruptions())
         );
     }
 
@@ -194,7 +191,6 @@ public class DefaultCdcApi implements CdcApi {
         /**
          * @return the new {@link DefaultCdcApi}
          */
-        @SuppressWarnings("removal")
         public DefaultCdcApi build() {
             return new DefaultCdcApi(securityProvider,
                                      unitOfWorkFactory,

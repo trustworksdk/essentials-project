@@ -81,7 +81,6 @@ interface Identifier {}
 ```java
 public class OrderId extends CharSequenceType<OrderId> implements Identifier {
     public OrderId(CharSequence value) { super(value); }
-    public OrderId(String value) { super(value); }  // Required for Jackson 2.18+
 
     public static OrderId of(CharSequence value) { return new OrderId(value); }
     public static OrderId random() { return new OrderId(RandomIdGenerator.generate()); }
@@ -102,14 +101,14 @@ public class ProductSequence extends LongType<ProductSequence> {
 ```java
 public class Quantity extends BigDecimalType<Quantity> {
     public Quantity(BigDecimal value) { super(value); }
-    public Quantity(long value) { super(BigDecimal.valueOf(value)); }  // Required for Jackson 2
+    public Quantity(long value) { super(BigDecimal.valueOf(value)); }  // Optional convenience overload
 
     public static Quantity of(BigDecimal value) { return new Quantity(value); }
     public static Quantity of(long value) { return new Quantity(BigDecimal.valueOf(value)); }
 }
 ```
 
-No extra constructor is needed for Jackson. `types-jackson`/`types-jackson3` register a `NumberType` deserializer
+No extra constructor is needed for Jackson. `types-jackson3` registers a `NumberType` deserializer
 that reads the JSON number at the width the type wraps and constructs through `SingleValueType.from(...)`, so the
 value-typed constructor is the only one the wire format depends on. Convenience overloads (`(long)`, `(double)`)
 are yours to add or omit on their own merits.
@@ -386,7 +385,7 @@ Built-in Kotlin types: `Amount`, `CountryCode`
 
 | Framework | Module | Doc |
 |-----------|--------|-----|
-| Jackson JSON | `types-jackson` | [LLM-types-jackson.md](LLM-types-jackson.md) |
+| Jackson JSON | `types-jackson3` | [LLM-types-jackson.md](LLM-types-jackson.md) |
 | Spring Data MongoDB | `types-springdata-mongo` | [LLM-types-springdata-mongo.md](LLM-types-springdata-mongo.md) |
 | Spring Data JPA | `types-springdata-jpa` | [LLM-types-springdata-jpa.md](LLM-types-springdata-jpa.md) |
 | JDBI v3 | `types-jdbi` | [LLM-types-jdbi.md](LLM-types-jdbi.md) |
@@ -400,7 +399,7 @@ See [LLM-types-integrations.md](LLM-types-integrations.md) for overview.
 ## Gotchas
 
 - **Null rejection**: All constructors reject null values
-- **Jackson 2.18+**: Requires explicit `String` constructor alongside `CharSequence` for `CharSequenceType`
+- **Jackson**: `types-jackson3` (Jackson 3 only) pins a value type's single-argument constructor as a delegating creator, so a `CharSequenceType` needs only its `CharSequence` constructor (the extra `String` constructor Jackson 2.18+ needed may stay)
 - **`NumberType` subclasses need only the value-typed constructor**: a registered `NumberType` deserializer reads each value at its own width, so convenience overloads are never part of the wire contract. A `(double)` overload on a `BigDecimalType` used to silently truncate decimals; it no longer does
 - **Immutability**: All operations return new instances
 - **Money currency**: Operations throw `NotTheSameCurrenciesException` if currencies differ

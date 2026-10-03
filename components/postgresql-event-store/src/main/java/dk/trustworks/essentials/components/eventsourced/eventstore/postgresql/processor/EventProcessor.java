@@ -188,6 +188,27 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
  *     }
  * }
  * }</pre>
+ *
+ * <h3>Validation failures inside a {@code @MessageHandler} dead-letter the message immediately</h3>
+ * The {@link DurableQueueConsumer} classifies a set of exception types as permanent errors and marks the message as a
+ * Poison-Message/Dead-Letter-Message on the <em>first</em> delivery attempt, bypassing the {@link RedeliveryPolicy}'s
+ * backoff entirely: {@code DurableQueueDeserializationException}, {@code MismatchedInputException},
+ * {@link NoClassDefFoundError}, {@link ClassCastException} and {@link IllegalArgumentException}. A match anywhere in
+ * the failure's cause chain counts.
+ * <p>
+ * {@link IllegalArgumentException} is the one that catches handler authors out.
+ * {@code FailFast.requireNonNull(...)} and {@code requireTrue(...)} — the validation idiom used throughout
+ * Essentials — both throw it, and so does Kotlin's {@code require(...)}. Opt out for a specific type with
+ * {@code MessageDeliveryErrorHandler.builder().alwaysRetryOn(IllegalArgumentException.class)}, which overrides the
+ * built-in list for {@link IllegalArgumentException} and {@link ClassCastException}. The other three can never
+ * succeed on a later attempt and are not overridable, and opting out does not lift
+ * {@link RedeliveryPolicy#maximumNumberOfRedeliveries}.
+ * <p>
+ * Choose the exception type by whether the condition can ever become true: {@link IllegalArgumentException} when the
+ * message can never be processed, and a retryable exception when it may succeed later — a lookup against a view that
+ * has not caught up yet being the usual case.
+ * <p>
+ * See {@code LLM/LLM-foundation.md} for the full description.
  */
 public abstract class EventProcessor extends AbstractEventProcessor {
     protected final Logger log = LoggerFactory.getLogger(this.getClass());
@@ -261,6 +282,9 @@ public abstract class EventProcessor extends AbstractEventProcessor {
         }
         patternMatchingInboxMessageHandlerDelegate = new PatternMatchingMessageHandler(this, getMessageHandlerInterceptors());
         patternMatchingInboxMessageHandlerDelegate.allowUnmatchedMessages();
+        // Take over the UnitOfWork boundary from the Inbox, so that each MessageHandler annotated method is invoked
+        // according to its own MessageHandler#unitOfWork() mode - see UnitOfWorkBoundaryOwningMessageConsumer
+        patternMatchingInboxMessageHandlerDelegate.setUnitOfWorkFactory(eventStore.getUnitOfWorkFactory());
         inboxMessageHandlerDelegate = handleQueuedMessageConsumer(patternMatchingInboxMessageHandlerDelegate);
     }
 

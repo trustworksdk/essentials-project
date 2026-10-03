@@ -11,13 +11,8 @@ stored; everything else in the law applies unchanged to both.
 
 ```bash
 mvn verify -pl :postgresql-cqrs                 # unit + ITs (needs Docker)
-mvn -Pjackson2 verify -pl :postgresql-cqrs -am  # the other Jackson flavour; -am is required
 mvn spring-boot:run -pl :postgresql-cqrs        # after `docker compose up -d`
 ```
-
-The `-am` is not optional on the non-default flavour: without it a sibling resolves from the local
-repo with the property unresolved and **both** Jackson flavours land on the classpath. See the root
-`CLAUDE.md`.
 
 ## Bounded contexts
 

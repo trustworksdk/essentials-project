@@ -21,8 +21,9 @@ everything else: their command type, their one API file, their handler and their
 | `use_cases/suspend_instrument` | command | Suspends an instrument, with a reason. One-way |
 | `use_cases/initialize_price` | command | Opens the price stream at a starting price |
 | `use_cases/update_price` | command | Records a price tick. The authoritative write path |
+| `use_cases/risk_approve_instrument` | automation | Runs a newly registered instrument through an external risk assessment and records the answer. The demo's `UnitOfWorkMode.NONE` example |
 | `views/latest_price` | view | Serves the current price of one instrument. Aggregate-backed, strongly consistent |
-| `views/instrument_details` | view | Lists instruments and serves one by id, from a projection |
+| `views/instrument_details` | view | Lists instruments and serves one by id, from a projection. Includes risk status |
 
 ## Two aggregates, one id
 
@@ -62,14 +63,42 @@ It is not a precedent. Nothing else on `InstrumentPrice` is public, and nothing 
 that wants price *history*, or prices *across* instruments, is a different read model and projects — which is
 exactly what `brokerage.trade_valuation` does.
 
-## Both mutating methods are idempotent no-ops
+## Every mutating method is an idempotent no-op
 
-`Instrument.rename` to the display name already held, and `Instrument.suspend` on an already-suspended
-instrument, return without applying. So does `InstrumentPrice.updatePrice` when the tick repeats the price
+`Instrument.rename` to the display name already held, `Instrument.suspend` on an already-suspended instrument,
+and `Instrument.recordRiskApproval` / `recordRiskRejection` on an instrument that already carries a risk
+decision all return without applying. So does `InstrumentPrice.updatePrice` when the tick repeats the price
 already held — which matters at this write rate: an unchanged market must not lengthen the stream. Repeat
 commands leave no trace instead of growing history. Keep it that way.
 
 Suspension is one-way: there is no un-suspend event, so the first reason stands for the life of the stream.
+
+For the risk decision that guard is load-bearing rather than tidy: `use_cases/risk_approve_instrument` calls
+the risk service *outside* any transaction, so the call can succeed and the transaction recording its outcome
+still fail, redelivering the event and repeating the call. Pinned by `InstrumentRiskDecisionTest`.
+
+## `use_cases/risk_approve_instrument` is the demo's `UnitOfWorkMode.NONE` example
+
+It is an **automation** — `slice.yaml` says `kind: automation`, it reacts to an event and exposes no endpoint —
+but it lives under `use_cases/` alongside the command slices rather than in an `automations/` directory of its
+own. The kind is declared in `slice.yaml`, not by the parent directory, and this demo keeps one directory of
+slices per context. `postgresql-cqrs` does have `banking/automations/`; don't take the difference as a rule.
+
+Its handler is declared `@MessageHandler(unitOfWork = UnitOfWorkMode.NONE)`, so it runs with no `UnitOfWork`
+and therefore holds no pooled database connection while it blocks on the external risk service; the write that
+follows is wrapped in `usingUnitOfWork(...)`. The full argument, the consequences the mode shifts onto the
+handler, and why the risk service is a `Thread.sleep` stub are in that slice's `CLAUDE.md`.
+
+Two things follow from it that are easy to get wrong elsewhere:
+
+- It is an `EventProcessor`, not a `ViewEventProcessor` — the latter rejects `NONE` handlers outright, because
+  it handles each message in one `UnitOfWork` so the view update and the acknowledgement commit together.
+- The stub's latency (`trading-demo.risk-approval.latency`) must stay well under
+  `essentials.durable-queues.message-handling-timeout`, or the message is reset as stuck and
+  redelivered while the first attempt is still blocked.
+
+`InstrumentRiskRejected` and `InstrumentSuspended` stay separate events: a rejection says the instrument was
+never cleared, a suspension says a cleared one was stopped.
 
 ## Prices are positive by construction
 
@@ -102,6 +131,6 @@ its stream name still read together at the point of use.
 ## Directories beside the slices
 
 - `events/` — both sealed hierarchies, `InstrumentEvent` and `InstrumentPriceEvent`, one variant per file
-- `types/` — `InstrumentId`, `Symbol`
+- `types/` — `InstrumentId`, `Symbol`, `RiskRating`
 - `aggregates/` — the two aggregates plus their `StatefulAggregateRepository` wrappers (`Instruments`,
   `InstrumentPrices`), which persist an already-constructed aggregate and never build one

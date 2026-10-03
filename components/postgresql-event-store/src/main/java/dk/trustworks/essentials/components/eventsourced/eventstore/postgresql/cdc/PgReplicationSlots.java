@@ -70,24 +70,22 @@ public final class PgReplicationSlots {
          * @param invalidationReason why the slot was invalidated, or {@code null}
          * @param failover           whether the slot is enabled for failover
          * @param synced             whether the slot was synced from a primary
-         * @deprecated Use {@link #builder()}. This constructor declares an {@code Optional} parameter and/or more than five parameters; the builder names every argument and accepts both plain values and {@code Optional}s. It is unchanged and remains the implementation the builder delegates to.
          */
-        @Deprecated(forRemoval = true, since = "0.40.x")
-        public SlotInfo(String slotName,
-                        String slotType,
-                        String plugin,
-                        String database,
-                        Integer activePid,
-                        boolean temporary,
-                        String restartLsn,
-                        String confirmedFlushLsn,
-                        String walStatus,
-                        Long safeWalSize,
-                        String inactiveSince,
-                        String conflicting,
-                        String invalidationReason,
-                        Boolean failover,
-                        Boolean synced) {
+        SlotInfo(String slotName,
+                 String slotType,
+                 String plugin,
+                 String database,
+                 Integer activePid,
+                 boolean temporary,
+                 String restartLsn,
+                 String confirmedFlushLsn,
+                 String walStatus,
+                 Long safeWalSize,
+                 String inactiveSince,
+                 String conflicting,
+                 String invalidationReason,
+                 Boolean failover,
+                 Boolean synced) {
             this.slotName = slotName;
             this.slotType = slotType;
             this.plugin = plugin;

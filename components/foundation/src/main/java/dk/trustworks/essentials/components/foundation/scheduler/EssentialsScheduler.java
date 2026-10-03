@@ -21,7 +21,7 @@ import dk.trustworks.essentials.components.foundation.scheduler.executor.Executo
 import dk.trustworks.essentials.components.foundation.scheduler.executor.ExecutorScheduledJobRepository.ExecutorJobEntry;
 import dk.trustworks.essentials.components.foundation.scheduler.pgcron.*;
 
-import java.util.List;
+import java.util.*;
 
 /**
  * Represents a scheduler responsible for scheduling jobs defined by the EssentialsScheduledJob interface.
@@ -131,4 +131,28 @@ public interface EssentialsScheduler {
      * @return the total count of executor job entries.
      */
     long getTotalExecutorJobEntries();
+
+    /**
+     * Runs a registered job once, now, and waits for it to finish - on top of its schedule, which is not changed.
+     * <p>
+     * {@code jobName} is the job's registered name, with or without the instance suffix the scheduler stores it
+     * under - so a name read from {@link #fetchExecutorJobEntries(long, long)} or {@link #fetchPgCronEntries(long, long)}
+     * works as it is. Only jobs registered with this scheduler can be run; another application's {@code cron.job}
+     * row cannot.
+     * <ul>
+     *     <li>An <b>executor job</b> runs on the calling thread, and only on the instance holding the scheduler's
+     *     fenced lock - elsewhere this throws {@link ScheduledJobNotRunnableHereException}.</li>
+     *     <li>A <b>pg_cron job</b> has its function called directly, from any instance. The run is not recorded in
+     *     pg_cron's {@code cron.job_run_details}.</li>
+     * </ul>
+     * A manual run is not coordinated with a scheduled run of the same job, which may be in progress at the same
+     * time. The Essentials jobs - TTL deletes and monitors - are safe to run concurrently; a job of your own should
+     * be too before it is run this way.
+     *
+     * @param jobName the job to run
+     * @return the outcome, or empty if no job of that name is registered with this scheduler
+     * @throws ScheduledJobNotRunnableHereException for an executor job when this instance does not hold the
+     *                                               scheduler lock
+     */
+    Optional<ScheduledJobRun> runJobNow(String jobName);
 }

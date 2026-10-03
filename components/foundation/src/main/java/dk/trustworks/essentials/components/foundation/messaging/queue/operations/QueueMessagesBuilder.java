@@ -26,7 +26,7 @@ import java.util.*;
  */
 public final class QueueMessagesBuilder {
     private QueueName          queueName;
-    private List<Message>            messages;
+    private List<? extends Message> messages;
     private Optional<Duration> deliveryDelay;
 
     /**
@@ -44,7 +44,7 @@ public final class QueueMessagesBuilder {
      * @param messages the messages being enqueued
      * @return this builder instance
      */
-    public QueueMessagesBuilder setMessages(List<Message> messages) {
+    public QueueMessagesBuilder setMessages(List<? extends Message> messages) {
         this.messages = messages;
         return this;
     }
@@ -73,7 +73,6 @@ public final class QueueMessagesBuilder {
      * Builder an {@link QueueMessages} instance from the builder properties
      * @return the {@link QueueMessages} instance
      */
-    @SuppressWarnings("removal")
     public QueueMessages build() {
         return new QueueMessages(queueName, messages, deliveryDelay);
     }

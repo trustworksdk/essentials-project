@@ -72,15 +72,13 @@ public class DurableAsyncAggregateSnapshotRepository implements AggregateSnapsho
      * @param jsonSerializer the serializer used to serialize and deserialize events to JSON
      * @param addNewSnapshotStrategy the strategy that defines how new snapshots are added
      * @param snapshotDeletionStrategy the strategy used to delete old or unused snapshots
-     * @deprecated Use {@link #builder()}. This constructor declares an {@code Optional} parameter and/or more than five parameters; the builder names every argument and accepts both plain values and {@code Optional}s. It is unchanged and remains the implementation the builder delegates to.
      */
-    @Deprecated(forRemoval = true, since = "0.40.x")
-    public DurableAsyncAggregateSnapshotRepository(ConfigurableEventStore<? extends AggregateEventStreamConfiguration> eventStore,
-                                                   AggregateSnapshotStore snapshotStore,
-                                                   AggregateSnapshotJobRepository jobRepository,
-                                                   JSONEventSerializer jsonSerializer,
-                                                   AddNewAggregateSnapshotStrategy addNewSnapshotStrategy,
-                                                   AggregateSnapshotDeletionStrategy snapshotDeletionStrategy) {
+    DurableAsyncAggregateSnapshotRepository(ConfigurableEventStore<? extends AggregateEventStreamConfiguration> eventStore,
+                       AggregateSnapshotStore snapshotStore,
+                       AggregateSnapshotJobRepository jobRepository,
+                       JSONEventSerializer jsonSerializer,
+                       AddNewAggregateSnapshotStrategy addNewSnapshotStrategy,
+                       AggregateSnapshotDeletionStrategy snapshotDeletionStrategy) {
         this(eventStore,
              snapshotStore,
              jobRepository,
@@ -91,11 +89,7 @@ public class DurableAsyncAggregateSnapshotRepository implements AggregateSnapsho
              Optional.empty());
     }
 
-    /**
-     * @deprecated Use {@link #builder()}. This constructor declares an {@code Optional} parameter and/or more than five parameters; the builder names every argument and accepts both plain values and {@code Optional}s. It is unchanged and remains the implementation the builder delegates to.
-     */
-    @Deprecated(forRemoval = true, since = "0.40.x")
-    public DurableAsyncAggregateSnapshotRepository(ConfigurableEventStore<? extends AggregateEventStreamConfiguration> eventStore,
+    DurableAsyncAggregateSnapshotRepository(ConfigurableEventStore<? extends AggregateEventStreamConfiguration> eventStore,
                                                    AggregateSnapshotStore snapshotStore,
                                                    AggregateSnapshotJobRepository jobRepository,
                                                    JSONEventSerializer jsonSerializer,
@@ -122,11 +116,9 @@ public class DurableAsyncAggregateSnapshotRepository implements AggregateSnapsho
      * @param addNewSnapshotStrategy the strategy that defines how new snapshots are added
      * @param snapshotDeletionStrategy the strategy used to delete old or unused snapshots
      * @param meterRegistryOptional an optional meter registry for metrics collection and monitoring
-     * @deprecated Use {@link #builder()}. This constructor declares an {@code Optional} parameter and/or more than five parameters; the builder names every argument and accepts both plain values and {@code Optional}s. It is unchanged and remains the implementation the builder delegates to.
      */
     @SuppressWarnings("OptionalUsedAsFieldOrParameterType")
-    @Deprecated(forRemoval = true, since = "0.40.x")
-    public DurableAsyncAggregateSnapshotRepository(ConfigurableEventStore<? extends AggregateEventStreamConfiguration> eventStore,
+    DurableAsyncAggregateSnapshotRepository(ConfigurableEventStore<? extends AggregateEventStreamConfiguration> eventStore,
                                                    AggregateSnapshotStore snapshotStore,
                                                    AggregateSnapshotJobRepository jobRepository,
                                                    JSONEventSerializer jsonSerializer,
@@ -144,11 +136,7 @@ public class DurableAsyncAggregateSnapshotRepository implements AggregateSnapsho
     }
 
     @SuppressWarnings("OptionalUsedAsFieldOrParameterType")
-    /**
-     * @deprecated Use {@link #builder()}. This constructor declares an {@code Optional} parameter and/or more than five parameters; the builder names every argument and accepts both plain values and {@code Optional}s. It is unchanged and remains the implementation the builder delegates to.
-     */
-    @Deprecated(forRemoval = true, since = "0.40.x")
-    public DurableAsyncAggregateSnapshotRepository(ConfigurableEventStore<? extends AggregateEventStreamConfiguration> eventStore,
+    DurableAsyncAggregateSnapshotRepository(ConfigurableEventStore<? extends AggregateEventStreamConfiguration> eventStore,
                                                    AggregateSnapshotStore snapshotStore,
                                                    AggregateSnapshotJobRepository jobRepository,
                                                    JSONEventSerializer jsonSerializer,
@@ -405,7 +393,6 @@ public class DurableAsyncAggregateSnapshotRepository implements AggregateSnapsho
         /**
          * @return the new {@link DurableAsyncAggregateSnapshotRepository}
          */
-        @SuppressWarnings("removal")
         public DurableAsyncAggregateSnapshotRepository build() {
             return new DurableAsyncAggregateSnapshotRepository(eventStore,
                                                                snapshotStore,

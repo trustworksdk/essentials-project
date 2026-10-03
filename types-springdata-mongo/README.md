@@ -288,4 +288,4 @@ public class Created extends LocalDateTimeType<Created> {
 
 - [LLM-types-springdata-mongo.md](../LLM/LLM-types-springdata-mongo.md) - API reference for LLM assistance
 - [types](../types) - Core types module (`SingleValueType`, `CharSequenceType`, etc.)
-- [types-jackson](../types-jackson) - Jackson serialization for types
+- [types-jackson3](../types-jackson3) - Jackson serialization for types

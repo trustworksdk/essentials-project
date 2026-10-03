@@ -17,6 +17,7 @@
 package dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.cdc;
 
 import dk.trustworks.essentials.components.foundation.transaction.jdbi.*;
+import dk.trustworks.essentials.components.foundation.schema.*;
 import io.micrometer.core.instrument.MeterRegistry;
 
 import java.util.Optional;
@@ -30,6 +31,7 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
  * {@code Optional} overload, for Spring {@code @Bean} methods where an {@code Optional} injection point is idiomatic.
  */
 public final class CdcInboxRepositoryBuilder {
+    private SchemaOwnership schemaOwnership = SchemaOwnership.COMPONENT;
     private HandleAwareUnitOfWorkFactory<? extends HandleAwareUnitOfWork> unitOfWorkFactory;
     private MeterRegistry                                                meterRegistry;
     private String                                                       cdcInboxTableName = CdcSql.DEFAULT_CDC_TABLE_NAME;
@@ -78,14 +80,24 @@ public final class CdcInboxRepositoryBuilder {
     }
 
     /**
+     * @param schemaOwnership {@link SchemaOwnership#COMPONENT} (the default) creates the inbox table when the repository
+     *                        is built; {@link SchemaOwnership#HARNESS} leaves it to an {@link EssentialsSchemaHarness}
+     * @return this builder instance
+     */
+    public CdcInboxRepositoryBuilder setSchemaOwnership(SchemaOwnership schemaOwnership) {
+        this.schemaOwnership = requireNonNull(schemaOwnership, "schemaOwnership cannot be null");
+        return this;
+    }
+
+    /**
      * Builds the repository.
      *
      * @return the repository
      */
-    @SuppressWarnings("removal")
     public CdcInboxRepository build() {
         return new CdcInboxRepository(requireNonNull(unitOfWorkFactory, "unitOfWorkFactory cannot be null"),
                                       Optional.ofNullable(meterRegistry),
-                                      requireNonNull(cdcInboxTableName, "cdcInboxTableName cannot be null"));
+                                      requireNonNull(cdcInboxTableName, "cdcInboxTableName cannot be null"),
+                                      schemaOwnership);
     }
 }

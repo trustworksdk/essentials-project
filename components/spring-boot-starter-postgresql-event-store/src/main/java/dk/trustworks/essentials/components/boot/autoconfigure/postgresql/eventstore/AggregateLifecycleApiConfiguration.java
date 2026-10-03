@@ -43,13 +43,15 @@ public class AggregateLifecycleApiConfiguration {
                                                        JSONEventSerializer jsonSerializer,
                                                        Optional<AggregateClosingBooksGenerationAccessProvider> closingBooksGenerationAccessProvider,
                                                        Optional<AggregateSnapshotStore> snapshotStore) {
-        return new DefaultAggregateLifecycleApi(securityProvider,
-                                                snapshotPolicyRegistry,
-                                                closingBooksPolicyRegistry,
-                                                closingBooksGenerationAccessProvider,
-                                                snapshotStore,
-                                                eventStore,
-                                                jsonSerializer);
+        return DefaultAggregateLifecycleApi.builder()
+                                           .setSecurityProvider(securityProvider)
+                                           .setSnapshotPolicyRegistry(snapshotPolicyRegistry)
+                                           .setClosingBooksPolicyRegistry(closingBooksPolicyRegistry)
+                                           .setClosingBooksGenerationAccessProvider(closingBooksGenerationAccessProvider)
+                                           .setSnapshotStore(snapshotStore)
+                                           .setEventStore(eventStore)
+                                           .setJsonSerializer(jsonSerializer)
+                                           .build();
     }
 
     @Bean
@@ -58,10 +60,12 @@ public class AggregateLifecycleApiConfiguration {
                                                                            AggregateSnapshotPolicyRegistry snapshotPolicyRegistry,
                                                                            AggregateClosingBooksPolicyRegistry closingBooksPolicyRegistry,
                                                                            Optional<MeterRegistry> meterRegistry) {
-        return new DefaultAggregateLifecycleStatisticsApi(securityProvider,
-                                                          snapshotPolicyRegistry,
-                                                          closingBooksPolicyRegistry,
-                                                          meterRegistry);
+        return DefaultAggregateLifecycleStatisticsApi.builder()
+                                                     .setSecurityProvider(securityProvider)
+                                                     .setSnapshotPolicyRegistry(snapshotPolicyRegistry)
+                                                     .setClosingBooksPolicyRegistry(closingBooksPolicyRegistry)
+                                                     .setMeterRegistry(meterRegistry)
+                                                     .build();
     }
 
     /**

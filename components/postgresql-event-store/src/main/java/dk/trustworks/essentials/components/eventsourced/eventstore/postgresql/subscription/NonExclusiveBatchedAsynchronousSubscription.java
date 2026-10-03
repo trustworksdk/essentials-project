@@ -18,7 +18,6 @@ package dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.s
 
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.*;
-import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.observability.EventStoreSubscriptionObserver;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.types.GlobalEventOrder;
 import dk.trustworks.essentials.components.foundation.types.*;
 import dk.trustworks.essentials.shared.time.StopWatch;
@@ -69,36 +68,6 @@ public class NonExclusiveBatchedAsynchronousSubscription extends AbstractEventSt
         this.durableSubscriptionRepository = durableContext.durableSubscriptionRepository();
         this.onFirstSubscriptionSubscribeFromAndIncludingGlobalOrder = durableContext.resolveOnFirstSubscriptionGlobalOrder(context.aggregateType());
         this.eventStoreSubscriptionManagerSettings = durableContext.eventStoreSubscriptionManagerSettings();
-        requireTrue(maxBatchSize > 0, "maxBatchSize must be greater than 0");
-        this.maxBatchSize = maxBatchSize;
-        this.maxLatency = requireNonNull(maxLatency, "No maxLatency provided");
-        this.eventHandler = requireNonNull(eventHandler, "No eventHandler provided");
-    }
-
-    /**
-     * @deprecated Use {@link #NonExclusiveBatchedAsynchronousSubscription(EventStoreSubscriptionContext, DurableSubscriptionContext, int, Duration, BatchedPersistedEventHandler)}.
-     *         The shared arguments are now two context values. This constructor delegates and behaves identically.
-     */
-    @Deprecated(forRemoval = true, since = "0.40.x")
-    @SuppressWarnings("OptionalUsedAsFieldOrParameterType")
-    public NonExclusiveBatchedAsynchronousSubscription(EventStore eventStore,
-                                                       DurableSubscriptionRepository durableSubscriptionRepository,
-                                                       AggregateType aggregateType,
-                                                       SubscriberId subscriberId,
-                                                       GlobalEventOrder onFirstSubscriptionSubscribeFromAndIncludingGlobalOrder,
-                                                       Optional<Tenant> onlyIncludeEventsForTenant,
-                                                       int maxBatchSize,
-                                                       Duration maxLatency,
-                                                       BatchedPersistedEventHandler eventHandler,
-                                                       EventStoreSubscriptionObserver eventStoreSubscriptionObserver,
-                                                       EventStoreSubscriptionManagerSettings eventStoreSubscriptionManagerSettings,
-                                                       Consumer<EventStoreSubscription> unsubscribeCallback,
-                                                       Function<String, EventStorePollingOptimizer> eventStorePollingOptimizerFactory) {
-        super(eventStore, aggregateType, subscriberId, onlyIncludeEventsForTenant, eventStoreSubscriptionObserver, unsubscribeCallback, eventStorePollingOptimizerFactory);
-        this.durableSubscriptionRepository = requireNonNull(durableSubscriptionRepository, "No durableSubscriptionRepository provided");
-        this.onFirstSubscriptionSubscribeFromAndIncludingGlobalOrder = requireNonNull(onFirstSubscriptionSubscribeFromAndIncludingGlobalOrder,
-                "No onFirstSubscriptionSubscribeFromAndIncludingGlobalOrder provided");
-        this.eventStoreSubscriptionManagerSettings = requireNonNull(eventStoreSubscriptionManagerSettings, "No eventStoreSubscriptionManagerSettings provided");
         requireTrue(maxBatchSize > 0, "maxBatchSize must be greater than 0");
         this.maxBatchSize = maxBatchSize;
         this.maxLatency = requireNonNull(maxLatency, "No maxLatency provided");

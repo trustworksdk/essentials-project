@@ -19,7 +19,6 @@ package dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.s
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.bus.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.*;
-import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.observability.EventStoreSubscriptionObserver;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.types.GlobalEventOrder;
 import dk.trustworks.essentials.components.foundation.fencedlock.*;
 import dk.trustworks.essentials.components.foundation.types.*;
@@ -59,28 +58,6 @@ public class ExclusiveInTransactionSubscription extends AbstractEventStoreSubscr
         this.fencedLockManager = requireNonNull(fencedLockManager, "No fencedLockManager provided");
         this.eventHandler = requireNonNull(eventHandler, "No eventHandler provided");
         this.lockName = LockName.of(msg("[{}-{}]", context.subscriberId(), context.aggregateType()));
-    }
-
-    /**
-     * @deprecated Use {@link #ExclusiveInTransactionSubscription(EventStoreSubscriptionContext, FencedLockManager, TransactionalPersistedEventHandler)}.
-     *         The six shared arguments are now one {@link EventStoreSubscriptionContext}. This constructor delegates and
-     *         behaves identically.
-     */
-    @Deprecated(forRemoval = true, since = "0.40.x")
-    @SuppressWarnings("OptionalUsedAsFieldOrParameterType")
-    public ExclusiveInTransactionSubscription(EventStore eventStore,
-                                              FencedLockManager fencedLockManager,
-                                              AggregateType aggregateType,
-                                              SubscriberId subscriberId,
-                                              Optional<Tenant> onlyIncludeEventsForTenant,
-                                              TransactionalPersistedEventHandler eventHandler,
-                                              EventStoreSubscriptionObserver eventStoreSubscriptionObserver,
-                                              Consumer<EventStoreSubscription> unsubscribeCallback,
-                                              Function<String, EventStorePollingOptimizer> eventStorePollingOptimizerFactory) {
-        super(eventStore, aggregateType, subscriberId, onlyIncludeEventsForTenant, eventStoreSubscriptionObserver, unsubscribeCallback, eventStorePollingOptimizerFactory);
-        this.fencedLockManager = requireNonNull(fencedLockManager, "No fencedLockManager provided");
-        this.eventHandler = requireNonNull(eventHandler, "No eventHandler provided");
-        this.lockName = LockName.of(msg("[{}-{}]", subscriberId, aggregateType));
     }
 
     @Override

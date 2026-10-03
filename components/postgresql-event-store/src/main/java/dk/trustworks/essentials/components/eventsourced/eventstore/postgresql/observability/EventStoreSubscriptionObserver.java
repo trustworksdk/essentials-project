@@ -18,6 +18,7 @@ package dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.o
 
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.*;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.gap.GapReconciliation;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.persistence.AggregateEventStreamPersistenceStrategy;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.subscription.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.transaction.EventStoreUnitOfWork;
@@ -148,6 +149,24 @@ public interface EventStoreSubscriptionObserver {
                         List<GlobalEventOrder> transientGapsToInclude,
                         List<PersistedEvent> persistedEvents,
                         Duration reconcileGapsDuration);
+
+    /**
+     * What a gap reconciliation changed for a subscriber: gaps first registered, resolved, and given up on as
+     * permanent.
+     * <p>
+     * Unlike {@link #reconciledGaps}, which the polling loop reports once per poll with its timing, this is reported
+     * wherever gaps are reconciled - polling, and the Change Data Capture catch-up (backfill) that runs before a
+     * subscription switches to live CDC delivery - and carries the outcome rather than the inputs. The default does
+     * nothing, so existing observers are unaffected.
+     *
+     * @param subscriberId      the id of the subscriber whose gaps were reconciled
+     * @param aggregateType     the type of aggregate the subscriber is subscribing to
+     * @param gapReconciliation what the reconciliation changed; {@link GapReconciliation#NONE} is not reported
+     */
+    default void gapReconciliationOutcome(SubscriberId subscriberId,
+                                          AggregateType aggregateType,
+                                          GapReconciliation gapReconciliation) {
+    }
 
     /**
      * How long did it take for the {@link EventStore}'s poll event to publish an event to the underlying {@link Flux}'s

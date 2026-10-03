@@ -50,7 +50,7 @@ class CdcEventStoreSubscriptionParity_IT extends AbstractLogicalReplicationPostg
 
     @BeforeEach
     void setup() {
-        var serializer = EssentialsJSONEventSerializers.createForActiveJacksonFlavor();
+        var serializer = EssentialsJSONEventSerializers.create();
         var eventMapper = new EventProcessorIT.TestPersistableEventMapper();
 
         var persistenceStrategy = new SeparateTablePerAggregateTypePersistenceStrategy(
@@ -79,14 +79,13 @@ class CdcEventStoreSubscriptionParity_IT extends AbstractLogicalReplicationPostg
                 cdcEventStore,
                 50,
                 Duration.ofMillis(50),
-                new PostgresqlFencedLockManager(
-                        jdbi,
-                        unitOfWorkFactory,
-                        Optional.of("node-1"),
-                        Duration.ofSeconds(3),
-                        Duration.ofMillis(500),
-                        false
-                ),
+                PostgresqlFencedLockManager.builder()
+                                           .setJdbi(jdbi)
+                                           .setUnitOfWorkFactory(unitOfWorkFactory)
+                                           .setLockManagerInstanceId("node-1")
+                                           .setLockTimeOut(Duration.ofSeconds(3))
+                                           .setLockConfirmationInterval(Duration.ofMillis(500))
+                                           .build(),
                 Duration.ofSeconds(1),
                 durableSubscriptionRepository
         );

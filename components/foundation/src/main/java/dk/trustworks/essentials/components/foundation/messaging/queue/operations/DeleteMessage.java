@@ -23,9 +23,7 @@ import dk.trustworks.essentials.shared.interceptor.InterceptorChain;
 import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 
 /**
- * Delete a message (Queued or Dead Letter Message)<br>
- * Note this method MUST be called within an existing {@link UnitOfWork} IF
- * using {@link TransactionalMode#FullyTransactional}<br>
+ * Delete a message (Queued or Dead Letter Message)<br><br>
  * Operation also matches {@link DurableQueuesInterceptor#intercept(DeleteMessage, InterceptorChain)}
  */
 public final class DeleteMessage {
@@ -42,8 +40,6 @@ public final class DeleteMessage {
 
     /**
      * Delete a message (Queued or Dead Letter Message)<br>
-     * Note this method MUST be called within an existing {@link UnitOfWork} IF
-     * using {@link TransactionalMode#FullyTransactional}
      *
      * @param queueEntryId the unique id of the Message to delete
      */

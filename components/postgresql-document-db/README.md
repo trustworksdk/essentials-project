@@ -58,23 +58,13 @@ A Kotlin-based Document Database built on PostgreSQL JSONB, providing flexible J
 
 <!-- Jackson -->
 <dependency>
-    <groupId>com.fasterxml.jackson.core</groupId>
+    <groupId>tools.jackson.core</groupId>
     <artifactId>jackson-databind</artifactId>
     <version>${jackson.version}</version>
 </dependency>
 <dependency>
-    <groupId>com.fasterxml.jackson.module</groupId>
+    <groupId>tools.jackson.module</groupId>
     <artifactId>jackson-module-kotlin</artifactId>
-    <version>${jackson.version}</version>
-</dependency>
-<dependency>
-    <groupId>com.fasterxml.jackson.datatype</groupId>
-    <artifactId>jackson-datatype-jsr310</artifactId>
-    <version>${jackson.version}</version>
-</dependency>
-<dependency>
-    <groupId>com.fasterxml.jackson.datatype</groupId>
-    <artifactId>jackson-datatype-jdk8</artifactId>
     <version>${jackson.version}</version>
 </dependency>
 
@@ -422,11 +412,10 @@ Create a single factory instance and reuse it for all repositories:
 val repositoryFactory = DocumentDbRepositoryFactory(
     jdbi,
     JdbiUnitOfWorkFactory(jdbi),
-    JacksonJSONSerializer(
-        EssentialsImmutableJacksonModule.createObjectMapper(
-            Jdk8Module(),
-            JavaTimeModule()
-        ).registerKotlinModule()
+    Jackson3JSONSerializer(
+        EssentialsObjectMappers.createJackson3ObjectMapper(
+            KotlinModule.Builder().build()   // tools.jackson.module.kotlin.KotlinModule
+        )
     )
 )
 ```

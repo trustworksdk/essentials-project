@@ -23,14 +23,17 @@ import dk.trustworks.essentials.components.foundation.scheduler.executor.*;
 import dk.trustworks.essentials.components.foundation.scheduler.executor.ExecutorScheduledJobRepository.ExecutorJobEntry;
 import dk.trustworks.essentials.components.foundation.scheduler.pgcron.*;
 import dk.trustworks.essentials.components.foundation.scheduler.pgcron.PgCronRepository.*;
+import dk.trustworks.essentials.components.foundation.schema.*;
 import dk.trustworks.essentials.components.foundation.transaction.jdbi.*;
 import dk.trustworks.essentials.shared.Lifecycle;
 import dk.trustworks.essentials.shared.concurrent.ThreadFactoryBuilder;
 import dk.trustworks.essentials.shared.network.Network;
 import org.slf4j.*;
 
+import java.time.*;
 import java.util.*;
 import java.util.concurrent.*;
+import java.util.function.Function;
 
 import static dk.trustworks.essentials.shared.FailFast.*;
 
@@ -51,7 +54,7 @@ import static dk.trustworks.essentials.shared.FailFast.*;
  *   <li>Manages task lifecycle using a distributed lock to ensure coordinated task execution across multiple nodes.</li>
  * </ul>
  */
-public class DefaultEssentialsScheduler implements EssentialsScheduler, Lifecycle {
+public class DefaultEssentialsScheduler implements EssentialsScheduler, Lifecycle, EssentialsSchemaContributor {
 
     private static final Logger log = LoggerFactory.getLogger(DefaultEssentialsScheduler.class);
 
@@ -77,13 +80,45 @@ public class DefaultEssentialsScheduler implements EssentialsScheduler, Lifecycl
     public DefaultEssentialsScheduler(HandleAwareUnitOfWorkFactory<?> unitOfWorkFactory,
                                       FencedLockManager lockManager,
                                       int schedulerThreads) {
+        this(unitOfWorkFactory, lockManager, schedulerThreads, SchemaOwnership.COMPONENT);
+    }
+
+    /**
+     * @param schemaOwnership {@link SchemaOwnership#COMPONENT} creates the scheduled-jobs table now;
+     *                        {@link SchemaOwnership#HARNESS} leaves it to an {@link EssentialsSchemaHarness} this
+     *                        scheduler is registered with
+     */
+    public DefaultEssentialsScheduler(HandleAwareUnitOfWorkFactory<?> unitOfWorkFactory,
+                                      FencedLockManager lockManager,
+                                      int schedulerThreads,
+                                      SchemaOwnership schemaOwnership) {
         this.unitOfWorkFactory = requireNonNull(unitOfWorkFactory, "unitOfWorkFactory cannot be null");
         this.fencedLockManager = requireNonNull(lockManager, "lockManager cannot be null");
         requireTrue(schedulerThreads > 0, "schedulerThreads must be greater than 0");
         this.schedulerThreads = schedulerThreads;
         this.pgCronRepository = new PgCronRepository(unitOfWorkFactory);
-        this.executorScheduledJobRepository = new ExecutorScheduledJobRepository(unitOfWorkFactory);
+        this.executorScheduledJobRepository = new ExecutorScheduledJobRepository(unitOfWorkFactory,
+                                                                                 ExecutorScheduledJobRepository.DEFAULT_SCHEDULED_JOBS_TABLE_NAME,
+                                                                                 requireNonNull(schemaOwnership, "schemaOwnership cannot be null"));
         this.lockName = new LockName("essentials-scheduler");
+    }
+
+    /**
+     * The scheduled-jobs table, as contributed by this scheduler's {@link ExecutorScheduledJobRepository}.
+     */
+    @Override
+    public String moduleId() {
+        return executorScheduledJobRepository.moduleId();
+    }
+
+    @Override
+    public int order() {
+        return executorScheduledJobRepository.order();
+    }
+
+    @Override
+    public List<SchemaChange> contribute(SchemaContext context) {
+        return executorScheduledJobRepository.contribute(context);
     }
 
     /**
@@ -188,6 +223,62 @@ public class DefaultEssentialsScheduler implements EssentialsScheduler, Lifecycl
         return false;
     }
 
+    @Override
+    public Optional<ScheduledJobRun> runJobNow(String jobName) {
+        requireNonNull(jobName, "jobName cannot be null");
+        var executorJob = findRegisteredJob(executorJobs, ExecutorJob::name, jobName);
+        if (executorJob.isPresent()) {
+            return Optional.of(runExecutorJobNow(executorJob.get()));
+        }
+        return findRegisteredJob(pgCronJobs, PgCronJob::name, jobName).map(this::runPgCronJobNow);
+    }
+
+    /**
+     * Matches the registered name, or the name the scheduler stored it under - the registered name plus the
+     * {@link JobNameResolver} suffix of whichever instance stored it, not necessarily this one. The longest matching
+     * registered name wins, so {@code ttl_orders} is not taken for a suffixed {@code ttl}.
+     */
+    private static <J> Optional<J> findRegisteredJob(List<J> jobs, Function<J, String> nameOf, String requestedName) {
+        return jobs.stream()
+                   .filter(job -> requestedName.equals(nameOf.apply(job))
+                           || requestedName.startsWith(nameOf.apply(job) + JobNameResolver.UNDER_SCORE))
+                   .max(Comparator.comparingInt(job -> nameOf.apply(job).length()));
+    }
+
+    private ScheduledJobRun runExecutorJobNow(ExecutorJob job) {
+        if (!started || !lockAcquired) {
+            var lockHolder = fencedLockManager.lookupLock(lockName)
+                                              .map(FencedLock::getLockedByLockManagerInstanceId)
+                                              .orElse(null);
+            throw new ScheduledJobNotRunnableHereException(job.name(), lockHolder);
+        }
+        log.info("▶️ Running ExecutorJob '{}' on demand", job.name());
+        return timedRun(job.name(), ScheduledJobRun.JobType.EXECUTOR, () -> job.task().run());
+    }
+
+    /**
+     * Calls the job's function directly. Its statement is built from the registered job - never read back from
+     * {@code cron.job}, which may hold any application's jobs - so only what this scheduler registered can be run
+     */
+    private ScheduledJobRun runPgCronJobNow(PgCronJob job) {
+        log.info("▶️ Running PgCronJob '{}' on demand", job.name());
+        return timedRun(job.name(), ScheduledJobRun.JobType.PG_CRON,
+                        () -> unitOfWorkFactory.usingUnitOfWork(uow -> uow.handle().createQuery(job.functionCallSql()).mapToMap().list()));
+    }
+
+    private static ScheduledJobRun timedRun(String jobName, ScheduledJobRun.JobType jobType, Runnable run) {
+        var startedAt = OffsetDateTime.now(ZoneOffset.UTC);
+        var startNs   = System.nanoTime();
+        String error  = null;
+        try {
+            run.run();
+        } catch (Throwable t) {
+            log.warn("❌ On-demand run of {} job '{}' failed", jobType, jobName, t);
+            error = t.getClass().getName() + (t.getMessage() != null ? ": " + t.getMessage() : "");
+        }
+        return new ScheduledJobRun(jobName, jobType, startedAt, Duration.ofNanos(System.nanoTime() - startNs), error == null, error);
+    }
+
     private void scheduleExecutorJobInternal(ExecutorJob job) {
         if (executorScheduledJobRepository.existsByName(job.name())) {
             log.warn("ExecutorJob '{}' already exists", job);
@@ -250,9 +341,15 @@ public class DefaultEssentialsScheduler implements EssentialsScheduler, Lifecycl
                                                               );
 
             unitOfWorkFactory.usingUnitOfWork(uow -> {
-                var available = PostgresqlUtil.isPGExtensionAvailable(uow.handle(), "pg_cron");
+                // Created when the server offers it and this role may create it. The check used to read pg_extension,
+                // so CREATE EXTENSION ran only when pg_cron already existed - pg_cron worked only where something else
+                // had created it first. Refused under a savepoint, so a role without the privilege, or a database other
+                // than cron.database_name, disables pg_cron support instead of aborting the start.
+                var handle    = uow.handle();
+                var available = PostgresqlUtil.isPGExtensionAvailable(handle, "pg_cron")
+                        || (PostgresqlUtil.isPGExtensionInstallable(handle, "pg_cron")
+                        && PostgresqlUtil.executeAllowingRefusal(handle, "CREATE EXTENSION IF NOT EXISTS pg_cron;"));
                 if (available) {
-                    uow.handle().execute("CREATE EXTENSION IF NOT EXISTS pg_cron;");
                     boolean loaded = determineIfPgCronIsLoaded();
                     pgCronAvailable = loaded;
                     if (!loaded) {

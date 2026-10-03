@@ -124,44 +124,6 @@ public abstract class DBFencedLockManager<UOW extends UnitOfWork, LOCK extends D
                         });
     }
 
-    /**
-     * @param lockStorage                                                    the lock storage used for the lock manager
-     * @param unitOfWorkFactory                                              the {@link UnitOfWork} factory
-     * @param lockManagerInstanceId                                          The unique name for this lock manager instance. If left {@link Optional#empty()} then the machines hostname is used
-     * @param lockTimeOut                                                    the period between {@link FencedLock#getLockLastConfirmedTimestamp()} and the current time before the lock is marked as timed out
-     * @param lockConfirmationInterval                                       how often should the locks be confirmed. MUST is less than the <code>lockTimeOut</code>
-     * @param releaseAcquiredLocksInCaseOfIOExceptionsDuringLockConfirmation Should {@link FencedLock}'s acquired by this {@link FencedLockManager} be released in case calls to {@link FencedLockStorage#confirmLockInDB(DBFencedLockManager, UnitOfWork, DBFencedLock, OffsetDateTime)} fails
-     *                                                                       with an exception where {@link IOExceptionUtil#isIOException(Throwable)} returns true -
-     *                                                                       If releaseAcquiredLocksInCaseOfIOExceptionsDuringLockConfirmation is true, then {@link FencedLock}'s will be released locally,
-     *                                                                       otherwise we will retain the {@link FencedLock}'s as locked.
-     * @param eventBus                                                       optional {@link LocalEventBus} where {@link FencedLockEvents} will be published
-     * @deprecated Use {@link #DBFencedLockManager(FencedLockStorage, UnitOfWorkFactory, FencedLockManagerSettings, EventBus)}.
-     *         The four configuration arguments in the middle are now one {@link FencedLockManagerSettings} value —
-     *         build it with {@link FencedLockManagerSettings#builder()} — and the {@code Optional<EventBus>} is a
-     *         plain nullable argument. This constructor delegates and behaves identically; note only that the
-     *         {@code lockConfirmationInterval < lockTimeOut} check now fires when the settings are created rather
-     *         than here, which is strictly earlier.
-     */
-    @Deprecated(forRemoval = true, since = "0.40.x")
-    @SuppressWarnings("OptionalUsedAsFieldOrParameterType")
-    protected DBFencedLockManager(FencedLockStorage<UOW, LOCK> lockStorage,
-                                  UnitOfWorkFactory<? extends UOW> unitOfWorkFactory,
-                                  Optional<String> lockManagerInstanceId,
-                                  Duration lockTimeOut,
-                                  Duration lockConfirmationInterval,
-                                  boolean releaseAcquiredLocksInCaseOfIOExceptionsDuringLockConfirmation,
-                                  Optional<EventBus> eventBus) {
-        this(lockStorage,
-             unitOfWorkFactory,
-             FencedLockManagerSettings.builder()
-                                      .setLockManagerInstanceId(requireNonNull(lockManagerInstanceId, "No lockManagerInstanceId option provided"))
-                                      .setLockTimeOut(lockTimeOut)
-                                      .setLockConfirmationInterval(lockConfirmationInterval)
-                                      .setReleaseAcquiredLocksInCaseOfIOExceptionsDuringLockConfirmation(releaseAcquiredLocksInCaseOfIOExceptionsDuringLockConfirmation)
-                                      .build(),
-             requireNonNull(eventBus, "No eventBus option provided").orElse(null));
-    }
-
     @Override
     public void start() {
         if (!started) {
@@ -716,7 +678,26 @@ public abstract class DBFencedLockManager<UOW extends UnitOfWork, LOCK extends D
                     var fencedLock = lock.get();
                     fencedLock.registerCallback(lockCallback);
                     locksAcquiredByThisLockManager.put(lockName, (LOCK) fencedLock);
-                    lockCallback.lockAcquired(lock.get());
+                    try {
+                        lockCallback.lockAcquired(fencedLock);
+                    } catch (RuntimeException e) {
+                        // The lock WAS acquired; it is the callback that failed. Keeping the lock would
+                        // be the worst of both outcomes: this instance owns a lock it is not serving,
+                        // no other instance can take it, and no later tick will ever call the callback
+                        // again - the next tick finds the lock already held by this instance and takes
+                        // neither branch below, so the failure is permanent and silent apart from one
+                        // log line whose text says the acquisition failed, when it did not.
+                        //
+                        // Releasing turns that into something recoverable: the next tick tries again,
+                        // and a cause that clears itself (a queue registered a moment later, a
+                        // dependency that finished starting) is picked up without a restart. A cause
+                        // that does not clear logs once per tick, which is the paced, visible failure
+                        // a permanent one should be.
+                        log.error(msg("[{}] Lock '{}' was acquired but its lockAcquired callback failed - releasing it "
+                                      + "so the next attempt can retry rather than holding a lock nothing is serving",
+                                      lockManagerInstanceId, lockName), e);
+                        releaseLock((LOCK) fencedLock);
+                    }
                 } else {
                     if (log.isTraceEnabled()) {
                         log.trace("[{}] Couldn't async Acquire lock '{}' as it is acquired by another Lock Manager instance: {}",

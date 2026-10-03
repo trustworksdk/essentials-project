@@ -25,9 +25,7 @@ import java.util.*;
 import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 
 /**
- * Query the next Queued Message (i.e. not including Dead Letter Messages) that's ready to be delivered to a {@link DurableQueueConsumer}<br>
- * Note this method MUST be called within an existing {@link UnitOfWork} IF
- * using {@link TransactionalMode#FullyTransactional}<br>
+ * Query the next Queued Message (i.e. not including Dead Letter Messages) that's ready to be delivered to a {@link DurableQueueConsumer}<br><br>
  * Operation also matched {@link DurableQueuesInterceptor#intercept(GetNextMessageReadyForDelivery, InterceptorChain)}
  */
 public final class GetNextMessageReadyForDelivery {
@@ -48,8 +46,6 @@ public final class GetNextMessageReadyForDelivery {
 
     /**
      * Query the next Queued Message (i.e. not including Dead Letter Messages) that's ready to be delivered to a {@link DurableQueueConsumer}<br>
-     * Note this method MUST be called within an existing {@link UnitOfWork} IF
-     * using {@link TransactionalMode#FullyTransactional}
      *
      * @param queueName the name of the Queue where we will query for the next message ready for delivery
      */
@@ -60,8 +56,6 @@ public final class GetNextMessageReadyForDelivery {
 
     /**
      * Query the next Queued Message (i.e. not including Dead Letter Messages) that's ready to be delivered to a {@link DurableQueueConsumer}<br>
-     * Note this method MUST be called within an existing {@link UnitOfWork} IF
-     * using {@link TransactionalMode#FullyTransactional}
      *
      * @param queueName the name of the Queue where we will query for the next message ready for delivery
      * @param excludeOrderedMessagesWithKey collection of {@link OrderedMessage#getKey()}'s to exclude in the search for the next message

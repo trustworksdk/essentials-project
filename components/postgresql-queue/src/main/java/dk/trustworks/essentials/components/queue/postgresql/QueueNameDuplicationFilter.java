@@ -16,7 +16,7 @@
 
 package dk.trustworks.essentials.components.queue.postgresql;
 
-import com.fasterxml.jackson.databind.JsonNode;
+import tools.jackson.databind.JsonNode;
 import dk.trustworks.essentials.components.foundation.messaging.queue.QueueName;
 import dk.trustworks.essentials.components.foundation.postgresql.*;
 import dk.trustworks.essentials.components.foundation.transaction.UnitOfWork;
@@ -57,7 +57,7 @@ public class QueueNameDuplicationFilter implements NotificationDuplicationFilter
      */
     @Override
     public Optional<String> extractDuplicationKey(JsonNode parameterJson) {
-        return Optional.ofNullable(parameterJson.has("queue_name") ? parameterJson.get("queue_name").asText() : null);
+        return Optional.ofNullable(parameterJson.has("queue_name") ? parameterJson.get("queue_name").asString() : null);
     }
 }
 

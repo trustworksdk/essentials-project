@@ -121,7 +121,6 @@ public final class BatchedPersistedEventSubscriberBuilder {
      *
      * @return the subscriber
      */
-    @SuppressWarnings("removal")
     public BatchedPersistedEventSubscriber build() {
         return new BatchedPersistedEventSubscriber(requireNonNull(eventHandler, "eventHandler cannot be null"),
                                                    requireNonNull(eventStoreSubscription, "eventStoreSubscription cannot be null"),

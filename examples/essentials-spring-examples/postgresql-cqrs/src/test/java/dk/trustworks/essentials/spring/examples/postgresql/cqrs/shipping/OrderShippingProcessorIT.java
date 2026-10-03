@@ -71,8 +71,7 @@ public class OrderShippingProcessorIT {
             .withUsername("test");
 
     @Container
-    static  org.testcontainers.kafka.KafkaContainer       kafkaContainer = new org.testcontainers.kafka.KafkaContainer(KAFKA_IMAGE)
-            .withStartupAttempts(2);
+    static  org.testcontainers.kafka.KafkaContainer       kafkaContainer = newKafkaContainer();
     private KafkaMessageListenerContainer<String, Object> kafkaListenerContainer;
 
     @DynamicPropertySource

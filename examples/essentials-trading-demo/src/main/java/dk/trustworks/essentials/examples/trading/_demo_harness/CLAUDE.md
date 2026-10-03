@@ -13,6 +13,10 @@ What lives here is the machinery that makes the demo demonstrate something:
 | `TradingLoadGeneratorController` | The harness's own admin API |
 | `TradingDashboard*` | The lightweight status screen and its SSE stream |
 | `DirectInstrumentPriceService` | A deliberately **non**-event-sourced latest-price table, written with raw JDBC, whose only purpose is to be benchmarked against the `market_data` aggregate path |
+| `QueueLoadGenerator` | Drives the **shard-owned queue engine** on both lanes at once — sustained trickle plus on-demand spikes — and checks per-key ordering as messages arrive |
+| `QueueLoadGeneratorController` | `/api/admin/queue-load` — status, start/stop, `POST /spike?size=N`, `POST /faults?retries=N&poison=M&failures=K`, `POST /faults/blocked-key?behind=N` |
+
+**The dashboard's SSE emitters never time out, so `TradingDashboardStreamService` completes them on `ContextClosedEvent`.** Without that an open dashboard tab held Spring Boot's graceful shutdown for the full 30 s phase timeout on every Ctrl-C, ending in `AsyncRequestTimeoutException`.
 
 ## Why these are not slices
 
@@ -73,3 +77,146 @@ read it by accident. The authoritative latest price is always the `InstrumentPri
 
 See `../../REFACTORING_PLAN.md` § Open questions for the argument that it belongs in `market_data`
 instead.
+
+## The shard-owned queue exercise
+
+`QueueLoadGenerator` exists because the queue engine is unpublished and experimental: this app is
+where it meets a real Spring application, a shared connection pool and a database that is also
+serving an event store. Four things it caught that the engine's own tests could not, all of them
+misuse rather than engine defects — which is the point of an integration demo.
+
+- **`@Scheduled` is inert here.** The demo has no `@EnableScheduling`, so the annotation binds,
+  validates and never fires. A load generator that generates no load is the quietest possible
+  failure. Own a `ScheduledExecutorService`, as `TradingLoadGeneratorManager` does.
+- **`MessageQueue.consume` covers BOTH lanes.** The lane is chosen by the message — `Message.of` is
+  unordered, `Message.ordered` carries a key — not by the consumer. A second `consume()` on the same
+  queue is therefore a *competing consumer with its own instance identity*, not "the other lane":
+  registering one per lane delivered price ticks to the ordered handler, dead-lettered 1 934 of them
+  for failing to parse as a sequence number, and reported two live instances for one process. Use one
+  subscription and discriminate on `payloadType`.
+- **`key_order` allocation must be atomic with the enqueue that carries it.** `key_order` is the
+  producer's statement of what order means, so the engine can only deliver a key in that order if
+  numbering and committing agree. With a sustained arm and a spike arm numbering the same keys, a
+  spike spends seconds inserting 50 000 rows while the sustained arm takes a *higher* `key_order` and
+  commits it *first* — 7 390 ordering violations in one spike, the engine faithfully reporting a
+  defect in the code feeding it. A real producer gets this free from one aggregate under one unit of
+  work; a two-armed generator has to arrange it.
+- **A key belongs to ONE producer, and the same is true across processes.** `nextOrderPerKey` is
+  in-memory and starts at zero in every JVM, so two instances generating into one key space both
+  number `ACC-77` 0, 1, 2 …. The ordered lane's primary key is `(queue_id, shard, msg_key, key_order)`,
+  so the second arrival at a position is refused — `duplicate key value violates unique constraint
+  "shard_queue_ordered_pkey"` once per sustained tick, plus an ordering violation for every pair that
+  interleaved. That reads as broken ordered delivery and is the constraint working. Each instance now
+  produces under its own `ACC-<instanceId>-<runToken>-` prefix (`keyPrefix`, from
+  `ShardOwnedQueueFactory.instanceId()`), chosen over electing a single producer so both instances
+  still exercise the producing side as well as the consuming one.
+- **The same is true across restarts, which is why the prefix carries a run token.** With the
+  instance id alone, a restarted `demo-1` numbered its keys from 0 again while the previous run's rows
+  (numbered up to ~1 600) were still queued: the engine delivered 1 600, then 2, and logged an ordering
+  violation for every such key. Correctly — the producer really did number them that way. A token from
+  the start time gives each run fresh keys; the previous run's backlog drains under keys nothing
+  produces any more.
+
+Measured after those three were fixed, one instance, 4 unordered shards and 64 ordered units:
+
+| | |
+|---|---|
+| spike | 100 000 messages (50 000 per lane) in one call |
+| backlog at t+5s | 39 739 unordered, 34 257 ordered |
+| fully drained | t+20s, roughly 5 000 msg/s combined |
+| ordering violations | 0, against a 34 000-deep ordered queue |
+| dead letters | 0 |
+| ownership | 4 + 64 units, `fullyOwned` throughout |
+
+### Injected faults
+
+`POST /api/admin/queue-load/faults?retries=N&poison=M&failures=K` enqueues, on each lane, N messages
+that fail K times and then succeed, and M that fail every attempt and are dead-lettered after the
+consumer's `maxAttempts` (3 by default, so K must be 1 or 2). They are kept apart from the traffic
+above, and both halves of that are load-bearing:
+
+- **Own payload types**, so they are never ordering-checked and never counted as ticks or account
+  activity. Watch `retryFaultsRecovered`, `injectedFailures` and `deadLetteredDepth` instead.
+- **A single-use key per ordered fault message** (`FAULT-<instanceId>-<runToken>-<n>`). A dead
+  letter blocks its key and dead-letters everything that arrives for it afterwards, so a poison
+  message on an `ACC-` key would silently take that account's activity down with it.
+
+The retry handler reads the attempt count with `MessageQueue.getMessage(messageId)` — the handler
+is not given it — so the count lives in the database and survives a rebalance to another instance.
+Poison dead letters stay until someone deletes or resurrects them; resurrecting one just fails it
+again.
+
+`POST /faults/blocked-key?behind=N` builds the one case the single-use fault keys cannot show: a key
+that stops. Its head (`key_order` 0) fails until resurrected and the N behind it are parked by the
+engine unhandled. The response names the admin call that recovers it,
+`POST <admin-base>/shard-owned-queues/trading-events/ordered-keys/<key>/resurrect`; the key then
+replays in `key_order`, checked by the same ordering assertion as account activity. Deleting the head
+first skips it — the rest stay parked behind the lowest remaining dead letter until the resurrect.
+
+- **"Fails until resurrected" is keyed on the head's `MessageId`.** Resurrecting gives a message a
+  fresh sequence value, so a new id; the handler fails only under the id it was enqueued with. The
+  set is in memory, so it is **single-instance only**: with two instances the key's unit may belong
+  to the other one, which delivers the head first time and the key never blocks.
+- **Head registration and the handler share one lock.** `enqueue` commits before it returns the ids,
+  so a fast consumer can be handed the head before it is known to be one.
+
+
+Its first run found an engine defect: every **unordered** poison message vanished — neither queued
+nor dead-lettered — because the unordered lane's range acknowledgement deleted rows waiting out a
+retry backoff. Fixed in the engine; see "The unordered range ack" in
+`components/postgresql-queue-shard-owned/CLAUDE.md`. After a fault run,
+`deadLetteredDepth` should equal `poisonFaultsEnqueued`.
+
+`unownedShards` is the field to watch, not depth: depth cannot tell "nobody is consuming" from
+"busy", and this engine's ownership failures have historically been invisible in depth alone.
+
+## The Inbox exercise, which is the more honest one
+
+`QueueLoadGenerator`'s handler sleeps a millisecond. Real handlers open a unit of work and write SQL,
+and the way to exercise that without writing a fake is to put the app's own `DurableQueues` on the
+engine: an `EventProcessor` forwards what it consumes through an `Inbox`, and an `Inbox` is a queue.
+`essentials.shard-owned-queue.durable-queues-enabled` does that, so the four projections are delivered
+by the engine and their handlers do the real work. The demo used to carry its own
+`ShardOwnedDurableQueuesConfiguration` bean for this; the starter owns it now, and the demo is just
+two lines of YAML. The engine auto-registers the queues the processors invent:
+
+```
+DefaultCommandQueue | Inbox:TradeSettlementProjection | Inbox:TradeValuationProjection
+InstrumentDetailsProjection:queue | TradingAccountStatementProjection:queue | trading-events
+```
+
+What this caught that the engine's own tests and the synthetic generator could not:
+
+- **`ViewEventProcessor` called `queuedMessage.getId()` in log arguments.** Arguments are evaluated
+  eagerly, so it ran on every delivery whatever the level. `getId()` is the `QueueEntryId`, which the
+  adapter's codec packs from `(QueueName, MessageId)`, and the push path has no `MessageId` — the
+  engine's `MessageHandler` gets `(key, payload, payloadType)`. The adapter throws there rather than
+  stub an id, so every projection message dead-lettered from a log statement nobody had enabled.
+  Now trace-level behind `isTraceEnabled()`, which is what a per-message statement should have been
+  anyway. The reminder is that the partial-message contract has to hold for *callers*, not just for
+  the adapter's own tests.
+
+The demo also had to turn `enable-queue-statistics` back off — it was explicitly on here, and it
+installs a trigger on the `durable_queues` table, which only `PostgresqlDurableQueues` creates. Not
+a gap in the adapter: the setting is off by default and is going away in the next major.
+
+### Measured, one instance, 4 unordered shards and 64 ordered units per queue
+
+Trade bursts stop contributing at `maxGeneratedTrades` (500), so the spike lever is price updates —
+also the heavier message, since each one updates every trade on its instrument (~250 rows). Eight
+concurrent producers × 5 000:
+
+| | |
+|---|---|
+| peak backlog | ~2 450 on `Inbox:TradeValuationProjection` |
+| peak lag | ~8s, held flat while producers ran |
+| drain | 2 441 → 0 in ~4s once producers stopped (~600/s, each message a bulk `UPDATE`) |
+| dead letters | 0 |
+| errors | 0 |
+| fence | 1 on all 12 lanes throughout — no ownership churn under load |
+
+The shape is the finding: lag plateaus rather than growing without bound while producers run, and the
+backlog only appears once *producers* are made concurrent. A single synchronous burst endpoint cannot
+outrun the projections — 4 000 price updates in 6s never took the Inbox past a depth of 8. That the
+fence never moved is what the instance-liveness redesign was for; a lease-expiry design would have
+churned ownership exactly here, under load, while the pool was contended.

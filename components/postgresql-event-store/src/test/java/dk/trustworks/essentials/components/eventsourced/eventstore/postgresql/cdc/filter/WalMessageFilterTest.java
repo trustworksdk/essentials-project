@@ -16,8 +16,7 @@
 
 package dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.cdc.filter;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
-import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.serializer.json.JacksonJSONEventSerializer;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.serializer.json.EssentialsJSONEventSerializers;
 import org.junit.jupiter.api.Test;
 
 import java.nio.charset.StandardCharsets;
@@ -28,7 +27,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 class WalMessageFilterTest {
     private final DefaultWalMessageFilter filter = new DefaultWalMessageFilter(
-            new JacksonJSONEventSerializer(new ObjectMapper()),
+            EssentialsJSONEventSerializers.create(),
             java.util.Set.of("orders_events"));
 
     @Test
@@ -135,9 +134,7 @@ class WalMessageFilterTest {
         var liveTables = new HashSet<String>();
         liveTables.add("orders_events");
 
-        var liveFilter = new DefaultWalMessageFilter(
-                new JacksonJSONEventSerializer(new ObjectMapper()),
-                () -> liveTables);
+        var liveFilter = new DefaultWalMessageFilter((() -> liveTables));
 
         String ordersInsert = """
                               {"change":[{"kind":"insert","table":"orders_events"}]}
@@ -165,12 +162,7 @@ class WalMessageFilterTest {
     @Test
     void supplier_is_invoked_on_every_shouldPersist_call() {
         var invocations = new AtomicInteger();
-        var liveFilter = new DefaultWalMessageFilter(
-                new JacksonJSONEventSerializer(new ObjectMapper()),
-                () -> {
-                    invocations.incrementAndGet();
-                    return java.util.Set.of("orders_events");
-                });
+        var liveFilter = new DefaultWalMessageFilter((() -> { invocations.incrementAndGet(); return java.util.Set.of("orders_events"); }));
 
         String wal = """
                      {"change":[{"kind":"insert","table":"orders_events"}]}
@@ -190,7 +182,7 @@ class WalMessageFilterTest {
     @Test
     void empty_supplier_rejects_everything() {
         var liveFilter = new DefaultWalMessageFilter(
-                new JacksonJSONEventSerializer(new ObjectMapper()),
+                EssentialsJSONEventSerializers.create(),
                 java.util.Set.<String>of());
 
         String wal = """

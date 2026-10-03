@@ -23,6 +23,9 @@ import dk.trustworks.essentials.components.foundation.fencedlock.api.*;
 import dk.trustworks.essentials.components.foundation.messaging.queue.*;
 import dk.trustworks.essentials.components.foundation.messaging.queue.DurableQueues.QueueingSortOrder;
 import dk.trustworks.essentials.components.foundation.messaging.queue.api.*;
+import dk.trustworks.essentials.components.foundation.postgresql.api.*;
+import dk.trustworks.essentials.components.foundation.scheduler.ScheduledJobNotRunnableHereException;
+import dk.trustworks.essentials.components.foundation.scheduler.api.*;
 import dk.trustworks.essentials.shared.security.*;
 import org.junit.jupiter.api.*;
 import org.springframework.http.MediaType;
@@ -34,6 +37,7 @@ import tools.jackson.databind.json.JsonMapper;
 import java.time.*;
 import java.util.*;
 
+import static org.hamcrest.Matchers.containsString;
 import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.*;
@@ -55,6 +59,8 @@ class AdminApiEndpointsTest {
     private final DurableQueuesApi durableQueuesApi = mock(DurableQueuesApi.class);
     private final AggregateLifecycleApi aggregateLifecycleApi = mock(AggregateLifecycleApi.class);
     private final AggregateArchiveApi   aggregateArchiveApi   = mock(AggregateArchiveApi.class);
+    private final PostgresqlQueryStatisticsApi queryStatisticsApi = mock(PostgresqlQueryStatisticsApi.class);
+    private final SchedulerApi                 schedulerApi       = mock(SchedulerApi.class);
 
     private final TestAuthenticatedUser authenticatedUser = new TestAuthenticatedUser();
 
@@ -68,7 +74,9 @@ class AdminApiEndpointsTest {
         mockMvc = MockMvcBuilders.standaloneSetup(new FencedLocksController(dbFencedLockApi, principalResolver),
                                                  new DurableQueuesController(durableQueuesApi, principalResolver),
                                                  new AggregateLifecycleController(aggregateLifecycleApi, principalResolver),
-                                                 new AggregateArchiveController(aggregateArchiveApi, principalResolver))
+                                                 new AggregateArchiveController(aggregateArchiveApi, principalResolver),
+                                                 new PostgresqlQueryStatisticsController(queryStatisticsApi, principalResolver),
+                                                 new SchedulerController(schedulerApi, principalResolver))
                                  .setControllerAdvice(new AdminApiExceptionHandler())
                                  .setMessageConverters(new JacksonJsonHttpMessageConverter(jsonMapper))
                                  .addPlaceholderValue(AdminApiPaths.BASE_PATH_PROPERTY, BASE)
@@ -110,6 +118,67 @@ class AdminApiEndpointsTest {
             mockMvc.perform(get(BASE + "/durable-queues/queues/orders/messages/count"))
                    .andExpect(status().isOk())
                    .andExpect(jsonPath("$.total").value(42));
+        }
+
+        @Test
+        void running_a_scheduler_job_returns_its_outcome() throws Exception {
+            when(schedulerApi.runJobNow(any(), eq("cdc_inbox_ttl_host-1")))
+                    .thenReturn(Optional.of(new ApiScheduledJobRun("cdc_inbox_ttl", "PG_CRON", OffsetDateTime.parse("2026-10-02T12:00:00Z"),
+                                                                   42, true, null)));
+
+            mockMvc.perform(post(BASE + "/scheduler/jobs/cdc_inbox_ttl_host-1/run"))
+                   .andExpect(status().isOk())
+                   .andExpect(jsonPath("$.jobType").value("PG_CRON"))
+                   .andExpect(jsonPath("$.durationMs").value(42))
+                   .andExpect(jsonPath("$.succeeded").value(true));
+        }
+
+        @Test
+        void running_an_unknown_scheduler_job_is_not_found() throws Exception {
+            when(schedulerApi.runJobNow(any(), any())).thenReturn(Optional.empty());
+
+            mockMvc.perform(post(BASE + "/scheduler/jobs/someone_elses_job/run"))
+                   .andExpect(status().isNotFound());
+        }
+
+        @Test
+        void running_an_executor_job_away_from_the_lock_holder_is_a_conflict_naming_the_holder() throws Exception {
+            when(schedulerApi.runJobNow(any(), any())).thenThrow(new ScheduledJobNotRunnableHereException("ttl", "instance-2"));
+
+            mockMvc.perform(post(BASE + "/scheduler/jobs/ttl/run"))
+                   .andExpect(status().isConflict())
+                   .andExpect(jsonPath("$.message").value(containsString("instance-2")));
+        }
+
+        @Test
+        void the_slowest_queries_fall_back_to_the_contract_defaults() throws Exception {
+            when(queryStatisticsApi.getSlowestQueries(any(), any(), anyInt())).thenReturn(List.of());
+
+            mockMvc.perform(get(BASE + "/postgresql/query-statistics/slowest"))
+                   .andExpect(status().isOk());
+
+            verify(queryStatisticsApi).getSlowestQueries(any(), eq(QueryStatisticsOrder.TOTAL_TIME), eq(10));
+        }
+
+        @Test
+        void the_slowest_queries_order_and_limit_are_passed_through() throws Exception {
+            when(queryStatisticsApi.getSlowestQueries(any(), any(), anyInt()))
+                    .thenReturn(List.of(new ApiQueryStatistics("SELECT 1", 10.0, 2, 5.0, 2, 4.0, 6.0, 1.0, 8, 2, 80.0)));
+
+            mockMvc.perform(get(BASE + "/postgresql/query-statistics/slowest")
+                                    .param("orderBy", "MEAN_TIME")
+                                    .param("limit", "25"))
+                   .andExpect(status().isOk())
+                   .andExpect(jsonPath("$[0].maxTime").value(6.0))
+                   .andExpect(jsonPath("$[0].cacheHitRatio").value(80.0));
+
+            verify(queryStatisticsApi).getSlowestQueries(any(), eq(QueryStatisticsOrder.MEAN_TIME), eq(25));
+        }
+
+        @Test
+        void an_unknown_slowest_queries_order_is_a_bad_request() throws Exception {
+            mockMvc.perform(get(BASE + "/postgresql/query-statistics/slowest").param("orderBy", "NOPE"))
+                   .andExpect(status().isBadRequest());
         }
 
         @Test

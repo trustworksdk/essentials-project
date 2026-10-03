@@ -97,23 +97,17 @@ public class WalReplicationTailerWal2JsonIT extends AbstractLogicalReplicationPo
                                              CdcAvailability availability,
                                              Optional<MeterRegistry> meterRegistry,
                                              Optional<WalReplicationTailerErrorHandler> errorHandler) {
-        return new WalReplicationTailer(
-                replicationDataSource,
-                jdbi,
-                unitOfWorkFactory,
-                slotName,
-                inboxRepo,
-                props,
-                slotMode,
-                CdcMode.AUTO,
-                CdcProperties.CdcDeliveryMode.INBOX,
-                noOpWal2JsonPlugin(props),
-                Optional.empty(),
-                Optional.empty(),
-                availability,
-                meterRegistry,
-                errorHandler
-        );
+        return new WalReplicationTailer(CdcTailerDependencies.builder()
+                                                             .setReplicationDataSource(replicationDataSource)
+                                                             .setJdbi(jdbi)
+                                                             .setUnitOfWorkFactory(unitOfWorkFactory)
+                                                             .setLogicalDecodingPlugin(noOpWal2JsonPlugin(props))
+                                                             .setAvailability(availability)
+                                                             .setMeterRegistry(meterRegistry)
+                                                             .setErrorHandler(errorHandler)
+                                                             .build(),
+                                        new CdcTailerSettings(slotName, props, slotMode, CdcMode.AUTO, false),
+                                        CdcDelivery.inbox(inboxRepo));
     }
 
     @AfterEach

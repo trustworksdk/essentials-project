@@ -16,17 +16,9 @@
 
 package dk.trustworks.essentials.components.queue.postgresql;
 
-import com.fasterxml.jackson.annotation.JsonAutoDetect;
-import com.fasterxml.jackson.databind.DeserializationFeature;
-import com.fasterxml.jackson.databind.MapperFeature;
-import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.databind.SerializationFeature;
-import com.fasterxml.jackson.databind.json.JsonMapper;
-import com.fasterxml.jackson.datatype.jdk8.Jdk8Module;
-import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 import dk.trustworks.essentials.components.foundation.json.EssentialsObjectMappers;
+import tools.jackson.databind.ObjectMapper;
 import dk.trustworks.essentials.components.foundation.json.Jackson3JSONSerializer;
-import dk.trustworks.essentials.components.foundation.json.JacksonJSONSerializer;
 import dk.trustworks.essentials.components.foundation.json.JSONSerializer;
 import dk.trustworks.essentials.components.foundation.messaging.queue.DurableQueueDeserializationException;
 import dk.trustworks.essentials.components.foundation.messaging.queue.MessageMetaData;
@@ -98,21 +90,21 @@ public class DurableQueuesSerialization {
     }
 
     /**
-     * Create default {@link JSONSerializer}. Uses Jackson 3 when the Jackson 3 Essentials modules are present,
-     * otherwise falls back to Jackson 2.
+     * Create the default {@link JSONSerializer}, with the canonical Essentials mapper configuration.
      */
     public static JSONSerializer createDefaultJSONSerializer() {
         return EssentialsObjectMappers.createJSONSerializer();
     }
 
     /**
-     * Default {@link ObjectMapper} supporting {@link Jdk8Module}, {@link JavaTimeModule}, {@link EssentialTypesJacksonModule} and {@link EssentialsImmutableJacksonModule}, which
-     * is used together with the {@link JSONSerializer}
+     * Default Jackson 3 {@link ObjectMapper} with the canonical Essentials configuration (including
+     * {@code EssentialTypesJacksonModule} and {@code EssentialsImmutableJacksonModule} when present), which is used
+     * together with the {@link JSONSerializer}
      *
      * @return the default {@link ObjectMapper}
      */
     public static ObjectMapper createDefaultObjectMapper() {
-        return EssentialsObjectMappers.createJackson2ObjectMapper();
+        return EssentialsObjectMappers.createJackson3ObjectMapper();
     }
 
 

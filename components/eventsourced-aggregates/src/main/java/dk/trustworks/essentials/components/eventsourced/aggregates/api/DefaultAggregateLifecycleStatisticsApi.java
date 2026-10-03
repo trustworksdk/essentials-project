@@ -37,14 +37,10 @@ public class DefaultAggregateLifecycleStatisticsApi implements AggregateLifecycl
     private final AggregateClosingBooksPolicyRegistry closingBooksPolicyRegistry;
     private final Optional<MeterRegistry> meterRegistry;
 
-    /**
-     * @deprecated Use {@link #builder()}. This constructor declares an {@code Optional} parameter and/or more than five parameters; the builder names every argument and accepts both plain values and {@code Optional}s. It is unchanged and remains the implementation the builder delegates to.
-     */
-    @Deprecated(forRemoval = true, since = "0.40.x")
-    public DefaultAggregateLifecycleStatisticsApi(EssentialsSecurityProvider securityProvider,
-                                                  AggregateSnapshotPolicyRegistry snapshotPolicyRegistry,
-                                                  AggregateClosingBooksPolicyRegistry closingBooksPolicyRegistry,
-                                                  Optional<MeterRegistry> meterRegistry) {
+    DefaultAggregateLifecycleStatisticsApi(EssentialsSecurityProvider securityProvider,
+                                           AggregateSnapshotPolicyRegistry snapshotPolicyRegistry,
+                                           AggregateClosingBooksPolicyRegistry closingBooksPolicyRegistry,
+                                           Optional<MeterRegistry> meterRegistry) {
         this.securityProvider = requireNonNull(securityProvider, "securityProvider must not be null");
         this.snapshotPolicyRegistry = requireNonNull(snapshotPolicyRegistry, "snapshotPolicyRegistry must not be null");
         this.closingBooksPolicyRegistry = requireNonNull(closingBooksPolicyRegistry, "closingBooksPolicyRegistry must not be null");
@@ -304,7 +300,6 @@ public class DefaultAggregateLifecycleStatisticsApi implements AggregateLifecycl
         /**
          * @return the new {@link DefaultAggregateLifecycleStatisticsApi}
          */
-        @SuppressWarnings("removal")
         public DefaultAggregateLifecycleStatisticsApi build() {
             return new DefaultAggregateLifecycleStatisticsApi(securityProvider,
                                                               snapshotPolicyRegistry,

@@ -49,8 +49,8 @@ Consequences worth knowing before editing:
   `use_cases/ship_order/CLAUDE.md`.
 - **The Kafka DTOs carry a plain `String` id, not `OrderId`.** Converting happens in the two adapters of
   `external_systems/order_management`, and nowhere else. Typing the DTOs with `OrderId` means the ACL
-  stops translating — and it also drags the Essentials value-type serializer onto Kafka's `ObjectMapper`,
-  which is what used to break this module under `-Pjackson2`.
+  stops translating — and it also drags the Essentials value-type serializer onto Kafka's `ObjectMapper`
+  (under 0.50's since-removed `-Pjackson2` profile that is what broke this module).
 
 ## Public surface
 

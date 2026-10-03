@@ -46,11 +46,17 @@ public final class PostgresqlUtil {
     }
 
     /**
-     * Checks if a specified PostgreSQL extension is available in the current database instance.
+     * Checks if a specified PostgreSQL extension is <b>installed</b> in the current database - present in
+     * {@code pg_extension}, i.e. {@code CREATE EXTENSION} has already been run for it.
+     * <p>
+     * Despite the name, this is not whether the extension <i>could</i> be created: an extension whose packages are on
+     * the server but that has not been created yet answers {@code false}. Use {@link #isPGExtensionInstallable} for
+     * that. Both of the framework's own callers once used this to decide whether to run {@code CREATE EXTENSION},
+     * which therefore only ever ran when it had nothing to do.
      *
      * @param handle    the Jdbi {@code Handle} used to execute the query; must not be null
      * @param extension the name of the PostgreSQL extension to check; must not be null
-     * @return {@code true} if the specified extension is available, {@code false} otherwise
+     * @return {@code true} if the specified extension is installed in the current database, {@code false} otherwise
      */
     public static boolean isPGExtensionAvailable(Handle handle, String extension) {
         requireNonNull(handle, "No handle provided");
@@ -64,6 +70,86 @@ public final class PostgresqlUtil {
                      .bind("extension", extension)
                      .mapTo(Boolean.class)
                      .first();
+    }
+
+    /**
+     * Checks if a PostgreSQL extension <b>could be created</b> in the current database: its packages are installed on
+     * the server, so it is listed in {@code pg_available_extensions}. Says nothing about whether the current role is
+     * allowed to create it, nor whether it is already created - see {@link #isPGExtensionAvailable}.
+     *
+     * @param handle    the Jdbi {@code Handle} used to execute the query; must not be null
+     * @param extension the name of the PostgreSQL extension to check; must not be null
+     * @return {@code true} if the server offers the extension, {@code false} otherwise
+     */
+    public static boolean isPGExtensionInstallable(Handle handle, String extension) {
+        requireNonNull(handle, "No handle provided");
+        requireNonNull(extension, "No extension provided");
+        return handle.createQuery("SELECT exists(SELECT 1 FROM pg_available_extensions WHERE name = :extension)")
+                     .bind("extension", extension)
+                     .mapTo(Boolean.class)
+                     .first();
+    }
+
+    /**
+     * Whether a library is listed in the server's {@code shared_preload_libraries}. Extensions such as
+     * {@code pg_stat_statements} and {@code pg_cron} can be created without it, but do not work until the server is
+     * restarted with the library preloaded.
+     *
+     * @param handle  the Jdbi {@code Handle} used to execute the query; must not be null
+     * @param library the library name as it appears in {@code shared_preload_libraries}; must not be null
+     * @return {@code true} if the library is preloaded
+     */
+    public static boolean isPGLibraryPreloaded(Handle handle, String library) {
+        requireNonNull(handle, "No handle provided");
+        requireNonNull(library, "No library provided");
+        var preloaded = handle.createQuery("SELECT current_setting('shared_preload_libraries')")
+                              .mapTo(String.class)
+                              .first();
+        if (preloaded == null) {
+            return false;
+        }
+        return Arrays.stream(preloaded.split(","))
+                     .map(String::trim)
+                     .map(name -> name.replace("\"", ""))
+                     .anyMatch(library::equals);
+    }
+
+    /**
+     * Run a statement that is allowed to be refused - typically a best-effort {@code CREATE EXTENSION} - without the
+     * refusal aborting the caller's transaction.
+     * <p>
+     * Inside a transaction a failing statement aborts it, and everything after it in the same unit of work then fails
+     * with "current transaction is aborted". A savepoint confines the failure to the statement. Outside a transaction
+     * the statement simply runs on its own.
+     *
+     * @param handle    the Jdbi {@code Handle} to run the statement on; must not be null
+     * @param statement the statement; must not be null
+     * @return {@code true} if the statement succeeded, {@code false} if it was refused
+     */
+    public static boolean executeAllowingRefusal(Handle handle, String statement) {
+        requireNonNull(handle, "No handle provided");
+        requireNonNull(statement, "No statement provided");
+        if (!handle.isInTransaction()) {
+            try {
+                handle.execute(statement);
+                return true;
+            } catch (Exception e) {
+                log.debug("Statement refused: {}", statement, e);
+                return false;
+            }
+        }
+        var savepoint = "essentials_allowing_refusal";
+        handle.savepoint(savepoint);
+        try {
+            handle.execute(statement);
+            handle.release(savepoint);
+            return true;
+        } catch (Exception e) {
+            // Jdbi forgets the savepoint on rollback, so there is nothing to release afterwards.
+            handle.rollbackToSavepoint(savepoint);
+            log.debug("Statement refused: {}", statement, e);
+            return false;
+        }
     }
 
     /**

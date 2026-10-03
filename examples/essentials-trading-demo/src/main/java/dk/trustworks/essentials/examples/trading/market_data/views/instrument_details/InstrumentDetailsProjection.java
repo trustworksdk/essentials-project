@@ -24,6 +24,8 @@ import dk.trustworks.essentials.components.foundation.messaging.MessageHandler;
 import dk.trustworks.essentials.examples.trading.market_data.aggregates.Instruments;
 import dk.trustworks.essentials.examples.trading.market_data.events.InstrumentRegistered;
 import dk.trustworks.essentials.examples.trading.market_data.events.InstrumentRenamed;
+import dk.trustworks.essentials.examples.trading.market_data.events.InstrumentRiskApproved;
+import dk.trustworks.essentials.examples.trading.market_data.events.InstrumentRiskRejected;
 import dk.trustworks.essentials.examples.trading.market_data.events.InstrumentSuspended;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
@@ -54,9 +56,16 @@ public class InstrumentDetailsProjection extends ViewEventProcessor {
                                               display_name VARCHAR NOT NULL,
                                               suspended BOOLEAN NOT NULL DEFAULT FALSE,
                                               suspension_reason VARCHAR NULL,
+                                              risk_status VARCHAR NOT NULL DEFAULT 'PENDING',
+                                              risk_detail VARCHAR NULL,
                                               updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
                                           )
                                           """);
+        // The two risk columns arrived after the table did, and CREATE TABLE IF NOT EXISTS is a no-op against a demo
+        // database that already has it. Both statements are idempotent, so they cost one round trip at startup and
+        // spare anyone with an existing demo database an "column risk_status does not exist" on the first query.
+        this.jdbcTemplate.execute("ALTER TABLE projection_instrument_details ADD COLUMN IF NOT EXISTS risk_status VARCHAR NOT NULL DEFAULT 'PENDING'");
+        this.jdbcTemplate.execute("ALTER TABLE projection_instrument_details ADD COLUMN IF NOT EXISTS risk_detail VARCHAR NULL");
     }
 
     @Override
@@ -71,11 +80,17 @@ public class InstrumentDetailsProjection extends ViewEventProcessor {
 
     @MessageHandler
     void handle(InstrumentRegistered event) {
+        /*
+         * The upsert deliberately leaves risk_status alone on conflict. An instrument is registered once, but the
+         * event can be redelivered — and by then the risk automation may already have recorded its decision, which a
+         * blanket reset to PENDING would erase.
+         */
         jdbcTemplate.update("""
                                     INSERT INTO projection_instrument_details (
-                                        instrument_id, symbol, display_name, suspended, suspension_reason, updated_at
+                                        instrument_id, symbol, display_name, suspended, suspension_reason,
+                                        risk_status, risk_detail, updated_at
                                     )
-                                    VALUES (?, ?, ?, false, NULL, CURRENT_TIMESTAMP)
+                                    VALUES (?, ?, ?, false, NULL, 'PENDING', NULL, CURRENT_TIMESTAMP)
                                     ON CONFLICT (instrument_id) DO UPDATE
                                     SET symbol = EXCLUDED.symbol,
                                         display_name = EXCLUDED.display_name,
@@ -104,6 +119,32 @@ public class InstrumentDetailsProjection extends ViewEventProcessor {
                                     UPDATE projection_instrument_details
                                     SET suspended = true,
                                         suspension_reason = ?,
+                                        updated_at = CURRENT_TIMESTAMP
+                                    WHERE instrument_id = ?
+                                    """,
+                            event.reason(),
+                            event.instrumentId().toString());
+    }
+
+    @MessageHandler
+    void handle(InstrumentRiskApproved event) {
+        jdbcTemplate.update("""
+                                    UPDATE projection_instrument_details
+                                    SET risk_status = 'APPROVED',
+                                        risk_detail = ?,
+                                        updated_at = CURRENT_TIMESTAMP
+                                    WHERE instrument_id = ?
+                                    """,
+                            event.riskRating().toString(),
+                            event.instrumentId().toString());
+    }
+
+    @MessageHandler
+    void handle(InstrumentRiskRejected event) {
+        jdbcTemplate.update("""
+                                    UPDATE projection_instrument_details
+                                    SET risk_status = 'REJECTED',
+                                        risk_detail = ?,
                                         updated_at = CURRENT_TIMESTAMP
                                     WHERE instrument_id = ?
                                     """,

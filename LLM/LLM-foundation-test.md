@@ -163,7 +163,7 @@ protected abstract JSONSerializer createJSONSerializer();
 #### Helpers
 
 ```java
-// Auto-wraps in UnitOfWork if TransactionalMode.FullyTransactional
+// Runs the action directly — each queue operation carries its own transaction
 protected <R> R withDurableQueue(Supplier<R> supplier);
 protected void usingDurableQueue(Runnable action);
 
@@ -393,6 +393,16 @@ protected abstract UOW_FACTORY createUnitOfWorkFactory();
 
 ## Test Utilities
 
+### Schema rules (ArchUnit)
+
+**Package**: `dk.trustworks.essentials.components.foundation.test.architecture`
+
+`EssentialsSchemaRules.ddlLivesInSchemaContributors(allowed)` fails for a class holding a `CREATE`/`ALTER`/`DROP`/`TRUNCATE`
+statement that is no `EssentialsSchemaContributor` and not nested in one ([LLM-foundation.md](./LLM-foundation.md#database-schema-harness)). It reads the class files'
+constant pools (literals, text blocks, concatenation recipes), so it sees DDL that starts a string constant.
+`ALLOWED_DDL_HOLDERS` lists the justified exceptions with their reasons. Subclass `AbstractEssentialsSchemaRulesTest`
+in a module whose classpath reaches the modules to guard; it is not frozen.
+
 ### ProxyJSONSerializer
 
 **Package**: `dk.trustworks.essentials.components.foundation.test.messaging.queue`
@@ -510,9 +520,7 @@ package dk.trustworks.essentials.components.postgresql.queue;
 import dk.trustworks.essentials.components.foundation.json.JSONSerializer;
 import dk.trustworks.essentials.components.foundation.test.messaging.queue.DurableQueuesIT;
 import dk.trustworks.essentials.components.foundation.transaction.jdbi.*;
-import dk.trustworks.essentials.jackson.immutable.JacksonJSONSerializer;
-import dk.trustworks.essentials.jackson.types.EssentialTypesJacksonModule;
-import com.fasterxml.jackson.databind.json.JsonMapper;
+import dk.trustworks.essentials.components.foundation.json.EssentialsObjectMappers;
 import org.jdbi.v3.core.Jdbi;
 import org.junit.jupiter.api.*;
 import org.testcontainers.containers.PostgreSQLContainer;
@@ -554,10 +562,8 @@ public class PostgresqlDurableQueuesIT
 
     @Override
     protected JSONSerializer createJSONSerializer() {
-        return new JacksonJSONSerializer(
-            JsonMapper.builder()
-                .addModule(new EssentialTypesJacksonModule())
-                .build());
+        // Never hand-build a mapper here: it drifts from the persisted format
+        return EssentialsObjectMappers.createJSONSerializer();
     }
 }
 ```
@@ -581,10 +587,10 @@ durableQueues.start();
 ### ⚠️ Missing Transaction Wrapper
 
 ```java
-// ❌ Wrong - FullyTransactional mode needs wrapping
+// ❌ Wrong - bypasses the subclass's hook, e.g. one that wraps queue calls in a UnitOfWork
 durableQueues.queueMessage(queueName, message);
 
-// ✅ Correct
+// ✅ Correct - withDurableQueue/usingDurableQueue are pass-throughs a subclass can override
 withDurableQueue(() -> durableQueues.queueMessage(queueName, message));
 ```
 

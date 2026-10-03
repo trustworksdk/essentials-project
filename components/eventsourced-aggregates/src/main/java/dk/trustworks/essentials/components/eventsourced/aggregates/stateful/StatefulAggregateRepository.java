@@ -112,7 +112,7 @@ public interface StatefulAggregateRepository<ID, EVENT_TYPE, AGGREGATE_IMPL_TYPE
      * @param aggregateRootInstanceFactory the factory responsible for instantiating your {@link StatefulAggregate}'s when loading them from the {@link EventStore}
      * @param aggregateImplementationType  the concrete aggregate implementation type (MUST be a subtype of {@link StatefulAggregate}).<br>
      *                                     It will try to resolve the Aggregate Id type from the aggregateImplementationType type parameters
-     * @param aggregateSnapshotRepository  optional (may be null) {@link AggregateSnapshotRepository}
+     * @param aggregateSnapshotRepositoryProvider resolves the {@link AggregateSnapshotRepository} for the aggregate type, which may be none
      * @return a repository instance that can be used load, add and query aggregates of type <code>aggregateType</code>
      */
     @SuppressWarnings("unchecked")
@@ -202,7 +202,7 @@ public interface StatefulAggregateRepository<ID, EVENT_TYPE, AGGREGATE_IMPL_TYPE
      * @param aggregateRootInstanceFactory the factory responsible for instantiating your {@link StatefulAggregate}'s when loading them from the {@link EventStore}
      * @param aggregateImplementationType  the concrete aggregate implementation type (MUST be a subtype of {@link StatefulAggregate}).<br>
      *                                     It will try to resolve the Aggregate Id type from the aggregateImplementationType type parameters
-     * @param aggregateSnapshotRepository  optional (may be null) {@link AggregateSnapshotRepository}
+     * @param aggregateSnapshotRepositoryProvider resolves the {@link AggregateSnapshotRepository} for the aggregate type, which may be none
      * @return a repository instance that can be used load, add and query aggregates of type <code>aggregateType</code>
      */
     @SuppressWarnings("unchecked")
@@ -345,7 +345,7 @@ public interface StatefulAggregateRepository<ID, EVENT_TYPE, AGGREGATE_IMPL_TYPE
      * @param aggregateRootInstanceFactory the factory responsible for instantiating your {@link StatefulAggregate}'s when loading them from the {@link EventStore}
      * @param aggregateIdType              the concrete aggregate ID type
      * @param aggregateImplementationType  the concrete aggregate type (MUST be a subtype of {@link StatefulAggregate})
-     * @param aggregateSnapshotRepository  optional (may be null) {@link AggregateSnapshotRepository}
+     * @param aggregateSnapshotRepositoryProvider resolves the {@link AggregateSnapshotRepository} for the aggregate type, which may be none
      * @return a repository instance that can be used load, add and query aggregates of type <code>aggregateType</code>
      */
     static <CONFIG extends AggregateEventStreamConfiguration,
@@ -431,7 +431,7 @@ public interface StatefulAggregateRepository<ID, EVENT_TYPE, AGGREGATE_IMPL_TYPE
      * @param aggregateRootInstanceFactory the factory responsible for instantiating your {@link StatefulAggregate}'s when loading them from the {@link EventStore}
      * @param aggregateIdType              the concrete aggregate ID type
      * @param aggregateImplementationType  the concrete aggregate type (MUST be a subtype of {@link StatefulAggregate})
-     * @param aggregateSnapshotRepository  optional (may be null) {@link AggregateSnapshotRepository}
+     * @param aggregateSnapshotRepositoryProvider resolves the {@link AggregateSnapshotRepository} for the aggregate type, which may be none
      * @return a repository instance that can be used load, add and query aggregates of type <code>aggregateType</code>
      */
     static <CONFIG extends AggregateEventStreamConfiguration,
@@ -619,15 +619,13 @@ public interface StatefulAggregateRepository<ID, EVENT_TYPE, AGGREGATE_IMPL_TYPE
          * @param aggregateIdType                   the concrete aggregate ID type
          * @param aggregateImplementationType       the concrete aggregate type (MUST be a subtype of {@link StatefulAggregate})
          * @param aggregateSnapshotRepository       optional (may be null) {@link AggregateSnapshotRepository}
-         * @deprecated Use {@link StatefulAggregateRepository#builder()} or one of the {@code from(...)} factory methods. This constructor declares more than five parameters; it is unchanged and remains the implementation those paths delegate to.
          */
-        @Deprecated(forRemoval = true, since = "0.40.x")
-        protected <CONFIG extends AggregateEventStreamConfiguration> DefaultStatefulAggregateRepository(ConfigurableEventStore<CONFIG> eventStore,
-                                                                                                      CONFIG aggregateEventStreamConfiguration,
-                                                                                                      StatefulAggregateInstanceFactory statefulAggregateInstanceFactory,
-                                                                                                      Class<ID> aggregateIdType,
-                                                                                                      Class<AGGREGATE_IMPL_TYPE> aggregateImplementationType,
-                                                                                                      AggregateSnapshotRepository aggregateSnapshotRepository) {
+        <CONFIG extends AggregateEventStreamConfiguration> DefaultStatefulAggregateRepository(ConfigurableEventStore<CONFIG> eventStore,
+                                                                                  CONFIG aggregateEventStreamConfiguration,
+                                                                                  StatefulAggregateInstanceFactory statefulAggregateInstanceFactory,
+                                                                                  Class<ID> aggregateIdType,
+                                                                                  Class<AGGREGATE_IMPL_TYPE> aggregateImplementationType,
+                                                                                  AggregateSnapshotRepository aggregateSnapshotRepository) {
             this.eventStore = requireNonNull(eventStore, "You must supply an EventStore instance");
             this.aggregateType = requireNonNull(aggregateEventStreamConfiguration, "You must supply an aggregateType").aggregateType;
             this.aggregateRootInstanceFactory = requireNonNull(statefulAggregateInstanceFactory, "You must supply a AggregateRootFactory instance");
@@ -650,10 +648,8 @@ public interface StatefulAggregateRepository<ID, EVENT_TYPE, AGGREGATE_IMPL_TYPE
          * @param aggregateIdType                  the concrete aggregate ID type
          * @param aggregateImplementationType      the concrete aggregate type (MUST be a subtype of {@link StatefulAggregate})
          * @param aggregateSnapshotRepository      optional (may be null) {@link AggregateSnapshotRepository}
-         * @deprecated Use {@link StatefulAggregateRepository#builder()} or one of the {@code from(...)} factory methods. This constructor declares more than five parameters; it is unchanged and remains the implementation those paths delegate to.
          */
-        @Deprecated(forRemoval = true, since = "0.40.x")
-        protected <CONFIG extends AggregateEventStreamConfiguration> DefaultStatefulAggregateRepository(ConfigurableEventStore<CONFIG> eventStore,
+        <CONFIG extends AggregateEventStreamConfiguration> DefaultStatefulAggregateRepository(ConfigurableEventStore<CONFIG> eventStore,
                                                                                                       AggregateType aggregateType,
                                                                                                       StatefulAggregateInstanceFactory statefulAggregateInstanceFactory,
                                                                                                       Class<ID> aggregateIdType,

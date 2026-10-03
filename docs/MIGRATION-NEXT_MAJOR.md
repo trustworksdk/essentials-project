@@ -1,5 +1,9 @@
 # Migration guide — construction ergonomics and `Optional` policy
 
+> **0.60 has carried out these removals.** Everything below marked deprecated in 0.50 is gone from the public API in
+> 0.60; this guide stays as the reference for what replaces each member. What else changed is in
+> [MIGRATION-0.60.md](./MIGRATION-0.60.md).
+
 > **Nothing in this guide is urgent yet.** Every constructor named below still exists, still compiles and still
 > behaves exactly as it did. This release only marks them `@Deprecated(forRemoval = true)` and adds a better way to
 > construct each type alongside. Upgrading and changing nothing gives you deprecation warnings and no errors.
@@ -108,6 +112,11 @@ longer be constructed.
 ## ⚠️ Behaviour changes in this release
 
 ### `PostgresqlDurableQueues.builder()` now defaults `useOrderedUnorderedQuery` to `true`
+
+> **Superseded in 0.60.** The flag, the unified query it selected, and the
+> `essentials.durable-queues.use-ordered-unordered-query` property have since been removed — the
+> ordered/unordered pair is the only claim path. See [MIGRATION-0.60.md](./MIGRATION-0.60.md). The rest of this
+> section is the 0.50 history.
 
 The same shape of divergence as the transactional-mode one below, in a different setting.
 `EssentialsComponentsProperties` defaulted the flag to `true` and the deprecated wide constructors passed

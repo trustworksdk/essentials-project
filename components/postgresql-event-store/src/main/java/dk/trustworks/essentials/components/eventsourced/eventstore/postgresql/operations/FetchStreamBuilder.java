@@ -85,6 +85,6 @@ public final class FetchStreamBuilder<ID> {
      * @return the {@link FetchStream} instance
      */
     public FetchStream<ID> build() {
-        return new FetchStream<>(aggregateType, aggregateId, eventOrderRange, tenant);
+        return new FetchStream<>(aggregateType, aggregateId, eventOrderRange, tenant.orElse(null));
     }
 }

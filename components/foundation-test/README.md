@@ -492,10 +492,7 @@ public class PostgresqlDurableQueuesIT
 
     @Override
     protected JSONSerializer createJSONSerializer() {
-        return new JacksonJSONSerializer(
-            JsonMapper.builder()
-                .addModule(new EssentialTypesJacksonModule())
-                .build());
+        return EssentialsObjectMappers.createJSONSerializer();
     }
 }
 ```

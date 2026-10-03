@@ -145,8 +145,8 @@ Step by step:
 
 > **The Kafka DTOs must keep their plain `String` ids.** `OrderEvent.id()` and
 > `ExternalOrderShippingEvent.orderId()` are deliberately not typed with `OrderId`. Typing them with the domain
-> type means the boundary stops translating — and it broke the `-Pjackson2` build, because the Kafka mapper and
-> the Essentials types module can end up on different Jackson majors. See the module's `CLAUDE.md`.
+> type means the boundary stops translating, coupling the Kafka contract to the domain's id format. See the
+> module's `CLAUDE.md`.
 
 ### One thing the diagram does not show
 
@@ -175,12 +175,8 @@ All commands are run from the `examples/essentials-spring-examples` folder.
 
 ```bash
 mvn verify -pl :postgresql-inbox-outbox                 # unit + integration tests (needs Docker)
-mvn -Pjackson2 verify -pl :postgresql-inbox-outbox -am  # the other Jackson flavour; -am is required
 docker compose up -d && mvn spring-boot:run -pl :postgresql-inbox-outbox
 ```
-
-The `-am` is not optional on the non-default Jackson flavour — see
-[the aggregator README](../README.md#jackson-flavour).
 
 ### Tests
 
@@ -259,7 +255,7 @@ In short, the starter provides: `Jdbi` wrapped in a `TransactionAwareDataSourceP
 `SpringTransactionAwareJdbiUnitOfWorkFactory`, `PostgresqlDurableQueues`, `Inboxes`/`Outboxes`,
 `DurableLocalCommandBus`, `LocalEventBus`, `PostgresqlFencedLockManager`, `MultiTableChangeListener`,
 `ReactiveHandlersBeanPostProcessor` (which is what auto-registers every `@CmdHandler` and `@Handler` bean in
-this module), `JacksonJSONSerializer`, the Micrometer interceptors, the optional `EssentialsScheduler` /
+this module), `JSONSerializer` (Jackson 3, from `EssentialsObjectMappers.createJSONSerializer()`), the Micrometer interceptors, the optional `EssentialsScheduler` /
 `PostgresqlTTLManager`, and the admin API beans.
 
 > ⚠️ **Security.** `essentials.durable-queues.shared-queue-table-name` and
@@ -278,7 +274,6 @@ essentials.reactive.queued-task-cap-factor=1.5
 
 # DurableQueues — backs the command bus, the Outbox, and the load harness's Inbox
 essentials.durable-queues.shared-queue-table-name=durable_queues
-essentials.durable-queues.transactional-mode=singleoperationtransaction
 essentials.durable-queues.use-centralized-message-fetcher=true
 essentials.durable-queues.centralized-message-fetcher-polling-interval=20ms
 essentials.durable-queues.polling-delay-interval-increment-factor=0.5
@@ -311,9 +306,6 @@ Notes on the values this example picks:
   uses. `polling-delay-interval-increment-factor` and `max-polling-interval` are listed above but have **no
   effect** in this mode — they configure the legacy per-consumer polling path, which is what
   `use-centralized-message-fetcher=false` selects. They are kept as a worked example of the properties.
-- **`transactional-mode=singleoperationtransaction`** is the recommended mode and the starter default.
-  `fullytransactional` makes queue operations join the caller's transaction, which breaks retry counting and
-  dead-lettering, because a failure marks the whole transaction for rollback.
 - **The fenced-lock and multi-table-change-listener values differ from the starter defaults** (`15s`/`4s` and
   `50ms` respectively). They are set explicitly here so the file doubles as a worked example of the properties;
   neither choice is a recommendation.

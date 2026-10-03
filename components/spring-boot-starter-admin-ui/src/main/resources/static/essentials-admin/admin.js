@@ -28,6 +28,7 @@ const API = document.body.dataset.api;
 const CAN = {
     writeLocks: document.body.dataset.canWriteLocks === 'true',
     writeQueues: document.body.dataset.canWriteQueues === 'true',
+    writeScheduler: document.body.dataset.canWriteScheduler === 'true',
     readPayloads: document.body.dataset.canReadPayloads === 'true'
 };
 
@@ -58,6 +59,7 @@ async function api(path, options = {}) {
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 const nil = (t = '—') => `<span class="nil" title="not set">${t}</span>`;
 const num = (v) => (v == null ? nil() : Number(v).toLocaleString('en-US'));
+const millis = (v) => (v == null ? nil() : `${num(v)} ms`);
 const ts = (v) => (v == null ? nil() : esc(String(v).replace('T', ' ').replace(/(\.\d+)?Z?$/, '')));
 const epoch = (ms) => (ms == null ? nil() : ts(new Date(ms).toISOString().slice(0, 19)));
 
@@ -109,6 +111,10 @@ function errorState(err, requiredRole) {
                detail: 'The request was not authenticated. Sign in to the host application, then reload.' },
         403: { cls: 'state-403', icon: '▲', title: 'Not permitted',
                detail: 'Your roles do not cover this operation.' },
+        404: { cls: 'state-403', icon: '▲', title: 'Not found',
+               detail: 'The server has nothing by that name or identifier.' },
+        409: { cls: 'state-403', icon: '▲', title: 'Not possible here',
+               detail: 'The request is valid, but cannot be carried out on the instance it reached.' },
         500: { cls: 'state-5xx', icon: '■', title: 'Server error',
                detail: 'The server failed to answer. No detail is returned on a 5xx by design — check the application logs.' },
         0:   { cls: 'state-5xx', icon: '■', title: 'Cannot reach the server',
@@ -155,7 +161,10 @@ views.overview = async () => {
       ${tile('Subscriptions', subs ? subs.length : nil())}
       ${tile('CDC', cdc ? badge(cdc.availability.state === 'ACTIVE' ? 'good' : 'warning', cdc.availability.state) : nil(),
              cdc ? 'slot ' + esc(cdc.availability.slotName ?? '—') : '')}
-      ${tile('CDC fallbacks', cdc ? num(cdc.availability.fallbackCount) : nil(), 'since CDC went active',
+      ${tile('CDC interruptions', cdc && cdc.interruptions ? num(cdc.interruptions.count) : nil(),
+             cdc && cdc.interruptions ? (cdc.interruptions.ongoing ? 'ongoing' : 'recovered on their own') : '',
+             cdc && cdc.interruptions ? cdc.interruptions.count > 0 : false)}
+      ${tile('CDC fallbacks', cdc ? num(cdc.availability.fallbackCount) : nil(), 'subscription switches to polling',
              cdc ? cdc.availability.fallbackCount > 0 : false)}
     </div>
 
@@ -274,13 +283,26 @@ views.queues = async () => {
     </div>
 
     <div class="kpi-row">
-      ${tile('Queued', queuedCount ? num(queuedCount.total) : nil())}
-      ${tile('Dead letters', deadCount ? num(deadCount.total) : nil(), null, deadCount ? deadCount.total > 0 : false)}
-      ${tile('Delivered', stats ? num(stats.totalMessagesDelivered) : nil())}
-      ${tile('Avg delivery latency', stats ? `${stats.avgDeliveryLatencyMs} <span class="tile-sub" style="font-size:13px">ms</span>` : nil())}
-      ${tile('Last delivery', stats ? esc(String(stats.lastDelivery).slice(11, 19)) : nil(),
-             stats ? esc(String(stats.lastDelivery).slice(0, 10)) : null)}
+      ${tile('Queued', queuedCount ? num(queuedCount.total) : nil(), 'cluster-wide')}
+      ${tile('Dead letters', deadCount ? num(deadCount.total) : nil(), 'cluster-wide', deadCount ? deadCount.total > 0 : false)}
+      ${tile('In flight', stats ? (stats.depth.messagesBeingDelivered == null ? 'unknown' : num(stats.depth.messagesBeingDelivered)) : nil(),
+             stats && stats.depth.messagesBeingDelivered == null ? 'not counted by this queue implementation' : 'cluster-wide')}
+      ${tile('Oldest ready', stats ? millis(stats.depth.oldestReadyMessageAgeMillis) : nil(),
+             'cluster-wide', !!(stats && stats.depth.oldestReadyMessageAgeMillis && stats.depth.messagesBeingDelivered === 0))}
     </div>
+
+    <div class="notice"><strong>Delivery figures below cover this instance only.</strong> The queue itself is shared
+      through the database, so another instance may be draining it while these read zero. A restart resets them.</div>
+
+    <div class="kpi-row">
+      ${tile('Handled', stats && stats.instance ? num(stats.instance.messagesHandled) : nil(), 'this instance')}
+      ${tile('Retried', stats && stats.instance ? num(stats.instance.messagesRetried) : nil(), 'this instance')}
+      ${tile('Dead-lettered', stats && stats.instance ? num(stats.instance.messagesDeadLettered) : nil(), 'this instance')}
+      ${tile('Avg handler time', stats && stats.instance ? millis(stats.instance.averageHandlerDurationMillis) : nil(), 'this instance')}
+    </div>
+    ${stats && stats.instance && stats.instance.lastFailureReason
+      ? `<div class="notice">Last failure on this instance ${ts(stats.instance.lastFailureAt)}: ${esc(stats.instance.lastFailureReason)}</div>`
+      : ''}
 
     ${card(dead ? 'Dead-letter messages' : 'Queued messages',
         messages ? table(cols, messages.map(msgRow), { empty: dead ? 'No dead-letter messages' : 'No queued messages' })
@@ -367,6 +389,13 @@ views.subscriptions = async () => {
     ], rows, { empty: 'No active subscriptions' }), 'GET /event-store/subscriptions', true)}`;
 };
 
+/* The outcome of the last on-demand run, shown above the job lists until the next one. Kept across re-renders: the
+   action re-renders the view as soon as the run returns. */
+let lastJobRun = null;
+
+const runNowButton = (name) => `<button class="btn btn-sm" data-act="runJob" data-name="${esc(name)}"
+      ${CAN.writeScheduler ? '' : 'disabled title="Requires essentials_scheduler_writer"'}>Run now</button>`;
+
 views.scheduler = async () => {
     const settled = await Promise.allSettled([
         api('/scheduler/pg-cron-jobs?startIndex=0&pageSize=100'),
@@ -384,7 +413,8 @@ views.scheduler = async () => {
       <td>${esc(j.nodeName)}:${j.nodePort}</td>
       <td>${esc(j.database)}</td>
       <td>${j.active ? badge('good', 'Active') : badge('neutral', 'Paused')}</td>
-      <td class="actions"><button class="btn btn-sm" data-runs="${j.jobId}" data-job="${esc(j.jobName ?? j.jobId)}">Run details</button></td>
+      <td class="actions">${j.jobName ? runNowButton(j.jobName) : ''}
+        <button class="btn btn-sm" data-runs="${j.jobId}" data-job="${esc(j.jobName ?? j.jobId)}">Run details</button></td>
     </tr>`);
 
     const execRows = (execJobs ?? []).map((e) => `<tr>
@@ -393,13 +423,21 @@ views.scheduler = async () => {
       <td class="num">${num(e.period)}</td>
       <td>${esc(e.unit)}</td>
       <td>${ts(e.scheduledAt)}</td>
+      <td class="actions">${runNowButton(e.name)}</td>
     </tr>`);
 
+    const lastRun = lastJobRun && `<div class="notice">
+      <strong>Last on-demand run:</strong> <span class="mono">${esc(lastJobRun.jobName)}</span> (${esc(lastJobRun.jobType)})
+      ${lastJobRun.succeeded ? badge('good', 'Succeeded') : badge('critical', 'Failed')}
+      in ${num(lastJobRun.durationMs)} ms, started ${ts(lastJobRun.startedAt)}
+      ${lastJobRun.error ? `<br><span class="mono" style="font-size:12px">${esc(lastJobRun.error)}</span>` : ''}</div>`;
+
     return `
+    ${lastRun || ''}
     ${card('pg_cron jobs', jobs
         ? table([
             { label: 'Job', num: true }, { label: 'Name' }, { label: 'Schedule' }, { label: 'Command' },
-            { label: 'Node' }, { label: 'Database' }, { label: 'State' }, { label: '', width: '110px', sticky: true }
+            { label: 'Node' }, { label: 'Database' }, { label: 'State' }, { label: '', width: '190px', sticky: true }
         ], jobRows, { empty: 'pg_cron is not installed or exposes no jobs' })
         : errorState(settled[0].reason, 'essentials_scheduler_reader'),
         jobCount ? `${jobCount.total} total` : 'GET /scheduler/pg-cron-jobs', true)}
@@ -409,75 +447,231 @@ views.scheduler = async () => {
     ${card('Executor jobs', execJobs
         ? table([
             { label: 'Name' }, { label: 'Initial delay', num: true }, { label: 'Period', num: true },
-            { label: 'Unit' }, { label: 'Scheduled at' }
+            { label: 'Unit' }, { label: 'Scheduled at' }, { label: '', width: '100px', sticky: true }
         ], execRows, { empty: 'No executor jobs registered' })
         : errorState(settled[2].reason, 'essentials_scheduler_reader'), 'GET /scheduler/executor-jobs', true)}`;
 };
 
+/* What the slowest queries are ranked by, and how many are shown. TOTAL_TIME is the default, but on a busy system it
+   is dominated by cheap statements that run constantly - queue polling above all - so the ranking is selectable. */
+let pgState = { orderBy: 'TOTAL_TIME', limit: 10 };
+
+const QUERY_ORDERS = {
+    TOTAL_TIME: ['Total time', 'Where the database spends its time. Favours cheap statements that run constantly, such as queue polling.'],
+    MEAN_TIME: ['Mean time', 'Statements that are slow each time they run, however rarely.'],
+    MAX_TIME: ['Max time', 'The slowest single execution - outliers such as lock waits.'],
+    CALLS: ['Calls', 'The busiest statements.'],
+    BLOCKS_READ: ['Blocks read', 'Statements reading the most blocks from outside shared buffers.']
+};
+
+/* Section ids are stable identifiers from the API; anything unknown is shown as reported. */
+const TABLE_SECTIONS = {
+    'event-store': 'Event store',
+    subscriptions: 'Event subscriptions and gaps',
+    cdc: 'CDC inbox',
+    'durable-queues': 'Durable queues',
+    'shard-owned-queues': 'Shard-owned queues',
+    'fenced-locks': 'Fenced locks',
+    aggregates: 'Aggregates',
+    infrastructure: 'Infrastructure'
+};
+
+const pct = (v) => (v == null ? nil('n/a') : `${Number(v).toFixed(1)}%`);
+const cacheCell = (v) => (v == null ? nil('n/a') : v < 90 ? badge('warning', pct(v)) : pct(v));
+
 views.postgresql = async () => {
+    const { orderBy, limit } = pgState;
     const settled = await Promise.allSettled([
-        api('/postgresql/query-statistics/top-ten-slowest'),
-        api('/event-store/statistics/table-sizes'),
-        api('/event-store/statistics/table-activity'),
-        api('/event-store/statistics/table-cache-hit-ratio')
+        api(`/postgresql/query-statistics/slowest?orderBy=${orderBy}&limit=${limit}`),
+        api('/postgresql/table-statistics')
     ]);
-    const [slow, sizes, activity, cacheHit] = settled.map((r) => (r.status === 'fulfilled' ? r.value : null));
+    const [slow, tables] = settled.map((r) => (r.status === 'fulfilled' ? r.value : null));
 
-    const maxMean = slow?.length ? Math.max(...slow.map((q) => q.meanTime)) : 0;
+    const rankValue = {
+        TOTAL_TIME: (q) => q.totalTime, MEAN_TIME: (q) => q.meanTime, MAX_TIME: (q) => q.maxTime,
+        CALLS: (q) => q.calls, BLOCKS_READ: (q) => q.sharedBlksRead
+    }[orderBy];
+    const maxRank = slow?.length ? Math.max(...slow.map(rankValue)) : 0;
+    const ms = (v) => `${Number(v).toLocaleString('en-US', { maximumFractionDigits: v < 10 ? 2 : 0 })} ms`;
+    const ranked = (q, formatted) => bar(rankValue(q), maxRank, formatted);
     const qRows = (slow ?? []).map((q) => `<tr>
-      <td class="truncate mono" title="${esc(q.query)}">${esc(q.query)}</td>
-      <td class="num">${num(q.calls)}</td>
-      <td class="num">${q.totalTime.toLocaleString('en-US', { maximumFractionDigits: 0 })} ms</td>
-      <td>${bar(q.meanTime, maxMean, q.meanTime.toFixed(2) + ' ms')}</td>
+      <td class="truncate mono" title="${esc(q.query ?? '')}">${q.query == null ? nil() : esc(q.query)}</td>
+      <td class="num">${orderBy === 'CALLS' ? ranked(q, num(q.calls)) : num(q.calls)}</td>
+      <td class="num">${orderBy === 'TOTAL_TIME' ? ranked(q, ms(q.totalTime)) : ms(q.totalTime)}</td>
+      <td class="num">${orderBy === 'MEAN_TIME' ? ranked(q, ms(q.meanTime)) : ms(q.meanTime)}</td>
+      <td class="num">${orderBy === 'MAX_TIME' ? ranked(q, ms(q.maxTime)) : ms(q.maxTime)}</td>
+      <td class="num">${num(q.rows)}</td>
+      <td class="num">${orderBy === 'BLOCKS_READ' ? ranked(q, num(q.sharedBlksRead)) : num(q.sharedBlksRead)}</td>
+      <td class="num">${cacheCell(q.cacheHitRatio)}</td>
     </tr>`);
 
-    const mb = (s) => parseFloat(s) || 0;
-    const maxSize = sizes ? Math.max(...Object.values(sizes).map((v) => mb(v.totalSize))) : 0;
-    const sRows = Object.entries(sizes ?? {}).map(([t, v]) => `<tr>
-      <td class="mono">${esc(t)}</td>
-      <td>${bar(mb(v.totalSize), maxSize, esc(v.totalSize))}</td>
-      <td class="num">${esc(v.tableSize)}</td>
-      <td class="num">${esc(v.indexSize)}</td>
-    </tr>`);
+    const toolbar = `
+    <div class="toolbar">
+      <label>Rank queries by
+        <select id="pgOrderSelect">${Object.entries(QUERY_ORDERS)
+            .map(([k, [label]]) => `<option value="${k}" ${k === orderBy ? 'selected' : ''}>${esc(label)}</option>`).join('')}</select>
+      </label>
+      <label>Show
+        <select id="pgLimitSelect">${[10, 25, 50, 100]
+            .map((n) => `<option ${n === limit ? 'selected' : ''}>${n}</option>`).join('')}</select>
+      </label>
+    </div>`;
 
-    const aRows = Object.entries(activity ?? {}).map(([t, v]) => `<tr>
-      <td class="mono">${esc(t)}</td>
-      <td class="num">${num(v.seq_scan)}</td>
-      <td class="num">${num(v.idx_scan)}</td>
-      <td class="num">${num(v.idx_tup_fetch)}</td>
-      <td class="num">${num(v.n_tup_ins)}</td>
-      <td class="num">${num(v.n_tup_upd)}</td>
-      <td class="num">${num(v.n_tup_del)}</td>
-    </tr>`);
-
-    return `
-    ${card('Ten slowest queries', slow
-        ? table([{ label: 'Query' }, { label: 'Calls', num: true }, { label: 'Total time', num: true }, { label: 'Mean time', num: true }],
-                qRows, { empty: 'pg_stat_statements is not enabled' })
+    const slowCard = card(`Slowest queries by ${QUERY_ORDERS[orderBy][0].toLowerCase()}`, slow
+        ? table([{ label: 'Query' }, { label: 'Calls', num: true }, { label: 'Total', num: true }, { label: 'Mean', num: true },
+                 { label: 'Max', num: true }, { label: 'Rows', num: true }, { label: 'Blocks read', num: true }, { label: 'Cache hit', num: true }],
+                qRows, { empty: 'pg_stat_statements is not enabled, or has recorded nothing for this database yet' })
         : errorState(settled[0].reason, 'essentials_postgresql_stats_reader'),
-        'GET /postgresql/query-statistics/top-ten-slowest', true)}
+        QUERY_ORDERS[orderBy][1], true);
 
-    <div class="grid-2">
-      ${card('Table sizes', sizes
-        ? table([{ label: 'Table' }, { label: 'Total', num: true }, { label: 'Heap', num: true }, { label: 'Indexes', num: true }], sRows)
-        : errorState(settled[1].reason, 'essentials_postgresql_stats_reader'), 'table-sizes', true)}
+    if (!tables) {
+        return toolbar + slowCard + card('Table statistics', errorState(settled[1].reason, 'essentials_postgresql_stats_reader'),
+                                         'GET /postgresql/table-statistics', true);
+    }
 
-      ${card('Cache hit ratio', cacheHit
-        ? Object.entries(cacheHit).map(([t, v]) => {
-            const low = v.cacheHitRatio < 90;
-            return `<div class="meter-row"><span class="mono">${esc(t)} ${low ? badge('warning', 'low') : ''}</span>
-              <span class="meter-track" role="img" aria-label="${v.cacheHitRatio}%"><span class="meter-fill" style="width:${v.cacheHitRatio}%"></span></span>
-              <span class="meter-val">${v.cacheHitRatio}%</span></div>`;
-          }).join('')
-        : errorState(settled[3].reason, 'essentials_postgresql_stats_reader'), 'table-cache-hit-ratio')}
+    /* Sizes are compared in bytes - the pretty-printed sizes mix units ("12 kB" against "4 MB") */
+    const maxSize = tables.length ? Math.max(...tables.map((t) => t.totalSizeBytes)) : 0;
+    const totalBytes = tables.reduce((sum, t) => sum + t.totalSizeBytes, 0);
+    const withRatio = tables.filter((t) => t.cacheHitRatio != null);
+    const lowest = withRatio.length ? withRatio.reduce((a, b) => (b.cacheHitRatio < a.cacheHitRatio ? b : a)) : null;
+    const prettyBytes = (b) => {
+        const units = ['B', 'kB', 'MB', 'GB', 'TB'];
+        let i = 0;
+        while (b >= 1024 && i < units.length - 1) { b /= 1024; i++; }
+        return `${b.toLocaleString('en-US', { maximumFractionDigits: i ? 1 : 0 })} ${units[i]}`;
+    };
+    /* Dead rows worth a look: a fifth of the live rows or more, ignoring tables too small to matter. Queue tables
+       churn constantly, so this is the bloat signal that matters most there. */
+    const bloated = (t) => t.deadRows > 1000 && t.deadRows >= t.liveRows / 5;
+    /* HOT updates touch no index. A low share on a frequently updated table means an update changes an indexed
+       column - often by design, as with a status flag - or, only when none does, too little free space per page. */
+    const hotRatio = (t) => (t.rowsUpdated ? (100 * t.rowsHotUpdated) / t.rowsUpdated : null);
+    const hotCell = (t) => {
+        const r = hotRatio(t);
+        return r == null ? nil('n/a') : t.rowsUpdated > 1000 && r < 50 ? badge('warning', pct(r)) : pct(r);
+    };
+    /* Unique and primary-key indexes do their job without being scanned, so only the others count as unused */
+    const unusedIndex = (i) => i.idxScan === 0 && !i.unique && !i.primary;
+    const allIndexes = tables.flatMap((t) => (t.indexes ?? []).map((i) => ({ ...i, tableName: t.tableName })));
+    const unused = allIndexes.filter(unusedIndex);
+    const invalid = allIndexes.filter((i) => !i.valid);
+    const maxIndexSize = allIndexes.length ? Math.max(...allIndexes.map((i) => i.sizeBytes)) : 0;
+    const indexFlags = (i) => [
+        i.primary ? badge('neutral', 'primary key') : i.unique ? badge('neutral', 'unique') : '',
+        unusedIndex(i) ? badge('warning', 'unused') : '',
+        i.valid ? '' : badge('critical', 'invalid')
+    ].join(' ');
+    /* One place naming everything the tiles and badges flag, so a count is never the end of the trail */
+    const sectionOf = (t) => TABLE_SECTIONS[t.section] ?? t.section;
+    const showLink = (target) => `<button class="link" data-scroll="${target}">show</button>`;
+    const bloatedTables = tables.filter(bloated).sort((a, b) => b.deadRows - a.deadRows);
+    const lowCacheTables = withRatio.filter((t) => t.cacheHitRatio < 90).sort((a, b) => a.cacheHitRatio - b.cacheHitRatio);
+    const lowHotTables = tables.filter((t) => t.rowsUpdated > 1000 && hotRatio(t) < 50).sort((a, b) => hotRatio(a) - hotRatio(b));
+    const attentionPart = (id, title, hint, cols, rows) => (rows.length
+        ? `<div class="attention-part" id="${id}"><div class="attention-title">${esc(title)} <span class="card-note">${esc(hint)}</span></div>${table(cols, rows)}</div>`
+        : '');
+    const attention = [
+        attentionPart('pg-attention-bloat', 'Dead-row bloat', 'vacuum is not keeping up, or something holds it back',
+            [{ label: 'Table' }, { label: 'Section' }, { label: 'Live rows', num: true }, { label: 'Dead rows', num: true },
+             { label: 'Dead / live', num: true }, { label: 'Last vacuum' }],
+            bloatedTables.map((t) => `<tr><td class="mono">${esc(t.tableName)}</td><td>${esc(sectionOf(t))}</td>
+              <td class="num">${num(t.liveRows)}</td><td class="num">${num(t.deadRows)}</td>
+              <td class="num">${t.liveRows ? pct((100 * t.deadRows) / t.liveRows) : nil('n/a')}</td><td>${ts(t.lastVacuum)}</td></tr>`)),
+        attentionPart('pg-attention-unused', 'Unused indexes', 'never scanned since the statistics reset - drop candidates',
+            [{ label: 'Table' }, { label: 'Index' }, { label: 'Size', num: true }, { label: 'Entries read', num: true }],
+            [...unused].sort((a, b) => b.sizeBytes - a.sizeBytes).map((i) => `<tr><td class="mono">${esc(i.tableName)}</td>
+              <td class="mono">${esc(i.indexName)}</td><td class="num">${esc(i.size)}</td><td class="num">${num(i.idxTupRead)}</td></tr>`)),
+        attentionPart('pg-attention-invalid', 'Invalid indexes', 'left by a failed CREATE INDEX CONCURRENTLY - drop or rebuild',
+            [{ label: 'Table' }, { label: 'Index' }, { label: 'Size', num: true }],
+            invalid.map((i) => `<tr><td class="mono">${esc(i.tableName)}</td><td class="mono">${esc(i.indexName)}</td>
+              <td class="num">${esc(i.size)}</td></tr>`)),
+        attentionPart('pg-attention-cache', 'Low cache hit', 'under 90% of block requests served from shared buffers',
+            [{ label: 'Table' }, { label: 'Section' }, { label: 'Cache hit', num: true }, { label: 'Total size', num: true }],
+            lowCacheTables.map((t) => `<tr><td class="mono">${esc(t.tableName)}</td><td>${esc(sectionOf(t))}</td>
+              <td class="num">${pct(t.cacheHitRatio)}</td><td class="num">${esc(t.totalSize)}</td></tr>`)),
+        /* Usually by design: an update that changes an indexed column - a status flag in an index, as on the CDC inbox
+           and the queue tables - can never be HOT, and fillfactor does not change that. It only helps when no indexed
+           column changes and the page is merely full. The table's indexes are listed so the cause can be read off. */
+        attentionPart('pg-attention-hot', 'Few HOT updates',
+            'expected when updates change an indexed column, such as a status in an index - fillfactor helps only when they do not',
+            [{ label: 'Table' }, { label: 'Section' }, { label: 'Updates', num: true }, { label: 'HOT', num: true }, { label: 'Indexes' }],
+            lowHotTables.map((t) => `<tr><td class="mono">${esc(t.tableName)}</td><td>${esc(sectionOf(t))}</td>
+              <td class="num">${num(t.rowsUpdated)}</td><td class="num">${pct(hotRatio(t))}</td>
+              <td class="mono">${(t.indexes ?? []).map((i) => esc(i.indexName)).join('<br>') || nil()}</td></tr>`))
+    ].join('');
+    const indexDetails = (rows) => {
+        const indexes = rows.flatMap((t) => (t.indexes ?? []).map((i) => ({ ...i, tableName: t.tableName })));
+        if (!indexes.length) return '';
+        const sectionUnused = indexes.filter(unusedIndex).length;
+        return `<details class="index-details"><summary>Indexes (${indexes.length})${sectionUnused ? ` · ${badge('warning', `${sectionUnused} unused`)}` : ''}</summary>
+          ${table([
+              { label: 'Table' }, { label: 'Index' }, { label: 'Size', num: true }, { label: 'Scans', num: true },
+              { label: 'Entries read', num: true }, { label: 'Rows fetched', num: true }, { label: 'Cache hit', num: true }, { label: '' }
+          ], indexes.map((i) => `<tr>
+            <td class="mono">${esc(i.tableName)}</td>
+            <td class="mono">${esc(i.indexName)}</td>
+            <td>${bar(i.sizeBytes, maxIndexSize, esc(i.size))}</td>
+            <td class="num">${num(i.idxScan)}</td>
+            <td class="num">${num(i.idxTupRead)}</td>
+            <td class="num">${num(i.idxTupFetch)}</td>
+            <td class="num">${cacheCell(i.cacheHitRatio)}</td>
+            <td>${indexFlags(i)}</td>
+          </tr>`))}</details>`;
+    };
+
+    const bySection = new Map();
+    tables.forEach((t) => bySection.set(t.section, [...(bySection.get(t.section) ?? []), t]));
+
+    const sectionCards = [...bySection.entries()].map(([section, rows]) => card(TABLE_SECTIONS[section] ?? section,
+        table([
+            { label: 'Table' }, { label: 'Total', num: true }, { label: 'Heap', num: true }, { label: 'Indexes', num: true },
+            { label: 'Live rows', num: true }, { label: 'Dead rows', num: true }, { label: 'Seq scans', num: true },
+            { label: 'Index scans', num: true }, { label: 'Inserts', num: true }, { label: 'Updates', num: true },
+            { label: 'HOT', num: true }, { label: 'Deletes', num: true }, { label: 'Cache hit', num: true }, { label: 'Last vacuum' }
+        ], rows.map((t) => `<tr>
+          <td class="mono">${esc(t.tableName)}</td>
+          <td>${bar(t.totalSizeBytes, maxSize, esc(t.totalSize))}</td>
+          <td class="num">${esc(t.tableSize)}</td>
+          <td class="num">${esc(t.indexSize)}</td>
+          <td class="num">${num(t.liveRows)}</td>
+          <td class="num">${bloated(t) ? badge('warning', num(t.deadRows)) : num(t.deadRows)}</td>
+          <td class="num">${num(t.seqScan)}</td>
+          <td class="num">${num(t.idxScan)}</td>
+          <td class="num">${num(t.rowsInserted)}</td>
+          <td class="num">${num(t.rowsUpdated)}</td>
+          <td class="num">${hotCell(t)}</td>
+          <td class="num">${num(t.rowsDeleted)}</td>
+          <td class="num">${cacheCell(t.cacheHitRatio)}</td>
+          <td>${ts(t.lastVacuum)}</td>
+        </tr>`)) + indexDetails(rows),
+        `${rows.length} ${rows.length === 1 ? 'table' : 'tables'}`, true)).join('');
+
+    return `${toolbar}
+    <div class="kpi-row">
+      ${tile('Essentials tables', num(tables.length), 'that exist in this database')}
+      ${tile('Total size', prettyBytes(totalBytes), 'tables, indexes and TOAST')}
+      ${tile('Lowest cache hit', lowest ? pct(lowest.cacheHitRatio) : nil(),
+             lowest ? `${esc(lowest.tableName)}${lowCacheTables.length ? ` · ${showLink('pg-attention-cache')}` : ''}` : 'no block access yet',
+             !!(lowest && lowest.cacheHitRatio < 90))}
+      ${tile('Dead-row bloat', num(bloatedTables.length),
+             `tables with many dead rows${bloatedTables.length ? ` · ${showLink('pg-attention-bloat')}` : ''}`, bloatedTables.length > 0)}
+      ${tile('Unused indexes', num(unused.length),
+             unused.length ? `${prettyBytes(unused.reduce((sum, i) => sum + i.sizeBytes, 0))} written for nothing · ${showLink('pg-attention-unused')}`
+                           : 'every non-unique index is scanned',
+             unused.length > 0)}
+      ${invalid.length ? tile('Invalid indexes', num(invalid.length), `maintained but never used · ${showLink('pg-attention-invalid')}`, true) : ''}
     </div>
 
-    ${card('Table activity', activity
-        ? table([
-            { label: 'Table' }, { label: 'Seq scans', num: true }, { label: 'Index scans', num: true },
-            { label: 'Index tuples', num: true }, { label: 'Inserts', num: true }, { label: 'Updates', num: true }, { label: 'Deletes', num: true }
-        ], aRows)
-        : errorState(settled[2].reason, 'essentials_postgresql_stats_reader'), 'table-activity', true)}`;
+    ${attention ? `<div id="pg-attention">${card('Needs attention', attention, 'what the tiles and badges flag', true)}</div>` : ''}
+
+    ${slowCard}
+
+    <div class="notice">Table counters are cumulative since PostgreSQL's statistics were last reset, not since this
+      application started. Cache hit is the share of block requests served from shared buffers. HOT is the share of
+      updates that touched no index. An index counts as unused when nothing on this server has scanned it since the
+      reset - check that the statistics cover a representative period, and any read replicas, before dropping one.</div>
+
+    ${sectionCards || card('Table statistics', table([], [], { empty: 'None of the Essentials tables exist yet' }), null, true)}`;
 };
 
 views.cdc = async () => {
@@ -489,6 +683,7 @@ views.cdc = async () => {
     }
 
     const a = c.availability;
+    const i = c.interruptions;
     const s = c.slot;
     const d = c.dispatcher;
     const stateBadge = { ACTIVE: badge('good', 'ACTIVE'), INACTIVE: badge('neutral', 'INACTIVE'), FAILED: badge('critical', 'FAILED') }[a.state]
@@ -500,8 +695,15 @@ views.cdc = async () => {
        <span class="kv-val">${fmt[k] ? fmt[k](v) : v == null ? nil() : typeof v === 'boolean' ? String(v) : esc(String(v))}</span></div>`).join('')}</div>`;
 
     return `
-    ${a.fallbackCount > 0 ? `<div class="banner banner-warning"><span aria-hidden="true">▲</span>
-      <div><strong>CDC has fallen back to polling ${a.fallbackCount === 1 ? 'once' : a.fallbackCount + ' times'} after having been active.</strong>
+    ${i && i.count > 0 ? `<div class="banner banner-warning"><span aria-hidden="true">▲</span>
+      <div><strong>CDC has been interrupted ${i.count === 1 ? 'once' : num(i.count) + ' times'}${i.ongoing ? ', and still is' : ''}.</strong>
+      Last at ${ts(i.lastInterruptedAt)}${i.lastReason ? ': <code class="mono">' + esc(i.lastReason) + '</code>' : ''}${
+      !i.ongoing && i.lastRecoveredAt ? ` — active again at ${ts(i.lastRecoveredAt)}` : ''}.
+      Subscriptions poll for the duration, so an interruption costs latency, not events. A count that keeps rising
+      points at the connection: an idle timeout on a proxy, <code class="mono">wal_sender_timeout</code>, or a
+      suspended host.</div></div>` : ''}
+    ${a.fallbackCount > 0 && !(i && i.count > 0) ? `<div class="banner banner-warning"><span aria-hidden="true">▲</span>
+      <div><strong>Subscriptions have fallen back to polling ${a.fallbackCount === 1 ? 'once' : a.fallbackCount + ' times'} after CDC had been active.</strong>
       In <code class="mono">AUTO</code> mode a fallback is silent by design — polling keeps delivering events, so this
       is the only place it surfaces.</div></div>` : ''}
     ${/* Warm-up polls are the normal startup case and must not look like a fault: subscriptions start before the
@@ -516,7 +718,9 @@ views.cdc = async () => {
       ${tile('Availability', stateBadge, 'changed ' + epoch(a.lastChangedEpochMs))}
       ${tile('Published events', d ? num(d.publishedEvents) : nil(), d ? 'last batch ' + d.lastBatchSize : 'dispatcher not running')}
       ${tile('Poison rows', d ? num(d.poisonRows) : nil(), d && d.poisonRows > 0 ? 'inspect inbox' : null, d ? d.poisonRows > 0 : false)}
-      ${tile('Fallbacks', num(a.fallbackCount), 'since CDC went active', a.fallbackCount > 0)}
+      ${tile('Interruptions', i ? num(i.count) : nil(), i ? (i.ongoing ? 'ongoing' : 'last ' + (i.lastInterruptedAt ? ts(i.lastInterruptedAt) : 'never')) : null,
+             i ? i.count > 0 : false)}
+      ${tile('Fallbacks', num(a.fallbackCount), 'subscription switches to polling', a.fallbackCount > 0)}
       ${tile('Slot WAL', `<span class="is-text">${esc(s.walStatus ?? '—')}</span>`,
              s.safeWalSize != null ? 'safe ' + (s.safeWalSize / 1073741824).toFixed(0) + ' GiB' : null)}
     </div>
@@ -527,6 +731,14 @@ views.cdc = async () => {
         { state: () => stateBadge, lastChanged: (v) => v, reason: (v) => (v == null ? nil('no reason reported') : esc(v)),
           everActive: bool,
           warmupPollCount: (v) => `${num(v)}<span class="tile-sub" style="font-size:12px"> · started before CDC was ready</span>` }))}
+
+      ${i ? card('Interruptions', kv({ count: i.count, ongoing: i.ongoing, lastInterruptedAt: i.lastInterruptedAt,
+                                       lastReason: i.lastReason, lastRecoveredAt: i.lastRecoveredAt },
+        { count: (v) => num(v), ongoing: (v) => (v ? badge('warning', 'yes') : badge('neutral', 'no')),
+          lastInterruptedAt: (v) => (v == null ? nil('never') : ts(v)),
+          lastReason: (v) => (v == null ? nil('none') : esc(v)),
+          lastRecoveredAt: (v) => (v == null ? nil('—') : ts(v)) }),
+        'Kept after CDC recovers — the availability reason is cleared') : ''}
 
       ${card('Replication slot', kv(s, {
         exists: bool, active: bool, expectedPluginMatches: bool, temporary: bool, failover: bool, synced: bool,
@@ -676,7 +888,6 @@ async function openSubscriptionDrawer(subscriberId, aggregateType) {
         <div class="field-label"><span>${esc(label)}</span></div>
         <div class="kv" style="grid-template-columns:1fr">${items.join('')}</div>
       </div>`;
-    const millis = (v) => (v == null ? nil() : `${num(v)} ms`);
 
     drawer.innerHTML = `
     <div class="drawer-head">
@@ -702,15 +913,21 @@ async function openSubscriptionDrawer(subscriberId, aggregateType) {
         kvItem('lastFailureAt', ts(s.eventHandling.lastFailureAt)),
         kvItem('lastNumberOfEventsRequested', num(s.eventHandling.lastNumberOfEventsRequested))
     ])}
-      ${field('Polling — zero while CDC delivers the events', [
+      ${field('Polling — also under CDC: before CDC is active and on fallback; CDC catch-up not counted', [
         kvItem('polls', num(s.polling.polls)),
         kvItem('pollsWithoutEvents', num(s.polling.pollsWithoutEvents)),
         kvItem('skippedPolls', num(s.polling.skippedPolls)),
         kvItem('lastPollAt', ts(s.polling.lastPollAt)),
         kvItem('lastPollDuration', millis(s.polling.lastPollDurationMillis)),
-        kvItem('consecutiveNoPersistedEventsReturned', num(s.polling.consecutiveNoPersistedEventsReturned)),
-        kvItem('gapReconciliations', num(s.polling.gapReconciliations))
+        kvItem('consecutiveNoPersistedEventsReturned', num(s.polling.consecutiveNoPersistedEventsReturned))
     ])}
+      ${s.gaps ? field('Gaps — watch promotedToPermanentGaps: events this subscriber stopped waiting for', [
+        kvItem('newTransientGaps', num(s.gaps.newTransientGaps)),
+        kvItem('resolvedTransientGaps', num(s.gaps.resolvedTransientGaps)),
+        kvItem('promotedToPermanentGaps', num(s.gaps.promotedToPermanentGaps)),
+        kvItem('lastNewTransientGapAt', ts(s.gaps.lastNewTransientGapAt)),
+        kvItem('lastPromotedToPermanentGapAt', ts(s.gaps.lastPromotedToPermanentGapAt))
+    ]) : ''}
       ${field('Fenced lock — exclusive subscriptions only', [
         kvItem('currentlyHeld', String(s.lock.currentlyHeld)),
         kvItem('acquisitions', num(s.lock.acquisitions)),
@@ -773,6 +990,57 @@ function closeDialog() {
 }
 
 const actions = {
+    runJob: (name) => ({
+        title: 'Run job now?', danger: false, confirmLabel: 'Run now',
+        body: `<p>Runs <code class="mono">${esc(name)}</code> once, now, and waits for it to finish. Its schedule is not
+           changed, and the run is not coordinated with a scheduled run of the same job.</p>
+           <p>An executor job runs only on the instance holding the scheduler lock - if this request reaches another
+           instance it is refused, naming the one that holds it. A pg_cron job's run is not recorded in its run
+           details. Only jobs this application's scheduler registered can be run.</p>`,
+        run: async () => {
+            lastJobRun = await api(`/scheduler/jobs/${encodeURIComponent(name)}/run`, { method: 'POST' });
+        }
+    }),
+    shardRetry: (id) => ({
+        title: 'Retry now?', danger: false, confirmLabel: 'Retry',
+        body: `<p>Makes <code class="mono">${esc(id)}</code> visible again immediately, ahead of whatever backoff it
+           is waiting out. The attempt still counts against the redelivery policy's budget.</p>`,
+        run: () => api(`/shard-owned-queues/${encodeURIComponent(shardOwnedState.queue)}/messages/${encodeURIComponent(id)}/retry`, { method: 'POST' })
+    }),
+    shardDlq: (id) => ({
+        title: 'Mark as dead letter?', danger: false, confirmLabel: 'Mark as dead letter',
+        body: `<p>Stops delivery attempts for <code class="mono">${esc(id)}</code> and parks it. Reversible.</p>`,
+        run: () => api(`/shard-owned-queues/${encodeURIComponent(shardOwnedState.queue)}/messages/${encodeURIComponent(id)}/mark-as-dead-letter`, { method: 'POST' })
+    }),
+    shardResurrect: (id) => ({
+        title: 'Resurrect dead-letter message', danger: false, confirmLabel: 'Resurrect',
+        body: `<p>Returns <code class="mono">${esc(id)}</code> to its lane. It re-enters at a fresh sequence, so
+           <strong>its id changes</strong> — the old one no longer addresses it.</p>`,
+        run: () => api(`/shard-owned-queues/${encodeURIComponent(shardOwnedState.queue)}/messages/${encodeURIComponent(id)}/resurrect`, { method: 'POST' })
+    }),
+    shardResurrectKey: (key) => ({
+        title: 'Resurrect the whole key', danger: false, confirmLabel: 'Resurrect key',
+        body: `<p>Returns <strong>every</strong> dead letter of <code class="mono">${esc(key)}</code> to the ordered
+           lane, in <code>key_order</code>, in one transaction — so the key resumes where it stopped rather than
+           replaying what it already handled.</p>
+           <p>This is the way back from a key stopped behind a dead letter. Resurrecting message by message
+           works too, but only lowest <code>key_order</code> first: a higher one put back while a lower one is
+           still parked is simply parked again.</p>
+           <p>If the handler is still broken the first message fails its way back and the key stops again.</p>`,
+        run: () => api(`/shard-owned-queues/${encodeURIComponent(shardOwnedState.queue)}/ordered-keys/${encodeURIComponent(key)}/resurrect`, { method: 'POST' })
+    }),
+    shardDelete: (id) => ({
+        title: 'Delete message?', danger: true, confirmLabel: 'Delete message',
+        body: `<p>Permanently removes <code class="mono">${esc(id)}</code>. The payload is not recoverable
+           afterwards — copy it from the detail drawer first if it may be needed.</p>`,
+        run: () => api(`/shard-owned-queues/${encodeURIComponent(shardOwnedState.queue)}/messages/${encodeURIComponent(id)}`, { method: 'DELETE' })
+    }),
+    shardPurge: (name) => ({
+        title: 'Purge queue?', danger: true, confirmLabel: 'Purge queue',
+        body: `<p>Deletes every message in <code class="mono">${esc(name)}</code> — both lanes and the dead-letter
+           table. Not recoverable.</p>`,
+        run: () => api(`/shard-owned-queues/${encodeURIComponent(name)}/messages`, { method: 'DELETE' })
+    }),
     release: (name) => ({
         title: 'Release fenced lock?', danger: true, confirmLabel: 'Release lock',
         body: `<p>Releases <code class="mono">${esc(name)}</code>. Whichever instance holds it loses it, and another may
@@ -1162,10 +1430,230 @@ views.aggregateLookup = async () => {
     ${archivedDetailCard}`;
 };
 
+
+/* ── Shard-owned queues ──────────────────────────────────────────────────────────────────────
+   A different engine with a different contract, so a separate view rather than a tab on the
+   durable-queues one. Two things it shows that the other cannot, and one it cannot show:
+
+   OWNERSHIP is the headline, not depth. Every shard has exactly one owning consumer, and the
+   failure this engine actually has is a shard nobody owns — messages routed there are never
+   delivered while depth looks merely busy. unownedShards is therefore the tile that turns red;
+   a deep queue with every shard owned is a working queue under load.
+
+   The two LANES are reported apart because they are separate owners with separate unit spaces:
+   the unordered lane spans shardCount, the ordered lane its own fixed routing space, so a single
+   combined figure would hide which half is unserved.
+
+   There is no "browse queued messages" list. The engine reads per shard from a cursor and offers
+   no listing of live messages, only dead letters and lookup by id — so the view offers exactly
+   that rather than a page that would have to invent an order. */
+let shardOwnedState = { queue: null };
+
+const laneBar = (owned, total) => {
+    const pct = total > 0 ? Math.round((owned / total) * 100) : 0;
+    const tone = owned === total ? 'good' : owned === 0 ? 'critical' : 'warning';
+    return `<span class="chip">${owned}/${total}</span> ${badge(tone, `${pct}%`)}`;
+};
+
+views.shardOwnedQueues = async () => {
+    let names;
+    try {
+        names = await api('/shard-owned-queues');
+    } catch (e) {
+        return card('Shard-owned queues', errorState(e, 'essentials_queue_reader'), 'GET /shard-owned-queues', true);
+    }
+    if (!names.length) {
+        return card('Shard-owned queues',
+            `<div class="empty">No shard-owned queues are registered. A queue is registered by name with a
+             shard count before it can be consumed — this engine will not invent one.</div>`,
+            'GET /shard-owned-queues', true);
+    }
+
+    if (!shardOwnedState.queue || !names.includes(shardOwnedState.queue)) shardOwnedState.queue = names[0];
+    const q = shardOwnedState.queue;
+
+    const settled = await Promise.allSettled([
+        api(`/shard-owned-queues/${encodeURIComponent(q)}/status`),
+        api(`/shard-owned-queues/${encodeURIComponent(q)}/dead-letter-messages?offset=0&limit=100`),
+        api(`/shard-owned-queues/${encodeURIComponent(q)}/statistics`)
+    ]);
+    const [status, deadLetters, stats] = settled.map((r) => (r.status === 'fulfilled' ? r.value : null));
+
+    const dlqRow = (m) => `<tr data-shard-msg="${esc(m.id)}">
+      <td><button class="link" data-shard-msg="${esc(m.id)}">${esc(m.id)}</button></td>
+      <td>${m.lane === 'ordered' ? badge('neutral', 'ordered') : badge('neutral', 'unordered')}</td>
+      <td class="mono">${m.key ? esc(m.key) : nil()}</td>
+      <td class="truncate mono">${m.payload == null
+            ? `<span class="nil" title="Requires essentials_queue_payload_reader">redacted</span>`
+            : `<button class="link" data-shard-msg="${esc(m.id)}" title="View full payload">${esc(m.payload)}</button>`}</td>
+      <td>${ts(m.enqueuedAt)}</td>
+      <td class="num">${m.attempts}</td>
+      <td class="truncate">${m.blockedByKeyOrder != null
+            ? badge('warning', `blocked behind key_order ${m.blockedByKeyOrder}`)
+            : (m.lastError ? badge('serious', m.lastError) : nil())}</td>
+      <td class="actions">
+        <button class="btn btn-sm" data-act="shardResurrect" data-name="${esc(m.id)}" ${CAN.writeQueues ? '' : 'disabled'}>Resurrect</button>
+        ${m.key ? `<button class="btn btn-sm" data-act="shardResurrectKey" data-name="${esc(m.key)}"
+                           title="Return every dead letter of this key, in key_order"
+                           ${CAN.writeQueues ? '' : 'disabled'}>Resurrect key</button>` : ''}
+        <button class="btn btn-sm btn-danger" data-act="shardDelete" data-name="${esc(m.id)}" ${CAN.writeQueues ? '' : 'disabled'}>Delete</button>
+      </td>
+    </tr>`;
+
+    const cols = [
+        { label: 'Message id' }, { label: 'Lane' }, { label: 'Key' }, { label: 'Payload' },
+        { label: 'Enqueued' }, { label: 'Attempts', num: true }, { label: 'Last error' },
+        { label: '', width: '290px', sticky: true }
+    ];
+
+    const ownership = status ? `
+      <table class="table">
+        <thead><tr><th>Lane</th><th>Owned</th><th>Depth</th></tr></thead>
+        <tbody>
+          <tr><td>Unordered</td><td>${laneBar(status.unorderedShardsOwned, status.shardCount)}</td>
+              <td class="num">${num(status.unorderedDepth)}</td></tr>
+          <tr><td>Ordered</td><td>${laneBar(status.orderedShardsOwned, status.orderedUnits)}</td>
+              <td class="num">${num(status.orderedDepth)}</td></tr>
+        </tbody>
+      </table>`
+        : errorState(settled[0].reason, 'essentials_queue_reader');
+
+    return `
+    <div class="toolbar">
+      <label>Queue
+        <select id="shardQueueSelect">${names.map((n) => `<option ${n === q ? 'selected' : ''}>${esc(n)}</option>`).join('')}</select>
+      </label>
+      <label><input type="text" id="shardMessageLookup" placeholder="Find by message id (u-3-1042)" size="28"></label>
+      <div class="spacer"></div>
+      <button class="btn btn-sm btn-danger" data-act="shardPurge" data-name="${esc(q)}" ${CAN.writeQueues ? '' : 'disabled'}>Purge queue</button>
+    </div>
+
+    <div class="kpi-row">
+      ${tile('Unowned units', status ? num(status.unownedShards) : nil(),
+             'Cluster-wide. Messages routed here are never delivered', status ? status.unownedShards > 0 : false)}
+      ${tile('Unordered depth', status ? num(status.unorderedDepth) : nil())}
+      ${tile('Ordered depth', status ? num(status.orderedDepth) : nil())}
+      ${tile('Dead letters', status ? num(status.deadLetteredDepth) : nil(), null,
+             status ? status.deadLetteredDepth > 0 : false)}
+      ${tile('Instances', status ? `${num(status.liveInstances)}` : nil(),
+             status ? `of at most ${status.maxInstances}` : null)}
+    </div>
+
+    ${card('Ownership — across the cluster', ownership
+        + `<p class="hint">Units with a live owner <em>anywhere</em>, not this instance's share. Read it with
+             the delivery counters below, which are this instance's alone: a queue can be fully owned here
+             and delivering nothing in the instance you are looking at, because another one holds it.
+             A queue consumed through an exclusive subscription — an <code>EventProcessor</code>'s inbox —
+             is held by one instance cluster-wide by design, so its siblings consume none of it.</p>`,
+        'GET /shard-owned-queues/{queueName}/status', true)}
+
+    ${card('Delivery — this instance', stats
+        ? (stats.runningInThisInstance
+            ? `<div class="kpi-row">
+                 ${tile('Delivered', num(stats.delivered))}
+                 ${tile('Handler failures', num(stats.handlerFailures), null, stats.handlerFailures > 0)}
+                 ${tile('Retries', `${num(stats.retriesDispatched)} <span class="tile-sub" style="font-size:13px">of ${num(stats.retriesScheduled)} scheduled</span>`)}
+                 ${tile('Dead-lettered', num(stats.deadLettered), null, stats.deadLettered > 0)}
+                 ${tile('Order violations', num(stats.orderViolations),
+                        'A key delivered below its highest key_order so far — see the WARN naming the key', stats.orderViolations > 0)}
+               </div>
+               <div class="kpi-row">
+                 ${tile('Keys blocked', num(stats.keysBlockedByDeadLetter),
+                        'A key stopped behind a dead letter and delivers nothing until it is resurrected',
+                        stats.keysBlockedByDeadLetter > 0)}
+                 ${tile('Parked behind a block', num(stats.messagesPoisonedBehindDeadLetter),
+                        'Dead-lettered without ever reaching a handler — large against "Dead-lettered" means ONE message is broken, not the handler',
+                        stats.messagesPoisonedBehindDeadLetter > 0)}
+               </div>
+               <div class="kpi-row">
+                 ${tile('Sweep recoveries', num(stats.sweepRecoveries),
+                        'Found by the backstop, not the cursor — normal under backlog')}
+                 ${tile('Units acquired', num(stats.shardsAcquired))}
+                 ${tile('Units released', num(stats.shardsReleased))}
+                 ${tile('Leases lost', num(stats.leasesLost),
+                        'Rebalancing if during one, fencing if not', stats.leasesLost > 0)}
+                 ${tile('Watermark capped', num(stats.watermarkCapped),
+                        'Ordered cursor advanced on the clock, not on proof', stats.watermarkCapped > 0)}
+               </div>
+               <p class="hint">Counted in memory by this instance since it started, and reset by a restart.
+                  Another instance serving the same queue reports different numbers, and both are right.</p>
+               <p class="hint"><strong>What "delivered" means depends on who feeds the queue.</strong> An
+                  <code>EventProcessor</code> forwards every event through its inbox, so there the count is
+                  the event rate. A <code>ViewEventProcessor</code> handles events inline and queues only
+                  what it could not — a retry, or work held behind one — so there a rising count is a
+                  signal, and zero is the healthy state rather than a silent projection.</p>`
+            : `<div class="empty">This instance consumes none of this queue, so it has no counters for it.
+                 That is not a stalled queue — check <strong>Unowned units</strong> above, which reads the
+                 database and covers the whole cluster.</div>`)
+        : errorState(settled[2].reason, 'essentials_queue_reader'),
+        'GET /shard-owned-queues/{queueName}/statistics', true)}
+
+    ${card('Dead-letter messages',
+        deadLetters ? table(cols, deadLetters.map(dlqRow), { empty: 'No dead-letter messages' })
+                    : errorState(settled[1].reason, 'essentials_queue_reader'),
+        'GET /shard-owned-queues/{queueName}/dead-letter-messages', true)}`;
+};
+
+
+/* The shard-owned engine addresses a message by (queueName, messageId): a MessageId is
+   (lane, shard, sequence) and sequences are per shard, so "u-0-1" exists in every queue. There is
+   deliberately no resolve-queue-from-id endpoint to fall back on — the queue is part of the address,
+   not a convenience — so this drawer always takes both. */
+async function openShardOwnedDrawer(queueName, id) {
+    const drawer = document.getElementById('drawer');
+    drawer.innerHTML = `<div class="drawer-head"><div class="drawer-title" id="drawerTitle">Message detail</div>
+      <button class="btn btn-sm" id="drawerClose">Close</button></div>
+      <div class="drawer-body">${loadingRows(4, ['60%', '90%', '40%', '70%'])}</div>`;
+    drawer.classList.add('is-open');
+    document.getElementById('scrim').classList.add('is-open');
+    document.querySelectorAll('tbody tr[data-shard-msg]').forEach((tr) => tr.classList.toggle('is-selected', tr.dataset.shardMsg === id));
+
+    let m;
+    try {
+        m = await api(`/shard-owned-queues/${encodeURIComponent(queueName)}/messages/${encodeURIComponent(id)}`);
+    } catch (e) {
+        drawer.querySelector('.drawer-body').innerHTML = errorState(e, 'essentials_queue_reader');
+        return;
+    }
+    drawerPayload = m.payload;
+
+    const kvItem = (k, v) => `<div class="kv-item"><span class="kv-key">${esc(k)}</span><span class="kv-val">${v}</span></div>`;
+    drawer.innerHTML = `<div class="drawer-head"><div class="drawer-title">Message detail</div>
+        <button class="btn btn-sm" id="drawerClose">Close</button></div>
+      <div class="drawer-body">
+        <div class="kv">
+          ${kvItem('Id', `<span class="mono">${esc(m.id)}</span>`)}
+          ${kvItem('Queue', esc(String(m.queueName)))}
+          ${kvItem('Lane', badge('neutral', esc(m.lane)))}
+          ${kvItem('Shard', String(m.shard))}
+          ${kvItem('Sequence', String(m.sequence))}
+          ${kvItem('Key', m.key ? `<span class="mono">${esc(m.key)}</span>` : nil())}
+          ${kvItem('Attempts', String(m.attempts))}
+          ${kvItem('Enqueued', ts(m.enqueuedAt))}
+          ${kvItem('Visible at', ts(m.visibleAt))}
+          ${kvItem('State', m.isDeadLetter ? badge('critical', 'Dead letter') : badge('neutral', 'Queued'))}
+          ${kvItem('Last error', m.lastError ? badge('serious', esc(m.lastError)) : nil())}
+        </div>
+        ${card('Payload', m.payload == null
+            ? `<div class="empty">Withheld — requires essentials_queue_payload_reader</div>`
+            : `<pre class="payload mono">${esc(m.payload)}</pre>
+               <button class="btn btn-sm" data-copy="1">Copy</button>`,
+            'GET /shard-owned-queues/{queueName}/messages/{messageId}', true)}
+        <div class="drawer-actions">
+          <button class="btn btn-sm" data-act="shardRetry" data-name="${esc(m.id)}" ${CAN.writeQueues ? '' : 'disabled'}>Retry now</button>
+          ${m.isDeadLetter
+            ? `<button class="btn btn-sm" data-act="shardResurrect" data-name="${esc(m.id)}" ${CAN.writeQueues ? '' : 'disabled'}>Resurrect</button>`
+            : `<button class="btn btn-sm" data-act="shardDlq" data-name="${esc(m.id)}" ${CAN.writeQueues ? '' : 'disabled'}>Dead-letter</button>`}
+          <button class="btn btn-sm btn-danger" data-act="shardDelete" data-name="${esc(m.id)}" ${CAN.writeQueues ? '' : 'disabled'}>Delete</button>
+        </div>
+      </div>`;
+}
+
 const titles = {
     overview: ['Dashboard', 'Current state of the Essentials infrastructure'],
     locks: ['Fenced locks', 'Distributed locks held across service instances'],
     queues: ['Durable queues', 'Queued and dead-letter messages, delivery statistics'],
+    shardOwnedQueues: ['Shard-owned queues', 'Per-lane depth, shard ownership and dead letters'],
     scheduler: ['Scheduler', 'pg_cron jobs, run history and executor jobs'],
     subscriptions: ['Subscriptions', 'Event-store subscription resume points'],
     cdc: ['Change Data Capture', 'Replication slot, tailer and dispatcher state'],
@@ -1309,6 +1797,12 @@ document.addEventListener('click', async (e) => {
         return;
     }
 
+    const scrollTarget = e.target.closest('[data-scroll]');
+    if (scrollTarget) {
+        document.getElementById(scrollTarget.dataset.scroll)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        return;
+    }
+
     const trigger = e.target.closest('[data-msg]');
     if (trigger && !e.target.closest('.actions')) openDrawer(trigger.dataset.msg);
 });
@@ -1325,7 +1819,10 @@ document.addEventListener('change', (e) => {
         return render('aggregateLookup');
     }
     if (e.target.id === 'queueSelect') { queueState.queue = e.target.value; render('queues'); }
+    if (e.target.id === 'shardQueueSelect') { shardOwnedState.queue = e.target.value; render('shardOwnedQueues'); }
     if (e.target.id === 'sortSelect') { queueState.sortOrder = e.target.value; render('queues'); }
+    if (e.target.id === 'pgOrderSelect') { pgState.orderBy = e.target.value; render('postgresql'); }
+    if (e.target.id === 'pgLimitSelect') { pgState.limit = Number(e.target.value); render('postgresql'); }
 });
 
 /*
@@ -1339,6 +1836,13 @@ document.addEventListener('keydown', (e) => {
     aggregateState.generation = null;
     aggregateState.archivedGeneration = null;
     render('aggregateLookup');
+});
+
+document.addEventListener('keydown', async (e) => {
+    if (e.key !== 'Enter' || e.target.id !== 'shardMessageLookup') return;
+    const wanted = e.target.value.trim();
+    if (!wanted) return;
+    await openShardOwnedDrawer(shardOwnedState.queue, wanted);
 });
 
 document.addEventListener('keydown', async (e) => {
@@ -1371,6 +1875,11 @@ document.addEventListener('keydown', async (e) => {
 });
 
 document.addEventListener('click', (e) => {
+    const shardMsg = e.target.closest('[data-shard-msg]');
+    if (shardMsg && !e.target.closest('[data-act]')) {
+        openShardOwnedDrawer(shardOwnedState.queue, shardMsg.dataset.shardMsg);
+        return;
+    }
     const tab = e.target.closest('[data-qtab]');
     if (tab) { queueState.tab = tab.dataset.qtab; render('queues'); }
 });

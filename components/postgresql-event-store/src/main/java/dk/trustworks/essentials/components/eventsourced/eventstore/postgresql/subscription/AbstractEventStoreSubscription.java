@@ -76,38 +76,6 @@ public abstract class AbstractEventStoreSubscription implements EventStoreSubscr
         this.eventStorePollingOptimizerFactory = context.eventStorePollingOptimizerFactory();
     }
 
-    /**
-     * @param eventStore                        the event store to subscribe to
-     * @param aggregateType                     the aggregate type whose event stream is subscribed to
-     * @param subscriberId                      the durable identity of this subscriber
-     * @param onlyIncludeEventsForTenant        restrict the subscription to one tenant, or {@link Optional#empty()} for all
-     * @param eventStoreSubscriptionObserver    observability hook for the subscription lifecycle
-     * @param unsubscribeCallback               invoked when the subscription unsubscribes
-     * @param eventStorePollingOptimizerFactory creates the polling optimizer for a given subscription
-     * @deprecated Use {@link #AbstractEventStoreSubscription(EventStoreSubscriptionContext)}. These seven arguments
-     *         were repeated positionally by all five subscription subclasses, which is what pushed the widest of them
-     *         to thirteen parameters. This constructor delegates and behaves identically.
-     */
-    @Deprecated(forRemoval = true, since = "0.40.x")
-    @SuppressWarnings("OptionalUsedAsFieldOrParameterType")
-    protected AbstractEventStoreSubscription(EventStore eventStore,
-                                             AggregateType aggregateType,
-                                             SubscriberId subscriberId,
-                                             Optional<Tenant> onlyIncludeEventsForTenant,
-                                             EventStoreSubscriptionObserver eventStoreSubscriptionObserver,
-                                             Consumer<EventStoreSubscription> unsubscribeCallback,
-                                             Function<String, EventStorePollingOptimizer> eventStorePollingOptimizerFactory) {
-        this(EventStoreSubscriptionContext.builder()
-                                          .setEventStore(eventStore)
-                                          .setAggregateType(aggregateType)
-                                          .setSubscriberId(subscriberId)
-                                          .setOnlyIncludeEventsForTenant(requireNonNull(onlyIncludeEventsForTenant, "No onlyIncludeEventsForTenant provided"))
-                                          .setEventStoreSubscriptionObserver(eventStoreSubscriptionObserver)
-                                          .setUnsubscribeCallback(unsubscribeCallback)
-                                          .setEventStorePollingOptimizerFactory(eventStorePollingOptimizerFactory)
-                                          .build());
-    }
-
     @Override
     public SubscriberId subscriberId() {
         return subscriberId;

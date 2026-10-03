@@ -88,7 +88,6 @@ public abstract class PostgresqlDurableQueuesLatencyIT extends DurableQueuesLoad
                                                                                                   true))
                                       .setUseCentralizedMessageFetcher(false)
                                       .setCentralizedMessageFetcherPollingInterval(Duration.ofMillis(30))
-                                      .setUseOrderedUnorderedQuery(false)
                                       .build();
     }
 
@@ -171,28 +170,6 @@ public abstract class PostgresqlDurableQueuesLatencyIT extends DurableQueuesLoad
     }
 
     @Test
-    void measure_latency_multi_queue_unordered_old_query() {
-        List<QueueName> queuesList = IntStream.range(0, QUEUE_COUNT)
-                                              .mapToObj(i -> QueueName.of("PerfQ" + i))
-                                              .toList();
-
-        Map<QueueName, List<Message>> unorderedMessages = TestMessageFactory.createUnorderedMessages(TOTAL_PER_TEST, queuesList);
-
-        unitOfWorkFactory.usingUnitOfWork(uow -> {
-            for (var queueName : queuesList) {
-                List<Message> messages = unorderedMessages.get(queueName);
-                for (List<Message> chunk : partition(messages, BATCH_SIZE)) {
-                    var ids = durableQueues.queueMessages(queueName, chunk);
-                    assertThat(ids).hasSize(chunk.size());
-                }
-            }
-        });
-
-        QueryPerformanceResult result = oldQuery(queuesList);
-        System.out.println("Unordered workload performance old query: " + result);
-    }
-
-    @Test
     void measure_latency_multi_queue_ordered() {
         List<QueueName> queuesList = IntStream.range(0, QUEUE_COUNT)
                                               .mapToObj(i -> QueueName.of("PerfQueue" + i))
@@ -257,28 +234,6 @@ public abstract class PostgresqlDurableQueuesLatencyIT extends DurableQueuesLoad
                                           latencies.stream().mapToLong(x -> x).average().orElse(0) / 1_000.0,
                                           percentile(latencies, 0.95),
                                           percentile(latencies, 0.99));
-    }
-
-    @Test
-    void measure_latency_multi_queue_ordered_old_query() {
-        List<QueueName> queuesList = IntStream.range(0, QUEUE_COUNT)
-                                              .mapToObj(i -> QueueName.of("PerfQueue" + i))
-                                              .toList();
-
-        var orderedMap = TestMessageFactory.createOrderedMessages(TOTAL_PER_TEST, queuesList, 75000);
-
-        unitOfWorkFactory.usingUnitOfWork(uow -> {
-            for (var queueName : queuesList) {
-                List<OrderedMessage> messages = orderedMap.get(queueName);
-                for (List<OrderedMessage> chunk : partition(messages, BATCH_SIZE)) {
-                    var ids = durableQueues.queueMessages(queueName, chunk);
-                    assertThat(ids).hasSize(chunk.size());
-                }
-            }
-        });
-
-        QueryPerformanceResult result = oldQuery(queuesList);
-        System.out.println("Ordered workload performance old query: " + result);
     }
 
     @Test
@@ -372,81 +327,6 @@ public abstract class PostgresqlDurableQueuesLatencyIT extends DurableQueuesLoad
                     }
 
                     return false;
-                });
-            }
-        }
-
-        return new QueryPerformanceResult(Duration.between(wallStart, Instant.now()).toMillis(),
-                                          latencies.stream().mapToLong(x -> x).average().orElse(0) / 1_000.0,
-                                          percentile(latencies, 0.95),
-                                          percentile(latencies, 0.99));
-    }
-
-    @Test
-    void measure_latency_multi_queue_mixed_old_query() {
-        var queuesList = IntStream.range(0, QUEUE_COUNT)
-                                  .mapToObj(i -> QueueName.of("PerfQ" + i))
-                                  .toList();
-
-        int half         = TOTAL_PER_TEST / 2;
-        var unorderedMap = TestMessageFactory.createUnorderedMessages(half, queuesList);
-        var orderedMap   = TestMessageFactory.createOrderedMessages(half, queuesList, 40000);
-
-        unitOfWorkFactory.usingUnitOfWork(uow -> {
-            for (var queueName : queuesList) {
-                var unOrderedMessages = unorderedMap.get(queueName);
-                for (List<Message> chunk : partition(unOrderedMessages, BATCH_SIZE)) {
-                    var unOrderedIds = durableQueues.queueMessages(queueName, chunk);
-                    assertThat(unOrderedIds).hasSize(chunk.size());
-                }
-
-                var orderedMessages = orderedMap.get(queueName);
-                for (List<OrderedMessage> chunk : partition(orderedMessages, BATCH_SIZE)) {
-                    var orderedIds = durableQueues.queueMessages(queueName, chunk);
-                    assertThat(orderedIds).hasSize(chunk.size());
-                }
-            }
-        });
-
-        QueryPerformanceResult result = oldQuery(queuesList);
-
-        System.out.println("Mixed workload performance old query: " + result);
-    }
-
-    private QueryPerformanceResult oldQuery(List<QueueName> queuesList) {
-        var totalFetched = new AtomicInteger();
-        var fetchedPerQueue = queuesList.stream()
-                                        .collect(Collectors.toMap(qn -> qn, qn -> new AtomicInteger()));
-        var        wallStart = Instant.now();
-        List<Long> latencies = new ArrayList<>();
-
-        var oldSql = durableQueues.getDurableQueuesSql().buildGetNextMessageReadyForDeliverySqlStatement(Collections.emptySet());
-
-        while (totalFetched.get() < targetQueriesToMeasure()) {
-            for (var queueName : queuesList) {
-                if (totalFetched.get() >= targetQueriesToMeasure()) {
-                    break;
-                }
-                if (fetchedPerQueue.get(queueName).get() >= targetQueriesToMeasurePerQueue()) {
-                    continue;
-                }
-                unitOfWorkFactory.usingUnitOfWork(uow -> {
-                    long t0 = System.nanoTime();
-                    var queuedMessage = uow.handle().createQuery(oldSql)
-                                           .bind("queueName", queueName)
-                                           .bind("now", Instant.now())
-                                           .bind("limit", 1)
-                                           .map(durableQueues.getQueuedMessageMapper())
-                                           .findOne();
-                    long t1 = System.nanoTime();
-                    if (queuedMessage.isPresent()) {
-                        latencies.add(t1 - t0);
-                        fetchedPerQueue.get(queueName).incrementAndGet();
-                        totalFetched.incrementAndGet();
-                        uow.handle().createUpdate("DELETE FROM durable_queues WHERE id = :id")
-                           .bind("id", queuedMessage.get().getId())
-                           .execute();
-                    }
                 });
             }
         }

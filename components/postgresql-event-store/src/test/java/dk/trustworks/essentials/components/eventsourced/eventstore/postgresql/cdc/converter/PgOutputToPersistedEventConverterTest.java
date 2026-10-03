@@ -35,7 +35,7 @@ import static java.util.Map.entry;
 class PgOutputToPersistedEventConverterTest {
     private final AggregateType orders = AggregateType.of("Orders");
     private final PgOutputToPersistedEventConverter converter = new PgOutputToPersistedEventConverter(
-            EssentialsJSONEventSerializers.createForActiveJacksonFlavor(),
+            EssentialsJSONEventSerializers.create(),
             tableName -> "orders_events".equals(tableName) ? orders : null,
             aggregateType -> Optional.empty()
     );
@@ -95,7 +95,7 @@ class PgOutputToPersistedEventConverterTest {
     @Test
     void deserializes_the_aggregate_id_to_its_configured_type() {
         var typedConverter = new PgOutputToPersistedEventConverter(
-                EssentialsJSONEventSerializers.createForActiveJacksonFlavor(),
+                EssentialsJSONEventSerializers.create(),
                 tableName -> "orders_events".equals(tableName) ? orders : null,
                 aggregateType -> Optional.of(AggregateIdSerializer.serializerFor(TestOrderId.class))
         );
@@ -111,7 +111,7 @@ class PgOutputToPersistedEventConverterTest {
     @Test
     void leaves_the_aggregate_id_as_raw_text_when_the_aggregate_type_is_unregistered() {
         var unresolvableConverter = new PgOutputToPersistedEventConverter(
-                EssentialsJSONEventSerializers.createForActiveJacksonFlavor(),
+                EssentialsJSONEventSerializers.create(),
                 tableName -> "orders_events".equals(tableName) ? orders : null,
                 aggregateType -> Optional.empty()
         );
@@ -169,7 +169,7 @@ class PgOutputToPersistedEventConverterTest {
     void ignores_tables_when_resolver_throws_for_unknown_mapping() {
         var strictResolver = new DefaultAggregateTypeResolver(Map.of("orders_events", orders));
         var strictConverter = new PgOutputToPersistedEventConverter(
-                EssentialsJSONEventSerializers.createForActiveJacksonFlavor(),
+                EssentialsJSONEventSerializers.create(),
                 strictResolver,
                 aggregateType -> Optional.empty()
         );

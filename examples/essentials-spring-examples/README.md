@@ -60,9 +60,9 @@ command, its handler and its endpoint together, and there is no `controllers/`, 
 
 | | |
 |---|---|
-| Java | 21 (the reactor compiles with `--release 21` and builds on JDK 25) |
-| Spring Boot | 4.0.x |
-| Jackson | 3 — see [Jackson flavour](#jackson-flavour) below |
+| Java | 25 (the reactor compiles with `--release 25` and builds on JDK 25–27) |
+| Spring Boot | 4.1.x |
+| Jackson | 3 only — see [Jackson](#jackson) below |
 | Docker | required — the integration tests use Testcontainers, and `docker-compose.yml` provides the local runtime stack |
 
 ## Build and test
@@ -95,35 +95,23 @@ mvn spring-boot:run -pl :postgresql-cqrs
 Each application serves on `http://localhost:8080`, so run one at a time. The per-example README lists its
 endpoints and walks the scenario through with `curl`.
 
-## Jackson flavour
+## Jackson
 
-These examples target the **default Jackson 3 flavour**, which is what Spring Boot 4 ships. They also build and
-test under `-Pjackson2`, but that build has one hard requirement:
-
-```bash
-mvn -Pjackson2 verify -pl :postgresql-cqrs -am     # -am is NOT optional
-```
-
-The profile only overrides `essentials.types-jackson.artifactId` for modules in the **current reactor**.
-Without `-am`, a sibling resolves from the local repository with the property unresolved, it then resolves from
-the Essentials parent's default (Jackson 3), and **both** flavours land on the classpath under the same fully
-qualified class names. `EssentialsJacksonModules` fails loudly on that mismatch — believe it rather than the
-profile.
+Essentials 0.60 supports **Jackson 3 only** (`tools.jackson`), which is what Spring Boot 4 ships. The examples
+depend on `types-jackson3` / `immutable-jackson3` through the starters and need no Jackson 2 on the classpath —
+the explicit `jackson-databind` dependency that 0.50 examples carried as a workaround is gone.
 
 ### Why the Kafka DTOs carry plain `String` ids
 
 Spring Boot 4 auto-configures a **Jackson 3** `JsonMapper`, and Spring for Apache Kafka 4's
 `JacksonJsonSerializer`/`JacksonJsonDeserializer` bind against it. That is the mapper on the application's own
-JSON boundary, regardless of which flavour the Essentials persistence layer uses. Under `-Pjackson2` the
-Essentials value-type support (`EssentialTypesJacksonModule`) is a *Jackson 2* `Module`, which Boot's Jackson 3
-auto-configuration does not collect — so an Essentials `CharSequenceType` such as `OrderId` would not round-trip
-over Kafka.
+JSON boundary, and it is a different mapper from the one the Essentials persistence layer uses.
 
-The examples do not paper over that with a compatibility shim. Instead, **no Essentials type crosses the wire at
-all**: every Kafka DTO in `shipping/external_systems/order_management/` is typed with a plain `String`, and the
-two adapters convert at the boundary. That is the anti-corruption boundary doing its job — an upstream
-id-format change cannot reach the domain — and the Jackson flavour stops being load-bearing as a side effect.
-Re-typing those DTOs with `OrderId` reintroduces both problems at once; each module's `CLAUDE.md` records this.
+The examples keep that boundary explicit: **no Essentials type crosses the wire at all**. Every Kafka DTO in
+`shipping/external_systems/order_management/` is typed with a plain `String`, and the two adapters convert at the
+boundary. That is the anti-corruption boundary doing its job — an upstream id-format change cannot reach the
+domain. (In 0.50 this also sidestepped a failure under the since-removed Jackson 2 build profile.) Re-typing those
+DTOs with `OrderId` reintroduces the coupling; each module's `CLAUDE.md` records this.
 
 ## Observability
 

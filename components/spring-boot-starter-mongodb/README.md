@@ -113,7 +113,7 @@ All beans use `@ConditionalOnMissingBean` for easy overriding.
 |------|-----------|-------------|
 | `EssentialTypesJacksonModule` | Always | Jackson support for Essentials semantic types |
 | `EssentialsImmutableJacksonModule` | Objenesis on classpath + `essentials.immutable-jackson-module-enabled=true` | Jackson support for immutable objects without default constructor |
-| `JacksonJSONSerializer` | Always | Pre-configured ObjectMapper with sensible defaults |
+| `JSONSerializer` (`Jackson3JSONSerializer`) | Always | `EssentialsObjectMappers.createJSONSerializer()` — the canonical persistence mapper. Define your own `JSONSerializer` bean to add modules; the starter does not pick up `JacksonModule` beans for persistence |
 
 ### MongoDB Integration
 
@@ -162,7 +162,6 @@ essentials.fenced-lock-manager.release-acquired-locks-in-case-of-i-o-exceptions-
 
 ```properties
 essentials.durable-queues.shared-queue-collection-name=durable_queues
-essentials.durable-queues.transactional-mode=single-operation-transaction
 essentials.durable-queues.message-handling-timeout=5s
 essentials.durable-queues.polling-delay-interval-increment-factor=0.5
 essentials.durable-queues.max-polling-interval=2s
@@ -172,7 +171,6 @@ essentials.durable-queues.verbose-tracing=false
 | Property | Default | Description                                                                   |
 |----------|---------|-------------------------------------------------------------------------------|
 | `shared-queue-collection-name` | `durable_queues` | MongoDB collection for messages. **See [Security](#security)** |
-| `transactional-mode` | `singleoperationtransaction` | `fully-transactional` or `single-operation-transaction` (recommended)            |
 | `message-handling-timeout` | `30s` | Timeout before unacknowledged message is redelivered (single-op mode only)    |
 | `polling-delay-interval-increment-factor` | `0.5` | Backoff factor when no messages found                                         |
 | `max-polling-interval` | `2s` | Maximum polling delay                                                         |
@@ -364,16 +362,8 @@ See [types-springdata-mongo](../../types-springdata-mongo/README.md) for complet
         <artifactId>spring-boot-starter-data-mongodb</artifactId>
     </dependency>
     <dependency>
-        <groupId>com.fasterxml.jackson.core</groupId>
+        <groupId>tools.jackson.core</groupId>
         <artifactId>jackson-databind</artifactId>
-    </dependency>
-    <dependency>
-        <groupId>com.fasterxml.jackson.datatype</groupId>
-        <artifactId>jackson-datatype-jdk8</artifactId>
-    </dependency>
-    <dependency>
-        <groupId>com.fasterxml.jackson.datatype</groupId>
-        <artifactId>jackson-datatype-jsr310</artifactId>
     </dependency>
     <dependency>
         <groupId>io.projectreactor</groupId>

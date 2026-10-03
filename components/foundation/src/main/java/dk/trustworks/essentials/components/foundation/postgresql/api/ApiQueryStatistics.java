@@ -21,30 +21,60 @@ import dk.trustworks.essentials.components.foundation.postgresql.stats.QueryStat
 import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 
 /**
- * Represents statistics for a specific database query in an API context.
+ * Statistics for one normalized statement, as recorded by PostgreSQL's {@code pg_stat_statements}.
  * <p>
- * This record encapsulates details about a query, including:
- * - The query string itself.
- * - The total execution time spent on the query.
- * - The number of times the query was executed.
- * - The average execution time per query call.
+ * Times are in milliseconds. {@code totalTime} and {@code meanTime} include planning time; {@code minTime},
+ * {@code maxTime} and {@code stddevTime} are execution time only, as {@code pg_stat_statements} does not track
+ * those for planning.
  * <p>
- * The {@link #from(QueryStatistics)} method allows conversion from a
- * {@code QueryStatistics} object, providing a bridge between a domain-specific
- * representation of query statistics and the API layer.
+ * The {@link #from(QueryStatistics)} method converts from the internal {@link QueryStatistics}.
+ *
+ * @param query          the normalized statement text
+ * @param totalTime      total planning and execution time across all calls
+ * @param calls          number of calls
+ * @param meanTime       mean planning and execution time per call
+ * @param rows           rows retrieved or affected, summed over all calls
+ * @param minTime        fastest execution
+ * @param maxTime        slowest execution
+ * @param stddevTime     standard deviation of the execution time
+ * @param sharedBlksHit  shared blocks found in shared buffers
+ * @param sharedBlksRead shared blocks read from outside shared buffers
+ * @param cacheHitRatio  {@code sharedBlksHit} as a percentage 0-100 of all shared blocks accessed, one decimal.
+ *                       {@code null} when the statement accessed no shared blocks
  */
 public record ApiQueryStatistics(
         String query,
         double totalTime,
         long calls,
-        double meanTime
+        double meanTime,
+        long rows,
+        double minTime,
+        double maxTime,
+        double stddevTime,
+        long sharedBlksHit,
+        long sharedBlksRead,
+        Double cacheHitRatio
 ) {
+
+    /**
+     * The statistics as reported before the per-call and buffer statistics were added
+     */
+    public ApiQueryStatistics(String query, double totalTime, long calls, double meanTime) {
+        this(query, totalTime, calls, meanTime, 0, 0, 0, 0, 0, 0, null);
+    }
 
     public static ApiQueryStatistics from(QueryStatistics queryStats) {
         requireNonNull(queryStats, "queryStats must not be null");
         return new ApiQueryStatistics(queryStats.query(),
-                queryStats.totalTime(),
-                queryStats.calls(),
-                queryStats.meanTime());
+                                      queryStats.totalTime(),
+                                      queryStats.calls(),
+                                      queryStats.meanTime(),
+                                      queryStats.rows(),
+                                      queryStats.minTime(),
+                                      queryStats.maxTime(),
+                                      queryStats.stddevTime(),
+                                      queryStats.sharedBlksHit(),
+                                      queryStats.sharedBlksRead(),
+                                      queryStats.cacheHitRatio());
     }
 }

@@ -17,6 +17,7 @@
 package dk.trustworks.essentials.components.adminapi.rest;
 
 import dk.trustworks.essentials.components.adminapi.rest.dto.ApiError;
+import dk.trustworks.essentials.components.foundation.scheduler.ScheduledJobNotRunnableHereException;
 import dk.trustworks.essentials.shared.security.EssentialsSecurityException;
 import org.slf4j.*;
 import org.springframework.http.*;
@@ -58,6 +59,16 @@ public class AdminApiExceptionHandler {
     @ExceptionHandler(AdminApiResourceNotFoundException.class)
     public ResponseEntity<ApiError> handleNotFound(AdminApiResourceNotFoundException e) {
         return error(HttpStatus.NOT_FOUND, e.getMessage());
+    }
+
+    /**
+     * A valid request for an executor job that reached an instance not holding the scheduler lock - the only
+     * instance an executor job may run on. The message names the holder, so the caller can direct the request there.
+     */
+    @ExceptionHandler(ScheduledJobNotRunnableHereException.class)
+    public ResponseEntity<ApiError> handleNotRunnableHere(ScheduledJobNotRunnableHereException e) {
+        log.debug("Admin API request rejected as not runnable on this instance: {}", e.getMessage());
+        return error(HttpStatus.CONFLICT, e.getMessage());
     }
 
     /**

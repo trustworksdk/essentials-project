@@ -40,6 +40,7 @@ import java.util.*;
 import java.util.concurrent.CopyOnWriteArrayList;
 
 import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
+import static dk.trustworks.essentials.shared.MessageFormatter.msg;
 
 /**
  * Event Modeling style Event Sourced Event Processor and Command Handler, which is capable of both containing {@link CmdHandler} as well as {@link MessageHandler}
@@ -244,15 +245,31 @@ public abstract class InTransactionEventProcessor implements Lifecycle {
     @Override
     public void start() {
         if (!started) {
-            started = true;
             var processorName              = requireNonNull(getProcessorName(), "getProcessorName() returned null");
             var subscribeToEventsRelatedTo = requireNonNull(reactsToEventsRelatedToAggregateTypes(), "reactsToEventsRelatedToAggregateTypes() returned null");
+
+            setupMessageHandlerDelegate();
+            /*
+             * An InTransactionEventProcessor handles every event inside the UnitOfWork that appended it - that is what it
+             * is for - so it never hands the UnitOfWork boundary to the PatternMatchingMessageHandler and there is no
+             * UnitOfWork-free window to offer a UnitOfWorkMode.NONE handler to. Reject it rather than run the blocking
+             * call inside the appending transaction, which is what silently ignoring the mode would amount to.
+             *
+             * Checked before 'started' is set, so a rejected processor still reports isStarted() == false and a second
+             * start() attempt throws again instead of silently doing nothing.
+             */
+            if (patternMatchingHandlerDelegate.hasNonTransactionalMessageHandlers()) {
+                throw new IllegalStateException(msg("InTransactionEventProcessor '{}' declares one or more @MessageHandler methods with UnitOfWorkMode.NONE, which an InTransactionEventProcessor doesn't support - " +
+                                                    "it handles every event inside the UnitOfWork that appended it. Use an EventProcessor for handlers that need to perform blocking I/O",
+                                                    processorName));
+            }
+
+            started = true;
             log.info("⚙️ [{}] Starting InTransactionEventProcessor - will subscribe '{}' to events related to these AggregatesType's: {}",
                      processorName,
                      useExclusively ? "exclusively" : "non-exclusively",
                      subscribeToEventsRelatedTo);
 
-            setupMessageHandlerDelegate();
             subscribeInTransaction(subscribeToEventsRelatedTo);
         }
     }

@@ -16,7 +16,6 @@
 
 package dk.trustworks.essentials.types.spring.web.model;
 
-import com.fasterxml.jackson.databind.annotation.JsonDeserialize;
 import dk.trustworks.essentials.types.*;
 
 import java.util.*;
@@ -25,7 +24,6 @@ public class Order {
     public OrderId                  id;
     public CustomerId               customerId;
     public AccountId                accountId;
-    @JsonDeserialize(keyUsing = ProductIdKeyDeserializer.class)
     public Map<ProductId, Quantity> orderLines;
 
     private Amount     amount;

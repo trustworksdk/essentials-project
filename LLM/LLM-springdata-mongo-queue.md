@@ -5,7 +5,7 @@
 ## TOC
 - [Quick Facts](#quick-facts)
 - [Configuration](#configuration)
-- [Transaction Modes](#transaction-modes)
+- [Transactions](#transactions)
 - [Document Schema](#document-schema)
 - [Polling Optimization](#polling-optimization)
 - [Common Pitfalls](#common-pitfalls)
@@ -36,34 +36,30 @@
 
 ## Configuration
 
-### Constructor Options
+### Construction
 ```java
 // Base package: dk.trustworks.essentials.components.queue.springdata.mongodb
 
-// SingleOperationTransaction (Recommended)
-MongoDurableQueues(MongoTemplate mongoTemplate, Duration messageHandlingTimeout)
+// All defaults
+new MongoDurableQueues(mongoTemplate, Duration.ofSeconds(10))   // messageHandlingTimeout
 
-// Custom collection name
-MongoDurableQueues(MongoTemplate mongoTemplate, Duration messageHandlingTimeout,
-                   String sharedQueueCollectionName)
-
-// Custom polling optimizer
-MongoDurableQueues(MongoTemplate mongoTemplate, String sharedQueueCollectionName,
-                   Duration messageHandlingTimeout,
-                   Function<ConsumeFromQueue, QueuePollingOptimizer> queuePollingOptimizerFactory)
-
-// FullyTransactional (NOT RECOMMENDED)
-MongoDurableQueues(MongoTemplate mongoTemplate,
-                   SpringMongoTransactionAwareUnitOfWorkFactory unitOfWorkFactory)
+// Anything else: the builder
+MongoDurableQueues.builder()
+                  .setMongoTemplate(mongoTemplate)
+                  .setMessageHandlingTimeout(Duration.ofSeconds(10))
+                  .setSharedQueueCollectionName("durable_queues")         // optional
+                  .setQueuePollingOptimizerFactory(queuePollingOptimizerFactory) // optional
+                  .setUnitOfWorkFactory(unitOfWorkFactory)                // optional - see Transactions
+                  .build();
 ```
 
-| Param | Type | Purpose |
+| Builder setter | Type | Purpose |
 |-------|------|---------|
-| `mongoTemplate` | `MongoTemplate` | Spring Data MongoDB template |
-| `messageHandlingTimeout` | `Duration` | Stuck message timeout |
-| `sharedQueueCollectionName` | `String` | Collection name (⚠️ [injection risk](#security)) |
-| `queuePollingOptimizerFactory` | `Function<ConsumeFromQueue, QueuePollingOptimizer>` | Custom optimizer |
-| `unitOfWorkFactory` | `SpringMongoTransactionAwareUnitOfWorkFactory` | For FullyTransactional mode |
+| `setMongoTemplate` | `MongoTemplate` | Spring Data MongoDB template. Required |
+| `setMessageHandlingTimeout` | `Duration` | Stuck message timeout. Defaults to `DEFAULT_MESSAGE_HANDLING_TIMEOUT` (30s) |
+| `setSharedQueueCollectionName` | `String` | Collection name (⚠️ [injection risk](#security)) |
+| `setQueuePollingOptimizerFactory` | `Function<ConsumeFromQueue, QueuePollingOptimizer>` | Custom optimizer |
+| `setUnitOfWorkFactory` | `SpringMongoTransactionAwareUnitOfWorkFactory` | Optional; handle each message in a `UnitOfWork` - see [Transactions](#transactions) |
 
 ### Basic Setup
 ```java
@@ -110,14 +106,15 @@ public DurableQueues durableQueues(MongoTemplate mongoTemplate) {
 }
 ```
 
-## Transaction Modes
+## Transactions
 
-| Mode | Behavior | Recommendation |
-|------|----------|----------------|
-| `SingleOperationTransaction` | Each op in own transaction | ✅ **Use this** - proper retry/DLQ |
-| `FullyTransactional` | Join parent transaction | ❌ **Avoid** - breaks retry counts |
+Every queue operation runs in its own transaction: queueing, fetching, acknowledging, retrying and dead-lettering are
+separate single-document operations, so a handler failure can never roll back the retry count. (0.60 removed
+`TransactionalMode`; its `FullyTransactional` mode broke exactly that.)
 
-⚠️ **FullyTransactional breaks retry handling**: Transaction rollback prevents retry count updates and DLQ persistence.
+With a `SpringMongoTransactionAwareUnitOfWorkFactory` (`setUnitOfWorkFactory`, requires a replica set) each message is
+handled inside a `UnitOfWork` of its own, and a `queueMessage` called inside a caller's `UnitOfWork` joins it - the
+enqueue commits or rolls back with the caller's writes, which is what an Outbox relies on.
 
 ## Document Schema
 
@@ -167,17 +164,15 @@ Linear backoff - only option for MongoDB.
 import dk.trustworks.essentials.components.foundation.messaging.queue.SimpleQueuePollingOptimizer;
 import dk.trustworks.essentials.components.foundation.messaging.queue.operations.ConsumeFromQueue;
 
-new MongoDurableQueues(
-    mongoTemplate,
-    null,  // unitOfWorkFactory
-    "durable_queues",
-    Duration.ofSeconds(10), // Message handling timeout
-    consumeFromQueue -> new SimpleQueuePollingOptimizer(
-        consumeFromQueue,
-        100,    // delayIncrementMs
-        5000    // maxDelayMs
-    )
-);
+MongoDurableQueues.builder()
+                  .setMongoTemplate(mongoTemplate)
+                  .setSharedQueueCollectionName("durable_queues")
+                  .setMessageHandlingTimeout(Duration.ofSeconds(10))
+                  .setQueuePollingOptimizerFactory(consumeFromQueue -> new SimpleQueuePollingOptimizer(
+                      consumeFromQueue,
+                      100,    // delayIncrementMs
+                      5000))  // maxDelayMs
+                  .build();
 ```
 
 | Param | Description |
@@ -210,16 +205,16 @@ durableQueues.start();  // Creates MessageListenerContainer
 // ✅ "mongodb://localhost:27017,localhost:27018/myapp?replicaSet=rs0"
 ```
 
-**2. FullyTransactional breaks retries**
+**2. Expecting the handler's writes and the acknowledgement to commit together**
 ```java
-// ❌ new MongoDurableQueues(mongoTemplate, unitOfWorkFactory)
-// ✅ new MongoDurableQueues(mongoTemplate, Duration.ofSeconds(10))
+// ❌ Relying on a rollback in the handler to un-acknowledge the message - acknowledgement is its own transaction
+// ✅ Make the handler idempotent; a retried delivery repeats it
 ```
 
 **3. Forgetting start()**
 ```java
-// ❌ var queues = new MongoDurableQueues(...);  // Change Streams inactive
-// ✅ var queues = new MongoDurableQueues(...); queues.start();
+// ❌ var queues = MongoDurableQueues.builder()...build();  // Change Streams inactive
+// ✅ var queues = MongoDurableQueues.builder()...build(); queues.start();
 ```
 
 **4. Missing type converters**
@@ -377,10 +372,10 @@ See [README Security](../components/springdata-mongo-queue/README.md#security) f
 ```java
 // ❌ DANGEROUS
 String collectionName = userInput + "_queue";
-new MongoDurableQueues(mongoTemplate, Duration.ofSeconds(10), collectionName);
+MongoDurableQueues.builder().setMongoTemplate(mongoTemplate).setSharedQueueCollectionName(collectionName).build();
 
 // ✅ SAFE - hardcoded value
-new MongoDurableQueues(mongoTemplate, Duration.ofSeconds(10), "durable_queues");
+MongoDurableQueues.builder().setMongoTemplate(mongoTemplate).setSharedQueueCollectionName("durable_queues").build();
 
 // ⚠️ Validate if from config
 MongoUtil.checkIsValidCollectionName(collectionName);  // Basic validation (not exhaustive)
@@ -413,11 +408,11 @@ static MongoDBContainer mongo = new MongoDBContainer("mongo:6.0");
 
 @Bean
 public DurableQueues testDurableQueues(MongoTemplate mongoTemplate) {
-    var queues = new MongoDurableQueues(
-        mongoTemplate,
-        Duration.ofSeconds(10), // Message handling timeout
-        "test_queue"
-    );
+    var queues = MongoDurableQueues.builder()
+                                   .setMongoTemplate(mongoTemplate)
+                                   .setMessageHandlingTimeout(Duration.ofSeconds(10))
+                                   .setSharedQueueCollectionName("test_queue")
+                                   .build();
     queues.start();
     return queues;
 }

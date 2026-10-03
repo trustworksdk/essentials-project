@@ -140,10 +140,8 @@ public final class PostgresqlEventStore<CONFIG extends AggregateEventStreamConfi
      *                                                measure statistics related to {@link EventStoreSubscription}'s
      *                                                and calls to {@link #pollEvents(AggregateType, long, Optional, Optional, Optional, Optional, Optional)}
      * @param <STRATEGY>                              the persistence strategy type
-     * @deprecated Use {@link #builder()}. This constructor declares an {@code Optional} parameter and/or more than five parameters; the builder names every argument and accepts both plain values and {@code Optional}s. It is unchanged and remains the implementation the builder delegates to.
      */
-    @Deprecated(forRemoval = true, since = "0.40.x")
-    public <STRATEGY extends AggregateEventStreamPersistenceStrategy<CONFIG>> PostgresqlEventStore(EventStoreUnitOfWorkFactory unitOfWorkFactory,
+    <STRATEGY extends AggregateEventStreamPersistenceStrategy<CONFIG>> PostgresqlEventStore(EventStoreUnitOfWorkFactory unitOfWorkFactory,
                                                                                                    STRATEGY aggregateEventStreamPersistenceStrategy,
                                                                                                    Optional<EventStoreEventBus> eventStoreLocalEventBusOption,
                                                                                                    Function<PostgresqlEventStore<CONFIG>, EventStreamGapHandler<CONFIG>> eventStreamGapHandlerFactory,
@@ -196,7 +194,7 @@ public final class PostgresqlEventStore<CONFIG extends AggregateEventStreamConfi
         return new PostgresqlEventStore<>(unitOfWorkFactory,
                                           aggregateEventStreamPersistenceStrategy,
                                           Optional.empty(),
-                                          eventStore -> new PostgresqlEventStreamGapHandler<>(eventStore, unitOfWorkFactory),
+                                          eventStore -> new PostgresqlEventStreamGapHandler<>(unitOfWorkFactory),
                                           new NoOpEventStoreSubscriptionObserver());
     }
 
@@ -572,21 +570,25 @@ public final class PostgresqlEventStore<CONFIG extends AggregateEventStreamConfi
                                                                 onlyIncludeEventIfItBelongsToTenant,
                                                                 persistedEvents,
                                                                 loadEventsByGlobalOrderTiming.stop().getDuration());
-                subscriptionGapHandler.ifPresent(gapHandler -> {
+                var gapReconciliation = subscriptionGapHandler.map(gapHandler -> {
                     var reconcileGapsTiming = StopWatch.start("reconcileGaps(" + actualSubscriberId + ", " + aggregateType + ")");
-                    gapHandler.reconcileGaps(aggregateType,
-                                             globalOrderRange,
-                                             persistedEvents,
-                                             transientGapsToIncludeInQuery);
+                    var outcome = gapHandler.reconcileGapsAndReport(aggregateType,
+                                                                    globalOrderRange,
+                                                                    persistedEvents,
+                                                                    transientGapsToIncludeInQuery);
                     eventStoreSubscriptionObserver.reconciledGaps(actualSubscriberId,
                                                                   aggregateType,
                                                                   globalOrderRange,
                                                                   transientGapsToIncludeInQuery, persistedEvents,
                                                                   reconcileGapsTiming.stop().getDuration());
-
-                });
+                    return outcome;
+                }).orElse(GapReconciliation.NONE);
                 commitIfStartedByThisPoll(unitOfWork, startedUnitOfWork);
                 unitOfWork = null;
+                // After the commit, so a reconciliation that rolls back is not counted.
+                if (!gapReconciliation.isEmpty()) {
+                    eventStoreSubscriptionObserver.gapReconciliationOutcome(actualSubscriberId, aggregateType, gapReconciliation);
+                }
                 if (persistedEvents.size() > 0) {
                     consecutiveNoPersistedEventsReturned.set(0);
                     if (log.isTraceEnabled()) {
@@ -968,20 +970,25 @@ public final class PostgresqlEventStore<CONFIG extends AggregateEventStreamConfi
                                                                 persistedEvents,
                                                                 loadEventsByGlobalOrderTiming.stop().getDuration());
 
-                subscriptionGapHandler.ifPresent(gapHandler -> {
+                var gapReconciliation = subscriptionGapHandler.map(gapHandler -> {
                     var reconcileGapsTiming = StopWatch.start("reconcileGaps(" + subscriberId + ", " + aggregateType + ")");
-                    gapHandler.reconcileGaps(aggregateType,
-                                             globalOrderRange,
-                                             persistedEvents,
-                                             transientGapsToIncludeInQuery);
+                    var outcome = gapHandler.reconcileGapsAndReport(aggregateType,
+                                                                    globalOrderRange,
+                                                                    persistedEvents,
+                                                                    transientGapsToIncludeInQuery);
                     eventStoreSubscriptionObserver.reconciledGaps(subscriberId,
                                                                   aggregateType,
                                                                   globalOrderRange,
                                                                   transientGapsToIncludeInQuery, persistedEvents,
                                                                   reconcileGapsTiming.stop().getDuration());
-                });
+                    return outcome;
+                }).orElse(GapReconciliation.NONE);
                 commitIfStartedByThisPoll(unitOfWork, startedUnitOfWork);
                 unitOfWork = null;
+                // After the commit, so a reconciliation that rolls back is not counted.
+                if (!gapReconciliation.isEmpty()) {
+                    eventStoreSubscriptionObserver.gapReconciliationOutcome(subscriberId, aggregateType, gapReconciliation);
+                }
                 if (!persistedEvents.isEmpty()) {
                     consecutiveNoPersistedEventsReturned.set(0);
                     if (log.isTraceEnabled()) {

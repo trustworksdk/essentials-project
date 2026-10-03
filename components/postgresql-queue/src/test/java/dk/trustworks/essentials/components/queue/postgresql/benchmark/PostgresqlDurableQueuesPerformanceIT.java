@@ -60,13 +60,6 @@ public abstract class PostgresqlDurableQueuesPerformanceIT extends DurableQueues
      */
     protected abstract boolean useCentralizedMessageFetcher();
 
-    /**
-     * Determine whether to use the centralized message fetcher
-     *
-     * @return true for centralized message fetcher, false for traditional consumer
-     */
-    protected abstract boolean useOrderedUnorderedQuery();
-
     protected abstract long totalMessagesConsumedTarget();
 
     protected abstract Duration consumerPollInterval();
@@ -87,7 +80,6 @@ public abstract class PostgresqlDurableQueuesPerformanceIT extends DurableQueues
                                                                                                   true))
                                       .setUseCentralizedMessageFetcher(useCentralizedMessageFetcher())
                                       .setCentralizedMessageFetcherPollingInterval(consumerPollInterval())
-                                      .setUseOrderedUnorderedQuery(useOrderedUnorderedQuery())
                                       .build();
     }
 

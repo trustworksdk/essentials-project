@@ -33,7 +33,7 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
  * {@code TableCacheHitRatio} object, serving as a bridge between domain-specific
  * statistics and the API layer representation.
  *
- * @param cacheHitRatio The cache hit ratio expressed as a long value.
+ * @param cacheHitRatio The cache hit ratio as a whole percentage, 0-100
  */
 public record ApiTableCacheHitRatio(long cacheHitRatio) {
 

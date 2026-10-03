@@ -98,14 +98,14 @@ class PollingUnitOfWorkLifecycleIT {
                                                                                        },
                                                                                        standardSingleTenantConfiguration(aggregateType -> aggregateType + "_events",
                                                                                                                          EventStreamTableColumnNames.defaultColumnNames(),
-                                                                                                                         EssentialsJSONEventSerializers.createForActiveJacksonFlavor(),
+                                                                                                                         EssentialsJSONEventSerializers.create(),
                                                                                                                          IdentifierColumnType.UUID,
                                                                                                                          JSONColumnType.JSONB));
         observer = new DisposeWhenPollIsSkipped();
         eventStore = new PostgresqlEventStore<>(unitOfWorkFactory,
                                                 persistenceStrategy,
                                                 Optional.empty(),
-                                                eventStore -> new PostgresqlEventStreamGapHandler<>(eventStore, unitOfWorkFactory),
+                                                eventStore -> new PostgresqlEventStreamGapHandler<>(unitOfWorkFactory),
                                                 observer);
         eventStore.addAggregateEventStreamConfiguration(ORDERS, AggregateIdSerializer.serializerFor(OrderId.class));
 

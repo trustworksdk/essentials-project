@@ -16,16 +16,15 @@
 
 package dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.serializer.json;
 
-import dk.trustworks.essentials.components.foundation.json.*;
+import dk.trustworks.essentials.components.foundation.json.EssentialsObjectMappers;
 
 /**
- * Builds the {@link JSONEventSerializer} for whichever Jackson major the application uses, with the canonical
- * Essentials mapper configuration from {@link EssentialsObjectMappers}.
+ * Builds the {@link JSONEventSerializer} with the canonical Essentials mapper configuration from
+ * {@link EssentialsObjectMappers}.
  * <p>
- * Use this instead of picking {@link JacksonJSONEventSerializer} or {@link Jackson3JSONEventSerializer} by hand: the two
- * write identical JSON only when their mappers are configured identically, which is what going through
- * {@link EssentialsObjectMappers} guarantees. Persisted event payloads and metadata have to remain readable across a
- * Jackson upgrade, so that guarantee is the whole point.
+ * Use this instead of constructing {@link Jackson3JSONEventSerializer} around a hand-built mapper: persisted event
+ * payloads and metadata have to stay readable across library versions, and only the mapper configuration in
+ * {@link EssentialsObjectMappers} guarantees the established format.
  */
 public final class EssentialsJSONEventSerializers {
 
@@ -33,15 +32,9 @@ public final class EssentialsJSONEventSerializers {
     }
 
     /**
-     * @return a {@link JSONEventSerializer} for the Jackson flavor on the classpath — Jackson 3 when the Essentials
-     *         Jackson 3 modules are present, otherwise Jackson 2
+     * @return a {@link JSONEventSerializer} using the canonical Essentials mapper configuration
      */
-    public static JSONEventSerializer createForActiveJacksonFlavor() {
-        // Two returns rather than a conditional expression: merging the two branch types makes the verifier load
-        // JacksonJSONEventSerializer, which is not needed - and not wanted - on a classpath without Jackson 2.
-        if (EssentialsJacksonModules.isJackson3Flavor()) {
-            return new Jackson3JSONEventSerializer(EssentialsObjectMappers.createJackson3ObjectMapper());
-        }
-        return new JacksonJSONEventSerializer(EssentialsObjectMappers.createJackson2ObjectMapper());
+    public static JSONEventSerializer create() {
+        return new Jackson3JSONEventSerializer(EssentialsObjectMappers.createJackson3ObjectMapper());
     }
 }

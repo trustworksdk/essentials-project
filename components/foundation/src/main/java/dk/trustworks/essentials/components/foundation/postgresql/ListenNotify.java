@@ -268,6 +268,58 @@ public final class ListenNotify {
     }
 
     /**
+     * The statements {@link #addChangeNotificationTriggerToTable(Handle, String, List, String...)} executes, as a schema
+     * contribution: the notify function, then the trigger. Unlike that method it cannot ask the server for its version,
+     * so the trigger is always dropped and re-created rather than {@code CREATE OR REPLACE}d - equivalent inside the one
+     * transaction a {@link dk.trustworks.essentials.components.foundation.schema.SchemaApplier} runs it in, and valid on
+     * every supported PostgreSQL version.
+     *
+     * @param tableName                                         the table to notify about
+     * @param triggerOnSqlOperations                            the operations that notify
+     * @param includeAdditionalTableColumnsInNotificationPayload columns to include in the payload
+     * @return the statements, in order
+     */
+    public static List<String> changeNotificationTriggerStatements(String tableName,
+                                                                   List<SqlOperation> triggerOnSqlOperations,
+                                                                   String... includeAdditionalTableColumnsInNotificationPayload) {
+        requireNonBlank(tableName, "No tableName provided");
+        requireNonEmpty(triggerOnSqlOperations, "No triggerOnSqlOperations entries provided");
+        PostgresqlUtil.checkIsValidTableOrColumnName(tableName);
+
+        var additionalColumnsPayLoadStatement = TABLE_NAME + ", " + SQL_OPERATION;
+        var additionalColumnsSelectStatement  = "TG_TABLE_NAME, TG_OP";
+        if (includeAdditionalTableColumnsInNotificationPayload != null && includeAdditionalTableColumnsInNotificationPayload.length > 0) {
+            Arrays.stream(includeAdditionalTableColumnsInNotificationPayload).forEach(PostgresqlUtil::checkIsValidTableOrColumnName);
+            additionalColumnsPayLoadStatement += ", " + String.join(", ", includeAdditionalTableColumnsInNotificationPayload);
+            additionalColumnsSelectStatement += ", " + Arrays.stream(includeAdditionalTableColumnsInNotificationPayload).map(column -> "NEW." + column).reduce((result, column) -> result + ", " + column).get() + "\n";
+        }
+        var notifyFunctionSql = bind("CREATE OR REPLACE FUNCTION notify_{:tableName}_change()\n" +
+                                             "       RETURNS trigger AS $$\n" +
+                                             "       BEGIN\n" +
+                                             "         PERFORM (\n" +
+                                             "            WITH payload({:additionalColumnsPayLoadStatement}) AS (\n" +
+                                             "              SELECT {:additionalColumnsSelectStatement}" +
+                                             "            )\n" +
+                                             "            SELECT pg_notify('{:channelName}', row_to_json(payload)::text) FROM payload);\n" +
+                                             "         RETURN NULL;\n" +
+                                             "       END;\n" +
+                                             "       $$ LANGUAGE PLPGSQL;",
+                                     arg("tableName", tableName),
+                                     arg("channelName", resolveTableChangeChannelName(tableName)),
+                                     arg("additionalColumnsPayLoadStatement", additionalColumnsPayLoadStatement),
+                                     arg("additionalColumnsSelectStatement", additionalColumnsSelectStatement));
+        var dropTriggerSql = bind("DROP TRIGGER IF EXISTS notify_on_{:tableName}_changes ON {:tableName} CASCADE",
+                                  arg("tableName", tableName));
+        var createTriggerSql = bind("CREATE TRIGGER notify_on_{:tableName}_changes\n" +
+                                            "      AFTER {:on} ON {:tableName}\n" +
+                                            "      FOR EACH ROW\n" +
+                                            "         EXECUTE FUNCTION notify_{:tableName}_change();",
+                                    arg("tableName", tableName),
+                                    arg("on", triggerOnSqlOperations.stream().map(Enum::name).reduce((result, on) -> result + " OR " + on).get()));
+        return List.of(notifyFunctionSql, dropTriggerSql, createTriggerSql);
+    }
+
+    /**
      * Remove Table change notification <code>FUNCTION</code> and an <b>AFTER</b> <code>TRIGGER</code> to the given Table in order to support the classical Postgresql LISTEN/NOTIFY concept.<br>
      *
      * @param handle    the jdbi handle

@@ -34,7 +34,7 @@ public interface ClosingBooksGenerationResolver<ID> {
      * serialization two callers can resolve the same open generation and both act on it, leaving only the storage
      * constraint to catch them — and that surfaces as an opaque failure in the middle of whatever business operation
      * triggered the rollover, rather than the outcome
-     * {@link #openNextGeneration(AggregateType, LogicalAggregateId, String)} and
+     * {@link #openNextGeneration(AggregateType, LogicalAggregateId, ClosingBooksStreamIdGenerator)} and
      * {@link #closeCurrentGeneration(AggregateType, LogicalAggregateId)} document.
      * <p>
      * The default implementation gives no isolation and simply runs {@code rollover}, which is correct for

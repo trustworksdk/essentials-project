@@ -59,8 +59,10 @@ class SingleOperationTransactionMongoDistributedCompetingConsumersDurableQueuesI
 
     @Override
     protected MongoDurableQueues createDurableQueues(SpringMongoTransactionAwareUnitOfWorkFactory unitOfWorkFactory) {
-        return new MongoDurableQueues(mongoTemplate,
-                                      Duration.ofSeconds(5));
+        return MongoDurableQueues.builder()
+                                  .setMongoTemplate(mongoTemplate)
+                                  .setMessageHandlingTimeout(Duration.ofSeconds(5))
+                                  .build();
     }
 
     @Override

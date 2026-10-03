@@ -503,4 +503,4 @@ public class Order extends SpecificRecordBase implements SpecificRecord {
 
 - [LLM-types-avro.md](../LLM/LLM-types-avro.md) - API reference for LLM assistance
 - [types](../types) - Core types module (`SingleValueType`, `CharSequenceType`, etc.)
-- [types-jackson](../types-jackson) - Jackson serialization for types
+- [types-jackson3](../types-jackson3) - Jackson serialization for types

@@ -124,7 +124,6 @@ public class QueueFetchStrategyBenchmarkIT {
         var durableQueues = PostgresqlDurableQueues.builder()
                                                    .setUnitOfWorkFactory(unitOfWorkFactory)
                                                    .setUseCentralizedMessageFetcher(true)
-                                                   .setUseOrderedUnorderedQuery(true)
                                                    .setCentralizedMessageFetcherPollingInterval(Duration.ofMillis(20))
                                                    .build();
 

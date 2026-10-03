@@ -23,9 +23,7 @@ import dk.trustworks.essentials.shared.interceptor.InterceptorChain;
 import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 
 /**
- * Mark the message as acknowledged - this operation also deletes the messages from the Queue<br>
- * Note this method MUST be called within an existing {@link UnitOfWork} IF
- * using {@link TransactionalMode#FullyTransactional}<br>
+ * Mark the message as acknowledged - this operation also deletes the messages from the Queue<br><br>
  * Operation also matches {@link DurableQueuesInterceptor#intercept(AcknowledgeMessageAsHandled, InterceptorChain)}
  */
 public final class AcknowledgeMessageAsHandled {
@@ -42,8 +40,6 @@ public final class AcknowledgeMessageAsHandled {
 
     /**
      * Mark the message as acknowledged - this operation deleted the messages from the Queue<br>
-     * Note this method MUST be called within an existing {@link UnitOfWork} IF
-     * using {@link TransactionalMode#FullyTransactional}
      *
      * @param queueEntryId the unique id of the Message to acknowledge
      */

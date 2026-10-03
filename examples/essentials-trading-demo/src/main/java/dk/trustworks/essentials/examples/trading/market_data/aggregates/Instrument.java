@@ -21,8 +21,11 @@ import dk.trustworks.essentials.components.eventsourced.aggregates.stateful.mode
 import dk.trustworks.essentials.examples.trading.market_data.events.InstrumentEvent;
 import dk.trustworks.essentials.examples.trading.market_data.events.InstrumentRegistered;
 import dk.trustworks.essentials.examples.trading.market_data.events.InstrumentRenamed;
+import dk.trustworks.essentials.examples.trading.market_data.events.InstrumentRiskApproved;
+import dk.trustworks.essentials.examples.trading.market_data.events.InstrumentRiskRejected;
 import dk.trustworks.essentials.examples.trading.market_data.events.InstrumentSuspended;
 import dk.trustworks.essentials.examples.trading.market_data.types.InstrumentId;
+import dk.trustworks.essentials.examples.trading.market_data.types.RiskRating;
 import dk.trustworks.essentials.examples.trading.market_data.types.Symbol;
 
 import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
@@ -39,9 +42,10 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
  * compare the other two against. Its stream is short by construction -- an instrument is registered once, occasionally
  * renamed, and at most once suspended.
  *
- * <p>Both mutating methods are idempotent no-ops rather than errors: renaming to the current display name, and
- * suspending an already-suspended instrument, return without applying anything. A repeated command therefore leaves no
- * trace in the stream instead of growing it.
+ * <p>Every mutating method is an idempotent no-op rather than an error: renaming to the current display name,
+ * suspending an already-suspended instrument, and recording a risk decision on an instrument that already has one all
+ * return without applying anything. A repeated command therefore leaves no trace in the stream instead of growing it.
+ * For the risk decision that idempotency is not a nicety -- see {@link #recordRiskApproval}.
  *
  * <p>Reached through {@link Instruments}. Commands are unpacked by the slice that handles them, so this class never
  * names a command type.
@@ -51,6 +55,7 @@ public class Instrument extends AggregateRoot<InstrumentId, InstrumentEvent, Ins
     private String  displayName;
     private boolean suspended;
     private String  suspensionReason;
+    private boolean riskAssessed;
 
     /**
      * Used for rehydration
@@ -87,12 +92,44 @@ public class Instrument extends AggregateRoot<InstrumentId, InstrumentEvent, Ins
         apply(new InstrumentSuspended(aggregateId(), reason));
     }
 
+    /**
+     * Records that an external risk assessment cleared this instrument.
+     *
+     * <p>The no-op on an instrument that already carries a risk decision is what makes the
+     * {@code market_data.risk_approve_instrument} automation safe. That automation calls the risk service <em>outside</em>
+     * any transaction, so the call can succeed and the transaction that records its outcome still fail -- after which the
+     * triggering {@code InstrumentRegistered} is redelivered and the whole handler runs again. Without this guard the
+     * second run would append a second decision to the stream.
+     *
+     * <p>The first decision therefore stands, exactly as the first suspension reason does.
+     */
+    public void recordRiskApproval(RiskRating riskRating) {
+        requireNonNull(riskRating, "No riskRating provided");
+        if (riskAssessed) {
+            return;
+        }
+        apply(new InstrumentRiskApproved(aggregateId(), riskRating));
+    }
+
+    /**
+     * Records that an external risk assessment refused to clear this instrument. Idempotent for the same reason as
+     * {@link #recordRiskApproval}.
+     */
+    public void recordRiskRejection(String reason) {
+        requireNonNull(reason, "No reason provided");
+        if (riskAssessed) {
+            return;
+        }
+        apply(new InstrumentRiskRejected(aggregateId(), reason));
+    }
+
     @EventHandler
     private void on(InstrumentRegistered e) {
         symbol = e.symbol();
         displayName = e.displayName();
         suspended = false;
         suspensionReason = null;
+        riskAssessed = false;
     }
 
     @EventHandler
@@ -104,5 +141,15 @@ public class Instrument extends AggregateRoot<InstrumentId, InstrumentEvent, Ins
     private void on(InstrumentSuspended e) {
         suspended = true;
         suspensionReason = e.reason();
+    }
+
+    @EventHandler
+    private void on(InstrumentRiskApproved e) {
+        riskAssessed = true;
+    }
+
+    @EventHandler
+    private void on(InstrumentRiskRejected e) {
+        riskAssessed = true;
     }
 }

@@ -25,8 +25,9 @@ import org.slf4j.*;
 import java.util.List;
 
 import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
+import static dk.trustworks.essentials.shared.FailFast.requireTrue;
 import static dk.trustworks.essentials.shared.security.EssentialsSecurityRoles.*;
-import static dk.trustworks.essentials.shared.security.EssentialsSecurityValidator.hasAnyEssentialsSecurityRoles;
+import static dk.trustworks.essentials.shared.security.EssentialsSecurityValidator.validateHasAnyEssentialsSecurityRoles;
 
 /**
  * Default implementation of the {@link PostgresqlQueryStatisticsApi} interface for retrieving PostgreSQL query statistics.
@@ -55,13 +56,27 @@ public class DefaultPostgresqlQueryStatisticsApi implements PostgresqlQueryStati
     private void initializePgStatStatementsAvailability() {
         try {
             unitOfWorkFactory.usingUnitOfWork(uow -> {
-                this.pgStatementsAvailable = PostgresqlUtil.isPGExtensionAvailable(uow.handle(), "pg_stat_statements");
-                if (pgStatementsAvailable) {
-                    log.info("pg_stat_statements extension is available");
-                    uow.handle().execute("CREATE EXTENSION IF NOT EXISTS pg_stat_statements;");
+                var handle = uow.handle();
+                if (PostgresqlUtil.isPGExtensionAvailable(handle, "pg_stat_statements")) {
+                    // Already created - by an operator, or by an earlier start of this application.
+                    this.pgStatementsAvailable = true;
+                } else if (!PostgresqlUtil.isPGExtensionInstallable(handle, "pg_stat_statements")) {
+                    this.pgStatementsAvailable = false;
+                } else if (!PostgresqlUtil.isPGLibraryPreloaded(handle, "pg_stat_statements")) {
+                    // Creatable, but its view errors on every read until the server preloads the library. Not
+                    // created, so as not to leave an extension behind that cannot work.
+                    log.info("pg_stat_statements is installed on the server but not in shared_preload_libraries - query statistics are unavailable");
+                    this.pgStatementsAvailable = false;
                 } else {
-                    log.info("pg_stat_statements extension is not available");
+                    // Best effort. It used to be attempted only when the extension already existed, because the
+                    // check above read pg_extension, so it never created anything and the statistics were silently
+                    // empty. A refusal - usually a role that may not create extensions - is the operator's choice.
+                    this.pgStatementsAvailable = PostgresqlUtil.executeAllowingRefusal(handle, "CREATE EXTENSION IF NOT EXISTS pg_stat_statements;");
+                    if (!pgStatementsAvailable) {
+                        log.info("pg_stat_statements could not be created by this role - query statistics are unavailable until an operator creates it");
+                    }
                 }
+                log.info("pg_stat_statements extension is {}", pgStatementsAvailable ? "available" : "not available");
             });
         } catch (Exception e) {
             this.pgStatementsAvailable = false;
@@ -71,41 +86,81 @@ public class DefaultPostgresqlQueryStatisticsApi implements PostgresqlQueryStati
     }
 
     private void validateRoles(Object principal) {
-        hasAnyEssentialsSecurityRoles(securityProvider, principal, POSTGRESQL_STATS_READER, ESSENTIALS_ADMIN);
+        // validateHas... throws. This used to call hasAnyEssentialsSecurityRoles, which only returns a boolean -
+        // the result was ignored, so any authenticated principal could read the statistics.
+        validateHasAnyEssentialsSecurityRoles(securityProvider, principal, POSTGRESQL_STATS_READER, ESSENTIALS_ADMIN);
     }
 
+    @Override
     public List<ApiQueryStatistics> getTopTenSlowestQueries(Object principal) {
-        validateRoles(principal);
-        return getTopTenSlowestQueries(10).stream()
-                .map(ApiQueryStatistics::from)
-                .toList();
+        return getSlowestQueries(principal, QueryStatisticsOrder.TOTAL_TIME, 10);
     }
 
-    private List<QueryStatistics> getTopTenSlowestQueries(int limit) {
-        if(!pgStatementsAvailable) {
+    @Override
+    public List<ApiQueryStatistics> getSlowestQueries(Object principal, QueryStatisticsOrder orderBy, int limit) {
+        validateRoles(principal);
+        requireNonNull(orderBy, "No orderBy provided");
+        requireTrue(limit >= 1, "limit must be at least 1");
+        return querySlowestQueries(orderBy, Math.min(limit, MAX_SLOWEST_QUERIES_LIMIT)).stream()
+                                                                                     .map(ApiQueryStatistics::from)
+                                                                                     .toList();
+    }
+
+    /**
+     * The ORDER BY expression per ranking. A fixed mapping, never caller text, as it is concatenated into the SQL
+     */
+    private static String orderByExpression(QueryStatisticsOrder orderBy) {
+        return switch (orderBy) {
+            case TOTAL_TIME -> "total_time";
+            case MEAN_TIME -> "mean_time";
+            case MAX_TIME -> "max_exec_time";
+            case CALLS -> "calls";
+            case BLOCKS_READ -> "shared_blks_read";
+        };
+    }
+
+    private List<QueryStatistics> querySlowestQueries(QueryStatisticsOrder orderBy, int limit) {
+        if (!pgStatementsAvailable) {
             return List.of();
         }
         try {
             return unitOfWorkFactory.withUnitOfWork(uow -> {
                 var sql = """
-                            SELECT
-                              query,
-                              calls,
-                              total_plan_time + total_exec_time AS total_time,
-                              mean_plan_time + mean_exec_time  AS mean_time
-                            FROM pg_stat_statements
-                            ORDER BY total_time DESC
-                            LIMIT :limit;
-                        """;
+                        SELECT
+                          query,
+                          calls,
+                          total_plan_time + total_exec_time AS total_time,
+                          mean_plan_time + mean_exec_time   AS mean_time,
+                          rows,
+                          min_exec_time,
+                          max_exec_time,
+                          stddev_exec_time,
+                          shared_blks_hit,
+                          shared_blks_read,
+                          round((100.0 * shared_blks_hit / nullif(shared_blks_hit + shared_blks_read, 0))::numeric, 1) AS cache_hit_ratio
+                        FROM pg_stat_statements
+                        WHERE dbid = (SELECT oid FROM pg_database WHERE datname = current_database())
+                          AND query NOT ILIKE '%pg_stat_statements%'
+                        ORDER BY %s DESC
+                        LIMIT :limit
+                        """.replace("ORDER BY %s", "ORDER BY " + orderByExpression(orderBy));
                 return uow.handle().createQuery(sql)
-                        .bind("limit", limit)
-                        .map((rs, ctx) -> {
-                            return new QueryStatistics(rs.getString("query"),
-                                    rs.getDouble("total_time"),
-                                    rs.getLong("calls"),
-                                    rs.getDouble("mean_time"));
-                        })
-                        .list();
+                          .bind("limit", limit)
+                          .map((rs, ctx) -> {
+                              var cacheHitRatio = rs.getBigDecimal("cache_hit_ratio");
+                              return new QueryStatistics(rs.getString("query"),
+                                                         rs.getDouble("total_time"),
+                                                         rs.getLong("calls"),
+                                                         rs.getDouble("mean_time"),
+                                                         rs.getLong("rows"),
+                                                         rs.getDouble("min_exec_time"),
+                                                         rs.getDouble("max_exec_time"),
+                                                         rs.getDouble("stddev_exec_time"),
+                                                         rs.getLong("shared_blks_hit"),
+                                                         rs.getLong("shared_blks_read"),
+                                                         cacheHitRatio != null ? cacheHitRatio.doubleValue() : null);
+                          })
+                          .list();
             });
         } catch (Exception e) {
             if (PostgresqlUtil.isPGExtensionNotLoadedException(e)) {

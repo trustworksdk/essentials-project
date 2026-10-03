@@ -27,10 +27,6 @@ public class CentralizedPostgresqlDurableQueuesPerformanceIT extends PostgresqlD
         return true;
     }
 
-    @Override
-    protected boolean useOrderedUnorderedQuery() {
-        return false;
-    }
 
     @Override
     protected long totalMessagesConsumedTarget() {

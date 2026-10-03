@@ -641,6 +641,9 @@ SELECT pg_size_pretty(SUM(size)) AS total_wal_size FROM pg_ls_waldir();
 - `active = false AND inactive_since > 1 hour` → warn (orphaned slot risk).
 - `essentials.cdc.fallback_total` rising → CDC was working and stopped. This counter excludes startup
   warm-up polls, so any increase is real and worth paging on.
+- `essentials.cdc.interruptions_total` rising steadily → the replication connection keeps dropping, even though
+  each drop recovers on its own. Look at what sits between the application and PostgreSQL: a proxy or load
+  balancer idle timeout, `wal_sender_timeout`, or a host that is being suspended.
 - `essentials.cdc.eventstore.fallback.poll.count` rising while `essentials.cdc.active = 0`
   for an extended period → CDC isn't recovering on its own, investigate. Note this counter also ticks
   during normal startup; the "for an extended period" qualifier is what keeps it from firing on every boot.
@@ -1090,8 +1093,10 @@ Sampled every `cdc.slot.metricsInterval` (default 30s) by `CdcSlotMetrics`. Tagg
 - `essentials.cdc.eventstore.live_source.switch.count` (counter — mid-stream cutover)
 - `essentials.cdc.eventstore.backfill.page.latency` / `.loaded` / `.query_range`
 - `essentials.cdc.backfill_live.buffer.size` (gauge — backfill→live handover buffer)
-- `essentials.cdc.fallback_total` (counter — subscriptions that fell back to polling **after** CDC had been
-  active, i.e. a real regression. This is the one to alert on)
+- `essentials.cdc.fallback_total` (counter — times a subscription started on, or switched to, polling **after**
+  CDC had been active, i.e. a real regression; one per subscription per interruption. This is the one to alert on)
+- `essentials.cdc.interruptions_total` (counter — times CDC stopped being active other than by a requested stop.
+  One per outage, however many subscriptions it affected)
 - `essentials.cdc.warmup_poll_total` (counter — subscriptions that started on polling because CDC had not
   become active yet. Expected on every startup; **not** an error)
 - `essentials.cdc.start_failures_total` (with reason tag)
@@ -1110,7 +1115,25 @@ fenced lock. A healthy application therefore reports a non-zero `warmupPollCount
 `fallbackCount` on every start.
 
 `fallbackCount` / `essentials.cdc.fallback_total` count only polls that happen *after* CDC has been active at
-least once — a genuine loss of CDC. Alert on that one; ignore warm-up.
+least once — a genuine loss of CDC. Alert on that one; ignore warm-up. That covers both ways a subscription gets
+there: starting while CDC is down, and a running subscription switching off the CDC bus when CDC stops being
+active. The second used to go uncounted, so an outage every subscription polled through left `fallbackCount` at
+zero.
+
+### Interruptions
+
+A fallback is counted per subscription; an **interruption** is counted once per outage: any time CDC stops being
+`ACTIVE` other than by a requested stop — a dropped replication connection, a stream error, or the slot taken over
+by another instance. The CDC status's `interruptions` section (health details `interruptions.*`, the admin UI's
+CDC page) keeps the count, whether the latest one is still ongoing, and when and why it began and when CDC was
+active again. That record outlives recovery on purpose: the availability `reason` describes the current state only
+and is cleared when CDC becomes active again, so before this a dropped connection that reconnected within a second
+left no trace in the status.
+
+A typical interruption is a replication connection the server closed because the client went quiet, for example a
+suspended laptop that outlived `wal_sender_timeout` (60 s by default). The tailer logs one WARN with the stack trace
+(`CDC streamOnce failed`), reconnects within its backoff, and resumes from `confirmed_flush_lsn`; subscriptions poll
+in between, so the cost is latency, not events.
 
 `everActive` (health detail `everActive`) disambiguates the third case: `fallbackCount = 0` with
 `everActive = false` and a non-zero `warmupPollCount` means CDC never came up at all and everything is being
