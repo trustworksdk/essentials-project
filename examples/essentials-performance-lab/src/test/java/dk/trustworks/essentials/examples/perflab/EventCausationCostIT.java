@@ -32,7 +32,9 @@ import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.su
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.transaction.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.types.EventTypeOrName;
 import dk.trustworks.essentials.components.foundation.causation.CausationContext;
-import dk.trustworks.essentials.components.foundation.messaging.MessageHandler;
+import dk.trustworks.essentials.components.foundation.messaging.*;
+import dk.trustworks.essentials.components.foundation.messaging.queue.*;
+import dk.trustworks.essentials.components.foundation.messaging.queue.operations.ConsumeFromQueue;
 import dk.trustworks.essentials.components.foundation.messaging.eip.store_and_forward.Inboxes;
 import dk.trustworks.essentials.components.foundation.reactive.command.*;
 import dk.trustworks.essentials.components.foundation.types.EventId;
@@ -85,6 +87,7 @@ class EventCausationCostIT {
 
     private static final int           APPEND_EVENT_COUNT    = Integer.getInteger("lab.causation.append-events", 5_000);
     private static final int           PROCESSOR_EVENT_COUNT = Integer.getInteger("lab.causation.processor-events", 2_000);
+    private static final int           QUEUE_MESSAGE_COUNT   = Integer.getInteger("lab.causation.queue-messages", 5_000);
     private static final int           REPETITIONS           = Integer.getInteger("lab.causation.repetitions", 5);
     /**
      * Enough parallel inbox consumers, and a fast enough fetcher, that the processor chain is bound by the work each
@@ -227,6 +230,85 @@ class EventCausationCostIT {
         }
     }
 
+    // -------------------------------------------------------------------------------------------------- queue path
+
+    @Test
+    void cost_of_carrying_causation_across_a_durable_queue() {
+        var environment = PgSnapshot.captureEnvironment(dataSource);
+        var results     = new AbRunner(REPETITIONS).run(arms(enabled -> repetition -> measureQueuePath(enabled, repetition, environment)));
+
+        report("QUEUE PATH", QUEUE_MESSAGE_COUNT, results);
+        RunResult.writeAll("target/perf-lab-baseline/event-causation-queue-path.json",
+                           Map.of("comparison", "event causation, durable queue hand-off",
+                                  "messageCount", QUEUE_MESSAGE_COUNT,
+                                  "environment", environment,
+                                  "summaries", AbRunner.summarize(results),
+                                  "runs", results));
+
+        results.forEach(result -> {
+            assertThat(result.opsCompleted()).isEqualTo(QUEUE_MESSAGE_COUNT);
+            assertThat((Long) result.extra().get("messagesHandledWithACause"))
+                    .as("%s rep %d: the arm must actually do what its name says", result.arm(), result.repetition())
+                    .isEqualTo(result.arm().equals(ARM_ON) ? QUEUE_MESSAGE_COUNT : 0L);
+        });
+    }
+
+    /**
+     * Messages queued one per transaction with a cause bound - the shape of {@code Inbox.addMessageReceived} - while a
+     * consumer drains them. The enabled arm registers the {@link CausationDurableQueuesInterceptor}, which adds one
+     * metadata entry per message on the way in and re-binds it on the way out.
+     */
+    private RunResult measureQueuePath(boolean causationEnabled, int repetition, Map<String, String> environment) {
+        recreateSchema();
+        var setup         = EventStoreSetup.create(dataSource, causationEnabled);
+        var durableQueues = PostgresqlDurableQueues.builder()
+                                                   .setUnitOfWorkFactory(setup.unitOfWorkFactory())
+                                                   .setUseCentralizedMessageFetcher(true)
+                                                   .setCentralizedMessageFetcherPollingInterval(Duration.ofMillis(5))
+                                                   .build();
+        if (causationEnabled) {
+            durableQueues.addInterceptor(new CausationDurableQueuesInterceptor());
+        }
+        durableQueues.start();
+        var queueName        = QueueName.of("causation-cost");
+        var handled          = new AtomicInteger();
+        var handledWithCause = new AtomicLong();
+        var consumer = durableQueues.consumeFromQueue(ConsumeFromQueue.builder()
+                                                                      .setQueueName(queueName)
+                                                                      .setRedeliveryPolicy(RedeliveryPolicy.fixedBackoff(Duration.ofMillis(100), 3))
+                                                                      .setParallelConsumers(PROCESSOR_CONSUMERS)
+                                                                      .setQueueMessageHandler(message -> {
+                                                                          if (CausationContext.current().isPresent()) {
+                                                                              handledWithCause.incrementAndGet();
+                                                                          }
+                                                                          handled.incrementAndGet();
+                                                                      })
+                                                                      .build());
+        try {
+            var cause      = EventId.random();
+            var before     = PgSnapshot.capture(dataSource, List.of(PostgresqlDurableQueues.DEFAULT_DURABLE_QUEUES_TABLE_NAME));
+            var startNanos = System.nanoTime();
+            CausationContext.where(cause).run(() -> {
+                for (var index = 0; index < QUEUE_MESSAGE_COUNT; index++) {
+                    durableQueues.queueMessage(queueName, Message.of(new OrderPlaced("order-" + index)));
+                }
+            });
+            Awaitility.await()
+                      .atMost(Duration.ofSeconds(300))
+                      .pollInterval(Duration.ofMillis(10))
+                      .until(() -> handled.get() >= QUEUE_MESSAGE_COUNT);
+            var elapsedMillis = (System.nanoTime() - startNanos) / 1_000_000L;
+            var after         = PgSnapshot.capture(dataSource, List.of(PostgresqlDurableQueues.DEFAULT_DURABLE_QUEUES_TABLE_NAME));
+
+            return result("queue-path", causationEnabled, repetition, elapsedMillis, QUEUE_MESSAGE_COUNT, before, after, environment,
+                          List.of(),
+                          Map.of("messagesHandledWithACause", handledWithCause.get()));
+        } finally {
+            consumer.stop();
+            durableQueues.stop();
+        }
+    }
+
     // ------------------------------------------------------------------------------------------------------- helpers
 
     private static Map<String, IntFunction<RunResult>> arms(java.util.function.Function<Boolean, IntFunction<RunResult>> measure) {
@@ -255,7 +337,7 @@ class EventCausationCostIT {
         log.info("Throughput: {}   Append latency p50: {}",
                  off.throughputPerSecond().overlaps(on.throughputPerSecond()) ? "OVERLAP (no measurable difference)" : "SEPARATED",
                  off.responseTimeP50Micros().overlaps(on.responseTimeP50Micros()) ? "OVERLAP (no measurable difference)" : "SEPARATED");
-        log.info("WAL per event: {} bytes more with causation (the cause value itself is ~40 bytes)",
+        log.info("WAL per event/message: {} bytes more with causation (the cause value is ~40 bytes; a queue message also carries its metadata key)",
                  String.format("%+.1f", on.walBytesPerOperation().median() - off.walBytesPerOperation().median()));
         log.info("=====================================================================");
     }

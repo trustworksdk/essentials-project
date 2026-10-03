@@ -314,9 +314,12 @@ the cause has to **travel with the message** and be re-bound on the consuming si
   first draft said. A later revision of this document claimed otherwise — that `Mono.fromCallable(...)` runs its
   callable on the subscribing thread, so the handler would run inside the sender's binding — and a test proved it
   wrong: `publishOn` fuses with `fromCallable` and pulls the callable onto the `boundedElastic` worker. Only `send`
-  runs the handler on the caller's thread. **How to carry it is an open question** (see *Open questions*), because
-  `reactive` depends only on `shared` and cannot see `CausationContext`. `DurableLocalCommandBus.sendAndDontWait`
-  is not affected: it goes through the queue interceptor.
+  runs the handler on the caller's thread. Because `reactive` depends only on `shared` and cannot see
+  `CausationContext`, the bus gained a small SPI, `CommandContextPropagator`: `AbstractCommandBus` calls each
+  registered propagator on the sending thread when a command is sent (including a delayed `sendAndDontWait`), and
+  runs the handler inside what they return. `foundation`'s `CausationCommandContextPropagator` captures the cause
+  there and re-binds it on the worker; since it captures at *send*, a `sendAsync` `Mono` subscribed later still
+  carries it. `DurableLocalCommandBus.sendAndDontWait` goes through the queue interceptor instead.
 - **Process boundaries (HTTP, Kafka)** carry no framework metadata, and connecting work across processes is what
   trace context is for. But one cross-process causation matters inside a single service, and the webshop's
   capture flow shows it: the webhook builds a fresh `RecordCaptureOutcome` from the HTTP body and adds it to an
@@ -457,10 +460,14 @@ Nothing breaks, so this can ship in a minor release:
 - **The cause of a join is the delivering event**, with an explicit `CausationContext.where(...)` override for a
   policy that records a different one (F3). `caused_by_event_id` stays single-valued.
 - **No cause bound means no cause written**, never an error (F3).
-- **A command carries its cause** (F4) through `send` on any bus, because the handler runs inside the sender's
-  binding, and through the durable bus's `sendAndDontWait` by the queue interceptor. The plain `LocalCommandBus`'s
-  `sendAndDontWait` and every bus's `sendAsync` run the handler on a Reactor worker and lose it; how to carry it
-  there is open. Deciders never see it; other code may read it with `CausationContext.current()`.
+- **A command carries its cause on every bus** (F4): through `send` because the handler runs inside the sender's
+  binding; through the durable bus's `sendAndDontWait` by the queue interceptor; and through `sendAsync` and the
+  plain `LocalCommandBus`'s `sendAndDontWait` — which run the handler on a Reactor worker — by a
+  `CommandContextPropagator`, a small SPI added to `reactive` for this (captured on the sending thread, restored
+  around the handler). Chosen over a JVM-global Reactor schedule hook, which would have needed no API but changed
+  every Reactor hand-off in the application. `foundation` supplies `CausationCommandContextPropagator`; the starter
+  adds it to every command-bus bean. A `LocalCommandBus` built by hand outside Spring needs it added. Deciders never
+  see the cause; other code may read it with `CausationContext.current()`.
 - **Causation is written by default** (F3), with `essentials.eventstore.causation.enabled=false` turning off both
   writers — the enricher and the queue interceptor — together.
 - **The `caused_by_event_id` index is opt-in, harness-managed and partial** (F5): off by default behind
@@ -475,19 +482,7 @@ Nothing breaks, so this can ship in a minor release:
 
 ## Open questions
 
-One open design question, found in phase 5, and two things deliberately left for evidence:
-
-0. **Carrying the cause through `LocalCommandBus.sendAndDontWait` and `sendAsync`.** Both run the handler on a
-   Reactor `boundedElastic` worker, where the sender's binding is gone, and `reactive` cannot see
-   `CausationContext`. The candidates:
-   - *A small context-propagation SPI in `reactive`*: the command bus captures a context when a command is sent
-     and restores it around the handler. Additive; `foundation` supplies the causation implementation; but every
-     `LocalCommandBus` an application builds by hand has to be given it, or it does nothing.
-   - *A Reactor schedule hook* (`Schedulers.onScheduleHook`), installed by `foundation`, that captures the cause
-     when work is scheduled and re-binds it on the worker. No API change and covers all Reactor hand-offs, but it
-     is a JVM-global side effect of a library, and it makes every Reactor task scheduled inside a binding inherit
-     the cause.
-   - *Document it*: the durable bus carries the cause; the plain bus's asynchronous methods do not.
+None blocking. Two things are deliberately left for evidence rather than decided up front:
 
 1. **Recording the cause's AggregateType** next to its id, to turn the backward walk's union into a single-table
    lookup. Only if the union lookup measures as too slow on a realistic number of AggregateTypes.
@@ -611,7 +606,24 @@ work cannot, is drift between interleaved runs that this machine's spread happen
 harness reports it as separated because it is, and the reading is recorded rather than smoothed over. WAL still
 grows by the stored value only (+39.3 and +40.5 bytes).
 
-Phase 5 adds the `durable-queues` A/B.
+**Phase 5 — the queue path**, added to the same IT and run with the other two (7 repetitions per arm): 5 000
+messages queued one per transaction with a cause bound — the shape of `Inbox.addMessageReceived` — and drained by 8
+consumers on the centralized fetcher. The enabled arm registers the `CausationDurableQueuesInterceptor`:
+
+| Arm | Messages/s, median [IQR] | WAL bytes/message |
+|---|---|---|
+| causation off | 1 595 [2] | 1 181.3 |
+| causation on | 1 587 [5] | 1 296.9 |
+
+The append path and processor chain overlapped again in the same run (+41.0 and +41.8 WAL bytes per event).
+
+Reading the queue path: WAL grows by 115.6 bytes per message, which is the metadata entry
+(`"essentials.causedByEventId":"<36-character id>"`, about 58 bytes in JSONB) written **twice** — PostgreSQL logs
+the full row when the message is inserted and again when the UPDATE that claims it for delivery rewrites it. That
+is still only the stored value. Throughput is 0.5% lower, with interquartile ranges too narrow to overlap; unlike
+the processor chain's earlier separation this one points the way the added work does (one more metadata entry
+serialized on the way in and parsed on the way out), so it is recorded as a possibly real cost of about half a
+percent rather than dismissed as drift.
 
 ### Phase 3 — The enricher and the switch (`postgresql-event-store`, starter)
 
@@ -676,8 +688,11 @@ Phase 5 adds the `durable-queues` A/B.
     handler *and* in the UnitOfWork's `beforeCommit` — this is the test that caught the interceptor-order bug.
   - Inbox, Outbox and `DurableLocalCommandBus.sendAndDontWait`: an event appended by the receiving handler
     carries the cause bound at send.
-  - `LocalCommandBus`: pending the open question.
-- **Done** on `feature/event-causation`, except the `LocalCommandBus`: `CausationDurableQueuesInterceptorTest` (8),
+  - `LocalCommandBus`: `CausationAcrossLocalCommandBusTest` — with the propagator every send method carries the
+    cause, including a delayed `sendAndDontWait` and a `sendAsync` subscribed after the binding ended; without it,
+    `sendAndDontWait` and `sendAsync` lose it (pinned, so a change to the bus's threading is noticed).
+    `CommandContextPropagatorTest` in `reactive` covers the SPI itself with a `ThreadLocal`.
+- **Done** on `feature/event-causation`: `CausationDurableQueuesInterceptorTest` (8),
   `CausationAcrossDurableQueuesIT` (Inbox, Outbox, durable command bus and the no-cause case, each on the per-queue
   consumer and the centralized fetcher; 8), a shard-owned test in `InboxOutboxOnShardOwnedIT`, and the starter
   registering the interceptor with the `DurableQueues` bean (`CausationAutoConfigurationIT`).

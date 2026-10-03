@@ -55,6 +55,7 @@ import dk.trustworks.essentials.components.foundation.postgresql.MultiTableChang
 import dk.trustworks.essentials.components.foundation.postgresql.TableChangeNotification;
 import dk.trustworks.essentials.components.foundation.postgresql.stats.*;
 import dk.trustworks.essentials.components.foundation.messaging.eip.store_and_forward.*;
+import dk.trustworks.essentials.components.foundation.causation.CausationCommandContextPropagator;
 import dk.trustworks.essentials.components.foundation.messaging.queue.CausationDurableQueuesInterceptor;
 import dk.trustworks.essentials.components.foundation.messaging.queue.DurableQueues;
 import dk.trustworks.essentials.components.foundation.messaging.queue.DurableQueuesInterceptor;
@@ -493,6 +494,25 @@ public class EventStoreConfiguration {
     @ConditionalOnProperty(prefix = "essentials.eventstore.causation", name = "enabled", havingValue = "true", matchIfMissing = true)
     public CausationDurableQueuesInterceptor causationDurableQueuesInterceptor() {
         return new CausationDurableQueuesInterceptor();
+    }
+
+    /**
+     * Carries the cause from the sending thread to the Reactor worker that runs the handler for
+     * {@link CommandBus#sendAsync(Object)} and {@link LocalCommandBus#sendAndDontWait(Object)} - see
+     * {@link CausationCommandContextPropagator}. Added to every command bus bean in the context, including a
+     * {@link LocalCommandBus} the application declares itself.<br>
+     * Governed by {@code essentials.eventstore.causation.enabled}, like the enricher and the queue interceptor.
+     *
+     * @param commandBuses every command bus bean
+     * @return the {@link CausationCommandContextPropagator}
+     */
+    @Bean
+    @ConditionalOnMissingBean
+    @ConditionalOnProperty(prefix = "essentials.eventstore.causation", name = "enabled", havingValue = "true", matchIfMissing = true)
+    public CausationCommandContextPropagator causationCommandContextPropagator(List<AbstractCommandBus> commandBuses) {
+        var propagator = new CausationCommandContextPropagator();
+        commandBuses.forEach(commandBus -> commandBus.addContextPropagator(propagator));
+        return propagator;
     }
 
     @Bean

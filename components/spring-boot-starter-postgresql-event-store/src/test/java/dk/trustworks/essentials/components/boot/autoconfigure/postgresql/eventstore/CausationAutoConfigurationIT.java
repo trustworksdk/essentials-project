@@ -24,7 +24,8 @@ import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.pe
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.serializer.AggregateIdSerializer;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.transaction.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.types.EventTypeOrName;
-import dk.trustworks.essentials.components.foundation.causation.CausationContext;
+import dk.trustworks.essentials.components.foundation.causation.*;
+import dk.trustworks.essentials.components.foundation.reactive.command.DurableLocalCommandBus;
 import dk.trustworks.essentials.components.foundation.messaging.queue.*;
 import dk.trustworks.essentials.components.foundation.types.EventId;
 import dk.trustworks.essentials.shared.security.EssentialsSecurityProvider;
@@ -77,6 +78,7 @@ class CausationAutoConfigurationIT {
         contextRunner.run(ctx -> {
             assertThat(ctx).hasSingleBean(CausationPersistableEventEnricher.class);
             assertThat(ctx).hasSingleBean(CausationDurableQueuesInterceptor.class);
+            assertThat(ctx.getBean(DurableLocalCommandBus.class).getContextPropagators()).hasAtLeastOneElementOfType(CausationCommandContextPropagator.class);
             assertThat(ctx.getBean(dk.trustworks.essentials.components.queue.postgresql.PostgresqlDurableQueues.class).getInterceptors()).hasAtLeastOneElementOfType(CausationDurableQueuesInterceptor.class);
             assertThat(ctx.getBean(EssentialsEventStoreProperties.class).getCausation().isEnabled()).isTrue();
 
@@ -95,6 +97,7 @@ class CausationAutoConfigurationIT {
                      .run(ctx -> {
                          assertThat(ctx).doesNotHaveBean(CausationPersistableEventEnricher.class);
                          assertThat(ctx).doesNotHaveBean(CausationDurableQueuesInterceptor.class);
+                         assertThat(ctx.getBean(DurableLocalCommandBus.class).getContextPropagators()).isEmpty();
 
                          assertThat(appendWith(ctx, Optional.of(CAUSE))).isEmpty();
                      });
