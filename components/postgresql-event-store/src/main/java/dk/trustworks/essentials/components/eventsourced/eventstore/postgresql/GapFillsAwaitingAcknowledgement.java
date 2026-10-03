@@ -31,8 +31,13 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 import static dk.trustworks.essentials.shared.MessageFormatter.msg;
 
 /**
- * The gap fills one polling subscription of {@link PostgresqlEventStore} handed on and its subscriber has not
- * acknowledged yet (see {@link SubscriberAcknowledgement}) - and the resolution of their gaps once it does.
+ * <b>Internal - not part of the public API</b>, and may change in any release: public only so the CDC event store in
+ * another package can share it.
+ * <p>
+ * The gap fills one subscription handed on and its subscriber has not acknowledged yet (see
+ * {@link SubscriberAcknowledgement}) - and the resolution of their gaps once it does. Used by every polling subscription
+ * of {@link PostgresqlEventStore} that is acknowledged, and by the delivery gate of every subscription of the CDC event
+ * store - one protocol, so a fix to it applies to both.
  * <p>
  * A poll registers a gap fill here <b>before</b> it hands it on (a synchronous subscriber acknowledges inside the hand-on),
  * leaves its gap out of every reconciliation while it is here, and does not hand it on again when a later poll reads it
@@ -49,7 +54,7 @@ import static dk.trustworks.essentials.shared.MessageFormatter.msg;
  * the monitor never waits for a row the other one holds: the acknowledgement deletes only the gaps of fills that are
  * still here, which the poll neither resolves nor promotes.
  */
-final class GapFillsAwaitingAcknowledgement implements UnitOfWorkLifecycleCallback<GapFillsAwaitingAcknowledgement.Resolution> {
+public final class GapFillsAwaitingAcknowledgement implements UnitOfWorkLifecycleCallback<GapFillsAwaitingAcknowledgement.Resolution> {
     private static final Logger log = LoggerFactory.getLogger(GapFillsAwaitingAcknowledgement.class);
 
     private final SubscriptionGapHandler                         gapHandler;
@@ -68,11 +73,11 @@ final class GapFillsAwaitingAcknowledgement implements UnitOfWorkLifecycleCallba
     record Resolution(List<PersistedEvent> gapFills, GapReconciliation outcome) {
     }
 
-    GapFillsAwaitingAcknowledgement(SubscriptionGapHandler gapHandler,
-                                    AggregateType aggregateType,
-                                    EventStoreUnitOfWorkFactory<? extends EventStoreUnitOfWork> unitOfWorkFactory,
-                                    EventStoreSubscriptionObserver eventStoreSubscriptionObserver,
-                                    String eventStreamLogName) {
+    public GapFillsAwaitingAcknowledgement(SubscriptionGapHandler gapHandler,
+                                           AggregateType aggregateType,
+                                           EventStoreUnitOfWorkFactory<? extends EventStoreUnitOfWork> unitOfWorkFactory,
+                                           EventStoreSubscriptionObserver eventStoreSubscriptionObserver,
+                                           String eventStreamLogName) {
         this.gapHandler = requireNonNull(gapHandler, "No gapHandler provided");
         this.aggregateType = requireNonNull(aggregateType, "No aggregateType provided");
         this.unitOfWorkFactory = requireNonNull(unitOfWorkFactory, "No unitOfWorkFactory provided");
@@ -84,7 +89,7 @@ final class GapFillsAwaitingAcknowledgement implements UnitOfWorkLifecycleCallba
      * @return true if {@code event} was handed on and is not acknowledged yet - a poll that reads it again must not hand
      * it on again, nor resolve its gap
      */
-    boolean isAwaiting(PersistedEvent event) {
+    public boolean isAwaiting(PersistedEvent event) {
         return !awaiting.isEmpty() && awaiting.containsKey(event.globalEventOrder().longValue());
     }
 
@@ -92,14 +97,35 @@ final class GapFillsAwaitingAcknowledgement implements UnitOfWorkLifecycleCallba
      * @return the gap fills handed on and not acknowledged yet - given to every reconciliation along with the events a
      * poll loaded, so the gap handler never promotes their gaps (it does not promote a gap whose event it is given)
      */
-    Collection<PersistedEvent> awaitingEvents() {
+    public Collection<PersistedEvent> awaitingEvents() {
         return awaiting.isEmpty() ? List.of() : List.copyOf(awaiting.values());
+    }
+
+    /**
+     * @return {@code events}, plus the gap fills awaiting acknowledgement that are not among them - for a reconciliation,
+     * so it does not promote their gaps (see {@link #awaitingEvents()}). They lie below the reconciled range, so they are
+     * no new gaps either
+     */
+    public List<PersistedEvent> withAwaitingEvents(List<PersistedEvent> events) {
+        requireNonNull(events, "No events provided");
+        if (awaiting.isEmpty()) {
+            return events;
+        }
+        var given  = new HashSet<Long>();
+        events.forEach(event -> given.add(event.globalEventOrder().longValue()));
+        var result = new ArrayList<>(events);
+        awaiting.forEach((globalOrder, gapFill) -> {
+            if (!given.contains(globalOrder)) {
+                result.add(gapFill);
+            }
+        });
+        return result;
     }
 
     /**
      * Called by the poll right before it hands {@code gapFills} on
      */
-    void awaitAcknowledgement(List<PersistedEvent> gapFills) {
+    public void awaitAcknowledgement(List<PersistedEvent> gapFills) {
         gapFills.forEach(gapFill -> awaiting.put(gapFill.globalEventOrder().longValue(), gapFill));
     }
 
@@ -109,7 +135,7 @@ final class GapFillsAwaitingAcknowledgement implements UnitOfWorkLifecycleCallba
      *
      * @throws RuntimeException a failure to resolve them inside the caller's unit of work - the gaps stay open
      */
-    void acknowledged(List<PersistedEvent> events) {
+    public void acknowledged(List<PersistedEvent> events) {
         if (awaiting.isEmpty()) {
             return;
         }

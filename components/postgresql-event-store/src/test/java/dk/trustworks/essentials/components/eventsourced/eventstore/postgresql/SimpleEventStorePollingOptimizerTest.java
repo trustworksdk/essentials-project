@@ -23,6 +23,13 @@ import static org.assertj.core.api.Assertions.*;
 public class SimpleEventStorePollingOptimizerTest {
 
     @Test
+    void optimizersOtherThanTheNotifyAwareOneDoNotOptOutOfWaitingAfterAnEmptyPoll() {
+        assertThat(EventStorePollingOptimizer.None().mayRepollImmediatelyAfterAnEmptyPoll()).isFalse();
+        assertThat(new SimpleEventStorePollingOptimizer("test", 100, 40, 150).mayRepollImmediatelyAfterAnEmptyPoll()).isFalse();
+        assertThat(new JitteredEventStorePollingOptimizer("test", 100, 40, 150, 0.1).mayRepollImmediatelyAfterAnEmptyPoll()).isFalse();
+    }
+
+    @Test
     void increasesDelayAndCapsAtMax() {
         var optimizer = new SimpleEventStorePollingOptimizer("test", 100, 40, 150);
 

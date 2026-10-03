@@ -25,6 +25,7 @@ import org.junit.jupiter.api.Test;
 
 import java.time.OffsetDateTime;
 import java.util.*;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.stream.*;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -84,6 +85,33 @@ class DefaultSelectionStrategyTest {
         assertThat(mine.resolveTransientGaps(ORDERS, LongRange.from(1), gaps(LongStream.rangeClosed(1, 500))))
                 .hasSize(TransientGapsQuerySelection.MAX_GAPS_PER_QUERY + 1)
                 .contains(GlobalEventOrder.of(250));
+    }
+
+    /**
+     * Asked by the gap handler, a default selection rotates with the asking subscription's rotation - also when it is
+     * wrapped by, or called from, a custom strategy, which is not told which subscription asks
+     */
+    @Test
+    void wrapped_in_a_custom_strategy_it_still_rotates_per_subscription_when_the_gap_handler_asks() {
+        var defaultSelection = ResolveTransientGapsToIncludeInQueryStrategy.defaultSelection();
+        ResolveTransientGapsToIncludeInQueryStrategy wrapping = (type, range, gaps) -> defaultSelection.resolveTransientGaps(type, range, gaps);
+        var all                = gaps(LongStream.rangeClosed(1, 500));
+        var firstSubscription  = new ConcurrentHashMap<AggregateType, TransientGapsQuerySelection>();
+        var secondSubscription = new ConcurrentHashMap<AggregateType, TransientGapsQuerySelection>();
+        var firstReference     = new TransientGapsQuerySelection();
+        var secondReference    = new TransientGapsQuerySelection();
+
+        for (var poll = 0; poll < 5; poll++) {
+            // The second subscription polls twice as often: shared, the rotation would advance for both
+            assertThat(PostgresqlEventStreamGapHandler.withRotationsOf(firstSubscription, () -> wrapping.resolveTransientGaps(ORDERS, LongRange.from(1), all)))
+                    .isEqualTo(firstReference.select(all));
+            assertThat(PostgresqlEventStreamGapHandler.withRotationsOf(secondSubscription, () -> wrapping.resolveTransientGaps(ORDERS, LongRange.from(1), all)))
+                    .isEqualTo(secondReference.select(all));
+            assertThat(PostgresqlEventStreamGapHandler.withRotationsOf(secondSubscription, () -> wrapping.resolveTransientGaps(ORDERS, LongRange.from(1), all)))
+                    .isEqualTo(secondReference.select(all));
+        }
+        // ... and called directly, the instance rotates with its own, untouched by the subscriptions
+        assertThat(wrapping.resolveTransientGaps(ORDERS, LongRange.from(1), all)).isEqualTo(new TransientGapsQuerySelection().select(all));
     }
 
     private static List<Pair<GlobalEventOrder, OffsetDateTime>> gaps(LongStream orders) {

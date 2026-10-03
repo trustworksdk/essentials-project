@@ -18,7 +18,7 @@ package dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.c
 
 import dk.trustworks.essentials.components.distributed.fencedlock.postgresql.PostgresqlFencedLockManager;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.*;
-import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.PersistedEvent;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.gap.PostgresqlEventStreamGapHandler;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.persistence.table_per_aggregate_type.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.processor.EventProcessorIT;
@@ -28,12 +28,13 @@ import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.te
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.types.*;
 import dk.trustworks.essentials.components.foundation.transaction.UnitOfWork;
 import dk.trustworks.essentials.components.foundation.types.SubscriberId;
+import dk.trustworks.essentials.shared.functional.tuple.Pair;
 import dk.trustworks.essentials.types.LongRange;
 import org.junit.jupiter.api.*;
 import reactor.core.Disposable;
 
 import java.io.*;
-import java.time.Duration;
+import java.time.*;
 import java.util.*;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.*;
@@ -78,6 +79,18 @@ class CdcEventStoreGapFillAcknowledgementIT extends AbstractLogicalReplicationPo
 
     @BeforeEach
     void setup() {
+        setup(new PostgresqlEventStreamGapHandler<>(unitOfWorkFactory));
+        heldTransactions = Executors.newCachedThreadPool(runnable -> new Thread(runnable, "test-held-transaction"));
+    }
+
+    /**
+     * The event store, the CDC event store over it and the bus, all with {@code gapHandler} - called again by a test that
+     * needs another gap handler, before it subscribes
+     */
+    private void setup(PostgresqlEventStreamGapHandler<SeparateTablePerAggregateEventStreamConfiguration> gapHandler) {
+        if (bystander != null) {
+            bystander.dispose();
+        }
         var persistenceStrategy = new SeparateTablePerAggregateTypePersistenceStrategy(
                 jdbi,
                 unitOfWorkFactory,
@@ -85,7 +98,6 @@ class CdcEventStoreGapFillAcknowledgementIT extends AbstractLogicalReplicationPo
                 SeparateTablePerAggregateTypeEventStreamConfigurationFactory.defaultConfiguration(EssentialsJSONEventSerializers.create())
         );
         persistenceStrategy.addAggregateEventStreamConfiguration(ORDERS, OrderId.class);
-        var gapHandler = new PostgresqlEventStreamGapHandler<SeparateTablePerAggregateEventStreamConfiguration>(unitOfWorkFactory);
         eventStore = PostgresqlEventStore.<SeparateTablePerAggregateEventStreamConfiguration>builder()
                                          .setUnitOfWorkFactory(unitOfWorkFactory)
                                          .setPersistenceStrategy(persistenceStrategy)
@@ -104,7 +116,6 @@ class CdcEventStoreGapFillAcknowledgementIT extends AbstractLogicalReplicationPo
                                             availability);
         durableSubscriptionRepository = new PostgresqlDurableSubscriptionRepository(jdbi, cdcEventStore);
         bystander = cdcBus.fluxForAggregate(ORDERS).subscribe();
-        heldTransactions = Executors.newCachedThreadPool(runnable -> new Thread(runnable, "test-held-transaction"));
     }
 
     @AfterEach
@@ -342,7 +353,78 @@ class CdcEventStoreGapFillAcknowledgementIT extends AbstractLogicalReplicationPo
         assertThat(transientGapsOf(subscriberId)).isEmpty();
     }
 
+    /**
+     * On the polling leg (CDC INACTIVE throughout), the delivery tracker gives a gap up once it is older than the gap
+     * handler's threshold, and records that with the gap handler: the gap is promoted, so a restarted subscription does
+     * not wait for it either. The event for it that commits late is then dropped by both - the running subscription
+     * drops the delegate poll's copy (and acknowledges it to the poll, which handed it on as a gap fill), and the
+     * restarted one no longer asks for it. Before, the gap stayed transient, and only a restart delivered the event.
+     * <p>
+     * The promotion strategy states a threshold of 1 second - what the tracker waits - but never promotes on its own, so
+     * the gap is promoted by the give-up and by nothing else: no poll can promote it first, and the test does not
+     * depend on which of them gets there first.
+     */
+    @Test
+    void a_gap_given_up_on_the_polling_leg_is_promoted_and_its_late_event_is_delivered_neither_by_the_subscription_nor_after_a_restart() throws Exception {
+        setup(new PostgresqlEventStreamGapHandler<>(unitOfWorkFactory,
+                                                    Duration.ofSeconds(60),
+                                                    PostgresqlEventStreamGapHandler.ResolveTransientGapsToIncludeInQueryStrategy.defaultSelection(),
+                                                    new PostgresqlEventStreamGapHandler.ResolveTransientGapsToPermanentGapsPromotionStrategy() {
+                                                        @Override
+                                                        public Optional<Duration> permanentGapThreshold() {
+                                                            return Optional.of(Duration.ofSeconds(1));
+                                                        }
+
+                                                        @Override
+                                                        public List<GlobalEventOrder> resolveTransientGapsReadyToBePromotedToPermanentGaps(AggregateType forAggregateType,
+                                                                                                                                         List<Pair<GlobalEventOrder, OffsetDateTime>> allTransientGaps) {
+                                                            return List.of();
+                                                        }
+                                                    }));
+        var subscriberId = SubscriberId.of("cdc-polled-given-up-gap");
+        var manager      = startManager(10);
+        var handled      = new CopyOnWriteArrayList<Long>();
+        var subscription = manager.subscribeToAggregateEventsAsynchronously(subscriberId,
+                                                                            ORDERS,
+                                                                            GlobalEventOrder.FIRST_GLOBAL_EVENT_ORDER,
+                                                                            Optional.empty(),
+                                                                            (PersistedEventHandler) event -> handled.add(event.globalEventOrder().longValue()));
+        appendAndCommit();
+        await().atMost(Duration.ofSeconds(10)).until(() -> handled.size() == 1);
+
+        var a = holdAppend();
+        var b = appendAndCommit();
+        await().atMost(Duration.ofSeconds(10)).until(() -> handled.contains(b));
+        await().atMost(Duration.ofSeconds(10)).until(() -> transientGapsOf(subscriberId).equals(List.of(GlobalEventOrder.of(a.globalOrder()))));
+
+        // Older than the tracker waits for: the next event it delivers gives the gap up
+        await().pollDelay(Duration.ofMillis(1_500)).atMost(Duration.ofSeconds(5)).until(() -> true);
+        var c = appendAndCommit();
+        await().atMost(Duration.ofSeconds(10)).until(() -> handled.contains(c));
+        await().atMost(Duration.ofSeconds(10)).until(() -> transientGapsOf(subscriberId).isEmpty());
+        assertThat(permanentGaps()).contains(GlobalEventOrder.of(a.globalOrder()));
+
+        // The delegate's poll still asks for the gap - its gap handler has it cached - and loads the event now
+        a.commit();
+        await().pollDelay(Duration.ofSeconds(1)).atMost(Duration.ofSeconds(5)).until(() -> true);
+        assertThat(handled).doesNotContain(a.globalOrder());
+
+        subscription.stop();
+        subscription.start();
+        var d = appendAndCommit();
+        await().atMost(Duration.ofSeconds(20)).until(() -> handled.contains(d));
+        await().pollDelay(Duration.ofMillis(500)).atMost(Duration.ofSeconds(5)).until(() -> true);
+        assertThat(handled).doesNotContain(a.globalOrder())
+                           .doesNotHaveDuplicates();
+        assertThat(transientGapsOf(subscriberId)).isEmpty();
+        assertThat(availability.isActive()).isFalse();
+    }
+
     // ------------------------------------------------------------------------------------------------------------
+
+    private List<GlobalEventOrder> permanentGaps() {
+        return unitOfWorkFactory.withUnitOfWork(() -> eventStore.getEventStreamGapHandler().getPermanentGapsFor(ORDERS).toList());
+    }
 
     private static List<Long> globalOrdersOf(List<PersistedEvent> events) {
         return events.stream().map(event -> event.globalEventOrder().longValue()).toList();

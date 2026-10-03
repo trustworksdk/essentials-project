@@ -20,10 +20,12 @@ import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.ev
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.gap.SubscriptionGapHandler;
 import dk.trustworks.essentials.components.foundation.types.*;
 import reactor.core.Disposable;
+import org.slf4j.*;
 import reactor.core.publisher.Flux;
 
 import java.util.*;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Consumer;
 
 import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
@@ -73,7 +75,9 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
  * @see SubscriptionGapHandler#resolveFilledGaps(AggregateType, List)
  */
 public final class SubscriberAcknowledgement {
+    private static final Logger                        log      = LoggerFactory.getLogger(SubscriberAcknowledgement.class);
     private final List<Consumer<List<PersistedEvent>>> listeners = new CopyOnWriteArrayList<>();
+    private final AtomicBoolean                        warnedAboutSecondRegistration = new AtomicBoolean();
     private volatile boolean                           honoured;
 
     private SubscriberAcknowledgement() {
@@ -141,6 +145,12 @@ public final class SubscriberAcknowledgement {
      */
     public Disposable onAcknowledge(Consumer<List<PersistedEvent>> listener) {
         requireNonNull(listener, "No listener provided");
+        if (honoured && warnedAboutSecondRegistration.compareAndSet(false, true)) {
+            log.warn("A second event store subscription registered with {} - one SubscriberAcknowledgement serves ONE subscription, so every "
+                     + "acknowledgement is now passed to all of them and resolves gaps the other subscription's events never filled. Create a new "
+                     + "SubscriberAcknowledgement for every subscription",
+                     this);
+        }
         listeners.add(listener);
         honoured = true;
         return () -> listeners.remove(listener);

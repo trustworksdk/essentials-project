@@ -572,14 +572,12 @@ public class ViewEventProcessorIT {
         testProcessor.setResetCallback(resetPoints -> {
             Awaitility.waitAtMost(Duration.ofSeconds(2)).untilAsserted(() -> {
                 var currentEventOrder = eventStoreSubscriptionManager.getCurrentEventOrder(subscriberId, TEST_ORDERS);
-                System.out.println("After resetting: Current event order: " + currentEventOrder.get());
                 assertThat(currentEventOrder)
                         .hasValueSatisfying(order ->
                                                     assertThat(order.longValue()).isEqualTo(1)
                                            )
                         .describedAs("After resetting: Current event order");
                 var currentResumePoint = durableSubscriptionRepository.getResumePoint(subscriberId, TEST_ORDERS);
-                System.out.println("After resetting: Current resume point: " + currentEventOrder.get());
                 assertThat(currentResumePoint)
                         .hasValueSatisfying(resumePoint -> assertThat(resumePoint.getResumeFromAndIncluding().longValue()).isEqualTo(1))
                         .describedAs("After resetting: Current resume point");
@@ -590,14 +588,12 @@ public class ViewEventProcessorIT {
         // Check subscriptions catchup again
         Awaitility.waitAtMost(Duration.ofSeconds(3)).untilAsserted(() -> {
             var currentEventOrder = eventStoreSubscriptionManager.getCurrentEventOrder(subscriberId, TEST_ORDERS);
-            System.out.println("After resetting: Current event order: " + currentEventOrder.get());
             assertThat(currentEventOrder)
                     .hasValueSatisfying(order ->
                                                 assertThat(order.longValue()).isEqualTo(11)
                                        )
                     .describedAs("After resetting: Current event order");
             var currentResumePoint = durableSubscriptionRepository.getResumePoint(subscriberId, TEST_ORDERS);
-            System.out.println("After resetting: Current resume point: " + currentEventOrder.get());
             assertThat(currentResumePoint)
                     .hasValueSatisfying(resumePoint -> assertThat(resumePoint.getResumeFromAndIncluding().longValue()).isEqualTo(11))
                     .describedAs("After resetting: Current resume point");
@@ -744,7 +740,6 @@ public class ViewEventProcessorIT {
 
         @CmdHandler
         public void handle(EventProcessorIT.FailingCommandSentUsingAsyncAndDontWaitViaCommandBus cmd) {
-            System.out.println("*** Handling FailingCommand: " + cmd.reason);
             throw new RuntimeException(cmd.reason);
         }
 
@@ -752,7 +747,6 @@ public class ViewEventProcessorIT {
 
         @MessageHandler
         public void handle(EventProcessorIT.FailingCommandSentViaInbox cmd) {
-            System.out.println("*** Handling FailingCommand: " + cmd.reason);
             throw new RuntimeException(cmd.reason);
         }
 

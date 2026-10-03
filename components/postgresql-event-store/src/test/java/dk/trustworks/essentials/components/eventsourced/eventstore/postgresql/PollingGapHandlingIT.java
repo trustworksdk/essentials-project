@@ -18,6 +18,8 @@ package dk.trustworks.essentials.components.eventsourced.eventstore.postgresql;
 
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.gap.PostgresqlEventStreamGapHandler;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.gap.PostgresqlEventStreamGapHandler.ResolveTransientGapsToPermanentGapsPromotionStrategy;
+import dk.trustworks.essentials.shared.functional.tuple.Pair;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.observability.EventStoreSubscriptionObserver;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.persistence.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.persistence.table_per_aggregate_type.*;
@@ -107,6 +109,10 @@ class PollingGapHandlingIT {
      * The number of polls, empty or not - see {@link EventStoreSubscriptionObserver#resolvedBatchSizeForEventStorePoll}
      */
     private final AtomicInteger                                                     polls      = new AtomicInteger();
+    /**
+     * What the gap handler promotes transient gaps with; read on every promotion, so a test can swap it after setup
+     */
+    private volatile ResolveTransientGapsToPermanentGapsPromotionStrategy           promotionStrategy;
 
     @BeforeEach
     void setup() {
@@ -133,7 +139,20 @@ class PollingGapHandlingIT {
                                          .setUnitOfWorkFactory(unitOfWorkFactory)
                                          .setPersistenceStrategy(persistenceStrategy)
                                          // The default configuration - it is the default gap query strategy under test
-                                         .setEventStreamGapHandlerFactory(store -> new PostgresqlEventStreamGapHandler<>(unitOfWorkFactory))
+                                         .setEventStreamGapHandlerFactory(store -> new PostgresqlEventStreamGapHandler<>(unitOfWorkFactory,
+                                                                                                                         Duration.ofSeconds(60),
+                                                                                                                         PostgresqlEventStreamGapHandler.ResolveTransientGapsToIncludeInQueryStrategy.defaultSelection(),
+                                                                                                                         new ResolveTransientGapsToPermanentGapsPromotionStrategy() {
+                                                                                                                             @Override
+                                                                                                                             public Optional<Duration> permanentGapThreshold() {
+                                                                                                                                 return promotionStrategy.permanentGapThreshold();
+                                                                                                                             }
+
+                                                                                                                             @Override
+                                                                                                                             public List<GlobalEventOrder> resolveTransientGapsReadyToBePromotedToPermanentGaps(AggregateType forAggregateType, List<Pair<GlobalEventOrder, OffsetDateTime>> allTransientGaps) {
+                                                                                                                                 return promotionStrategy.resolveTransientGapsReadyToBePromotedToPermanentGaps(forAggregateType, allTransientGaps);
+                                                                                                                             }
+                                                                                                                         }))
                                          .setEventStoreSubscriptionObserver(new EventStoreSubscriptionObserver.NoOpEventStoreSubscriptionObserver() {
                                              @Override
                                              public void publishEvent(SubscriberId subscriberId, AggregateType aggregateType, PersistedEvent persistedEvent, Duration publishEventDuration) {
@@ -156,6 +175,7 @@ class PollingGapHandlingIT {
         published.clear();
         reconciled.clear();
         polls.set(0);
+        promotionStrategy = ResolveTransientGapsToPermanentGapsPromotionStrategy.thresholdBased(120);
         subscriptionManager = null;
     }
 
@@ -600,6 +620,64 @@ class PollingGapHandlingIT {
         });
         Awaitility.waitAtMost(Duration.ofSeconds(10)).untilAsserted(() -> assertThat(globalOrdersOf(restarted)).containsExactly(lateCommit.globalOrder));
         Awaitility.waitAtMost(Duration.ofSeconds(10)).untilAsserted(() -> assertThat(transientGapsOf(subscriberId)).isEmpty());
+    }
+
+    /**
+     * An acknowledgement held open - the subscriber's unit of work has not committed yet - must not stall the poll: it
+     * keeps delivering new events and promoting expired holes while the fill's gap deletion is uncommitted, and the
+     * fill's gap is gone once the unit of work commits (see {@link GapFillsAwaitingAcknowledgement}).
+     */
+    @ParameterizedTest
+    @EnumSource(PollingMode.class)
+    void an_acknowledgement_held_open_does_not_stall_the_poll_and_resolves_the_gap_once_it_commits(PollingMode pollingMode) throws Exception {
+        promotionStrategy = ResolveTransientGapsToPermanentGapsPromotionStrategy.thresholdBased(1);
+        var subscriberId    = SubscriberId.of("held-acknowledgement-" + pollingMode);
+        var acknowledgement = SubscriberAcknowledgement.create();
+        var received        = new CopyOnWriteArrayList<PersistedEvent>();
+
+        // Order 1 is a late commit, order 3 a rolled-back hole that is discovered once the marker (4) is delivered
+        var lateCommit = appendAndHoldOpen();
+        var committed  = appendCommitted();
+        appendRolledBack();
+        var marker     = appendCommitted();
+        var hole       = marker - 1;
+        subscription = poll(pollingMode, subscriberId, GlobalEventOrder.FIRST_GLOBAL_EVENT_ORDER.longValue(), acknowledgement).subscribe(received::add);
+        Awaitility.waitAtMost(Duration.ofSeconds(10)).untilAsserted(() -> assertThat(globalOrdersOf(received)).containsExactly(committed, marker));
+        Awaitility.waitAtMost(Duration.ofSeconds(10)).untilAsserted(() -> assertThat(transientGapsOf(subscriberId)).contains(GlobalEventOrder.of(lateCommit.globalOrder), GlobalEventOrder.of(hole)));
+
+        lateCommit.commit();
+        Awaitility.waitAtMost(Duration.ofSeconds(10)).untilAsserted(() -> assertThat(globalOrdersOf(received)).contains(lateCommit.globalOrder));
+        var gapFill = received.stream().filter(event -> event.globalEventOrder().longValue() == lateCommit.globalOrder).findFirst().orElseThrow();
+
+        // Acknowledge the fill in a unit of work on this thread and leave it open
+        var held = unitOfWorkFactory.getOrCreateNewUnitOfWork();
+        acknowledgement.acknowledge(gapFill);
+
+        // While it is held: new gaps open and the older hole expires - the poll must go on (the appends run on another thread, this one's unit of work is open)
+        var newCommitted = executor.submit(() -> {
+            appendRolledBack();
+            return appendCommitted();
+        }).get(10, TimeUnit.SECONDS);
+        Awaitility.waitAtMost(Duration.ofSeconds(10)).untilAsserted(() -> assertThat(globalOrdersOf(received)).contains(newCommitted));
+        Awaitility.waitAtMost(Duration.ofSeconds(10)).untilAsserted(() -> assertThat(permanentGaps()).contains(GlobalEventOrder.of(hole)));
+        assertThat(permanentGaps()).doesNotContain(GlobalEventOrder.of(lateCommit.globalOrder));
+
+        held.commit();
+        assertThat(transientGapsOf(subscriberId)).doesNotContain(GlobalEventOrder.of(lateCommit.globalOrder));
+        assertThat(permanentGaps()).doesNotContain(GlobalEventOrder.of(lateCommit.globalOrder));
+        var secondMarker = appendCommitted();
+        Awaitility.waitAtMost(Duration.ofSeconds(10)).untilAsserted(() -> assertThat(globalOrdersOf(received)).contains(secondMarker));
+        assertThat(globalOrdersOf(received)).doesNotHaveDuplicates();
+    }
+
+    /**
+     * The permanent gaps, read on another thread - this one may have a unit of work open
+     */
+    private List<GlobalEventOrder> permanentGaps() throws Exception {
+        return executor.submit(() -> unitOfWorkFactory.withUnitOfWork(unitOfWork -> eventStore.getEventStreamGapHandler()
+                                                                                              .getPermanentGapsFor(aggregateType)
+                                                                                              .toList()))
+                       .get(10, TimeUnit.SECONDS);
     }
 
     // -------------------------------------------------------------------------------------------------------------------------------------------------

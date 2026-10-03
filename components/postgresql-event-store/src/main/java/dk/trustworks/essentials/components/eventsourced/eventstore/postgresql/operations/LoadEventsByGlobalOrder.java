@@ -129,9 +129,6 @@ public final class LoadEventsByGlobalOrder {
     }
 
     /**
-     * @param onlyIncludeEventIfItBelongsToTenant if non-null then only include events that belong to the specified {@link Tenant}, otherwise all Events matching the criteria are returned
-     */
-    /**
      * When present, <b>every</b> tenant's events are loaded (as long as {@link #getOnlyIncludeEventIfItBelongsToTenant()} is empty),
      * but only the events belonging to this tenant - or to no tenant at all - carry their payload and metadata. The events of other
      * tenants are returned with an empty JSON payload and metadata and are only fit for telling that their global order exists
@@ -154,6 +151,9 @@ public final class LoadEventsByGlobalOrder {
         return this;
     }
 
+    /**
+     * @param onlyIncludeEventIfItBelongsToTenant if non-null then only include events that belong to the specified {@link Tenant}, otherwise all Events matching the criteria are returned
+     */
     public LoadEventsByGlobalOrder setOnlyIncludeEventIfItBelongsToTenant(Tenant onlyIncludeEventIfItBelongsToTenant) {
         this.onlyIncludeEventIfItBelongsToTenant = onlyIncludeEventIfItBelongsToTenant;
         return this;

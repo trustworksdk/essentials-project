@@ -24,6 +24,7 @@ import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.ob
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.operations.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.persistence.AggregateEventStreamConfiguration;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.serializer.AggregateIdSerializer;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.serializer.TenantSerializer;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.transaction.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.types.GlobalEventOrder;
 import dk.trustworks.essentials.components.foundation.transaction.*;
@@ -330,6 +331,7 @@ public class CdcEventStore<CONFIG extends AggregateEventStreamConfiguration> imp
                                                       pollingInterval,
                                                       subscriptionId,
                                                       eventStorePollingOptimizerFactory),
+                              aggregateType,
                               deliveryGate,
                               onlyIncludeEventIfItBelongsToTenant,
                               acknowledgement);
@@ -371,16 +373,18 @@ public class CdcEventStore<CONFIG extends AggregateEventStreamConfiguration> imp
      * </ul>
      */
     private Flux<PersistedEvent> handOn(Flux<PersistedEvent> source,
+                                        AggregateType aggregateType,
                                         DeliveryGate deliveryGate,
                                         Optional<Tenant> onlyIncludeEventIfItBelongsToTenant,
                                         Optional<SubscriberAcknowledgement> acknowledgement) {
         if (acknowledgement.isEmpty()) {
-            return filterByTenant(reportingHandedOn(source, deliveryGate), onlyIncludeEventIfItBelongsToTenant);
+            return filterByTenant(reportingHandedOn(source, deliveryGate), aggregateType, onlyIncludeEventIfItBelongsToTenant);
         }
+        var belongsToTenant = belongsToTenant(aggregateType, onlyIncludeEventIfItBelongsToTenant);
         var toTheSubscriber = onlyIncludeEventIfItBelongsToTenant.isEmpty()
                               ? source
                               : source.filter(event -> {
-                                  if (eventBelongsToTenant(event, onlyIncludeEventIfItBelongsToTenant)) {
+                                  if (belongsToTenant.test(event)) {
                                       return true;
                                   }
                                   deliveryGate.acknowledged(List.of(event));
@@ -509,7 +513,7 @@ public class CdcEventStore<CONFIG extends AggregateEventStreamConfiguration> imp
 
         // BackfillThenLiveOrdered records an event as it emits it - possibly into its ordered live buffer - so a gap
         // fill's gap is resolved only once the subscriber is done with it, as it leaves the ordered output (see handOn)
-        return handOn(ordered, deliveryGate, onlyIncludeEventIfItBelongsToTenant, acknowledgement);
+        return handOn(ordered, aggregateType, deliveryGate, onlyIncludeEventIfItBelongsToTenant, acknowledgement);
     }
 
     /**
@@ -695,7 +699,7 @@ public class CdcEventStore<CONFIG extends AggregateEventStreamConfiguration> imp
                                   // BackfillThenLiveOrdered records delivery itself, as it emits - here it only drops
                                   // what it already delivered
                                   .filter(forBackfillThenLiveOrdered
-                                          ? event -> !tracker.isDelivered(event.globalEventOrder().longValue())
+                                          ? deliveryGate::isNotDeliveredYet
                                           : deliveryGate::deliver),
                                   // No tenant gate here: the caller filters by tenant after the gate (see handOn), as the
                                   // tracker has to see every global order
@@ -864,14 +868,20 @@ public class CdcEventStore<CONFIG extends AggregateEventStreamConfiguration> imp
      *     open gaps, is handed it again. That covers a fill waiting for a batch, an I/O retry, or demand.</li>
      *     <li>for any other subscriber: once the downstream took it ({@link #handedOn}, via {@link #reportingHandedOn}).</li>
      * </ul>
-     * A fill whose subscription is cancelled before it is done with keeps its gap, and the next subscription waits for it
-     * again. Back-fill and catch-up pages leave the gaps they fill open for the same reason - every event they load passes
-     * through the gate - and, like every reconciliation here, are given the fills still awaiting acknowledgement, so the
-     * gap handler never promotes their gaps.
+     * The fills awaiting that are kept in a {@link GapFillsAwaitingAcknowledgement}, the protocol the delegate's
+     * acknowledged polls follow too. A fill whose subscription is cancelled before it is done with keeps its gap, and the
+     * next subscription waits for it again. Back-fill and catch-up pages leave the gaps they fill open for the same reason
+     * - every event they load passes through the gate - and, like every reconciliation here, are given the fills still
+     * awaiting acknowledgement, so the gap handler never promotes their gaps.
+     * <p>
+     * A gap the tracker gives up on is recorded with the gap handler too ({@link #recordGivenUpGaps()}), so the transient
+     * gaps a later subscription waits for agree with what this one stopped waiting for: an event that fills a given-up gap
+     * late is dropped by both.
      * <p>
      * The delegate's polls (the polling leg) are handed an acknowledgement ({@link #newDelegateAcknowledgement()}) which
-     * the gate acknowledges every event the subscriber is done with to: the delegate then leaves the gaps of the fills it
-     * hands on to the gate, rather than resolving them once it handed them into this pipeline.
+     * the gate acknowledges every event the subscriber is done with to, and every event it drops ({@link #dropped}): the
+     * delegate then leaves the gaps of the fills it hands on to the gate, rather than resolving them once it handed them
+     * into this pipeline, and is never left waiting for a fill the gate dropped.
      * <p>
      * Only when there is a subscriber id and a gap handler that records gaps, and only for events that open or fill a
      * gap - an in-order event costs nothing. A failure outside the subscriber's unit of work is logged and the event
@@ -882,37 +892,44 @@ public class CdcEventStore<CONFIG extends AggregateEventStreamConfiguration> imp
      * Runs on the delivering thread - the subscription's {@code Cdc-*}, {@code Publish-*} or back-fill thread, never the
      * bus's - except {@link #acknowledged}, which runs on the subscriber's.
      */
-    private final class DeliveryGate implements DeliveryRecorder, UnitOfWorkLifecycleCallback<GapFillResolution> {
-        private final CdcDeliveryTracker               tracker;
-        private final AggregateType                    aggregateType;
-        private final Optional<SubscriptionGapHandler> gapHandler;
+    private final class DeliveryGate implements DeliveryRecorder {
+        private final CdcDeliveryTracker                        tracker;
+        private final AggregateType                             aggregateType;
+        private final Optional<SubscriptionGapHandler>          gapHandler;
         /**
-         * The gap fills let through, by global order, whose gap is resolved once the subscriber is done with them
+         * The gap fills let through whose gap is resolved once the subscriber is done with them - the protocol the
+         * delegate's acknowledged polls follow too. Present with a gap handler that records gaps
          */
-        private final Map<Long, PersistedEvent>        gapFillsBeingHandedOn   = new ConcurrentHashMap<>();
+        private final Optional<GapFillsAwaitingAcknowledgement> gapFillsBeingHandedOn;
         /**
          * Handed to the delegate's current poll (see {@link #newDelegateAcknowledgement()}); acknowledges to it every event
-         * the subscriber is done with
+         * the subscriber is done with, and every event the gate drops
          */
-        private volatile SubscriberAcknowledgement     delegateAcknowledgement = SubscriberAcknowledgement.create();
+        private volatile SubscriberAcknowledgement              delegateAcknowledgement = SubscriberAcknowledgement.create();
 
         private DeliveryGate(CdcDeliveryTracker tracker, AggregateType aggregateType, Optional<SubscriptionGapHandler> gapHandler) {
             this.tracker = tracker;
             this.aggregateType = aggregateType;
             this.gapHandler = gapHandler.filter(handler -> recordsGaps());
+            this.gapFillsBeingHandedOn = this.gapHandler.map(handler -> new GapFillsAwaitingAcknowledgement(handler,
+                                                                                                         aggregateType,
+                                                                                                         unitOfWorkFactory,
+                                                                                                         eventStore.getEventStoreSubscriptionObserver(),
+                                                                                                         handler.subscriberId() + "-" + aggregateType));
+            if (this.gapHandler.isPresent()) {
+                tracker.collectGivenUpGaps();
+            }
         }
 
         @Override
         public boolean deliver(PersistedEvent event) {
             long globalOrder = event.globalEventOrder().longValue();
             var  delivery    = tracker.markDelivered(globalOrder);
+            recordGivenUpGaps();
             switch (delivery.kind()) {
                 case OPENED_GAP -> recordOpenedGap(event, LongRange.between(delivery.gapFromInclusive(), globalOrder));
-                case FILLED_GAP -> {
-                    if (gapHandler.isPresent()) {
-                        gapFillsBeingHandedOn.put(globalOrder, event);
-                    }
-                }
+                case FILLED_GAP -> gapFillsBeingHandedOn.ifPresent(gapFills -> gapFills.awaitAcknowledgement(List.of(event)));
+                case DUPLICATE -> dropped(event);
                 default -> {
                 }
             }
@@ -920,55 +937,57 @@ public class CdcEventStore<CONFIG extends AggregateEventStreamConfiguration> imp
         }
 
         /**
+         * The gate drops {@code event} - delivered before, or given up on: acknowledged to the delegate's polls, which
+         * would otherwise keep a gap fill they handed on waiting for an acknowledgement that never comes - its gap neither
+         * resolved nor promoted for as long as the poll lives, as an awaiting fill's gap is never promoted. Not a gap fill
+         * the gate let through earlier that the subscriber is not done with: its gap is the record that it is still owed,
+         * and the subscriber's acknowledgement reaches the delegate too.
+         */
+        @Override
+        public void dropped(PersistedEvent event) {
+            if (gapFillsBeingHandedOn.isPresent() && gapFillsBeingHandedOn.get().isAwaiting(event)) {
+                return;
+            }
+            delegateAcknowledgement.acknowledge(event);
+        }
+
+        /**
          * For a subscriber that does not acknowledge: the downstream took {@code event}, so it is done with
          */
         @Override
         public void handedOn(PersistedEvent event) {
-            delegateAcknowledgement.acknowledge(event);
-            if (gapFillsBeingHandedOn.isEmpty()) return;
-            var gapFill = gapFillsBeingHandedOn.get(event.globalEventOrder().longValue());
-            if (gapFill != null) {
-                resolveInAUnitOfWorkOfItsOwn(List.of(gapFill));
-            }
+            acknowledged(List.of(event));
         }
 
         /**
          * The subscriber is done with {@code events} - the {@link SubscriberAcknowledgement} listener; also called for
-         * another tenant's event the tenant filter drops. Resolves the gaps of the gap fills among them: inside the
-         * current unit of work if there is one (the subscriber's), else in a unit of work of their own. Acknowledges
-         * them to the delegate's polls too.
+         * another tenant's event the tenant filter drops, and for an event a subscriber that does not acknowledge was
+         * handed. Resolves the gaps of the gap fills among them (see {@link GapFillsAwaitingAcknowledgement#acknowledged}),
+         * and acknowledges them to the delegate's polls.
          *
          * @throws RuntimeException a failure to resolve them inside the caller's unit of work - the gaps stay open
          */
         void acknowledged(List<PersistedEvent> events) {
-            if (!gapFillsBeingHandedOn.isEmpty()) {
-                var gapFills = events.stream()
-                                     .filter(event -> gapFillsBeingHandedOn.containsKey(event.globalEventOrder().longValue()))
-                                     .toList();
-                if (!gapFills.isEmpty()) {
-                    var currentUnitOfWork = unitOfWorkFactory.getCurrentUnitOfWork();
-                    if (currentUnitOfWork.isPresent()) {
-                        var outcome = resolveFilledGaps(gapFills);
-                        currentUnitOfWork.get().registerLifecycleCallbackForResource(new GapFillResolution(gapFills, outcome), this);
-                    } else {
-                        resolveInAUnitOfWorkOfItsOwn(gapFills);
-                    }
-                }
-            }
+            gapFillsBeingHandedOn.ifPresent(gapFills -> gapFills.acknowledged(events));
             delegateAcknowledgement.acknowledge(events);
-        }
-
-        /**
-         * @return the gap fills let through that the subscriber is not done with yet - given to every reconciliation, so
-         * the gap handler never promotes their gaps (it promotes no gap whose event it is given)
-         */
-        Collection<PersistedEvent> awaitingAcknowledgement() {
-            return gapFillsBeingHandedOn.isEmpty() ? List.of() : List.copyOf(gapFillsBeingHandedOn.values());
         }
 
         @Override
         public boolean isDelivered(PersistedEvent event) {
             return tracker.isDelivered(event.globalEventOrder().longValue());
+        }
+
+        /**
+         * The live source's filter in front of {@link BackfillThenLiveOrdered}, which records what it delivers itself
+         *
+         * @return true unless {@code event} was delivered before or given up on - then it is {@link #dropped}
+         */
+        boolean isNotDeliveredYet(PersistedEvent event) {
+            if (!isDelivered(event)) {
+                return true;
+            }
+            dropped(event);
+            return false;
         }
 
         /**
@@ -983,37 +1002,47 @@ public class CdcEventStore<CONFIG extends AggregateEventStreamConfiguration> imp
             return acknowledgement;
         }
 
-        private GapReconciliation resolveFilledGaps(List<PersistedEvent> gapFills) {
+        /**
+         * The gaps the tracker gave up on, recorded with the gap handler ({@link SubscriptionGapHandler#giveUpTransientGaps}):
+         * the transient gap is what a later subscription of the subscriber waits for (see {@code newDeliveryTracker}).
+         * Left open, a restarted subscription waited for a gap this one had given up on - and delivered its event, should
+         * its transaction commit late, although this subscription dropped it. Every reconciliation here and in the
+         * delegate's polls is given the gap fills awaiting acknowledgement, and a given-up order is none, so this never
+         * promotes a gap the subscriber is still owed. In a unit of work of its own, holding the gap handler's monitor,
+         * never across the commit; a failure is logged, and a later subscription then waits for those gaps once more.
+         */
+        private void recordGivenUpGaps() {
+            var givenUp = tracker.drainGivenUpGaps();
+            if (givenUp.isEmpty() || gapHandler.isEmpty()) return;
             var handler = gapHandler.get();
-            synchronized (handler) {
-                return handler.resolveFilledGaps(aggregateType, gapFills);
-            }
-        }
-
-        private void resolveInAUnitOfWorkOfItsOwn(List<PersistedEvent> gapFills) {
             try {
-                resolved(gapFills, unitOfWorkFactory.withUnitOfWork(uow -> resolveFilledGaps(gapFills)));
+                var reconciliation = unitOfWorkFactory.withUnitOfWork(uow -> {
+                    synchronized (handler) {
+                        return handler.giveUpTransientGaps(aggregateType, givenUp);
+                    }
+                });
+                if (!reconciliation.isEmpty()) {
+                    eventStore.getEventStoreSubscriptionObserver().gapReconciliationOutcome(handler.subscriberId(), aggregateType, reconciliation);
+                }
             } catch (RuntimeException e) {
-                log.warn("[{}-{}] Could not resolve the gap(s) {} with the gap handler - they stay open, so a later subscription is handed those events again",
-                         gapHandler.get().subscriberId(), aggregateType, gapFills.stream().map(PersistedEvent::globalEventOrder).toList(), e);
+                log.warn("[{}-{}] Could not record with the gap handler that the gap(s) {} were given up on - a later subscription waits for them again",
+                         handler.subscriberId(), aggregateType, givenUp, e);
             }
         }
 
-        private void resolved(List<PersistedEvent> gapFills, GapReconciliation outcome) {
-            gapFills.forEach(gapFill -> gapFillsBeingHandedOn.remove(gapFill.globalEventOrder().longValue(), gapFill));
-            if (!outcome.isEmpty()) {
-                eventStore.getEventStoreSubscriptionObserver().gapReconciliationOutcome(gapHandler.get().subscriberId(), aggregateType, outcome);
-            }
-        }
-
+        /**
+         * No query asked for any transient gap - the event came from the bus or a poll, not from a query of this gap
+         * handler's - so none is passed as included in one: the gap handler promotes a gap only when a query that asked
+         * for it did not get it, and asked for nothing, it changes no other gap either (it resolves the gaps a query asked
+         * for and got). The gaps the tracker gives up on are promoted through {@link #recordGivenUpGaps()} instead.
+         */
         private void recordOpenedGap(PersistedEvent event, LongRange range) {
             if (gapHandler.isEmpty()) return;
             var handler = gapHandler.get();
             try {
                 var reconciliation = unitOfWorkFactory.withUnitOfWork(uow -> {
                     synchronized (handler) {
-                        var transientGaps = handler.findTransientGapsToIncludeInQuery(aggregateType, range);
-                        return handler.reconcileGapsAndReport(aggregateType, range, withAwaitingAcknowledgement(List.of(event)), transientGaps);
+                        return handler.reconcileGapsAndReport(aggregateType, range, withAwaitingAcknowledgement(List.of(event)), List.of());
                     }
                 });
                 if (!reconciliation.isEmpty()) {
@@ -1027,66 +1056,36 @@ public class CdcEventStore<CONFIG extends AggregateEventStreamConfiguration> imp
 
         /**
          * {@code events}, plus the gap fills awaiting acknowledgement that are not among them - for a reconciliation, so
-         * it does not promote their gaps. They lie below the reconciled range, so they are no new gaps either.
+         * it does not promote their gaps (see {@link GapFillsAwaitingAcknowledgement#withAwaitingEvents})
          */
         List<PersistedEvent> withAwaitingAcknowledgement(List<PersistedEvent> events) {
-            var awaiting = awaitingAcknowledgement();
-            if (awaiting.isEmpty()) {
-                return events;
-            }
-            var given  = events.stream().map(PersistedEvent::globalEventOrder).collect(Collectors.toSet());
-            var result = new ArrayList<>(events);
-            awaiting.stream().filter(event -> !given.contains(event.globalEventOrder())).forEach(result::add);
-            return result;
+            return gapFillsBeingHandedOn.map(gapFills -> gapFills.withAwaitingEvents(events)).orElse(events);
         }
-
-        @Override
-        public BeforeCommitProcessingStatus beforeCommit(UnitOfWork unitOfWork, List<GapFillResolution> associatedResources) {
-            return BeforeCommitProcessingStatus.COMPLETED;
-        }
-
-        @Override
-        public void afterCommit(UnitOfWork unitOfWork, List<GapFillResolution> associatedResources) {
-            associatedResources.forEach(resolution -> resolved(resolution.gapFills(), resolution.outcome()));
-        }
-
-        @Override
-        public void beforeRollback(UnitOfWork unitOfWork, List<GapFillResolution> associatedResources, Throwable causeOfTheRollback) {
-        }
-
-        @Override
-        public void afterRollback(UnitOfWork unitOfWork, List<GapFillResolution> associatedResources, Throwable causeOfTheRollback) {
-            // The gaps stay open, and the fills wait for the next acknowledgement
-        }
-
-        /**
-         * Nothing a rollback to a savepoint cannot undo: the gaps were deleted in the transaction, and the fills are
-         * forgotten here only after it committed
-         */
-        @Override
-        public boolean hasPendingChanges(GapFillResolution resource) {
-            return false;
-        }
-    }
-
-    /**
-     * The gaps a {@link DeliveryGate} resolved for an acknowledgement inside a unit of work it did not start, until that
-     * unit of work ends
-     */
-    private record GapFillResolution(List<PersistedEvent> gapFills, GapReconciliation outcome) {
     }
 
     /**
      * Tenant predicate mirroring the base store's SQL "({tenantColumn} IS NULL OR {tenantColumn} =
-     * :tenant)": a tenant-less event belongs to every tenant (absent event-tenant ⇒ kept), and an absent
-     * subscriber tenant filter keeps everything.
+     * :tenant)", as {@link PostgresqlEventStore}'s in-memory tenant filter does: a tenant-less event belongs to every
+     * tenant (absent event-tenant ⇒ kept), and an event's tenant matches when it serializes to the same column value as
+     * the wanted one under the aggregate type's configured {@link TenantSerializer} - so the CDC paths deliver the same
+     * events as polling for a custom serializer. Only without a configuration for the aggregate type (a delegate that
+     * offers none) are the tenants' {@code toString()} compared. An absent subscriber tenant filter keeps everything.
      */
-    private static boolean eventBelongsToTenant(PersistedEvent e, Optional<Tenant> onlyIncludeEventIfItBelongsToTenant) {
-        return onlyIncludeEventIfItBelongsToTenant
-                .map(t -> e.tenant()
-                           .map(tt -> tt.toString().equals(t.toString()))
-                           .orElse(true))
-                .orElse(true);
+    @SuppressWarnings({"unchecked", "rawtypes"})
+    private Predicate<PersistedEvent> belongsToTenant(AggregateType aggregateType, Optional<Tenant> onlyIncludeEventIfItBelongsToTenant) {
+        if (onlyIncludeEventIfItBelongsToTenant.isEmpty()) {
+            return event -> true;
+        }
+        var wantedTenant = onlyIncludeEventIfItBelongsToTenant.get();
+        Function<Tenant, String> columnValueOf = eventStore.findAggregateEventStreamConfiguration(aggregateType)
+                                                           .<Function<Tenant, String>>map(configuration -> {
+                                                               TenantSerializer tenantSerializer = configuration.tenantSerializer;
+                                                               return tenant -> tenantSerializer.serialize(tenant);
+                                                           })
+                                                           .orElse(Tenant::toString);
+        return event -> event.tenant()
+                             .map(eventTenant -> Objects.equals(columnValueOf.apply(eventTenant), columnValueOf.apply(wantedTenant)))
+                             .orElse(true);
     }
 
     /**
@@ -1094,11 +1093,11 @@ public class CdcEventStore<CONFIG extends AggregateEventStreamConfiguration> imp
      * filtering must happen AFTER ordering, because the delivery tracker behind BackfillThenLiveOrdered has to see
      * every global order - an event removed upstream of it would be a gap it records and waits for.
      */
-    private static Flux<PersistedEvent> filterByTenant(Flux<PersistedEvent> source, Optional<Tenant> onlyIncludeEventIfItBelongsToTenant) {
+    private Flux<PersistedEvent> filterByTenant(Flux<PersistedEvent> source, AggregateType aggregateType, Optional<Tenant> onlyIncludeEventIfItBelongsToTenant) {
         if (onlyIncludeEventIfItBelongsToTenant.isEmpty()) {
             return source;
         }
-        return source.filter(e -> eventBelongsToTenant(e, onlyIncludeEventIfItBelongsToTenant));
+        return source.filter(belongsToTenant(aggregateType, onlyIncludeEventIfItBelongsToTenant));
     }
 
     /**
@@ -1571,6 +1570,13 @@ public class CdcEventStore<CONFIG extends AggregateEventStreamConfiguration> imp
         }
 
         /**
+         * Called for an event left out because it was handed downstream before (or given up on) - after
+         * {@link #isDelivered} said so; {@link #deliver} sees to it itself when it returns false
+         */
+        default void dropped(PersistedEvent event) {
+        }
+
+        /**
          * Only the tracker - no gap handler
          */
         static DeliveryRecorder tracking(CdcDeliveryTracker tracker) {
@@ -1821,6 +1827,7 @@ public class CdcEventStore<CONFIG extends AggregateEventStreamConfiguration> imp
                         if (deliveries.isDelivered(ev)) {
                             // Duplicate / already-emitted (by the backfill or the drain) — does not occupy buffer,
                             // compensate immediately.
+                            deliveries.dropped(ev);
                             request(1);
                             return;
                         }

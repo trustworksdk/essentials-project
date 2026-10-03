@@ -279,6 +279,39 @@ class CdcDeliveryTrackerTest {
     }
 
     @Test
+    void the_orders_given_up_on_are_collected_for_the_gap_handler_once_asked_to() {
+        var tracker = tracker(10, 2);
+        tracker.collectGivenUpGaps();
+        tracker.seedEarlierGaps(List.of(GlobalEventOrder.of(4)));
+        tracker.markDelivered(11);
+        // Gaps 12..13 and 15
+        tracker.markDelivered(14);
+        tracker.markDelivered(16);
+        assertThat(tracker.drainGivenUpGaps()).isEmpty();
+
+        // A third gap is one more than the cap: the oldest, 12..13, is given up at once
+        tracker.markDelivered(18);
+        assertThat(tracker.drainGivenUpGaps()).extracting(GlobalEventOrder::longValue).containsExactly(12L, 13L);
+        assertThat(tracker.drainGivenUpGaps()).as("drained").isEmpty();
+
+        // Too old: the earlier gap, and the gaps 15 and 17
+        advanceClock(GAP_TIMEOUT);
+        assertThat(tracker.resumeFromInclusive()).isEqualTo(19);
+        assertThat(tracker.drainGivenUpGaps()).extracting(GlobalEventOrder::longValue).containsExactlyInAnyOrder(4L, 15L, 17L);
+    }
+
+    @Test
+    void the_orders_given_up_on_are_not_kept_unless_asked_to() {
+        var tracker = tracker(0, 100);
+        tracker.markDelivered(1);
+        tracker.markDelivered(3);
+        advanceClock(GAP_TIMEOUT);
+
+        assertThat(tracker.resumeFromInclusive()).as("2 given up").isEqualTo(4);
+        assertThat(tracker.drainGivenUpGaps()).isEmpty();
+    }
+
+    @Test
     void a_threshold_too_large_for_nanoseconds_does_not_overflow_into_giving_every_gap_up() {
         var tracker = new CdcDeliveryTracker("test", 0, Duration.ofDays(365L * 1000), 100, nanoTime::get);
         tracker.markDelivered(2);

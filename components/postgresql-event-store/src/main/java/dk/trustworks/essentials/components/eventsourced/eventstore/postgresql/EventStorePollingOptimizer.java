@@ -41,4 +41,16 @@ public interface EventStorePollingOptimizer {
     boolean shouldSkipPolling();
 
     long currentDelayMs();
+
+    /**
+     * Whether a zero {@link #currentDelayMs()} after an empty poll is deliberate, meaning the polling worker may poll again
+     * at once (such as an optimizer that returns zero because a NOTIFY landed since the last poll). When {@code false}
+     * (the default) the polling worker waits the polling interval after an empty poll whenever the delay is zero -
+     * without that a decorated {@link #None()} or a custom optimizer returning zero would poll in a busy loop.
+     *
+     * @return true if the optimizer deliberately returns zero to have the polling worker poll again at once
+     */
+    default boolean mayRepollImmediatelyAfterAnEmptyPoll() {
+        return false;
+    }
 }

@@ -25,6 +25,7 @@ import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.ob
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.operations.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.persistence.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.serializer.AggregateIdSerializer;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.serializer.TenantSerializer;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.subscription.EventStoreSubscriptionManager;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.transaction.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.types.GlobalEventOrder;
@@ -590,189 +591,193 @@ public final class PostgresqlEventStore<CONFIG extends AggregateEventStreamConfi
         var nextFromInclusiveGlobalOrder         = new AtomicLong(fromInclusiveGlobalOrder);
         var subscriptionGapHandler               = subscriberId.map(eventStreamGapHandler::gapHandlerFor);
         var actualSubscriberId                   = subscriberId.orElse(NO_SUBSCRIBER_ID);
-        var awaitingAcknowledgement              = awaitingAcknowledgement(acknowledgement, subscriptionGapHandler, aggregateType, eventStreamLogName);
 
-        var persistedEventsFlux = Flux.defer(() -> {
-            // The first poll runs on the subscribing thread, which may already be inside a UnitOfWork. The poll then
-            // joins it, and must leave ending it to its owner.
-            var                  startedUnitOfWork = unitOfWorkFactory.getCurrentUnitOfWork().isEmpty();
-            EventStoreUnitOfWork unitOfWork;
-            try {
-                unitOfWork = unitOfWorkFactory.getOrCreateNewUnitOfWork();
-            } catch (Exception e) {
-                if (IOExceptionUtil.isIOException(e)) {
-                    eventStoreStreamLog.debug(msg("[{}] Experienced a IO/Connection related issue '{}'. Will return an empty Flux",
-                                                  eventStreamLogName,
-                                                  e.getClass().getSimpleName()),
-                                              e);
-                } else {
-                    eventStoreStreamLog.error(msg("[{}] Experienced a non-IO related issue '{}'. Will return an empty Flux",
-                                                  eventStreamLogName,
-                                                  e.getClass().getSimpleName()),
-                                              e);
+        // One per subscription (each subscribe gets its own), as in pollEvents
+        Function<Optional<GapFillsAwaitingAcknowledgement>, Flux<PersistedEvent>> pollingWith = awaitingAcknowledgement -> {
+            var persistedEventsFlux = Flux.defer(() -> {
+                // The first poll runs on the subscribing thread, which may already be inside a UnitOfWork. The poll then
+                // joins it, and must leave ending it to its owner.
+                var                  startedUnitOfWork = unitOfWorkFactory.getCurrentUnitOfWork().isEmpty();
+                EventStoreUnitOfWork unitOfWork;
+                try {
+                    unitOfWork = unitOfWorkFactory.getOrCreateNewUnitOfWork();
+                } catch (Exception e) {
+                    if (IOExceptionUtil.isIOException(e)) {
+                        eventStoreStreamLog.debug(msg("[{}] Experienced a IO/Connection related issue '{}'. Will return an empty Flux",
+                                                      eventStreamLogName,
+                                                      e.getClass().getSimpleName()),
+                                                  e);
+                    } else {
+                        eventStoreStreamLog.error(msg("[{}] Experienced a non-IO related issue '{}'. Will return an empty Flux",
+                                                      eventStreamLogName,
+                                                      e.getClass().getSimpleName()),
+                                                  e);
+                    }
+                    return Flux.empty();
                 }
-                return Flux.empty();
-            }
 
-            try {
-                var resolveBatchSizeForThisQueryTiming = StopWatch.start("resolveBatchSizeForThisQuery (" + actualSubscriberId + ", " + aggregateType + ")");
+                try {
+                    var resolveBatchSizeForThisQueryTiming = StopWatch.start("resolveBatchSizeForThisQuery (" + actualSubscriberId + ", " + aggregateType + ")");
 
-                long batchSizeForThisQuery = resolveBatchSizeForThisQuery(aggregateType,
-                                                                          eventStreamLogName,
-                                                                          eventStoreStreamLog,
-                                                                          lastBatchSizeForThisQuery.get(),
-                                                                          batchFetchSize,
-                                                                          consecutiveNoPersistedEventsReturned,
-                                                                          nextFromInclusiveGlobalOrder,
-                                                                          unitOfWork);
-                eventStoreSubscriptionObserver.resolvedBatchSizeForEventStorePoll(actualSubscriberId,
-                                                                                  aggregateType,
-                                                                                  batchFetchSize,
-                                                                                  Long.MAX_VALUE,
-                                                                                  lastBatchSizeForThisQuery.get(),
-                                                                                  consecutiveNoPersistedEventsReturned.get(),
-                                                                                  nextFromInclusiveGlobalOrder.get(),
-                                                                                  batchSizeForThisQuery,
-                                                                                  resolveBatchSizeForThisQueryTiming.stop().getDuration()
-                                                                                 );
+                    long batchSizeForThisQuery = resolveBatchSizeForThisQuery(aggregateType,
+                                                                              eventStreamLogName,
+                                                                              eventStoreStreamLog,
+                                                                              lastBatchSizeForThisQuery.get(),
+                                                                              batchFetchSize,
+                                                                              consecutiveNoPersistedEventsReturned,
+                                                                              nextFromInclusiveGlobalOrder,
+                                                                              unitOfWork);
+                    eventStoreSubscriptionObserver.resolvedBatchSizeForEventStorePoll(actualSubscriberId,
+                                                                                      aggregateType,
+                                                                                      batchFetchSize,
+                                                                                      Long.MAX_VALUE,
+                                                                                      lastBatchSizeForThisQuery.get(),
+                                                                                      consecutiveNoPersistedEventsReturned.get(),
+                                                                                      nextFromInclusiveGlobalOrder.get(),
+                                                                                      batchSizeForThisQuery,
+                                                                                      resolveBatchSizeForThisQueryTiming.stop().getDuration()
+                                                                                     );
 
-                if (batchSizeForThisQuery == 0) {
-                    consecutiveNoPersistedEventsReturned.set(0);
-                    lastBatchSizeForThisQuery.set(batchFetchSize);
+                    if (batchSizeForThisQuery == 0) {
+                        consecutiveNoPersistedEventsReturned.set(0);
+                        lastBatchSizeForThisQuery.set(batchFetchSize);
 
-                    eventStoreStreamLog.debug("[{}] Skipping polling as no new events have been persisted since last poll",
-                                              eventStreamLogName);
+                        eventStoreStreamLog.debug("[{}] Skipping polling as no new events have been persisted since last poll",
+                                                  eventStreamLogName);
+                        commitIfStartedByThisPoll(unitOfWork, startedUnitOfWork);
+                        unitOfWork = null;
+                        return Flux.empty();
+                    } else {
+                        lastBatchSizeForThisQuery.set(batchSizeForThisQuery);
+                    }
+
+                    var globalOrderRange = LongRange.from(nextFromInclusiveGlobalOrder.get(), batchSizeForThisQuery);
+                    var transientGapsToIncludeInQuery = subscriptionGapHandler.map(gapHandler -> findTransientGapsToIncludeInQuery(gapHandler, aggregateType, globalOrderRange))
+                                                                              .orElse(null);
+
+                    var loadEventsByGlobalOrderTiming = StopWatch.start("loadEventsByGlobalOrder(" + actualSubscriberId + ", " + aggregateType + ")");
+                    // Every tenant's events: see loadEventsForPoll
+                    var loadedEvents = loadEventsForPoll(aggregateType, globalOrderRange, transientGapsToIncludeInQuery, onlyIncludeEventIfItBelongsToTenant);
+                    // Without the gap fills handed on before and not acknowledged yet: their gap is open, so they are read again
+                    var persistedEvents = notAwaitingAcknowledgement(eventsBelongingToTenant(aggregateType, loadedEvents, onlyIncludeEventIfItBelongsToTenant), awaitingAcknowledgement);
+                    eventStoreSubscriptionObserver.eventStorePolled(actualSubscriberId,
+                                                                    aggregateType,
+                                                                    globalOrderRange,
+                                                                    transientGapsToIncludeInQuery,
+                                                                    onlyIncludeEventIfItBelongsToTenant,
+                                                                    persistedEvents,
+                                                                    loadEventsByGlobalOrderTiming.stop().getDuration());
+                    // The gaps filled by events about to be emitted stay open until they have been - see gapFillsAmong
+                    var gapFillsToEmit = gapFillsAmong(persistedEvents, transientGapsToIncludeInQuery);
+                    var gapReconciliation = subscriptionGapHandler.map(gapHandler -> {
+                        var reconcileGapsTiming = StopWatch.start("reconcileGaps(" + actualSubscriberId + ", " + aggregateType + ")");
+                        var outcome = reconcileGaps(gapHandler,
+                                                    aggregateType,
+                                                    globalOrderRange,
+                                                    eventsToReconcile(loadedEvents, awaitingAcknowledgement),
+                                                    gapsResolvedBeforePublishing(transientGapsToIncludeInQuery, gapFillsToEmit, awaitingAcknowledgement));
+                        eventStoreSubscriptionObserver.reconciledGaps(actualSubscriberId,
+                                                                      aggregateType,
+                                                                      globalOrderRange,
+                                                                      transientGapsToIncludeInQuery, loadedEvents,
+                                                                      reconcileGapsTiming.stop().getDuration());
+                        return outcome;
+                    }).orElse(GapReconciliation.NONE);
                     commitIfStartedByThisPoll(unitOfWork, startedUnitOfWork);
                     unitOfWork = null;
-                    return Flux.empty();
-                } else {
-                    lastBatchSizeForThisQuery.set(batchSizeForThisQuery);
-                }
-
-                var globalOrderRange = LongRange.from(nextFromInclusiveGlobalOrder.get(), batchSizeForThisQuery);
-                var transientGapsToIncludeInQuery = subscriptionGapHandler.map(gapHandler -> findTransientGapsToIncludeInQuery(gapHandler, aggregateType, globalOrderRange))
-                                                                          .orElse(null);
-
-                var loadEventsByGlobalOrderTiming = StopWatch.start("loadEventsByGlobalOrder(" + actualSubscriberId + ", " + aggregateType + ")");
-                // Every tenant's events: see loadEventsForPoll
-                var loadedEvents = loadEventsForPoll(aggregateType, globalOrderRange, transientGapsToIncludeInQuery, onlyIncludeEventIfItBelongsToTenant);
-                // Without the gap fills handed on before and not acknowledged yet: their gap is open, so they are read again
-                var persistedEvents = notAwaitingAcknowledgement(eventsBelongingToTenant(loadedEvents, onlyIncludeEventIfItBelongsToTenant), awaitingAcknowledgement);
-                eventStoreSubscriptionObserver.eventStorePolled(actualSubscriberId,
-                                                                aggregateType,
-                                                                globalOrderRange,
-                                                                transientGapsToIncludeInQuery,
-                                                                onlyIncludeEventIfItBelongsToTenant,
-                                                                persistedEvents,
-                                                                loadEventsByGlobalOrderTiming.stop().getDuration());
-                // The gaps filled by events about to be emitted stay open until they have been - see gapFillsAmong
-                var gapFillsToEmit = gapFillsAmong(persistedEvents, transientGapsToIncludeInQuery);
-                var gapReconciliation = subscriptionGapHandler.map(gapHandler -> {
-                    var reconcileGapsTiming = StopWatch.start("reconcileGaps(" + actualSubscriberId + ", " + aggregateType + ")");
-                    var outcome = reconcileGaps(gapHandler,
-                                                aggregateType,
-                                                globalOrderRange,
-                                                eventsToReconcile(loadedEvents, awaitingAcknowledgement),
-                                                gapsResolvedBeforePublishing(transientGapsToIncludeInQuery, gapFillsToEmit, awaitingAcknowledgement));
-                    eventStoreSubscriptionObserver.reconciledGaps(actualSubscriberId,
-                                                                  aggregateType,
-                                                                  globalOrderRange,
-                                                                  transientGapsToIncludeInQuery, loadedEvents,
-                                                                  reconcileGapsTiming.stop().getDuration());
-                    return outcome;
-                }).orElse(GapReconciliation.NONE);
-                commitIfStartedByThisPoll(unitOfWork, startedUnitOfWork);
-                unitOfWork = null;
-                // After the commit, so a reconciliation that rolls back is not counted.
-                if (!gapReconciliation.isEmpty()) {
-                    eventStoreSubscriptionObserver.gapReconciliationOutcome(actualSubscriberId, aggregateType, gapReconciliation);
-                }
-                // Past every event loaded - including other tenants' events, which are not emitted - once all were emitted
-                var nextGlobalOrderAfterThisPoll = nextGlobalOrderAfter(loadedEvents);
-                if (loadedEvents.size() > 0) {
-                    consecutiveNoPersistedEventsReturned.set(0);
-                    if (log.isTraceEnabled()) {
-                        eventStoreStreamLog.debug("[{}] loadEventsByGlobalOrder using globalOrderRange {} and transientGapsToIncludeInQuery {} returned {} events: {}",
-                                                  eventStreamLogName,
-                                                  globalOrderRange,
-                                                  transientGapsToIncludeInQuery,
-                                                  persistedEvents.size(),
-                                                  persistedEvents.stream().map(PersistedEvent::globalEventOrder).collect(Collectors.toList()));
-                    } else {
-                        eventStoreStreamLog.debug("[{}] loadEventsByGlobalOrder using globalOrderRange {} and transientGapsToIncludeInQuery {} returned {} events",
-                                                  eventStreamLogName,
-                                                  globalOrderRange,
-                                                  transientGapsToIncludeInQuery,
-                                                  persistedEvents.size());
+                    // After the commit, so a reconciliation that rolls back is not counted.
+                    if (!gapReconciliation.isEmpty()) {
+                        eventStoreSubscriptionObserver.gapReconciliationOutcome(actualSubscriberId, aggregateType, gapReconciliation);
                     }
-                } else {
-                    consecutiveNoPersistedEventsReturned.incrementAndGet();
-                    eventStoreStreamLog.trace("[{}] loadEventsByGlobalOrder using globalOrderRange {} and transientGapsToIncludeInQuery {} returned no events",
-                                              eventStreamLogName,
-                                              globalOrderRange,
-                                              transientGapsToIncludeInQuery);
-                }
+                    // Past every event loaded - including other tenants' events, which are not emitted - once all were emitted
+                    var nextGlobalOrderAfterThisPoll = nextGlobalOrderAfter(loadedEvents);
+                    if (loadedEvents.size() > 0) {
+                        consecutiveNoPersistedEventsReturned.set(0);
+                        if (log.isTraceEnabled()) {
+                            eventStoreStreamLog.debug("[{}] loadEventsByGlobalOrder using globalOrderRange {} and transientGapsToIncludeInQuery {} returned {} events: {}",
+                                                      eventStreamLogName,
+                                                      globalOrderRange,
+                                                      transientGapsToIncludeInQuery,
+                                                      persistedEvents.size(),
+                                                      persistedEvents.stream().map(PersistedEvent::globalEventOrder).collect(Collectors.toList()));
+                        } else {
+                            eventStoreStreamLog.debug("[{}] loadEventsByGlobalOrder using globalOrderRange {} and transientGapsToIncludeInQuery {} returned {} events",
+                                                      eventStreamLogName,
+                                                      globalOrderRange,
+                                                      transientGapsToIncludeInQuery,
+                                                      persistedEvents.size());
+                        }
+                    } else {
+                        consecutiveNoPersistedEventsReturned.incrementAndGet();
+                        eventStoreStreamLog.trace("[{}] loadEventsByGlobalOrder using globalOrderRange {} and transientGapsToIncludeInQuery {} returned no events",
+                                                  eventStreamLogName,
+                                                  globalOrderRange,
+                                                  transientGapsToIncludeInQuery);
+                    }
 
-                // Right before they are emitted - once the reconciliation committed - so the subscriber can acknowledge them
-                awaitingAcknowledgement.ifPresent(awaiting -> awaiting.awaitAcknowledgement(gapFillsToEmit));
-                var emitted = Flux.fromIterable(persistedEvents);
-                if (awaitingAcknowledgement.isEmpty() && subscriptionGapHandler.isPresent() && !gapFillsToEmit.isEmpty()) {
-                    // Subscribed only once every event was emitted, and not at all when the subscriber cancels first:
-                    // then the gaps stay open, and the next subscription asks for them again
-                    var gapHandler = subscriptionGapHandler.get();
-                    emitted = emitted.concatWith(Mono.fromRunnable(() -> resolveGapsFilledByPublishedEvents(gapHandler, actualSubscriberId, aggregateType, gapFillsToEmit, eventStreamLogName)));
+                    // Right before they are emitted - once the reconciliation committed - so the subscriber can acknowledge them
+                    awaitingAcknowledgement.ifPresent(awaiting -> awaiting.awaitAcknowledgement(gapFillsToEmit));
+                    var emitted = Flux.fromIterable(persistedEvents);
+                    if (awaitingAcknowledgement.isEmpty() && subscriptionGapHandler.isPresent() && !gapFillsToEmit.isEmpty()) {
+                        // Subscribed only once every event was emitted, and not at all when the subscriber cancels first:
+                        // then the gaps stay open, and the next subscription asks for them again
+                        var gapHandler = subscriptionGapHandler.get();
+                        emitted = emitted.concatWith(Mono.fromRunnable(() -> resolveGapsFilledByPublishedEvents(gapHandler, actualSubscriberId, aggregateType, gapFillsToEmit, eventStreamLogName)));
+                    }
+                    return emitted.doOnComplete(() -> nextFromInclusiveGlobalOrder.accumulateAndGet(nextGlobalOrderAfterThisPoll, Math::max));
+                } catch (RuntimeException e) {
+                    log.error(msg("[{}] Polling failed", eventStreamLogName), e);
+                    if (unitOfWork != null) {
+                        rollbackIfStartedByThisPoll(unitOfWork, startedUnitOfWork, e, eventStreamLogName);
+                        unitOfWork = null;
+                    }
+                    eventStoreStreamLog.error(msg("[{}] Returning Error for '{}' EventStream with nextFromInclusiveGlobalOrder {}",
+                                                  eventStreamLogName,
+                                                  aggregateType,
+                                                  nextFromInclusiveGlobalOrder.get()),
+                                              e);
+                    return Flux.error(e);
+                } finally {
+                    // Safety net for any exit that ended neither way - an Error, or a future early return. A UnitOfWork
+                    // left open here outlives the poll: if the subscription is disposed before the next poll picks it up,
+                    // it holds its connection and a lock on the event table for the life of the process.
+                    if (unitOfWork != null) {
+                        rollbackIfStartedByThisPoll(unitOfWork, startedUnitOfWork, null, eventStreamLogName);
+                    }
                 }
-                return emitted.doOnComplete(() -> nextFromInclusiveGlobalOrder.accumulateAndGet(nextGlobalOrderAfterThisPoll, Math::max));
-            } catch (RuntimeException e) {
-                log.error(msg("[{}] Polling failed", eventStreamLogName), e);
-                if (unitOfWork != null) {
-                    rollbackIfStartedByThisPoll(unitOfWork, startedUnitOfWork, e, eventStreamLogName);
-                    unitOfWork = null;
-                }
-                eventStoreStreamLog.error(msg("[{}] Returning Error for '{}' EventStream with nextFromInclusiveGlobalOrder {}",
-                                              eventStreamLogName,
-                                              aggregateType,
-                                              nextFromInclusiveGlobalOrder.get()),
-                                          e);
-                return Flux.error(e);
-            } finally {
-                // Safety net for any exit that ended neither way - an Error, or a future early return. A UnitOfWork
-                // left open here outlives the poll: if the subscription is disposed before the next poll picks it up,
-                // it holds its connection and a lock on the event table for the life of the process.
-                if (unitOfWork != null) {
-                    rollbackIfStartedByThisPoll(unitOfWork, startedUnitOfWork, null, eventStreamLogName);
-                }
-            }
-        }).doOnNext(event -> {
-            // Never backwards: an event filling a gap lies below the read position, and moving back to it would deliver
-            // every event above it again
-            final long nextGlobalOrder = event.globalEventOrder().longValue() + 1L;
-            eventStoreStreamLog.trace("[{}] Updating nextFromInclusiveGlobalOrder from {} to at least {}",
-                                      eventStreamLogName,
-                                      nextFromInclusiveGlobalOrder.get(),
-                                      nextGlobalOrder);
-            nextFromInclusiveGlobalOrder.accumulateAndGet(nextGlobalOrder, Math::max);
-        }).onErrorResume(throwable -> {
-            if (isCriticalError(throwable)) {
-                return Flux.error(throwable);
-            }
-            eventStoreStreamLog.error(msg("[{}] Failed: {}",
+            }).doOnNext(event -> {
+                // Never backwards: an event filling a gap lies below the read position, and moving back to it would deliver
+                // every event above it again
+                final long nextGlobalOrder = event.globalEventOrder().longValue() + 1L;
+                eventStoreStreamLog.trace("[{}] Updating nextFromInclusiveGlobalOrder from {} to at least {}",
                                           eventStreamLogName,
-                                          throwable.getMessage()),
-                                      throwable);
-            return Flux.empty();
-        });
+                                          nextFromInclusiveGlobalOrder.get(),
+                                          nextGlobalOrder);
+                nextFromInclusiveGlobalOrder.accumulateAndGet(nextGlobalOrder, Math::max);
+            }).onErrorResume(throwable -> {
+                if (isCriticalError(throwable)) {
+                    return Flux.error(throwable);
+                }
+                eventStoreStreamLog.error(msg("[{}] Failed: {}",
+                                              eventStreamLogName,
+                                              throwable.getMessage()),
+                                          throwable);
+                return Flux.empty();
+            });
 
-        var polling = persistedEventsFlux
-                .repeatWhen(longFlux -> Flux.interval(pollingInterval.orElse(Duration.ofMillis(DEFAULT_POLLING_INTERVAL_MILLISECONDS)))
-                                            .onBackpressureDrop()
-                                            .publishOn(Schedulers.newSingle("Publish-" + subscriberId.orElse(NO_SUBSCRIBER_ID) + "-" + aggregateType, true)));
+            var polling = persistedEventsFlux
+                    .repeatWhen(longFlux -> Flux.interval(pollingInterval.orElse(Duration.ofMillis(DEFAULT_POLLING_INTERVAL_MILLISECONDS)))
+                                                .onBackpressureDrop()
+                                                .publishOn(Schedulers.newSingle("Publish-" + subscriberId.orElse(NO_SUBSCRIBER_ID) + "-" + aggregateType, true)));
+            return polling;
+        };
         // Registered when subscribed, before the first poll
         return acknowledgement.map(ack -> Flux.defer(() -> {
+                                  var awaitingAcknowledgement = awaitingAcknowledgement(acknowledgement, subscriptionGapHandler, aggregateType, eventStreamLogName);
                                   registerWith(ack, awaitingAcknowledgement);
-                                  return polling;
+                                  return pollingWith.apply(awaitingAcknowledgement);
                               }))
-                              .orElse(polling);
+                              .orElseGet(() -> pollingWith.apply(Optional.empty()));
     }
 
     /**
@@ -1000,7 +1005,7 @@ public final class PostgresqlEventStore<CONFIG extends AggregateEventStreamConfi
             var pollingSleep             = pollingInterval.orElse(Duration.ofMillis(DEFAULT_POLLING_INTERVAL_MILLISECONDS)).toMillis();
             var remainingDemandForEvents = demandForEvents;
 
-            while (remainingDemandForEvents > 0 && !sink.isCancelled()) {
+            while (remainingDemandForEvents > 0 && !sink.isCancelled() && !Thread.currentThread().isInterrupted()) {
 
                 var numberOfEventsPublished = pollForEvents(remainingDemandForEvents);
                 remainingDemandForEvents -= numberOfEventsPublished;
@@ -1012,15 +1017,16 @@ public final class PostgresqlEventStore<CONFIG extends AggregateEventStreamConfi
                 if (numberOfEventsPublished == 0 && !lastPollConsumedEvents) {
                     pollingOptimizer.eventStorePollingReturnedNoEvents();
                     eventStoreStreamLog.trace("[{}] Skipping polling cycle based on optimizer", eventStreamLogName);
-                    // An optimizer that never delays leaves nothing between one empty poll and the next - wait the polling interval
+                    // A zero delay leaves nothing between one empty poll and the next - wait the polling interval, unless the optimizer opted out
                     var delayMs = pollingOptimizer.currentDelayMs();
-                    if (delayMs <= 0 && pollingOptimizer instanceof NoEventStorePollingOptimizer) {
+                    if (delayMs <= 0 && !pollingOptimizer.mayRepollImmediatelyAfterAnEmptyPoll()) {
                         delayMs = pollingSleep;
                     }
                     if (delayMs > 0) {
                         try {
                             Thread.sleep(delayMs);
                         } catch (InterruptedException e) {
+                            // Restore the flag - the loop condition then ends this worker rather than polling without sleeping
                             Thread.currentThread().interrupt();
                         }
                     }
@@ -1122,7 +1128,7 @@ public final class PostgresqlEventStore<CONFIG extends AggregateEventStreamConfi
                                                                 globalOrderRange,
                                                                 transientGapsToIncludeInQuery,
                                                                 onlyIncludeEventIfItBelongsToTenant,
-                                                                eventsBelongingToTenant(loadedEvents, onlyIncludeEventIfItBelongsToTenant),
+                                                                eventsBelongingToTenant(aggregateType, loadedEvents, onlyIncludeEventIfItBelongsToTenant),
                                                                 loadEventsByGlobalOrderTiming.stop().getDuration());
 
                 // No more than demanded is published, and this poll only consumes - reconciles, and moves the read
@@ -1131,7 +1137,7 @@ public final class PostgresqlEventStore<CONFIG extends AggregateEventStreamConfi
                 // they are still transient gaps - resolving one that is then not published would lose its event. A gap
                 // fill handed on before and not acknowledged yet is read again too (its gap is open), and not published again
                 var consumedEvents = eventsWithinDemand(loadedEvents, remainingDemandForEvents);
-                var eventsToPublish = notAwaitingAcknowledgement(eventsBelongingToTenant(consumedEvents, onlyIncludeEventIfItBelongsToTenant), awaitingAcknowledgement);
+                var eventsToPublish = notAwaitingAcknowledgement(eventsBelongingToTenant(aggregateType, consumedEvents, onlyIncludeEventIfItBelongsToTenant), awaitingAcknowledgement);
                 if (consumedEvents.size() < loadedEvents.size()) {
                     eventStoreStreamLog.debug("[{}] Polling worker - Loaded {} event(s), but will only publish {} event(s), as this matches the remainingDemandForEvents {}",
                                               eventStreamLogName,
@@ -1272,7 +1278,7 @@ public final class PostgresqlEventStore<CONFIG extends AggregateEventStreamConfi
         private List<PersistedEvent> eventsWithinDemand(List<PersistedEvent> loadedEvents, long remainingDemandForEvents) {
             var published = 0L;
             for (var index = 0; index < loadedEvents.size(); index++) {
-                if (eventBelongsToTenant(loadedEvents.get(index), onlyIncludeEventIfItBelongsToTenant) && !isAwaitingAcknowledgement(loadedEvents.get(index))) {
+                if (eventBelongsToTenant(aggregateType, loadedEvents.get(index), onlyIncludeEventIfItBelongsToTenant) && !isAwaitingAcknowledgement(loadedEvents.get(index))) {
                     if (published == remainingDemandForEvents) {
                         return loadedEvents.subList(0, index);
                     }
@@ -1364,16 +1370,7 @@ public final class PostgresqlEventStore<CONFIG extends AggregateEventStreamConfi
      * of an unacknowledged fill must stay open. They lie below the poll's range, so they are no new gaps either.
      */
     private static List<PersistedEvent> eventsToReconcile(List<PersistedEvent> events, Optional<GapFillsAwaitingAcknowledgement> awaitingAcknowledgement) {
-        var stillAwaiting = awaitingAcknowledgement.map(GapFillsAwaitingAcknowledgement::awaitingEvents).orElse(List.of());
-        if (stillAwaiting.isEmpty()) {
-            return events;
-        }
-        var read = events.stream().map(PersistedEvent::globalEventOrder).collect(Collectors.toSet());
-        var eventsToReconcile = new ArrayList<>(events);
-        stillAwaiting.stream()
-                     .filter(event -> !read.contains(event.globalEventOrder()))
-                     .forEach(eventsToReconcile::add);
-        return eventsToReconcile;
+        return awaitingAcknowledgement.map(awaiting -> awaiting.withAwaitingEvents(events)).orElse(events);
     }
 
     /**
@@ -1478,25 +1475,32 @@ public final class PostgresqlEventStore<CONFIG extends AggregateEventStreamConfi
         }
     }
 
-    private static List<PersistedEvent> eventsBelongingToTenant(List<PersistedEvent> events, Optional<Tenant> onlyIncludeEventIfItBelongsToTenant) {
+    private List<PersistedEvent> eventsBelongingToTenant(AggregateType aggregateType, List<PersistedEvent> events, Optional<Tenant> onlyIncludeEventIfItBelongsToTenant) {
         if (onlyIncludeEventIfItBelongsToTenant.isEmpty()) {
             return events;
         }
         return events.stream()
-                     .filter(event -> eventBelongsToTenant(event, onlyIncludeEventIfItBelongsToTenant))
+                     .filter(event -> eventBelongsToTenant(aggregateType, event, onlyIncludeEventIfItBelongsToTenant))
                      .toList();
     }
 
     /**
      * The in-memory equivalent of the SQL tenant filter {@code (tenant IS NULL OR tenant = :tenant)}: an event without a
-     * tenant belongs to every tenant, and no tenant filter keeps every event. The same predicate as the
-     * {@link dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.cdc.CdcEventStore}'s.
+     * tenant belongs to every tenant, and no tenant filter keeps every event. Tenants are compared the way the SQL does -
+     * by their {@link TenantSerializer#serialize serialized form} under the aggregate type's {@link TenantSerializer} - so
+     * this keeps exactly the events whose payload the SQL ({@code onlyLoadPayloadIfEventBelongsToTenant}) did not omit,
+     * also for a serializer whose form differs from {@link Object#toString()}.
      */
-    private static boolean eventBelongsToTenant(PersistedEvent event, Optional<Tenant> onlyIncludeEventIfItBelongsToTenant) {
-        return onlyIncludeEventIfItBelongsToTenant.map(tenant -> event.tenant()
-                                                                      .map(eventTenant -> eventTenant.toString().equals(tenant.toString()))
-                                                                      .orElse(true))
-                                                  .orElse(true);
+    @SuppressWarnings({"unchecked", "rawtypes"})
+    private boolean eventBelongsToTenant(AggregateType aggregateType, PersistedEvent event, Optional<Tenant> onlyIncludeEventIfItBelongsToTenant) {
+        if (onlyIncludeEventIfItBelongsToTenant.isEmpty()) {
+            return true;
+        }
+        TenantSerializer tenantSerializer = persistenceStrategy.getAggregateEventStreamConfiguration(aggregateType).tenantSerializer;
+        var               wantedTenant    = tenantSerializer.serialize(onlyIncludeEventIfItBelongsToTenant.get());
+        return event.tenant()
+                    .map(eventTenant -> Objects.equals(tenantSerializer.serialize(eventTenant), wantedTenant))
+                    .orElse(true);
     }
 
     /**

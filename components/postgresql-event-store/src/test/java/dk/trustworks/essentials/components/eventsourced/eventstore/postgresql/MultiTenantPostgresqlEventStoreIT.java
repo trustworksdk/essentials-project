@@ -473,6 +473,59 @@ class MultiTenantPostgresqlEventStoreIT {
     }
 
 
+    /**
+     * The SQL tenant predicates compare the tenant's serialized form, so the in-memory tenant filter must as well: with a serializer
+     * that normalizes the tenant (here to lower case) the stored tenant {@code acme} is the subscribed tenant {@code Acme}, and the
+     * subscriber must get those events - with their payload - and not another tenant's
+     */
+    @Test
+    void test_pollEvents_for_a_tenant_serializer_whose_serialized_form_differs_from_toString() {
+        eventStore.addAggregateEventStreamConfiguration(SeparateTablePerAggregateEventStreamConfiguration.standardConfiguration(PRODUCTS,
+                                                                                                                                createJSONSerializer(),
+                                                                                                                                AggregateIdSerializer.serializerFor(ProductId.class),
+                                                                                                                                IdentifierColumnType.TEXT,
+                                                                                                                                JSONColumnType.JSON,
+                                                                                                                                new LowerCasingTenantSerializer()));
+        var received = new CopyOnWriteArrayList<PersistedEvent>();
+        var subscription = eventStore.pollEvents(PRODUCTS,
+                                                 GlobalEventOrder.FIRST_GLOBAL_EVENT_ORDER,
+                                                 Optional.of(10),
+                                                 Optional.of(Duration.ofMillis(100)),
+                                                 Optional.of(TenantId.of("Acme")),
+                                                 Optional.of(SubscriberId.of("LowerCasedTenantSub")),
+                                                 Optional.empty())
+                                     .subscribe(received::add);
+
+        var acmeProductId  = ProductId.random();
+        var otherProductId = ProductId.random();
+        tenantId = TenantId.of("Acme");
+        var unitOfWork = unitOfWorkFactory.getOrCreateNewUnitOfWork();
+        eventStore.appendToStream(PRODUCTS, acmeProductId, List.of(new ProductEvent.ProductAdded(acmeProductId)));
+        unitOfWork.commit();
+        tenantId = TenantId.of("Other");
+        unitOfWork = unitOfWorkFactory.getOrCreateNewUnitOfWork();
+        eventStore.appendToStream(PRODUCTS, otherProductId, List.of(new ProductEvent.ProductAdded(otherProductId)));
+        unitOfWork.commit();
+
+        Awaitility.waitAtMost(Duration.ofSeconds(5))
+                  .untilAsserted(() -> assertThat(received).hasSize(1));
+        subscription.dispose();
+        assertThat((Object) received.get(0).aggregateId()).isEqualTo(acmeProductId);
+        assertThat(received.get(0).tenant()).isEqualTo(Optional.of(TenantId.of("acme")));
+        Object payload = received.get(0).event().deserialize();
+        assertThat(payload).usingRecursiveComparison().isEqualTo(new ProductEvent.ProductAdded(acmeProductId));
+    }
+
+    /**
+     * Stores the tenant in lower case, so the serialized form of {@code Acme} is {@code acme}
+     */
+    private static class LowerCasingTenantSerializer extends TenantSerializer.TenantIdSerializer {
+        @Override
+        public String serialize(TenantId tenant) {
+            return tenant == null ? null : tenant.toString().toLowerCase();
+        }
+    }
+
     private Map<AggregateType, Map<?, List<?>>> createTestEvents() {
         var eventsPerAggregateType = new HashMap<AggregateType, Map<?, List<?>>>();
 

@@ -20,6 +20,7 @@ import dk.trustworks.essentials.components.foundation.json.EssentialsObjectMappe
 import tools.jackson.databind.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.PostgresqlEventStore;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.*;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.gap.PostgresqlEventStreamGapHandler.ResolveTransientGapsToIncludeInQueryStrategy;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.gap.PostgresqlEventStreamGapHandler.ResolveTransientGapsToPermanentGapsPromotionStrategy;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.observability.EventStoreSubscriptionObserver;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.persistence.*;
@@ -123,7 +124,6 @@ class PostgresqlEventStreamGapHandlerIT {
                                                     Optional.of(ordersSubscriberId),
                                                     Optional.empty())
                                         .subscribe(e -> {
-                                            System.out.println("Received Order event: " + e);
                                             orderEventsReceived.add(e);
                                         });
 
@@ -466,6 +466,113 @@ class PostgresqlEventStreamGapHandlerIT {
 
         assertThat(promoted.promotedToPermanentGaps()).isEqualTo(1);
         assertThat(permanentGaps(gapHandler)).contains(middle.globalEventOrder());
+    }
+
+    /**
+     * A subscription that tracks gaps itself (CDC) gives a gap up after the promotion strategy's threshold: the gap is
+     * promoted then, without waiting for the strategy to see it as old enough by its own clock. A given-up order that is
+     * no transient gap of the subscriber - resolved or promoted meanwhile - is not recorded as a permanent gap.
+     */
+    @Test
+    void a_gap_given_up_after_the_strategy_s_threshold_is_promoted_at_once() {
+        var subscriber = SubscriberId.of("gap-given-up-sub");
+        var gapHandler = new PostgresqlEventStreamGapHandler<SeparateTablePerAggregateEventStreamConfiguration>(unitOfWorkFactory,
+                                                                                                               Duration.ofMillis(1000),
+                                                                                                               ResolveTransientGapsToIncludeInQueryStrategy.defaultSelection(),
+                                                                                                               ResolveTransientGapsToPermanentGapsPromotionStrategy.thresholdBased(120))
+                .gapHandlerFor(subscriber);
+        var events = appendEvents(4);
+        var first  = events.get(0);
+        var second = events.get(1);
+        var third  = events.get(2);
+        var last   = events.get(3);
+        var range  = LongRange.between(first.globalEventOrder().longValue(), last.globalEventOrder().longValue());
+        unitOfWorkFactory.withUnitOfWork(unitOfWork -> gapHandler.reconcileGapsAndReport(aggregateType, range, List.of(first, last), List.of()));
+        assertThat(gapHandler.getTransientGapsFor(aggregateType)).containsExactly(second.globalEventOrder(), third.globalEventOrder());
+        var noTransientGap = GlobalEventOrder.of(last.globalEventOrder().longValue() + 100);
+
+        var givenUp = unitOfWorkFactory.withUnitOfWork(unitOfWork -> gapHandler.giveUpTransientGaps(aggregateType, List.of(second.globalEventOrder(), noTransientGap)));
+
+        assertThat(givenUp).isEqualTo(new GapReconciliation(0, 0, 1));
+        assertThat(gapHandler.getTransientGapsFor(aggregateType)).containsExactly(third.globalEventOrder());
+        assertThat(currentTransientGaps(subscriber)).containsExactly(third.globalEventOrder());
+        assertThat(permanentGaps(gapHandler)).contains(second.globalEventOrder())
+                                             .doesNotContain(third.globalEventOrder(), noTransientGap);
+    }
+
+    /**
+     * With a promotion strategy that states no threshold the subscription gave the gap up after a default the strategy
+     * knows nothing about: only what the strategy itself considers ready is promoted
+     */
+    @Test
+    void a_gap_given_up_is_promoted_only_when_a_strategy_without_a_threshold_considers_it_ready() {
+        var subscriber = SubscriberId.of("gap-given-up-custom-strategy-sub");
+        var gapHandler = new PostgresqlEventStreamGapHandler<SeparateTablePerAggregateEventStreamConfiguration>(unitOfWorkFactory,
+                                                                                                               Duration.ofMillis(1000),
+                                                                                                               ResolveTransientGapsToIncludeInQueryStrategy.defaultSelection(),
+                                                                                                               (forAggregateType, allTransientGaps) -> List.of())
+                .gapHandlerFor(subscriber);
+        var events = appendEvents(3);
+        var range  = LongRange.between(events.get(0).globalEventOrder().longValue(), events.get(2).globalEventOrder().longValue());
+        unitOfWorkFactory.withUnitOfWork(unitOfWork -> gapHandler.reconcileGapsAndReport(aggregateType, range, List.of(events.get(0), events.get(2)), List.of()));
+
+        var givenUp = unitOfWorkFactory.withUnitOfWork(unitOfWork -> gapHandler.giveUpTransientGaps(aggregateType, List.of(events.get(1).globalEventOrder())));
+
+        assertThat(givenUp.promotedToPermanentGaps()).isZero();
+        assertThat(currentTransientGaps(subscriber)).containsExactly(events.get(1).globalEventOrder());
+        assertThat(permanentGaps(gapHandler)).doesNotContain(events.get(1).globalEventOrder());
+    }
+
+    /**
+     * The default selection rotates through more than 50 gaps per subscription - also when the include strategy only
+     * wraps it, so the gap handler cannot recognise it: two subscriptions, one polling twice as often, each see the
+     * rotation of their own
+     */
+    @Test
+    void a_wrapped_default_selection_keeps_a_rotation_per_subscription() {
+        var defaultSelection = ResolveTransientGapsToIncludeInQueryStrategy.defaultSelection();
+        var eventStreamGapHandler = new PostgresqlEventStreamGapHandler<SeparateTablePerAggregateEventStreamConfiguration>(unitOfWorkFactory,
+                                                                                                                          Duration.ofSeconds(60),
+                                                                                                                          (type, range, gaps) -> defaultSelection.resolveTransientGaps(type, range, gaps),
+                                                                                                                          ResolveTransientGapsToPermanentGapsPromotionStrategy.thresholdBased(120));
+        var first  = eventStreamGapHandler.gapHandlerFor(SubscriberId.of("gap-rotation-first-sub"));
+        var second = eventStreamGapHandler.gapHandlerFor(SubscriberId.of("gap-rotation-second-sub"));
+        var events = appendEvents(102);
+        var range  = LongRange.between(events.getFirst().globalEventOrder().longValue(), events.getLast().globalEventOrder().longValue());
+        unitOfWorkFactory.usingUnitOfWork(unitOfWork -> {
+            first.reconcileGapsAndReport(aggregateType, range, List.of(events.getFirst(), events.getLast()), List.of());
+            second.reconcileGapsAndReport(aggregateType, range, List.of(events.getFirst(), events.getLast()), List.of());
+        });
+        var allGaps = events.subList(1, 101).stream()
+                            .map(event -> Pair.of(event.globalEventOrder(), OffsetDateTime.now()))
+                            .collect(Collectors.toList());
+        var firstReference  = new TransientGapsQuerySelection();
+        var secondReference = new TransientGapsQuerySelection();
+        var nextRange       = LongRange.from(events.getLast().globalEventOrder().longValue() + 1);
+
+        for (var poll = 0; poll < 4; poll++) {
+            assertThat(transientGapsToIncludeInQuery(first, nextRange))
+                    .isEqualTo(firstReference.select(allGaps));
+            assertThat(transientGapsToIncludeInQuery(second, nextRange))
+                    .isEqualTo(secondReference.select(allGaps));
+            assertThat(transientGapsToIncludeInQuery(second, nextRange))
+                    .isEqualTo(secondReference.select(allGaps));
+        }
+    }
+
+    private List<GlobalEventOrder> transientGapsToIncludeInQuery(SubscriptionGapHandler gapHandler, LongRange range) {
+        List<GlobalEventOrder> gaps = unitOfWorkFactory.withUnitOfWork(unitOfWork -> gapHandler.findTransientGapsToIncludeInQuery(aggregateType, range));
+        return gaps;
+    }
+
+    private List<PersistedEvent> appendEvents(int count) {
+        var orderId = OrderId.random();
+        var events  = new ArrayList<OrderEvent>();
+        for (var i = 0; i < count; i++) {
+            events.add(new OrderEvent.OrderAccepted(orderId));
+        }
+        return unitOfWorkFactory.withUnitOfWork(() -> eventStore.appendToStream(aggregateType, orderId, events))
+                                .eventList();
     }
 
     /**

@@ -117,6 +117,35 @@ public interface SubscriptionGapHandler {
     }
 
     /**
+     * Record that the subscription gave up waiting for these transient gaps' events - so the next subscription of this
+     * subscriber does not wait for them again, and drops an event for one of them that commits late, as the subscription
+     * that gave up does.
+     * <p>
+     * Called by a subscription that tracks gaps itself - the CDC event store's delivery tracker - once it has waited
+     * {@link #transientGapGiveUpThreshold()} for a gap without its event arriving, from the CDC bus or a poll. That wait
+     * is its proof that the event is missing, standing in for the query that asked for the gap and did not get it, which
+     * is what {@link #reconcileGapsAndReport(AggregateType, LongRange, List, List)} promotes on. The event store calls it
+     * inside a unit of work of its own, holding this handler's monitor, never across the commit.
+     * <p>
+     * The default implementation reconciles as a query that asked for exactly these gaps and found none of their events
+     * would: {@link #reconcileGapsAndReport(AggregateType, LongRange, List, List)} with no events - promoting the ones the
+     * handler's own rule considers ready. The {@link PostgresqlEventStreamGapHandler}'s handlers override it to promote
+     * each of them that is still a transient gap, when their promotion strategy states the threshold that was waited.
+     *
+     * @param aggregateType the aggregate type the gaps belong to
+     * @param transientGaps the global orders given up on - transient gaps of this subscriber, unless something else
+     *                      resolved or promoted them meanwhile
+     * @return what recording the give-up changed for this subscriber - the number of transient gaps promoted
+     */
+    default GapReconciliation giveUpTransientGaps(AggregateType aggregateType, List<GlobalEventOrder> transientGaps) {
+        if (transientGaps.isEmpty()) {
+            return GapReconciliation.NONE;
+        }
+        var highest = transientGaps.stream().mapToLong(GlobalEventOrder::longValue).max().getAsLong();
+        return reconcileGapsAndReport(aggregateType, LongRange.only(highest), List.of(), transientGaps);
+    }
+
+    /**
      * How long this handler keeps waiting for a transient gap's event before it gives up on it (promotes it to a permanent
      * gap), when that is a fixed duration it can state. A subscription that tracks gaps itself - the CDC event store's
      * delivery tracker - waits for a gap that long too, so it follows a customised promotion strategy rather than

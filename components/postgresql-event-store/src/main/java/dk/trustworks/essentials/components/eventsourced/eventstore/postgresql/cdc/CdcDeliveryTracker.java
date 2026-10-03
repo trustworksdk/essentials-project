@@ -50,7 +50,9 @@ import static dk.trustworks.essentials.shared.FailFast.*;
  * first, measured from when a delivered order above it revealed it - and then given up: W moves past it, and an event
  * for it that shows up later is dropped as a duplicate would be. That is the polling path's rule too: its gap handler
  * stops re-querying a transient gap once it promotes it to permanent. The number of runs and of earlier gaps is capped as
- * well, and hitting the cap gives up the oldest gap at once and logs a WARN.
+ * well, and hitting the cap gives up the oldest gap at once and logs a WARN. Once {@link #collectGivenUpGaps()} was
+ * called, the orders given up on are kept for {@link #drainGivenUpGaps()}, so the subscription can record the give-up
+ * with its gap handler.
  * <p>
  * Delivering a gap's event after events with higher orders is out of global order. That is the existing contract:
  * the polling path delivers gap-filled events late too, which is why a subscriber's resume point only ever advances
@@ -127,6 +129,8 @@ final class CdcDeliveryTracker {
     /** Since when (in {@link #nanoClock} time) the {@link #earlierGaps} have been waited for */
     private long                                    earlierGapsSince;
     private boolean                                 capReachedLogged;
+    /** The orders given up on since the last {@link #drainGivenUpGaps()} - null while they are not collected */
+    private List<GlobalEventOrder>                  givenUp;
 
     /**
      * @param name                    used in log statements, e.g. {@code subscriber-aggregateType}
@@ -198,6 +202,29 @@ final class CdcDeliveryTracker {
             log.warn("[{}] {} transient gaps were recorded before this subscription started - waiting only for the {} highest of them, the {} lowest are given up",
                      name, earlierGaps.size() + skipped, maxTrackedGaps, skipped);
         }
+    }
+
+    /**
+     * Keep the orders given up on from now on, until {@link #drainGivenUpGaps()} takes them - for a subscription that
+     * records the give-up with its gap handler. Without it they are not kept at all.
+     */
+    synchronized void collectGivenUpGaps() {
+        if (givenUp == null) {
+            givenUp = new ArrayList<>();
+        }
+    }
+
+    /**
+     * @return the orders given up on - the gaps waited for too long or past the cap, and the earlier gaps - since the
+     * last call, lowest gap first; none unless {@link #collectGivenUpGaps()} was called
+     */
+    synchronized List<GlobalEventOrder> drainGivenUpGaps() {
+        if (givenUp == null || givenUp.isEmpty()) {
+            return List.of();
+        }
+        var drained = List.copyOf(givenUp);
+        givenUp.clear();
+        return drained;
     }
 
     /**
@@ -343,6 +370,9 @@ final class CdcDeliveryTracker {
         }
         if (!earlierGaps.isEmpty() && now - earlierGapsSince >= gapTimeoutNanos) {
             log.debug("[{}] Gave up waiting for {} transient gap(s) recorded before this subscription started", name, earlierGaps.size());
+            if (givenUp != null) {
+                earlierGaps.forEach(earlierGap -> givenUp.add(GlobalEventOrder.of(earlierGap)));
+            }
             earlierGaps.clear();
         }
     }
@@ -361,6 +391,11 @@ final class CdcDeliveryTracker {
     private void giveUpLowestGap(String reason) {
         var lowest = runsAboveWatermark.pollFirstEntry();
         log.debug("[{}] Gave up waiting for global order(s) {}..{} - {}", name, watermark + 1, lowest.getKey() - 1, reason);
+        if (givenUp != null) {
+            for (long order = watermark + 1; order < lowest.getKey(); order++) {
+                givenUp.add(GlobalEventOrder.of(order));
+            }
+        }
         watermark = lowest.getValue().end;
     }
 

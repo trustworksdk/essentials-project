@@ -80,10 +80,6 @@ public final class LoadEventsByGlobalOrderBuilder {
     }
 
     /**
-     * Builder an {@link LoadEventsByGlobalOrder} instance from the builder properties
-     * @return the {@link LoadEventsByGlobalOrder} instance
-     */
-    /**
      * @param onlyLoadPayloadIfEventBelongsToTenant see {@link LoadEventsByGlobalOrder#getOnlyLoadPayloadIfEventBelongsToTenant()}
      * @return this builder
      */
@@ -92,6 +88,10 @@ public final class LoadEventsByGlobalOrderBuilder {
         return this;
     }
 
+    /**
+     * Builder an {@link LoadEventsByGlobalOrder} instance from the builder properties
+     * @return the {@link LoadEventsByGlobalOrder} instance
+     */
     public LoadEventsByGlobalOrder build() {
         return new LoadEventsByGlobalOrder(aggregateType, globalEventOrderRange, includeAdditionalGlobalOrders, onlyIncludeEventIfItBelongsToTenant.orElse(null))
                 .setOnlyLoadPayloadIfEventBelongsToTenant(onlyLoadPayloadIfEventBelongsToTenant.orElse(null));
