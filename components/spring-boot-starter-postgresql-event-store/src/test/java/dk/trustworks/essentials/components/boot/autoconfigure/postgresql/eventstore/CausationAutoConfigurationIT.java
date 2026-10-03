@@ -25,6 +25,7 @@ import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.se
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.transaction.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.types.EventTypeOrName;
 import dk.trustworks.essentials.components.foundation.causation.CausationContext;
+import dk.trustworks.essentials.components.foundation.messaging.queue.*;
 import dk.trustworks.essentials.components.foundation.types.EventId;
 import dk.trustworks.essentials.shared.security.EssentialsSecurityProvider;
 import org.junit.jupiter.api.Test;
@@ -75,6 +76,8 @@ class CausationAutoConfigurationIT {
     void causation_is_recorded_by_default() {
         contextRunner.run(ctx -> {
             assertThat(ctx).hasSingleBean(CausationPersistableEventEnricher.class);
+            assertThat(ctx).hasSingleBean(CausationDurableQueuesInterceptor.class);
+            assertThat(ctx.getBean(dk.trustworks.essentials.components.queue.postgresql.PostgresqlDurableQueues.class).getInterceptors()).hasAtLeastOneElementOfType(CausationDurableQueuesInterceptor.class);
             assertThat(ctx.getBean(EssentialsEventStoreProperties.class).getCausation().isEnabled()).isTrue();
 
             assertThat(appendWith(ctx, Optional.of(CAUSE))).contains(CAUSE);
@@ -91,6 +94,7 @@ class CausationAutoConfigurationIT {
         contextRunner.withPropertyValues("essentials.eventstore.causation.enabled=false")
                      .run(ctx -> {
                          assertThat(ctx).doesNotHaveBean(CausationPersistableEventEnricher.class);
+                         assertThat(ctx).doesNotHaveBean(CausationDurableQueuesInterceptor.class);
 
                          assertThat(appendWith(ctx, Optional.of(CAUSE))).isEmpty();
                      });

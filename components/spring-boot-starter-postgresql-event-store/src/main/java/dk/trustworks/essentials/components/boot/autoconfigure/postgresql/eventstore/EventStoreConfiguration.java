@@ -55,7 +55,9 @@ import dk.trustworks.essentials.components.foundation.postgresql.MultiTableChang
 import dk.trustworks.essentials.components.foundation.postgresql.TableChangeNotification;
 import dk.trustworks.essentials.components.foundation.postgresql.stats.*;
 import dk.trustworks.essentials.components.foundation.messaging.eip.store_and_forward.*;
+import dk.trustworks.essentials.components.foundation.messaging.queue.CausationDurableQueuesInterceptor;
 import dk.trustworks.essentials.components.foundation.messaging.queue.DurableQueues;
+import dk.trustworks.essentials.components.foundation.messaging.queue.DurableQueuesInterceptor;
 import dk.trustworks.essentials.components.foundation.reactive.command.DurableLocalCommandBus;
 import dk.trustworks.essentials.components.foundation.transaction.UnitOfWork;
 import dk.trustworks.essentials.reactive.*;
@@ -474,6 +476,23 @@ public class EventStoreConfiguration {
     @ConditionalOnProperty(prefix = "essentials.eventstore.causation", name = "enabled", havingValue = "true", matchIfMissing = true)
     public CausationPersistableEventEnricher causationPersistableEventEnricher() {
         return new CausationPersistableEventEnricher();
+    }
+
+    /**
+     * Carries the cause across every {@link DurableQueues} hand-off - {@link Inbox}, {@link Outbox} and
+     * {@link DurableLocalCommandBus#sendAndDontWait(Object)} - so work done on the consuming side records the event that
+     * caused the message to be queued. See {@link CausationDurableQueuesInterceptor}.<br>
+     * Registered with the {@link DurableQueues} by the queue starters, which collect every {@link DurableQueuesInterceptor}
+     * bean. Governed by the same {@code essentials.eventstore.causation.enabled} as the enricher, so causation is never
+     * written in-process but dropped at every queue.
+     *
+     * @return the {@link CausationDurableQueuesInterceptor}
+     */
+    @Bean
+    @ConditionalOnMissingBean
+    @ConditionalOnProperty(prefix = "essentials.eventstore.causation", name = "enabled", havingValue = "true", matchIfMissing = true)
+    public CausationDurableQueuesInterceptor causationDurableQueuesInterceptor() {
+        return new CausationDurableQueuesInterceptor();
     }
 
     @Bean

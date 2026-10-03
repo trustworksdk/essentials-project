@@ -299,26 +299,24 @@ the cause has to **travel with the message** and be re-bound on the consuming si
     interceptor receives a partial `QueuedMessage` whose `getId()` and `getTotalDeliveryAttempts()` throw (see the
     `ShardOwnedDurableQueues` javadoc). The metadata itself survives: `MessageEnvelope` serializes it with the
     payload.
-  - **Its position in the interceptor chain does not matter for correctness.** In every engine — default
-    (`DefaultDurableQueueConsumer`), centralized fetcher (`CentralizedMessageFetcher`) and shard-owned
-    (`ShardOwnedDurableQueues.handleWithInterceptors`) — the chain's terminal action is the queue's message
-    handler, and the UnitOfWork is opened inside it: by `Inboxes.handleMessage`, or by the command bus's
-    `UnitOfWorkControllingCommandBusInterceptor`. No engine opens a UnitOfWork outside the `HandleQueuedMessage`
-    chain, so any interceptor around it encloses the commit. The phase 5 tests pin this per engine, so a future
-    engine that wraps delivery in a UnitOfWork from outside fails a test instead of silently dropping causes.
+  - **It must run outermost in the chain — `@InterceptorOrder(1)`.** An earlier revision of this document said
+    its position did not matter, reasoning that every engine opens the handler's UnitOfWork inside the chain's
+    terminal action. That missed that on PostgreSQL the UnitOfWork is opened *by an interceptor*:
+    `PostgresqlDurableQueues` always registers `SingleOperationTransactionDurableQueuesInterceptor`, which wraps
+    `HandleQueuedMessage` in a UnitOfWork. With the causation interceptor inside it, the handler saw the cause but
+    the commit — where repositories append — ran after the binding had ended. The phase 5 IT caught it on both
+    PostgreSQL engines (the shard-owned engine has no such interceptor and passed). Interceptors without an order
+    sort as 10, and the sort is stable.
   - **It is registered by the event-store starter**, as a `DurableQueuesInterceptor` bean. The queue starters
     (`spring-boot-starter-postgresql`, `spring-boot-starter-postgresql-queue-shard-owned`) already collect every
     `DurableQueuesInterceptor` bean, and without an event store there are no causing events to carry.
-- **The plain `LocalCommandBus`** in `reactive` needs no change, and the earlier draft was wrong to say it did.
-  `sendAndDontWait` builds `Mono.fromCallable(...).publishOn(boundedElastic()).subscribe()`; `fromCallable` runs
-  its callable when it is subscribed, and `subscribe()` is called on the sending thread, so the handler runs on
-  the sender's thread, inside the sender's binding. (`publishOn` only moves the *result* signal.) `sendAsync`
-  returns the same shape unsubscribed: the handler runs on whichever thread subscribes, so the cause survives when
-  the caller subscribes inside the binding — the normal case — and is lost when the `Mono` is stored and
-  subscribed later. That limitation is documented rather than fixed: `reactive` depends only on `shared` and
-  cannot see `CausationContext`, and adding a generic context-propagation hook to the command bus for this one
-  case is not worth it. Tests in `foundation` pin both behaviours, so if `sendAndDontWait` is ever made truly
-  asynchronous the causation test fails and the change has to carry the cause.
+- **The plain `LocalCommandBus`** in `reactive` *does* lose the cause on `sendAndDontWait` and `sendAsync`, as the
+  first draft said. A later revision of this document claimed otherwise — that `Mono.fromCallable(...)` runs its
+  callable on the subscribing thread, so the handler would run inside the sender's binding — and a test proved it
+  wrong: `publishOn` fuses with `fromCallable` and pulls the callable onto the `boundedElastic` worker. Only `send`
+  runs the handler on the caller's thread. **How to carry it is an open question** (see *Open questions*), because
+  `reactive` depends only on `shared` and cannot see `CausationContext`. `DurableLocalCommandBus.sendAndDontWait`
+  is not affected: it goes through the queue interceptor.
 - **Process boundaries (HTTP, Kafka)** carry no framework metadata, and connecting work across processes is what
   trace context is for. But one cross-process causation matters inside a single service, and the webshop's
   capture flow shows it: the webhook builds a fresh `RecordCaptureOutcome` from the HTTP body and adds it to an
@@ -459,10 +457,10 @@ Nothing breaks, so this can ship in a minor release:
 - **The cause of a join is the delivering event**, with an explicit `CausationContext.where(...)` override for a
   policy that records a different one (F3). `caused_by_event_id` stays single-valued.
 - **No cause bound means no cause written**, never an error (F3).
-- **A command carries its cause on every bus** (F4): synchronously and through the plain `LocalCommandBus` because
-  the handler runs inside the sender's binding, and on the durable bus by the queue interceptor. A `sendAsync`
-  `Mono` subscribed outside the binding loses it, documented. Deciders never see it; other code may read it with
-  `CausationContext.current()`.
+- **A command carries its cause** (F4) through `send` on any bus, because the handler runs inside the sender's
+  binding, and through the durable bus's `sendAndDontWait` by the queue interceptor. The plain `LocalCommandBus`'s
+  `sendAndDontWait` and every bus's `sendAsync` run the handler on a Reactor worker and lose it; how to carry it
+  there is open. Deciders never see it; other code may read it with `CausationContext.current()`.
 - **Causation is written by default** (F3), with `essentials.eventstore.causation.enabled=false` turning off both
   writers — the enricher and the queue interceptor — together.
 - **The `caused_by_event_id` index is opt-in, harness-managed and partial** (F5): off by default behind
@@ -477,7 +475,19 @@ Nothing breaks, so this can ship in a minor release:
 
 ## Open questions
 
-None blocking. Two things are deliberately left for evidence rather than decided up front:
+One open design question, found in phase 5, and two things deliberately left for evidence:
+
+0. **Carrying the cause through `LocalCommandBus.sendAndDontWait` and `sendAsync`.** Both run the handler on a
+   Reactor `boundedElastic` worker, where the sender's binding is gone, and `reactive` cannot see
+   `CausationContext`. The candidates:
+   - *A small context-propagation SPI in `reactive`*: the command bus captures a context when a command is sent
+     and restores it around the handler. Additive; `foundation` supplies the causation implementation; but every
+     `LocalCommandBus` an application builds by hand has to be given it, or it does nothing.
+   - *A Reactor schedule hook* (`Schedulers.onScheduleHook`), installed by `foundation`, that captures the cause
+     when work is scheduled and re-binds it on the worker. No API change and covers all Reactor hand-offs, but it
+     is a JVM-global side effect of a library, and it makes every Reactor task scheduled inside a binding inherit
+     the cause.
+   - *Document it*: the durable bus carries the cause; the plain bus's asynchronous methods do not.
 
 1. **Recording the cause's AggregateType** next to its id, to turn the backward walk's union into a single-table
    lookup. Only if the union lookup measures as too slow on a realistic number of AggregateTypes.
@@ -663,13 +673,14 @@ Phase 5 adds the `durable-queues` A/B.
 - Tests:
   - Unit: never overwrites an existing key; no key when unbound; tolerates the shard-owned partial message.
   - Per engine (default, centralized fetcher, shard-owned): a cause bound at `queueMessage` is visible in the
-    handler *and* in the UnitOfWork's `beforeCommit` — this is the test that pins "no engine opens a UnitOfWork
-    outside the chain".
+    handler *and* in the UnitOfWork's `beforeCommit` — this is the test that caught the interceptor-order bug.
   - Inbox, Outbox and `DurableLocalCommandBus.sendAndDontWait`: an event appended by the receiving handler
     carries the cause bound at send.
-  - `LocalCommandBus` (in `foundation`'s tests, since `reactive` cannot see `CausationContext`):
-    `sendAndDontWait` and a `sendAsync` subscribed inside the binding see the cause; a `sendAsync` subscribed
-    after the binding ended does not. The last one documents the limitation rather than wishing it away.
+  - `LocalCommandBus`: pending the open question.
+- **Done** on `feature/event-causation`, except the `LocalCommandBus`: `CausationDurableQueuesInterceptorTest` (8),
+  `CausationAcrossDurableQueuesIT` (Inbox, Outbox, durable command bus and the no-cause case, each on the per-queue
+  consumer and the centralized fetcher; 8), a shard-owned test in `InboxOutboxOnShardOwnedIT`, and the starter
+  registering the interceptor with the `DurableQueues` bean (`CausationAutoConfigurationIT`).
 
 ### Phase 6 — Read path (`postgresql-event-store`, admin modules)
 
