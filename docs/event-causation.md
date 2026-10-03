@@ -170,13 +170,15 @@ The binding sites, in order of importance:
    place that holds the resolved `PersistedEvent` — `resolveEventReference` already loads it with one
    `fetchStream` per delivery, then discards everything except the deserialized payload. It must return the
    `PersistedEvent` as well. Binding here encloses `PatternMatchingMessageHandler.invokeMethod`, so it covers a
-   `REQUIRED` handler's commit and a `NONE` handler's own `withUnitOfWork` alike.
+   `REQUIRED` handler's commit and a `NONE` handler's own `withUnitOfWork` alike. `ViewEventProcessor` reuses
+   this consumer for its queued path, and binds the same way on its direct path (`handlePersistedEvent`, which
+   hands the event straight to the handler when nothing is queued for its key). Projections rarely append, but a
+   view handler may send a command, and the binding costs nothing.
 2. **Durable-queue delivery**, re-binding from `MessageMetaData` (F4). The engine-agnostic place is a
    `DurableQueuesInterceptor` around `HandleQueuedMessage`, which every engine — default, centralized fetcher,
    shard-owned — runs; `Inboxes.handleMessage` opens its UnitOfWork inside that chain, so the commit is covered.
-3. **`InTransactionEventProcessor.invokeHandler`**, around its handler call. It already has the `PersistedEvent`.
-   `ViewEventProcessor` rejects `NONE` handlers and projections do not append events, but an in-transaction
-   processor can append, so it is bound from the start rather than left for later.
+3. **`InTransactionEventProcessor.invokeHandler`**, around its handler call. It already has the `PersistedEvent`,
+   and an in-transaction processor can append, so it is bound from the start rather than left for later.
 4. **Raw event-store subscriptions**, which are public API and which applications use directly:
    - `PersistedEventSubscriber` (asynchronous subscriptions), around `handleWithBackPressure(e)`, per event.
    - `ExclusiveInTransactionSubscription` and `NonExclusiveInTransactionSubscription`, around
@@ -193,7 +195,10 @@ works when the delivery owns the UnitOfWork. It does not work for the in-transac
 failure there is worse than a null. An in-transaction handler runs inside the *appending* UnitOfWork: if it loads
 an aggregate through `StatefulAggregateRepository` and changes it, the resulting events are written in
 `beforeCommit` of that outer UnitOfWork — after the per-event binding has ended, and inside whatever binding the
-outer work had. They would be recorded as caused by whatever caused the outer work — one step too far back —
+outer work had. (The mechanics: `GenericHandleAwareUnitOfWork.commit` loops over the resource callbacks, then
+publishes the `BeforeCommit` events — which is when in-transaction handlers run — and makes another pass only if a
+callback returned `REQUIRED`. The lazily appending repositories return `REQUIRED` after appending, so in the usual
+case the handler's newly registered aggregate is processed in that next pass. `CausationBindingIT` pins it.) They would be recorded as caused by whatever caused the outer work — one step too far back —
 which is a wrong answer that looks right. So the three lazily appending repositories — `StatefulAggregateRepository`, the decider
 `CommandHandler` and `FlexAggregateRepository` — capture `CausationContext.current()` at the moment they register
 the aggregate with the UnitOfWork, and re-bind that captured value around their own `appendToStream` in
@@ -501,6 +506,7 @@ integration tests (Docker).
   winning and the outer restored; "no cause" hiding an outer binding; a binding is not visible in a task submitted
   to an executor from inside it (the property F4 exists for), can be captured and re-bound there, and is not
   visible in that pool thread's next task.
+- **Done** on `feature/event-causation`.
 
 ### Phase 2 — Delivery-site bindings (`postgresql-event-store`)
 
@@ -512,8 +518,38 @@ integration tests (Docker).
 - `ExclusiveInTransactionSubscription`, `NonExclusiveInTransactionSubscription`: bind around
   `eventHandler.handle(event, unitOfWork)`.
 - `BatchedPersistedEventSubscriber`: no binding; javadoc on the batch handler says how to bind explicitly.
-- Tests: for each site, a handler that records `CausationContext.current()` sees the delivered event's id. For
-  the `EventProcessor`, one `REQUIRED` and one `NONE` handler.
+- `ViewEventProcessor.handlePersistedEvent` (direct path): bind around `patternMatchingMessageHandlerDelegate.accept(msg)`.
+  Its queued path already goes through the resolving consumer.
+- Tests (`CausationBindingIT`): for each site, a handler that records `CausationContext.current()` sees the
+  delivered event's id. For the `EventProcessor`, one `REQUIRED` and one `NONE` handler, each also recording what a
+  UnitOfWork callback sees at commit; and an explicit binding inside a handler overriding the delivered cause. The
+  async subscription is checked at commit too. One test pins the phase 4 premise: a callback registered by an
+  in-transaction handler runs at commit under the *appender's* binding, not the delivered event's.
+- **Done** on `feature/event-causation`.
+
+### Performance gate (applies from phase 3 on)
+
+There are no recorded baselines for the paths causation touches. The performance lab
+(`examples/essentials-performance-lab`) writes its results to `target/`, so nothing is committed; the only committed
+figures are `docs/durable-queue-measurements.md`, which compare the two queue engines with each other, and the lab has
+no scenario that drives event → `EventProcessor` → handler → append at all.
+
+Rather than record a "before" on `release/0.60` and compare it with an "after" from a different run — which the
+measurements document already warns is not a sound comparison — the gate is an A/B **within one interleaved run**,
+using `essentials.eventstore.causation.enabled` as the switch (it exists from phase 3):
+
+- **Phase 2** adds one `ScopedValue` binding per delivery and nothing else; it is not measured separately.
+- **Phase 3 (enricher):** the lab's `baseline-polling-vs-cdc` scenario, both arms in one run. The cost to look for is
+  the `PersistableEvent` copy per event and the extra column value written.
+- **Phase 4 (lazy appends):** a new lab scenario, because none exists: an `EventProcessor` whose handler appends
+  through `StatefulAggregateRepository`, measuring end-to-end handled-events/s and append latency.
+- **Phase 5 (queue interceptor):** the lab's `durable-queues` scenario, both arms, both engines. The cost to look for
+  is one metadata entry per queued message, serialized and stored.
+- **Phase 6 (index):** a separate A/B with `index-enabled` on and off, measuring append latency, since the index is
+  the one part with a per-insert database cost.
+
+The acceptance bar is "no difference outside the run-to-run noise of the same arm". A result outside it is a design
+question, not a tuning task, and gets written up next to the numbers in `docs/durable-queue-measurements.md` style.
 
 ### Phase 3 — The enricher and the switch (`postgresql-event-store`, starter)
 

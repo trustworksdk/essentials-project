@@ -20,6 +20,7 @@ import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.bus.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.types.GlobalEventOrder;
+import dk.trustworks.essentials.components.foundation.causation.CausationContext;
 import dk.trustworks.essentials.components.foundation.types.*;
 import dk.trustworks.essentials.shared.Exceptions;
 import dk.trustworks.essentials.shared.time.StopWatch;
@@ -93,7 +94,8 @@ public class NonExclusiveInTransactionSubscription extends AbstractEventStoreSub
                         );
                         try {
                             var handleEventTiming = StopWatch.start("handleEvent (" + subscriberId + ", " + aggregateType + ")");
-                            eventHandler.handle(event, persistedEvents.unitOfWork);
+                            CausationContext.where(event.eventId())
+                                            .run(() -> eventHandler.handle(event, persistedEvents.unitOfWork));
                             eventStoreSubscriptionObserver.handleEvent(event,
                                     eventHandler,
                                     NonExclusiveInTransactionSubscription.this,

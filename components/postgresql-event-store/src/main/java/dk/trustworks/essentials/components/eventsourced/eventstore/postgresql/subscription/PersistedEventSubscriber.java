@@ -18,6 +18,7 @@ package dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.s
 
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.PersistedEvent;
+import dk.trustworks.essentials.components.foundation.causation.CausationContext;
 import dk.trustworks.essentials.components.foundation.IOExceptionUtil;
 import dk.trustworks.essentials.shared.time.StopWatch;
 import org.reactivestreams.Subscription;
@@ -173,7 +174,8 @@ public class PersistedEventSubscriber extends BaseSubscriber<PersistedEvent> {
                             e.aggregateId(),
                             e.eventOrder()
                     );
-                    return eventStore.getUnitOfWorkFactory()
+                    // The binding encloses the UnitOfWork, so it also covers events appended lazily when it commits
+                    return CausationContext.where(e.eventId()).call(() -> eventStore.getUnitOfWorkFactory()
                             .withUnitOfWork(unitOfWork -> {
                                 var handleEventTiming = StopWatch.start("handleEvent (" + eventStoreSubscription.subscriberId() + ", " + eventStoreSubscription.aggregateType() + ")");
                                 var result = eventHandler.handleWithBackPressure(e);
@@ -183,7 +185,7 @@ public class PersistedEventSubscriber extends BaseSubscriber<PersistedEvent> {
                                         handleEventTiming.stop().getDuration()
                                 );
                                 return result;
-                            });
+                            }));
                 })
                 .retryWhen(forwardToEventHandlerRetryBackoffSpec
                         .doBeforeRetry(retrySignal -> {
