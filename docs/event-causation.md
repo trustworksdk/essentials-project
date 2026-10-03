@@ -490,13 +490,17 @@ integration tests (Docker).
 
 - New package `dk.trustworks.essentials.components.foundation.causation` with `CausationContext`:
   - `static Optional<EventId> current()`
-  - `static Binding where(EventId causedBy)` returning a small wrapper with `run(Runnable)` and
-    `call(Callable)` / a checked variant, over `ScopedValue.where(CAUSE, …)`. A `null` cause binds nothing and
-    runs the action directly, so call sites never branch.
+  - `static Binding where(EventId causedBy)` and `static Binding where(Optional<EventId> causedBy)`, returning a
+    small wrapper with `run(Runnable)` and `call(ScopedValue.CallableOp)` (which propagates checked exceptions
+    unchanged).
+  - The value bound is an `Optional<EventId>`, so `where(Optional.empty())` binds an explicit *"no cause"* that
+    hides any outer binding. That is what phase 4 needs: a repository that captured "no cause" at registration
+    must not inherit some unrelated outer cause at commit. No `null` anywhere in the API.
   - The `ScopedValue` instance itself stays private; the class is the only way in.
-- Unit tests: binding visible inside and gone after; nesting with the innermost winning; `null` binds nothing;
-  a binding is not visible in a task submitted to an executor from inside it (the property F4 exists for), and
-  is not visible in that pool thread's next task.
+- Unit tests: binding visible inside and gone after, including when the action throws; nesting with the innermost
+  winning and the outer restored; "no cause" hiding an outer binding; a binding is not visible in a task submitted
+  to an executor from inside it (the property F4 exists for), can be captured and re-bound there, and is not
+  visible in that pool thread's next task.
 
 ### Phase 2 — Delivery-site bindings (`postgresql-event-store`)
 
