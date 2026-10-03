@@ -154,9 +154,18 @@ final class OrderedShardOwner implements BatchReadableOwner {
     }
 
     /**
-     * Set once a WARN has been logged for a key, so a blocked key is reported on transition only.
+     * Set once a key has been handed to {@link BlockedKeyReport}, so a blocked key is reported on transition only.
      */
     private final Set<String> reportedBlocks = new HashSet<>();
+    /**
+     * The in-flight keys an abandoned shed has already been WARNed about. The rebalancer re-attempts
+     * the shed every heartbeat tick, so a handler that hangs would otherwise produce the same WARN on
+     * every tick for as long as it hangs. Only an abandon held up by a key not reported yet is logged
+     * at WARN; a repeat for the same keys goes to DEBUG.
+     * <p>
+     * Guarded by {@link #stateLock}.
+     */
+    private final Set<String> reportedStuckKeys = new HashSet<>();
     /**
      * Set when a row arrives at exactly a key's blocked {@code key_order} — which can only be the
      * dead letter itself, resurrected, since {@code (key, key_order)} is unique and the original row
@@ -708,14 +717,9 @@ final class OrderedShardOwner implements BatchReadableOwner {
             above.clear();
         }
         if (reportedBlocks.add(key)) {
-            // Once per key, because this is a state an operator has to act on: nothing for this key
-            // will be delivered again until the dead letter is resurrected or deleted. It is also the
-            // only signal — the messages behind it are moved out of the queue, so depth falls rather
-            // than rises, and a rising dead-letter count is what is left to notice.
-            log.warn("Ordered shard {}: key '{}' is blocked at key_order {} — its message was dead-lettered, so "
-                             + "nothing above that order will be delivered and anything arriving for it is dead-lettered "
-                             + "too. Resurrect or delete the dead letter to release the key",
-                     shard, key, previous);
+            // Once per key, and further limited per consumer by BlockedKeyReport: a handler failing for
+            // everything blocks every key with traffic, which was a WARN per key without end.
+            BlockedKeyReport.keyBlocked(metrics, storage.queueId(), shard, key, previous);
         }
         metrics.keysBlockedByDeadLetter.increment();
     }
@@ -970,6 +974,9 @@ final class OrderedShardOwner implements BatchReadableOwner {
         int inFlight;
         synchronized (stateLock) {
             inFlight = keysInFlight.size();
+            if (inFlight == 0) {
+                reportedStuckKeys.clear();
+            }
         }
         if (inFlight == 0) {
             // Flush while the fence is still valid. Acknowledging after the release would be refused,
@@ -988,11 +995,34 @@ final class OrderedShardOwner implements BatchReadableOwner {
             // unbalanced is a performance cost, releasing here would be an ordering bug.
             shedding.set(false);
             metrics.shedsAbandoned.increment();
-            log.warn("Ordered shard {}: shed abandoned with {} key(s) still in a handler — keeping the shard",
-                     shard, inFlight);
+            List<String> stuckKeys;
+            boolean      notReportedYet;
+            synchronized (stateLock) {
+                stuckKeys = List.copyOf(keysInFlight);
+                // Forget keys that have since finished, so one that gets stuck again later is reported again.
+                reportedStuckKeys.retainAll(keysInFlight);
+                notReportedYet = reportedStuckKeys.addAll(keysInFlight);
+            }
+            if (notReportedYet) {
+                log.warn("Ordered shard {}: shed abandoned with {} key(s) still in a handler {} — keeping the shard. "
+                                 + "The shed is retried every heartbeat; this is logged again only if another key holds it up",
+                         shard, stuckKeys.size(), describeKeys(stuckKeys));
+            } else {
+                log.debug("Ordered shard {}: shed abandoned again with {} key(s) still in a handler {}",
+                          shard, stuckKeys.size(), describeKeys(stuckKeys));
+            }
             return false;
         }
         return false;
+    }
+
+    /**
+     * The keys named in a log line, capped: they are what an operator looks up, but a shard can hold
+     * up to {@code keyConcurrency} of them.
+     */
+    private static String describeKeys(List<String> keys) {
+        var max = 10;
+        return keys.size() <= max ? keys.toString() : keys.subList(0, max) + " and " + (keys.size() - max) + " more";
     }
 
     @Override

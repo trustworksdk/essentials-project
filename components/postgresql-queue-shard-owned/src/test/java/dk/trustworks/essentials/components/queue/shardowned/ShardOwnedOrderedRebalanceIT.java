@@ -16,9 +16,13 @@
 
 package dk.trustworks.essentials.components.queue.shardowned;
 
+import ch.qos.logback.classic.Level;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.read.ListAppender;
 import com.zaxxer.hikari.*;
 import org.awaitility.Awaitility;
 import org.junit.jupiter.api.*;
+import org.slf4j.LoggerFactory;
 import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.*;
 
@@ -26,6 +30,7 @@ import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.*;
 import java.util.concurrent.*;
+import java.util.stream.Collectors;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -240,6 +245,11 @@ class ShardOwnedOrderedRebalanceIT {
             }
         };
 
+        var logged      = new ListAppender<ILoggingEvent>();
+        var ownerLogger = (ch.qos.logback.classic.Logger) LoggerFactory.getLogger(OrderedShardOwner.class);
+        logged.start();
+        ownerLogger.addAppender(logged);
+
         var first  = new ShardOwnedQueue(dataSource, QUEUE_ID, SHARD_COUNT, "ord-e");
         var second = new ShardOwnedQueue(dataSource, QUEUE_ID, SHARD_COUNT, "ord-f");
         try {
@@ -259,9 +269,26 @@ class ShardOwnedOrderedRebalanceIT {
             second.startConsumingOrdered((messageId, key, payload, payloadType) -> {
             }, fast(Duration.ofMillis(500)), SHARD_COUNT);
 
-            // The shed is attempted, cannot drain, and is given up on.
+            // The shed is attempted, cannot drain, and is given up on - and, being retried every
+            // heartbeat, given up on again, several times per shard.
             Awaitility.await().atMost(Duration.ofSeconds(20))
-                      .untilAsserted(() -> assertThat(first.metrics().shedsAbandoned.sum()).isPositive());
+                      .untilAsserted(() -> assertThat(first.metrics().shedsAbandoned.sum())
+                              .isGreaterThanOrEqualTo(3L * ShardOwnedSchema.ORDERED_UNITS / 2));
+            // The same stuck keys are reported once per shard, not once per heartbeat for as long as
+            // they stay stuck.
+            List<ILoggingEvent> events;
+            synchronized (logged) { // the monitor AppenderBase appends under; the pumps are still logging
+                events = new ArrayList<>(logged.list);
+            }
+            var abandonWarningsPerShard = events.stream()
+                                                     .filter(event -> event.getLevel() == Level.WARN)
+                                                     .filter(event -> event.getMessage().contains("shed abandoned"))
+                                                     .collect(Collectors.groupingBy(event -> event.getArgumentArray()[0],
+                                                                                    Collectors.counting()));
+            assertThat(abandonWarningsPerShard).isNotEmpty();
+            assertThat(abandonWarningsPerShard.values())
+                    .as("an abandoned shed held up by the same keys must WARN once, not on every retry")
+                    .allMatch(count -> count == 1L);
             // Correctness over balance: the shard is still here, not handed over mid-key.
             assertThat(first.shardsHeld())
                     .as("a shard whose keys are still in handlers must not be released")
@@ -276,6 +303,7 @@ class ShardOwnedOrderedRebalanceIT {
             });
             assertThat(first.metrics().shedsCompleted.sum()).isPositive();
         } finally {
+            ownerLogger.detachAppender(logged);
             blockHandlers.countDown();
             first.close();
             second.close();

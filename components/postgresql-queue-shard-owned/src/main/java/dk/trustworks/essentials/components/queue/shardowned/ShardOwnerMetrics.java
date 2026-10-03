@@ -227,6 +227,13 @@ public final class ShardOwnerMetrics {
     final java.util.concurrent.atomic.AtomicLong nextLeaseOverrunWarningNanos =
             new java.util.concurrent.atomic.AtomicLong(System.nanoTime());
 
+    /** Rate limit for the WARN that reports a key blocked by a dead letter. See {@code BlockedKeyReport}. */
+    final java.util.concurrent.atomic.AtomicLong nextBlockedKeyWarningNanos =
+            new java.util.concurrent.atomic.AtomicLong(System.nanoTime());
+
+    /** Keys blocked since that WARN was last logged, which the next one reports as a count. */
+    final LongAdder blockedKeysSinceLastWarning = new LongAdder();
+
     /**
      * The operator-facing subset, as a stable shape.
      * <p>
