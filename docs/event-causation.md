@@ -556,8 +556,9 @@ question, not a tuning task, and gets written up next to the numbers in `docs/du
 - `CausationPersistableEventEnricher` in `persistence.table_per_aggregate_type`: if `causedByEventId()` is empty
   and a cause is bound, return a copy with it set (every other field copied unchanged); otherwise return the
   event as is.
-- Starter: `EssentialsEventStoreProperties` gains a nested `causation` block with `enabled` (default `true`) and
-  `indexEnabled` (default `false`, used in phase 6). The enricher bean is
+- Starter: `EssentialsEventStoreProperties` gains a nested `causation` block with `enabled` (default `true`).
+  `index-enabled` is added in phase 6, together with the index it switches, so no release carries a property that
+  does nothing. The enricher bean is
   `@ConditionalOnProperty(prefix = "essentials.eventstore.causation", name = "enabled", matchIfMissing = true)`.
   Check the generated `spring-configuration-metadata.json` after a clean build (the `-proc:full` gotcha).
 - F1: rewrite the default mapper's javadoc in `EventStoreConfiguration`; tighten the `PersistableEventMapper`
@@ -565,6 +566,11 @@ question, not a tuning task, and gets written up next to the numbers in `docs/du
 - Tests: enricher unit tests (fills empty, never overwrites, no-op when unbound); a starter test that the bean is
   present by default and absent with `enabled=false`; an IT where an `EventProcessor` handler appends through an
   eager adapter and the persisted row carries the triggering event's id.
+- The enricher copies the event through `PersistableEvent.DefaultPersistableEvent`'s constructor rather than
+  `PersistableEvent.from(...)`, because `from` assigns a timestamp when none is set and a custom mapper may leave
+  the timestamp to the event store.
+- **Done** on `feature/event-causation`: `CausationPersistableEventEnricher(Test)`, `CausationAutoConfigurationIT`
+  (default on, off switch, a mapper's own cause kept), and two write-path tests in `CausationBindingIT`.
 
 ### Phase 4 — Lazy appends (`eventsourced-aggregates`)
 

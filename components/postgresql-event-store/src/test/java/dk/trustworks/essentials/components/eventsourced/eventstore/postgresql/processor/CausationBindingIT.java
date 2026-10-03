@@ -27,7 +27,8 @@ import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.se
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.serializer.json.EssentialsJSONEventSerializers;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.subscription.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.transaction.*;
-import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.types.GlobalEventOrder;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.persistence.PersistableEvent;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.types.*;
 import dk.trustworks.essentials.components.foundation.causation.CausationContext;
 import dk.trustworks.essentials.components.foundation.messaging.*;
 import dk.trustworks.essentials.components.foundation.messaging.eip.store_and_forward.Inboxes;
@@ -55,12 +56,13 @@ import static org.assertj.core.api.Assertions.*;
  * {@link CausationContext} around the handler - and, where the site owns the {@link UnitOfWork}, around its commit
  * too, which is where lazily appended events are written.
  * <p>
- * Nothing here writes a cause to the database yet; that is the enricher's job. These tests pin the bindings it will
- * read.
+ * The {@link CausationPersistableEventEnricher} turns the binding into the persisted {@code caused_by_event_id}; the
+ * write-path tests check that end to end.
  */
 @Testcontainers
 class CausationBindingIT {
-    private static final AggregateType ORDERS = AggregateType.of("Orders");
+    private static final AggregateType ORDERS    = AggregateType.of("Orders");
+    private static final AggregateType SHIPMENTS = AggregateType.of("Shipments");
     private static final Duration      WAIT   = Duration.ofSeconds(15);
 
     @Container
@@ -94,13 +96,24 @@ class CausationBindingIT {
 
         unitOfWorkFactory = new EventStoreManagedUnitOfWorkFactory(jdbi);
         var jsonSerializer = EssentialsJSONEventSerializers.create();
-        var persistenceStrategy = new SeparateTablePerAggregateTypePersistenceStrategy(jdbi,
-                                                                                       unitOfWorkFactory,
-                                                                                       new EventProcessorIT.TestPersistableEventMapper(),
-                                                                                       standardSingleTenantConfiguration(
-                                                                                               jsonSerializer,
-                                                                                               IdentifierColumnType.UUID,
-                                                                                               JSONColumnType.JSONB));
+        // A mapper that sets no cause, so the enricher decides it - as with the starter's default mapper
+        var persistenceStrategy = SeparateTablePerAggregateTypePersistenceStrategy.builder()
+                                                                                  .setJdbi(jdbi)
+                                                                                  .setUnitOfWorkFactory(unitOfWorkFactory)
+                                                                                  .setEventMapper((aggregateId, configuration, event, eventOrder) ->
+                                                                                                          PersistableEvent.builder()
+                                                                                                                          .setEvent(event)
+                                                                                                                          .setAggregateType(configuration.aggregateType)
+                                                                                                                          .setAggregateId(aggregateId)
+                                                                                                                          .setEventTypeOrName(EventTypeOrName.with(event.getClass()))
+                                                                                                                          .setEventOrder(eventOrder)
+                                                                                                                          .build())
+                                                                                  .setAggregateEventStreamConfigurationFactory(standardSingleTenantConfiguration(
+                                                                                          jsonSerializer,
+                                                                                          IdentifierColumnType.UUID,
+                                                                                          JSONColumnType.JSONB))
+                                                                                  .setPersistableEventEnrichers(List.of(new CausationPersistableEventEnricher()))
+                                                                                  .build();
         eventStore = PostgresqlEventStore.<SeparateTablePerAggregateEventStreamConfiguration>builder()
                                          .setUnitOfWorkFactory(unitOfWorkFactory)
                                          .setPersistenceStrategy(persistenceStrategy)
@@ -108,6 +121,7 @@ class CausationBindingIT {
                                          .setEventStoreSubscriptionObserver(new EventStoreSubscriptionObserver.NoOpEventStoreSubscriptionObserver())
                                          .build();
         eventStore.addAggregateEventStreamConfiguration(ORDERS, AggregateIdSerializer.serializerFor(OrderId.class));
+        eventStore.addAggregateEventStreamConfiguration(SHIPMENTS, AggregateIdSerializer.serializerFor(OrderId.class));
 
         fencedLockManager = PostgresqlFencedLockManager.builder()
                                                        .setEventBus(eventStore.localEventBus())
@@ -191,6 +205,27 @@ class CausationBindingIT {
 
         awaitObserved("REQUIRED.handler");
         assertThat(CausationContext.current()).isEmpty();
+    }
+
+    @Test
+    void an_event_appended_by_a_handler_is_persisted_with_the_delivered_event_as_its_cause() {
+        start(new RecordingEventProcessor(eventProcessorDependencies()));
+        var orderId = OrderId.random();
+
+        var delivered = append(new OrderConfirmed(orderId));
+
+        Awaitility.waitAtMost(WAIT).untilAsserted(() -> assertThat(shipmentEvents(orderId)).hasSize(1));
+        assertThat(shipmentEvents(orderId).getFirst().causedByEventId()).contains(delivered);
+    }
+
+    @Test
+    void an_event_appended_with_no_cause_bound_is_persisted_without_one() {
+        var orderId = OrderId.random();
+        append(new OrderPlaced(orderId));
+
+        var persisted = unitOfWorkFactory.withUnitOfWork(() -> eventStore.fetchStream(ORDERS, orderId).orElseThrow().eventList());
+
+        assertThat(persisted.getFirst().causedByEventId()).isEmpty();
     }
 
     // -------------------------------------------------------------------------------------------- ViewEventProcessor
@@ -410,13 +445,19 @@ class CausationBindingIT {
         });
     }
 
+    private List<PersistedEvent> shipmentEvents(OrderId orderId) {
+        return unitOfWorkFactory.withUnitOfWork(() -> eventStore.fetchStream(SHIPMENTS, orderId)
+                                                                .map(stream -> stream.eventList())
+                                                                .orElse(List.of()));
+    }
+
     private void awaitObserved(String... keys) {
         Awaitility.waitAtMost(WAIT).untilAsserted(() -> assertThat(observed).containsKeys(keys));
     }
 
     // ----------------------------------------------------------------------------------------------------- test data
 
-    sealed interface OrderEvent permits OrderPlaced, OrderShipped, OrderCancelled {
+    sealed interface OrderEvent permits OrderPlaced, OrderShipped, OrderCancelled, OrderConfirmed {
         OrderId orderId();
     }
 
@@ -427,6 +468,12 @@ class CausationBindingIT {
     }
 
     record OrderCancelled(OrderId orderId) implements OrderEvent {
+    }
+
+    record OrderConfirmed(OrderId orderId) implements OrderEvent {
+    }
+
+    record ShipmentRequested(OrderId orderId) {
     }
 
     class RecordingEventProcessor extends EventProcessor {
@@ -456,6 +503,11 @@ class CausationBindingIT {
         void on(OrderShipped e) {
             observed.put("NONE.handler", CausationContext.current());
             usingUnitOfWork(() -> recordCauseAtCommit("NONE.beforeCommit"));
+        }
+
+        @MessageHandler
+        void on(OrderConfirmed e) {
+            eventStore.appendToStream(SHIPMENTS, e.orderId(), new ShipmentRequested(e.orderId()));
         }
 
         @MessageHandler

@@ -75,6 +75,8 @@ public class EssentialsEventStoreProperties {
 
     private final CdcProperties cdc = new CdcProperties();
 
+    private final CausationProperties causation = new CausationProperties();
+
     /**
      * Should the Tracing produces only include all operations or only top level operations (default false)
      *
@@ -270,6 +272,15 @@ public class EssentialsEventStoreProperties {
      */
     public CdcProperties getCdc() {
         return cdc;
+    }
+
+    /**
+     * Event causation: recording, on every persisted event, the id of the event that caused it
+     *
+     * @return the {@link CausationProperties}
+     */
+    public CausationProperties getCausation() {
+        return causation;
     }
 
     /**
@@ -591,6 +602,38 @@ public class EssentialsEventStoreProperties {
 
         public void setBackoffMultiplier(double backoffMultiplier) {
             this.backoffMultiplier = backoffMultiplier;
+        }
+    }
+
+    /**
+     * Event causation configuration.
+     * <p>
+     * When enabled, every event written in reaction to another event records that event's id as its
+     * {@code caused_by_event_id}. The framework binds the cause at each event delivery site it owns, and the
+     * {@link dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.persistence.table_per_aggregate_type.CausationPersistableEventEnricher}
+     * writes it. A cause a custom {@link dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.persistence.PersistableEventMapper}
+     * sets itself is never overwritten.
+     */
+    public static class CausationProperties {
+        private boolean enabled = true;
+
+        /**
+         * Is event causation recorded (default {@code true})
+         *
+         * @return Is event causation recorded
+         */
+        public boolean isEnabled() {
+            return enabled;
+        }
+
+        /**
+         * Record event causation. Set to {@code false} to restore the pre-causation behaviour, where
+         * {@code caused_by_event_id} is only set by a custom {@link dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.persistence.PersistableEventMapper}
+         *
+         * @param enabled Record event causation
+         */
+        public void setEnabled(boolean enabled) {
+            this.enabled = enabled;
         }
     }
 

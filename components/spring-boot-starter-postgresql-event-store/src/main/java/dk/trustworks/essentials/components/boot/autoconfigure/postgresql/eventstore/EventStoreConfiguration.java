@@ -141,8 +141,16 @@ public class EventStoreConfiguration {
 
     /**
      * Default {@link PersistableEventMapper} which maps from the raw Java Event's to {@link PersistableEvent}<br>
-     * The {@link PersistableEventMapper} adds additional information such as:
-     * event-id, event-type, event-order, event-timestamp, event-meta-data, correlation-id, tenant-id for each persisted event at a cross-functional level.
+     * It sets the aggregate type, aggregate id, event type and event order; the event store assigns the event id,
+     * event revision and timestamp. It sets <b>no</b> correlation id and <b>no</b> tenant - supply your own
+     * {@link PersistableEventMapper} bean if your events need those.<br>
+     * Other cross-functional information is added afterwards by {@link PersistableEventEnricher}s:
+     * <ul>
+     *     <li>{@link CausationPersistableEventEnricher} sets {@link PersistableEvent#causedByEventId()} to the event that
+     *     caused the current work (see {@link #causationPersistableEventEnricher()})</li>
+     *     <li>{@link MicrometerTracingEventStoreInterceptor} adds the trace context to the event meta-data, when
+     *     {@code management.tracing.enabled=true}</li>
+     * </ul>
      *
      * @return the {@link PersistableEventMapper} to use for all Events
      */
@@ -452,6 +460,20 @@ public class EventStoreConfiguration {
                                                                                                           EssentialsComponentsProperties essentialsComponentsProperties) {
         return new PostgresqlEventStreamGapHandler<SeparateTablePerAggregateEventStreamConfiguration>(eventStoreUnitOfWorkFactory,
                                                                                                       essentialsComponentsProperties.getSchema().getMode().schemaOwnership());
+    }
+
+    /**
+     * Records, on every persisted event, the id of the event that caused it - see {@link CausationPersistableEventEnricher}.<br>
+     * Never overwrites a cause set by a custom {@link PersistableEventMapper}.
+     * Disable with {@code essentials.eventstore.causation.enabled=false}.
+     *
+     * @return the {@link CausationPersistableEventEnricher}
+     */
+    @Bean
+    @ConditionalOnMissingBean
+    @ConditionalOnProperty(prefix = "essentials.eventstore.causation", name = "enabled", havingValue = "true", matchIfMissing = true)
+    public CausationPersistableEventEnricher causationPersistableEventEnricher() {
+        return new CausationPersistableEventEnricher();
     }
 
     @Bean
