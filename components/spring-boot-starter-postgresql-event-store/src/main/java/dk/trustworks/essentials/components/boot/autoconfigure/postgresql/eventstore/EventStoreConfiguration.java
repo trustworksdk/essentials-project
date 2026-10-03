@@ -396,7 +396,7 @@ public class EventStoreConfiguration {
                                                                                                                                     EssentialsEventStoreProperties properties,
                                                                                                                                     List<PersistableEventEnricher> persistableEventEnrichers,
                                                                                                                                     EssentialsComponentsProperties essentialsComponentsProperties) {
-        return SeparateTablePerAggregateTypePersistenceStrategy.builder()
+        var persistenceStrategy = SeparateTablePerAggregateTypePersistenceStrategy.builder()
                                                                .setJdbi(jdbi)
                                                                .setUnitOfWorkFactory(unitOfWorkFactory)
                                                                .setEventMapper(persistableEventMapper)
@@ -406,6 +406,11 @@ public class EventStoreConfiguration {
                                                                .setPersistableEventEnrichers(persistableEventEnrichers)
                                                                .setSchemaOwnership(essentialsComponentsProperties.getSchema().getMode().schemaOwnership())
                                                                .build();
+        if (properties.getCausation().isIndexEnabled()) {
+            // Before any aggregate type is registered, so every event-stream table gets the index as part of its schema
+            persistenceStrategy.enableCausationIndex();
+        }
+        return persistenceStrategy;
     }
 
     /**

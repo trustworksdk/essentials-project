@@ -615,7 +615,8 @@ public class EssentialsEventStoreProperties {
      * sets itself is never overwritten.
      */
     public static class CausationProperties {
-        private boolean enabled = true;
+        private boolean enabled      = true;
+        private boolean indexEnabled = false;
 
         /**
          * Is event causation recorded (default {@code true})
@@ -634,6 +635,31 @@ public class EssentialsEventStoreProperties {
          */
         public void setEnabled(boolean enabled) {
             this.enabled = enabled;
+        }
+
+        /**
+         * Is the caused-by-event-id index created on every event-stream table (default {@code false})
+         *
+         * @return Is the caused-by-event-id index enabled
+         */
+        public boolean isIndexEnabled() {
+            return indexEnabled;
+        }
+
+        /**
+         * Create a partial index on the caused-by-event-id column of every event-stream table, which
+         * {@code EventStore.loadEventsCausedBy(EventId)} ("what did this event cause?") requires and refuses to run
+         * without. Not needed for {@code EventStore.findEvent(EventId)} ("what caused this event?"), which uses the
+         * event-id index.<br>
+         * The index is created by the schema harness, in one transaction, so on a large existing table it blocks writes
+         * while it builds: build it by hand with {@code CREATE INDEX CONCURRENTLY} first, using
+         * {@code SeparateTablePerAggregateTypePersistenceStrategy.causationIndexStatement(...)} for the exact statement.
+         * In {@code essentials.schema.mode=validate} enabling this adds a schema change that must be applied first.
+         *
+         * @param indexEnabled Create the caused-by-event-id index
+         */
+        public void setIndexEnabled(boolean indexEnabled) {
+            this.indexEnabled = indexEnabled;
         }
     }
 

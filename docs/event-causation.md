@@ -719,6 +719,27 @@ percent rather than dismissed as drift.
   change applies to an AggregateType added after start-up; validate mode fails until the emitted script is
   applied; a hand-built `CONCURRENTLY` index with the documented name is adopted by the harness without
   rebuilding.
+- **Split.** 6a is the event store and the index; 6b the admin API and console.
+- **6a — how it landed** on `feature/event-causation`:
+  - `EventStore.findEvent(EventId)` is one `loadEvent(aggregateType, eventId)` per registered aggregate type, in
+    table-name order, so every lookup reuses the existing event-id index *and* goes through the interceptor chain.
+    No new SQL. An id a UUID-typed table cannot hold is treated as "not in this table".
+  - `EventStore.loadEventsCausedBy(EventId)` (named for the existing `loadEvent`/`loadEvents`, rather than the
+    plan's `findEventsCausedBy`) is a new `LoadEventsCausedBy` operation with its own interceptor hook, and one
+    indexed query per table. "Ordered by global order" was not quite possible: a global event order is per table,
+    so results come in table-name order, and in global order within a table.
+  - Both are `default` methods on `EventStore` (and the forward one on `AggregateEventStreamPersistenceStrategy`)
+    that throw `UnsupportedOperationException`, so other implementations keep compiling; `PostgresqlEventStore`
+    and `CdcEventStore` implement them.
+  - The index follows the existing `enableNotifyTriggers` pattern: `enableCausationIndex()` on the strategy,
+    idempotent, sweeping the tables registered so far; the starter calls it before any type is registered when
+    `essentials.eventstore.causation.index-enabled=true`. `causationIndexStatement(configuration)` is public so the
+    concurrent pre-build uses the exact name and predicate.
+  - **Found along the way:** with UUID-typed event-id columns, a cause that is not a UUID made the *append* fail
+    (`UUID.fromString` in the persist path). Framework ids are UUIDs, but a cause bound explicitly, or carried over
+    from a TEXT-typed stream with custom ids, could have failed a business transaction over diagnostic metadata.
+    Such a cause is now dropped with a WARN. (Correlation ids keep the old behaviour; they are outside this work.)
+  - Tests: `CausationLookupIT` (9) and a validate-mode test in `EventStoreSchemaModeIT`.
 
 ### Phase 7 — The decisive integration test
 
