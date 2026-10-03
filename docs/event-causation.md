@@ -771,6 +771,13 @@ two webshop shapes without the webshop:
 
 Both assert exact ids, not "some cause is set", because a missing binding fails silently (F3).
 
+**Done** on `feature/event-causation`: `EventCausationEndToEndIT` in the event-store starter, through the real
+auto-configuration and lifecycle. Both shapes, as above, with every lazy append going through
+`StatefulAggregateRepository` - and the second one continues past the plan: the admin API's
+`findCausationChain` walks the Inbox-reached event back through `FundsCaptureRequested` to the triggering event,
+and `findEventsCausedBy` finds the forward step. It passes with causation on and fails on every assertion with
+`essentials.eventstore.causation.enabled=false`.
+
 ### Phase 8 — Documentation
 
 - `LLM/LLM-postgresql-event-store.md` and `LLM/LLM-foundation.md`: `CausationContext`, the two properties, the
