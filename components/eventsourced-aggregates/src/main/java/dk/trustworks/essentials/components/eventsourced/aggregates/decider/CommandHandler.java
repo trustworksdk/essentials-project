@@ -262,6 +262,12 @@ public interface CommandHandler<COMMAND, EVENT, ERROR> {
             }
 
             class DeciderUnitOfWorkLifecycleCallback implements UnitOfWorkLifecycleCallback<EventsToAppendToStream<ID, EVENT, STATE>> {
+                /**
+                 * The commit calls {@link #beforeCommit} once per pass, and makes another pass whenever any callback asks
+                 * for one or new resources were registered - so the same events must not be appended twice
+                 */
+                private final Set<EventsToAppendToStream<ID, EVENT, STATE>> appended = Collections.newSetFromMap(new IdentityHashMap<>());
+
                 @Override
                 public BeforeCommitProcessingStatus beforeCommit(UnitOfWork unitOfWork, List<EventsToAppendToStream<ID, EVENT, STATE>> associatedResources) {
                     log.trace("[{}] beforeCommit processing {} '{}' registered with the UnitOfWork being committed",
@@ -269,6 +275,9 @@ public interface CommandHandler<COMMAND, EVENT, ERROR> {
                               associatedResources.size(),
                               stateType.getName());
                     associatedResources.forEach(eventsToAppendToStream -> {
+                        if (!appended.add(eventsToAppendToStream)) {
+                            return;
+                        }
                         log.trace("[{}] beforeCommit processing '{}' with id '{}'",
                                   aggregateType,
                                   stateType.getName(),
