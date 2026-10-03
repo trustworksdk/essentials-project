@@ -381,8 +381,8 @@ EventStreamGapHandler<SeparateTablePerAggregateEventStreamConfiguration> eventSt
 }
 ```
 
-- `defaultSelection()` keeps a rotation per subscription whenever the gap handler asks (as is, wrapped or composed in a custom strategy); called directly outside the gap handler, an instance rotates with its own. A poll always also asks for gaps old enough to promote; a gap is promoted only when a poll asked for it and its event was missing
-- CDC gives up a gap at `thresholdBased(n)`'s threshold; a lambda promotion strategy states none (override `permanentGapThreshold()`), so CDC uses 120 s
+- `defaultSelection()` keeps a rotation per subscription and instance whenever the gap handler asks (as is, wrapped or composed in a custom strategy; call each instance once per ask); called directly outside the gap handler or from another thread (executor, `CompletableFuture`), an instance rotates with its own, shared by every subscription reaching it that way. A poll always also asks for gaps old enough to promote; a gap is promoted only when a poll asked for it and its event was missing
+- CDC gives up a gap at `thresholdBased(n)`'s threshold; a lambda promotion strategy states none (override `permanentGapThreshold()`), so CDC uses 120 s; the give-up becomes a permanent gap of the whole aggregate type
 - Use the event store's `EventStoreUnitOfWorkFactory`: a foreign one WARNs once and resolves gaps in its own transaction (commits before the handler's)
 
 #### CDC

@@ -923,10 +923,19 @@ threshold the gap handler had. It now waits as long as the subscription's gap ha
 A give-up is now durable: the CDC event store records it through the new default method
 `SubscriptionGapHandler#giveUpTransientGaps(AggregateType, List<GlobalEventOrder>)`, and `PostgresqlEventStreamGapHandler`
 promotes the given-up gaps that are still transient. A late-committing event for a given-up gap is dropped by the running
-subscription and after a restart; before, a restart delivered it and its gap never closed.
+subscription and after a restart; before, a restart delivered it and its gap never closed. The give-up is recorded with
+the next event delivered and when the subscription ends, and a failed write is tried again.
+
+A recorded give-up is a permanent gap of the whole aggregate type, exactly as a gap a poll promotes is: every other
+subscriber of the aggregate type skips that global order from then on. That is why only gaps the CDC event store waited
+the gap handler's give-up threshold for are recorded. A gap it stops waiting for because more than 10,000 gaps were
+waited for at once is not: its transaction may still be in flight, so it stays a transient gap, and a restarted
+subscription waits for it again.
 
 **What to do:** nothing, if you use the default threshold. A custom `SubscriptionGapHandler` that wants a give-up to
-survive a restart overrides `giveUpTransientGaps(...)`. A promotion strategy written as a lambda, a custom gap
+survive a restart overrides `giveUpTransientGaps(...)`; if you call it yourself, pass only gaps you waited at least
+`transientGapGiveUpThreshold()` for, since `PostgresqlEventStreamGapHandler` promotes what it is given without checking
+their age. A promotion strategy written as a lambda, a custom gap
 handler and `NoEventStreamGapHandler` state no threshold and keep 120 s; implement
 `ResolveTransientGapsToPermanentGapsPromotionStrategy#permanentGapThreshold()` (or override
 `transientGapGiveUpThreshold()` on your handler) to change it.
@@ -944,11 +953,20 @@ a shorter polling interval. A custom or decorated `EventStorePollingOptimizer` t
 purpose must override the new default method `mayRepollImmediatelyAfterAnEmptyPoll()` to return `true`; otherwise the
 polling worker waits the polling interval after every empty poll.
 
+A polling worker whose thread is interrupted without the subscription being cancelled - by event handling that runs on
+the polling thread - now ends the flux with an `InterruptedException` and logs a WARN, instead of polling back-to-back.
+Do not interrupt the polling thread from a handler, nor restore an interrupt on it.
+
 ### One `SubscriberAcknowledgement` per subscription
 
 An instance serves exactly one subscription. If you poll yourself, create one per subscription with
-`SubscriberAcknowledgement.create()`; registering a second event store subscription on the same instance logs a WARN
-once, and its acknowledgements would mix with the first's.
+`SubscriberAcknowledgement.create()`; registering a second event store subscription on the same instance while the
+first is still registered logs a WARN once, and its acknowledgements would mix with the first's.
+
+Subscribing the same polling flux again once the previous subscribe ended - `retry()`, `repeat()` - is the same
+subscription, not a second one: `PostgresqlEventStore` and `CdcEventStore` dispose the previous subscribe's registration
+before registering the next, so no WARN is logged. A gap fill the previous subscribe handed on and that you had not
+acknowledged by then keeps its gap, and the next subscribe hands it on again, so your handler may see it twice.
 
 ### A gap is resolved only once its event was handled
 
