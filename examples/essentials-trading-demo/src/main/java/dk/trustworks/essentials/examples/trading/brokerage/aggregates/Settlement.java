@@ -124,7 +124,7 @@ public class Settlement extends AggregateRoot<SettlementId, SettlementEvent, Set
         if (settled) {
             return;
         }
-        apply(new SettlementMarkedSettled(aggregateId()));
+        apply(new SettlementMarkedSettled(aggregateId(), tradeId, accountId, grossAmount));
     }
 
     public void reconcile() {
@@ -139,6 +139,9 @@ public class Settlement extends AggregateRoot<SettlementId, SettlementEvent, Set
     }
 
     public void closeSettlement() {
+        if (closed) {
+            return;
+        }
         assertOpen();
         if (!reconciled) {
             throw new IllegalStateException("Cannot close settlement before reconciliation is complete");

@@ -16,6 +16,7 @@
 
 package dk.trustworks.essentials.components.foundation.messaging.queue.api;
 
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.AggregateType;
 import dk.trustworks.essentials.components.foundation.messaging.queue.*;
 
 import java.time.OffsetDateTime;
@@ -26,6 +27,14 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
  * Represents a message that has been queued and its associated metadata.
  * This record provides details about the enqueued message,
  * such as its identifiers, payload, timestamps, delivery attempts, and its current state.
+ *
+ * @param orderedMessageKey       the key of an {@link OrderedMessage}; null for an unordered message
+ * @param orderedMessageOrder     the order of an {@link OrderedMessage}; null for an unordered message
+ * @param referencedAggregateType set when the message refers to a persisted event rather than carrying one - as the
+ *                                inbox messages of an {@code EventProcessor} do: the aggregate type, with
+ *                                {@code orderedMessageKey} the aggregate id and {@code orderedMessageOrder} the event
+ *                                order. Routing information, not payload, so it is present whatever the caller's
+ *                                payload rights. Null for every other message
  */
 public record ApiQueuedMessage(
         QueueEntryId id,
@@ -38,7 +47,10 @@ public record ApiQueuedMessage(
         int totalDeliveryAttempts,
         int redeliveryAttempts,
         boolean isDeadLetterMessage,
-        boolean isBeingDelivered
+        boolean isBeingDelivered,
+        String orderedMessageKey,
+        Long orderedMessageOrder,
+        String referencedAggregateType
 ) {
 
     /**
@@ -62,8 +74,21 @@ public record ApiQueuedMessage(
                 message.getTotalDeliveryAttempts(),
                 message.getRedeliveryAttempts(),
                 message.isDeadLetterMessage(),
-                message.isBeingDelivered()
+                message.isBeingDelivered(),
+                message.getMessage() instanceof OrderedMessage ordered ? ordered.getKey() : null,
+                message.getMessage() instanceof OrderedMessage ordered ? ordered.getOrder() : null,
+                referencedAggregateType(message.getMessage())
         );
+    }
+
+    /**
+     * An ordered message whose payload is an {@link AggregateType} refers to the persisted event at that aggregate
+     * type, key (aggregate id) and order - the shape of an {@code EventProcessor}'s inbox messages
+     */
+    private static String referencedAggregateType(Message message) {
+        return message instanceof OrderedMessage && message.getPayload() instanceof AggregateType aggregateType
+               ? aggregateType.toString()
+               : null;
     }
 
     /**
@@ -91,6 +116,9 @@ public record ApiQueuedMessage(
                 ", redeliveryAttempts=" + redeliveryAttempts +
                 ", isDeadLetterMessage=" + isDeadLetterMessage +
                 ", isBeingDelivered=" + isBeingDelivered +
+                ", orderedMessageKey='" + orderedMessageKey + '\'' +
+                ", orderedMessageOrder=" + orderedMessageOrder +
+                ", referencedAggregateType='" + referencedAggregateType + '\'' +
                 '}';
     }
 }

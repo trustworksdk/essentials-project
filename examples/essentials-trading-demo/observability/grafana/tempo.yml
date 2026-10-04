@@ -30,3 +30,8 @@ overrides:
   defaults:
     metrics_generator:
       processors: [service-graphs, span-metrics]
+
+# Tempo keeps traces for 14 days by default; under the demo's constant load that is gigabytes.
+compactor:
+  compaction:
+    block_retention: 24h

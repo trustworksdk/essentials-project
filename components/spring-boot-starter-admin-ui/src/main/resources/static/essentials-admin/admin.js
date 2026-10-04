@@ -249,6 +249,11 @@ views.queues = async () => {
       <td class="truncate">${m.lastDeliveryError ? badge('serious', m.lastDeliveryError) : nil()}</td>
       <td>${m.isBeingDelivered ? badge('warning', 'Delivering') : m.isDeadLetterMessage ? badge('critical', 'Dead letter') : badge('neutral', 'Queued')}</td>
       <td class="actions">
+        ${m.referencedAggregateType
+            ? `<button class="btn btn-sm" data-causation-aggregate-type="${esc(m.referencedAggregateType)}"
+                       data-causation-aggregate-id="${esc(m.orderedMessageKey)}"
+                       title="The event this message refers to: ${esc(m.referencedAggregateType)} ${esc(m.orderedMessageKey)} #${esc(String(m.orderedMessageOrder))}">Causation</button>`
+            : ''}
         ${m.isDeadLetterMessage
             ? `<button class="btn btn-sm" data-act="resurrect" data-name="${esc(m.id)}" ${CAN.writeQueues ? '' : 'disabled'}>Resurrect</button>`
             : `<button class="btn btn-sm" data-act="dlq" data-name="${esc(m.id)}" ${CAN.writeQueues ? '' : 'disabled'}>Dead-letter</button>`}
@@ -259,7 +264,7 @@ views.queues = async () => {
     const cols = [
         { label: 'Entry id' }, { label: 'Payload' }, { label: 'Added' },
         { label: 'Attempts', num: true }, { label: 'Redel.', num: true }, { label: 'Last error' },
-        { label: 'State' }, { label: '', width: '170px', sticky: true }
+        { label: 'State' }, { label: '', width: '250px', sticky: true }
     ];
 
     return `
@@ -1343,12 +1348,14 @@ views.aggregateLookup = async () => {
           <td class="num">${num(ev.eventRevision)}</td>
           <td>${ts(ev.timestamp)}</td>
           <td class="truncate mono">${ev.eventPayload ? esc(ev.eventPayload) : nil()}</td>
+          <td class="actions"><button class="btn btn-sm" data-causation-event="${esc(ev.eventId)}">Causation</button></td>
         </tr>`;
         eventStreamCard = card(`Event stream · generation ${aggregateState.generation}`
                 + (stream?.partialEventStream ? ' · truncated' : ''),
             stream
                 ? table([{ label: 'Event order', num: true }, { label: 'Global order', num: true },
-                         { label: 'Revision', num: true }, { label: 'Timestamp' }, { label: 'Payload' }],
+                         { label: 'Revision', num: true }, { label: 'Timestamp' }, { label: 'Payload' },
+                         { label: '', width: '110px', sticky: true }],
                         (stream.events ?? []).map(eventRow), { empty: 'The generation holds no events' })
                 : streamError?.status === 404
                     ? '<div class="empty">No such generation</div>'
@@ -1649,6 +1656,198 @@ async function openShardOwnedDrawer(queueName, id) {
       </div>`;
 }
 
+/* ── Event causation ─────────────────────────────────────────────────────────────────────────
+   "Why did this happen?" walks back through recorded causes; "what did it cause?" lists direct effects and needs the
+   opt-in caused-by-event-id index, so a 409 there is explained rather than shown as a failure. Event ids are links:
+   following one re-centres the view on that event. Payloads are deliberately not part of these operations. */
+let causationState = { eventId: '', aggregateType: '', aggregateId: '' };
+
+/* A persisted event type is "FQCN:" plus the fully qualified class name - far too long for a table cell. The label
+   shows the simple class name (nested-class part included) and keeps the full type in the tooltip. An event *name*
+   (a named, not typed, event) is shown as it is. */
+function eventTypeLabel(eventType) {
+    if (eventType == null) return nil();
+    const full = String(eventType).replace(/^FQCN:/, '');
+    const simple = full.includes('.') ? full.slice(full.lastIndexOf('.') + 1).replace(/\$/g, '.') : full;
+    return `<span class="badge badge-neutral event-type" title="${esc(full)}">${esc(simple)}</span>`;
+}
+
+const causationLink = (id) => (id == null ? nil('none recorded')
+    : `<button class="link mono" data-causation-event="${esc(id)}" title="Show causation for this event">${esc(String(id).slice(0, 18))}…</button>`);
+
+const causationRow = (ev, index) => `<tr${index === 0 ? ' class="is-selected"' : ''}>
+  <td class="num">${index == null ? '' : num(index)}</td>
+  <td>${causationLink(ev.eventId)}</td>
+  <td>${eventTypeLabel(ev.eventType)}</td>
+  <td>${esc(ev.aggregateType)}</td>
+  <td class="truncate mono">${esc(ev.aggregateId)}</td>
+  <td class="num">${num(ev.eventOrder)}</td>
+  <td>${ts(ev.timestamp)}</td>
+  <td>${causationLink(ev.causedByEventId)}</td>
+</tr>`;
+
+const causationCols = (first) => [
+    { label: first, num: true, width: '60px' }, { label: 'Event id' }, { label: 'Event type' }, { label: 'Aggregate type' },
+    { label: 'Aggregate id' }, { label: 'Event order', num: true }, { label: 'Timestamp' }, { label: 'Caused by' }
+];
+
+views.causation = async () => {
+    const eventId       = causationState.eventId.trim();
+    const aggregateType = causationState.aggregateType.trim();
+    const aggregateId   = causationState.aggregateId.trim();
+
+    /* Aggregate type suggestions come from the subscriptions, the one listing of aggregate types the API has. A failure
+       only loses the suggestions - the field still accepts any type. */
+    let knownTypes = [];
+    try {
+        knownTypes = [...new Set((await api('/event-store/subscriptions')).map((s) => s.aggregateType))].sort();
+    } catch (e) { /* suggestions are optional */ }
+
+    const toolbar = `
+    <div class="toolbar">
+      <label><input type="text" id="causationAggregateType" list="causationAggregateTypes" placeholder="Aggregate type" size="18"
+                    value="${esc(aggregateType)}"></label>
+      <datalist id="causationAggregateTypes">${knownTypes.map((t) => `<option value="${esc(t)}">`).join('')}</datalist>
+      <label><input type="text" id="causationAggregateId" placeholder="Aggregate id" size="26" value="${esc(aggregateId)}"></label>
+      <span class="chip">or</span>
+      <label><input type="text" id="causationEventInput" placeholder="Event id" size="38" value="${esc(eventId)}"></label>
+      <div class="spacer"></div>
+      <span class="chip">identity and cause only · no payloads</span>
+    </div>`;
+
+    let aggregateCard = '';
+    if (aggregateType && aggregateId) {
+        let events = null;
+        let eventsError = null;
+        try {
+            events = await api(`/event-store/aggregate-types/${encodeURIComponent(aggregateType)}/aggregates/${encodeURIComponent(aggregateId)}/events?limit=100`);
+        } catch (e) {
+            eventsError = e;
+        }
+        aggregateCard = card(`Events of ${aggregateType} ${aggregateId} · most recent 100, pick one to walk its causation`,
+            events
+                ? table(causationCols(''), events.map((ev) => causationRow(ev, null)),
+                        { empty: 'No events - check the aggregate type is registered with this event store, and the id' })
+                : errorState(eventsError, 'essentials_subscription_reader'),
+            'GET /event-store/aggregate-types/{aggregateType}/aggregates/{aggregateId}/events', true);
+    }
+
+    if (!eventId) {
+        return toolbar + (aggregateCard || card('Event causation',
+            `<div class="empty"><div class="empty-icon" aria-hidden="true">◌</div>
+             <div>Enter an aggregate type and id to list its events, or an event id, to see why an event happened and
+                  what it caused</div></div>`, null, true));
+    }
+
+    let event;
+    try {
+        event = await api(`/event-store/events/${encodeURIComponent(eventId)}`);
+    } catch (e) {
+        return toolbar + aggregateCard + card('Event causation',
+            e.status === 404 ? '<div class="empty">No registered event stream holds an event with that id</div>'
+                             : errorState(e, 'essentials_subscription_reader'),
+            'GET /event-store/events/{eventId}', true);
+    }
+
+    let chain;
+    try {
+        chain = await api(`/event-store/events/${encodeURIComponent(eventId)}/causation-chain?maxDepth=20`);
+    } catch (e) {
+        return toolbar + aggregateCard + card('Causation', errorState(e, 'essentials_subscription_reader'),
+            'GET /event-store/events/{eventId}/causation-chain', true);
+    }
+    const treeCard = await causationTreeCard(eventId, chain);
+    return toolbar + aggregateCard + `
+    <div class="kpi-row">
+      ${tile('Event type', eventTypeLabel(event.eventType), esc(event.aggregateType))}
+      ${tile('Aggregate', `<span class="mono">${esc(String(event.aggregateId).slice(0, 18))}</span>`, `event order ${num(event.eventOrder)}`)}
+      ${tile('Persisted', ts(event.timestamp), `global order ${num(event.globalEventOrder)}`)}
+      ${tile('Caused by', event.causedByEventId ? causationLink(event.causedByEventId) : nil('none recorded'),
+             event.causedByEventId ? 'follow to walk back' : 'started by a request, a schedule or a person')}
+    </div>
+    ${treeCard}`;
+};
+
+/* ── Causation tree ──────────────────────────────────────────────────────────────────────────
+   The whole flow the looked-up event belongs to: rooted at the start of its chain, with the path down to the event
+   expanded and the event highlighted. Every other branch expands on click, one level at a time - a busy event can
+   have caused thousands - and each node's effects are fetched once and kept while the page stays on that event. */
+let causationTree = { forEventId: null, children: new Map(), expanded: new Set(), indexDisabled: false };
+
+const TREE_CHILD_LIMIT = 50;
+
+async function loadCausedEvents(id) {
+    if (causationTree.children.has(id)) return;
+    try {
+        causationTree.children.set(id, await api(`/event-store/events/${encodeURIComponent(id)}/caused-events`));
+    } catch (e) {
+        if (e.status === 409) {
+            causationTree.indexDisabled = true;
+            return;
+        }
+        throw e;
+    }
+}
+
+async function causationTreeCard(eventId, chain) {
+    const path = [...chain].reverse();   // root first, the looked-up event last
+    if (causationTree.forEventId !== eventId) {
+        causationTree = { forEventId: eventId, children: new Map(), expanded: new Set(path.map((ev) => ev.eventId)), indexDisabled: false };
+    }
+    try {
+        // The path's own levels, so the siblings along the way are visible; then whatever the user expanded
+        for (const id of causationTree.expanded) {
+            if (causationTree.indexDisabled) break;
+            await loadCausedEvents(id);
+        }
+    } catch (e) {
+        return card('Causation', errorState(e, 'essentials_subscription_reader'), 'GET /event-store/events/{eventId}/caused-events', true);
+    }
+
+    const onPath = new Map(path.map((ev, i) => [ev.eventId, path[i + 1]]));   // path node -> its child on the path
+    const rows = [];
+    const addRow = (ev, depth) => {
+        const kids = causationTree.indexDisabled ? (onPath.get(ev.eventId) ? [onPath.get(ev.eventId)] : [])
+                                                 : causationTree.children.get(ev.eventId);
+        const open = causationTree.expanded.has(ev.eventId);
+        const toggle = kids && kids.length === 0
+            ? `<span class="tree-leaf" aria-hidden="true">·</span>`
+            : `<button class="tree-toggle" data-causation-expand="${esc(ev.eventId)}" aria-expanded="${open}"
+                       title="${open ? 'Collapse' : 'Show what this event caused'}">${open ? '▾' : '▸'}</button>`;
+        rows.push(`<tr${ev.eventId === eventId ? ' class="is-selected"' : ''}>
+          <td><div class="tree-cell" style="padding-left:${depth * 18}px">${toggle} ${eventTypeLabel(ev.eventType)}</div></td>
+          <td>${esc(ev.aggregateType)}</td>
+          <td class="truncate mono">${esc(ev.aggregateId)}</td>
+          <td class="num">${num(ev.eventOrder)}</td>
+          <td>${ts(ev.timestamp)}</td>
+          <td>${causationLink(ev.eventId)}</td>
+        </tr>`);
+        if (open && kids) {
+            kids.slice(0, TREE_CHILD_LIMIT).forEach((kid) => addRow(kid, depth + 1));
+            if (kids.length > TREE_CHILD_LIMIT) {
+                rows.push(`<tr><td colspan="6"><div class="tree-cell" style="padding-left:${(depth + 1) * 18}px">
+                  <span class="nil">… ${num(kids.length - TREE_CHILD_LIMIT)} more not shown</span></div></td></tr>`);
+            }
+        }
+    };
+    addRow(path[0], 0);
+
+    const notes = [];
+    if (path[0].causedByEventId) {
+        notes.push(`<div class="notice">This is not the root: the first event's cause was not found in a registered event
+          stream, or the chain is longer than 20 steps.</div>`);
+    }
+    if (causationTree.indexDisabled) {
+        notes.push(`<div class="notice"><strong>Only the chain is shown.</strong> Showing everything each event caused needs
+          the caused-by-event-id index. Enable it with <code class="mono">essentials.eventstore.causation.index-enabled=true</code>;
+          on large existing event tables, build the index concurrently first.</div>`);
+    }
+    return card('Causation · from the root of the chain, the selected event highlighted',
+        notes.join('') + table([{ label: 'Event' }, { label: 'Aggregate type' }, { label: 'Aggregate id' },
+                                { label: 'Event order', num: true }, { label: 'Timestamp' }, { label: 'Event id' }], rows),
+        'GET /event-store/events/{eventId}/causation-chain · GET /event-store/events/{eventId}/caused-events', true);
+}
+
 const titles = {
     overview: ['Dashboard', 'Current state of the Essentials infrastructure'],
     locks: ['Fenced locks', 'Distributed locks held across service instances'],
@@ -1659,7 +1858,8 @@ const titles = {
     cdc: ['Change Data Capture', 'Replication slot, tailer and dispatcher state'],
     postgresql: ['PostgreSQL statistics', 'Query, size, activity and cache statistics'],
     aggregates: ['Aggregates', 'Snapshot and closing-books policies and statistics'],
-    aggregateLookup: ['Aggregate lookup', 'Generations, snapshots and archives of one logical aggregate']
+    aggregateLookup: ['Aggregate lookup', 'Generations, snapshots and archives of one logical aggregate'],
+    causation: ['Event causation', 'Why an event happened, and what it caused']
 };
 
 let currentView = 'overview';
@@ -1703,6 +1903,28 @@ document.addEventListener('click', async (e) => {
         closeDialog();
         await fn?.();
         return;
+    }
+
+    const expandTarget = e.target.closest('[data-causation-expand]');
+    if (expandTarget) {
+        const id = expandTarget.dataset.causationExpand;
+        if (causationTree.expanded.has(id)) causationTree.expanded.delete(id);
+        else causationTree.expanded.add(id);
+        return render('causation');
+    }
+
+    const aggregateCausationTarget = e.target.closest('[data-causation-aggregate-type]');
+    if (aggregateCausationTarget) {
+        causationState = { eventId: '',
+                           aggregateType: aggregateCausationTarget.dataset.causationAggregateType,
+                           aggregateId: aggregateCausationTarget.dataset.causationAggregateId };
+        return show('causation');
+    }
+
+    const causationTarget = e.target.closest('[data-causation-event]');
+    if (causationTarget) {
+        causationState.eventId = causationTarget.dataset.causationEvent;
+        return show('causation');
     }
 
     if (e.target.closest('[data-copy]')) {
@@ -1836,6 +2058,20 @@ document.addEventListener('keydown', (e) => {
     aggregateState.generation = null;
     aggregateState.archivedGeneration = null;
     render('aggregateLookup');
+});
+
+document.addEventListener('keydown', (e) => {
+    if (e.key !== 'Enter' || e.target.id !== 'causationEventInput') return;
+    causationState.eventId = e.target.value;
+    render('causation');
+});
+
+document.addEventListener('keydown', (e) => {
+    if (e.key !== 'Enter' || (e.target.id !== 'causationAggregateType' && e.target.id !== 'causationAggregateId')) return;
+    causationState.aggregateType = document.getElementById('causationAggregateType').value;
+    causationState.aggregateId = document.getElementById('causationAggregateId').value;
+    causationState.eventId = '';
+    render('causation');
 });
 
 document.addEventListener('keydown', async (e) => {

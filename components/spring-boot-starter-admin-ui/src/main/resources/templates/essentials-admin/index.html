@@ -91,6 +91,10 @@
                 th:title="${canReadSubscriptions} ? null : 'Requires essentials_subscription_reader'">
             <span class="ic">⌕</span> Aggregate lookup
         </button>
+        <button class="nav-item" data-view="causation" th:disabled="${!canReadSubscriptions}"
+                th:title="${canReadSubscriptions} ? null : 'Requires essentials_subscription_reader'">
+            <span class="ic">⤺</span> Event causation
+        </button>
     </nav>
 
     <div class="sidebar-footer">
@@ -122,6 +126,7 @@
     <section class="section" data-section="postgresql"></section>
     <section class="section" data-section="aggregates"></section>
     <section class="section" data-section="aggregateLookup"></section>
+    <section class="section" data-section="causation"></section>
 </main>
 
 <div class="scrim" id="scrim"></div>

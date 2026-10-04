@@ -131,7 +131,7 @@ public class AdminUiDemoApplication {
         return new ApiQueuedMessage(QueueEntryId.of(id), QueueName.of("OrderEvents"), payload,
                                     OffsetDateTime.parse("2026-07-31T12:04:20Z"),
                                     OffsetDateTime.parse("2026-07-31T12:04:35Z"), null, error,
-                                    attempts, redeliveries, false, delivering);
+                                    attempts, redeliveries, false, delivering, null, null, null);
     }
 
     private static ApiQueuedMessage dead(String id) {
@@ -140,7 +140,9 @@ public class AdminUiDemoApplication {
                                     OffsetDateTime.parse("2026-07-31T08:11:02Z"), null,
                                     OffsetDateTime.parse("2026-07-31T08:44:19Z"),
                                     "PaymentGatewayTimeoutException: no response after 30s\n\tat PaymentGatewayClient.authorize(PaymentGatewayClient.java:88)",
-                                    5, 4, true, false);
+                                    5, 4, true, false,
+                                    // An EventProcessor inbox message: it refers to the persisted event Payments/payment-1042#2
+                                    "payment-1042", 2L, "Payments");
     }
 
     @Bean
@@ -289,6 +291,38 @@ public class AdminUiDemoApplication {
                                                  OffsetDateTime.parse("2026-07-31T10:40:12Z")));
         when(api.findAllSubscriptionStatistics(any())).thenReturn(List.of(orderProcessorStatistics));
         when(api.findSubscriptionStatistics(any(), any(), any())).thenReturn(Optional.of(orderProcessorStatistics));
+
+        // A causation chain shaped like the webshop's capture flow: the order, the hold it led to, the capture request,
+        // and the capture the gateway's webhook recorded. Start from 7c1e0f9a-0004-... to walk it back.
+        var causationEvents = new LinkedHashMap<String, ApiCausationEvent>();
+        for (var event : List.of(
+                new ApiCausationEvent("7c1e0f9a-0001-4b8e-9c55-1f0e9c3d2b11", "Orders", "order-1042", "OrderPlaced", 2, 918190,
+                                      OffsetDateTime.parse("2026-07-31T12:01:02Z"), null),
+                new ApiCausationEvent("7c1e0f9a-0002-4b8e-9c55-1f0e9c3d2b11", "Payments", "payment-1042", "CreditCardHoldPlaced", 0, 45201,
+                                      OffsetDateTime.parse("2026-07-31T12:01:03Z"), "7c1e0f9a-0001-4b8e-9c55-1f0e9c3d2b11"),
+                new ApiCausationEvent("7c1e0f9a-0003-4b8e-9c55-1f0e9c3d2b11", "Payments", "payment-1042", "FundsCaptureRequested", 1, 45214,
+                                      OffsetDateTime.parse("2026-07-31T12:03:40Z"), "7c1e0f9a-0002-4b8e-9c55-1f0e9c3d2b11"),
+                new ApiCausationEvent("7c1e0f9a-0004-4b8e-9c55-1f0e9c3d2b11", "Payments", "payment-1042", "FundsCaptured", 2, 45219,
+                                      OffsetDateTime.parse("2026-07-31T12:03:41Z"), "7c1e0f9a-0003-4b8e-9c55-1f0e9c3d2b11"))) {
+            causationEvents.put(event.eventId(), event);
+        }
+        when(api.findEvent(any(), any())).thenAnswer(invocation -> Optional.ofNullable(causationEvents.get(invocation.getArgument(1).toString())));
+        when(api.findCausationChain(any(), any(), anyInt())).thenAnswer(invocation -> {
+            var chain = new ArrayList<ApiCausationEvent>();
+            var next  = causationEvents.get(invocation.getArgument(1).toString());
+            while (next != null && chain.size() < (int) invocation.getArgument(2)) {
+                chain.add(next);
+                next = next.causedByEventId() == null ? null : causationEvents.get(next.causedByEventId());
+            }
+            return chain;
+        });
+        when(api.findAggregateEvents(any(), any(), any(), anyInt())).thenAnswer(invocation -> causationEvents.values().stream()
+                                                                                                    .filter(event -> event.aggregateType().equals(invocation.getArgument(1).toString())
+                                                                                                                     && event.aggregateId().equals(invocation.getArgument(2)))
+                                                                                                    .toList());
+        when(api.findEventsCausedBy(any(), any())).thenAnswer(invocation -> causationEvents.values().stream()
+                                                                                          .filter(event -> invocation.getArgument(1).toString().equals(event.causedByEventId()))
+                                                                                          .toList());
         return api;
     }
 

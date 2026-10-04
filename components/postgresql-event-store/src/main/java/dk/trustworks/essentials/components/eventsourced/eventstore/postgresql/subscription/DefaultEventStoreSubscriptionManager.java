@@ -22,6 +22,7 @@ import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.ob
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.types.GlobalEventOrder;
 import dk.trustworks.essentials.components.foundation.IOExceptionUtil;
 import dk.trustworks.essentials.components.foundation.fencedlock.FencedLockManager;
+import dk.trustworks.essentials.components.foundation.lifecycle.*;
 import dk.trustworks.essentials.components.foundation.types.*;
 import dk.trustworks.essentials.shared.concurrent.ThreadFactoryBuilder;
 import dk.trustworks.essentials.shared.functional.CheckedRunnable;
@@ -42,7 +43,7 @@ import static dk.trustworks.essentials.shared.MessageFormatter.msg;
  * Default implementation of the {@link EventStoreSubscriptionManager} interface that uses the {@link EventStore#getEventStoreSubscriptionObserver()}
  * to track {@link EventStoreSubscription} statistics
  */
-public class DefaultEventStoreSubscriptionManager implements EventStoreSubscriptionManager {
+public class DefaultEventStoreSubscriptionManager implements EventStoreSubscriptionManager, ShutdownAware {
     private static final Logger log = LoggerFactory.getLogger(DefaultEventStoreSubscriptionManager.class);
 
     private final EventStore                    eventStore;
@@ -254,6 +255,20 @@ public class DefaultEventStoreSubscriptionManager implements EventStoreSubscript
         var stopDuration = StopWatch.time(CheckedRunnable.safe(eventStoreSubscription::stop));
         log.info("[{}] Stopped EventStoreSubscription '{}' in {} ms.", fencedLockManager.getLockManagerInstanceId(), eventStoreSubscription.subscriberId(), stopDuration.toMillis());
         eventStoreSubscriptionObserver.stoppedSubscriber(eventStoreSubscription, stopDuration);
+    }
+
+    /**
+     * Passed on to every subscription, which are not beans themselves: they are stopped from several places - an event
+     * processor's own {@code stop()}, a fenced lock's release callback, this manager's {@link #stop()} - usually before
+     * this manager, and each saves its resume point on the way out
+     */
+    @Override
+    public void shutdownStarting(ShutdownContext shutdown) {
+        subscribers.values().forEach(subscription -> {
+            if (subscription instanceof ShutdownAware shutdownAware) {
+                shutdownAware.shutdownStarting(shutdown);
+            }
+        });
     }
 
     @Override

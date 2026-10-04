@@ -72,7 +72,10 @@ class AdminApiSerializationTest {
                                           3,
                                           1,
                                           true,
-                                          false);
+                                          false,
+                                          null,
+                                          null,
+                                          null);
 
         var json = mapper.writeValueAsString(message);
 

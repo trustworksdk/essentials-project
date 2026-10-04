@@ -18,6 +18,7 @@ package dk.trustworks.essentials.components.foundation.scheduler;
 
 import dk.trustworks.essentials.components.foundation.IOExceptionUtil;
 import dk.trustworks.essentials.components.foundation.fencedlock.*;
+import dk.trustworks.essentials.components.foundation.lifecycle.*;
 import dk.trustworks.essentials.components.foundation.postgresql.PostgresqlUtil;
 import dk.trustworks.essentials.components.foundation.scheduler.executor.*;
 import dk.trustworks.essentials.components.foundation.scheduler.executor.ExecutorScheduledJobRepository.ExecutorJobEntry;
@@ -28,6 +29,7 @@ import dk.trustworks.essentials.components.foundation.transaction.jdbi.*;
 import dk.trustworks.essentials.shared.Lifecycle;
 import dk.trustworks.essentials.shared.concurrent.ThreadFactoryBuilder;
 import dk.trustworks.essentials.shared.network.Network;
+import dk.trustworks.essentials.shared.functional.CheckedRunnable;
 import org.slf4j.*;
 
 import java.time.*;
@@ -36,6 +38,7 @@ import java.util.concurrent.*;
 import java.util.function.Function;
 
 import static dk.trustworks.essentials.shared.FailFast.*;
+import static dk.trustworks.essentials.shared.MessageFormatter.msg;
 
 /**
  * <b>Note: This scheduler is not intended to replace a full-fledged scheduler such as Quartz or Spring, it is a simple
@@ -54,7 +57,7 @@ import static dk.trustworks.essentials.shared.FailFast.*;
  *   <li>Manages task lifecycle using a distributed lock to ensure coordinated task execution across multiple nodes.</li>
  * </ul>
  */
-public class DefaultEssentialsScheduler implements EssentialsScheduler, Lifecycle, EssentialsSchemaContributor {
+public class DefaultEssentialsScheduler implements EssentialsScheduler, Lifecycle, ShutdownAware, EssentialsSchemaContributor {
 
     private static final Logger log = LoggerFactory.getLogger(DefaultEssentialsScheduler.class);
 
@@ -65,6 +68,7 @@ public class DefaultEssentialsScheduler implements EssentialsScheduler, Lifecycl
     private final LockName                                                      lockName;
 
     private volatile boolean started;
+    private volatile ShutdownContext shutdown;
     private volatile boolean lockAcquired;
 
     private       ScheduledExecutorService       executorService;
@@ -332,6 +336,7 @@ public class DefaultEssentialsScheduler implements EssentialsScheduler, Lifecycl
     public void start() {
         if (!started) {
             started = true;
+            shutdown = null;
 
             executorService = Executors.newScheduledThreadPool(schedulerThreads,
                                                                ThreadFactoryBuilder.builder()
@@ -436,15 +441,7 @@ public class DefaultEssentialsScheduler implements EssentialsScheduler, Lifecycl
 
         unscheduleExecutorJobs(instanceId);
 
-        try {
-            executorScheduledJobRepository.deleteAll();
-        } catch (Exception e) {
-            if (IOExceptionUtil.isIOException(e)) {
-                log.debug("Failed to purge stale executor scheduled jobs on lock release", e);
-            } else {
-                log.warn("Failed to purge stale executor scheduled jobs on lock release", e);
-            }
-        }
+        cleanUp("purge stale executor scheduled jobs on lock release", executorScheduledJobRepository::deleteAll);
     }
 
     private void scheduleJobs() {
@@ -468,15 +465,7 @@ public class DefaultEssentialsScheduler implements EssentialsScheduler, Lifecycl
             log.info("⏹ Stopping Essentials Scheduler (pg_cron available = '{}')", pgCronAvailable);
 
             if (lockAcquired) {
-                try {
-                    executorScheduledJobRepository.deleteAll();
-                } catch (Exception e) {
-                    if (IOExceptionUtil.isIOException(e)) {
-                        log.debug("Error deleting executor scheduled jobs in stop()", e);
-                    } else {
-                        log.warn("Error deleting executor scheduled jobs in stop()", e);
-                    }
-                }
+                cleanUp("delete executor scheduled jobs in stop()", executorScheduledJobRepository::deleteAll);
             }
 
             fencedLockManager.cancelAsyncLockAcquiring(lockName);
@@ -496,19 +485,39 @@ public class DefaultEssentialsScheduler implements EssentialsScheduler, Lifecycl
         }
     }
 
+    /**
+     * Unscheduling is cleanup, and during shutdown cleanup is one bounded attempt that is skipped once the database has
+     * proven unreachable - see {@link ShutdownContext}. Note the one piece of it with no backstop: a pg_cron job this
+     * instance could not unschedule stays in {@code cron.job} until an instance with the same host name starts again.
+     */
+    @Override
+    public void shutdownStarting(ShutdownContext shutdown) {
+        this.shutdown = requireNonNull(shutdown, "No shutdown provided");
+    }
+
+    private void cleanUp(String description, CheckedRunnable step) {
+        var shutdown = this.shutdown;
+        if (shutdown != null) {
+            shutdown.attemptCleanup(description, step);
+            return;
+        }
+        try {
+            step.run();
+        } catch (Exception e) {
+            if (IOExceptionUtil.isIOException(e)) {
+                log.debug("Failed to {}", description, e);
+            } else {
+                log.warn("Failed to {}", description, e);
+            }
+        }
+    }
+
     private void unscheduleExecutorJobs(String instanceId) {
         for (var future : executorJobFutures.values()) {
             future.cancel(true);
         }
-        try {
-            executorScheduledJobRepository.deleteByNameEndingWithInstanceId(instanceId);
-        } catch (Exception e) {
-            if (IOExceptionUtil.isIOException(e)) {
-                log.debug("Failed to purge executor scheduled jobs for instance '{}'", instanceId, e);
-            } else {
-                log.warn("Failed to purge executor scheduled jobs for instance '{}'", instanceId, e);
-            }
-        }
+        cleanUp(msg("purge executor scheduled jobs for instance '{}'", instanceId),
+                () -> executorScheduledJobRepository.deleteByNameEndingWithInstanceId(instanceId));
         executorJobFutures.clear();
     }
 
@@ -517,26 +526,11 @@ public class DefaultEssentialsScheduler implements EssentialsScheduler, Lifecycl
             for (Map.Entry<PgCronJob, Integer> pair : pgCronJobIds.entrySet()) {
                 var jobId = pair.getValue();
                 if (jobId != null) {
-                    try {
-                        pgCronRepository.unschedule(jobId);
-                    } catch (Exception e) {
-                        if (IOExceptionUtil.isIOException(e)) {
-                            log.debug("Failed to unschedule pg_cron jobId '{}'", jobId, e);
-                        } else {
-                            log.warn("Failed to unschedule pg_cron jobId '{}'", jobId, e);
-                        }
-                    }
+                    cleanUp(msg("unschedule pg_cron jobId '{}'", jobId), () -> pgCronRepository.unschedule(jobId));
                 }
             }
-            try {
-                pgCronRepository.deleteJobByNameEndingWithInstanceId(instanceId);
-            } catch (Exception e) {
-                if (IOExceptionUtil.isIOException(e)) {
-                    log.debug("Failed to purge pg_cron jobs for instance '{}'", instanceId, e);
-                } else {
-                    log.warn("Failed to purge pg_cron jobs for instance '{}'", instanceId, e);
-                }
-            }
+            cleanUp(msg("purge pg_cron jobs for instance '{}'", instanceId),
+                    () -> pgCronRepository.deleteJobByNameEndingWithInstanceId(instanceId));
             pgCronJobIds.clear();
         }
     }

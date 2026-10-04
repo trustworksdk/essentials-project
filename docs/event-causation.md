@@ -13,6 +13,11 @@ Micrometer tracing interceptors already carry W3C trace context through event me
 the `correlation_id` column; it stays as it is, available to an application whose own `PersistableEventMapper`
 wants to set it.
 
+**Status:** implemented on `feature/event-causation`, cut from `release/0.60`; phases 1–8 are done, phase 9 waits
+for the webshop to reach the release line. 0.60 is not yet tagged, so merging the branch ships it in **0.60.0**; the
+release notes and migration guide carry it there (§2.9, §1.1.7). The paragraph below is the original reasoning, kept
+for the record.
+
 **Not in 0.60, and does not need a breaking release.** An earlier draft targeted "the next major" on two grounds:
 the mapper SPI could take a new parameter, and the JDK 25 baseline would make `ScopedValue` available. 0.60 has
 since shipped the JDK 25 baseline without this work (`docs/platform-upgrade-0.60.md`, D6, deliberately deferred
@@ -170,13 +175,15 @@ The binding sites, in order of importance:
    place that holds the resolved `PersistedEvent` — `resolveEventReference` already loads it with one
    `fetchStream` per delivery, then discards everything except the deserialized payload. It must return the
    `PersistedEvent` as well. Binding here encloses `PatternMatchingMessageHandler.invokeMethod`, so it covers a
-   `REQUIRED` handler's commit and a `NONE` handler's own `withUnitOfWork` alike.
+   `REQUIRED` handler's commit and a `NONE` handler's own `withUnitOfWork` alike. `ViewEventProcessor` reuses
+   this consumer for its queued path, and binds the same way on its direct path (`handlePersistedEvent`, which
+   hands the event straight to the handler when nothing is queued for its key). Projections rarely append, but a
+   view handler may send a command, and the binding costs nothing.
 2. **Durable-queue delivery**, re-binding from `MessageMetaData` (F4). The engine-agnostic place is a
    `DurableQueuesInterceptor` around `HandleQueuedMessage`, which every engine — default, centralized fetcher,
    shard-owned — runs; `Inboxes.handleMessage` opens its UnitOfWork inside that chain, so the commit is covered.
-3. **`InTransactionEventProcessor.invokeHandler`**, around its handler call. It already has the `PersistedEvent`.
-   `ViewEventProcessor` rejects `NONE` handlers and projections do not append events, but an in-transaction
-   processor can append, so it is bound from the start rather than left for later.
+3. **`InTransactionEventProcessor.invokeHandler`**, around its handler call. It already has the `PersistedEvent`,
+   and an in-transaction processor can append, so it is bound from the start rather than left for later.
 4. **Raw event-store subscriptions**, which are public API and which applications use directly:
    - `PersistedEventSubscriber` (asynchronous subscriptions), around `handleWithBackPressure(e)`, per event.
    - `ExclusiveInTransactionSubscription` and `NonExclusiveInTransactionSubscription`, around
@@ -193,7 +200,10 @@ works when the delivery owns the UnitOfWork. It does not work for the in-transac
 failure there is worse than a null. An in-transaction handler runs inside the *appending* UnitOfWork: if it loads
 an aggregate through `StatefulAggregateRepository` and changes it, the resulting events are written in
 `beforeCommit` of that outer UnitOfWork — after the per-event binding has ended, and inside whatever binding the
-outer work had. They would be recorded as caused by whatever caused the outer work — one step too far back —
+outer work had. (The mechanics: `GenericHandleAwareUnitOfWork.commit` loops over the resource callbacks, then
+publishes the `BeforeCommit` events — which is when in-transaction handlers run — and makes another pass only if a
+callback returned `REQUIRED`. The lazily appending repositories return `REQUIRED` after appending, so in the usual
+case the handler's newly registered aggregate is processed in that next pass. `CausationBindingIT` pins it.) They would be recorded as caused by whatever caused the outer work — one step too far back —
 which is a wrong answer that looks right. So the three lazily appending repositories — `StatefulAggregateRepository`, the decider
 `CommandHandler` and `FlexAggregateRepository` — capture `CausationContext.current()` at the moment they register
 the aggregate with the UnitOfWork, and re-bind that captured value around their own `appendToStream` in
@@ -294,26 +304,27 @@ the cause has to **travel with the message** and be re-bound on the consuming si
     interceptor receives a partial `QueuedMessage` whose `getId()` and `getTotalDeliveryAttempts()` throw (see the
     `ShardOwnedDurableQueues` javadoc). The metadata itself survives: `MessageEnvelope` serializes it with the
     payload.
-  - **Its position in the interceptor chain does not matter for correctness.** In every engine — default
-    (`DefaultDurableQueueConsumer`), centralized fetcher (`CentralizedMessageFetcher`) and shard-owned
-    (`ShardOwnedDurableQueues.handleWithInterceptors`) — the chain's terminal action is the queue's message
-    handler, and the UnitOfWork is opened inside it: by `Inboxes.handleMessage`, or by the command bus's
-    `UnitOfWorkControllingCommandBusInterceptor`. No engine opens a UnitOfWork outside the `HandleQueuedMessage`
-    chain, so any interceptor around it encloses the commit. The phase 5 tests pin this per engine, so a future
-    engine that wraps delivery in a UnitOfWork from outside fails a test instead of silently dropping causes.
+  - **It must run outermost in the chain — `@InterceptorOrder(1)`.** An earlier revision of this document said
+    its position did not matter, reasoning that every engine opens the handler's UnitOfWork inside the chain's
+    terminal action. That missed that on PostgreSQL the UnitOfWork is opened *by an interceptor*:
+    `PostgresqlDurableQueues` always registers `SingleOperationTransactionDurableQueuesInterceptor`, which wraps
+    `HandleQueuedMessage` in a UnitOfWork. With the causation interceptor inside it, the handler saw the cause but
+    the commit — where repositories append — ran after the binding had ended. The phase 5 IT caught it on both
+    PostgreSQL engines (the shard-owned engine has no such interceptor and passed). Interceptors without an order
+    sort as 10, and the sort is stable.
   - **It is registered by the event-store starter**, as a `DurableQueuesInterceptor` bean. The queue starters
     (`spring-boot-starter-postgresql`, `spring-boot-starter-postgresql-queue-shard-owned`) already collect every
     `DurableQueuesInterceptor` bean, and without an event store there are no causing events to carry.
-- **The plain `LocalCommandBus`** in `reactive` needs no change, and the earlier draft was wrong to say it did.
-  `sendAndDontWait` builds `Mono.fromCallable(...).publishOn(boundedElastic()).subscribe()`; `fromCallable` runs
-  its callable when it is subscribed, and `subscribe()` is called on the sending thread, so the handler runs on
-  the sender's thread, inside the sender's binding. (`publishOn` only moves the *result* signal.) `sendAsync`
-  returns the same shape unsubscribed: the handler runs on whichever thread subscribes, so the cause survives when
-  the caller subscribes inside the binding — the normal case — and is lost when the `Mono` is stored and
-  subscribed later. That limitation is documented rather than fixed: `reactive` depends only on `shared` and
-  cannot see `CausationContext`, and adding a generic context-propagation hook to the command bus for this one
-  case is not worth it. Tests in `foundation` pin both behaviours, so if `sendAndDontWait` is ever made truly
-  asynchronous the causation test fails and the change has to carry the cause.
+- **The plain `LocalCommandBus`** in `reactive` *does* lose the cause on `sendAndDontWait` and `sendAsync`, as the
+  first draft said. A later revision of this document claimed otherwise — that `Mono.fromCallable(...)` runs its
+  callable on the subscribing thread, so the handler would run inside the sender's binding — and a test proved it
+  wrong: `publishOn` fuses with `fromCallable` and pulls the callable onto the `boundedElastic` worker. Only `send`
+  runs the handler on the caller's thread. Because `reactive` depends only on `shared` and cannot see
+  `CausationContext`, the bus gained a small SPI, `CommandContextPropagator`: `AbstractCommandBus` calls each
+  registered propagator on the sending thread when a command is sent (including a delayed `sendAndDontWait`), and
+  runs the handler inside what they return. `foundation`'s `CausationCommandContextPropagator` captures the cause
+  there and re-binds it on the worker; since it captures at *send*, a `sendAsync` `Mono` subscribed later still
+  carries it. `DurableLocalCommandBus.sendAndDontWait` goes through the queue interceptor instead.
 - **Process boundaries (HTTP, Kafka)** carry no framework metadata, and connecting work across processes is what
   trace context is for. But one cross-process causation matters inside a single service, and the webshop's
   capture flow shows it: the webhook builds a fresh `RecordCaptureOutcome` from the HTTP body and adds it to an
@@ -454,10 +465,14 @@ Nothing breaks, so this can ship in a minor release:
 - **The cause of a join is the delivering event**, with an explicit `CausationContext.where(...)` override for a
   policy that records a different one (F3). `caused_by_event_id` stays single-valued.
 - **No cause bound means no cause written**, never an error (F3).
-- **A command carries its cause on every bus** (F4): synchronously and through the plain `LocalCommandBus` because
-  the handler runs inside the sender's binding, and on the durable bus by the queue interceptor. A `sendAsync`
-  `Mono` subscribed outside the binding loses it, documented. Deciders never see it; other code may read it with
-  `CausationContext.current()`.
+- **A command carries its cause on every bus** (F4): through `send` because the handler runs inside the sender's
+  binding; through the durable bus's `sendAndDontWait` by the queue interceptor; and through `sendAsync` and the
+  plain `LocalCommandBus`'s `sendAndDontWait` — which run the handler on a Reactor worker — by a
+  `CommandContextPropagator`, a small SPI added to `reactive` for this (captured on the sending thread, restored
+  around the handler). Chosen over a JVM-global Reactor schedule hook, which would have needed no API but changed
+  every Reactor hand-off in the application. `foundation` supplies `CausationCommandContextPropagator`; the starter
+  adds it to every command-bus bean. A `LocalCommandBus` built by hand outside Spring needs it added. Deciders never
+  see the cause; other code may read it with `CausationContext.current()`.
 - **Causation is written by default** (F3), with `essentials.eventstore.causation.enabled=false` turning off both
   writers — the enricher and the queue interceptor — together.
 - **The `caused_by_event_id` index is opt-in, harness-managed and partial** (F5): off by default behind
@@ -490,13 +505,18 @@ integration tests (Docker).
 
 - New package `dk.trustworks.essentials.components.foundation.causation` with `CausationContext`:
   - `static Optional<EventId> current()`
-  - `static Binding where(EventId causedBy)` returning a small wrapper with `run(Runnable)` and
-    `call(Callable)` / a checked variant, over `ScopedValue.where(CAUSE, …)`. A `null` cause binds nothing and
-    runs the action directly, so call sites never branch.
+  - `static Binding where(EventId causedBy)` and `static Binding where(Optional<EventId> causedBy)`, returning a
+    small wrapper with `run(Runnable)` and `call(ScopedValue.CallableOp)` (which propagates checked exceptions
+    unchanged).
+  - The value bound is an `Optional<EventId>`, so `where(Optional.empty())` binds an explicit *"no cause"* that
+    hides any outer binding. That is what phase 4 needs: a repository that captured "no cause" at registration
+    must not inherit some unrelated outer cause at commit. No `null` anywhere in the API.
   - The `ScopedValue` instance itself stays private; the class is the only way in.
-- Unit tests: binding visible inside and gone after; nesting with the innermost winning; `null` binds nothing;
-  a binding is not visible in a task submitted to an executor from inside it (the property F4 exists for), and
-  is not visible in that pool thread's next task.
+- Unit tests: binding visible inside and gone after, including when the action throws; nesting with the innermost
+  winning and the outer restored; "no cause" hiding an outer binding; a binding is not visible in a task submitted
+  to an executor from inside it (the property F4 exists for), can be captured and re-bound there, and is not
+  visible in that pool thread's next task.
+- **Done** on `feature/event-causation`.
 
 ### Phase 2 — Delivery-site bindings (`postgresql-event-store`)
 
@@ -508,16 +528,116 @@ integration tests (Docker).
 - `ExclusiveInTransactionSubscription`, `NonExclusiveInTransactionSubscription`: bind around
   `eventHandler.handle(event, unitOfWork)`.
 - `BatchedPersistedEventSubscriber`: no binding; javadoc on the batch handler says how to bind explicitly.
-- Tests: for each site, a handler that records `CausationContext.current()` sees the delivered event's id. For
-  the `EventProcessor`, one `REQUIRED` and one `NONE` handler.
+- `ViewEventProcessor.handlePersistedEvent` (direct path): bind around `patternMatchingMessageHandlerDelegate.accept(msg)`.
+  Its queued path already goes through the resolving consumer.
+- Tests (`CausationBindingIT`): for each site, a handler that records `CausationContext.current()` sees the
+  delivered event's id. For the `EventProcessor`, one `REQUIRED` and one `NONE` handler, each also recording what a
+  UnitOfWork callback sees at commit; and an explicit binding inside a handler overriding the delivered cause. The
+  async subscription is checked at commit too. One test pins the phase 4 premise: a callback registered by an
+  in-transaction handler runs at commit under the *appender's* binding, not the delivered event's.
+- **Done** on `feature/event-causation`.
+
+### Performance gate (applies from phase 3 on)
+
+There are no recorded baselines for the paths causation touches. The performance lab
+(`examples/essentials-performance-lab`) writes its results to `target/`, so nothing is committed; the only committed
+figures are `docs/durable-queue-measurements.md`, which compare the two queue engines with each other, and the lab has
+no scenario that drives event → `EventProcessor` → handler → append at all.
+
+Rather than record a "before" on `release/0.60` and compare it with an "after" from a different run — which the
+measurements document already warns is not a sound comparison — the gate is an A/B **within one interleaved run**,
+using `essentials.eventstore.causation.enabled` as the switch (it exists from phase 3):
+
+- **Phase 2** adds one `ScopedValue` binding per delivery and nothing else; it is not measured separately.
+- **Phase 3 (enricher):** `EventCausationCostIT`'s append-path test in the lab. The cost to look for is the
+  `PersistableEvent` copy per event and the extra column value written. (The `baseline-polling-vs-cdc` scenario was
+  the first idea, but it compares polling with CDC and has no causation switch to interleave on; a dedicated IT on
+  the lab's `AbRunner` was simpler than adding one.)
+- **Phase 4 (lazy appends):** `EventCausationCostIT`'s processor-chain test, added in phase 3 because no lab
+  scenario drove this path: an `EventProcessor` whose handler saves through `StatefulAggregateRepository`.
+- **Phase 5 (queue interceptor):** the lab's `durable-queues` scenario, both arms, both engines. The cost to look for
+  is one metadata entry per queued message, serialized and stored.
+- **Phase 6 (index):** a separate A/B with `index-enabled` on and off, measuring append latency, since the index is
+  the one part with a per-insert database cost.
+
+The acceptance bar is "no difference outside the run-to-run noise of the same arm" for throughput and latency. WAL
+bytes per event are expected to grow by the size of the value written, and the check is that they grow by no more. A result outside it is a design
+question, not a tuning task, and gets written up next to the numbers in `docs/durable-queue-measurements.md` style.
+
+### Measured
+
+`EventCausationCostIT` in the performance lab (`-Dbenchmark.run=true`), interleaved A/B on whether the enricher is
+registered, run on 2026-10-03 against `58da23de` (phase 3). Bindings are unconditional, so they are in both arms.
+Environment: devcontainer, aarch64, 8-CPU cgroup quota shared by JVM and database (no CPU pinning), PostgreSQL 17.5
+in Testcontainers with `synchronous_commit=on`, JDK 25. **Only the two arms within one table are comparable**;
+absolute numbers are this machine's.
+
+Append path — 5 000 events, one per UnitOfWork, with a cause bound; 7 repetitions per arm:
+
+| Arm | Events/s, median [Q1–Q3] | Append p50 µs, median [Q1–Q3] | WAL bytes/event |
+|---|---|---|---|
+| causation off | 4 798 [4 501–6 013] | 214 [158–225] | 677.8 |
+| causation on | 4 916 [4 673–5 498] | 208 [165–218] | 718.0 |
+
+Processor chain — 3 000 events through an `EventProcessor` (8 inbox consumers, centralized fetcher) whose handler
+saves a new aggregate through `StatefulAggregateRepository`, appended lazily at commit; 7 repetitions per arm:
+
+| Arm | Events/s, median [Q1–Q3] | WAL bytes/event |
+|---|---|---|
+| causation off | 1 576 [1 563–1 580] | 2 108.6 |
+| causation on | 1 586 [1 566–1 590] | 2 153.2 |
+
+Reading: throughput and latency distributions overlap in both shapes, so the run does not separate the arms. WAL
+grows by 40.2 and 44.6 bytes per event, which is the cause value itself (a 36-character id plus its header) — the
+column was already there and null before. Nothing beyond the stored value is visible.
+
+Two harness lessons from getting there: with the queue defaults the processor chain delivered exactly one message per
+20 ms poll, so both arms measured 50 events/s with zero spread — a measurement of configuration, fixed by the
+consumer count and fetcher above. And WAL bytes cannot be held to "overlap": the enabled arm writes one more value
+per event by design, so the check is that the difference is the size of that value.
+
+**Rerun after phase 4** (lazy appends capture the cause at registration), same settings, same day:
+
+| Shape | Arm | Events/s, median [Q1–Q3] | WAL bytes/event |
+|---|---|---|---|
+| Append path | causation off | 5 045 [4 077–6 033] | 678.6 |
+| Append path | causation on | 4 831 [4 293–5 543] | 717.9 |
+| Processor chain | causation off | 1 577 [1 570–1 583] | 2 114.1 |
+| Processor chain | causation on | 1 592 [1 590–1 593] | 2 154.6 |
+
+The append path overlaps again. The processor chain's interquartile ranges do *not* overlap — but the enabled arm
+is the faster one, by 0.9%, with both ranges under 1% wide. A difference that size, pointing the way the added
+work cannot, is drift between interleaved runs that this machine's spread happens to resolve, not a cost; the
+harness reports it as separated because it is, and the reading is recorded rather than smoothed over. WAL still
+grows by the stored value only (+39.3 and +40.5 bytes).
+
+**Phase 5 — the queue path**, added to the same IT and run with the other two (7 repetitions per arm): 5 000
+messages queued one per transaction with a cause bound — the shape of `Inbox.addMessageReceived` — and drained by 8
+consumers on the centralized fetcher. The enabled arm registers the `CausationDurableQueuesInterceptor`:
+
+| Arm | Messages/s, median [IQR] | WAL bytes/message |
+|---|---|---|
+| causation off | 1 595 [2] | 1 181.3 |
+| causation on | 1 587 [5] | 1 296.9 |
+
+The append path and processor chain overlapped again in the same run (+41.0 and +41.8 WAL bytes per event).
+
+Reading the queue path: WAL grows by 115.6 bytes per message, which is the metadata entry
+(`"essentials.causedByEventId":"<36-character id>"`, about 58 bytes in JSONB) written **twice** — PostgreSQL logs
+the full row when the message is inserted and again when the UPDATE that claims it for delivery rewrites it. That
+is still only the stored value. Throughput is 0.5% lower, with interquartile ranges too narrow to overlap; unlike
+the processor chain's earlier separation this one points the way the added work does (one more metadata entry
+serialized on the way in and parsed on the way out), so it is recorded as a possibly real cost of about half a
+percent rather than dismissed as drift.
 
 ### Phase 3 — The enricher and the switch (`postgresql-event-store`, starter)
 
 - `CausationPersistableEventEnricher` in `persistence.table_per_aggregate_type`: if `causedByEventId()` is empty
   and a cause is bound, return a copy with it set (every other field copied unchanged); otherwise return the
   event as is.
-- Starter: `EssentialsEventStoreProperties` gains a nested `causation` block with `enabled` (default `true`) and
-  `indexEnabled` (default `false`, used in phase 6). The enricher bean is
+- Starter: `EssentialsEventStoreProperties` gains a nested `causation` block with `enabled` (default `true`).
+  `index-enabled` is added in phase 6, together with the index it switches, so no release carries a property that
+  does nothing. The enricher bean is
   `@ConditionalOnProperty(prefix = "essentials.eventstore.causation", name = "enabled", matchIfMissing = true)`.
   Check the generated `spring-configuration-metadata.json` after a clean build (the `-proc:full` gotcha).
 - F1: rewrite the default mapper's javadoc in `EventStoreConfiguration`; tighten the `PersistableEventMapper`
@@ -525,6 +645,11 @@ integration tests (Docker).
 - Tests: enricher unit tests (fills empty, never overwrites, no-op when unbound); a starter test that the bean is
   present by default and absent with `enabled=false`; an IT where an `EventProcessor` handler appends through an
   eager adapter and the persisted row carries the triggering event's id.
+- The enricher copies the event through `PersistableEvent.DefaultPersistableEvent`'s constructor rather than
+  `PersistableEvent.from(...)`, because `from` assigns a timestamp when none is set and a custom mapper may leave
+  the timestamp to the event store.
+- **Done** on `feature/event-causation`: `CausationPersistableEventEnricher(Test)`, `CausationAutoConfigurationIT`
+  (default on, off switch, a mapper's own cause kept), and two write-path tests in `CausationBindingIT`.
 
 ### Phase 4 — Lazy appends (`eventsourced-aggregates`)
 
@@ -536,6 +661,21 @@ integration tests (Docker).
   triggering event's id. And the case that motivated this phase: an in-transaction subscription handler that
   changes an aggregate through `StatefulAggregateRepository` writes the id of the event it was handed, not the id
   of the outer work's cause.
+- **How it landed.** "Into the registered callback state" turned out not to exist for two of the three: the
+  stateful and flex repositories each share *one* callback instance across every aggregate and UnitOfWork, so the
+  callback has nowhere per-aggregate to keep a cause. Giving each registration its own callback instance would
+  have changed how the UnitOfWork groups and orders appends, so instead an internal helper,
+  `CausesCapturedAtRegistration`, keeps the captured cause per (UnitOfWork, resource identity) beside the callback:
+  first registration wins, entries are released in `afterCommit`/`afterRollback`, and the map is weak on the
+  UnitOfWork so an abandoned one — or a read-only Spring transaction, which skips `afterCommit` — cannot leak.
+  The decider's resource is its own private `EventsToAppendToStream` record, so there the cause simply rides on
+  the record. `FlexAggregateRepository`'s resource, `EventsToPersist`, is public API, which is why it uses the
+  helper rather than gaining a field.
+- **Done** on `feature/event-causation`: `CausationCapturedAtRegistrationIT` (9 tests: the cause at registration
+  wins over the one at commit for all three repositories; "no cause" at registration is kept; first registration
+  wins; a loaded aggregate's later changes; the in-transaction case end to end). All nine fail with the phase 4
+  changes reverted. The `EventProcessor` → repository case is covered end to end by the lab's processor chain,
+  which asserts every reaction event carries a cause.
 
 ### Phase 5 — Queue propagation (`foundation`, starter)
 
@@ -550,13 +690,17 @@ integration tests (Docker).
 - Tests:
   - Unit: never overwrites an existing key; no key when unbound; tolerates the shard-owned partial message.
   - Per engine (default, centralized fetcher, shard-owned): a cause bound at `queueMessage` is visible in the
-    handler *and* in the UnitOfWork's `beforeCommit` — this is the test that pins "no engine opens a UnitOfWork
-    outside the chain".
+    handler *and* in the UnitOfWork's `beforeCommit` — this is the test that caught the interceptor-order bug.
   - Inbox, Outbox and `DurableLocalCommandBus.sendAndDontWait`: an event appended by the receiving handler
     carries the cause bound at send.
-  - `LocalCommandBus` (in `foundation`'s tests, since `reactive` cannot see `CausationContext`):
-    `sendAndDontWait` and a `sendAsync` subscribed inside the binding see the cause; a `sendAsync` subscribed
-    after the binding ended does not. The last one documents the limitation rather than wishing it away.
+  - `LocalCommandBus`: `CausationAcrossLocalCommandBusTest` — with the propagator every send method carries the
+    cause, including a delayed `sendAndDontWait` and a `sendAsync` subscribed after the binding ended; without it,
+    `sendAndDontWait` and `sendAsync` lose it (pinned, so a change to the bus's threading is noticed).
+    `CommandContextPropagatorTest` in `reactive` covers the SPI itself with a `ThreadLocal`.
+- **Done** on `feature/event-causation`: `CausationDurableQueuesInterceptorTest` (8),
+  `CausationAcrossDurableQueuesIT` (Inbox, Outbox, durable command bus and the no-cause case, each on the per-queue
+  consumer and the centralized fetcher; 8), a shard-owned test in `InboxOutboxOnShardOwnedIT`, and the starter
+  registering the interceptor with the `DurableQueues` bean (`CausationAutoConfigurationIT`).
 
 ### Phase 6 — Read path (`postgresql-event-store`, admin modules)
 
@@ -580,6 +724,57 @@ integration tests (Docker).
   change applies to an AggregateType added after start-up; validate mode fails until the emitted script is
   applied; a hand-built `CONCURRENTLY` index with the documented name is adopted by the harness without
   rebuilding.
+- **Split.** 6a is the event store and the index; 6b the admin API and console.
+- **6a — how it landed** on `feature/event-causation`:
+  - `EventStore.findEvent(EventId)` is one `loadEvent(aggregateType, eventId)` per registered aggregate type, in
+    table-name order, so every lookup reuses the existing event-id index *and* goes through the interceptor chain.
+    No new SQL. An id a UUID-typed table cannot hold is treated as "not in this table".
+  - `EventStore.loadEventsCausedBy(EventId)` (named for the existing `loadEvent`/`loadEvents`, rather than the
+    plan's `findEventsCausedBy`) is a new `LoadEventsCausedBy` operation with its own interceptor hook, and one
+    indexed query per table. "Ordered by global order" was not quite possible: a global event order is per table,
+    so results come in table-name order, and in global order within a table.
+  - Both are `default` methods on `EventStore` (and the forward one on `AggregateEventStreamPersistenceStrategy`)
+    that throw `UnsupportedOperationException`, so other implementations keep compiling; `PostgresqlEventStore`
+    and `CdcEventStore` implement them.
+  - The index follows the existing `enableNotifyTriggers` pattern: `enableCausationIndex()` on the strategy,
+    idempotent, sweeping the tables registered so far; the starter calls it before any type is registered when
+    `essentials.eventstore.causation.index-enabled=true`. `causationIndexStatement(configuration)` is public so the
+    concurrent pre-build uses the exact name and predicate.
+  - **Found along the way:** with UUID-typed event-id columns, a cause that is not a UUID made the *append* fail
+    (`UUID.fromString` in the persist path). Framework ids are UUIDs, but a cause bound explicitly, or carried over
+    from a TEXT-typed stream with custom ids, could have failed a business transaction over diagnostic metadata.
+    Such a cause is now dropped with a WARN. (Correlation ids keep the old behaviour; they are outside this work.)
+  - Tests: `CausationLookupIT` (9) and a validate-mode test in `EventStoreSchemaModeIT`.
+- **6b — how it landed** on `feature/event-causation`:
+  - `EventStoreApi` gains `findEvent`, `findCausationChain` (walk back to `maxDepth`, default 20, at most 100,
+    stopping at a missing cause or a revisited event) and `findEventsCausedBy`, at `GET /event-store/events/{eventId}`,
+    `…/causation-chain` and `…/caused-events`, guarded by `essentials_subscription_reader` / `essentials_admin`.
+  - They return a new `ApiCausationEvent`: identity, position, timestamp and cause, **without payloads**. Walking
+    causation does not need them, and the admin API otherwise guards payloads with a separate role; they can be
+    added later without breaking anyone.
+  - A missing index answers `409` with the property to set. `DefaultEventStoreApi` unwraps it from the
+    `UnitOfWorkException` its UnitOfWork wraps it in — without that the adapter answered `500`, which only the
+    end-to-end test could see.
+  - Console: an **Event causation** page — look up an event id and see the whole flow it belongs to as one tree,
+    rooted at the start of its chain, with the path down to the event expanded and the event highlighted. Other
+    branches expand on click, one level at a time (at most 50 children shown per node), and each node's effects are
+    fetched once per page visit. Event types show as their simple class name, the full type on hover. Without the
+    caused-by index the tree degrades to the chain alone, with a notice saying how to enable it. (A first version
+    showed the chain and the direct effects as two tables; trying it on the trading demo showed a flow is hard to read
+    that way.)
+  - **Where users get an event id from** was the gap a review found: they know the business id, not an event id, and
+    the console showed event ids only for closing-books generations. So `findAggregateEvents` (`GET
+    /event-store/aggregate-types/{aggregateType}/aggregates/{aggregateId}/events`, most recent `limit` events, default
+    100) lists an aggregate's events, converting the text id with the type's configured `AggregateIdSerializer`, and
+    the causation page takes an aggregate type (suggested from the subscriptions) and id as its starting point. A queued or
+    dead-lettered `EventProcessor` inbox message links to it too: `ApiQueuedMessage` gained `orderedMessageKey`,
+    `orderedMessageOrder` and `referencedAggregateType` (set when the payload is an `AggregateType`, the shape of an
+    event reference - routing information, so not behind the payload role). The aggregate lookup's event-stream rows gain a
+    *Causation* button. The page's three calls are literal paths, so the parity gate covers them.
+  - Verified: contract drift, validation and compatibility gates; `AdminApiEndpointsTest` and the conformance
+    count; the UI parity gate; and the three endpoints exercised over HTTP against the demo application. **Not
+    verified visually** — no browser is installed in the devcontainer, so the page was syntax-checked but not
+    rendered.
 
 ### Phase 7 — The decisive integration test
 
@@ -594,6 +789,13 @@ two webshop shapes without the webshop:
 
 Both assert exact ids, not "some cause is set", because a missing binding fails silently (F3).
 
+**Done** on `feature/event-causation`: `EventCausationEndToEndIT` in the event-store starter, through the real
+auto-configuration and lifecycle. Both shapes, as above, with every lazy append going through
+`StatefulAggregateRepository` - and the second one continues past the plan: the admin API's
+`findCausationChain` walks the Inbox-reached event back through `FundsCaptureRequested` to the triggering event,
+and `findEventsCausedBy` finds the forward step. It passes with causation on and fails on every assertion with
+`essentials.eventstore.causation.enabled=false`.
+
 ### Phase 8 — Documentation
 
 - `LLM/LLM-postgresql-event-store.md` and `LLM/LLM-foundation.md`: `CausationContext`, the two properties, the
@@ -604,6 +806,11 @@ Both assert exact ids, not "some cause is set", because a missing binding fails 
   metadata key; the index property with the verbatim `CREATE INDEX CONCURRENTLY` statement and the validate-mode
   note.
 - Release notes entry.
+- **Done** on `feature/event-causation`: an *Event Causation* section in `LLM/LLM-postgresql-event-store.md`, and
+  causation coverage in `LLM-foundation.md`, `LLM-reactive.md`, `LLM-admin-api.md` and
+  `LLM-spring-boot-starter-modules.md`; an *Event Causation* section in the event store's README; §1.1.7 and §2.9 in
+  `RELEASE-NOTES-0.60.0.md`; an *Event causation* section in `MIGRATION-0.60.md` with the verbatim concurrent-build
+  statement; the OpenAPI changelog; and module `CLAUDE.md` gotchas throughout.
 
 ### Phase 9 — Webshop worked example (when the webshop is on the release line)
 

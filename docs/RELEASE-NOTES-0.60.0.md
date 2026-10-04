@@ -43,6 +43,7 @@ notes summarise both and link to them rather than repeating every table.
    - [1.5 Durable queues](#15-durable-queues)
    - [1.6 Database objects changed on first startup](#16-database-objects-changed-on-first-startup)
    - [1.7 Subscription statistics records have a new component](#17-subscription-statistics-records-have-a-new-component)
+   - [1.8 `ApiQueuedMessage` has three new components](#18-apiqueuedmessage-has-three-new-components)
 2. [New features](#2-new-features)
 3. [Bug fixes](#3-bug-fixes)
 4. [Deprecations](#4-deprecations)
@@ -135,6 +136,14 @@ This mostly concerns 0.50 applications that were still on the Jackson 2 flavour.
 The unified claim query and its flag are gone. If you set the flag to `false`, you now get the split
 ordered/unordered queries, which measured 5.4× faster. Setting it to `true`, the default, changes nothing.
 Delete the builder call, constructor argument or property.
+
+#### 1.1.7 Events start recording their cause
+
+With the Spring Boot event-store starter, every event appended in reaction to another event now records that event's
+id in `caused_by_event_id`, and every message queued while a cause is bound carries one more `MessageMetaData`
+entry, `essentials.causedByEventId`. Nothing changes for a `PersistableEventMapper` that sets a cause itself. No
+schema change, and existing rows keep their nulls. `essentials.eventstore.causation.enabled=false` restores the old
+behaviour. See [§2.9](#29-event-causation).
 
 ---
 
@@ -296,6 +305,15 @@ The queue tables keep three indexes: `idx_<table>_ordered_msg`, `idx_<table>_uno
 snapshots itself is affected, such as test fixtures and mocks of `EventStoreApi`; reading them is unaffected. Pass
 `SubscriptionStatistics.Gaps.NONE`, or `ApiSubscriptionGapStatistics.from(SubscriptionStatistics.Gaps.NONE)`, where
 there is no gap activity to report. The admin API response only gains an optional `gaps` field.
+
+### 1.8 `ApiQueuedMessage` has three new components
+
+`ApiQueuedMessage` ends with `orderedMessageKey`, `orderedMessageOrder` and `referencedAggregateType`, so its
+constructor takes three more arguments. Only code that builds it itself is affected, such as test fixtures and mocks
+of `DurableQueuesApi`; pass `null, null, null` for an unordered message. The admin API response only gains three
+optional fields. `referencedAggregateType` is set for messages that refer to a persisted event - an `EventProcessor`'s
+inbox messages - and is what lets the console link a stuck or dead-lettered event message to its causation (see
+[§2.9](#29-event-causation)). It is routing information, not payload, so it is present without the payload role.
 
 ---
 
@@ -550,6 +568,33 @@ Two related corrections:
 - **A dropped replication connection logs one stack trace, not two.** The failed advisory-lock release that
   follows it is now logged at DEBUG, because PostgreSQL releases the lock when the session ends.
 
+### 2.9 Event causation
+
+Every persisted event can now record which event caused it, so "why did this happen?" is a lookup. The event store
+always had the `caused_by_event_id` column, and the starter's default mapper claimed to fill it, but nothing did.
+
+- **Recorded by default.** The framework binds the delivered event as the cause around every handler it calls -
+  `EventProcessor` (both `REQUIRED` and `UnitOfWorkMode.NONE` handlers), `ViewEventProcessor`,
+  `InTransactionEventProcessor`, and async and in-transaction subscriptions - and `CausationPersistableEventEnricher`
+  writes it. Lazily appending repositories record the cause bound when the aggregate joined the UnitOfWork.
+- **Carried across hand-offs**: through `Inbox`, `Outbox` and `DurableLocalCommandBus.sendAndDontWait` in message
+  metadata (`CausationDurableQueuesInterceptor`), and through `sendAsync`/`sendAndDontWait` on a Reactor worker by
+  a new command-bus SPI, `CommandContextPropagator`.
+- **Bound explicitly** where the framework cannot see it - a webhook answering an event it looked up, a batched
+  subscription - with `CausationContext.where(eventId)`.
+- **Looked up** with `EventStore.findEvent(EventId)` ("what caused this?") and `EventStore.loadEventsCausedBy(EventId)`
+  ("what did this cause?"); the latter needs the opt-in partial index
+  `essentials.eventstore.causation.index-enabled=true`.
+- **Admin API and console**: list an aggregate's recent events (`GET /event-store/aggregate-types/{aggregateType}/aggregates/{aggregateId}/events`),
+  then walk from any of them with `GET /event-store/events/{eventId}`, `…/causation-chain` and `…/caused-events`. The
+  console's *Event causation* page starts from an aggregate type and id, or an event id, and a queued or dead-lettered
+  `EventProcessor` inbox message links to it. Identity and cause only, no payloads.
+- **Cost**, measured in the performance lab: no measurable difference on appends or through an `EventProcessor`;
+  WAL grows by the stored id. Across a durable queue, about 116 bytes of WAL per message and 0.5% throughput.
+
+Correlation ids are still not populated; trace context covers "what did this request do". Design and measurements:
+[event-causation.md](./event-causation.md). How to configure it: [LLM-postgresql-event-store.md](../LLM/LLM-postgresql-event-store.md#event-causation).
+
 ---
 
 ## 3. Bug fixes
@@ -565,6 +610,8 @@ Two related corrections:
 | **`alwaysRetryOn(...)` had no effect**, see [§1.1.2](#112-dead-letter-classification-changed-in-two-ways) | Custom redelivery policies |
 | **Slow-query statistics were always empty, and `pg_cron` was never created by the framework.** The check before the best-effort `CREATE EXTENSION` read `pg_extension` (installed) instead of `pg_available_extensions` (installable), so the create only ran when the extension already existed. `pg_stat_statements` is now created at startup when the server preloads it and the role may create extensions, and `pg_cron` when the server offers it; a refusal is logged and treated as unavailable without failing the start | Admin API query statistics, the Essentials scheduler |
 | **The queue statistics trigger counted a purge as a delivery.** Fixed by the replacement in [§2.4](#24-durable-queue-observability) | Statistics consumers |
+| **An aggregate saved by an in-transaction handler could be silently lost.** The commit only made another `beforeCommit` pass when a callback asked for one, so a resource registered during the last pass - by an in-transaction subscription handler, after an event appended directly with `appendToStream` - was committed without ever being written. The commit now makes another pass whenever resources were registered during one, and works on a snapshot of the callbacks so a callback registering more cannot fail it | In-transaction subscriptions and `InTransactionEventProcessor` handlers that change aggregates through a repository |
+| **A decider command and a stateful-repository change in one UnitOfWork failed the transaction.** The decider `CommandHandler` appended its events again on every commit pass, and a `StatefulAggregateRepository` append always asks for one. It now appends each command's events once | Decider `CommandHandler` users |
 
 **The 0.50.1 fixes are all in 0.60,** either merged directly or made unnecessary by other work. The polling
 unit-of-work leak fix came in unchanged. The Jackson 2-specific fixes are no longer needed now that Jackson 2

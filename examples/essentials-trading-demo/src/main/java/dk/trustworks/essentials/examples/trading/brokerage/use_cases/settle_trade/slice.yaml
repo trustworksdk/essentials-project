@@ -1,0 +1,31 @@
+schemaVersion: "1.1"
+slice: brokerage.settle_trade
+kind: automation
+bc: brokerage
+owner: brokerage-team
+status: live
+summary: Drive an executed trade through settlement to the end, issuing each step's command from the previous step's event, so a trade's settlement is one causation tree.
+generator: essentials
+language: java
+
+handles: [TradeExecuted, SettlementRequested, SettlementCreated, ClearingRequested, ClearingConfirmed, SettlementMarkedSettled, SettlementReconciled]
+sends: [RequestSettlement, CreateSettlement, RequestClearing, ConfirmClearing, MarkSettlementSettled, ReconcileSettlement, MarkTradeSettled, ApplyTradeSettlement, CloseSettlement]
+publishes: []
+writes: []
+reads: []
+endpoints: []
+invariants:
+  - id: INV-ST-1
+    text: "Every step is safe to repeat, because a redelivered event repeats its command - the aggregates ignore a step that already happened and CreateSettlement ignores an existing settlement"
+    enforcedBy: Trade, Settlement, TradingAccount, CreateSettlementHandler
+  - id: INV-ST-2
+    text: "The clearing house is called with no UnitOfWork active, so no database connection is held for the duration of the call"
+    enforcedBy: SettleTradeProcessor
+  - id: INV-ST-3
+    text: "Inactive under trading-demo.simulation.trade-lifecycle=scripted, where the harness sends every settlement command itself"
+    enforcedBy: SettleTradeProcessor
+forbidden:
+  - cross-slice-internal:brokerage
+tests:
+  unit: { present: false }
+  integration: { present: true, path: "src/test/java/dk/trustworks/essentials/examples/trading/brokerage/SettleTradeAutomationTest.java" }

@@ -130,7 +130,12 @@ See [spring-boot-starter-postgresql-event-store README](../components/spring-boo
 
 **Event Publishing:**
 - `EventStoreEventBus` - Local event publishing
-- `PersistableEventMapper` - Event metadata mapping
+- `PersistableEventMapper` - Event metadata mapping (sets no correlation id, tenant or cause)
+
+**Event Causation** (unless `essentials.eventstore.causation.enabled=false`):
+- `CausationPersistableEventEnricher` - Writes each event's `causedByEventId`
+- `CausationDurableQueuesInterceptor` - Carries the cause across Inbox/Outbox/durable command bus
+- `CausationCommandContextPropagator` - Added to every command-bus bean, for `sendAsync`/`sendAndDontWait`
 
 **Observability:**
 - `MicrometerTracingEventStoreInterceptor` - Distributed tracing (when enabled)
@@ -279,6 +284,7 @@ Prefix: `essentials`
 | Property | Default | Effect |
 |----------|---------|--------|
 | `life-cycles.start-life-cycles` | `true` | Auto-start Lifecycle beans |
+| `life-cycles.shutdown-timeout` | `10s` | Shutdown budget for stopping Lifecycle beans; bounded, best-effort DB cleanup during shutdown |
 | `reactive-bean-post-processor-enabled` | `true` | Auto-register handlers |
 | `immutable-jackson-module-enabled` | `true` | Enable immutable deserialization |
 
@@ -357,6 +363,15 @@ Prefix: `essentials.eventstore`
 - `true`: Also published immediately after `appendToStream()` (individual)
 
 See [postgresql-event-store: Flush Publishing](../components/postgresql-event-store/README.md#flush-publishing)
+
+#### Event Causation
+
+Prefix: `essentials.eventstore.causation` - see [event causation](./LLM-postgresql-event-store.md#event-causation)
+
+| Property | Default | Notes |
+|----------|---------|-------|
+| `enabled` | `true` | Record which event caused each event; `false` turns off every part that writes it |
+| `index-enabled` | `false` | Partial index on `caused_by_event_id` in every event-stream table; required by `EventStore.loadEventsCausedBy` and the admin `caused-events` operation. A schema change - pre-build concurrently on large tables |
 
 #### Subscription Manager
 
@@ -684,6 +699,7 @@ public PostgresqlDurableQueues postgresqlDurableQueues(...) {
 - ⚠️ **Transactional Mode**: Use `single-operation-transaction` for reliable retry/DLQ (fully-transactional breaks retries)
 - ⚠️ **Bean Conditionals**: Event Store provides own `UnitOfWorkFactory`, `EventBus`, `JSONSerializer` (PostgreSQL starter skips these when EventStore on classpath)
 - ⚠️ **Lifecycle Start**: Set `start-life-cycles=false` to manually control lifecycle
+- ⚠️ **Shutdown with the database gone**: cleanup on stop (fenced-lock release, resume-point save, job unscheduling) is one bounded attempt and skipped once the DB proves unreachable; `life-cycles.shutdown-timeout` (10s) caps the whole stop. Implement `ShutdownAware` (foundation `lifecycle`) on your own `Lifecycle` beans whose `stop()` touches the DB, and run that work through `ShutdownContext.attemptCleanup(...)`
 - ⚠️ **MongoDB CharSequenceTypes**: Must register types using ObjectId values or used as Map keys
 - ⚠️ **Flush Publishing**: Enable only if sagas need per-event coordination (impacts transaction semantics)
 - ⚠️ **Admin UI**: Requires both `EssentialsAuthenticatedUser` implementation AND Spring Security config (not auto-configured)

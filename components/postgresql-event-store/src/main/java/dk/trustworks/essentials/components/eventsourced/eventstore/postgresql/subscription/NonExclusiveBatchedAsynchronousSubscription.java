@@ -190,7 +190,9 @@ public class NonExclusiveBatchedAsynchronousSubscription extends AbstractEventSt
             }
             try {
                 // Allow the reactive components to complete
-                Thread.sleep(500);
+                if (!isShutdownCleanupAbandoned()) {
+                    Thread.sleep(500);
+                }
             } catch (InterruptedException e) {
                 // Ignore
                 Thread.currentThread().interrupt();

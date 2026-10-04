@@ -63,3 +63,25 @@ Scheduler, added later in the same unreleased version:
   register - another application's `cron.job` row cannot be run; `409` for an executor job when the
   request reached an instance not holding the scheduler lock. This is the first operation declaring
   `409`.
+
+Event causation, added later in the same unreleased version (`docs/event-causation.md`):
+
+- **`GET /event-store/aggregate-types/{aggregateType}/aggregates/{aggregateId}/events`**
+  (`EventStoreApi.findAggregateEvents`) lists an aggregate's most recent events (`limit`, default 100, at most
+  1000), oldest first - the place to start, since a user knows the business id rather than an event id.
+- **`GET /event-store/events/{eventId}`** (`EventStoreApi.findEvent`) finds an event by its id alone,
+  in whichever registered aggregate type's event stream holds it. `404` when none does.
+- **`GET /event-store/events/{eventId}/causation-chain`** (`EventStoreApi.findCausationChain`) answers
+  "why did this happen?": the event, then its recorded cause, then that event's cause, up to
+  `maxDepth` (default 20, at most 100) events.
+- **`GET /event-store/events/{eventId}/caused-events`** (`EventStoreApi.findEventsCausedBy`) answers
+  "what did this cause?": the event's direct effects across all registered aggregate types. `409` when
+  the opt-in caused-by-event-id index (`essentials.eventstore.causation.index-enabled`) is not enabled.
+
+`ApiQueuedMessage` gains three optional fields, `orderedMessageKey`, `orderedMessageOrder` and
+`referencedAggregateType` - the last set when the message refers to a persisted event, as an `EventProcessor`'s inbox
+messages do, so a client can go from a stuck message to the aggregate's events.
+
+All four causation operations return the new `ApiCausationEvent` - the event's identity, position, timestamp and
+`causedByEventId`, deliberately without event or metadata payloads - and require
+`essentials_subscription_reader` or `essentials_admin`.

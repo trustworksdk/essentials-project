@@ -17,16 +17,23 @@
 package dk.trustworks.essentials.examples.trading.brokerage.events;
 
 import dk.trustworks.essentials.examples.trading.brokerage.types.SettlementId;
-import dk.trustworks.essentials.examples.trading.brokerage.types.TradeId;
+import dk.trustworks.essentials.examples.trading.brokerage.types.*;
+import dk.trustworks.essentials.types.Amount;
 
 import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 
 /**
  * The trade has asked for a settlement, and named it. The {@code Settlement} aggregate under that id is a separate
  * consistency boundary; this event records only the trade's side of the link.
+ * <p>
+ * {@code accountId} and {@code grossAmount} are what the settlement needs to be created, carried here so the
+ * {@code brokerage.settle_trade} automation can create it from this event alone. Both are {@code null} on events
+ * persisted before they were added.
  */
 public record SettlementRequested(TradeId tradeId,
-                                  SettlementId settlementId) implements TradeEvent {
+                                  SettlementId settlementId,
+                                  TradingAccountId accountId,
+                                  Amount grossAmount) implements TradeEvent {
     public SettlementRequested {
         requireNonNull(tradeId, "No tradeId provided");
         requireNonNull(settlementId, "No settlementId provided");

@@ -34,6 +34,35 @@ public class TradingDemoSimulationProperties {
      * rolls the generation, so raising the threshold does not require changing this unless it exceeds the cap.
      */
     private int maxPolicyDrivenEvents = 500;
+    /**
+     * Who drives a trade from execution to settlement.
+     * <ul>
+     *   <li>{@code AUTOMATED} (default): the harness places and executes trades, and the {@code brokerage.settle_trade}
+     *       automation drives every settlement step from the previous step's event - so each trade's settlement is one
+     *       causation tree, as the admin console's <i>Event causation</i> page shows it.</li>
+     *   <li>{@code SCRIPTED}: the harness sends every settlement command itself, one after another, and the automation
+     *       is not started. Each step is then its own root. Kept for the benchmark scenarios, whose figures assume a
+     *       synchronous loop.</li>
+     * </ul>
+     */
+    private TradeLifecycle tradeLifecycle = TradeLifecycle.AUTOMATED;
+
+    public enum TradeLifecycle {
+        AUTOMATED,
+        SCRIPTED
+    }
+
+    public TradeLifecycle getTradeLifecycle() {
+        return tradeLifecycle;
+    }
+
+    public void setTradeLifecycle(TradeLifecycle tradeLifecycle) {
+        this.tradeLifecycle = tradeLifecycle;
+    }
+
+    public boolean isTradeLifecycleAutomated() {
+        return tradeLifecycle == TradeLifecycle.AUTOMATED;
+    }
 
     public boolean isEnabled() {
         return enabled;

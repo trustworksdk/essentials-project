@@ -606,6 +606,55 @@ class WalReplicationWithEssentialsAggregatePgOutputIT extends AbstractLogicalRep
                                  new CdcDispatcherSettings(slotName, CdcDispatcherProperties.defaults(), CdcDeliveryMode.INBOX));
     }
 
+    /**
+     * pgoutput resolves the publication as of each decoded change, so a slot created before its publication fails on
+     * the first change in between - and, never confirming anything, replays it on every reconnect. Seen on a fresh demo
+     * database: {@code publication "essentials_cdc_publication" does not exist} on every attempt while the publication
+     * plainly existed. The tailer must recognise it and recreate the slot rather than retry forever.
+     */
+    @Test
+    void pgoutput_slot_created_before_its_publication_is_recreated_instead_of_failing_forever() {
+        String slotName = slotName();
+        String publicationName = publicationName();
+        jdbi.useHandle(handle -> handle.select("select pg_create_logical_replication_slot(?, 'pgoutput')", slotName)
+                                       .mapTo(String.class)
+                                       .one());
+        appendOrderEvents(); // a change the slot holds but cannot decode: the publication does not exist yet
+        createPublication(publicationName);
+        var walPositionAfterPublication = jdbi.withHandle(handle -> handle.select("select pg_current_wal_lsn()::text").mapTo(String.class).one());
+
+        AggregateTypeResolver resolver = table -> "orders_events".equalsIgnoreCase(table) ? ORDERS : null;
+        var pgOutputConverter = new PgOutputToPersistedEventConverter(jacksonJSONSerializer, resolver, AggregateIdSerializerResolver.forEventStore(eventStore));
+        List<PersistedEvent> cdcPersistedEvents = new CopyOnWriteArrayList<>();
+        var tailer = directPgOutputTailer(slotName, publicationName, pgOutputConverter, cdcPersistedEvents);
+        tailer.start();
+        try {
+            await().atMost(Duration.ofSeconds(20))
+                   .pollInterval(Duration.ofMillis(100))
+                   .untilAsserted(() -> assertThat(slotRestartsAtOrAfter(slotName, walPositionAfterPublication))
+                           .as("slot recreated past the publication's creation")
+                           .isTrue());
+
+            appendOneMoreOrderEvent();
+
+            await().atMost(Duration.ofSeconds(20))
+                   .pollInterval(Duration.ofMillis(100))
+                   .untilAsserted(() -> assertThat(cdcPersistedEvents)
+                           .extracting(event -> event.event().getEventTypeOrNamePersistenceValue())
+                           .anySatisfy(type -> assertThat(type).endsWith("OrderAccepted")));
+        } finally {
+            tailer.stop();
+        }
+    }
+
+    private boolean slotRestartsAtOrAfter(String slotName, String walPosition) {
+        Optional<Boolean> restartsAtOrAfter = jdbi.withHandle(handle -> handle.select("select restart_lsn >= ?::pg_lsn from pg_replication_slots where slot_name = ?",
+                                                                                      walPosition, slotName)
+                                                                              .mapTo(Boolean.class)
+                                                                              .findOne());
+        return restartsAtOrAfter.orElse(false);
+    }
+
     private WalReplicationTailer directPgOutputTailer(String slotName,
                                                        String publicationName,
                                                        PgOutputToPersistedEventConverter pgOutputConverter,

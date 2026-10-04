@@ -17,7 +17,11 @@
 package dk.trustworks.essentials.components.adminapi.rest;
 
 import dk.trustworks.essentials.components.eventsourced.aggregates.api.*;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.api.ApiCausationEvent;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.api.EventStoreApi;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.AggregateType;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.persistence.CausationIndexNotEnabledException;
+import dk.trustworks.essentials.components.foundation.types.EventId;
 import dk.trustworks.essentials.components.foundation.fencedlock.LockName;
 import dk.trustworks.essentials.components.foundation.fencedlock.api.*;
 import dk.trustworks.essentials.components.foundation.messaging.queue.*;
@@ -61,6 +65,7 @@ class AdminApiEndpointsTest {
     private final AggregateArchiveApi   aggregateArchiveApi   = mock(AggregateArchiveApi.class);
     private final PostgresqlQueryStatisticsApi queryStatisticsApi = mock(PostgresqlQueryStatisticsApi.class);
     private final SchedulerApi                 schedulerApi       = mock(SchedulerApi.class);
+    private final EventStoreApi                eventStoreApi      = mock(EventStoreApi.class);
 
     private final TestAuthenticatedUser authenticatedUser = new TestAuthenticatedUser();
 
@@ -76,11 +81,17 @@ class AdminApiEndpointsTest {
                                                  new AggregateLifecycleController(aggregateLifecycleApi, principalResolver),
                                                  new AggregateArchiveController(aggregateArchiveApi, principalResolver),
                                                  new PostgresqlQueryStatisticsController(queryStatisticsApi, principalResolver),
-                                                 new SchedulerController(schedulerApi, principalResolver))
+                                                 new SchedulerController(schedulerApi, principalResolver),
+                                                 new EventStoreController(eventStoreApi, principalResolver))
                                  .setControllerAdvice(new AdminApiExceptionHandler())
                                  .setMessageConverters(new JacksonJsonHttpMessageConverter(jsonMapper))
                                  .addPlaceholderValue(AdminApiPaths.BASE_PATH_PROPERTY, BASE)
                                  .build();
+    }
+
+    private static ApiCausationEvent causationEvent(EventId eventId, String causedBy) {
+        return new ApiCausationEvent(eventId.toString(), "Orders", "order-1", "OrderPlaced", 0, 7,
+                                     OffsetDateTime.parse("2026-10-03T10:00:00Z"), causedBy);
     }
 
     @Nested
@@ -100,6 +111,70 @@ class AdminApiEndpointsTest {
                    .andExpect(content().contentTypeCompatibleWith(MediaType.APPLICATION_JSON))
                    .andExpect(jsonPath("$[0].lockName").value("my-lock"))
                    .andExpect(jsonPath("$[0].currentToken").value(17));
+        }
+
+        @Test
+        void an_event_is_found_by_its_id_alone_with_its_cause() throws Exception {
+            var eventId = EventId.random();
+            when(eventStoreApi.findEvent(any(), eq(eventId))).thenReturn(Optional.of(causationEvent(eventId, "the-cause")));
+
+            mockMvc.perform(get(BASE + "/event-store/events/" + eventId))
+                   .andExpect(status().isOk())
+                   .andExpect(jsonPath("$.eventId").value(eventId.toString()))
+                   .andExpect(jsonPath("$.causedByEventId").value("the-cause"))
+                   .andExpect(jsonPath("$.eventPayload").doesNotExist());
+        }
+
+        @Test
+        void an_event_no_registered_event_stream_holds_is_not_found() throws Exception {
+            when(eventStoreApi.findEvent(any(), any())).thenReturn(Optional.empty());
+
+            mockMvc.perform(get(BASE + "/event-store/events/" + EventId.random()))
+                   .andExpect(status().isNotFound());
+        }
+
+        @Test
+        void an_aggregates_events_default_to_the_most_recent_hundred() throws Exception {
+            var eventId = EventId.random();
+            when(eventStoreApi.findAggregateEvents(any(), eq(AggregateType.of("Orders")), eq("order-1"), eq(100)))
+                    .thenReturn(List.of(causationEvent(eventId, null)));
+
+            mockMvc.perform(get(BASE + "/event-store/aggregate-types/Orders/aggregates/order-1/events"))
+                   .andExpect(status().isOk())
+                   .andExpect(jsonPath("$[0].eventId").value(eventId.toString()))
+                   .andExpect(jsonPath("$[0].eventPayload").doesNotExist());
+        }
+
+        @Test
+        void the_causation_chain_defaults_to_twenty_events() throws Exception {
+            var eventId = EventId.random();
+            when(eventStoreApi.findCausationChain(any(), eq(eventId), eq(20)))
+                    .thenReturn(List.of(causationEvent(eventId, "the-cause"), causationEvent(EventId.of("the-cause"), null)));
+
+            mockMvc.perform(get(BASE + "/event-store/events/" + eventId + "/causation-chain"))
+                   .andExpect(status().isOk())
+                   .andExpect(jsonPath("$[0].eventId").value(eventId.toString()))
+                   .andExpect(jsonPath("$[1].eventId").value("the-cause"));
+        }
+
+        @Test
+        void the_events_an_event_caused_are_listed() throws Exception {
+            var eventId = EventId.random();
+            when(eventStoreApi.findEventsCausedBy(any(), eq(eventId))).thenReturn(List.of(causationEvent(EventId.of("effect"), eventId.toString())));
+
+            mockMvc.perform(get(BASE + "/event-store/events/" + eventId + "/caused-events"))
+                   .andExpect(status().isOk())
+                   .andExpect(jsonPath("$[0].eventId").value("effect"));
+        }
+
+        @Test
+        void listing_caused_events_without_the_causation_index_is_a_conflict_saying_how_to_enable_it() throws Exception {
+            when(eventStoreApi.findEventsCausedBy(any(), any()))
+                    .thenThrow(new CausationIndexNotEnabledException("Set essentials.eventstore.causation.index-enabled=true"));
+
+            mockMvc.perform(get(BASE + "/event-store/events/" + EventId.random() + "/caused-events"))
+                   .andExpect(status().isConflict())
+                   .andExpect(jsonPath("$.message").value(containsString("essentials.eventstore.causation.index-enabled")));
         }
 
         @Test
@@ -285,7 +360,10 @@ class AdminApiEndpointsTest {
                                     1,
                                     0,
                                     false,
-                                    false);
+                                    false,
+                                    null,
+                                    null,
+                                    null);
     }
 
     /** Stands in for the consumer's own {@link EssentialsAuthenticatedUser} implementation. */

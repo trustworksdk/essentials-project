@@ -284,6 +284,20 @@ public interface AggregateEventStreamPersistenceStrategy<CONFIG extends Aggregat
     Optional<PersistedEvent> loadEvent(EventStoreUnitOfWork unitOfWork, AggregateType aggregateType, EventId eventId);
 
     /**
+     * Load every event, across all registered aggregate types, whose {@link PersistedEvent#causedByEventId()} is the given
+     * event id - "what did this event cause?"
+     * <p>
+     * The default implementation throws {@link UnsupportedOperationException}; a strategy that can answer it overrides it.
+     *
+     * @param unitOfWork      the current unit of work
+     * @param causedByEventId the id of the causing event
+     * @return the events caused by it; empty if none
+     */
+    default List<PersistedEvent> loadEventsCausedBy(EventStoreUnitOfWork unitOfWork, EventId causedByEventId) {
+        throw new UnsupportedOperationException(getClass().getName() + " does not support loading the events caused by an event");
+    }
+
+    /**
      * Find the highest {@link GlobalEventOrder} persisted in relation to the given aggregateType
      *
      * @param unitOfWork    the current unit of work

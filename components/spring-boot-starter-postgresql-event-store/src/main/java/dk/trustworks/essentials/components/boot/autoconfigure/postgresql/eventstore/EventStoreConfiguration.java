@@ -55,7 +55,10 @@ import dk.trustworks.essentials.components.foundation.postgresql.MultiTableChang
 import dk.trustworks.essentials.components.foundation.postgresql.TableChangeNotification;
 import dk.trustworks.essentials.components.foundation.postgresql.stats.*;
 import dk.trustworks.essentials.components.foundation.messaging.eip.store_and_forward.*;
+import dk.trustworks.essentials.components.foundation.causation.CausationCommandContextPropagator;
+import dk.trustworks.essentials.components.foundation.messaging.queue.CausationDurableQueuesInterceptor;
 import dk.trustworks.essentials.components.foundation.messaging.queue.DurableQueues;
+import dk.trustworks.essentials.components.foundation.messaging.queue.DurableQueuesInterceptor;
 import dk.trustworks.essentials.components.foundation.reactive.command.DurableLocalCommandBus;
 import dk.trustworks.essentials.components.foundation.transaction.UnitOfWork;
 import dk.trustworks.essentials.reactive.*;
@@ -141,8 +144,16 @@ public class EventStoreConfiguration {
 
     /**
      * Default {@link PersistableEventMapper} which maps from the raw Java Event's to {@link PersistableEvent}<br>
-     * The {@link PersistableEventMapper} adds additional information such as:
-     * event-id, event-type, event-order, event-timestamp, event-meta-data, correlation-id, tenant-id for each persisted event at a cross-functional level.
+     * It sets the aggregate type, aggregate id, event type and event order; the event store assigns the event id,
+     * event revision and timestamp. It sets <b>no</b> correlation id and <b>no</b> tenant - supply your own
+     * {@link PersistableEventMapper} bean if your events need those.<br>
+     * Other cross-functional information is added afterwards by {@link PersistableEventEnricher}s:
+     * <ul>
+     *     <li>{@link CausationPersistableEventEnricher} sets {@link PersistableEvent#causedByEventId()} to the event that
+     *     caused the current work (see {@link #causationPersistableEventEnricher()})</li>
+     *     <li>{@link MicrometerTracingEventStoreInterceptor} adds the trace context to the event meta-data, when
+     *     {@code management.tracing.enabled=true}</li>
+     * </ul>
      *
      * @return the {@link PersistableEventMapper} to use for all Events
      */
@@ -385,7 +396,7 @@ public class EventStoreConfiguration {
                                                                                                                                     EssentialsEventStoreProperties properties,
                                                                                                                                     List<PersistableEventEnricher> persistableEventEnrichers,
                                                                                                                                     EssentialsComponentsProperties essentialsComponentsProperties) {
-        return SeparateTablePerAggregateTypePersistenceStrategy.builder()
+        var persistenceStrategy = SeparateTablePerAggregateTypePersistenceStrategy.builder()
                                                                .setJdbi(jdbi)
                                                                .setUnitOfWorkFactory(unitOfWorkFactory)
                                                                .setEventMapper(persistableEventMapper)
@@ -395,6 +406,11 @@ public class EventStoreConfiguration {
                                                                .setPersistableEventEnrichers(persistableEventEnrichers)
                                                                .setSchemaOwnership(essentialsComponentsProperties.getSchema().getMode().schemaOwnership())
                                                                .build();
+        if (properties.getCausation().isIndexEnabled()) {
+            // Before any aggregate type is registered, so every event-stream table gets the index as part of its schema
+            persistenceStrategy.enableCausationIndex();
+        }
+        return persistenceStrategy;
     }
 
     /**
@@ -452,6 +468,56 @@ public class EventStoreConfiguration {
                                                                                                           EssentialsComponentsProperties essentialsComponentsProperties) {
         return new PostgresqlEventStreamGapHandler<SeparateTablePerAggregateEventStreamConfiguration>(eventStoreUnitOfWorkFactory,
                                                                                                       essentialsComponentsProperties.getSchema().getMode().schemaOwnership());
+    }
+
+    /**
+     * Records, on every persisted event, the id of the event that caused it - see {@link CausationPersistableEventEnricher}.<br>
+     * Never overwrites a cause set by a custom {@link PersistableEventMapper}.
+     * Disable with {@code essentials.eventstore.causation.enabled=false}.
+     *
+     * @return the {@link CausationPersistableEventEnricher}
+     */
+    @Bean
+    @ConditionalOnMissingBean
+    @ConditionalOnProperty(prefix = "essentials.eventstore.causation", name = "enabled", havingValue = "true", matchIfMissing = true)
+    public CausationPersistableEventEnricher causationPersistableEventEnricher() {
+        return new CausationPersistableEventEnricher();
+    }
+
+    /**
+     * Carries the cause across every {@link DurableQueues} hand-off - {@link Inbox}, {@link Outbox} and
+     * {@link DurableLocalCommandBus#sendAndDontWait(Object)} - so work done on the consuming side records the event that
+     * caused the message to be queued. See {@link CausationDurableQueuesInterceptor}.<br>
+     * Registered with the {@link DurableQueues} by the queue starters, which collect every {@link DurableQueuesInterceptor}
+     * bean. Governed by the same {@code essentials.eventstore.causation.enabled} as the enricher, so causation is never
+     * written in-process but dropped at every queue.
+     *
+     * @return the {@link CausationDurableQueuesInterceptor}
+     */
+    @Bean
+    @ConditionalOnMissingBean
+    @ConditionalOnProperty(prefix = "essentials.eventstore.causation", name = "enabled", havingValue = "true", matchIfMissing = true)
+    public CausationDurableQueuesInterceptor causationDurableQueuesInterceptor() {
+        return new CausationDurableQueuesInterceptor();
+    }
+
+    /**
+     * Carries the cause from the sending thread to the Reactor worker that runs the handler for
+     * {@link CommandBus#sendAsync(Object)} and {@link LocalCommandBus#sendAndDontWait(Object)} - see
+     * {@link CausationCommandContextPropagator}. Added to every command bus bean in the context, including a
+     * {@link LocalCommandBus} the application declares itself.<br>
+     * Governed by {@code essentials.eventstore.causation.enabled}, like the enricher and the queue interceptor.
+     *
+     * @param commandBuses every command bus bean
+     * @return the {@link CausationCommandContextPropagator}
+     */
+    @Bean
+    @ConditionalOnMissingBean
+    @ConditionalOnProperty(prefix = "essentials.eventstore.causation", name = "enabled", havingValue = "true", matchIfMissing = true)
+    public CausationCommandContextPropagator causationCommandContextPropagator(List<AbstractCommandBus> commandBuses) {
+        var propagator = new CausationCommandContextPropagator();
+        commandBuses.forEach(commandBus -> commandBus.addContextPropagator(propagator));
+        return propagator;
     }
 
     @Bean

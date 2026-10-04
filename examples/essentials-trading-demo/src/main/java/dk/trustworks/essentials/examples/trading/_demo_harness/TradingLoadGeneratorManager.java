@@ -313,6 +313,11 @@ public class TradingLoadGeneratorManager implements Lifecycle {
             var safeCount = normalizeBurstCount(count);
             ensureSeedDataAvailableForBurst();
             for (int i = 0; i < safeCount; i++) {
+                if (simulationProperties.isTradeLifecycleAutomated()) {
+                    // Nothing is left pending: each new trade is settled by brokerage.settle_trade
+                    createPendingTradeAndSettlement();
+                    continue;
+                }
                 if (pendingSettlements.isEmpty()) {
                     createPendingTradeAndSettlement();
                 }
@@ -491,7 +496,9 @@ public class TradingLoadGeneratorManager implements Lifecycle {
             return;
         }
         createPendingTradeAndSettlement();
-        settleNextPendingTrade();
+        if (!simulationProperties.isTradeLifecycleAutomated()) {
+            settleNextPendingTrade();
+        }
     }
 
     private void generatePriceUpdate() {
@@ -627,6 +634,15 @@ public class TradingLoadGeneratorManager implements Lifecycle {
 
         commandBus.send(new PlaceTrade(tradeId, accountId, instrumentId, side, quantity, executionPrice));
         commandBus.send(new ExecuteTrade(tradeId));
+        if (simulationProperties.isTradeLifecycleAutomated()) {
+            // brokerage.settle_trade drives the settlement from TradeExecuted - counted here, as the harness has done
+            // all it will do for this trade
+            latestTradeId = tradeId;
+            latestSettlementId = settlementId;
+            generatedTradeCount.incrementAndGet();
+            generatedSettlementCount.incrementAndGet();
+            return;
+        }
         commandBus.send(new RequestSettlement(tradeId, settlementId));
         commandBus.send(new CreateSettlement(settlementId, tradeId, accountId, grossAmount(executionPrice, quantity)));
         commandBus.send(new RequestClearing(settlementId));

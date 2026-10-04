@@ -486,7 +486,8 @@ public class EssentialsComponentsConfiguration {
         // The emit mode only writes the schema script: nothing may consume, poll or subscribe against a database that
         // does not have the schema yet
         return new DefaultLifecycleManager(this::onContextRefreshedEvent,
-                                           properties.getLifeCycles().isStartLifeCycles() && properties.getSchema().getMode() != SchemaMode.EMIT);
+                                           properties.getLifeCycles().isStartLifeCycles() && properties.getSchema().getMode() != SchemaMode.EMIT,
+                                           properties.getLifeCycles().getShutdownTimeout());
     }
 
     private void onContextRefreshedEvent(ApplicationContext applicationContext) {

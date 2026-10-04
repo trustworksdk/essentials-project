@@ -86,6 +86,7 @@ final class EssentialsAdminApiSpec {
             ApiQueueStatistics.class,
             ApiSubscription.class,
             ApiSubscriptionStatistics.class,
+            ApiCausationEvent.class,
             ApiCdcStatus.class,
             ApiAggregateSnapshotPolicy.class,
             ApiAggregateClosingBooksPolicy.class,
@@ -115,7 +116,8 @@ final class EssentialsAdminApiSpec {
             "ApiCdcStatus", Set.of("availability", "configuration", "slot"),
             "ApiTableStatistics", Set.of("section", "tableName", "totalSize", "tableSize", "indexSize", "indexes"),
             "ApiIndexStatistics", Set.of("indexName", "size"),
-            "ApiScheduledJobRun", Set.of("jobName", "jobType", "startedAt"));
+            "ApiScheduledJobRun", Set.of("jobName", "jobType", "startedAt"),
+            "ApiCausationEvent", Set.of("eventId", "aggregateType", "aggregateId", "eventType", "timestamp"));
 
     /**
      * DTO properties that are {@code null} by design, with the reason surfaced as the property description.
@@ -138,7 +140,12 @@ final class EssentialsAdminApiSpec {
                             + "there has been no block access since the statistics were reset."),
             "ApiQueuedMessage", Map.of(
                     "payload", "The raw message payload. Null unless the caller holds the QUEUE_PAYLOAD_READER "
-                            + "or ESSENTIALS_ADMIN role."),
+                            + "or ESSENTIALS_ADMIN role.",
+                    "orderedMessageKey", "The key of an ordered message. Null for an unordered message.",
+                    "orderedMessageOrder", "The order of an ordered message. Null for an unordered message.",
+                    "referencedAggregateType", "Set when the message refers to a persisted event as the inbox messages "
+                            + "of an EventProcessor do. It is the aggregate type and orderedMessageKey is the aggregate id. "
+                            + "Null for every other message."),
             "ApiCdcStatus", Map.of(
                     "tailer", "Null when no WAL replication tailer is running in this instance.",
                     "dispatcher", "Null when no CDC dispatcher is running in this instance."),
@@ -154,7 +161,11 @@ final class EssentialsAdminApiSpec {
                     "tenant", "The tenant the subscription is restricted to. Null when the subscription is not "
                             + "restricted to a tenant or is not running in this instance.",
                     "inMemoryGlobalOrder", "The in-memory resume point of the running subscription. It can be ahead of "
-                            + "currentGlobalOrder. Null when the subscription is not running in this instance."));
+                            + "currentGlobalOrder. Null when the subscription is not running in this instance."),
+            "ApiCausationEvent", Map.of(
+                    "causedByEventId", "The id of the event that caused this one. Null when no cause was recorded. Events "
+                            + "started by a request or a person have none. Neither do events persisted before causation "
+                            + "was recorded."));
 
     /** Tag name &rarr; description, in display order. */
     static final Map<String, String> TAGS = new LinkedHashMap<>() {{
@@ -163,7 +174,7 @@ final class EssentialsAdminApiSpec {
         put("postgresql-query-statistics", "Inspect slow-query statistics from pg_stat_statements.");
         put("postgresql-table-statistics", "Inspect size, activity, and cache-hit statistics for every table the Essentials components own.");
         put("durable-queues", "Inspect and manage durable queue and dead-letter messages.");
-        put("event-store", "Inspect event-store subscriptions and persisted event order.");
+        put("event-store", "Inspect event-store subscriptions and persisted event order, and walk event causation.");
         put("cdc", "Inspect Change Data Capture runtime state and effective configuration.");
         put("event-store-statistics", "Inspect event-store table size, activity, and cache-hit statistics.");
         put("aggregate-lifecycle", "Inspect aggregate snapshot and closing-books policies, generations, and snapshots.");
@@ -484,6 +495,51 @@ final class EssentialsAdminApiSpec {
          .summary("List runtime statistics for every event-store subscription running in this instance.")
          .roles(SUBSCRIPTION_R, ADMIN)
          .responseArray("ApiSubscriptionStatistics");
+
+        b.operation(EventStoreApi.class, "findEvent")
+         .tag("event-store").get("/event-store/events/{eventId}")
+         .summary("Find an event by its id alone, in whichever registered aggregate type's event stream holds it. "
+                  + "Returns the event's identity and recorded cause, not its payload.")
+         .roles(SUBSCRIPTION_R, ADMIN)
+         .pathParam("eventId", new StringSchema(), "The event id.")
+         .responseOptionalRef("ApiCausationEvent", "The event.");
+
+        b.operation(EventStoreApi.class, "findAggregateEvents")
+         .tag("event-store").get("/event-store/aggregate-types/{aggregateType}/aggregates/{aggregateId}/events")
+         .summary("The most recent events of one aggregate, oldest first - the starting point for walking causation. "
+                  + "Returns each event's identity and recorded cause, not its payload. Empty when the aggregate type is "
+                  + "not registered or the aggregate has no events.")
+         .roles(SUBSCRIPTION_R, ADMIN)
+         .pathParam("aggregateType", new StringSchema(), "The aggregate type.")
+         .pathParam("aggregateId", new StringSchema(), "The aggregate id, as text.")
+         .queryParam("limit", new IntegerSchema().format("int32").minimum(java.math.BigDecimal.ONE)
+                                                  .maximum(java.math.BigDecimal.valueOf(EventStoreApi.MAX_AGGREGATE_EVENTS))
+                                                  ._default(100),
+                     false, "How many of the most recent events to return.")
+         .responseArray("ApiCausationEvent");
+
+        b.operation(EventStoreApi.class, "findCausationChain")
+         .tag("event-store").get("/event-store/events/{eventId}/causation-chain")
+         .summary("Why did this event happen: the event, then the event that caused it, then that event's cause, and so "
+                  + "on. Stops at an event without a recorded cause, at a cause no registered event stream holds, or "
+                  + "after maxDepth events.")
+         .roles(SUBSCRIPTION_R, ADMIN)
+         .pathParam("eventId", new StringSchema(), "The id of the event to start from.")
+         .queryParam("maxDepth", new IntegerSchema().format("int32").minimum(java.math.BigDecimal.ONE)
+                                                     .maximum(java.math.BigDecimal.valueOf(EventStoreApi.MAX_CAUSATION_CHAIN_DEPTH))
+                                                     ._default(20),
+                     false, "The most events to return, starting with the event itself.")
+         .responseArray("ApiCausationEvent");
+
+        b.operation(EventStoreApi.class, "findEventsCausedBy")
+         .tag("event-store").get("/event-store/events/{eventId}/caused-events")
+         .summary("What did this event cause: every event whose recorded cause is this event, across all registered "
+                  + "aggregate types. Direct effects only. Requires the opt-in caused-by-event-id index.")
+         .roles(SUBSCRIPTION_R, ADMIN)
+         .pathParam("eventId", new StringSchema(), "The id of the causing event.")
+         .conflict("The caused-by-event-id index is not enabled (essentials.eventstore.causation.index-enabled), and the "
+                   + "lookup refuses to scan every event-stream table without it.")
+         .responseArray("ApiCausationEvent");
 
         b.operation(EventStoreApi.class, "findSubscriptionStatistics")
          .tag("event-store").get("/event-store/subscriptions/{subscriberId}/aggregate-types/{aggregateType}/statistics")

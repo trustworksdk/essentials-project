@@ -87,3 +87,8 @@ essentials:
   # QueueLoadGenerator drives it and the adapter can back DurableQueues. Tuning lives in application-compose.yml.
   shard-owned-queue:
     enabled: true
+  eventstore:
+    causation:
+      # Causation is recorded by default; the index behind "what did this event cause?" is opt-in. The demo turns it
+      # on so the admin console's Event causation page can walk both directions.
+      index-enabled: true
