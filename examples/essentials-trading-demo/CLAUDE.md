@@ -142,6 +142,12 @@ Grafana from `compose.yml`'s `observability` compose profile; config and dashboa
   search. A `custom` variable with no options, which it was, offers an empty dropdown and nothing can be entered.
 - **loki4j 2.x labels are one per line.** The comma-separated form 1.x accepted fails the whole logging
   configuration at start-up (`Unable to split ... to key-value pairs`).
+- **Every store the demo writes to is size- or time-capped, because the load generators never stop.** Prometheus
+  `retention.time=2d` + `retention.size=1GB` (uncapped it reached 4 GB+), Tempo `block_retention: 24h`, Postgres
+  `max_slot_wal_keep_size=2GB`. The last one is the CDC slot: unread, it retained WAL until the disk filled and Postgres
+  could not restart. Past the cap Postgres invalidates the slot instead and the database survives; subscriptions fall
+  back to polling (`CdcMode.AUTO`), and CDC stays down until the slot is dropped and recreated — by hand, or by
+  `CdcEffectivenessMonitor`'s opt-in recreate-on-stuck. Keep all of these in both compose copies.
 - **Dashboards query OTLP names** (`..._milliseconds_bucket`, `..._total`), not the Prometheus registry's
   `_seconds`. Queue gauges are cluster-wide and reported by every instance: `max by (queue)`, never `sum`.
 

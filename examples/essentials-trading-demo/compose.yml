@@ -12,8 +12,8 @@ services:
     container_name: essentials-trading-demo-postgresql
     image: essentials-postgres:17.5
     build:
-      context: ../../
-      dockerfile: docker/postgresql/Dockerfile
+      context: ../../docker/postgresql
+      dockerfile: Dockerfile
     restart: unless-stopped
     ports:
       - "5432:5432"
@@ -24,7 +24,7 @@ services:
     # shared_preload_libraries is set here, and only here: the official image has no environment
     # variable for it. Loading pg_stat_statements is not enough on its own - the extension also has to
     # be created in the database, which the application does at startup when it can.
-    command: ["postgres", "-c", "shared_preload_libraries=pg_cron,pg_stat_statements", "-c", "cron.database_name=essentials-trading-demo", "-c", "wal_level=logical", "-c", "max_replication_slots=10", "-c", "max_wal_senders=10"]
+    command: ["postgres", "-c", "shared_preload_libraries=pg_cron,pg_stat_statements", "-c", "cron.database_name=essentials-trading-demo", "-c", "wal_level=logical", "-c", "max_replication_slots=10", "-c", "max_wal_senders=10", "-c", "max_slot_wal_keep_size=2GB"]
 
   # ---- Observability, behind the `observability` compose profile ----------------------------------
   # Started only when that profile is active - the `observability` Spring profile activates it, see
@@ -53,6 +53,9 @@ services:
       - --enable-feature=exemplar-storage
       - --web.enable-remote-write-receiver
       - --config.file=/etc/prometheus/prometheus.yml
+      # The load generators never stop, so without a cap the TSDB grows until the disk is full (4 GB+ seen)
+      - --storage.tsdb.retention.time=2d
+      - --storage.tsdb.retention.size=1GB
     volumes:
       - prometheus:/prometheus
       - ./observability/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
