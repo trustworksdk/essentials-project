@@ -330,6 +330,12 @@ var subscriptionManager = EventStoreSubscriptionManager.builder()
 subscriptionManager.start();
 ```
 
+Resume points are saved every `snapshotResumePointsEvery` (builder default 1s), and only those that changed are written.
+After an ungraceful stop, events handled since the last save are redelivered. To bound that by count as well as time,
+opt in with `.setSnapshotResumePointsAfterEvents(n)`: a resume point that has moved `n` global orders past its last
+save is written early. The check runs in memory every tenth of `snapshotResumePointsEvery`, kept between 50 ms and
+1 s. `0` (default) disables it.
+
 ### Subscription Types
 
 | Type | Transaction | Exclusive | Resume Points | Use Case |

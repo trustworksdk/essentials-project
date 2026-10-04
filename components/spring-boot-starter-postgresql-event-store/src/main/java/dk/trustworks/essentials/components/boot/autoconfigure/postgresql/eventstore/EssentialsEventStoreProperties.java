@@ -348,6 +348,7 @@ public class EssentialsEventStoreProperties {
         private Duration                                         eventStorePollingInterval    = Duration.ofMillis(100);
         private Duration                                         maxEventStorePollingInterval = Duration.ofMillis(2000);
         private Duration                                         snapshotResumePointsEvery    = Duration.ofSeconds(1);
+        private int                                              snapshotResumePointsAfterEvents = 0;
         private EssentialsComponentsProperties.MetricsProperties metrics                      = new EssentialsComponentsProperties.MetricsProperties();
         private final NotifyPollingProperties                    notifyPolling                = new NotifyPollingProperties();
         private final SubscriptionStatisticsProperties            statistics                   = new SubscriptionStatisticsProperties();
@@ -427,6 +428,28 @@ public class EssentialsEventStoreProperties {
          */
         public void setSnapshotResumePointsEvery(Duration snapshotResumePointsEvery) {
             this.snapshotResumePointsEvery = snapshotResumePointsEvery;
+        }
+
+        /**
+         * Opt-in early save of a busy subscriber's {@link SubscriptionResumePoint} - {@code 0} (the default) means disabled
+         *
+         * @return the number of {@code GlobalEventOrder} positions a resume point may advance before it is saved ahead of the next
+         * {@link #getSnapshotResumePointsEvery()} tick, or {@code 0} when disabled
+         */
+        public int getSnapshotResumePointsAfterEvents() {
+            return snapshotResumePointsAfterEvents;
+        }
+
+        /**
+         * Opt-in: also save an active subscriber's {@link SubscriptionResumePoint} as soon as it has advanced this many
+         * {@code GlobalEventOrder} positions since it was last saved, instead of waiting for the next {@link #getSnapshotResumePointsEvery()} tick.
+         * Bounds how many already-handled events are redelivered after an ungraceful stop by count as well as by time. The threshold is checked
+         * in memory and only resume points past it are written, so idle or slow subscribers cost nothing extra
+         *
+         * @param snapshotResumePointsAfterEvents the threshold; {@code 0} (the default) disables the early save
+         */
+        public void setSnapshotResumePointsAfterEvents(int snapshotResumePointsAfterEvents) {
+            this.snapshotResumePointsAfterEvents = snapshotResumePointsAfterEvents;
         }
 
         /**

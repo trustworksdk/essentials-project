@@ -111,4 +111,27 @@ class SubscriptionResumePointTest {
     void test_a_newly_loaded_resume_point_is_in_sync_with_the_store() {
         assertThat(resumePointAt(100).isChanged()).isFalse();
     }
+
+    @Test
+    void test_unpersisted_advance_counts_forward_progress_since_the_last_persisted_value() {
+        var resumePoint = resumePointAt(100);
+        assertThat(resumePoint.unpersistedAdvance()).isZero();
+
+        resumePoint.advanceResumeFromAndIncluding(GlobalEventOrder.of(150));
+        assertThat(resumePoint.unpersistedAdvance()).isEqualTo(50);
+
+        resumePoint.markAsPersisted(GlobalEventOrder.of(140), OffsetDateTime.now());
+        assertThat(resumePoint.unpersistedAdvance()).isEqualTo(10);
+    }
+
+    @Test
+    void test_unpersisted_advance_is_zero_after_a_backwards_reposition() {
+        // A reset rewinds the resume point and saves it itself - the early save must not count it as progress
+        var resumePoint = resumePointAt(100);
+
+        resumePoint.setResumeFromAndIncluding(GlobalEventOrder.of(10));
+
+        assertThat(resumePoint.isChanged()).isTrue();
+        assertThat(resumePoint.unpersistedAdvance()).isZero();
+    }
 }

@@ -647,3 +647,56 @@ Testcontainers IT covering:
   harmless duplicate into a loss), so it needs careful handling of the active/in-flight case — the
   open question the inline note at `saveResumePointsForAllSubscribers()` flags. Build it only if a
   user is sensitive to duplicate-on-crash-recovery and idempotency isn't sufficient.
+- **S5 — Count-bounded resume-point save. Shipped in 0.60, opt-in.**
+  `snapshotResumePointsAfterEvents` (builder) / `essentials.eventstore.subscription-manager.snapshot-resume-points-after-events`
+  (Spring). A second task on the resume-point scheduler thread checks every active subscriber in memory and saves
+  only those whose resume point advanced at least that many `GlobalEventOrder` positions since the last confirmed
+  write (`SubscriptionResumePoint.unpersistedAdvance()`). It runs every tenth of `snapshotResumePointsEvery`, kept
+  between 50 ms and 1 s. The upper bound keeps a long periodic interval from making the threshold slow to act.
+  Because it shares the periodic save's single thread, the manager never runs two saves at once.
+
+  Alongside it, the Spring default for `snapshot-resume-points-every` dropped from `10s` to `1s`, matching the
+  builder. That is cheap because `PostgresqlDurableSubscriptionRepository.saveResumePoints` drops unchanged resume
+  points before opening a transaction. An idle system issues no statement, and a busy one at most one batched
+  `UPDATE` per interval.
+
+  Rejected: a no-rewind guard in the `UPDATE` (`AND resume_from_and_including_global_eventorder < :new`). Resets
+  rewind a resume point on purpose and persist through the same `saveResumePoints`, so the guard would silently
+  drop every reset.
+
+- **S6 — OPEN: a save in flight can overwrite a concurrent reset.** Not introduced by S5, but S5 makes saves more
+  frequent and so widens the exposure.
+
+  **The sequence.**
+  1. The manager's save thread (periodic or S5) selects an *active* subscription and binds its current resume
+     point, X.
+  2. On another thread, the subscription is reset to Y < X. `resetFrom` calls `stop()`, then `overrideResumePoint`,
+     which sets Y, writes it, and marks Y persisted.
+  3. The save from step 1 commits after step 2, so the row holds X again. It then calls `markAsPersisted(X)`.
+  4. In memory the resume point is Y and the last-persisted value is X, so `isChanged()` is true. Once `resetFrom`
+     calls `start()` and the subscription is active again, the next save writes Y.
+
+  The database is therefore wrong for at most one save interval. **If the node dies inside that window, the reset is
+  lost.** The subscription resumes from X and never re-processes Y..X-1. The same interleaving during a plain
+  `stop()` (no reset) only regresses the row to an older value. That causes redelivery, which is allowed under
+  at-least-once delivery, but `persistResumePointUntilSettled` may already have returned, and nothing re-saves an
+  inactive subscription.
+
+  **Why it is not fixed yet.** Every fix costs something on a path that matters:
+  - *Hold the resume point's monitor across bind → commit → `markAsPersisted`.* `advanceResumeFromAndIncluding` is
+    `synchronized` on the same object, so event-handler threads would block for every database round-trip of the
+    save. That defeats the point of saving asynchronously.
+  - *Compare-and-set in SQL* (a `reposition_epoch` / version column, `UPDATE … WHERE epoch = :expected`). Correct,
+    and safe across JVMs too, but a schema change to `durable_subscriptions` with a migration path.
+  - *In-JVM self-heal.* `setResumeFromAndIncluding` bumps an epoch. The saver captures the epoch with the value it
+    binds, and if the epoch changed by commit time it immediately re-saves the current value. No schema change, and
+    the window shrinks from one save interval to one round-trip, but it does not close.
+
+  Leaning toward the self-heal now and compare-and-set at the next schema-changing release, but that has not been
+  decided. Before choosing, check whether non-exclusive subscriptions on several nodes writing the same
+  `(subscriber_id, aggregate_type)` row need the cross-JVM guarantee anyway.
+
+  **Related dead code.** `SubscriptionResetOnPoisonNotifier`'s reset callback says it forces durable persistence.
+  It builds a fresh `SubscriptionResumePoint`, which starts with its persisted value equal to its current value, so
+  `isChanged()` is false and `saveResumePoints` filters it out without writing. The reset is still persisted, by
+  `overrideResumePoint` inside `resetFrom`, so behaviour is correct. The callback only misleads.

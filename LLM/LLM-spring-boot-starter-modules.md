@@ -383,6 +383,7 @@ Prefix: `essentials.eventstore.subscription-manager`
 | `event-store-polling-interval` | `100ms` | When processing events |
 | `max-event-store-polling-interval` | `2000ms` | Max backoff when idle |
 | `snapshot-resume-points-every` | `1s` | Save position frequency (only changed positions are written) |
+| `snapshot-resume-points-after-events` | `0` (off) | Opt-in: also save a position once it advanced this many global orders since its last save |
 
 #### Subscription Monitor
 

@@ -139,6 +139,16 @@ public final class SubscriptionResumePoint {
         return !Objects.equals(resumeFromAndIncluding, lastPersistedResumeFromAndIncluding);
     }
 
+    /**
+     * @return how many {@link GlobalEventOrder} positions {@link #getResumeFromAndIncluding()} has moved
+     * <i>forward</i> since the value last confirmed written - an upper bound on the number of events that
+     * would be redelivered if the subscriber stopped ungracefully now. {@code 0} when the resume point
+     * has not advanced, or was repositioned backwards
+     */
+    long unpersistedAdvance() {
+        return Math.max(0, resumeFromAndIncluding.longValue() - lastPersistedResumeFromAndIncluding.longValue());
+    }
+
     @Override
     public boolean equals(Object o) {
         if (this == o) return true;

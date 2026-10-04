@@ -603,6 +603,30 @@ always had the `caused_by_event_id` column, and the starter's default mapper cla
 Correlation ids are still not populated; trace context covers "what did this request do". Design and measurements:
 [event-causation.md](./event-causation.md). How to configure it: [LLM-postgresql-event-store.md](../LLM/LLM-postgresql-event-store.md#event-causation).
 
+### 2.10 Save a busy subscriber's resume point early (opt-in)
+
+Resume points are saved every `snapshotResumePointsEvery`, so after a crash a subscriber redelivers whatever it handled
+since the last tick. On a high-throughput subscriber that can be many events. `snapshotResumePointsAfterEvents` adds a
+bound by count: a resume point that has advanced that many `GlobalEventOrder` positions since it was last saved is
+written ahead of the next tick.
+
+```java
+EventStoreSubscriptionManager.builder()
+    ...
+    .setSnapshotResumePointsAfterEvents(1000)
+    .build();
+```
+
+```properties
+essentials.eventstore.subscription-manager.snapshot-resume-points-after-events=1000
+```
+
+`0`, the default, disables it. The threshold is checked in memory every tenth of `snapshotResumePointsEvery`, kept
+between 50 ms and 1 second. The check runs on the same thread as the periodic save, so the two never write concurrently.
+Only resume points past the threshold are written, so an idle or slow subscriber costs no extra database writes. The
+distance is counted in global event order positions. For a tenant-filtered subscriber, or across gaps, it is an upper
+bound on the events actually handled.
+
 ---
 
 ## 3. Bug fixes
