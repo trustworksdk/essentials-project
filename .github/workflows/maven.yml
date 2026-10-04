@@ -161,15 +161,20 @@ jobs:
         run: uv run --script tests/slice-compile/overlay.py check
 
       # chrome-headless-shell from Chrome for Testing, as a zip: no Node, no apt. Its libraries come with the runner's
-      # own Chrome install.
-      - name: Install chrome-headless-shell (Chrome for Testing, Stable)
+      # own Chrome install. One exact build, checked against a committed sha256 before it runs: no lookup through the
+      # last-known-good JSON, so neither a new Stable release nor whatever URL that file names can change what runs here.
+      # To bump: pick a version from that JSON, download its linux64 zip from the URL below, set both values from it.
+      - name: Install chrome-headless-shell (Chrome for Testing, pinned)
         id: chrome
+        env:
+          CHROME_VERSION: 154.0.8037.92
+          CHROME_SHA256: 636aa5c79f2693632e9921b8bbb050038ba11672e02346c06c20f991aed096f9
         run: |
-          read -r version url < <(curl -fsSL https://googlechromelabs.github.io/chrome-for-testing/last-known-good-versions-with-downloads.json |
-            uv run python -c 'import json, sys; s = json.load(sys.stdin)["channels"]["Stable"]; print(s["version"], next(d["url"] for d in s["downloads"]["chrome-headless-shell"] if d["platform"] == "linux64"))')
-          curl -fsSL -o "$RUNNER_TEMP/chrome-headless-shell.zip" "$url"
-          unzip -q "$RUNNER_TEMP/chrome-headless-shell.zip" -d "$RUNNER_TEMP"
-          echo "chrome-headless-shell $version"
+          zip="$RUNNER_TEMP/chrome-headless-shell.zip"
+          curl -fsSL -o "$zip" "https://storage.googleapis.com/chrome-for-testing-public/$CHROME_VERSION/linux64/chrome-headless-shell-linux64.zip"
+          echo "$CHROME_SHA256  $zip" | sha256sum --check --strict
+          unzip -q "$zip" -d "$RUNNER_TEMP"
+          echo "chrome-headless-shell $CHROME_VERSION"
           echo "path=$RUNNER_TEMP/chrome-headless-shell-linux64/chrome-headless-shell" >> "$GITHUB_OUTPUT"
 
       # The slice-map page's layout is JavaScript; the check runs it in the browser and parses the DOM it leaves.
