@@ -16,7 +16,6 @@
 
 package dk.trustworks.essentials.components.foundation.messaging.queue.api;
 
-import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.AggregateType;
 import dk.trustworks.essentials.components.foundation.messaging.queue.*;
 
 import java.time.OffsetDateTime;
@@ -82,12 +81,24 @@ public record ApiQueuedMessage(
     }
 
     /**
-     * An ordered message whose payload is an {@link AggregateType} refers to the persisted event at that aggregate
-     * type, key (aggregate id) and order - the shape of an {@code EventProcessor}'s inbox messages
+     * The metadata key an {@code EventProcessor} marks its event-reference messages with - the value of
+     * {@code AbstractEventProcessor.EventReferenceOrderedMessage.EVENT_REFERENCE_METADATA_KEY}. Repeated rather than
+     * referenced: that class, and the {@code AggregateType} such a message carries, live in packages that depend on
+     * this one, and naming either here is a package cycle {@code EssentialsArchitectureTest} refuses.
+     */
+    public static final String EVENT_REFERENCE_METADATA_KEY = "EVENT_REFERENCE";
+
+    /**
+     * An {@code EventProcessor}'s inbox message refers to the persisted event at its payload's aggregate type, its key
+     * (aggregate id) and its order, rather than carrying the event. Recognised the way the processor recognises it - by
+     * its metadata marker, not by the payload's type
      */
     private static String referencedAggregateType(Message message) {
-        return message instanceof OrderedMessage && message.getPayload() instanceof AggregateType aggregateType
-               ? aggregateType.toString()
+        return message instanceof OrderedMessage
+                       && message.getMetaData() != null
+                       && "true".equals(message.getMetaData().get(EVENT_REFERENCE_METADATA_KEY))
+                       && message.getPayload() != null
+               ? message.getPayload().toString()
                : null;
     }
 

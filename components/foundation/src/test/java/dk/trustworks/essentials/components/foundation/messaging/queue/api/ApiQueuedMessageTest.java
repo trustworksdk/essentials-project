@@ -28,7 +28,7 @@ class ApiQueuedMessageTest {
 
     @Test
     void a_message_referring_to_a_persisted_event_names_the_aggregate_type_key_and_order_even_without_its_payload() {
-        var api = ApiQueuedMessage.from(queued(OrderedMessage.of(AggregateType.of("Payments"), "payment-1042", 2)));
+        var api = ApiQueuedMessage.from(queued(eventReference(AggregateType.of("Payments"), "payment-1042", 2)));
 
         assertThat(api.payload()).as("payload is still role-gated").isNull();
         assertThat(api.referencedAggregateType()).isEqualTo("Payments");
@@ -45,6 +45,18 @@ class ApiQueuedMessageTest {
         assertThat(api.referencedAggregateType()).isNull();
     }
 
+    /**
+     * Recognised by the processor's marker, as the processor recognises it - not by the payload's type, which this
+     * package must not name: {@code AggregateType}'s package depends on this one
+     */
+    @Test
+    void an_ordered_message_carrying_an_aggregate_type_without_the_event_reference_marker_refers_to_no_event() {
+        var api = ApiQueuedMessage.from(queued(OrderedMessage.of(AggregateType.of("Payments"), "payment-1042", 2)));
+
+        assertThat(api.referencedAggregateType()).isNull();
+        assertThat(api.orderedMessageOrder()).isEqualTo(2L);
+    }
+
     @Test
     void an_unordered_message_has_none_of_them() {
         var api = ApiQueuedMessage.from(queued(Message.of(AggregateType.of("Payments"))));
@@ -52,6 +64,11 @@ class ApiQueuedMessageTest {
         assertThat(api.orderedMessageKey()).isNull();
         assertThat(api.orderedMessageOrder()).isNull();
         assertThat(api.referencedAggregateType()).isNull();
+    }
+
+    private static OrderedMessage eventReference(AggregateType aggregateType, String aggregateId, long eventOrder) {
+        return OrderedMessage.of(aggregateType, aggregateId, eventOrder,
+                                 MessageMetaData.of(ApiQueuedMessage.EVENT_REFERENCE_METADATA_KEY, "true"));
     }
 
     private static QueuedMessage queued(Message message) {
