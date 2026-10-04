@@ -1568,14 +1568,14 @@ public final class ShardOwnedStorage {
      *                          since a takeover bumps it on rows that were never delivered.
      */
     public record DeadLetter(String lane, String key, int shard, long seq, byte[] payload, int attempts, String error,
-                             int payloadType, Long blockedByKeyOrder) {
+                             int payloadType, Long blockedByKeyOrder, long keyOrder) {
     }
 
     public List<DeadLetter> deadLetters(int offset, int limit) throws SQLException {
         try (var connection = dataSource.getConnection();
              var statement = connection.prepareStatement(
                      "SELECT source_lane, msg_key, seq, payload, attempts, last_error, shard, payload_type,"
-                             + " blocked_by_key_order FROM " + DLQ_TABLE
+                             + " blocked_by_key_order, COALESCE(key_order, 0) FROM " + DLQ_TABLE
                              + " WHERE queue_id = ? ORDER BY id OFFSET ? LIMIT ?")) {
             statement.setShort(1, queueId);
             statement.setInt(2, offset);
@@ -1592,7 +1592,7 @@ public final class ShardOwnedStorage {
                     rows.add(new DeadLetter(resultSet.getString(1), resultSet.getString(2), resultSet.getInt(7),
                                             resultSet.getLong(3), resultSet.getBytes(4), resultSet.getInt(5),
                                             resultSet.getString(6), resultSet.getInt(8),
-                                            blockedByKeyOrder));
+                                            blockedByKeyOrder, resultSet.getLong(10)));
                 }
                 return rows;
             }
@@ -1609,10 +1609,11 @@ public final class ShardOwnedStorage {
      */
     public Optional<StoredMessage> findMessage(int shard, long seq, boolean ordered) throws SQLException {
         var table = ordered ? ORDERED_TABLE : UNORDERED_TABLE;
-        var key   = ordered ? "msg_key" : "NULL::text";
+        var key      = ordered ? "msg_key" : "NULL::text";
+        var keyOrder = ordered ? "key_order" : "0::bigint";
         try (var connection = dataSource.getConnection();
              var statement = connection.prepareStatement(
-                     "SELECT " + key + ", payload, payload_type, attempts, enqueued_at, visible_at"
+                     "SELECT " + key + ", payload, payload_type, attempts, enqueued_at, visible_at, " + keyOrder
                              + " FROM " + table + " WHERE queue_id = ? AND shard = ? AND seq = ?")) {
             statement.setShort(1, queueId);
             statement.setInt(2, shard);
@@ -1626,7 +1627,8 @@ public final class ShardOwnedStorage {
                                                      resultSet.getInt(3),
                                                      resultSet.getInt(4),
                                                      resultSet.getTimestamp(5).toInstant(),
-                                                     resultSet.getTimestamp(6).toInstant()));
+                                                     resultSet.getTimestamp(6).toInstant(),
+                                                     resultSet.getLong(7)));
             }
         }
     }
@@ -1649,13 +1651,13 @@ public final class ShardOwnedStorage {
      * is paid once per administrator looking at a page, not once per delivered message.
      */
     public List<ListedMessage> listMessages(int offset, int limit, boolean ascending) throws SQLException {
-        var sql = "SELECT lane, shard, seq, msg_key, payload, payload_type, attempts, enqueued_at, visible_at FROM ("
+        var sql = "SELECT lane, shard, seq, msg_key, payload, payload_type, attempts, enqueued_at, visible_at, key_order FROM ("
                 + "   SELECT 'unordered' AS lane, shard, seq, NULL::text AS msg_key, payload, payload_type,"
-                + "          attempts, enqueued_at, visible_at"
+                + "          attempts, enqueued_at, visible_at, 0::bigint AS key_order"
                 + "     FROM " + UNORDERED_TABLE + " WHERE queue_id = ?"
                 + "   UNION ALL"
                 + "   SELECT 'ordered', shard, seq, msg_key, payload, payload_type,"
-                + "          attempts, enqueued_at, visible_at"
+                + "          attempts, enqueued_at, visible_at, key_order"
                 + "     FROM " + ORDERED_TABLE + " WHERE queue_id = ?"
                 + " ) lanes ORDER BY lane " + (ascending ? "ASC" : "DESC")
                 + ", shard " + (ascending ? "ASC" : "DESC")
@@ -1678,7 +1680,8 @@ public final class ShardOwnedStorage {
                                                                      resultSet.getInt(6),
                                                                      resultSet.getInt(7),
                                                                      resultSet.getTimestamp(8).toInstant(),
-                                                                     resultSet.getTimestamp(9).toInstant())));
+                                                                     resultSet.getTimestamp(9).toInstant(),
+                                                                     resultSet.getLong(10))));
                 }
                 return messages;
             }
@@ -1692,7 +1695,7 @@ public final class ShardOwnedStorage {
     }
 
     public record StoredMessage(String key, byte[] payload, int payloadType, int attempts,
-                                java.time.Instant enqueuedAt, java.time.Instant visibleAt) {
+                                java.time.Instant enqueuedAt, java.time.Instant visibleAt, long keyOrder) {
     }
 
     /**

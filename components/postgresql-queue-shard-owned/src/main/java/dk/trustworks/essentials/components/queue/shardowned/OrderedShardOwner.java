@@ -620,7 +620,7 @@ final class OrderedShardOwner implements BatchReadableOwner {
         var startedNanos = System.nanoTime();
         try {
             handler.handle(new MessageId(MessageId.Lane.ORDERED, shard, row.seq()),
-                           key, row.payload(), row.payloadType());
+                           key, keyOrder, row.payload(), row.payloadType());
             synchronized (stateLock) {
                 if (Thread.currentThread().isInterrupted()) {
                     metrics.abandonedOnInterrupt.increment();

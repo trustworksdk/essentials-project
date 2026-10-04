@@ -60,4 +60,21 @@ public interface MessageHandler {
      *                    {@link Message#payloadType()}
      */
     void handle(MessageId messageId, String key, byte[] payload, int payloadType) throws Exception;
+
+    /**
+     * What the engine calls. Adds the message's {@code key_order} - free on the delivery path, since the ordered
+     * lane's cursor read already returns it to order dispatch by. A consumer that rebuilds the producer's message needs
+     * it: the {@code DurableQueues} adapter turns it back into {@code OrderedMessage.getOrder()}, which an
+     * {@code EventProcessor} uses to load the event a forwarded reference points to. Without it every reference
+     * resolved to the aggregate's first event.
+     * <p>
+     * Defaults to {@link #handle(MessageId, String, byte[], int)}, so a handler that has no use for the order stays a
+     * lambda.
+     *
+     * @param keyOrder the message's position within its key as supplied by the producer; {@code 0} for an unordered
+     *                 message, matching {@link Message#keyOrder()}
+     */
+    default void handle(MessageId messageId, String key, long keyOrder, byte[] payload, int payloadType) throws Exception {
+        handle(messageId, key, payload, payloadType);
+    }
 }

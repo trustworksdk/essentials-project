@@ -23,6 +23,7 @@ import dk.trustworks.essentials.components.foundation.messaging.queue.operations
 // Single-type imports, not the package: shardowned.spi and foundation...queue both export QueueName,
 // Message and QueuedMessage, and this class deals in the foundation's.
 import dk.trustworks.essentials.components.queue.shardowned.spi.ConsumerOptions;
+import dk.trustworks.essentials.components.queue.shardowned.spi.MessageHandler;
 import dk.trustworks.essentials.components.queue.shardowned.spi.MessageId;
 import dk.trustworks.essentials.components.queue.shardowned.spi.MessageQueue;
 import dk.trustworks.essentials.components.queue.shardowned.spi.Subscription;
@@ -102,7 +103,17 @@ class ShardOwnedDurableQueueConsumer implements DurableQueueConsumer {
             return;
         }
         try {
-            subscription = queue.consume(this::deliver, toConsumerOptions(operation));
+            subscription = queue.consume(new MessageHandler() {
+                @Override
+                public void handle(MessageId messageId, String key, byte[] payload, int payloadType) {
+                    throw new IllegalStateException("The engine delivers with the key order");
+                }
+
+                @Override
+                public void handle(MessageId messageId, String key, long keyOrder, byte[] payload, int payloadType) {
+                    deliver(messageId, key, keyOrder, payload, payloadType);
+                }
+            }, toConsumerOptions(operation));
             log.info("Consumer '{}' started on queue '{}'", consumerName(), queueName());
         } catch (Exception e) {
             throw new DurableQueueException("Failed to start consumer '" + consumerName() + "'", e, queueName());
@@ -143,7 +154,7 @@ class ShardOwnedDurableQueueConsumer implements DurableQueueConsumer {
      * returns normally, and the message is acknowledged as handled — the same outcome as a handler
      * that returns without doing anything.
      */
-    private void deliver(MessageId messageId, String key, byte[] payload, int payloadType) {
+    private void deliver(MessageId messageId, String key, long keyOrder, byte[] payload, int payloadType) {
         if (payloadType != MessageEnvelope.FORMAT_VERSION) {
             throw new DurableQueueException(
                     "Message was written in envelope format " + payloadType + ", and this adapter reads format "
@@ -151,7 +162,9 @@ class ShardOwnedDurableQueueConsumer implements DurableQueueConsumer {
                             + ". A message enqueued by something other than this adapter cannot be delivered through it.",
                     queueName());
         }
-        var message = MessageEnvelope.deserialize(jsonSerializer, payload, key, 0L);
+        // The order matters, not only the key: an EventProcessor's forwarded event is a reference whose order is the
+        // event's position in its stream. Rebuilt as 0, every reference resolved to the aggregate's first event
+        var message = MessageEnvelope.deserialize(jsonSerializer, payload, key, keyOrder);
         var queuedMessage = ShardOwnedQueuedMessage.beingDelivered(queueName(),
                                                                    QueueEntryIdCodec.encode(queueName(), messageId),
                                                                    message);

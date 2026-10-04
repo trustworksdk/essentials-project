@@ -306,6 +306,13 @@ class InboxOutboxOnShardOwnedIT {
         assertThat(everything)
                 .as("both lanes are listed")
                 .hasSize(30);
+        assertThat(everything.stream()
+                             .map(QueuedMessage::getMessage)
+                             .filter(OrderedMessage.class::isInstance)
+                             .map(OrderedMessage.class::cast)
+                             .map(ordered -> ordered.getKey() + "@" + ordered.getOrder()))
+                .as("an ordered message is listed with its own order, not 0")
+                .containsExactlyInAnyOrder("key-0@0", "key-1@1", "key-2@2", "key-3@3", "key-4@4");
 
         // Walk it in pages of 7, which does not divide 30 — a boundary bug hides behind a clean divisor.
         var paged = new ArrayList<String>();
@@ -431,9 +438,13 @@ class InboxOutboxOnShardOwnedIT {
                   .untilAsserted(() -> assertThat(latch.getCount()).isZero());
 
         assertThat(perKey).hasSize(3);
+        // Exactly the producer's orders, not merely sorted ones: every message used to come back with order 0, which is
+        // sorted - so this passed while an EventProcessor, resolving each forwarded event by its order, only ever saw an
+        // aggregate's first event
+        var producersOrders = java.util.stream.LongStream.range(0, 100).boxed().toList();
         perKey.forEach((key, orders) -> assertThat(orders)
-                .as("key '%s' must be delivered in the order its producer assigned", key)
-                .isSorted());
+                .as("key '%s' must be delivered with, and in, the order its producer assigned", key)
+                .containsExactlyElementsOf(producersOrders));
     }
 
     /**

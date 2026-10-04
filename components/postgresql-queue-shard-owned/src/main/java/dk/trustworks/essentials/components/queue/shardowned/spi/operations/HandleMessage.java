@@ -31,8 +31,9 @@ import dk.trustworks.essentials.components.queue.shardowned.spi.MessageId;
  *
  * @param messageId   which message this is — {@code (lane, shard, sequence)}, unique within the queue
  * @param key         the ordering key for an ordered message, null otherwise
+ * @param keyOrder    the message's position within its key; {@code 0} for an unordered message
  * @param payload     the bytes as stored
  * @param payloadType the application's discriminator; opaque to the engine
  */
-public record HandleMessage(MessageId messageId, String key, byte[] payload, int payloadType) {
+public record HandleMessage(MessageId messageId, String key, long keyOrder, byte[] payload, int payloadType) {
 }

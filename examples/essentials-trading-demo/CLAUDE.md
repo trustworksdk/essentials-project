@@ -65,6 +65,8 @@ lane. Do **not** convert to `Decider`s.
   step's event, so a trade's settlement is one causation tree in the admin console's *Event causation* page. `scripted`
   turns it off and makes the harness send every step itself, as the benchmark scenarios assume. Tests that send the
   settlement commands themselves must pin `scripted`, or the automation races them. See that slice's `CLAUDE.md`.
+  The automation test runs twice — `SettleTradeAutomationTest` on `PostgresqlDurableQueues`, `…OnShardOwnedQueuesTest` on the
+  shard-owned engine the `compose` profile uses; only the latter caught the adapter delivering every event reference as order 0.
 - **Every `@SpringBootTest` here carries `@DirtiesContext`.** Each class owns a static Postgres container, so a cached
   context outlives its database; on the next context switch Spring pauses it, and every event-processor subscription's
   lock release waits out a Hikari connection timeout. Three such classes turned a 30s suite into 25+ minutes.
