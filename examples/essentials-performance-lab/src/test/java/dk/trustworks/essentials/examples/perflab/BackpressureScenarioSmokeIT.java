@@ -50,6 +50,12 @@ import static org.assertj.core.api.Assertions.assertThat;
                 "essentials.lab.aggregate-cardinality=10",
                 "essentials.lab.random-seed=11",
                 "essentials.lab.subscriber-handler-delay-ms=10",
+                // Throttled, so the catch-up check measures delivery rather than the machine. Unthrottled, 2s of
+                // producing was ~3 000 events for a subscriber that drains ~100/s, against a budget of only 1.5x the
+                // ideal drain time: a CPU-starved run (a loaded laptop's Docker VM) missed it with nothing wrong. At 150/s
+                // the subscriber still falls behind, so a backlog still forms, but ~300 events drain in ~3s against
+                // the 30s minimum budget.
+                "essentials.lab.producer-rate-hz=150",
                 "essentials.eventstore.cdc.enabled=false",
                 "essentials.lab.metrics-output-file=target/perf-lab-smoke/backpressure.json"
         })
