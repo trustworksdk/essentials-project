@@ -30,7 +30,7 @@ event records the event that caused it: one `TradeExecuted` roots a tree across 
 - **Every step is safe to repeat.** A redelivered event repeats its command, so the aggregates ignore a step that
   already happened (`Settlement.closeSettlement` included), `CreateSettlement` ignores an existing settlement, and
   `TradingAccount` remembers the trades it has settled in the current generation.
-- **The clearing house is a stub** (`ClearingHouseGateway`, `trading-demo.clearing-house.latency`, 200ms), called
+- **The clearing house is a stub** (`ClearingHouseGateway`, `trading-demo.clearing-house.latency`, 100ms — under the `observability` profile's 200ms INFO threshold, or every trade logs two timing lines), called
   from a `UnitOfWorkMode.NONE` handler like `market_data.risk_approve_instrument`'s risk service. Every request is
   confirmed.
 - **No realized P&L.** The cash moves by the gross amount; only the scripted harness simulates P&L.

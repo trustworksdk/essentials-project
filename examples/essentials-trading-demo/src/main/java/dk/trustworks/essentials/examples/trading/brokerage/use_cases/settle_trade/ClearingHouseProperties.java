@@ -29,9 +29,10 @@ public class ClearingHouseProperties {
     /**
      * How long the stubbed clearing confirmation blocks. Like the risk service's latency, it must stay well below
      * {@code essentials.durable-queues.message-handling-timeout} (30s by default), or the message is redelivered while
-     * the first attempt is still blocked.
+     * the first attempt is still blocked. Kept below the {@code observability} profile's 200ms INFO threshold for message
+     * handling, which every trade's clearing step would otherwise cross - two INFO lines per trade.
      */
-    private Duration latency = Duration.ofMillis(200);
+    private Duration latency = Duration.ofMillis(100);
 
     public Duration getLatency() {
         return latency;
