@@ -145,6 +145,14 @@ entry, `essentials.causedByEventId`. Nothing changes for a `PersistableEventMapp
 schema change, and existing rows keep their nulls. `essentials.eventstore.causation.enabled=false` restores the old
 behaviour. See [§2.9](#29-event-causation).
 
+#### 1.1.8 Spring saves subscription resume points every second, not every 10 seconds
+
+`essentials.eventstore.subscription-manager.snapshot-resume-points-every` now defaults to `1s`, the default
+`EventStoreSubscriptionManager.builder()` already used. After a crash, a subscriber now redelivers about one
+second of already-handled events instead of up to ten. Only resume points that changed since the last save are
+written, in one batched `UPDATE`, so an idle subscriber still causes no database writes. A busy one costs at most
+one statement per second. Set the property to `10s` to restore the old behaviour.
+
 ---
 
 ### 1.2 Platform: Java 25, Spring Boot 4.1, Kotlin 2.3

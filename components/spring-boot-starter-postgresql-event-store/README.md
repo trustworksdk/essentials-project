@@ -260,7 +260,7 @@ Controls how the subscription manager polls for and processes events:
 essentials.eventstore.subscription-manager.event-store-polling-batch-size=10
 essentials.eventstore.subscription-manager.event-store-polling-interval=100ms
 essentials.eventstore.subscription-manager.max-event-store-polling-interval=2000ms
-essentials.eventstore.subscription-manager.snapshot-resume-points-every=10s
+essentials.eventstore.subscription-manager.snapshot-resume-points-every=1s
 ```
 
 | Property | Default | What It Controls |
@@ -268,7 +268,7 @@ essentials.eventstore.subscription-manager.snapshot-resume-points-every=10s
 | `event-store-polling-batch-size` | `10` | How many events to fetch per poll. Higher = more throughput, but more memory per batch |
 | `event-store-polling-interval` | `100ms` | How often to check for new events when events are being processed |
 | `max-event-store-polling-interval` | `2000ms` | Maximum wait between polls when no events are found (uses jittered backoff) |
-| `snapshot-resume-points-every` | `10s` | How often to save each subscriber's position. Lower = less re-processing after crash, but more database writes |
+| `snapshot-resume-points-every` | `1s` | How often to save each subscriber's position. Bounds how much is re-processed after a crash. Only positions that changed are written (one batched `UPDATE` per interval at most), so idle subscribers cost nothing |
 
 ### CDC Operational API
 

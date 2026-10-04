@@ -347,7 +347,7 @@ public class EssentialsEventStoreProperties {
         private int                                              eventStorePollingBatchSize   = 10;
         private Duration                                         eventStorePollingInterval    = Duration.ofMillis(100);
         private Duration                                         maxEventStorePollingInterval = Duration.ofMillis(2000);
-        private Duration                                         snapshotResumePointsEvery    = Duration.ofSeconds(10);
+        private Duration                                         snapshotResumePointsEvery    = Duration.ofSeconds(1);
         private EssentialsComponentsProperties.MetricsProperties metrics                      = new EssentialsComponentsProperties.MetricsProperties();
         private final NotifyPollingProperties                    notifyPolling                = new NotifyPollingProperties();
         private final SubscriptionStatisticsProperties            statistics                   = new SubscriptionStatisticsProperties();
@@ -421,6 +421,9 @@ public class EssentialsEventStoreProperties {
          * How often should active (for exclusive subscribers this means subscribers that have acquired a distributed lock) subscribers have their {@link SubscriptionResumePoint} saved
          *
          * @param snapshotResumePointsEvery How often should active (for exclusive subscribers this means subscribers that have acquired a distributed lock) subscribers have their {@link SubscriptionResumePoint} saved
+         *                                  - default: every 1 second. Only resume points that changed since the last save are written, so an
+         *                                  idle subscriber costs nothing; the interval bounds how many already-handled events are redelivered
+         *                                  after an ungraceful stop
          */
         public void setSnapshotResumePointsEvery(Duration snapshotResumePointsEvery) {
             this.snapshotResumePointsEvery = snapshotResumePointsEvery;
