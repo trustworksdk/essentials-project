@@ -461,7 +461,7 @@ public class PostgresqlDurableQueuesIT
     extends DurableQueuesIT<PostgresqlDurableQueues, JdbiUnitOfWork, JdbiUnitOfWorkFactory> {
 
     @Container
-    static PostgreSQLContainer<?> postgres = new PostgreSQLContainer<>("postgres:15");
+    static PostgreSQLContainer postgres = new PostgreSQLContainer("postgres:15");
 
     private Jdbi jdbi;
 

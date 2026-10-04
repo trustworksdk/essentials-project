@@ -401,10 +401,10 @@ MongoUtil.checkIsValidCollectionName(collectionName);  // Basic validation (not 
 ```java
 // Base package: dk.trustworks.essentials.components.queue.springdata.mongodb
 import dk.trustworks.essentials.components.queue.springdata.mongodb.MongoDurableQueues;
-import org.testcontainers.containers.MongoDBContainer;
+import org.testcontainers.mongodb.MongoDBContainer;
 
 @Container
-static MongoDBContainer mongo = new MongoDBContainer("mongo:6.0");
+static MongoDBContainer mongo = new MongoDBContainer("mongo:6.0").withReplicaSet();
 
 @Bean
 public DurableQueues testDurableQueues(MongoTemplate mongoTemplate) {
