@@ -1168,7 +1168,10 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
         // a connection 68 times to perform one logical operation, which is how a stop against an
         // absent database turned into 68 consecutive connectionTimeouts — see
         // ShardOwnedStorage.releaseLeases.
-        var lane   = stillHeld.getFirst().lane();
+        // Every owner is on activeLane: one instance serves one lane (configureOrdered and configureUnordered refuse
+        // each other), and both the start and rebalance only acquire on it. Letting an instance hold both lanes would
+        // need this split per lane, or the other lane's leases would be left to expire on stop.
+        var lane   = activeLane;
         var shards = stillHeld.stream().map(LeasedOwner::shard).toList();
         try {
             storage.releaseLeases(lane, shards, instanceId);
