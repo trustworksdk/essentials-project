@@ -284,6 +284,7 @@ Prefix: `essentials`
 | Property | Default | Effect |
 |----------|---------|--------|
 | `life-cycles.start-life-cycles` | `true` | Auto-start Lifecycle beans |
+| `life-cycles.shutdown-timeout` | `10s` | Shutdown budget for stopping Lifecycle beans; bounded, best-effort DB cleanup during shutdown |
 | `reactive-bean-post-processor-enabled` | `true` | Auto-register handlers |
 | `immutable-jackson-module-enabled` | `true` | Enable immutable deserialization |
 
@@ -698,6 +699,7 @@ public PostgresqlDurableQueues postgresqlDurableQueues(...) {
 - ⚠️ **Transactional Mode**: Use `single-operation-transaction` for reliable retry/DLQ (fully-transactional breaks retries)
 - ⚠️ **Bean Conditionals**: Event Store provides own `UnitOfWorkFactory`, `EventBus`, `JSONSerializer` (PostgreSQL starter skips these when EventStore on classpath)
 - ⚠️ **Lifecycle Start**: Set `start-life-cycles=false` to manually control lifecycle
+- ⚠️ **Shutdown with the database gone**: cleanup on stop (fenced-lock release, resume-point save, job unscheduling) is one bounded attempt and skipped once the DB proves unreachable; `life-cycles.shutdown-timeout` (10s) caps the whole stop. Implement `ShutdownAware` (foundation `lifecycle`) on your own `Lifecycle` beans whose `stop()` touches the DB, and run that work through `ShutdownContext.attemptCleanup(...)`
 - ⚠️ **MongoDB CharSequenceTypes**: Must register types using ObjectId values or used as Map keys
 - ⚠️ **Flush Publishing**: Enable only if sagas need per-event coordination (impacts transaction semantics)
 - ⚠️ **Admin UI**: Requires both `EssentialsAuthenticatedUser` implementation AND Spring Security config (not auto-configured)

@@ -18,6 +18,7 @@ package dk.trustworks.essentials.components.boot.autoconfigure.queue.shardowned;
 
 import dk.trustworks.essentials.components.adminapi.rest.AdminApiPrincipalResolver;
 import dk.trustworks.essentials.components.foundation.json.JSONSerializer;
+import dk.trustworks.essentials.components.foundation.lifecycle.ShutdownAware;
 import dk.trustworks.essentials.components.foundation.postgresql.stats.*;
 // Single-type imports, not the package: foundation...queue and shardowned.spi both export QueueName,
 // and this class imports the spi package wholesale.
@@ -124,6 +125,16 @@ public class ShardOwnedQueueAutoConfiguration {
         var provider = new CompositeDataSourcePoolMetadataProvider(poolMetadataProviders.orderedStream().toList());
         return new ShardRuntime(dataSource, settings, new ShardOwnerMetrics(),
                                 SpringConnectionPoolMetadata.of(dataSource, provider));
+    }
+
+    /**
+     * Passes the application's shutdown signal on to the {@link ShardRuntime}, which depends on {@code shared} alone and
+     * so cannot be a {@link ShutdownAware} itself: its pump wait on stop is then bounded by what is left of the shutdown
+     * timeout ({@code essentials.life-cycles.shutdown-timeout}).
+     */
+    @Bean
+    public ShutdownAware shardRuntimeShutdownBridge(ShardRuntime shardRuntime) {
+        return shutdown -> shardRuntime.shutdownStarting(shutdown::remaining);
     }
 
     /**

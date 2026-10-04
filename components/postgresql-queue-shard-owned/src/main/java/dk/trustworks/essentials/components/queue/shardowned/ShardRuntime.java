@@ -20,9 +20,11 @@ import dk.trustworks.essentials.shared.Lifecycle;
 import org.slf4j.*;
 
 import javax.sql.DataSource;
+import java.time.Duration;
 import java.util.*;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.function.Supplier;
 
 import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 
@@ -50,6 +52,9 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
  * serve every queue, and was simply being constructed once per queue.
  */
 public final class ShardRuntime implements Lifecycle, AutoCloseable {
+    private static final Duration PUMP_TERMINATION_TIMEOUT = Duration.ofSeconds(30);
+    /** Set by {@link #shutdownStarting(Supplier)}; {@code null} outside an application shutdown */
+    private volatile Supplier<Duration> remainingShutdownTime;
     private static final Logger log = LoggerFactory.getLogger(ShardRuntime.class);
 
     /**
@@ -183,6 +188,7 @@ public final class ShardRuntime implements Lifecycle, AutoCloseable {
         if (!running.compareAndSet(false, true)) {
             return;
         }
+        remainingShutdownTime = null;
         try {
             // Before the first connection is taken: a pool the pumps would exhaust does not fail, it
             // retries forever — see PoolBudget.
@@ -293,6 +299,20 @@ public final class ShardRuntime implements Lifecycle, AutoCloseable {
         stop();
     }
 
+    /**
+     * The application is shutting down under a time budget: {@link #stop()} waits for the pumps no longer than what is
+     * left of it, instead of up to thirty seconds. Against an unreachable database a pump sits in a pooled connection
+     * checkout for the pool's whole timeout, and waiting for it then only delays every component stopped after this one.
+     * <p>
+     * Takes a plain supplier so the engine keeps depending on {@code shared} alone; the Spring starter bridges it from the
+     * application's shutdown signal.
+     *
+     * @param remainingShutdownTime what is left of the shutdown's time budget, asked for when {@link #stop()} runs
+     */
+    public void shutdownStarting(Supplier<Duration> remainingShutdownTime) {
+        this.remainingShutdownTime = requireNonNull(remainingShutdownTime, "No remainingShutdownTime provided");
+    }
+
     @Override
     public synchronized void stop() {
         if (!running.compareAndSet(true, false)) {
@@ -312,7 +332,12 @@ public final class ShardRuntime implements Lifecycle, AutoCloseable {
         heartbeat.shutdownNow();
         pumpExecutor.shutdown();
         try {
-            if (!pumpExecutor.awaitTermination(30, TimeUnit.SECONDS)) {
+            var pumpWait = PUMP_TERMINATION_TIMEOUT;
+            var shutdownBudget = remainingShutdownTime;
+            if (shutdownBudget != null && shutdownBudget.get().compareTo(pumpWait) < 0) {
+                pumpWait = shutdownBudget.get();
+            }
+            if (!pumpExecutor.awaitTermination(pumpWait.toMillis(), TimeUnit.MILLISECONDS)) {
                 pumpExecutor.shutdownNow();
             }
         } catch (InterruptedException e) {
