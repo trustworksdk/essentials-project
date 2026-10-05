@@ -766,6 +766,14 @@ Later TX1 commits → resolves: 1, 2, 3
 | **Transient** | Concurrent tx not yet committed | Subscription waits/retries |
 | **Permanent** | Tx rolled back (timeout exceeded) | Excluded from queries |
 
+A poll records a new gap (a hole below the highest event it read) as transient gaps only
+`SubscriptionGapHandler.MAX_AWAITED_ORDERS_PER_GAP_END` (5,000) orders deep from each end - the orders an in-flight
+transaction can hold. `PostgresqlEventStreamGapHandler` skips the middle of a wider hole (sequence `setval` forward,
+restore) with a WARN and records it nowhere: no transient or permanent gap rows, and an event committing there later is not
+delivered to a subscription already past it (never delivered twice, resume point never moves back) - unlike CDC, which
+awaits the middle in memory. Price: one transaction appending > 10,000 events, still uncommitted after the poll range has
+widened past it, has its middle events missed by polling subscriptions.
+
 Each poll re-asks for the subscriber's open transient gaps. Default `PostgresqlEventStreamGapHandler` constructors: all open
 gaps up to 50; beyond that the 20 highest + 10 lowest + a rotating window of 20 (max 50 per poll). A custom
 `ResolveTransientGapsToIncludeInQueryStrategy` (longer constructors) replaces that; compose

@@ -610,6 +610,51 @@ class PostgresqlEventStreamGapHandlerIT {
     }
 
     /**
+     * A hole wider than twice {@link SubscriptionGapHandler#MAX_AWAITED_ORDERS_PER_GAP_END} - the global order sequence
+     * moved a million forward - is recorded only at its two ends: the orders a transaction still in flight can hold. The
+     * middle gets no transient gap, and so never a permanent one; a permanent gap at an end is not recorded again
+     */
+    @Test
+    void a_reconciliation_records_only_the_ends_of_a_hole_wider_than_twice_the_bound() {
+        var jump = 1_000_000L;
+        var end  = (long) SubscriptionGapHandler.MAX_AWAITED_ORDERS_PER_GAP_END;
+        var eventStreamGapHandler = new PostgresqlEventStreamGapHandler<SeparateTablePerAggregateEventStreamConfiguration>(unitOfWorkFactory,
+                                                                                                                          Duration.ofSeconds(60),
+                                                                                                                          ResolveTransientGapsToIncludeInQueryStrategy.defaultSelection(),
+                                                                                                                          ResolveTransientGapsToPermanentGapsPromotionStrategy.thresholdBased(120));
+        var  subscriber = SubscriberId.of("gap-wide-hole-reconciled-sub");
+        var  gapHandler = eventStreamGapHandler.gapHandlerFor(subscriber);
+        long from       = appendEvents(1).getFirst().globalEventOrder().longValue() + 1;
+        var sequenceName = unitOfWorkFactory.withUnitOfWork(uow -> eventStore.getPersistenceStrategy()
+                                                                             .resolveGlobalEventOrderSequenceName(uow, aggregateType)
+                                                                             .orElseThrow());
+        unitOfWorkFactory.usingUnitOfWork(uow -> uow.handle().createQuery("SELECT setval(:seq, :value)")
+                                                    .bind("seq", sequenceName)
+                                                    .bind("value", from + jump - 1)
+                                                    .mapTo(Long.class)
+                                                    .one());
+        var above = appendEvents(1).getFirst();
+        assertThat(above.globalEventOrder().longValue()).isEqualTo(from + jump);
+        eventStreamGapHandler.registerPermanentGaps(aggregateType, List.of(GlobalEventOrder.of(from)), "test");
+
+        var outcome = unitOfWorkFactory.withUnitOfWork(unitOfWork -> gapHandler.reconcileGapsAndReport(aggregateType, LongRange.from(from, 2 * jump), List.of(above), List.of()));
+
+        assertThat(outcome).isEqualTo(new GapReconciliation((int) (2 * end - 1), 0, 0));
+        var recorded = currentTransientGaps(subscriber).stream().map(GlobalEventOrder::longValue).sorted().toList();
+        var expected = LongStream.concat(LongStream.rangeClosed(from + 1, from + end - 1),
+                                         LongStream.rangeClosed(from + jump - end, from + jump - 1))
+                                 .boxed()
+                                 .toList();
+        assertThat(recorded).isEqualTo(expected);
+        assertThat(gapHandler.getTransientGapsFor(aggregateType)).hasSize((int) (2 * end - 1));
+        assertThat(permanentGaps(gapHandler)).containsExactly(GlobalEventOrder.of(from));
+
+        // Reconciled again - another poll over the same range - nothing new
+        var again = unitOfWorkFactory.withUnitOfWork(unitOfWork -> gapHandler.reconcileGapsAndReport(aggregateType, LongRange.from(from, 2 * jump), List.of(above), List.of()));
+        assertThat(again).isEqualTo(GapReconciliation.NONE);
+    }
+
+    /**
      * A give-up records a permanent gap of the aggregate type, as a polling promotion does - not one of the subscriber
      * that gave up alone: another subscriber that reconciles a range spanning it afterwards does not record it as a
      * transient gap, so never asks for it. A gap nobody gave up still becomes its transient gap.

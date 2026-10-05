@@ -31,6 +31,28 @@ import java.util.stream.Stream;
  */
 public interface SubscriptionGapHandler {
     /**
+     * How many orders at each end of a newly discovered gap a subscription records as transient gaps, at most. A gap no
+     * wider than twice this is recorded in full.
+     * <p>
+     * Only an order a transaction still in flight holds can still be delivered, and the global order sequence hands such
+     * orders out next to the orders around them: right above the highest order the subscription had seen - taken before
+     * whatever moved the sequence forward (a {@code setval}, a restore) - or right below the event that revealed the gap -
+     * taken by a concurrent writer after any such move. Those two ends are recorded, durably. The middle of a wider gap is
+     * not: it gets no transient gap and so never a permanent gap either, it costs no rows whatever its width, and the
+     * subscription's resume point moves past it with the event that revealed it. Without that bound a gap of a million
+     * orders cost a million transient-gap rows, every later poll sorted and filtered them, and they were promoted to a
+     * million permanent-gap rows.
+     * <p>
+     * The middle is held by a transaction still in flight only when a single one appended more than twice this many
+     * events and a concurrent commit overtook it. Whether such an event is still delivered depends on the path: the CDC
+     * event store is handed every commit, so it waits for the middle in memory only, until its gap timeout (a restart or
+     * crash inside that window loses it). A polling subscription cannot re-read below its read position except by order,
+     * so the {@link PostgresqlEventStreamGapHandler}, which applies this bound when it reconciles a poll, skips the middle
+     * with a WARN and that subscription misses such an event (see its {@code reconcileGapsAndReport}).
+     */
+    int MAX_AWAITED_ORDERS_PER_GAP_END = 5_000;
+
+    /**
      * The id of the subscriber that we're handling gaps on behalf of
      *
      * @return the id of the subscriber that we're handling gaps on behalf of
