@@ -36,7 +36,9 @@ deterministic:
   slice-source:
     new:
     - {id: ESS-G6, gate: 6 undeclared mapping, severity: Should-fix,
-       file: src/main/java/com/example/shipping/views/order_status/OrderStatusAPI.java, line: 42}
+       file: src/main/java/com/example/shipping/views/order_status/OrderStatusAPI.java, line: 43}
+    - {id: ESS-G6, gate: 6 raw id, severity: Advisory,
+       file: src/main/java/com/example/shipping/views/order_status/OrderStatusAPI.java, line: 43}
 
 must_find:
 - id: R1
@@ -87,7 +89,7 @@ must_find:
   severity: Should-fix
   deterministic: true
   file: src/main/java/com/example/shipping/views/order_status/OrderStatusAPI.java
-  line: 42
+  line: 43
   anchor: 'public void purge(@PathVariable String orderId) {'
   symbol: OrderStatusAPI.purge
   what: DELETE /api/shipping/order-status/{orderId} is a request mapping no endpoint in the view's manifest describes.
@@ -96,7 +98,7 @@ must_find:
   ess: ESS-G15a
   severity: Blocking
   file: src/main/java/com/example/shipping/views/order_status/OrderStatusAPI.java
-  line: 43
+  line: 44
   anchor: 'shippingOrders.deleteById(orderId);'
   symbol: OrderStatusAPI.purge
   what: A mutating call (deleteById) on the bounded context's write repository from a view slice, outside use_cases/*.
@@ -109,6 +111,18 @@ must_find:
   anchor: 'public void setCancelled(boolean cancelled) {'
   symbol: ShippingOrder.setCancelled
   what: A new public setter writes the field the new cancelShipment() guard protects, so that invariant is bypassable.
+- id: R8
+  gate: '6'
+  ess: ESS-G6
+  severity: Advisory
+  deterministic: true
+  file: src/main/java/com/example/shipping/views/order_status/OrderStatusAPI.java
+  line: 43
+  anchor: 'public void purge(@PathVariable String orderId) {'
+  symbol: OrderStatusAPI.purge
+  what: >-
+    The new purge binds orderId as a raw String, beside get() in the same class taking OrderId. Its own row, separate
+    from the undeclared-mapping finding on the same line: a different defect (slice-source's `6 raw id`).
 
 dismissed:
 - id: D1
@@ -182,6 +196,14 @@ must_not_find:
   not_ids: [ESS-064]
   file: src/main/java/com/example/shipping/_loadtest/LoadHarness.java
   why: The ESS-064 candidate must be dismissed, not reported; _loadtest/ is not a slice.
+- id: N13
+  not_gates: ['*']
+  file: src/main/java/com/example/shipping/use_cases/ship_order/ShipOrderAPI.java
+  line: 21
+  anchor: 'public void ship(@PathVariable String orderId) {'
+  why: >-
+    Unchanged; slice-source's raw-id finding there is in the base run too, so it is pre-existing and counted, not
+    listed. The patch's own raw id is R8.
 
 tolerated:
 - id: T1
@@ -201,7 +223,7 @@ tolerated:
 
 fix:                      # prompt /essentials:review HEAD~1 --fix, the questions answered in order
   prompt: /essentials:review HEAD~1 --fix
-  offers_in_order: [R1, R2, R3]   # only mechanical rows from review-scan (confirmed) or stack-lint; never R4-R7
+  offers_in_order: [R1, R2, R3]   # only mechanical rows from review-scan (confirmed) or stack-lint; never R4-R8
   answers: [Apply, Skip, Apply]
   after:
   - file: pom.xml

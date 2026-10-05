@@ -82,7 +82,7 @@ the number they have where they are defined, never renumbered: `ESS-S<n>` for a 
 
 ### types-spring-web ([LLM-types-spring-web.md](LLM-types-spring-web.md))
 - <a id="ess-030"></a>`ESS-030` Typed `@RequestBody`/`@ResponseBody` not converted — the converter covers path variables and request params only → [LLM-types-spring-web.md § Gotchas](LLM-types-spring-web.md#gotchas)
-- <a id="ess-031"></a>`ESS-031` Typed `@PathVariable` answers 500 after adding the dependency — nothing is registered until a configurer is `@Import`ed → [LLM-types-spring-web.md § Configuration](LLM-types-spring-web.md#configuration)
+- <a id="ess-031"></a>`ESS-031` Typed `@PathVariable` answers 500 after adding the dependency — nothing is registered until a configurer is `@Import`ed; an id with a `String` constructor or `valueOf`/`of`/`from(String)` binds without one, but import it for every id → [LLM-types-spring-web.md § Configuration](LLM-types-spring-web.md#configuration)
 - <a id="ess-032"></a>`ESS-032` Registering `KotlinValueTypeConverter` by hand — the configurers already do it when `kotlin-reflect` is present → [LLM-types-spring-web.md § Configuration](LLM-types-spring-web.md#configuration)
 - <a id="ess-033"></a>`ESS-033` `ZonedDateTimeType` path variable fails to parse — the client must URL-encode it; region zone ids cannot be path variables → [LLM-types-spring-web.md § Gotchas](LLM-types-spring-web.md#gotchas)
 - <a id="ess-034"></a>`ESS-034` Assuming a Kotlin value-class id needs this module — a `@JvmInline value class` binds with nothing from Essentials → [LLM-types-spring-web.md § Kotlin semantic types](LLM-types-spring-web.md#kotlin-semantic-types)

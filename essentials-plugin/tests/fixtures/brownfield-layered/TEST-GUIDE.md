@@ -24,7 +24,7 @@ holds one instance of everything the heuristics claim to find, **plus traps**: a
 only findings proves nothing about false positives, which are the failure mode that discredits an
 inference tool.
 
-The sources carry no oracle labels: the ground truth lives only here and in `expected.yaml`. Its ids: `P1`–`P6` for the ranked findings (Pass 3 order), `N1`–`N7` for the must-nots.
+The sources carry no oracle labels: the ground truth lives only here and in `expected.yaml`. Its ids: `P1`–`P7` for the findings (`P1`–`P4` ranked in Pass 3 order, `P5`–`P7` unranked), `N1`–`N8` for the must-nots.
 `uv run --script tests/fixtures/check-expected.py` (from `essentials-plugin/`) checks `expected.yaml` against the tree and that no source carries an oracle label.
 
 Eval: `evals/slice-discover-brownfield-layered/` and `evals/slice-check-brownfield-layered/`; change-router's `gate-not-essentials` case — graders generated from `expected.yaml`; how to run and read it: `evals/README.md`.
@@ -117,6 +117,17 @@ Also expected from `discovery-heuristics.md` §7, because the nearest lane is se
   `OrderController.list`, `.get`, `ReportController.ordersByStatus` and `InvoiceController.unpaid`.
 - **Entity returned from an API** — the controllers return `Order` / `Invoice` directly.
 
+Also expected from `discovery-heuristics.md` §8, on any lane:
+
+- **Primitive ids at the domain edge** — order, invoice and customer ids are `String` in
+  `InvoiceController.pay`'s and `OrderController`'s `@PathVariable`s, in `BillingService.payInvoice(String
+  invoiceId, String cardToken)` (two adjacent `String`s a caller can swap) and in `Invoice.orderId`. Reported
+  **once per BC**, after the ranked four and the §7 findings, with no severity. Ranking it above any of
+  1–4 is a failure: it is a compile-time nicety next to a concurrent write.
+
+  Tolerated either way: `PaymentGatewayClient.charge(String invoiceId, …)`, the inner side of the
+  translation, named as one more primitive-id site or left out.
+
 ## Pass 4 — ladder
 
 Rung 1 must be a **pure regroup** with no framework adoption — if the proposed first step mentions
@@ -128,6 +139,11 @@ Rung 4 must offer **service-entity first** for this tree — formalise `Order`/`
 and must **not** present rung 4 as "adopt event sourcing". Offering only deciders or aggregates is a
 failure: it tells state-stored code its only route onto the law is an event store, which is not
 true.
+
+Introducing the semantic id types into each BC's `types/` must sit at **rung 2 or later** — the per-slice
+API files the split writes are where they first appear — never inside rung 1's pure move, and it must
+**not require Essentials**: a plain Java record or final class does. Essentials' `CharSequenceType` is a
+rung-4 choice. A ladder that makes typed ids wait on adopting the framework has inverted it.
 
 ## False-positive checks
 
@@ -144,6 +160,9 @@ The report must **not** contain any of these:
 - A finding against `Order.getStatus()` / `Invoice.getStatus()` **as a query surface**. These are plain
   JavaBean accessors on a non-Essentials entity; the §7 entity bar applies only once a BC is on the
   lane, and even then it distinguishes by caller.
+- A primitive-id finding against the payment gateway's own ids — `merchant_ref`, `txn_id` in
+  `integration/dto/`. They are the gateway's foreign schema; the translation maps them to the BC's
+  types at the boundary, and typing the DTO would couple `billing` to a schema it does not control.
 
 ## Known gaps
 

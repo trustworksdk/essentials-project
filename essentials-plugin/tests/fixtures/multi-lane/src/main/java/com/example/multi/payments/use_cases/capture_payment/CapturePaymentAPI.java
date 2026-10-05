@@ -15,7 +15,7 @@ public class CapturePaymentAPI {
     public CapturePaymentAPI(CommandBus commandBus) { this.commandBus = commandBus; }
 
     @PostMapping("/{paymentId}/capture")
-    public void capturePayment(@PathVariable String paymentId) {
-        commandBus.send(new CapturePayment(PaymentId.of(paymentId)));
+    public void capturePayment(@PathVariable PaymentId paymentId) {
+        commandBus.send(new CapturePayment(paymentId));
     }
 }

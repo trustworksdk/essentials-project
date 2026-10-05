@@ -98,5 +98,46 @@ class Versions(unittest.TestCase):
         self.assertFalse(sl.version_below(pins["kotlin.version"], pins["kotlin.floor"]))
 
 
+class TypedEdge(unittest.TestCase):
+    """The S4 typed-edge readers: which declared types only the Essentials converter can bind."""
+
+    def decls(self, text, kotlin):
+        return {n: (s, b) for n, s, b, _ in sl.edge_type_decls(sl.blank_strings(sl.strip_comments(text)), kotlin)}
+
+    def test_java_string_routes(self):
+        d = self.decls(
+            "public class A extends CharSequenceType<A> { public A(CharSequence v) { super(v); } }\n"
+            "public class B extends CharSequenceType<B> { public B(String v) { super(v); } }\n"
+            "public class C extends LongType<C> { public static C of(String v) { return null; } }\n"
+            "public final class D<T extends X> extends ShopCode<D> implements Identifier { D(String v) {} }\n"
+            "public record R(String value) { }\n", False)
+        self.assertEqual(d["A"], (["CharSequenceType"], False))
+        self.assertEqual(d["B"], (["CharSequenceType"], True))
+        self.assertEqual(d["C"], (["LongType"], True))
+        self.assertEqual(d["D"], (["ShopCode", "Identifier"], False), "a package-private constructor is not public")
+        self.assertNotIn("R", d, "a record is not a class declaration and binds through its constructor")
+
+    def test_kotlin_shapes(self):
+        d = self.decls(
+            "class A(value: CharSequence) : CharSequenceType<A>(value)\n"
+            "class B(value: String) : CharSequenceType<B>(value)\n"
+            "class C private constructor(value: String) : CharSequenceType<C>(value)\n"
+            "@JvmInline\nvalue class V(override val value: String) : StringValueType<V>\n", True)
+        self.assertEqual(d["A"], (["CharSequenceType"], False))
+        self.assertEqual(d["B"], (["CharSequenceType"], True))
+        self.assertEqual(d["C"], (["CharSequenceType"], False))
+        self.assertEqual(d["V"][0], ["StringValueType"])
+
+    def test_params(self):
+        java = sl.blank_strings(sl.strip_comments(
+            'f(@PathVariable("id") final OrderId id, @RequestParam @Valid Optional<Code> c) {}\n'
+            '// @PathVariable Hidden h\nString s = "@PathVariable Quoted q";'))
+        self.assertEqual([(a, n, s) for a, n, _, s, _ in sl.edge_params(java, False)],
+                         [("PathVariable", "id", "OrderId"), ("RequestParam", "c", "Code")])
+        kotlin = sl.blank_strings(sl.strip_comments("fun f(@PathVariable id: OrderId, @RequestParam t: Ticket?) {}"))
+        self.assertEqual([(n, w, s) for _, n, w, s, _ in sl.edge_params(kotlin, True)],
+                         [("id", "OrderId", "OrderId"), ("t", "Ticket?", "Ticket")])
+
+
 if __name__ == "__main__":
     unittest.main()

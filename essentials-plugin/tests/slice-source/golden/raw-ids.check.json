@@ -1,0 +1,211 @@
+{
+  "tool": "slice-source",
+  "format": 1,
+  "mode": "check",
+  "root": "tests/slice-source/cases/raw-ids",
+  "manifests": 6,
+  "parsed": 6,
+  "skippedManifests": [],
+  "slicesWithoutManifest": [],
+  "lanes": [
+    {
+      "bc": "billing",
+      "path": "src/main/*/com/example/ids/billing",
+      "detected": "undetermined",
+      "signals": {
+        "decider": 0,
+        "aggregates": false,
+        "entities": false,
+        "eventStore": 0
+      },
+      "declared": {}
+    },
+    {
+      "bc": "orders",
+      "path": "src/main/*/com/example/ids/orders",
+      "detected": "undetermined",
+      "signals": {
+        "decider": 0,
+        "aggregates": false,
+        "entities": false,
+        "eventStore": 0
+      },
+      "declared": {}
+    }
+  ],
+  "endpoints": [
+    {
+      "slice": "orders.cancel_order",
+      "method": "POST",
+      "path": "/api/orders/{id}/cancel",
+      "status": "ok",
+      "boundBy": [
+        "CancelOrderAPI.cancel"
+      ]
+    },
+    {
+      "slice": "orders.ship_order",
+      "method": "POST",
+      "path": "/api/orders/{id}/ship",
+      "status": "ok",
+      "boundBy": [
+        "ShipOrderAPI.ship"
+      ]
+    },
+    {
+      "slice": "orders.order_lookup",
+      "method": "GET",
+      "path": "/api/orders/lookup/{orderId}",
+      "status": "ok",
+      "boundBy": [
+        "OrderLookupAPI.get"
+      ]
+    },
+    {
+      "slice": "orders.order_lookup",
+      "method": "GET",
+      "path": "/api/orders/lookup/legacy/{id}",
+      "status": "ok",
+      "boundBy": [
+        "OrderLookupAPI.legacy"
+      ]
+    },
+    {
+      "slice": "orders.order_lookup",
+      "method": "GET",
+      "path": "/api/orders/lookup?customerId=",
+      "status": "ok",
+      "boundBy": [
+        "OrderLookupAPI.byCustomer"
+      ]
+    },
+    {
+      "slice": "orders.order_lookup",
+      "method": "GET",
+      "path": "/api/orders/lookup/by-sku/{sku}",
+      "status": "ok",
+      "boundBy": [
+        "OrderLookupAPI.bySku"
+      ]
+    },
+    {
+      "slice": "billing.void_invoice",
+      "method": "POST",
+      "path": "/api/billing/{id}/void",
+      "status": "ok",
+      "boundBy": [
+        "VoidInvoiceAPI.voidInvoice"
+      ]
+    },
+    {
+      "slice": "billing.invoice_lookup",
+      "method": "GET",
+      "path": "/api/billing/lookup/{invoiceId}",
+      "status": "ok",
+      "boundBy": [
+        "InvoiceLookupAPI.get"
+      ]
+    },
+    {
+      "slice": "billing.invoice_lookup",
+      "method": "GET",
+      "path": "/api/billing/lookup/raw/{invoiceId}",
+      "status": "ok",
+      "boundBy": [
+        "InvoiceLookupAPI.raw"
+      ]
+    },
+    {
+      "slice": "billing.invoice_lookup",
+      "method": "GET",
+      "path": "/api/billing/lookup?customerId=",
+      "status": "ok",
+      "boundBy": [
+        "InvoiceLookupAPI.byCustomer"
+      ]
+    },
+    {
+      "slice": "billing.invoice_lookup",
+      "method": "GET",
+      "path": "/api/billing/lookup?status=",
+      "status": "ok",
+      "boundBy": [
+        "InvoiceLookupAPI.byStatus"
+      ]
+    }
+  ],
+  "findings": [
+    {
+      "severity": "Advisory",
+      "gate": "6 raw id",
+      "id": "ESS-G6",
+      "slice": "orders.cancel_order",
+      "file": "src/main/java/com/example/ids/orders/use_cases/cancel_order/CancelOrderAPI.java",
+      "line": 15,
+      "message": "@PathVariable String orderId on CancelOrderAPI.cancel takes an id as a raw String; take the bounded context's semantic id type (e.g. OrderId) at the edge (rules/slice-design.md \u00a7 The command and the view *are* the contract)",
+      "hint": "two parts: type the parameter, then for a `CharSequenceType` / `SingleValueType` id always make sure exactly one configurer matching the web stack is `@Import`ed \u2014 `EssentialsWebMvcConfigurer` for spring-webmvc, `EssentialsWebFluxConfigurer` for spring-webflux (stack contract S4, ESS-031). It is required for an id with no `String` route (HTTP 500 without it) and the rule even where Spring's own conversion would bind one; stack-lint reports either case (`s4-typed-edge-unregistered` / `s4-typed-edge-convention`)"
+    },
+    {
+      "severity": "Advisory",
+      "gate": "6 raw id",
+      "id": "ESS-G6",
+      "slice": "orders.order_lookup",
+      "file": "src/main/java/com/example/ids/orders/views/order_lookup/OrderLookupAPI.java",
+      "line": 26,
+      "message": "@PathVariable long key on OrderLookupAPI.legacy takes an id as a raw long; take the bounded context's semantic id type (e.g. OrderId) at the edge (rules/slice-design.md \u00a7 The command and the view *are* the contract)",
+      "hint": "two parts: type the parameter, then for a `CharSequenceType` / `SingleValueType` id always make sure exactly one configurer matching the web stack is `@Import`ed \u2014 `EssentialsWebMvcConfigurer` for spring-webmvc, `EssentialsWebFluxConfigurer` for spring-webflux (stack contract S4, ESS-031). It is required for an id with no `String` route (HTTP 500 without it) and the rule even where Spring's own conversion would bind one; stack-lint reports either case (`s4-typed-edge-unregistered` / `s4-typed-edge-convention`)"
+    },
+    {
+      "severity": "Advisory",
+      "gate": "6 raw id",
+      "id": "ESS-G6",
+      "slice": "orders.order_lookup",
+      "file": "src/main/java/com/example/ids/orders/views/order_lookup/OrderLookupAPI.java",
+      "line": 32,
+      "message": "@RequestParam Optional<String> customer on OrderLookupAPI.byCustomer takes an id as a raw String; take the bounded context's semantic id type (e.g. OrderId) at the edge (rules/slice-design.md \u00a7 The command and the view *are* the contract)",
+      "hint": "two parts: type the parameter, then for a `CharSequenceType` / `SingleValueType` id always make sure exactly one configurer matching the web stack is `@Import`ed \u2014 `EssentialsWebMvcConfigurer` for spring-webmvc, `EssentialsWebFluxConfigurer` for spring-webflux (stack contract S4, ESS-031). It is required for an id with no `String` route (HTTP 500 without it) and the rule even where Spring's own conversion would bind one; stack-lint reports either case (`s4-typed-edge-unregistered` / `s4-typed-edge-convention`)"
+    },
+    {
+      "severity": "Advisory",
+      "gate": "6 raw id",
+      "id": "ESS-G6",
+      "slice": "orders.order_lookup",
+      "file": "src/main/java/com/example/ids/orders/views/order_lookup/OrderLookupAPI.java",
+      "line": 33,
+      "message": "@RequestParam UUID batchId on OrderLookupAPI.byCustomer takes an id as a raw UUID; take the bounded context's semantic id type (e.g. OrderId) at the edge (rules/slice-design.md \u00a7 The command and the view *are* the contract)",
+      "hint": "two parts: type the parameter, then for a `CharSequenceType` / `SingleValueType` id always make sure exactly one configurer matching the web stack is `@Import`ed \u2014 `EssentialsWebMvcConfigurer` for spring-webmvc, `EssentialsWebFluxConfigurer` for spring-webflux (stack contract S4, ESS-031). It is required for an id with no `String` route (HTTP 500 without it) and the rule even where Spring's own conversion would bind one; stack-lint reports either case (`s4-typed-edge-unregistered` / `s4-typed-edge-convention`)"
+    },
+    {
+      "severity": "Advisory",
+      "gate": "6 raw id",
+      "id": "ESS-G6",
+      "slice": "billing.invoice_lookup",
+      "file": "src/main/kotlin/com/example/ids/billing/views/invoice_lookup/InvoiceLookupAPI.kt",
+      "line": 23,
+      "message": "@PathVariable invoiceId: String on InvoiceLookupAPI.raw takes an id as a raw String; take the bounded context's semantic id type (e.g. OrderId) at the edge (rules/slice-design.md \u00a7 The command and the view *are* the contract)",
+      "hint": "two parts in Java, one here: a `@JvmInline value class` id binds with nothing from Essentials \u2014 no types-spring-web, no configurer (ESS-034); with it directly in the signature, pin the handler's name with `@Operation(operationId = \u2026)` (ESS-113)"
+    },
+    {
+      "severity": "Advisory",
+      "gate": "6 raw id",
+      "id": "ESS-G6",
+      "slice": "billing.invoice_lookup",
+      "file": "src/main/kotlin/com/example/ids/billing/views/invoice_lookup/InvoiceLookupAPI.kt",
+      "line": 27,
+      "message": "@RequestParam customerId: Long? on InvoiceLookupAPI.byCustomer takes an id as a raw Long; take the bounded context's semantic id type (e.g. OrderId) at the edge (rules/slice-design.md \u00a7 The command and the view *are* the contract)",
+      "hint": "two parts in Java, one here: a `@JvmInline value class` id binds with nothing from Essentials \u2014 no types-spring-web, no configurer (ESS-034); with it directly in the signature, pin the handler's name with `@Operation(operationId = \u2026)` (ESS-113)"
+    },
+    {
+      "severity": "Advisory",
+      "gate": "6 raw id",
+      "id": "ESS-G6",
+      "slice": "billing.invoice_lookup",
+      "file": "src/main/kotlin/com/example/ids/billing/views/invoice_lookup/InvoiceLookupAPI.kt",
+      "line": 27,
+      "message": "@RequestParam legacyId: LegacyId? (resolves to String) on InvoiceLookupAPI.byCustomer takes an id as a raw String; take the bounded context's semantic id type (e.g. OrderId) at the edge (rules/slice-design.md \u00a7 The command and the view *are* the contract)",
+      "hint": "two parts in Java, one here: a `@JvmInline value class` id binds with nothing from Essentials \u2014 no types-spring-web, no configurer (ESS-034); with it directly in the signature, pin the handler's name with `@Operation(operationId = \u2026)` (ESS-113)"
+    }
+  ],
+  "unverified": [],
+  "unparsed": []
+}

@@ -1,6 +1,7 @@
 package com.example.shop.orders.views.order_list;
 
 import com.example.shop.orders.config.ApiPaths;
+import com.example.shop.orders.types.OrderId;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -48,7 +49,7 @@ public class OrderListAPI {
     }
 
     @GetMapping(path = {"/{orderId}"})
-    public OrderListView get(@PathVariable String orderId) {
+    public OrderListView get(@PathVariable OrderId orderId) {
         return null;
     }
 }

@@ -305,6 +305,11 @@ An unregistered Decider compiles, passes every unit test, and breaks every `@Spr
 Do **not** name `EssentialsComponentsConfiguration` or `EssentialsComponentsProperties`: neither
 appears in any bundled doc, and the plugin never names an unproven symbol.
 
+**Every lane, Java — the typed edge.** When the slice's API takes a typed id (the aggregate-lane
+command and service-entity view templates do), run the S4 registration check in `slice-authoring.md`
+§4c. It runs stack-lint, offers each `ESS-S4` fix one at a time, and applies nothing without a yes. Name
+the result in the report, including "not checked" when stack-lint could not run.
+
 ## Step 6 — Report and self-check
 
 Report every file written and edited, then state what the user must still fill in: the command's

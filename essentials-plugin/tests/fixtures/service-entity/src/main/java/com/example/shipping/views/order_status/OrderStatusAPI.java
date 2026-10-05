@@ -1,5 +1,6 @@
 package com.example.shipping.views.order_status;
 
+import com.example.shipping.types.OrderId;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -29,7 +30,7 @@ public class OrderStatusAPI {
     }
 
     @GetMapping("/{orderId}")
-    public OrderStatusView get(@PathVariable String orderId) {
-        return queries.findByOrderId(orderId).orElseThrow();
+    public OrderStatusView get(@PathVariable OrderId orderId) {
+        return queries.findByOrderId(orderId.value()).orElseThrow();
     }
 }

@@ -577,8 +577,8 @@
           "class": "OrderListAPI",
           "method": "list",
           "file": "src/main/java/com/example/shop/orders/views/order_list/OrderListAPI.java",
-          "line": 20,
-          "annotationLine": 19,
+          "line": 21,
+          "annotationLine": 20,
           "annotation": "GetMapping",
           "httpMethods": [
             "GET"
@@ -608,8 +608,8 @@
           "class": "OrderListAPI",
           "method": "byStatus",
           "file": "src/main/java/com/example/shop/orders/views/order_list/OrderListAPI.java",
-          "line": 28,
-          "annotationLine": 27,
+          "line": 29,
+          "annotationLine": 28,
           "annotation": "GetMapping",
           "httpMethods": [
             "GET"
@@ -633,8 +633,8 @@
           "class": "OrderListAPI",
           "method": "shipped",
           "file": "src/main/java/com/example/shop/orders/views/order_list/OrderListAPI.java",
-          "line": 34,
-          "annotationLine": 33,
+          "line": 35,
+          "annotationLine": 34,
           "annotation": "GetMapping",
           "httpMethods": [
             "GET"
@@ -653,8 +653,8 @@
           "class": "OrderListAPI",
           "method": "between",
           "file": "src/main/java/com/example/shop/orders/views/order_list/OrderListAPI.java",
-          "line": 40,
-          "annotationLine": 39,
+          "line": 41,
+          "annotationLine": 40,
           "annotation": "GetMapping",
           "httpMethods": [
             "GET"
@@ -684,8 +684,8 @@
           "class": "OrderListAPI",
           "method": "search",
           "file": "src/main/java/com/example/shop/orders/views/order_list/OrderListAPI.java",
-          "line": 46,
-          "annotationLine": 45,
+          "line": 47,
+          "annotationLine": 46,
           "annotation": "GetMapping",
           "httpMethods": [
             "GET"
@@ -707,8 +707,8 @@
           "class": "OrderListAPI",
           "method": "get",
           "file": "src/main/java/com/example/shop/orders/views/order_list/OrderListAPI.java",
-          "line": 51,
-          "annotationLine": 50,
+          "line": 52,
+          "annotationLine": 51,
           "annotation": "GetMapping",
           "httpMethods": [
             "GET"

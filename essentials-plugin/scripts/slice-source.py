@@ -32,8 +32,8 @@ Usage
     ROOT        directory to scan (default: the current directory)
     --json      emit JSON on stdout (facts, or findings with --check)
     --check     compare every slice.yaml with its source: gates 6 (endpoints and query
-                discriminators, per handler), 11(b) (handled events declared) and the
-                signal-count rows of 14 (write-style lane). Needs pyyaml.
+                discriminators, per handler; raw-scalar ids at the API edge), 11(b) (handled
+                events declared) and the signal-count rows of 14 (write-style lane). Needs pyyaml.
     --bc NAME   restrict to these bounded contexts (directory name); repeatable
     --quiet     text mode: findings and unparsed only
 
@@ -98,6 +98,11 @@ USE_SITE_TARGETS = {"file", "property", "field", "get", "set", "receiver", "para
 JAVA_NOT_METHOD = {"if", "for", "while", "switch", "catch", "synchronized", "return", "new", "throw", "super", "this",
                    "assert", "else", "try", "do", "case", "yield"}
 SEVERITY_ORDER = {"Blocking": 0, "Should-fix": 1, "Advisory": 2}
+# gate `6 raw id`: an id-named request binding typed as one of these is the wire contract left untyped
+EDGE_BINDING_ANNS = {"PathVariable", "RequestParam"}
+ID_NAME = re.compile(r"^(?:id|.*[a-z0-9]Id)$")
+JAVA_SCALARS = {"String", "CharSequence", "long", "Long", "int", "Integer", "short", "Short", "UUID", "BigInteger"}
+KOTLIN_SCALARS = {"String", "CharSequence", "Long", "Int", "Short", "UUID", "BigInteger"}
 
 
 # --------------------------------------------------------------------------------------------------
@@ -2138,6 +2143,7 @@ def check_json(project):
                                              + ", ".join(broken)})
         _check_handled_events(project, s, facts, findings, unverified, bool(broken))
         _check_endpoints(project, s, facts, findings, unverified, endpoint_table)
+        _check_raw_ids(project, s, findings)
     lanes = []
     for bc in project.bcs:
         lane = lane_facts(project, bc)
@@ -2372,6 +2378,76 @@ def _check_endpoints(project, s, facts, findings, unverified, table):
                     f"{'/'.join(m['httpMethods'])} {shown} ({m['class']}.{m['method']}) is not described by any "
                     f"endpoint in {manifest}",
                     "the code is right and the manifest is stale — `--fix-manifests` adds it"))
+
+
+def _binding_names(project, f, p):
+    """(annotation, the names a @PathVariable / @RequestParam parameter answers to) — its own name, and the
+    `value` / `name` it binds when that is a readable string."""
+    for pa in p.anns:
+        if pa.simple in EDGE_BINDING_ANNS:
+            names = [p.name]
+            nv = project.arg(f, pa, "value", "name")
+            bound = nv.strings() if nv is not None else None
+            names += [n for n in bound or [] if n != p.name]
+            return pa.simple, names
+    return None, []
+
+
+def _scalar(project, f, tr):
+    """The JDK / Kotlin scalar a parameter type is (unwrapping `Optional<…>` and Kotlin `?`), or None. A Kotlin
+    typealias resolves to its target: `typealias OrderId = String` gives no type safety, so it is a String."""
+    r = project.resolve(f, tr)
+    if r["name"] == "Optional" and tr.args:
+        return _scalar(project, f, tr.args[0])
+    fqn = r["fqn"]
+    if fqn is not None and not fqn.startswith(("java.", "kotlin.")):
+        return None  # a project type that happens to share the name
+    return r["name"] if r["name"] in (KOTLIN_SCALARS if f.kotlin else JAVA_SCALARS) else None
+
+
+def _check_raw_ids(project, s, findings):
+    """Gate 6 `raw id`: an id-named request binding on a command or view API typed as a JDK scalar. A translation's
+    webhook is exempt: it carries the external system's ids, which are deliberately not the bounded context's types."""
+    if s.kind not in ("command", "view"):
+        return
+    for f in s.files:
+        if f.error is not None:
+            continue
+        for m in f.methods:
+            if not any(a.simple in MAPPING_ANNS for a in m.anns):
+                continue
+            for p in m.params:
+                ann, names = _binding_names(project, f, p)
+                if ann is None or not any(ID_NAME.match(n) for n in names):
+                    continue
+                if p.type is None:
+                    project.unparsed.append(project._u(f.path, p.line, f"@{ann} {p.name} on {m.name}",
+                                                       "parameter type not readable"))
+                    continue
+                scalar = _scalar(project, f, p.type)
+                if scalar is None:
+                    continue
+                written = p.type.text
+                shown = f"{p.name}: {written}" if f.kotlin else f"{written} {p.name}"
+                how = "" if written.rstrip("?") in (scalar, f"Optional<{scalar}>") else f" (resolves to {scalar})"
+                if f.kotlin:
+                    hint = ("two parts in Java, one here: a `@JvmInline value class` id binds with nothing from Essentials — "
+                            "no types-spring-web, no configurer (ESS-034); with it directly in the signature, pin the "
+                            "handler's name with `@Operation(operationId = …)` (ESS-113)")
+                else:
+                    hint = ("two parts: type the parameter, then for a `CharSequenceType` / `SingleValueType` id always make "
+                            "sure exactly one configurer matching the web stack is `@Import`ed — "
+                            "`EssentialsWebMvcConfigurer` for spring-webmvc, `EssentialsWebFluxConfigurer` for "
+                            "spring-webflux (stack contract S4, ESS-031). It is required for an id with no `String` "
+                            "route (HTTP 500 without it) and the rule even where Spring's own conversion would bind "
+                            "one; stack-lint reports either case (`s4-typed-edge-unregistered` / "
+                            "`s4-typed-edge-convention`)")
+                findings.append(finding(
+                    "Advisory", "6 raw id", s.id, f.rel, p.line,
+                    f"@{ann} {shown}{how} on {m.owner.name if m.owner else ''}.{m.name} takes an id as a raw "
+                    f"{scalar}; take the bounded context's semantic id type (e.g. OrderId) at the edge "
+                    f"(rules/slice-design.md § The command and the view *are* the contract)",
+                    hint))
 
 
 def _check_lane(project, bc_obj, lane, findings):

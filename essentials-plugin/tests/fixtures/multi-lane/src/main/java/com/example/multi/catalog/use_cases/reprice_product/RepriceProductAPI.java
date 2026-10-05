@@ -18,7 +18,7 @@ public class RepriceProductAPI {
     public record RepriceProductRequest(long priceMinor) {}
 
     @PutMapping("/{productId}/price")
-    public void repriceProduct(@PathVariable String productId, @RequestBody RepriceProductRequest body) {
-        commandBus.send(new RepriceProduct(ProductId.of(productId), body.priceMinor()));
+    public void repriceProduct(@PathVariable ProductId productId, @RequestBody RepriceProductRequest body) {
+        commandBus.send(new RepriceProduct(productId, body.priceMinor()));
     }
 }

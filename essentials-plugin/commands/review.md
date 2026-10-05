@@ -202,7 +202,7 @@ and the same two over `BASE_TREE` into `lint.base.json` / `source.base.json`.
 |---|---|---|
 | `slice-lint.py` | 0, 1 | gates 1, 3 and 4 ran |
 | | 2 | **Not run: ESS-G1, ESS-G3, ESS-G4**, naming the missing dependency. Never read the manifests yourself instead: an unvalidated manifest set reported as clean is the failure gate 1 exists to prevent |
-| `slice-source.py` | 0, 1 | gates 6 (mappings), 11(b) and 14 ran |
+| `slice-source.py` | 0, 1 | gates 6 (mappings, raw ids), 11(b) and 14 ran |
 | | 3 | incomplete, not a pass: each `unverified` entry for an in-scope slice goes under **Not run** with its reason; `unparsed` files likewise |
 | | 2 | **Not run: ESS-G6, ESS-G11b, ESS-G14** |
 
@@ -274,8 +274,8 @@ Apply the gates of `${CLAUDE_PLUGIN_ROOT}/commands/slice-check.md` Step 2 **as w
 restated here — to the in-scope files, with the lane `slice-source.py` detected for each bounded
 context deciding which gates apply and how (its gate applicability table).
 
-- Gates 1, 3 and 4 are `slice-lint.py`'s; gate 6's request-mapping checks, gate 11(b) and gate 14 are
-  `slice-source.py`'s. Take them from Step 3; do not run them again by eye. What remains of gate 6 (the
+- Gates 1, 3 and 4 are `slice-lint.py`'s; gate 6's request-mapping and raw-id checks, gate 11(b) and gate 14
+  are `slice-source.py`'s. Take them from Step 3; do not run them again by eye. What remains of gate 6 (the
   no-adapter rule, a view mapping reading a repository the slice does not own) is judgement.
 - Gate 12 is not a review check (above).
 - The cross-file gates (9, 13, 17) run only when the change adds, removes or renames a slice, a decider,

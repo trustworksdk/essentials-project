@@ -22,8 +22,8 @@ public class CancelOrderAPI {
 
     /** RULE (gate 6): path variables compare by position — `{orderId}` here, `{id}` in the manifest. */
     @PostMapping("{orderId}/cancel")
-    public void cancel(@PathVariable String orderId, @RequestBody Body body) {
-        var cmd = new CancelOrder(new OrderId(orderId), body.reason());
+    public void cancel(@PathVariable OrderId orderId, @RequestBody Body body) {
+        var cmd = new CancelOrder(orderId, body.reason());
         commandBus.send(cmd);
     }
 }

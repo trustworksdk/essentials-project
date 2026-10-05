@@ -254,108 +254,123 @@ RULES_LIST = [
          "the imported configurer is for the other web stack",
          "EssentialsWebFluxConfigurer.java:47 implements WebFluxConfigurer; "
          "EssentialsWebMvcConfigurer.java:51 implements WebMvcConfigurer"),
+    Rule("s4-typed-edge-unregistered", "S4", "Blocking",
+         [("C", 216, "MUST if any endpoint takes a semantic type"),
+          ("C", 240, "a missing converter surfaces as HTTP **500**"),
+          ("J", 79, "`types-spring-web` and the `@Import`")],
+         "an endpoint parameter typed as a SingleValueType only the Essentials converter can bind, "
+         "with that converter unregistered",
+         "SingleValueTypeConverter.java:37-40 (String->CharSequenceType, Number/String->NumberType, "
+         "String->JSR310SingleValueType); spring-core 7.0.9 ObjectToObjectConverter binds a String "
+         "constructor or static valueOf/of/from(String) itself"),
+    Rule("s4-typed-edge-convention", "S4", "Should-fix",
+         [("C", 228, "Import it whenever a Java `SingleValueType` id is at the edge"),
+          ("J", 79, "`types-spring-web` and the `@Import`")],
+         "an endpoint parameter typed as a SingleValueType that binds today only through Spring's String route, "
+         "with the Essentials converter unregistered",
+         "spring-core 7.0.9 ObjectToObjectConverter: static valueOf/of/from(String), then a String constructor"),
     Rule("s4-types-spring-web-missing", "S4", "Advisory",
          [("C", 218, "auto-configures nothing"), ("J", 79, "`types-spring-web` and the `@Import`")],
          "Java web application without types-spring-web"),
     # S5 ---------------------------------------------------------------------------------------
-    Rule("s5-document-db-factory", "S5", "Should-fix", [("C", 265, "`DocumentDbRepositoryFactory` bean built from")],
+    Rule("s5-document-db-factory", "S5", "Should-fix", [("C", 274, "`DocumentDbRepositoryFactory` bean built from")],
          "postgresql-document-db declared but no DocumentDbRepositoryFactory bean",
          "DocumentDbRepository.kt:536 (plain class, no auto-configuration)"),
-    Rule("s5-mongo-document-db", "S5", "Should-fix", [("C", 266, "on the `mongo` profile there is no such thing")],
+    Rule("s5-mongo-document-db", "S5", "Should-fix", [("C", 275, "on the `mongo` profile there is no such thing")],
          "postgresql-document-db declared on the mongo profile"),
     # 0.50.0: EssentialsComponentsProperties.java:286 binds durable-queues.transactional-mode.
-    Rule("s5-transactional-mode", "S5", "Should-fix", [("C", 261, "binds to nothing")],
+    Rule("s5-transactional-mode", "S5", "Should-fix", [("C", 270, "binds to nothing")],
          "essentials.durable-queues.transactional-mode in configuration",
          "docs/MIGRATION-0.60.md:542; EssentialsComponentsProperties.java:292-303 (no such field)",
          target_only=True),
-    Rule("s5-aggregate-declarations", "S5", "Should-fix", [("C", 271, "`EssentialsAggregateDeclarations`")],
+    Rule("s5-aggregate-declarations", "S5", "Should-fix", [("C", 280, "`EssentialsAggregateDeclarations`")],
          "an aggregate policy annotation on a class no EssentialsAggregateDeclarations bean declares",
          "AggregateSnapshotPolicy.java:38-40, AggregateClosingBooksPolicy.java:38 (@Target TYPE); "
          "EssentialsAggregateDeclarations.java:49; LLM/LLM-eventsourced-aggregates.md:671-674"),
     # S7 ---------------------------------------------------------------------------------------
-    Rule("s7-spec-generation", "S7", "Advisory", [("C", 308, "generated from the code, never hand-written")],
+    Rule("s7-spec-generation", "S7", "Advisory", [("C", 317, "generated from the code, never hand-written")],
          "nothing generates contracts/openapi.json: no test writing it from /v3/api-docs, no springdoc maven plugin"),
-    Rule("s7-contract-file", "S7", "Advisory", [("C", 310, "checked-in `contracts/openapi.json`")],
+    Rule("s7-contract-file", "S7", "Advisory", [("C", 319, "checked-in `contracts/openapi.json`")],
          "no committed spec: the frontend generator's input, or contracts/openapi.json, does not exist"),
     Rule("s7-frontend-input", "S7", "Advisory",
-         [("C", 310, "checked-in `contracts/openapi.json`"),
+         [("C", 319, "checked-in `contracts/openapi.json`"),
           ("F", 66, "target: '../contracts/openapi.json'")],
          "the frontend generator reads a live /v3/api-docs URL instead of the committed spec"),
     # 0.50.0: types-spring-web has no SingleValueTypeModelConverter (jar listing; the tag's source tree).
-    Rule("s7-model-converter", "S7", "Advisory", [("C", 328, "`SingleValueTypeModelConverter` as a bean")],
+    Rule("s7-model-converter", "S7", "Advisory", [("C", 337, "`SingleValueTypeModelConverter` as a bean")],
          "springdoc runs but SingleValueTypeModelConverter is not registered: the spec types semantic ids as objects",
          "types-spring-web/src/main/java/dk/trustworks/essentials/types/spring/web/SingleValueTypeModelConverter.java "
          "(a swagger-core ModelConverter; no auto-configuration in types-spring-web)", target_only=True),
     # S8 ---------------------------------------------------------------------------------------
     Rule("s8-embedded-cors", "S8", "Should-fix",
-         [("C", 346, "pick a mode explicitly and configure only that mode's pieces"),
+         [("C", 355, "pick a mode explicitly and configure only that mode's pieces"),
           ("F", 191, "Do not configure CORS")],
          "embedded frontend with a CORS configuration"),
     Rule("s8-embedded-base-url", "S8", "Should-fix",
-         [("C", 346, "pick a mode explicitly and configure only that mode's pieces"),
+         [("C", 355, "pick a mode explicitly and configure only that mode's pieces"),
           ("F", 194, "Do not set an API base URL")],
          "embedded frontend with an API base URL set"),
     Rule("s8-embedded-spa-filter", "S8", "Should-fix",
-         [("C", 346, "pick a mode explicitly and configure only that mode's pieces"),
+         [("C", 355, "pick a mode explicitly and configure only that mode's pieces"),
           ("F", 145, "A SPA fallback filter")],
          "embedded frontend without a SPA fallback to index.html"),
     Rule("s8-embedded-static-copy", "S8", "Should-fix",
-         [("C", 346, "pick a mode explicitly and configure only that mode's pieces"),
+         [("C", 355, "pick a mode explicitly and configure only that mode's pieces"),
           ("F", 135, "`maven-resources-plugin` copies `frontend/dist`")],
          "embedded frontend whose build output is not copied into static resources"),
     Rule("s8-standalone-base-url", "S8", "Blocking",
-         [("C", 346, "pick a mode explicitly and configure only that mode's pieces"),
+         [("C", 355, "pick a mode explicitly and configure only that mode's pieces"),
           ("F", 256, "configured *and consumed*")],
          "standalone frontend whose fetch mutator does not prefix VITE_API_BASE_URL"),
     Rule("s8-standalone-cors-source", "S8", "Blocking",
-         [("C", 346, "pick a mode explicitly and configure only that mode's pieces"),
+         [("C", 355, "pick a mode explicitly and configure only that mode's pieces"),
           ("F", 208, "expressed as a `CorsConfigurationSource` bean")],
          "standalone frontend and no CorsConfigurationSource bean"),
     Rule("s8-standalone-cors-webfilter", "S8", "Should-fix",
-         [("C", 346, "pick a mode explicitly and configure only that mode's pieces"),
+         [("C", 355, "pick a mode explicitly and configure only that mode's pieces"),
           ("F", 212, "Expose the source, not a standalone `CorsWebFilter`")],
          "CORS applied by a standalone CorsWebFilter/CorsFilter bean"),
     Rule("s8-standalone-cors-value", "S8", "Blocking",
-         [("C", 346, "pick a mode explicitly and configure only that mode's pieces"),
+         [("C", 355, "pick a mode explicitly and configure only that mode's pieces"),
           ("F", 240, "Bind the origin list with `@ConfigurationProperties`, never `@Value`")],
          "CORS origins bound with @Value"),
     Rule("s8-standalone-cors-wildcard", "S8", "Blocking",
-         [("C", 346, "pick a mode explicitly and configure only that mode's pieces"),
+         [("C", 355, "pick a mode explicitly and configure only that mode's pieces"),
           ("F", 209, "`allowCredentials = true` **cannot**")],
          "wildcard origin combined with allowCredentials"),
     Rule("s8-standalone-dead-spa", "S8", "Advisory",
-         [("C", 346, "pick a mode explicitly and configure only that mode's pieces"),
+         [("C", 355, "pick a mode explicitly and configure only that mode's pieces"),
           ("F", 277, "SPA filter is dead code in this mode")],
          "standalone frontend with a backend SPA fallback"),
     Rule("s8-generated-gitignore", "S8", "Should-fix",
-         [("C", 342, "contract-first pipeline of S7"),
+         [("C", 351, "contract-first pipeline of S7"),
           ("F", 76, "`generated/` and `model/` must not be committed")],
          "the generated API client is not git-ignored"),
     # S9 ---------------------------------------------------------------------------------------
     Rule("s9-admin-spi", "S9", "Should-fix",
-         [("C", 359, "`EssentialsAuthenticatedUser` and `EssentialsSecurityProvider`")],
+         [("C", 368, "`EssentialsAuthenticatedUser` and `EssentialsSecurityProvider`")],
          "an admin starter without the two security SPIs",
          "shared/src/main/java/dk/trustworks/essentials/shared/security/"
          "{EssentialsSecurityProvider,EssentialsAuthenticatedUser}.java"),
     # S10 --------------------------------------------------------------------------------------
-    Rule("s10-tc1-coordinates", "S10", "Advisory", [("C", 374, "The 1.x coordinates no longer resolve")],
+    Rule("s10-tc1-coordinates", "S10", "Advisory", [("C", 383, "The 1.x coordinates no longer resolve")],
          "a Testcontainers 1.x artifact coordinate",
          "~/.m2 org/testcontainers/testcontainers-{postgresql,mongodb} at the testcontainers-bom pin"),
-    Rule("s10-tc-package", "S10", "Advisory", [("C", 399, "`org.testcontainers.postgresql.PostgreSQLContainer`")],
+    Rule("s10-tc-package", "S10", "Advisory", [("C", 408, "`org.testcontainers.postgresql.PostgreSQLContainer`")],
          "a container class imported from the deprecated org.testcontainers.containers package",
          "testcontainers-postgresql jar at the pin: org.testcontainers.containers.PostgreSQLContainer is "
          "@Deprecated, org.testcontainers.postgresql.PostgreSQLContainer is not generic (javap); "
          "likewise testcontainers-mongodb MongoDBContainer"),
     Rule("s10-webtestclient-package", "S10", "Advisory",
-         [("C", 391, "`@AutoConfigureWebTestClient` is no longer in")],
+         [("C", 400, "`@AutoConfigureWebTestClient` is no longer in")],
          "@AutoConfigureWebTestClient imported from its Boot 3 package"),
-    Rule("s10-failsafe", "S10", "Advisory", [("C", 372, "Failsafe runs those during `verify`")],
+    Rule("s10-failsafe", "S10", "Advisory", [("C", 381, "Failsafe runs those during `verify`")],
          "integration tests present but maven-failsafe-plugin is not bound",
          "spring-boot-starter-parent pom: failsafe is in pluginManagement only"),
     # S11 --------------------------------------------------------------------------------------
-    Rule("s11-skip-frontend", "S11", "Should-fix", [("C", 423, "**`skip-frontend` profile** must exist")],
+    Rule("s11-skip-frontend", "S11", "Should-fix", [("C", 432, "**`skip-frontend` profile** must exist")],
          "frontend-maven-plugin without a skip-frontend profile"),
-    Rule("s11-boot-parent", "S11", "Advisory", [("C", 416, "`spring-boot-starter-parent` is the parent POM")],
+    Rule("s11-boot-parent", "S11", "Advisory", [("C", 425, "`spring-boot-starter-parent` is the parent POM")],
          "the reactor does not inherit spring-boot-starter-parent"),
 ]
 RULES = {r.check: r for r in RULES_LIST}
@@ -811,6 +826,167 @@ def config_keys(path: Path):
     except (OSError, UnicodeDecodeError):
         return []
     return properties_keys(text) if path.suffix == ".properties" else yaml_keys(text)
+
+
+# ---------------------------------------------------------------------------------------------
+# S4: endpoint parameters only the Essentials converter can bind
+
+# The bases SingleValueTypeConverter converts to (its ConvertiblePairs: String->CharSequenceType,
+# Number/String->NumberType, String->JSR310SingleValueType) and the abstract framework classes a project
+# id extends to reach them (types/src/main/java/dk/trustworks/essentials/types/).
+SVT_BASES = {"CharSequenceType", "NumberType", "BigDecimalType", "BigIntegerType", "ByteType", "DoubleType",
+             "FloatType", "IntegerType", "LongType", "ShortType", "JSR310SingleValueType", "InstantType",
+             "LocalDateType", "LocalDateTimeType", "LocalTimeType", "OffsetDateTimeType", "ZonedDateTimeType"}
+EDGE_PARAM = re.compile(r"@(?:org\.springframework\.web\.bind\.annotation\.)?(PathVariable|RequestParam)\b")
+STRING_TYPE = r"(?:java\.lang\.|kotlin\.)?String"
+
+
+def blank_strings(text):
+    """Blank the contents of string literals (offsets and newlines kept), so a literal is never read as code."""
+    text = re.sub(r'"""[\s\S]*?"""', lambda m: '"""' + re.sub(r"[^\n]", " ", m.group()[3:-3]) + '"""', text)
+    return re.sub(r'"(?:[^"\\\n]|\\.)*"', lambda m: '"' + " " * (len(m.group()) - 2) + '"', text)
+
+
+def _balanced(text, i, open_, close):
+    """Index just past the bracket closing the one at i."""
+    depth = 0
+    while i < len(text):
+        if text[i] == open_:
+            depth += 1
+        elif text[i] == close:
+            depth -= 1
+            if depth == 0:
+                return i + 1
+        i += 1
+    return i
+
+
+def _drop_angles(text):
+    while True:
+        out = re.sub(r"<[^<>]*>", "", text)
+        if out == text:
+            return out
+        text = out
+
+
+def _top_level_split(text):
+    parts, depth, cur = [], 0, []
+    for c in text:
+        if c in "(<":
+            depth += 1
+        elif c in ")>":
+            depth -= 1
+        if c == "," and depth == 0:
+            parts.append("".join(cur))
+            cur = []
+        else:
+            cur.append(c)
+    parts.append("".join(cur))
+    return parts
+
+
+def edge_type_decls(text, kotlin):
+    """[(name, [supertype simple names], binds_from_string, line)] for each class declared in a source text
+    (comments stripped, strings blanked). `binds_from_string`: a public String-arg constructor or a static
+    valueOf/of/from(String), which Spring's own ObjectToObjectConverter uses without any Essentials help."""
+    out = []
+    for m in re.finditer(r"\bclass\s+(\w+)", text):
+        name, j = m.group(1), m.end()
+        line = text.count("\n", 0, m.start()) + 1
+        if kotlin:
+            k = j
+            while k < len(text) and text[k] in " \t":
+                k += 1
+            if k < len(text) and text[k] == "<":
+                k = _balanced(text, k, "<", ">")
+            head = re.match(r"\s*(?:(?:@\w+\s*)*(private|protected|internal|public)\s+)?(?:constructor\s*)?\(", text[k:])
+            ctor_params, ctor_private = None, False
+            if head:
+                lp = k + head.end() - 1
+                rp = _balanced(text, lp, "(", ")")
+                ctor_params, ctor_private = text[lp + 1:rp - 1], head.group(1) == "private"
+                k = rp
+            supers = []
+            sm = re.match(r"\s*:\s*", text[k:])
+            if sm:
+                e, depth = k + sm.end(), 0
+                while e < len(text):
+                    c = text[e]
+                    if c in "(<":
+                        depth += 1
+                    elif c in ")>":
+                        depth -= 1
+                    elif depth == 0 and (c == "{" or (c == "\n" and not text[k:e].rstrip().endswith(","))):
+                        break
+                    e += 1
+                for part in _top_level_split(text[k + sm.end():e]):
+                    bm = re.match(r"\s*([\w.]+)", part)
+                    if bm:
+                        supers.append(bm.group(1).rsplit(".", 1)[-1])
+                k = e
+            body = ""
+            bm = re.match(r"\s*\{", text[k:])
+            if bm:
+                lb = k + bm.end() - 1
+                body = text[lb:_balanced(text, lb, "{", "}")]
+            binds = bool(ctor_params is not None and not ctor_private and re.fullmatch(
+                rf"\s*(?:@\w+\s*)*(?:(?:val|var|override|public|internal)\s+)*\w+\s*:\s*{STRING_TYPE}\s*", ctor_params))
+            binds = binds or bool(re.search(rf"(?<!private )\bconstructor\s*\(\s*\w+\s*:\s*{STRING_TYPE}\s*\)", body))
+            binds = binds or bool(re.search(rf"@JvmStatic\s+(?:\w+\s+)*fun\s+(?:valueOf|of|from)\s*\(\s*\w+\s*:\s*{STRING_TYPE}\s*\)",
+                                            body))
+        else:
+            brace = text.find("{", j)
+            if brace < 0:
+                continue
+            header = _drop_angles(text[j:brace])
+            supers = [x.rsplit(".", 1)[-1] for x in re.findall(r"\bextends\s+([\w.]+)", header)]
+            im = re.search(r"\bimplements\s+([^{]+)", header)
+            if im:
+                supers += [x.strip().rsplit(".", 1)[-1] for x in im.group(1).split(",") if x.strip()]
+            body = text[brace:_balanced(text, brace, "{", "}")]
+            binds = bool(re.search(rf"\bpublic\s+{name}\s*\(\s*(?:final\s+)?{STRING_TYPE}\s+\w+\s*\)", body)) or bool(
+                re.search(rf"\bpublic\s+static\s+(?:final\s+)?[\w.<>?, ]+\s+(?:valueOf|of|from)\s*\(\s*(?:final\s+)?"
+                          rf"{STRING_TYPE}\s+\w+\s*\)", body))
+        out.append((name, supers, binds, line))
+    return out
+
+
+def edge_params(text, kotlin):
+    """[(annotation, parameter name, written type, type simple name, line)] for every @PathVariable /
+    @RequestParam parameter in a source text (comments stripped, strings blanked); Optional<T> gives T."""
+    out = []
+    for m in EDGE_PARAM.finditer(text):
+        k = m.end()
+        while True:
+            ws = re.match(r"\s*", text[k:])
+            k += ws.end() if ws else 0
+            if k < len(text) and text[k] == "(":
+                k = _balanced(text, k, "(", ")")
+                continue
+            am = re.match(r"@[\w.]+", text[k:])
+            if am:
+                k += am.end()
+                continue
+            fm = re.match(r"final\b", text[k:])
+            if fm and not kotlin:
+                k += fm.end()
+                continue
+            break
+        if kotlin:
+            pm = re.match(r"(?:(?:val|var)\s+)?(\w+)\s*:\s*([\w.]+(?:\s*<[^>()]*>)?\??)", text[k:])
+            if not pm:
+                continue
+            pname, written = pm.group(1), pm.group(2)
+        else:
+            pm = re.match(r"([\w.]+(?:\s*<[^>()]*>)?)\s+(\w+)", text[k:])
+            if not pm:
+                continue
+            written, pname = pm.group(1), pm.group(2)
+        inner = re.fullmatch(r"(?:java\.util\.)?Optional\s*<\s*([\w.]+)\s*>", written)
+        head = inner.group(1) if inner else written.split("<", 1)[0].rstrip("? ")
+        simple = head.rsplit(".", 1)[-1]
+        out.append((m.group(1), pname, written, simple, text.count("\n", 0, m.start()) + 1))
+    return out
 
 
 # ---------------------------------------------------------------------------------------------
@@ -1375,6 +1551,11 @@ class Lint:
         if web is None:
             self.skip(["s4-configurer-web-mismatch", "s4-types-spring-web-missing"],
                       "both spring-boot-starter-webflux and a WebMvc starter declared")
+        if not imports or not tsw:
+            # The parameter is the cause's sharpest location: when one exists it is reported in place of the
+            # project-level s4-configurer-missing / s4-types-spring-web-missing, never beside them.
+            if self.s4_typed_edge(web, tsw, bool(imports)) and not imports:
+                return
         if not imports:
             if tsw:
                 self.add("s4-configurer-missing", self.app.rel, tsw.line,
@@ -1406,6 +1587,82 @@ class Lint:
                              f"use {to} (the import line too)",
                              [{"op": "replace-text", "file": s.rel, "line": line, "from": frm, "to": to}],
                              mechanical=False)
+
+    def s4_typed_edge(self, web, tsw, imported):
+        """s4-typed-edge-unregistered (no String route: 500) or s4-typed-edge-convention (binds through Spring's
+        String route today), one finding per parameter; True when any was reported."""
+        decls = {}  # simple name -> [(package, supers, binds_from_string)]
+        texts = []
+        for s in self.main:
+            kotlin = s.rel.endswith(".kt")
+            text = blank_strings(s.text)
+            pkg = re.search(r"^\s*package\s+([\w.]+)", text, re.M)
+            imports = dict((i.rsplit(".", 1)[-1], i) for i in re.findall(r"^\s*import\s+([\w.]+)", text, re.M))
+            texts.append((s, kotlin, text, pkg.group(1) if pkg else "", imports))
+            for name, supers, binds, _ in edge_type_decls(text, kotlin):
+                decls.setdefault(name, []).append((pkg.group(1) if pkg else "", supers, binds))
+
+        def chain(name, seen=()):
+            """The Essentials base a project type reaches through its supertypes, or None."""
+            for _, supers, _ in decls.get(name, []):
+                for sup in supers:
+                    if sup in SVT_BASES:
+                        return sup
+                    if sup in decls and sup not in seen:
+                        found = chain(sup, seen + (name,))
+                        if found:
+                            return found
+            return None
+
+        def pick(simple, pkg, imports):
+            cands = decls.get(simple, [])
+            fqn = imports.get(simple)
+            if fqn:
+                cands = [c for c in cands if c[0] == fqn.rsplit(".", 1)[0]] or cands
+            else:
+                cands = [c for c in cands if c[0] == pkg] or cands
+            return cands[0] if len(cands) >= 1 and all(c[2] == cands[0][2] for c in cands) else None
+
+        found = False
+        for s, kotlin, text, pkg, imports in texts:
+            for ann, pname, written, simple, line in edge_params(text, kotlin):
+                decl = pick(simple, pkg, imports)
+                base = chain(simple) if decl else None
+                if decl is None or base is None:
+                    continue
+                found = True
+                lack = [] if tsw else ["types-spring-web is not declared"]
+                if not imported:
+                    lack.append("no Essentials web configurer is @Import-ed")
+                to = {"webmvc": "EssentialsWebMvcConfigurer", "webflux": "EssentialsWebFluxConfigurer"}.get(web or "")
+                ref = "::class" if kotlin else ".class"
+                steps = [] if tsw else ["add dk.trustworks.essentials:types-spring-web"]
+                if not imported:
+                    steps.append(f"@Import({to}{ref}) on a @Configuration class — exactly one configurer, the "
+                                 f"spring-{web}'s" if to else
+                                 "@Import exactly one configurer on a @Configuration class — the web stack is "
+                                 "undetermined: EssentialsWebMvcConfigurer for spring-webmvc, "
+                                 "EssentialsWebFluxConfigurer for spring-webflux")
+                ops = None if tsw else [{"op": "add-dependency", "pom": self.app.rel, "groupId": ESS_GROUP,
+                                         "artifactId": "types-spring-web", "scope": None,
+                                         "version": "${essentials.version}"}]
+                shown = f"{pname}: {written}" if kotlin else f"{written} {pname}"
+                if decl[2]:
+                    self.add("s4-typed-edge-convention", s.rel, line,
+                             f"@{ann} {shown} — {simple} extends {base} and binds today only through Spring's own "
+                             f"String route (its String constructor or static valueOf/of/from(String)), and "
+                             f"{' and '.join(lack)}. Register the Essentials converter anyway: one registration "
+                             f"covers every Essentials type, SingleValueTypeConverter is what converts to a NumberType "
+                             f"or a JSR310 type, and dropping that String route later turns this endpoint into a "
+                             f"silent HTTP 500",
+                             "; ".join(steps), ops, mechanical=False)
+                    continue
+                self.add("s4-typed-edge-unregistered", s.rel, line,
+                         f"@{ann} {shown} — {simple} extends {base} and has no public String constructor or static "
+                         f"valueOf/of/from(String), so only SingleValueTypeConverter can bind it, and "
+                         f"{' and '.join(lack)}: a well-formed request answers HTTP 500",
+                         "; ".join(steps), ops, mechanical=False)
+        return found
 
     # -- S5 --------------------------------------------------------------------------------------
 

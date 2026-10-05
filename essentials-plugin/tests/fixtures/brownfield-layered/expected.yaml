@@ -187,9 +187,29 @@ must_find:
   line: 36
   anchor: public Order get(@PathVariable String orderId) {
   what: The controllers return Order / Invoice directly.
+- id: P7
+  rank: null
+  gate: null
+  ess: null
+  severity: null
+  kind: primitive-id-at-edge
+  file: src/main/java/com/example/shop/controller/InvoiceController.java
+  line: 16
+  anchor: public void pay(@PathVariable String invoiceId, @RequestBody PayRequest body) {
+  also_names:
+  - src/main/java/com/example/shop/service/BillingService.java
+  - src/main/java/com/example/shop/model/Invoice.java
+  what: >-
+    Order, invoice and customer ids are plain Strings in the controller signatures, the service methods
+    (BillingService.payInvoice(String invoiceId, String cardToken)) and the entity fields (Invoice.orderId), where
+    the law puts semantic id types in each BC's types/. Grouped (per BC, or once overall), not one finding per
+    parameter, and with no severity.
 ladder:
   rung_1: a pure regroup; must not mention Decider, AggregateRoot or the event store
   rung_4: offers service-entity first; must not be presented as 'adopt event sourcing'
+  semantic_ids: >-
+    introducing the BCs' semantic id types into types/ sits at rung 2 or later, never in rung 1's pure move, and
+    needs no Essentials (a plain record or final class); Essentials' CharSequenceType enters only at rung 4
 must_not_find:
 - id: N1
   not_gates:
@@ -231,3 +251,25 @@ must_not_find:
   file: src/main/java/com/example/shop/controller/ReportController.java
   line: 16
   anchor: public Map<String, Long> ordersByStatus() {
+- id: N8
+  not_gates:
+  - '*'
+  what: >-
+    the payment gateway's own ids in integration/dto/ (merchant_ref, txn_id) as primitive ids that need one of our
+    semantic types
+  why: >-
+    They are the gateway's foreign schema; the translation maps them to the BC's types at the boundary, and typing
+    the DTO itself would couple the BC's types to a schema it does not control.
+  file: src/main/java/com/example/shop/integration/dto/GatewayChargeRequest.java
+  line: 4
+  anchor: public String merchant_ref;
+tolerated:
+- id: TOL-gateway-charge-id
+  gates:
+  - '*'
+  file: src/main/java/com/example/shop/integration/PaymentGatewayClient.java
+  line: 15
+  anchor: public String charge(String invoiceId, BigDecimal amount, String cardToken) {
+  what: >-
+    Naming PaymentGatewayClient.charge(String invoiceId, …) as a primitive-id site, inside P7 or beside it. It is the
+    inner side of the translation, where the BC's own id may be typed; reporting or omitting it counts neither way.

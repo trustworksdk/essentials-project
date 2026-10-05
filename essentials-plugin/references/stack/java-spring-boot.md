@@ -78,7 +78,9 @@ A Java id extends `CharSequenceType` (or another `SingleValueType`). It is a rea
 JVM signature — there is no unboxing — so Spring cannot bind it natively. `SingleValueTypeConverter`
 is **required**, which means `types-spring-web` and the `@Import` of exactly one
 `Essentials*WebConfigurer` (S4) are required the moment any endpoint takes a typed path variable or
-request parameter.
+request parameter. Strictly, Spring's own conversion does bind an id that has a public `String` constructor
+or a static `valueOf`/`of`/`from(String)`, and the converter is required only for one without. S4 makes the
+import the rule for both.
 
 Where a Kotlin project can defer this dependency, a Java project cannot. A missing converter is
 HTTP **500** with `ConversionNotSupportedException`, not 400 (S4).

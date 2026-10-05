@@ -116,12 +116,16 @@ lane-specific findings (write-repository query drift, command-type leakage, enti
 API, god handler, bypassable invariant) and, just as importantly, its two traps: ORM-only accessors
 and write-path-only finders are **not** findings.
 
+On every lane, `none` included, run `discovery-heuristics.md` §8 — primitive ids at the domain edge,
+reported once per BC, after every other finding and without a severity — and its traps: a foreign
+schema's ids in a translation DTO, and strings that are not ids, are **not** findings.
+
 ## Step 6 — Pass 4: the ladder
 
 Four rungs, per `discovery-heuristics.md` §5, each paying off standalone: regroup → split → add
 manifests → adopt the framework.
 
-Two things must appear:
+These must appear:
 
 - **Rung 3 is the handoff.** Once manifests exist, `/essentials:slice-check` takes over and this
   command is done. Name that exit explicitly.
@@ -132,6 +136,9 @@ Two things must appear:
   write repository, with no event store and no new persistence dependency. Presenting rung 4 as
   "adopt event sourcing" is now factually wrong and costs the proposal exactly the audience that
   already decided against a stream.
+- **Semantic id types enter at rung 2, not rung 1.** Retyping a signature is not a pure move, and the
+  per-slice API files rung 2 writes are where the BC's ids from `types/` first appear — as plain
+  records or Kotlin value classes, with no Essentials. `CharSequenceType` is a rung-4 choice.
 
 ## Step 7 — Report
 

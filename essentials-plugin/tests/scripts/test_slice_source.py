@@ -141,6 +141,7 @@ class ExitCodes(unittest.TestCase):
         "kotlin-drift": (0, 1),
         "java-lanes": (0, 1),
         "lexer": (0, 0),
+        "raw-ids": (0, 1),
         "unparsed": (3, 3),
     }
 
@@ -251,6 +252,30 @@ class Rules(unittest.TestCase):
             ("6 undeclared mapping", "orders.order_board"),
         ])
         self.assertEqual([u["slice"] for u in self.check["kotlin-drift"]["unverified"]], ["orders.order_feed"])
+
+    def test_raw_ids_at_the_api_edge(self):
+        found = sorted((f["file"].rsplit("/", 1)[-1], f["line"], f["severity"])
+                       for f in self.check["raw-ids"]["findings"])
+        self.assertEqual(found, [
+            ("CancelOrderAPI.java", 15, "Advisory"),     # @PathVariable String orderId
+            ("InvoiceLookupAPI.kt", 23, "Advisory"),     # @PathVariable invoiceId: String
+            ("InvoiceLookupAPI.kt", 27, "Advisory"),     # @RequestParam customerId: Long?
+            ("InvoiceLookupAPI.kt", 27, "Advisory"),     # @RequestParam legacyId: LegacyId? — a typealias of String
+            ("OrderLookupAPI.java", 26, "Advisory"),     # @PathVariable("id") long key — the bound name counts
+            ("OrderLookupAPI.java", 32, "Advisory"),     # @RequestParam("customerId") Optional<String> customer
+            ("OrderLookupAPI.java", 33, "Advisory"),     # @RequestParam UUID batchId
+        ])
+        self.assertEqual({f["gate"] for f in self.check["raw-ids"]["findings"]}, {"6 raw id"})
+        alias = next(f for f in self.check["raw-ids"]["findings"] if "LegacyId" in f["message"])
+        self.assertIn("(resolves to String)", alias["message"])
+        hints = {f["file"].rsplit(".", 1)[-1]: f["hint"] for f in self.check["raw-ids"]["findings"]}
+        self.assertIn("ESS-031", hints["java"])
+        self.assertIn("ESS-034", hints["kt"])
+        flagged = " ".join(f["message"] for f in self.check["raw-ids"]["findings"])
+        for trap in ("sku", "status", "paid", "valid", " q ", "externalId", "OrderId orderId", "InvoiceId"):
+            self.assertNotIn(trap, flagged.replace("(e.g. OrderId)", ""), f"{trap} is not a raw id")
+        self.assertNotIn("payment_gateway", " ".join(f["file"] for f in self.check["raw-ids"]["findings"]),
+                         "a translation webhook carries the external system's ids")
 
     def test_lane_signal_rows(self):
         c = self.check["java-lanes"]

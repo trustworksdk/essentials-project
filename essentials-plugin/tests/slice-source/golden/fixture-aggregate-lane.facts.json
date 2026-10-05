@@ -4,7 +4,7 @@
   "mode": "facts",
   "root": "tests/fixtures/aggregate-lane",
   "manifestsRead": true,
-  "sourceFiles": 20,
+  "sourceFiles": 21,
   "bcs": [
     {
       "name": "billing",

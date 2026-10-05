@@ -122,6 +122,14 @@ EOF
   `reactive-bean-post-processor-enabled` property (`LLM-spring-boot-starter-modules.md`, default
   `true`). Note that `EssentialsComponentsConfiguration` and `EssentialsComponentsProperties` appear
   in **no** bundled doc — do not name either in a template, a skill, or a command.
+- The service-entity **view** API takes the BC's `<Aggregate>Id` as its `@PathVariable` and imports no
+  Essentials symbol for it. Java binds it through `SingleValueTypeConverter`, which the host registers
+  by `@Import`ing `EssentialsWebMvcConfigurer` / `EssentialsWebFluxConfigurer` (`LLM-types-spring-web.md`
+  § Configuration; stack contract S4); a Kotlin `@JvmInline value class` binds with nothing
+  (`LLM-types-spring-web.md` § Kotlin semantic types). The query stays `String`-keyed, so the id is
+  unwrapped with `CharSequenceType.toString()` (Java; it returns the wrapped value, as the `value()`
+  javadoc says — `types/src/main/java/dk/trustworks/essentials/types/CharSequenceType.java`) or
+  `StringValueType.value` (Kotlin; `LLM-types.md` § Kotlin Support shows the `override val value`).
 - `@Entity`, `@Document`, `JpaRepository`, `MongoRepository` and `org.springframework.data.repository.Repository`
   are Spring, not Essentials, and are out of this ledger's scope — which is also why the
   service-entity view templates ship: they are persistence-neutral. The entity and its write

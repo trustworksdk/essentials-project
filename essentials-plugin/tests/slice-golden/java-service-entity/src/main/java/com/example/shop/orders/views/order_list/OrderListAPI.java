@@ -1,5 +1,6 @@
 package com.example.shop.orders.views.order_list;
 
+import com.example.shop.orders.types.OrderId;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -20,6 +21,13 @@ import java.util.List;
  * Never inject `OrderRepository` (the BC's write repository), never call `save`/`delete`, never
  * touch another slice's queries. This slice reads its own table through its own interface, and that
  * is the entire allowance.
+ *
+ * The path variable is the BC's semantic id, not a {@code String} — the typed edge is the default
+ * shape (rules/slice-design.md § The command and the view *are* the contract). It binds because the
+ * Essentials converter is registered ({@code references/stack/stack-contract.md} S4); a missing
+ * converter surfaces as HTTP 500, not 400. Only the query stays {@code String}-keyed, because the
+ * entity's {@code @Id} is a {@code String} ({@code entities/CLAUDE.md}), so the id is unwrapped with
+ * {@code toString()} at the one call that needs it.
  */
 @RestController
 @RequestMapping("/api/orders")
@@ -37,7 +45,7 @@ public class OrderListAPI {
     }
 
     @GetMapping("/{orderId}")
-    public OrderListView byOrderId(@PathVariable String orderId) {
-        return queries.findOrderById(orderId).orElseThrow();
+    public OrderListView byOrderId(@PathVariable OrderId orderId) {
+        return queries.findOrderById(orderId.toString()).orElseThrow();
     }
 }

@@ -239,6 +239,18 @@ must_not_find:
   line: 11
   anchor: 'lane: decider'
   why: request_payment declares the lane the code has; the wrong side of ML-3 is capture_payment.
+- id: ML-T11
+  not_gates:
+  - '6'
+  file: src/main/java/com/example/multi/inventory/use_cases/adjust_stock/AdjustStockAPI.java
+  line: 21
+  anchor: 'public void adjustStock(@PathVariable String sku, @RequestBody AdjustStockRequest body) {'
+  symbol: AdjustStockAPI.adjustStock
+  why: >-
+    gate 6's raw-id clause keys on the binding's name, id or a camelCase ...Id, and sku is neither; slice-source.py
+    reports no raw id here and the gate takes that half verbatim. The other gate 6 clauses hold: one method-level
+    mapping, declared in the manifest. The typed ids are in the BC's neighbours (RepriceProductAPI, PostEntryAPI,
+    CapturePaymentAPI).
 skipped:
 - gate: '18'
   why: No Spring Data repository anywhere in the project.

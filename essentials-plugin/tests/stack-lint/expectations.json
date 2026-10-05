@@ -143,6 +143,25 @@
         {"check": "s5-transactional-mode", "file": "src/main/resources/application.yml", "line": 6, "targetOnly": true, "appliesWithUpgrade": true}
       ]
     },
+    "violating/java-typed-edge-mvc": {
+      "exit": 1,
+      "expectFacts": {"language": "java", "web": "webmvc"},
+      "findings": [
+        {"check": "s4-typed-edge-unregistered", "file": "backend/src/main/java/com/example/shop/orders/OrderLookupController.java", "line": 16},
+        {"check": "s4-typed-edge-unregistered", "file": "backend/src/main/java/com/example/shop/orders/OrderLookupController.java", "line": 17},
+        {"check": "s4-typed-edge-unregistered", "file": "backend/src/main/java/com/example/shop/orders/OrderLookupController.java", "line": 22},
+        {"check": "s4-typed-edge-convention", "file": "backend/src/main/java/com/example/shop/orders/OrderLookupController.java", "line": 28}
+      ]
+    },
+    "violating/kotlin-typed-edge-flux": {
+      "exit": 1,
+      "expectFacts": {"language": "kotlin", "web": "webflux"},
+      "findings": [
+        {"check": "s4-typed-edge-unregistered", "file": "backend/src/main/kotlin/com/example/golden/shipping/ShipmentLookup.kt", "line": 13},
+        {"check": "s4-typed-edge-convention", "file": "backend/src/main/kotlin/com/example/golden/shipping/ShipmentLookup.kt", "line": 13},
+        {"check": "s7-model-converter", "file": "backend/pom.xml", "line": 64}
+      ]
+    },
     "violating/not-essentials": {
       "exit": 2,
       "findings": []

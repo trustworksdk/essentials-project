@@ -4,7 +4,26 @@ Each entry is a release, headed by its `plugin.json` version: the Essentials rel
 targets, with a `-N` suffix for plugin-only releases.
 
 ## 0.60.0-1 — targets Essentials 0.60.0
-
+- **Slice check** — a new Advisory clause of gate 6, `6 raw id` (`ESS-G6`), reports a `@PathVariable` or
+  `@RequestParam` id typed as a plain `String`, `Long`, `UUID` or other scalar in a command or view slice,
+  where the law's default is the bounded context's semantic id type. Translation webhooks are exempt,
+  because they carry the external system's ids (`scripts/slice-source.py`, `commands/slice-check.md`).
+- **Slice templates** — the service-entity view's lookup endpoint takes the bounded context's semantic id
+  instead of a `String`, and unwraps it only for the `String`-keyed query, so a generated view slice no
+  longer starts off the law.
+- **Stack contract** — S4 now says to import exactly one `types-spring-web` configurer for the web stack
+  (`EssentialsWebMvcConfigurer` or `EssentialsWebFluxConfigurer`) whenever a Java `SingleValueType` id is
+  at the API edge. `stack-lint` reports `s4-typed-edge-unregistered` (Blocking) for an id that answers
+  HTTP 500 without it, and `s4-typed-edge-convention` (Should-fix) for one that Spring currently binds
+  through a `String` constructor or `valueOf`/`of`/`from(String)`. The slice skills check the registration
+  when they emit a typed id (`references/slice/slice-authoring.md` §4c).
+- **Slice discovery** — `/essentials:slice-discover` reports primitive ids at the domain edge as an
+  unranked finding, once per bounded context, and puts the semantic id types in `types/` at rung 2 of the
+  migration ladder, with no framework adoption required (`discovery-heuristics.md` §8).
+- **Bundled docs** — the `types-spring-web` gotcha and `ESS-031` no longer say every typed path variable
+  needs the configurer. It is required for an id with no `String` route; Spring binds one with a `String`
+  constructor or `valueOf`/`of`/`from(String)` on its own, and the rule is still to import it
+  (`LLM-types-spring-web.md`, `LLM-traps.md`).
 - **Bundled docs** — a subscription stopped by its `SubscriptionErrorPolicy` is alerted on through the
   level-triggered gauge `essentials.eventstore.subscription.stopped`, not the
   `stopped_by_error_policy` counter (`LLM-postgresql-event-store.md`, `LLM-spring-boot-starter-modules.md`).

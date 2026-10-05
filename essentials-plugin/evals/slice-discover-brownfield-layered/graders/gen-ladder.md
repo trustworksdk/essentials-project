@@ -8,4 +8,5 @@ The agent's final message is the report `/essentials:slice-discover` printed for
 PASS if the report's migration ladder satisfies:
 - rung 1: a pure regroup; must not mention Decider, AggregateRoot or the event store
 - rung 4: offers service-entity first; must not be presented as 'adopt event sourcing'
+- semantic ids: introducing the BCs' semantic id types into types/ sits at rung 2 or later, never in rung 1's pure move, and needs no Essentials (a plain record or final class); Essentials' CharSequenceType enters only at rung 4
 FAIL otherwise.

@@ -18,7 +18,7 @@ public class PayInvoiceAPI {
     public record PayInvoiceRequest(long paidMinor) {}
 
     @PostMapping("/{invoiceId}/payment")
-    public void payInvoice(@PathVariable String invoiceId, @RequestBody PayInvoiceRequest body) {
-        commandBus.send(new PayInvoice(InvoiceId.of(invoiceId), body.paidMinor()));
+    public void payInvoice(@PathVariable InvoiceId invoiceId, @RequestBody PayInvoiceRequest body) {
+        commandBus.send(new PayInvoice(invoiceId, body.paidMinor()));
     }
 }

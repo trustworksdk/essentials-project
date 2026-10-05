@@ -79,7 +79,7 @@ A new command slice (`use_cases/cancel_shipment`), a guarded `cancelShipment()` 
 endpoint on the order-status view, a command-bus bean, a row count in the load harness, a POM
 dependency and an `application.properties`.
 
-Findings — all seven must appear:
+Findings — all eight must appear:
 
 | # | Severity | Id | Where | What | Found by |
 |---|---|---|---|---|---|
@@ -87,21 +87,23 @@ Findings — all seven must appear:
 | 2 | Blocking | ESS-089 | `application.properties:2` | `reactive-bean-post-processor-enabled=false` unwires every handler; mechanical | review-scan |
 | 3 | Should-fix | ESS-097 | `application.properties:3` | queue statistics are removed; the key is silently unbound; mechanical | review-scan |
 | 4 | Advisory | ESS-016 | `config/CommandBusConfig.java:13` | a candidate, **confirmed**: `auto_ship` sends with `sendAndDontWait`, which a `LocalCommandBus` keeps in memory | review-scan + judgement |
-| 5 | Should-fix | ESS-G6 | `views/order_status/OrderStatusAPI.java:42` | `DELETE /{orderId}` is not in the view's `endpoints` | slice-source |
-| 6 | Blocking | ESS-G15a | `views/order_status/OrderStatusAPI.java:43` | `shippingOrders.deleteById` — a mutation on the write repository from a view | judgement |
+| 5 | Should-fix | ESS-G6 | `views/order_status/OrderStatusAPI.java:43` | `DELETE /{orderId}` is not in the view's `endpoints` | slice-source |
+| 6 | Blocking | ESS-G15a | `views/order_status/OrderStatusAPI.java:44` | `shippingOrders.deleteById` — a mutation on the write repository from a view | judgement |
 | 7 | Should-fix | ESS-G16 | `entities/ShippingOrder.java:53` | `setCancelled` bypasses the guard in `cancelShipment()` | judgement |
+| 8 | Advisory | ESS-G6 | `views/order_status/OrderStatusAPI.java:43` | `purge(@PathVariable String orderId)` takes the id raw, beside `get(@PathVariable OrderId …)`. Same line as 5, a different defect (`6 raw id`): its own row | slice-source |
 
 Dismissed: **ESS-064** at `_loadtest/LoadHarness.java:26` — a read-only row count for the load report;
 there is no write and no Spring transaction to join.
 
 Pre-existing, counted and never listed: the 13 stack-lint findings the fixture already has (S2.1 and
 others), and every finding `tests/fixtures/service-entity/TEST-GUIDE.md` lists — including `setShipped`
-and the command-typed constructor in `ShippingOrder.java`, a file the patch edits.
+and the command-typed constructor in `ShippingOrder.java`, a file the patch edits, and slice-source's raw id on
+`ShipOrderAPI.ship`, which the base run reports too.
 
 Traps — none of these may be reported: ESS-S3.1 as a row of its own; gate 6 on `CancelShipmentAPI.java`;
 anything on unchanged lines of `ShippingOrder.java`, or in `ShippingOrders.java`, `ShippingCommand.java`
 or `OrderStatusQueries.java`; ESS-080 on the JPA `@Id`; gate 4 on `cancel_shipment` writing
-`ShippingOrder`; gate 10 anywhere (not on this lane); ESS-064 as a finding.
+`ShippingOrder`; gate 10 anywhere (not on this lane); ESS-064 as a finding; the pre-existing raw id on the unchanged `ShipOrderAPI.java`.
 
 Tolerated: ESS-086 named beside finding 4; gate 9's post-processor note beside finding 2; a missing-test
 Should-fix on `cancel_shipment`; an Advisory on the `config/` package inside the bounded context.
@@ -113,7 +115,7 @@ Not an eval case: `claude plugin eval` runs one prompt per case and has no way t
 exactly findings 1, 2 and 3, in that order. The rest is a manual run of the `fix` block of
 `service-entity.expected.yaml`: `/essentials:review HEAD~1 --fix`, answering *Apply*, *Skip*, *Apply*: the command offers exactly
 findings 1, 2 and 3, in that order (Blocking first, then file and line), each with the exact before and
-after lines, and never offers 4–7. Afterwards `pom.xml` names `types-jackson3`, `application.properties`
+after lines, and never offers 4–8. Afterwards `pom.xml` names `types-jackson3`, `application.properties`
 keeps line 2 and loses line 3, and no Java file changed.
 
 ## Known gaps

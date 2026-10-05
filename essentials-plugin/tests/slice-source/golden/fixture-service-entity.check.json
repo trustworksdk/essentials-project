@@ -75,7 +75,18 @@
       ]
     }
   ],
-  "findings": [],
+  "findings": [
+    {
+      "severity": "Advisory",
+      "gate": "6 raw id",
+      "id": "ESS-G6",
+      "slice": "shipping.ship_order",
+      "file": "src/main/java/com/example/shipping/use_cases/ship_order/ShipOrderAPI.java",
+      "line": 21,
+      "message": "@PathVariable String orderId on ShipOrderAPI.ship takes an id as a raw String; take the bounded context's semantic id type (e.g. OrderId) at the edge (rules/slice-design.md \u00a7 The command and the view *are* the contract)",
+      "hint": "two parts: type the parameter, then for a `CharSequenceType` / `SingleValueType` id always make sure exactly one configurer matching the web stack is `@Import`ed \u2014 `EssentialsWebMvcConfigurer` for spring-webmvc, `EssentialsWebFluxConfigurer` for spring-webflux (stack contract S4, ESS-031). It is required for an id with no `String` route (HTTP 500 without it) and the rule even where Spring's own conversion would bind one; stack-lint reports either case (`s4-typed-edge-unregistered` / `s4-typed-edge-convention`)"
+    }
+  ],
   "unverified": [],
   "unparsed": []
 }

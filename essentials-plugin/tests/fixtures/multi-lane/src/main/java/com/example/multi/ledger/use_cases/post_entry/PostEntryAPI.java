@@ -18,7 +18,7 @@ public class PostEntryAPI {
     public record PostEntryRequest(long amountMinor) {}
 
     @PostMapping("/{accountId}/entries")
-    public void postEntry(@PathVariable String accountId, @RequestBody PostEntryRequest body) {
-        commandBus.send(new PostEntry(AccountId.of(accountId), body.amountMinor()));
+    public void postEntry(@PathVariable AccountId accountId, @RequestBody PostEntryRequest body) {
+        commandBus.send(new PostEntry(accountId, body.amountMinor()));
     }
 }

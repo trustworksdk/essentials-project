@@ -120,11 +120,16 @@ and it is why audit tools get switched off. Rank by payoff instead:
 
 Within a rank, order by blast radius: how many slices the fix touches.
 
+§7's lane findings and §8's primitive-id finding are reported **after** these four, never above them.
+
 ## 5. The ladder — every rung pays off alone
 
 1. **Regroup** into per-feature packages. A pure move: no behaviour change, no framework adoption, no
    new dependency. Reviewable as a rename.
-2. **Split** god entry points; one API file per slice.
+2. **Split** god entry points; one API file per slice. This is also where §8's semantic ids enter:
+   each per-slice API file gets a signature written fresh, so it takes the BC's id types from
+   `<bc>/types/` rather than a `String`. A plain Java record or final class, or a Kotlin value class,
+   is enough — no Essentials. Adopting Essentials' `CharSequenceType` for them belongs to rung 4.
 3. **Add manifests** — `slice.yaml` + per-slice `CLAUDE.md`.
 4. **Adopt** a sanctioned §R5 lane. Three destinations, and the right one depends on whether the BC
    needs to reconstruct state from history:
@@ -177,3 +182,30 @@ Only meaningful once §3.1 put the BC on — or nearest to — the service-entit
 persistence machinery, not a query surface; distinguish by **caller**, never by shape. And a
 repository finder used only by the write path (loading an entity to mutate it) is the repository doing
 its job — the finding is a finder serving a *read* path.
+
+## 8. Primitive ids at the domain edge
+
+Lane-independent: it applies whatever §3.1 reported, `none` included. **Low payoff and unranked** — it
+is reported after §4's four and §7's findings, never above them, and never with a severity.
+
+| Signal | Report |
+|---|---|
+| An identifier of a type the BC owns or references — an entity's `@Id`, an `accountId`, a `shipmentId` — typed `String`, `Long`/`long`, `Integer` or `UUID` in a controller signature (`@PathVariable String accountId`), a service method (`transfer(String fromAccountId, String toAccountId, …)`) or an entity field (`Shipment.accountId : String`) | **Once per BC**: the ids involved and roughly how many sites carry each. Not one finding per parameter — a list of forty `String` parameters buries the sole-writer finding it ranks below |
+
+The target is `rules/slice-design.md` § Directory vocabulary (`types/` holds the BC's ids) and
+§R2's "the command and the view *are* the contract", where a semantic id as the `@PathVariable` is
+the default shape to write. The payoff is compile-time: two adjacent `String` parameters can be
+swapped at a call site and nothing notices. It is real but small next to a concurrent write, which is
+why it ranks last.
+
+The fix sits at §5 rung 2, not rung 1: retyping a signature is not a pure move. And a typed id must
+keep the wire and the column as they are — a string stays a string on the path, in the JSON and in
+the table — so check how the web binder, the JSON mapper and the ORM read the new type before calling
+the rung behaviour-free.
+
+**Two traps — do not report either.** A field in a translation's DTO typed by a **foreign** schema
+(a snake_case `external_ref` or `transaction_id` the external system owns) is that system's contract, not this
+BC's id: §3.2's translation slice maps it to the BC's type at the boundary, and typing the DTO itself
+re-couples the BC to a schema it does not control. And a `String` that is not an identifier at all — a
+free-text comment, a status, a token passed through to an external system — is outside this
+finding; a status that wants to be an enum is a different observation.

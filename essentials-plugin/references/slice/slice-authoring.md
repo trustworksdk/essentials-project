@@ -196,6 +196,31 @@ silent until a tool parses it — at which point the slice disappears from a map
 templates already quote; keep it that way when adding one, and never render a path unquoted because
 "this one has no variable yet".
 
+## 4c. A typed Java id at the edge needs its registration
+
+When a slice emits or keeps a `@PathVariable` / `@RequestParam` typed as a Java `CharSequenceType` or other
+`SingleValueType` id, the application must have the registration S4 requires
+(`references/stack/stack-contract.md`). This holds **always**, not only where the id would otherwise fail
+to bind: S4 gives the reasons, and an id with no `String` route answers HTTP 500 without it. The
+`command_aggregate` and service-entity view templates take such an id, and so does every handler typed
+by hand. After rendering, run:
+
+```bash
+python3 ${CLAUDE_PLUGIN_ROOT}/scripts/stack-lint.py <projectRoot> --json
+```
+
+and act on its `ESS-S4` findings only, taking each verbatim: `s4-typed-edge-unregistered` (Blocking: the
+id has no `String` route), `s4-typed-edge-convention` (Should-fix: it binds today through Spring's own `String`
+route; import anyway), `s4-configurer-missing`, `s4-types-spring-web-missing`, `s4-configurer-web-mismatch` and
+`s4-configurer-count`. For each, name the finding and its `fix` and **offer** it. Apply it only on the user's yes, and
+never add a configurer beside an existing one. The configurer belongs to the web stack:
+`EssentialsWebMvcConfigurer` for spring-webmvc, `EssentialsWebFluxConfigurer` for spring-webflux, exactly
+one. stack-lint's fix names the one for the stack it detected; where it says the stack is undetermined,
+ask which. Exit 2 means stack-lint could not run (no `pom.xml`, no Essentials dependency): say in the
+report that the registration was **not checked**, never that it is fine. A Kotlin `@JvmInline value
+class` id needs neither the module nor the import, so a Kotlin slice whose edge takes only value classes
+skips this step.
+
 ## 5. How slice templates differ from the project template
 
 The project template is a **tree copied then patched down**. Slice templates are **fragments inserted

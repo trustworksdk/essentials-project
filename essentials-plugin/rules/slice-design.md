@@ -182,7 +182,9 @@ Specifically allowed — this is *assembly*, not translation:
     extending `CharSequenceType` needs `SingleValueTypeConverter`, registered by `@Import`ing
     `EssentialsWebMvcConfigurer` or `EssentialsWebFluxConfigurer` from `types-spring-web`.
     That module auto-configures nothing; the import *is* the registration, and a missing one surfaces
-    as **HTTP 500**, not 400.
+    as **HTTP 500**, not 400. Spring's own conversion binds an id with a public `String` constructor or a
+    static `valueOf`/`of`/`from(String)`, so the 500 hits only an id without one. Import the configurer
+    for every Java id anyway (`references/stack/stack-contract.md` S4).
   - **Request bodies.** `EssentialTypesJacksonModule` (`types-jackson3`) must be on the **web**
     `JsonMapper`. The Essentials starters publish it as a `@Bean`, which Spring Boot adds to its
     auto-configured web mapper; it is silently lost when no Essentials starter is on the classpath
@@ -871,7 +873,8 @@ Behavioural (these are correctness bugs, not just layout):
 - **Should-fix** — the structure works but will rot: a slice missing its manifest, a `_shared/`
   holding more than state, a view slice with no test, a view reading through the BC's write
   repository, a repository extending a CRUD-family interface instead of the bare `Repository` marker.
-- **Advisory** — worth a look: file-cohesion smells, naming drift, a missing invariant record.
+- **Advisory** — worth a look: file-cohesion smells, naming drift, a missing invariant record, an id
+  taken at the API edge as a raw scalar where the bounded context has a semantic id type.
 
 ## File cohesion (advisory)
 

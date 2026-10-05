@@ -10,7 +10,7 @@ and nothing references an `EventStore`, an `AggregateType` or an `EventOrder` (t
 event-store artifact). Strip the Essentials dependency and this becomes the `brownfield-layered` case
 — *nearest* to the lane, not on it.
 
-It carries nine planted findings and fifteen traps. One planted finding is a **misplaced** write
+It carries ten planted findings and fifteen traps. One planted finding is a **misplaced** write
 repository (`persistence/ShippingOrders`, which the law puts in `entities/`): it forces gate 15 to
 identify a write repository by type rather than by path, so a path-keyed implementation fails the
 fixture loudly instead of passing it silently.
@@ -41,7 +41,7 @@ Unlike `brownfield-layered/`, this tree **has opted into the law** — four mani
 | Gate 10 named as **skipped**, not silently absent | Silence reads as a pass |
 | No `aggregates/`, no deciders → **no** multi-lane Blocking | A single-lane BC must not trip the conflict branch |
 
-## Findings — all nine must appear
+## Findings — all ten must appear
 
 | # | Severity | Gate | Where | What |
 |---|---|---|---|---|
@@ -54,6 +54,7 @@ Unlike `brownfield-layered/`, this tree **has opted into the law** — four mani
 | 7 | **Should-fix** | 17 | `routing/ShippingCommand.java` | A routing marker on a lane that has no decider to filter and no stream to select. Nothing implements it. `routing/` is decider-lane-only and **required** there — this is the absent-on-the-other-lanes direction of gate 17 |
 | 8 | **Blocking** | 18(c) | `views/order_status/OrderStatusQueries.java` — `findById(String)` | A **projection** return type on a method named after a CRUD base method. `SimpleJpaRepository` owns `findById(ID)` and the match is on name + parameter types, so the method is captured by the base, returns `ShippingOrder`, and the caller gets a `ClassCastException`. Fix: rename to `findOrderStatusById` |
 | 9 | **Should-fix** | 18(a) | `persistence/ShippingOrders.java` | The write repository extends `JpaRepository` rather than the bare `Repository` marker, so its surface is everything Spring Data offers instead of the sanctioned load/save/delete |
+| 10 | **Advisory** | 6 (raw id) | `use_cases/ship_order/ShipOrderAPI.java` — `ship(@PathVariable String orderId)` | The id arrives as a raw `String` although the BC has `types/OrderId`, which the very next line wraps it in. `slice-source.py` reports it; the report takes it verbatim. Fix: take `OrderId` at the edge — its static `of(String)` is what Spring binds a path variable through. `OrderStatusAPI.get` is the typed counterpart in the same BC |
 
 Ordering: the three Blocking findings first. Within severity, either order is acceptable.
 
@@ -111,11 +112,11 @@ because it is what makes an audit tool get switched off.
 
 - **The multi-lane conflict branch is not exercised here** — this BC is single-lane by construction.
   Adding an `aggregates/` directory alongside `entities/` would exercise it, but would also make the
-  fixture's other 24 expectations conditional on a Blocking finding, so it is deliberately left out.
+  fixture's other 25 expectations conditional on a Blocking finding, so it is deliberately left out.
 - **Gate 17's decider-lane branches are not exercised** — a missing `routing/`, a command that does
   not implement its BC's marker, and a sealed marker all need a decider-lane fixture, and this repo
   has none. Only the absent-on-this-lane direction is covered here.
 - **Kotlin is not exercised.** The lane supports both languages; this fixture is Java only.
 - **Mongo is not exercised.** The entity here is JPA-shaped. The lane is persistence-neutral above
   `entities/`, so every other file in the tree would be byte-identical under Mongo.
-- `--fix-source` is not exercised. None of the nine findings is in its three-fix scope.
+- `--fix-source` is not exercised. None of the ten findings is in its three-fix scope.

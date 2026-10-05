@@ -132,6 +132,18 @@ must_find:
   line: 10
   anchor: public interface ShippingOrders extends JpaRepository<ShippingOrder, String> {
   what: The write repository extends JpaRepository rather than the bare Repository marker.
+- id: '10'
+  gate: '6'
+  ess: ESS-G6
+  severity: Advisory
+  deterministic: scripts/slice-source.py reports it (gate 6, raw id)
+  file: src/main/java/com/example/shipping/use_cases/ship_order/ShipOrderAPI.java
+  line: 21
+  anchor: public void ship(@PathVariable String orderId) {
+  symbol: ShipOrderAPI.ship
+  what: >-
+    The path variable orderId is bound as a raw String although the BC has a semantic id, types/OrderId, which the
+    next line wraps it in. Fix: take OrderId at the edge.
 must_not_find:
 - id: T1
   not_gates:
@@ -192,7 +204,7 @@ must_not_find:
   not_gates:
   - '6'
   file: src/main/java/com/example/shipping/views/order_status/OrderStatusAPI.java
-  line: 13
+  line: 14
   anchor: public class OrderStatusAPI {
   why: Three @GetMapping methods on a view API over its own read model; all declared in slice.yaml.
 - id: T6b
@@ -200,7 +212,7 @@ must_not_find:
   - '6'
   - 11a
   file: src/main/java/com/example/shipping/views/order_status/OrderStatusAPI.java
-  line: 26
+  line: 27
   anchor: '@GetMapping(params = "status")'
   why: >-
     ?status= in the manifest, params = "status" in code: match the route before '?', then the parameter in that
@@ -210,7 +222,7 @@ must_not_find:
   - '6'
   - 11a
   file: src/main/java/com/example/shipping/views/order_status/OrderStatusAPI.java
-  line: 22
+  line: 23
   anchor: '@RequestParam(defaultValue = "false") boolean shipped'
   why: An optional filter with a default is not a discriminator and needs no endpoint entry.
 - id: T7
@@ -319,7 +331,7 @@ reader:
     optional_params:
     - shipped
     file: src/main/java/com/example/shipping/views/order_status/OrderStatusAPI.java
-    line: 22
+    line: 23
     anchor: public List<OrderStatusView> list(
   - slice: shipping.order_status
     method: GET
@@ -327,12 +339,12 @@ reader:
     params:
     - status
     file: src/main/java/com/example/shipping/views/order_status/OrderStatusAPI.java
-    line: 27
+    line: 28
     anchor: public List<OrderStatusView> byStatus(
   - slice: shipping.order_status
     method: GET
     route: /api/shipping/order-status/{orderId}
     params: []
     file: src/main/java/com/example/shipping/views/order_status/OrderStatusAPI.java
-    line: 32
+    line: 33
     anchor: public OrderStatusView get(

@@ -1,0 +1,16 @@
+schemaVersion: "1.3"
+slice: orders.payment_gateway
+kind: translation
+bc: orders
+owner: orders-team
+status: live
+summary: Receive payment notifications from the gateway.
+generator: essentials
+language: java
+externalSystem: payment-gateway
+direction: inbound
+consumes: [GatewayPaymentReceived]
+maps:
+  - { from: GatewayPaymentReceived, to: TODOInternalCommand }
+tests:
+  unit: { present: false }

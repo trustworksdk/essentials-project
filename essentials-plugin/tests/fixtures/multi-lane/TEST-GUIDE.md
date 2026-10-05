@@ -65,6 +65,7 @@ src/main/java/com/example/multi/
 | ML-T8 | `catalog/entities/Products` under gate 15 or 18 | The write repository sits beside its entity; it is Essentials' DocumentDB repository, not Spring Data |
 | ML-T9 | `StockItem.setVersionValue`/`setLastUpdated` under gate 5 or 16 | The `JavaVersionedEntity` persistence contract, not a setter bypassing `adjust()`'s guard |
 | ML-T10 | `request_payment`'s `lane: decider` | It declares the lane the code has; the wrong side of ML-3 is `capture_payment` |
+| ML-T11 | `AdjustStockAPI.adjustStock`'s `@PathVariable String sku` under gate 6 (`6 raw id`) | The raw-id clause keys on the binding's name — `id`, or `…Id` at a camelCase boundary — and `sku` is neither, so `slice-source.py` reports nothing and the gate takes that half verbatim. Its other gate 6 clauses hold: one method-level mapping, declared in `slice.yaml`. `RepriceProductAPI`, `PostEntryAPI` and `CapturePaymentAPI`, the id-bound endpoints of the other three BCs, take their semantic id at the edge |
 
 ## Skipped — named as skipped, never silently absent
 

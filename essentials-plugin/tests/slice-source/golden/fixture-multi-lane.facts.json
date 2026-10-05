@@ -4,7 +4,7 @@
   "mode": "facts",
   "root": "tests/fixtures/multi-lane",
   "manifestsRead": true,
-  "sourceFiles": 47,
+  "sourceFiles": 48,
   "bcs": [
     {
       "name": "catalog",

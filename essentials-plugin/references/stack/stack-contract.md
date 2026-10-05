@@ -225,6 +225,15 @@ exactly one** — whichever web stack you are on. There is deliberately no combi
 of `spring-webmvc` / `spring-webflux` is ever on a classpath, so a class naming both configurer
 interfaces could not load.
 
+**Import it whenever a Java `SingleValueType` id is at the edge** — a `@PathVariable` or
+`@RequestParam` typed as a `CharSequenceType`, a `NumberType` or a JSR310 value type, in either
+language. For an id with no `String` route (no public `String` constructor and no static
+`valueOf`/`of`/`from(String)`) the configurer is *required*: without it the request answers 500.
+Spring's own conversion binds an id that has such a route, and the rule is to import the configurer
+anyway. One registration then covers every Essentials type, `SingleValueTypeConverter` is what converts
+to a `NumberType` or a JSR310 type, and an id that later loses its `String` constructor would otherwise
+turn into a silent 500. A Kotlin `@JvmInline value class` id is not a `SingleValueType` and needs neither.
+
 Neither configurer touches HTTP message codecs — they override `addFormatters` only — so adding
 this module **cannot** change which Jackson major serializes bodies. Bodies are S3's problem.
 

@@ -116,9 +116,11 @@ generated frontend client inherits it. A value class only inside a generic (`Lis
 does not mangle. Give exactly the mangling handlers
 `@Operation(operationId = "<viewCamel>…")` (`io.swagger.v3.oas.annotations.Operation`), named after the
 slice so it stays stable and unique; `@JvmName` is not an option on Spring's open methods. See
-`references/llm/LLM-types-spring-web.md` § Kotlin handler methods: set the operationId. The shipped
-templates keep value classes inside the request and response types, so no emitted handler mangles;
-the first edit that moves one into the signature — a typed `@PathVariable` id, say — does.
+`references/llm/LLM-types-spring-web.md` § Kotlin handler methods: set the operationId. The
+service-entity template's lookup takes the typed `@PathVariable` id and so ships with
+`@Operation(operationId = "<viewCamel>By<Aggregate>Id")`; the event-sourced template's single list
+query has no value class in its signature. The first edit that moves one into another handler's
+signature needs its own.
 
 ### 2c. Processor selection
 
@@ -259,7 +261,7 @@ then fill the TODOs the JSON lists under `todos`.
 |---|---|
 | `__View__View.<ext>` | `<bc>/views/<view>/<View>View.<ext>` — the closed projection interface |
 | `__View__Queries.<ext>` | `<bc>/views/<view>/<View>Queries.<ext>` — slice-private read-only queries |
-| `__View__API.<ext>` | `<bc>/views/<view>/<View>API.<ext>` |
+| `__View__API.<ext>` | `<bc>/views/<view>/<View>API.<ext>` — the lookup takes the BC's `<Aggregate>Id` and unwraps it (`toString()` / `.value`) for the `String`-keyed query |
 | `test/__View__IT.<ext>` | test tree, mirroring the slice package |
 | `slice.yaml`, `CLAUDE.md.template` | `<bc>/views/<view>/` |
 
@@ -286,6 +288,11 @@ and writing a stream name into `from` corrupts the event list (`manifest-guide.m
 **Service-entity lane:** Spring Data registers the query interface by scanning; there is nothing to
 wire. Leave `projections` empty in `slice.yaml` — its emptiness is the signal that gates 10 and 13's
 twin machinery do not apply, so do not delete the key and do not populate it.
+
+**Every lane, Java — the typed edge.** When the slice's API takes a typed id (the aggregate-lane
+command and service-entity view templates do), run the S4 registration check in `slice-authoring.md`
+§4c. It runs stack-lint, offers each `ESS-S4` fix one at a time, and applies nothing without a yes. Name
+the result in the report, including "not checked" when stack-lint could not run.
 
 ## Step 6 — Report and self-check
 
