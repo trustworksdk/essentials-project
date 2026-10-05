@@ -1062,7 +1062,15 @@ const actions = {
            failed event, so nothing is skipped - fix the cause first: if the event fails again, the error policy applies
            again and may stop the subscription at the same event.</p>
            <p>Acts on this instance only. An exclusive subscription keeps its fenced lock.</p>`,
-        run: () => api(`/event-store/subscriptions/${encodeURIComponent(subscriberId)}/aggregate-types/${encodeURIComponent(data.aggregateType)}/resume`, { method: 'POST' })
+        run: async () => {
+            const result = await api(`/event-store/subscriptions/${encodeURIComponent(subscriberId)}/aggregate-types/${encodeURIComponent(data.aggregateType)}/resume`, { method: 'POST' });
+            /* resumed=false is a 200, not an error: the request reached an instance where the subscription is not stopped
+               or not running - behind a load balancer, not necessarily the one that rendered this page. Say so, or the
+               page re-renders as if the resume had worked. */
+            if (!result?.resumed) {
+                throw { status: 409, message: 'Not resumed: the subscription is not stopped by its error policy on the instance that took this request. Reload, and retry against the instance running it.' };
+            }
+        }
     }),
     release: (name) => ({
         title: 'Release fenced lock?', danger: true, confirmLabel: 'Release lock',
