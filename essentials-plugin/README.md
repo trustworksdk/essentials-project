@@ -38,6 +38,7 @@ Run `/essentials:doctor` to check them on this machine: it lists each one with t
 - **Python 3.11 or newer** for every command that runs a script. The deterministic checks are scripts, and a command without them stops or marks its gates not run rather than guessing.
 - **[`uv`](https://docs.astral.sh/uv/)** for the scripts that need `pyyaml` or `jsonschema` (`slice-lint.py`, `slice-source.py`, `slice-index.py`). Each pins its dependencies in PEP 723 inline metadata, and the commands run them with `uv run --script`, which installs exactly those versions. Without `uv`, `python3 <script>` works where those packages are already installed (or `pipx run <script>`, which reads the same metadata). `init-render.py`, `render-slice.py`, `slice-law.py`, `stack-lint.py`, `review-scan.py` and `check-citations.py` are standard library only.
 - **For `/essentials:init`'s smoke build:** the JDK `references/stack/stack-pins.md` pins, Maven, and Docker (without Docker the result is compile-only and says so); `npm` to check a frontend.
+- **git for `/essentials:review`'s base-ref and `--pr` modes.** Outside a git repository only `<path>` mode works.
 
 ## Usage
 

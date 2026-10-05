@@ -15,7 +15,7 @@
 #   init    /essentials:init: python3 (init-render.py, stack-lint.py); the JDK, Maven, Docker and npm of
 #           its post-render hooks and smoke build (Steps 12 and 13.7)
 #   review  /essentials:review: python3 (review-scan.py, stack-lint.py); uv for slice-lint.py and
-#           slice-source.py
+#           slice-source.py; git for its base-ref and --pr modes
 #   slice   /essentials:add-slice, the slice skills, /essentials:slice-check, /essentials:slice-map:
 #           python3 (render-slice.py, slice-law.py); uv for slice-lint.py, slice-source.py, slice-index.py
 #   docs    the essentials-docs and essentials-change skills: search.sh (rg optional) and slice-law.py
@@ -33,6 +33,7 @@
 #   maven     mvn; a ./mvnw in the working directory serves /essentials:upgrade, not init's wrapper hook
 #   docker    the binary and a running daemon (`docker info`)
 #   npm       only for a frontend
+#   git       /essentials:review's base-ref and --pr modes; without it only <path> mode works
 #   rg        search.sh falls back to grep -R
 #
 # Status values: ok, missing, too-old, not-running (docker: binary, no daemon), fallback, partial,
@@ -44,7 +45,7 @@
 # Plain output: a header, one line per requirement — STATUS NAME FOUND NEED and what degrades without
 # it — then a verdict line.
 #
-# --json writes one object, schema 1 (new fields may be added; none is renamed or removed):
+# --json writes one object, schema 1 (new fields and requirements may be added; none is renamed or removed):
 #   { "schema": 1, "profile": "all", "os": "<bash $OSTYPE>", "ok": true|false,
 #     "blocking": ["<name>", ...],
 #     "requirements": [ { "name": "python3", "status": "<status>", "found": "<version or what was found>"|null,
@@ -232,6 +233,14 @@ if have npm; then
     npm_found=${v:-npm}
 fi
 
+git_status=missing git_found="<null>"
+if have git; then
+    git_status=ok
+    v=$(git --version 2>/dev/null)
+    re='^git version ([^[:space:]]+)'
+    if [[ $v =~ $re ]]; then git_found=${BASH_REMATCH[1]}; else git_found="git"; fi
+fi
+
 rg_status=missing rg_found="<null>"
 if have rg; then
     rg_status=ok
@@ -281,6 +290,8 @@ impacts() {
             echo "upgrade|compile-only|/essentials:upgrade's re-check runs test-compile only: the context start is unverified" ;;
         npm)
             echo "init|skipped|with a frontend, /essentials:init skips the frontend-lockfile hook and leaves the frontend unchecked; an embedded build needs -Pskip-frontend until a package-lock.json exists" ;;
+        git)
+            echo "review|not-run|/essentials:review: only <path> mode works outside git; a base ref and --pr cannot be resolved" ;;
         rg)
             echo "docs|fallback|search.sh falls back to grep -R: the same matches, slower" ;;
     esac
@@ -356,6 +367,7 @@ row java "$java_status" "$java_found" "$java_required" init upgrade
 row maven "$maven_status" "$maven_found" "<null>" init upgrade
 row docker "$docker_status" "$docker_found" "running daemon" init upgrade
 row npm "$npm_status" "$npm_found" "<null>" init
+row git "$git_status" "$git_found" "<null>" review
 row rg "$rg_status" "$rg_found" "<null>" docs
 
 blocking_names=${blocking_names# }

@@ -2,7 +2,7 @@
 name: doctor
 description: >-
   Check this machine for the tools the essentials plugin's commands run — python3 3.11+, uv (or
-  pyyaml and jsonschema), the pinned JDK, Maven, Docker, npm and ripgrep — and say what each missing
+  pyyaml and jsonschema), the pinned JDK, Maven, Docker, npm, git and ripgrep — and say what each missing
   one costs: a command that stops, a gate that is not run, a compile-only smoke build, a slower
   fallback. Runs scripts/doctor.sh for one profile (init, review, slice, docs) or all of them, then
   explains each gap with an install hint for this OS. Installs nothing.
@@ -59,6 +59,7 @@ paragraph in plain language:
 | Maven | `brew install maven` | the distribution's `maven`, or SDKMAN |
 | Docker (`NOT RUNNING`: start it) | Docker Desktop, OrbStack or Colima, then start it | Docker Engine; `sudo systemctl start docker` and membership of the `docker` group |
 | npm | `brew install node` | the distribution's `nodejs` and `npm`, or nvm |
+| git | `xcode-select --install`, or `brew install git` | the distribution's `git` |
 | ripgrep | `brew install ripgrep` | the distribution's `ripgrep` |
 
 A JDK that is installed but not first on the `PATH` or in `JAVA_HOME` is a `TOO OLD` line too: say

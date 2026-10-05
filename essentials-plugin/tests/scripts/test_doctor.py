@@ -11,7 +11,6 @@ is found on that PATH. The JDK it needs is read from stack-pins.md here too, exa
 from __future__ import annotations
 
 import json
-import os
 import re
 import shutil
 import subprocess
@@ -70,7 +69,7 @@ class Machine:
 
     def __init__(self, *, py: str | None, yaml: bool = False, jsonschema: bool = False, uv: bool = False,
                  java_major: int | None = None, docker_daemon: bool | None = None, mvn: bool = True,
-                 npm: bool = True, rg: bool = False, mvnw: bool = False) -> None:
+                 npm: bool = True, rg: bool = False, git: bool = False, mvnw: bool = False) -> None:
         self._tmp = tempfile.TemporaryDirectory()
         root = Path(self._tmp.name)
         self.bin = root / "bin"
@@ -91,13 +90,16 @@ class Machine:
             stub(self.bin, "npm", "echo 10.9.2\n")
         if rg:
             stub(self.bin, "rg", "echo 'ripgrep 14.1.1'; echo; echo 'features:+pcre2'\n")
+        if git:
+            stub(self.bin, "git", "echo 'git version 2.47.1'\n")
         if mvnw:
             stub(self.cwd, "mvnw", "exit 0\n")
 
     def run(self, *argv: str) -> subprocess.CompletedProcess[str]:
-        assert BASH is not None
+        bash = BASH
+        assert bash is not None
         env = {"PATH": str(self.bin), "HOME": str(self.cwd)}
-        return subprocess.run([BASH, str(SCRIPT), *argv], cwd=self.cwd, env=env, capture_output=True, text=True)
+        return subprocess.run([bash, str(SCRIPT), *argv], cwd=self.cwd, env=env, capture_output=True, text=True)
 
     def json(self, profile: str) -> tuple[int, dict]:
         result = self.run("--for", profile, "--json")
@@ -137,10 +139,10 @@ class DoctorTest(unittest.TestCase):
 
         expected_rows = {
             "init": ["bash", "python3", "java", "maven", "docker", "npm"],
-            "review": ["bash", "python3", "uv"],
+            "review": ["bash", "python3", "uv", "git"],
             "slice": ["bash", "python3", "uv"],
             "docs": ["bash", "python3", "rg"],
-            "all": ["bash", "python3", "uv", "java", "maven", "docker", "npm", "rg"],
+            "all": ["bash", "python3", "uv", "java", "maven", "docker", "npm", "git", "rg"],
         }
         for profile in PROFILES:
             with self.subTest(profile=profile):
@@ -203,6 +205,10 @@ class DoctorTest(unittest.TestCase):
         self.assertEqual(requirement(doc, "docker")["status"], "missing")
         self.assertEqual(requirement(doc, "npm")["status"], "missing")
         self.assertEqual(requirement(doc, "python3")["impacts"], [])
+        # Without git /essentials:review still runs in <path> mode, so git degrades it and never blocks.
+        git = requirement(doc, "git")
+        self.assertEqual((git["status"], git["blocking"]), ("missing", False))
+        self.assertEqual({(i["profile"], i["effect"]) for i in git["impacts"]}, {("review", "not-run")})
 
         plain = m.run("--for", "slice")
         self.assertEqual(plain.returncode, 0)
@@ -225,12 +231,13 @@ class DoctorTest(unittest.TestCase):
 
     def test_everything_present(self) -> None:
         m = self.machine(py="3.13.1", yaml=True, jsonschema=True, uv=True, java_major=self.pin,
-                         docker_daemon=True, rg=True)
+                         docker_daemon=True, rg=True, git=True)
         code, doc = m.json("all")
         self.assertEqual(code, 0)
         self.assertTrue(all(r["status"] == "ok" and r["impacts"] == [] for r in doc["requirements"]), doc)
         self.assertEqual(requirement(doc, "uv")["found"], "0.9.0")
         self.assertEqual(requirement(doc, "rg")["found"], "14.1.1")
+        self.assertEqual(requirement(doc, "git")["found"], "2.47.1")
 
     def test_uv_missing_falls_back_to_python3(self) -> None:
         m = self.machine(py="3.12.0", yaml=True, jsonschema=True)
@@ -243,7 +250,7 @@ class DoctorTest(unittest.TestCase):
         m = self.machine(py=None, mvn=False, npm=False)
         code, doc = m.json("all")
         self.assertEqual(code, 1)
-        for name in ("python3", "uv", "java", "maven", "docker", "npm", "rg"):
+        for name in ("python3", "uv", "java", "maven", "docker", "npm", "git", "rg"):
             with self.subTest(name=name):
                 r = requirement(doc, name)
                 self.assertEqual(r["status"], "missing")
