@@ -5,7 +5,7 @@ description: Fanning work out to background or worktree agents in this repo — 
 
 # Fanning work out to parallel agents
 
-The root `CLAUDE.md` carries the directive in one line (wait for every notification, verify each
+The root `CLAUDE.md` carries the directive in one line (wait for every agent to settle, verify each
 worktree base, stage explicit paths). This file carries the *why* and the recipes: the failures
 those rules came from, and what to do when you hit one.
 
@@ -86,7 +86,7 @@ included. It is tracked, so it applies to every contributor; override it per dev
 - **Anchor critical commits before any history surgery**: `git branch safety-<name> <sha>` for the
   pre-integration tip(s), so nothing can be lost while you investigate; delete the safety branches
   once the integration branch is verified.
-- **Remove finished worktrees before the next fan-out** — only after every notification is counted;
+- **Remove finished worktrees before the next fan-out** — only after every agent is settled;
   the rule and its reason are consequence 5 below.
 
 ## Background agents: file presence is NOT a completion signal
@@ -102,21 +102,36 @@ already created every file they owned and went on to revise them substantially (
 changed by 138 lines after the commit). Nothing was lost, but the commit was not the work the agents
 produced.
 
-**The rule: wait for the completion notification of every agent you launched — count them.** An
-agent is done when its `<task-notification>` arrives, and at no other moment. Not when its files
-exist, not when they look complete, not when they stopped changing between two polls.
+**The rule: wait for the completion of every agent you launched — count them.** Not when its files
+exist, not when they look complete, not when they stopped changing between two polls. Completion
+shows up as one of two signals — its `<task-notification>`, or `ListAgents` reporting it
+`completed` — so act on whichever comes first. A notification that arrives while the integrator is
+idle does **not** reliably wake it: in the project this skill was adapted from, one of six agents'
+notifications reached the session only attached to the user's next message, and the run sat idle
+until the user asked. So when either signal arrives, settle the question **in the same turn**:
+
+1. `ListAgents` — the agent says `completed`, not `running`;
+2. no process of its own is alive — `ps -eo pid,etimes,args | grep -E '[m]vn|[p]lugin-(check|scaffold)'`,
+   and `readlink /proc/<pid>/cwd` for any you cannot place (a worktree agent's build runs in its
+   worktree path);
+3. you have its hand-back report.
+
+All three → it is settled; count it and carry on (dispatch the next agent, update the brief). Only
+when one fails do you end the turn, and then say which agent you are waiting on and why — a stall
+the user can see is better than one they discover.
 
 **Consequences for the integrator:**
 
-1. **Track launches against notifications explicitly.** Nine launched means nine notifications
-   before you stage anything. One you cannot account for is still running.
+1. **Track launches against completions explicitly.** Nine launched means nine settled agents
+   before you stage anything. If you cannot account for one, it is still running — check it with
+   the three steps above rather than waiting for a notification that may not wake you.
 2. **Do not edit a file whose author is still live.** Normalisation passes (frontmatter, formatting,
    a companion-table update) applied to an in-flight file are either clobbered by the agent's next
    write or silently race it. Agents in the run above independently reported "something rewrote my
    frontmatter between my edits" — that was the integrator. Do every integrator-side edit after the
-   last notification.
+   last agent is settled.
 3. **Generated artefacts and verification run on the settled tree, not the polled one.** In this
-   repository that means, after the last notification and never per agent:
+   repository that means, after the last agent is settled and never per agent:
    `sh scripts/sync-plugin-llm.sh`, `init-render.py --update-golden`, `render-slice.py update-golden`,
    `evals/build.py`, `graphify update .`, and the `essentials-plugin/CLAUDE.md` § Before committing
    block. Each of them reads the whole tree; run mid-flight they bake in a half-written file and look
@@ -124,8 +139,8 @@ exist, not when they look complete, not when they stopped changing between two p
 4. **If you committed early anyway, `--amend` rather than stacking a fixup** — but only once every
    agent has reported, so the amend is against a settled tree, and only after re-running the full
    verification pass.
-5. **Then remove every finished worktree before the next fan-out** — once its agent's notification is
-   counted and its branch integrated (`git diff --stat <integration-branch> <branch>` shows nothing of
+5. **Then remove every finished worktree before the next fan-out** — once its agent is settled
+   and its branch integrated (`git diff --stat <integration-branch> <branch>` shows nothing of
    the agent's left unintegrated): `git worktree remove <path>`, or `git worktree prune` for one whose
    directory is already gone; confirm with `git worktree list`. A leftover worktree holds a full copy
    of every `CLAUDE.md` in the tree — the root and `essentials-plugin/` ones alone are tens of KB, and
@@ -254,7 +269,7 @@ ones that most often split across agents:
 **Integrator-owned, never assigned to an agent:** the `plugin.json` `version` (one bump per batch —
 N agents each bumping it is N conflicting releases), `commands/intro.md`, `README.md`'s counts,
 `CHANGELOG.md`, and every golden or generated file. Agents report what those files need; the
-integrator writes them once, after the last notification.
+integrator writes them once, after the last agent is settled.
 
 ### The rules
 
@@ -267,7 +282,7 @@ integrator writes them once, after the last notification.
    N private fixtures is not evidence that they agree with each other.
 3. **`git show HEAD:<path>` is the right way to avoid a live file and the wrong source of truth.**
    When a brief tells an agent to derive from a file another agent is editing, the derivation is
-   **provisional**: the integrator re-derives it on the settled tree, after the last notification.
+   **provisional**: the integrator re-derives it on the settled tree, after the last agent is settled.
    Better, order the fan-out so the deriving agent starts after the file's owner has reported.
 4. **Assert on the parsed result, not on the log line.** A helper that prints its own success is a
    witness with an interest in the outcome. Here the canonical case is `slice.yaml`: an unquoted
