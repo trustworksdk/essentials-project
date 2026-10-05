@@ -33,7 +33,7 @@ import org.slf4j.*;
 import java.time.Duration;
 import java.util.*;
 import java.util.concurrent.*;
-import java.util.function.Function;
+import java.util.function.*;
 import java.util.stream.Collectors;
 
 import static dk.trustworks.essentials.shared.FailFast.*;
@@ -44,16 +44,20 @@ import static dk.trustworks.essentials.shared.MessageFormatter.msg;
  * to track {@link EventStoreSubscription} statistics
  */
 public class DefaultEventStoreSubscriptionManager implements EventStoreSubscriptionManager, ShutdownAware {
-    private static final Logger log = LoggerFactory.getLogger(DefaultEventStoreSubscriptionManager.class);
+    private static final Logger   log                                       = LoggerFactory.getLogger(DefaultEventStoreSubscriptionManager.class);
+    private static final Duration MIN_ADVANCED_RESUME_POINTS_CHECK_INTERVAL = Duration.ofMillis(50);
+    private static final Duration MAX_ADVANCED_RESUME_POINTS_CHECK_INTERVAL = Duration.ofSeconds(1);
 
     private final EventStore                    eventStore;
     private final FencedLockManager             fencedLockManager;
     private final DurableSubscriptionRepository durableSubscriptionRepository;
     private final Duration                      snapshotResumePointsEvery;
+    private final int                           snapshotResumePointsAfterEvents;
 
     private final    ConcurrentMap<Pair<SubscriberId, AggregateType>, EventStoreSubscription> subscribers = new ConcurrentHashMap<>();
     private volatile boolean                                                                  started;
     private          ScheduledFuture<?>                                                       saveResumePointsFuture;
+    private          ScheduledFuture<?>                                                       saveAdvancedResumePointsFuture;
     private final    boolean                                                                  startLifeCycles;
     private          ScheduledExecutorService                                                 resumePointsScheduledExecutorService;
     private final    EventStoreSubscriptionObserver                                           eventStoreSubscriptionObserver;
@@ -119,7 +123,8 @@ public class DefaultEventStoreSubscriptionManager implements EventStoreSubscript
              snapshotResumePointsEvery,
              durableSubscriptionRepository,
              startLifeCycles,
-             null);
+             null,
+             0);
     }
 
     /**
@@ -137,6 +142,9 @@ public class DefaultEventStoreSubscriptionManager implements EventStoreSubscript
      * @param eventStorePollingOptimizerFactory a factory function to create {@link EventStorePollingOptimizer}'s<br>
      *                                          Input String parameter is the {@code eventStreamLogName} that is used label for logs (e.g., subscriberId+aggregateType).<br>
      *                                          Passing {@code null} causes the {@link DefaultEventStoreSubscriptionManager} to use the {@link JitteredEventStorePollingOptimizer} strategy.
+     * @param snapshotResumePointsAfterEvents   save an active subscriber's resume point ahead of the next {@code snapshotResumePointsEvery} tick once it
+     *                                          has advanced this many {@link GlobalEventOrder} positions since it was last saved; {@code 0} disables it.
+     *                                          See {@link EventStoreSubscriptionManagerBuilder#setSnapshotResumePointsAfterEvents(int)}
      *
      *                                          <p>Example usage:</p>
      *                                          <pre>
@@ -165,13 +173,16 @@ public class DefaultEventStoreSubscriptionManager implements EventStoreSubscript
                                                 Duration snapshotResumePointsEvery,
                                                 DurableSubscriptionRepository durableSubscriptionRepository,
                                                 boolean startLifeCycles,
-                                                Function<String, EventStorePollingOptimizer> eventStorePollingOptimizerFactory) {
+                                                Function<String, EventStorePollingOptimizer> eventStorePollingOptimizerFactory,
+                                                int snapshotResumePointsAfterEvents) {
         requireTrue(eventStorePollingBatchSize >= 1, "eventStorePollingBatchSize must be >= 1");
+        requireTrue(snapshotResumePointsAfterEvents >= 0, "snapshotResumePointsAfterEvents must be >= 0");
         this.eventStore = requireNonNull(eventStore, "No eventStore provided");
         requireNonNull(eventStorePollingInterval, "No eventStorePollingInterval provided");
         this.fencedLockManager = requireNonNull(fencedLockManager, "No fencedLockManager provided");
         this.durableSubscriptionRepository = requireNonNull(durableSubscriptionRepository, "No durableSubscriptionRepository provided");
         this.snapshotResumePointsEvery = requireNonNull(snapshotResumePointsEvery, "No snapshotResumePointsEvery provided");
+        this.snapshotResumePointsAfterEvents = snapshotResumePointsAfterEvents;
         this.eventStoreSubscriptionObserver = eventStore.getEventStoreSubscriptionObserver();
         this.startLifeCycles = startLifeCycles;
         this.eventStoreSubscriptionManagerSettings = new EventStoreSubscriptionManagerSettings(eventStorePollingBatchSize,
@@ -179,12 +190,13 @@ public class DefaultEventStoreSubscriptionManager implements EventStoreSubscript
                                                                                                snapshotResumePointsEvery);
         this.eventStorePollingOptimizerFactory = eventStorePollingOptimizerFactory != null ? eventStorePollingOptimizerFactory : this::createEventStorePollingOptimizer;
 
-        log.info("[{}] Using {} using {} with snapshotResumePointsEvery: {}, eventStorePollingBatchSize: {}, eventStorePollingInterval: {}, " +
+        log.info("[{}] Using {} using {} with snapshotResumePointsEvery: {}, snapshotResumePointsAfterEvents: {}, eventStorePollingBatchSize: {}, eventStorePollingInterval: {}, " +
                          "eventStoreSubscriptionObserver: {}, startLifeCycles: {}",
                  fencedLockManager.getLockManagerInstanceId(),
                  fencedLockManager,
                  durableSubscriptionRepository.getClass().getSimpleName(),
                  snapshotResumePointsEvery,
+                 snapshotResumePointsAfterEvents,
                  eventStorePollingBatchSize,
                  eventStorePollingInterval,
                  eventStoreSubscriptionObserver,
@@ -233,6 +245,15 @@ public class DefaultEventStoreSubscriptionManager implements EventStoreSubscript
                                          snapshotResumePointsEvery.toMillis(),
                                          snapshotResumePointsEvery.toMillis(),
                                          TimeUnit.MILLISECONDS);
+            if (snapshotResumePointsAfterEvents > 0) {
+                // Scheduled on the same single thread as the periodic save, so the two never write concurrently
+                var checkEvery = advancedResumePointsCheckInterval(snapshotResumePointsEvery);
+                saveAdvancedResumePointsFuture = resumePointsScheduledExecutorService
+                        .scheduleAtFixedRate(this::saveResumePointsThatAdvancedPastThreshold,
+                                             checkEvery.toMillis(),
+                                             checkEvery.toMillis(),
+                                             TimeUnit.MILLISECONDS);
+            }
             started = true;
             // Start any subscribers added prior to us starting
             subscribers.values().forEach(this::startEventStoreSubscriber);
@@ -276,6 +297,10 @@ public class DefaultEventStoreSubscriptionManager implements EventStoreSubscript
         if (started) {
             log.info("[{}] Stopping EventStore Subscription Manager", fencedLockManager.getLockManagerInstanceId());
             subscribers.forEach((subscriberIdAggregateTypePair, eventStoreSubscription) -> stopEventStoreSubscriber(eventStoreSubscription));
+            if (saveAdvancedResumePointsFuture != null) {
+                saveAdvancedResumePointsFuture.cancel(true);
+                saveAdvancedResumePointsFuture = null;
+            }
             if (saveResumePointsFuture != null) {
                 log.debug("[{}] Cancelling saveResumePointsFuture", fencedLockManager.getLockManagerInstanceId());
                 saveResumePointsFuture.cancel(true);
@@ -347,13 +372,35 @@ public class DefaultEventStoreSubscriptionManager implements EventStoreSubscript
         // Advancing the checkpoint for active subscribers (as stop() does) would trim that one-event
         // overlap, but risks skipping an in-flight event if the "is this boundary clean?" decision is
         // wrong — turning a harmless duplicate into a loss. Tracked as S4 in docs/subscription-improvements.md.
+        saveResumePointsOfActiveSubscribers(resumePoint -> true);
+    }
+
+    /**
+     * Early save enabled by {@code snapshotResumePointsAfterEvents}: an in-memory check of every active subscriber that
+     * writes only the resume points that advanced at least that many {@link GlobalEventOrder} positions since their last
+     * save. A subscriber below the threshold - including every idle one - costs no database round-trip.
+     */
+    private void saveResumePointsThatAdvancedPastThreshold() {
+        saveResumePointsOfActiveSubscribers(resumePoint -> resumePoint.unpersistedAdvance() >= snapshotResumePointsAfterEvents);
+    }
+
+    /**
+     * Only ever called on the single resume-point scheduler thread. A save in flight here cannot overwrite a reset that
+     * commits concurrently on another thread: the repository refuses a write from an older reposition epoch - see
+     * {@link SubscriptionResumePoint} and S6 in docs/subscription-improvements.md
+     */
+    private void saveResumePointsOfActiveSubscribers(Predicate<SubscriptionResumePoint> filter) {
         try {
-            durableSubscriptionRepository.saveResumePoints(subscribers.values()
-                                                                      .stream()
-                                                                      .filter(EventStoreSubscription::isActive)
-                                                                      .filter(eventStoreSubscription -> eventStoreSubscription.currentResumePoint().isPresent())
-                                                                      .map(eventStoreSubscription -> eventStoreSubscription.currentResumePoint().get())
-                                                                      .collect(Collectors.toList()));
+            var resumePoints = subscribers.values()
+                                          .stream()
+                                          .filter(EventStoreSubscription::isActive)
+                                          .map(EventStoreSubscription::currentResumePoint)
+                                          .flatMap(Optional::stream)
+                                          .filter(filter)
+                                          .collect(Collectors.toList());
+            if (!resumePoints.isEmpty()) {
+                durableSubscriptionRepository.saveResumePoints(resumePoints);
+            }
         } catch (Exception e) {
             if (IOExceptionUtil.isIOException(e)) {
                 log.debug(msg("Failed to store ResumePoint's for the {} subscriber(s) - Experienced a Connection issue, this can happen during JVM or application shutdown", subscribers.size()));
@@ -361,6 +408,22 @@ public class DefaultEventStoreSubscriptionManager implements EventStoreSubscript
                 log.error(msg("Failed to store ResumePoint's for the {} subscriber(s)", subscribers.size()), e);
             }
         }
+    }
+
+    /**
+     * How often the {@code snapshotResumePointsAfterEvents} threshold is checked: a tenth of {@code snapshotResumePointsEvery},
+     * kept between 50 ms and 1 second - a long periodic interval must not make the threshold slow to act - and never less often
+     * than the periodic save itself. The check is in memory, so its cadence costs no database round-trips
+     */
+    static Duration advancedResumePointsCheckInterval(Duration snapshotResumePointsEvery) {
+        var checkEvery = snapshotResumePointsEvery.dividedBy(10);
+        if (checkEvery.compareTo(MIN_ADVANCED_RESUME_POINTS_CHECK_INTERVAL) < 0) {
+            checkEvery = MIN_ADVANCED_RESUME_POINTS_CHECK_INTERVAL;
+        }
+        if (checkEvery.compareTo(MAX_ADVANCED_RESUME_POINTS_CHECK_INTERVAL) > 0) {
+            checkEvery = MAX_ADVANCED_RESUME_POINTS_CHECK_INTERVAL;
+        }
+        return checkEvery.compareTo(snapshotResumePointsEvery) > 0 ? snapshotResumePointsEvery : checkEvery;
     }
 
     private EventStoreSubscription addEventStoreSubscription(SubscriberId subscriberId,

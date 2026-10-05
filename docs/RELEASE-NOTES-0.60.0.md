@@ -44,6 +44,7 @@ notes summarise both and link to them rather than repeating every table.
    - [1.6 Database objects changed on first startup](#16-database-objects-changed-on-first-startup)
    - [1.7 Subscription statistics records have a new component](#17-subscription-statistics-records-have-a-new-component)
    - [1.8 `ApiQueuedMessage` has three new components](#18-apiqueuedmessage-has-three-new-components)
+   - [1.9 Resume-point saves carry a reposition epoch](#19-resume-point-saves-carry-a-reposition-epoch)
 2. [New features](#2-new-features)
 3. [Bug fixes](#3-bug-fixes)
 4. [Deprecations](#4-deprecations)
@@ -144,6 +145,14 @@ id in `caused_by_event_id`, and every message queued while a cause is bound carr
 entry, `essentials.causedByEventId`. Nothing changes for a `PersistableEventMapper` that sets a cause itself. No
 schema change, and existing rows keep their nulls. `essentials.eventstore.causation.enabled=false` restores the old
 behaviour. See [§2.9](#29-event-causation).
+
+#### 1.1.8 Spring saves subscription resume points every second, not every 10 seconds
+
+`essentials.eventstore.subscription-manager.snapshot-resume-points-every` now defaults to `1s`, the default
+`EventStoreSubscriptionManager.builder()` already used. After a crash, a subscriber now redelivers about one
+second of already-handled events instead of up to ten. Only resume points that changed since the last save are
+written, in one batched `UPDATE`, so an idle subscriber still causes no database writes. A busy one costs at most
+one statement per second. Set the property to `10s` to restore the old behaviour.
 
 ---
 
@@ -290,6 +299,7 @@ old statistics data matters to you, because nothing exports it first.
 | `DROP INDEX IF EXISTS idx_<table>_ordered_ready` | every queue table | Measured at zero scans in every workload shape; no longer created |
 | Drop `trg_log_message_delivery_stats`, `log_message_delivery_stats()` and the statistics table | only if the trigger exists | Runs once. The table name is read from the function body, and the table is dropped only if its columns match. A table whose trigger you already removed by hand survives; drop it yourself |
 | `CREATE TABLE IF NOT EXISTS essentials_schema_history` | always | The schema harness's ledger — see [§2.2](#22-database-schema-harness) |
+| `ALTER TABLE durable_subscriptions ADD COLUMN IF NOT EXISTS reposition_epoch BIGINT NOT NULL DEFAULT 0` | always (no-op once present) | Guards resume points against a stale save overwriting a reset — see [§1.9](#19-resume-point-saves-carry-a-reposition-epoch). Metadata-only in PostgreSQL 11+, so no table rewrite. Uses your `durableSubscriptionsTableName` if you configured one |
 
 ⚠️ **The index drops are not zero-downtime safe on a large queue table.** They run inside the bootstrap
 transaction under the framework's advisory lock, so a concurrently starting instance waits for them. Plan the
@@ -314,6 +324,31 @@ of `DurableQueuesApi`; pass `null, null, null` for an unordered message. The adm
 optional fields. `referencedAggregateType` is set for messages that refer to a persisted event - an `EventProcessor`'s
 inbox messages - and is what lets the console link a stuck or dead-lettered event message to its causation (see
 [§2.9](#29-event-causation)). It is routing information, not payload, so it is present without the payload role.
+
+### 1.9 Resume-point saves carry a reposition epoch
+
+A save that read a subscription's resume point before a reset could commit after the reset and overwrite it. If the
+node then died before the next save corrected the row, the reset was lost and the events it should have replayed
+were skipped. `durable_subscriptions` now has a `reposition_epoch` column ([§1.6](#16-database-objects-changed-on-first-startup)).
+Every deliberate reposition (`SubscriptionResumePoint.setResumeFromAndIncluding`, which every subscription reset goes
+through) increments the epoch. Normal progress (`advanceResumeFromAndIncluding`) does not. Every save writes value and
+epoch together and is refused when the stored epoch is newer, so the reset wins whichever write commits first.
+
+What you may need to change:
+
+- **`essentials.schema.mode=validate` or `emit`**: the framework does not alter the table itself. Apply the
+  `ALTER TABLE` from §1.6, or take it from the emitted script, before starting 0.60.
+- **A custom `DurableSubscriptionRepository`**: store and return the epoch
+  (`new SubscriptionResumePoint(…, repositionEpoch, lastUpdated)`). In `saveResumePoints`, bind
+  `SubscriptionResumePoint.snapshot()`, refuse a write whose epoch is older than the stored one, and record the outcome
+  with `markAsPersisted(Snapshot, OffsetDateTime)` or `markAsSuperseded(Snapshot)`. An implementation that ignores the
+  epoch keeps working as before: it is just not protected against the race.
+- **`markAsPersisted(GlobalEventOrder, OffsetDateTime)`** is deprecated. It cannot tell which epoch the written
+  value belonged to.
+
+A refused save is logged once per resume point at WARN when the row was repositioned by a writer other than this
+subscription. That is a stale instance, or non-exclusive subscriptions on several nodes sharing one row, which already
+overwrote each other's resume points before 0.60. The row keeps the reset, and restarting the subscription picks it up.
 
 ---
 
@@ -594,6 +629,30 @@ always had the `caused_by_event_id` column, and the starter's default mapper cla
 
 Correlation ids are still not populated; trace context covers "what did this request do". Design and measurements:
 [event-causation.md](./event-causation.md). How to configure it: [LLM-postgresql-event-store.md](../LLM/LLM-postgresql-event-store.md#event-causation).
+
+### 2.10 Save a busy subscriber's resume point early (opt-in)
+
+Resume points are saved every `snapshotResumePointsEvery`, so after a crash a subscriber redelivers whatever it handled
+since the last tick. On a high-throughput subscriber that can be many events. `snapshotResumePointsAfterEvents` adds a
+bound by count: a resume point that has advanced that many `GlobalEventOrder` positions since it was last saved is
+written ahead of the next tick.
+
+```java
+EventStoreSubscriptionManager.builder()
+    ...
+    .setSnapshotResumePointsAfterEvents(1000)
+    .build();
+```
+
+```properties
+essentials.eventstore.subscription-manager.snapshot-resume-points-after-events=1000
+```
+
+`0`, the default, disables it. The threshold is checked in memory every tenth of `snapshotResumePointsEvery`, kept
+between 50 ms and 1 second. The check runs on the same thread as the periodic save, so the two never write concurrently.
+Only resume points past the threshold are written, so an idle or slow subscriber costs no extra database writes. The
+distance is counted in global event order positions. For a tenant-filtered subscriber, or across gaps, it is an upper
+bound on the events actually handled.
 
 ---
 

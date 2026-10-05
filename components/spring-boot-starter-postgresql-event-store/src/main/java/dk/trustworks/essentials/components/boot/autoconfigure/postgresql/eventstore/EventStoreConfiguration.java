@@ -211,6 +211,7 @@ public class EventStoreConfiguration {
                                             .setEventStorePollingBatchSize(subscriptionManagerProps.getEventStorePollingBatchSize())
                                             .setEventStorePollingInterval(subscriptionManagerProps.getEventStorePollingInterval())
                                             .setSnapshotResumePointsEvery(subscriptionManagerProps.getSnapshotResumePointsEvery())
+                                            .setSnapshotResumePointsAfterEvents(subscriptionManagerProps.getSnapshotResumePointsAfterEvents())
                                             .setStartLifeCycles(essentialsComponentsProperties.getLifeCycles().isStartLifeCycles())
                                             .setEventStorePollingOptimizerFactory(optimizerFactory)
                                             .build();
