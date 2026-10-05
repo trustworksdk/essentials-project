@@ -66,6 +66,36 @@ class SubscriptionGapHandlerDefaultsTest {
         assertThat(handler.reconciliations).isEmpty();
     }
 
+    /**
+     * A gap handler that overrides only the per-order give-up keeps receiving every order of the ranges
+     */
+    @Test
+    void giving_up_ranges_gives_up_every_order_in_them() {
+        var handler = new RecordingGapHandler();
+
+        var outcome = handler.giveUpTransientGapRanges(ORDERS, List.of(LongRange.between(5, 7), LongRange.only(9)));
+
+        assertThat(handler.reconciliations).containsExactly(
+                new Reconciliation(ORDERS, LongRange.only(9), List.of(), List.of(GlobalEventOrder.of(5), GlobalEventOrder.of(6), GlobalEventOrder.of(7), GlobalEventOrder.of(9))));
+        assertThat(outcome).isEqualTo(RecordingGapHandler.REPORTED);
+    }
+
+    @Test
+    void giving_up_no_ranges_reconciles_nothing() {
+        var handler = new RecordingGapHandler();
+
+        assertThat(handler.giveUpTransientGapRanges(ORDERS, List.of())).isSameAs(GapReconciliation.NONE);
+        assertThat(handler.reconciliations).isEmpty();
+    }
+
+    @Test
+    void adding_transient_gaps_records_nothing_by_default() {
+        var handler = new RecordingGapHandler();
+
+        assertThat(handler.addTransientGaps(ORDERS, LongRange.between(1, 5))).isSameAs(GapReconciliation.NONE);
+        assertThat(handler.reconciliations).isEmpty();
+    }
+
     private record Reconciliation(AggregateType aggregateType,
                                   LongRange globalOrderQueryRange,
                                   List<PersistedEvent> persistedEvents,

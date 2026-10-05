@@ -790,13 +790,17 @@ then `acknowledge(...)` each event handled or given up on - never one skipped be
 resolves on hand-on, and a stopped batched subscriber holds its resume point at the lowest fill it had queued.
 A custom `SubscriptionGapHandler` gets default `resolveFilledGaps(AggregateType, List<PersistedEvent>)`, serialized calls
 per subscription, and must not promote a gap whose event is in the events it is given. When a CDC subscription gives up
-waiting for a gap's event (after `transientGapGiveUpThreshold()`) it calls the handler's default
-`giveUpTransientGaps(AggregateType, List<GlobalEventOrder>)`, so the give-up is durable: a late-committing event for that
+waiting for a gap's event (after `transientGapGiveUpThreshold()`) it calls the handler's
+`giveUpTransientGapRanges(AggregateType, List<LongRange>)`, one range per gap (default: lists the orders and calls
+`giveUpTransientGaps(AggregateType, List<GlobalEventOrder>)`), so the give-up is durable: a late-committing event for that
 gap is dropped by the running subscription and after a restart. Recorded with the next event delivered and when the
 subscription ends, retried after a failed write. A give-up is a permanent gap of the whole aggregate type (every subscriber
 skips it), so the caller must have waited at least `transientGapGiveUpThreshold()` for each gap passed: gaps CDC drops
 because > 10,000 are waited for at once stay transient, and a restarted subscription waits for them again.
-`PostgresqlEventStreamGapHandler` promotes those gaps immediately
+CDC waits for at most 5,000 orders at each end of a new gap (what in-flight transactions can hold); the middle of a wider
+gap (sequence `setval` forward, restore, big rollback) is dropped at once and recorded nowhere. Its lower end is recorded via
+`addTransientGaps(AggregateType, LongRange)` - default records nothing, so a custom handler's restart skips it.
+`PostgresqlEventStreamGapHandler` promotes given-up gaps immediately
 at the give-up when the promotion strategy states a threshold (`thresholdBased(n)` / `permanentGapThreshold()`), else only those
 the strategy deems ready; a custom handler may override the default. CDC records a gap a bus event opens without claiming any
 transient gap was queried, so on the CDC path promotion happens only through queries on the polling/back-fill leg and the give-up. Mocking a store wrapped by

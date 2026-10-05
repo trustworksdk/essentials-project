@@ -219,6 +219,13 @@ mark:
   fills. An event for a gap given up on is dropped, as polling drops one whose gap was
   promoted to permanent. At most 10 000 gaps are held at once; beyond that the oldest is
   given up at once and one WARN is logged;
+- a new gap is waited for at most 5 000 orders deep from each end - the orders right above
+  the highest delivered and right below the event that opened it, the only ones a
+  transaction still in flight can hold. The middle of a wider gap (the sequence moved
+  forward by `setval` or a restore, a large rolled-back append) is given up at once, with
+  a WARN: no transient gaps are recorded for it and it does not become a permanent gap. A
+  single in-flight append of more than 10 000 events overtaken by a concurrent commit has
+  its middle events dropped by that subscription;
 - polling resumes right after the watermark, so it reads the gaps again; a catch-up
   reads forward from the highest order delivered and asks for up to 1 000 of the gaps by
   order. What was delivered already is dropped.

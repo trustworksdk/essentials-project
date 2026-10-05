@@ -292,7 +292,7 @@ class CdcDeliveryTrackerTest {
         // Too old: the earlier gap, and the gaps 12..13 and 15
         advanceClock(GAP_TIMEOUT);
         assertThat(tracker.resumeFromInclusive()).isEqualTo(17);
-        assertThat(tracker.drainTimedOutGaps()).extracting(GlobalEventOrder::longValue).containsExactlyInAnyOrder(4L, 12L, 13L, 15L);
+        assertThat(orders(tracker.drainTimedOutGaps())).containsExactlyInAnyOrder(4L, 12L, 13L, 15L);
         assertThat(tracker.drainTimedOutGaps()).as("drained").isEmpty();
     }
 
@@ -318,10 +318,10 @@ class CdcDeliveryTrackerTest {
 
         // 15 was revealed 120 s ago, 17 only 60 s ago
         advanceClock(Duration.ofSeconds(60));
-        assertThat(tracker.drainTimedOutGaps()).extracting(GlobalEventOrder::longValue).containsExactly(15L);
+        assertThat(orders(tracker.drainTimedOutGaps())).containsExactly(15L);
 
         advanceClock(Duration.ofSeconds(60));
-        assertThat(tracker.drainTimedOutGaps()).extracting(GlobalEventOrder::longValue).containsExactly(17L);
+        assertThat(orders(tracker.drainTimedOutGaps())).containsExactly(17L);
     }
 
     @Test
@@ -331,7 +331,7 @@ class CdcDeliveryTrackerTest {
         tracker.seedEarlierGaps(List.of(GlobalEventOrder.of(50), GlobalEventOrder.of(60), GlobalEventOrder.of(70)));
 
         advanceClock(GAP_TIMEOUT);
-        assertThat(tracker.drainTimedOutGaps()).extracting(GlobalEventOrder::longValue).containsExactlyInAnyOrder(60L, 70L);
+        assertThat(orders(tracker.drainTimedOutGaps())).containsExactlyInAnyOrder(60L, 70L);
     }
 
     /**
@@ -345,7 +345,7 @@ class CdcDeliveryTrackerTest {
         tracker.markDelivered(3);
 
         advanceClock(GAP_TIMEOUT);
-        assertThat(tracker.drainTimedOutGaps()).extracting(GlobalEventOrder::longValue).containsExactly(2L);
+        assertThat(orders(tracker.drainTimedOutGaps())).containsExactly(2L);
         assertThat(tracker.watermark()).isEqualTo(3);
     }
 
@@ -357,13 +357,13 @@ class CdcDeliveryTrackerTest {
         tracker.markDelivered(3);
         advanceClock(GAP_TIMEOUT);
         var drained = tracker.drainTimedOutGaps();
-        assertThat(drained).extracting(GlobalEventOrder::longValue).containsExactly(2L);
+        assertThat(orders(drained)).containsExactly(2L);
 
         tracker.markDelivered(5);
         advanceClock(GAP_TIMEOUT);
         tracker.requeueTimedOutGaps(drained);
 
-        assertThat(tracker.drainTimedOutGaps()).extracting(GlobalEventOrder::longValue).containsExactly(2L, 4L);
+        assertThat(orders(tracker.drainTimedOutGaps())).containsExactly(2L, 4L);
         assertThat(tracker.drainTimedOutGaps()).isEmpty();
     }
 
@@ -376,7 +376,7 @@ class CdcDeliveryTrackerTest {
 
         assertThat(tracker.resumeFromInclusive()).as("2 given up").isEqualTo(4);
         assertThat(tracker.drainTimedOutGaps()).isEmpty();
-        tracker.requeueTimedOutGaps(List.of(GlobalEventOrder.of(2)));
+        tracker.requeueTimedOutGaps(List.of(LongRange.only(2)));
         assertThat(tracker.drainTimedOutGaps()).isEmpty();
     }
 
@@ -386,6 +386,79 @@ class CdcDeliveryTrackerTest {
         tracker.markDelivered(2);
         advanceClock(Duration.ofDays(365));
         assertThat(tracker.markDelivered(1).kind()).isEqualTo(Kind.FILLED_GAP);
+    }
+
+    /**
+     * A global order a million above the highest delivered - the sequence moved forward under the running subscription -
+     * costs no more than any gap the tracker waits for in full: only its two ends are waited for, the middle is given up
+     * at once, and what is drained once the timeout passed is the two ends, as two ranges
+     */
+    @Test
+    void a_gap_of_a_million_orders_is_waited_for_only_at_its_two_ends() {
+        var  tracker = tracker(0, 100);
+        long end     = CdcDeliveryTracker.MAX_AWAITED_ORDERS_PER_GAP_END;
+        long r       = 10;
+        tracker.collectTimedOutGaps();
+        for (long order = 1; order <= r; order++) {
+            tracker.markDelivered(order);
+        }
+
+        var jumped = r + 1_000_000;
+        var opened = tracker.markDelivered(jumped);
+
+        assertThat(opened.kind()).isEqualTo(Kind.OPENED_GAP);
+        assertThat(opened.givenUpAtOnce()).contains(LongRange.between(r + 1 + end, jumped - 1 - end));
+        assertThat(opened.awaitedGapsBelow(jumped)).containsExactly(LongRange.between(r + 1, r + end),
+                                                                    LongRange.between(jumped - end, jumped - 1));
+        assertThat(tracker.awaitedGaps(Integer.MAX_VALUE)).as("only the two ends are waited for").hasSize((int) (2 * end));
+        assertThat(tracker.resumeFromInclusive()).isEqualTo(r + 1);
+
+        // The middle is dropped at once, and never handed to the gap handler: it was not waited for
+        assertThat(tracker.markDelivered(r + 500_000).kind()).isEqualTo(Kind.DUPLICATE);
+        assertThat(tracker.isDelivered(r + 1 + end)).isTrue();
+        assertThat(tracker.drainTimedOutGaps()).isEmpty();
+        // Both ends are waited for
+        assertThat(tracker.markDelivered(r + 1).kind()).isEqualTo(Kind.FILLED_GAP);
+        assertThat(tracker.markDelivered(jumped - 1).kind()).isEqualTo(Kind.FILLED_GAP);
+
+        advanceClock(GAP_TIMEOUT);
+        var drained = tracker.drainTimedOutGaps();
+
+        assertThat(drained).containsExactly(LongRange.between(r + 2, r + end), LongRange.between(jumped - end, jumped - 2));
+        assertThat(orders(drained)).hasSize((int) (2 * end - 2));
+        assertThat(tracker.watermark()).isEqualTo(jumped);
+        assertThat(tracker.awaitedGaps(Integer.MAX_VALUE)).isEmpty();
+        assertThat(tracker.markDelivered(jumped + 1).kind()).isEqualTo(Kind.IN_ORDER);
+    }
+
+    @Test
+    void a_gap_no_wider_than_both_ends_together_is_waited_for_in_full() {
+        long end = CdcDeliveryTracker.MAX_AWAITED_ORDERS_PER_GAP_END;
+
+        var fits = tracker(0, 100).markDelivered(2 * end + 1);
+        var tracker = tracker(0, 100);
+        var oneMore = tracker.markDelivered(2 * end + 2);
+
+        assertThat(fits.givenUpAtOnce()).isEmpty();
+        assertThat(fits.awaitedGapsBelow(2 * end + 1)).containsExactly(LongRange.between(1, 2 * end));
+        assertThat(oneMore.givenUpAtOnce()).contains(LongRange.only(end + 1));
+        assertThat(tracker.awaitedGaps(Integer.MAX_VALUE)).hasSize((int) (2 * end));
+    }
+
+    @Test
+    void a_gap_given_up_after_the_timeout_is_drained_as_one_range_and_earlier_gaps_as_contiguous_ranges() {
+        var tracker = tracker(20, 100);
+        tracker.collectTimedOutGaps();
+        tracker.seedEarlierGaps(List.of(GlobalEventOrder.of(3), GlobalEventOrder.of(4), GlobalEventOrder.of(5), GlobalEventOrder.of(9)));
+        tracker.markDelivered(30);
+
+        advanceClock(GAP_TIMEOUT);
+
+        assertThat(tracker.drainTimedOutGaps()).containsExactly(LongRange.between(21, 29), LongRange.between(3, 5), LongRange.only(9));
+    }
+
+    private static List<Long> orders(List<LongRange> ranges) {
+        return ranges.stream().flatMap(range -> range.stream().boxed()).toList();
     }
 
     private record StubGapHandler(Optional<Duration> threshold) implements SubscriptionGapHandler {

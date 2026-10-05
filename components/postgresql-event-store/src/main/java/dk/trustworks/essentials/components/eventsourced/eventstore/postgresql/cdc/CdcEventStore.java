@@ -937,7 +937,7 @@ public class CdcEventStore<CONFIG extends AggregateEventStreamConfiguration> imp
             var  delivery    = tracker.markDelivered(globalOrder);
             recordGivenUpGaps();
             switch (delivery.kind()) {
-                case OPENED_GAP -> recordOpenedGap(event, LongRange.between(delivery.gapFromInclusive(), globalOrder));
+                case OPENED_GAP -> recordOpenedGap(event, delivery.awaitedGapsBelow(globalOrder));
                 case FILLED_GAP -> gapFillsBeingHandedOn.ifPresent(gapFills -> gapFills.awaitAcknowledgement(List.of(event)));
                 case DUPLICATE -> dropped(event);
                 default -> {
@@ -1062,13 +1062,14 @@ public class CdcEventStore<CONFIG extends AggregateEventStreamConfiguration> imp
          */
         private void recordGivenUpGaps() {
             if (gapHandler.isEmpty()) return;
+            // Ranges, one per gap: the gap handler promotes each range in one go, not order by order
             var givenUp = tracker.drainTimedOutGaps();
             if (givenUp.isEmpty()) return;
             var handler = gapHandler.get();
             try {
                 var reconciliation = unitOfWorkFactory.withUnitOfWork(uow -> {
                     synchronized (handler) {
-                        return handler.giveUpTransientGaps(aggregateType, givenUp);
+                        return handler.giveUpTransientGapRanges(aggregateType, givenUp);
                     }
                 });
                 if (!reconciliation.isEmpty()) {
@@ -1087,14 +1088,27 @@ public class CdcEventStore<CONFIG extends AggregateEventStreamConfiguration> imp
          * for it did not get it, and asked for nothing, it changes no other gap either (it resolves the gaps a query asked
          * for and got). The gaps the tracker gives up on after its timeout are given up through {@link #recordGivenUpGaps()}
          * instead.
+         * <p>
+         * Only the orders the tracker waits for are recorded ({@code awaitedGaps}, see
+         * {@link CdcDeliveryTracker#MAX_AWAITED_ORDERS_PER_GAP_END}): the gap right below the event, through the
+         * reconciliation, and - for a gap so wide the tracker waits only for its two ends - its lower end through
+         * {@link SubscriptionGapHandler#addTransientGaps}. The middle the tracker gave up at once is recorded nowhere: it
+         * was not waited for, so it must not become a permanent gap of the aggregate type; and the subscriber's resume
+         * point moves past it with this event, so no later subscription of the subscriber waits for it either - just as
+         * this one does not.
          */
-        private void recordOpenedGap(PersistedEvent event, LongRange range) {
+        private void recordOpenedGap(PersistedEvent event, List<LongRange> awaitedGaps) {
             if (gapHandler.isEmpty()) return;
-            var handler = gapHandler.get();
+            var handler   = gapHandler.get();
+            long order    = event.globalEventOrder().longValue();
+            var  belowIt  = awaitedGaps.getLast();
+            var  lowerEnd = awaitedGaps.size() > 1 ? Optional.of(awaitedGaps.getFirst()) : Optional.<LongRange>empty();
+            var  range    = LongRange.between(belowIt.fromInclusive, order);
             try {
                 var reconciliation = unitOfWorkFactory.withUnitOfWork(uow -> {
                     synchronized (handler) {
-                        return handler.reconcileGapsAndReport(aggregateType, range, withAwaitingAcknowledgement(List.of(event)), List.of());
+                        var recorded = handler.reconcileGapsAndReport(aggregateType, range, withAwaitingAcknowledgement(List.of(event)), List.of());
+                        return lowerEnd.map(gaps -> recorded.plus(handler.addTransientGaps(aggregateType, gaps))).orElse(recorded);
                     }
                 });
                 if (!reconciliation.isEmpty()) {
@@ -1102,7 +1116,7 @@ public class CdcEventStore<CONFIG extends AggregateEventStreamConfiguration> imp
                 }
             } catch (RuntimeException e) {
                 log.warn("[{}-{}] Could not record the gap {} with the gap handler - delivering global order {} regardless; a restart before the gap is filled will not wait for it",
-                         handler.subscriberId(), aggregateType, range, event.globalEventOrder(), e);
+                         handler.subscriberId(), aggregateType, awaitedGaps, event.globalEventOrder(), e);
             }
         }
 

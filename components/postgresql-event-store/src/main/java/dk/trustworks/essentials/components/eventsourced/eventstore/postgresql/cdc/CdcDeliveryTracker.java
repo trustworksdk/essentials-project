@@ -18,6 +18,7 @@ package dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.c
 
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.gap.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.types.GlobalEventOrder;
+import dk.trustworks.essentials.types.LongRange;
 import org.slf4j.*;
 
 import java.time.Duration;
@@ -50,14 +51,18 @@ import static dk.trustworks.essentials.shared.FailFast.*;
  * first, measured from when a delivered order above it revealed it - and then given up: W moves past it, and an event
  * for it that shows up later is dropped as a duplicate would be. That is the polling path's rule too: its gap handler
  * stops re-querying a transient gap once it promotes it to permanent. The number of runs and of earlier gaps is capped as
- * well, and hitting the cap gives up the oldest gap at once and logs a WARN.
+ * well, and hitting the cap gives up the oldest gap at once and logs a WARN. A new gap is waited for at most
+ * {@link #MAX_AWAITED_ORDERS_PER_GAP_END} orders deep from each end; the middle of a wider one is given up at once (see
+ * there), so what one gap costs - here, and in the transient gaps the subscription records for it - does not grow with
+ * its width.
  * <p>
- * Once {@link #collectTimedOutGaps()} was called, the orders of the gaps given up after waiting {@code gapTimeout} for
+ * Once {@link #collectTimedOutGaps()} was called, the ranges of the gaps given up after waiting {@code gapTimeout} for
  * them are kept for {@link #drainTimedOutGaps()}, so the subscription can record the give-up with its gap handler
  * ({@code SubscriptionGapHandler#giveUpTransientGaps}) - which makes them permanent gaps for every subscriber of the
  * aggregate type, and may therefore only be told about a gap that was waited for that long. A gap given up because of
  * the cap was not: its transaction may still be in flight. It is dropped here only, and stays a transient gap with the
- * gap handler, so a later subscription waits for it again.
+ * gap handler, so a later subscription waits for it again. Nor is the middle of a wide gap, given up at once: it was not
+ * waited for either, and the subscription never recorded it as a transient gap.
  * <p>
  * Delivering a gap's event after events with higher orders is out of global order. That is the existing contract:
  * the polling path delivers gap-filled events late too, which is why a subscriber's resume point only ever advances
@@ -83,17 +88,62 @@ final class CdcDeliveryTracker {
      * Bound on the runs held above the watermark - each one stands for at least one gap below it - and on the earlier gaps
      */
     static final int      DEFAULT_MAX_TRACKED_GAPS = 10_000;
+    /**
+     * How many global orders the tracker waits for at <i>each</i> end of a gap an event opens: the lowest ones, right
+     * above the highest order delivered before it, and the highest ones, right below the event. The orders between the
+     * two ends of a gap wider than twice this are given up at once - treated as delivered, so an event for one of them is
+     * dropped - without waiting {@code gapTimeout}, and without being collected for {@link #drainTimedOutGaps()}.
+     * <p>
+     * Why only the ends: {@code global_event_order} comes from the event table's sequence. {@code nextval} hands out
+     * orders in increasing order when a row is inserted and never takes one back, so an order in a gap is either
+     * <ul>
+     *     <li>held by a transaction still in flight. It took its orders from where the sequence stood at the time, next
+     *     to the orders handed out just before and after them, so they lie at one of the two ends: right above the
+     *     highest order delivered - taken before the event's, and before whatever moved the sequence forward (a
+     *     {@code setval}, a restore) - or right below the event - taken by a concurrent writer after any such move,
+     *     before the event's own. Both ends must therefore be waited for; or</li>
+     *     <li>never to be committed: burned by a rolled back transaction, or skipped by the sequence moving forward.
+     *     Nothing fills it.</li>
+     * </ul>
+     * Only the first kind can still be delivered, and there are no more of them than the events the in-flight
+     * transactions append. Unbounded, a gap of a million orders - a sequence moved a million forward under a running
+     * subscription - had a million transient gaps recorded before the event was handed on, and given up order by order
+     * once {@code gapTimeout} had passed.
+     * <p>
+     * Half of {@link #DEFAULT_MAX_TRACKED_GAPS}: one gap is waited for at most as many orders deep as the tracker waits
+     * for separate gaps at once - far more than the events normally in flight on one event table. The price: a single
+     * transaction holding orders further than this from both ends - an append of more than twice this many events,
+     * overtaken by a concurrent commit - has the events in the middle dropped by this subscription when it commits. A gap
+     * no wider than twice this is waited for in full.
+     */
+    static final int      MAX_AWAITED_ORDERS_PER_GAP_END = DEFAULT_MAX_TRACKED_GAPS / 2;
 
     /**
-     * What {@link #markDelivered} found. For {@link Kind#OPENED_GAP} the gap is {@code [gapFromInclusive .. order - 1]};
-     * for {@link Kind#FILLED_GAP} it is the order itself
+     * What {@link #markDelivered} found. For {@link Kind#OPENED_GAP} the gap is {@code [gapFromInclusive .. order - 1]},
+     * of which {@code givenUpAtOnce} - the middle of a gap wider than twice {@link #MAX_AWAITED_ORDERS_PER_GAP_END} - is
+     * not waited for; for {@link Kind#FILLED_GAP} it is the order itself
      */
-    record Delivery(Kind kind, long gapFromInclusive) {
+    record Delivery(Kind kind, long gapFromInclusive, Optional<LongRange> givenUpAtOnce) {
         static final Delivery DUPLICATE = new Delivery(Kind.DUPLICATE, 0);
         static final Delivery IN_ORDER  = new Delivery(Kind.IN_ORDER, 0);
 
+        Delivery(Kind kind, long gapFromInclusive) {
+            this(kind, gapFromInclusive, Optional.empty());
+        }
+
         boolean isNew() {
             return kind != Kind.DUPLICATE;
+        }
+
+        /**
+         * For {@link Kind#OPENED_GAP}: the orders below {@code order} - the event's - that the tracker waits for, lowest
+         * first: the whole gap, or the two ends of a wide one. Empty for any other kind
+         */
+        List<LongRange> awaitedGapsBelow(long order) {
+            if (kind != Kind.OPENED_GAP) return List.of();
+            return givenUpAtOnce.map(middle -> List.of(LongRange.between(gapFromInclusive, middle.fromInclusive - 1),
+                                                       LongRange.between(middle.getToInclusive() + 1, order - 1)))
+                                .orElseGet(() -> List.of(LongRange.between(gapFromInclusive, order - 1)));
         }
     }
 
@@ -135,10 +185,10 @@ final class CdcDeliveryTracker {
     private long                                    earlierGapsSince;
     private boolean                                 capReachedLogged;
     /**
-     * The orders given up on after {@code gapTimeout} since the last {@link #drainTimedOutGaps()} - null while they are
-     * not collected
+     * The ranges of orders given up on after {@code gapTimeout} since the last {@link #drainTimedOutGaps()} - null while
+     * they are not collected
      */
-    private List<GlobalEventOrder>                  timedOut;
+    private List<LongRange>                         timedOut;
 
     /**
      * @param name                    used in log statements, e.g. {@code subscriber-aggregateType}
@@ -229,11 +279,12 @@ final class CdcDeliveryTracker {
      * Gives up first on the gaps whose {@code gapTimeout} has passed, so a subscription that is stopped while idle
      * drains them too.
      *
-     * @return the orders given up on after waiting {@code gapTimeout} for them - the gaps below the highest order
-     * delivered, and the earlier gaps - since the last call; none unless {@link #collectTimedOutGaps()} was called.
-     * Never a gap given up because of the cap (see the class javadoc)
+     * @return the ranges of orders given up on after waiting {@code gapTimeout} for them - the gaps below the highest
+     * order delivered, and the earlier gaps - since the last call, lowest first per kind; none unless
+     * {@link #collectTimedOutGaps()} was called. One range per gap, which is at most {@link #MAX_AWAITED_ORDERS_PER_GAP_END}
+     * twice over wide. Never a gap given up because of the cap, nor the middle of a wide gap (see the class javadoc)
      */
-    synchronized List<GlobalEventOrder> drainTimedOutGaps() {
+    synchronized List<LongRange> drainTimedOutGaps() {
         giveUpExpiredGaps();
         if (timedOut == null || timedOut.isEmpty()) {
             return List.of();
@@ -244,13 +295,13 @@ final class CdcDeliveryTracker {
     }
 
     /**
-     * Put back orders {@link #drainTimedOutGaps()} returned that could not be recorded with the gap handler, so the next
+     * Put back ranges {@link #drainTimedOutGaps()} returned that could not be recorded with the gap handler, so the next
      * drain returns them again
      */
-    synchronized void requeueTimedOutGaps(List<GlobalEventOrder> orders) {
-        requireNonNull(orders, "No orders provided");
+    synchronized void requeueTimedOutGaps(List<LongRange> ranges) {
+        requireNonNull(ranges, "No ranges provided");
         if (timedOut != null) {
-            timedOut.addAll(0, orders);
+            timedOut.addAll(0, ranges);
         }
     }
 
@@ -284,8 +335,23 @@ final class CdcDeliveryTracker {
             }
             return Delivery.IN_ORDER;
         }
-        runsAboveWatermark.put(order, new Run(order, nanoClock.getAsLong()));
-        return new Delivery(Kind.OPENED_GAP, previousHighest + 1);
+        long now     = nanoClock.getAsLong();
+        long gapFrom = previousHighest + 1;
+        long gapTo   = order - 1;
+        if (gapTo - gapFrom + 1 > 2L * MAX_AWAITED_ORDERS_PER_GAP_END) {
+            // Held by no transaction that can still commit - see MAX_AWAITED_ORDERS_PER_GAP_END. A run of its own, as if
+            // delivered, so its events are dropped; the two ends are separate gaps, each waited for from now
+            var middle = LongRange.between(gapFrom + MAX_AWAITED_ORDERS_PER_GAP_END, gapTo - MAX_AWAITED_ORDERS_PER_GAP_END);
+            runsAboveWatermark.put(middle.fromInclusive, new Run(middle.getToInclusive(), now));
+            runsAboveWatermark.put(order, new Run(order, now));
+            log.warn("[{}] Global order {} opened a gap of {} orders above {} - waiting for the {} lowest and the {} highest of them, and giving up the {} in between ({}) at once, " +
+                             "as no transaction still in flight can hold them: the global order sequence was moved forward, or a large append rolled back",
+                     name, order, gapTo - gapFrom + 1, previousHighest, MAX_AWAITED_ORDERS_PER_GAP_END, MAX_AWAITED_ORDERS_PER_GAP_END,
+                     middle.getToInclusive() - middle.fromInclusive + 1, middle);
+            return new Delivery(Kind.OPENED_GAP, gapFrom, Optional.of(middle));
+        }
+        runsAboveWatermark.put(order, new Run(order, now));
+        return new Delivery(Kind.OPENED_GAP, gapFrom);
     }
 
     /**
@@ -398,7 +464,7 @@ final class CdcDeliveryTracker {
         if (!earlierGaps.isEmpty() && now - earlierGapsSince >= gapTimeoutNanos) {
             log.debug("[{}] Gave up waiting for {} transient gap(s) recorded before this subscription started", name, earlierGaps.size());
             if (timedOut != null) {
-                earlierGaps.forEach(earlierGap -> timedOut.add(GlobalEventOrder.of(earlierGap)));
+                timedOut.addAll(contiguousRanges(earlierGaps));
             }
             earlierGaps.clear();
         }
@@ -424,11 +490,33 @@ final class CdcDeliveryTracker {
         var lowest = runsAboveWatermark.pollFirstEntry();
         log.debug("[{}] Gave up waiting for global order(s) {}..{} - {}", name, watermark + 1, lowest.getKey() - 1, reason);
         if (afterTimeout && timedOut != null) {
-            for (long order = watermark + 1; order < lowest.getKey(); order++) {
-                timedOut.add(GlobalEventOrder.of(order));
-            }
+            timedOut.add(LongRange.between(watermark + 1, lowest.getKey() - 1));
         }
         watermark = lowest.getValue().end;
+    }
+
+    /**
+     * {@code orders} as the fewest ranges that cover exactly them, lowest first
+     */
+    private static List<LongRange> contiguousRanges(SortedSet<Long> orders) {
+        var  ranges = new ArrayList<LongRange>();
+        Long from   = null;
+        long to     = 0;
+        for (long order : orders) {
+            if (from != null && order == to + 1) {
+                to = order;
+                continue;
+            }
+            if (from != null) {
+                ranges.add(LongRange.between(from, to));
+            }
+            from = order;
+            to = order;
+        }
+        if (from != null) {
+            ranges.add(LongRange.between(from, to));
+        }
+        return ranges;
     }
 
     @Override

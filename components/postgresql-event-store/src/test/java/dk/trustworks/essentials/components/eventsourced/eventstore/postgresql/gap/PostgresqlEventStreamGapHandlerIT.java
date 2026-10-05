@@ -554,6 +554,62 @@ class PostgresqlEventStreamGapHandlerIT {
     }
 
     /**
+     * Ranges are given up in one statement, whatever their width: every transient gap of the subscriber within them is
+     * promoted, an order within them that is no transient gap is not recorded, and a transient gap outside them is kept
+     */
+    @Test
+    void giving_up_ranges_promotes_exactly_the_transient_gaps_within_them() {
+        var subscriber = SubscriberId.of("gap-given-up-ranges-sub");
+        var gapHandler = new PostgresqlEventStreamGapHandler<SeparateTablePerAggregateEventStreamConfiguration>(unitOfWorkFactory,
+                                                                                                               Duration.ofSeconds(60),
+                                                                                                               ResolveTransientGapsToIncludeInQueryStrategy.defaultSelection(),
+                                                                                                               ResolveTransientGapsToPermanentGapsPromotionStrategy.thresholdBased(120))
+                .gapHandlerFor(subscriber);
+        // Transient gaps 1..70 000 and 100 000; nothing at 80 000..90 000
+        unitOfWorkFactory.usingUnitOfWork(unitOfWork -> unitOfWork.handle()
+                                                                  .createUpdate("INSERT INTO " + TRANSIENT_SUBSCRIBER_GAPS_TABLE_NAME + " (subscriber_id, aggregate_type, gap_global_event_order, first_discovered) " +
+                                                                                        "SELECT :subscriber_id, :aggregate_type, order_, now() FROM generate_series(1, 70000) AS order_ " +
+                                                                                        "UNION ALL SELECT :subscriber_id, :aggregate_type, 100000, now()")
+                                                                  .bind("subscriber_id", subscriber)
+                                                                  .bind("aggregate_type", aggregateType)
+                                                                  .execute());
+
+        var outcome = unitOfWorkFactory.withUnitOfWork(unitOfWork -> gapHandler.giveUpTransientGapRanges(aggregateType,
+                                                                                                         List.of(LongRange.between(1, 70_000), LongRange.between(80_000, 90_000))));
+
+        assertThat(outcome).isEqualTo(new GapReconciliation(0, 0, 70_000));
+        assertThat(currentTransientGaps(subscriber)).containsExactly(GlobalEventOrder.of(100_000));
+        assertThat(gapHandler.getTransientGapsFor(aggregateType)).containsExactly(GlobalEventOrder.of(100_000));
+        var permanent = permanentGaps(gapHandler);
+        assertThat(permanent).hasSize(70_000)
+                             .doesNotContain(GlobalEventOrder.of(80_000), GlobalEventOrder.of(100_000));
+    }
+
+    /**
+     * Recording a range of transient gaps records each order once, except those that are permanent gaps of the
+     * aggregate type already, and changes no other gap
+     */
+    @Test
+    void adding_transient_gaps_records_the_orders_that_are_no_permanent_gaps() {
+        var eventStreamGapHandler = new PostgresqlEventStreamGapHandler<SeparateTablePerAggregateEventStreamConfiguration>(unitOfWorkFactory,
+                                                                                                                          Duration.ofSeconds(60),
+                                                                                                                          ResolveTransientGapsToIncludeInQueryStrategy.defaultSelection(),
+                                                                                                                          ResolveTransientGapsToPermanentGapsPromotionStrategy.thresholdBased(120));
+        var subscriber = SubscriberId.of("gap-added-range-sub");
+        var gapHandler = eventStreamGapHandler.gapHandlerFor(subscriber);
+        eventStreamGapHandler.registerPermanentGaps(aggregateType, List.of(GlobalEventOrder.of(1_002)), "test");
+
+        var added = unitOfWorkFactory.withUnitOfWork(unitOfWork -> gapHandler.addTransientGaps(aggregateType, LongRange.between(1_000, 1_004)));
+        var again = unitOfWorkFactory.withUnitOfWork(unitOfWork -> gapHandler.addTransientGaps(aggregateType, LongRange.between(1_003, 1_005)));
+
+        assertThat(added).isEqualTo(new GapReconciliation(4, 0, 0));
+        assertThat(again).as("1 003 and 1 004 were recorded already").isEqualTo(new GapReconciliation(1, 0, 0));
+        var expected = List.of(GlobalEventOrder.of(1_000), GlobalEventOrder.of(1_001), GlobalEventOrder.of(1_003), GlobalEventOrder.of(1_004), GlobalEventOrder.of(1_005));
+        assertThat(currentTransientGaps(subscriber)).containsExactlyElementsOf(expected);
+        assertThat(gapHandler.getTransientGapsFor(aggregateType)).containsExactlyElementsOf(expected);
+    }
+
+    /**
      * A give-up records a permanent gap of the aggregate type, as a polling promotion does - not one of the subscriber
      * that gave up alone: another subscriber that reconciles a range spanning it afterwards does not record it as a
      * transient gap, so never asks for it. A gap nobody gave up still becomes its transient gap.
