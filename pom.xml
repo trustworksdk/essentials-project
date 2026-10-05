@@ -116,7 +116,7 @@
         <log4j.version>2.26.1</log4j.version>
         <junit-bom.version>6.0.3</junit-bom.version>
         <testcontainers-bom.version>2.0.5</testcontainers-bom.version>
-        <jdbi3-bom.version>3.54.0</jdbi3-bom.version>
+        <jdbi3-bom.version>3.55.0</jdbi3-bom.version>
         <jackson3-bom.version>3.1.5</jackson3-bom.version>
         <!-- Jackson 2, for the third-party code that still runs on it (swagger, avro, the generated admin client);
              no Essentials persistence path uses it. See the import in dependencyManagement. -->
@@ -139,7 +139,7 @@
              release notes; do that as its own change, not inside a patch batch. -->
         <avro.version>1.12.2</avro.version>
         <commons-compress.version>1.28.0</commons-compress.version>
-        <commons-lang3.version>3.20.0</commons-lang3.version>
+        <commons-lang3.version>3.21.0</commons-lang3.version>
         <commons-configuration2.version>2.15.1</commons-configuration2.version>
         <kafka-clients.version>4.3.1</kafka-clients.version>
         <xmlunit-core.version>2.14.0</xmlunit-core.version>
@@ -156,20 +156,20 @@
         <maven-dependency-plugin.version>3.11.0</maven-dependency-plugin.version>
         <maven-project-info-reports-plugin.version>3.9.0</maven-project-info-reports-plugin.version>
         <maven-clean-plugin.version>3.5.0</maven-clean-plugin.version>
-        <maven-install-plugin.version>3.1.4</maven-install-plugin.version>
+        <maven-install-plugin.version>3.2.0</maven-install-plugin.version>
         <maven-resources-plugin.version>3.5.0</maven-resources-plugin.version>
-        <maven-deploy-plugin.version>3.1.4</maven-deploy-plugin.version>
+        <maven-deploy-plugin.version>3.2.0</maven-deploy-plugin.version>
         <maven-site-plugin.version>3.22.0</maven-site-plugin.version>
         <maven-jar-plugin.version>3.5.1</maven-jar-plugin.version>
         <maven-source-plugin.version>3.4.0</maven-source-plugin.version>
         <maven-javadoc-plugin.version>3.12.0</maven-javadoc-plugin.version>
-        <maven-failsafe-plugin.version>3.5.6</maven-failsafe-plugin.version>
-        <maven-surefire-plugin.version>3.5.6</maven-surefire-plugin.version>
+        <maven-failsafe-plugin.version>3.6.0</maven-failsafe-plugin.version>
+        <maven-surefire-plugin.version>3.6.0</maven-surefire-plugin.version>
         <!-- Test execution knobs; safe to override on the command line, e.g. -Dfailsafe.forkCount=1. -->
         <surefire.forkCount>2</surefire.forkCount>
         <failsafe.forkCount>2</failsafe.forkCount>
-        <maven-compiler-plugin.version>3.15.0</maven-compiler-plugin.version>
-        <versions-maven-plugin.version>2.21.0</versions-maven-plugin.version>
+        <maven-compiler-plugin.version>3.16.0</maven-compiler-plugin.version>
+        <versions-maven-plugin.version>2.22.0</versions-maven-plugin.version>
         <maven-enforcer-plugin.version>3.6.3</maven-enforcer-plugin.version>
         <minimum-maven-version>3.8.8</minimum-maven-version>
         <dependency-check-maven.version>12.2.2</dependency-check-maven.version>
