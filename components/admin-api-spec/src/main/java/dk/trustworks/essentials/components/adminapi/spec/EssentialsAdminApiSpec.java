@@ -163,7 +163,8 @@ final class EssentialsAdminApiSpec {
                     "inMemoryGlobalOrder", "The in-memory resume point of the running subscription. It can be ahead of "
                             + "currentGlobalOrder. Null when the subscription is not running in this instance.",
                     "stoppedByErrorPolicy", "Whether the error policy of the subscription halted it after a handler "
-                            + "failure (mode STOP). It then handles no further events until it is started again. active stays true for "
+                            + "failure (mode STOP or RETRY_N_THEN_STOP). It then handles no further events until it is resumed or "
+                            + "started again. active stays true for "
                             + "such a subscription. Always false for an in-transaction subscription. Null when the "
                             + "subscription is not running in this instance."),
             "ApiCausationEvent", Map.of(
@@ -178,7 +179,7 @@ final class EssentialsAdminApiSpec {
         put("postgresql-query-statistics", "Inspect slow-query statistics from pg_stat_statements.");
         put("postgresql-table-statistics", "Inspect size, activity, and cache-hit statistics for every table the Essentials components own.");
         put("durable-queues", "Inspect and manage durable queue and dead-letter messages.");
-        put("event-store", "Inspect event-store subscriptions and persisted event order, and walk event causation.");
+        put("event-store", "Inspect event-store subscriptions and persisted event order, resume a subscription stopped by its error policy, and walk event causation.");
         put("cdc", "Inspect Change Data Capture runtime state and effective configuration.");
         put("event-store-statistics", "Inspect event-store table size, activity, and cache-hit statistics.");
         put("aggregate-lifecycle", "Inspect aggregate snapshot and closing-books policies, generations, and snapshots.");
@@ -197,6 +198,7 @@ final class EssentialsAdminApiSpec {
     private static final String QUEUE_R        = QUEUE_READER.getRoleName();
     private static final String QUEUE_W        = QUEUE_WRITER.getRoleName();
     private static final String SUBSCRIPTION_R = SUBSCRIPTION_READER.getRoleName();
+    private static final String SUBSCRIPTION_W = SUBSCRIPTION_WRITER.getRoleName();
 
     /** Registers all operations. Adding/removing an interface method without updating this triggers a build failure. */
     static void defineOperations(SpecBuilder b) {
@@ -552,6 +554,17 @@ final class EssentialsAdminApiSpec {
          .pathParam("subscriberId", new StringSchema(), "The subscriber id.")
          .pathParam("aggregateType", new StringSchema(), "The aggregate type the subscriber subscribes to.")
          .responseOptionalRef("ApiSubscriptionStatistics", "The subscription statistics.");
+
+        b.operation(EventStoreApi.class, "resumeSubscriptionStoppedByErrorPolicy")
+         .tag("event-store").post("/event-store/subscriptions/{subscriberId}/aggregate-types/{aggregateType}/resume")
+         .summary("Resume a subscription that its error policy stopped (stoppedByErrorPolicy) without a restart. Delivery "
+                  + "restarts at the failed event, so nothing is skipped; if it fails again the error policy applies again. "
+                  + "An exclusive subscription keeps its fenced lock. Acts on this instance only, which must be running the "
+                  + "subscription - for an exclusive subscription, holding its lock.")
+         .roles(SUBSCRIPTION_W, ADMIN)
+         .pathParam("subscriberId", new StringSchema(), "The subscriber id.")
+         .pathParam("aggregateType", new StringSchema(), "The aggregate type the subscriber subscribes to.")
+         .responseResumed();
 
         // ---- cdc ----
         b.operation(CdcApi.class, "getStatus")

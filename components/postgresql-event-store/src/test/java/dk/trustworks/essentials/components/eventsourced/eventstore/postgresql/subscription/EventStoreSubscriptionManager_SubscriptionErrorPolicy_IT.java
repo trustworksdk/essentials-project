@@ -26,6 +26,7 @@ import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.se
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.test_data.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.transaction.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.types.*;
+import dk.trustworks.essentials.components.foundation.fencedlock.FencedLock;
 import dk.trustworks.essentials.components.foundation.transaction.UnitOfWork;
 import dk.trustworks.essentials.components.foundation.types.*;
 import dk.trustworks.essentials.shared.measurement.MeasurementTaker;
@@ -71,6 +72,7 @@ class EventStoreSubscriptionManager_SubscriptionErrorPolicy_IT {
     private EventStoreSubscriptionManager                                           eventStoreSubscriptionManager;
     private SubscriberId                                                            subscriberId;
     private SimpleMeterRegistry                                                     meterRegistry;
+    private PostgresqlFencedLockManager                                             fencedLockManager;
 
     @BeforeEach
     void setup() {
@@ -269,7 +271,137 @@ class EventStoreSubscriptionManager_SubscriptionErrorPolicy_IT {
         awaitStoppedByErrorPolicyCount(2);
     }
 
+    // ------------------------------------------------------------------------------------------- RETRY_N_THEN_STOP + resume
+
+    @Test
+    void retry_n_then_stop_retries_n_times_then_stops_and_a_resume_continues_at_the_failed_event() throws InterruptedException {
+        var failing = new AtomicBoolean(true);
+        eventStoreSubscriptionManager = startSubscriptionManager(SubscriptionErrorPolicy.retryThenStop(2, Duration.ofMillis(20), Duration.ofMillis(50)));
+        var handled      = new CopyOnWriteArrayList<Long>();
+        var attempts     = new ConcurrentHashMap<Long, AtomicInteger>();
+        var subscription = subscribe(handled, attempts, failing::get);
+
+        appendThreeEvents();
+
+        // 1 attempt + 2 retries, then stopped - not skipped
+        Awaitility.waitAtMost(Duration.ofSeconds(10)).until(subscription::isStoppedByErrorPolicy);
+        assertThat(attempts.get(FAILING_EVENT).get()).isEqualTo(3);
+        assertThat(subscription.isActive()).isTrue();
+        awaitStoppedByErrorPolicyCount(1);
+        Thread.sleep(1000);
+        assertThat(handled).containsExactly(1L);
+        assertThat(attempts.get(FAILING_EVENT).get()).isEqualTo(3);
+        assertThat(attempts).doesNotContainKey(3L);
+        awaitDurableResumePoint(FAILING_EVENT);
+
+        // Resumed while the cause persists: the failed event is retried per the policy again, and the subscription stops at it again
+        assertThat(subscription.resumeIfStoppedByErrorPolicy()).isTrue();
+        Awaitility.waitAtMost(Duration.ofSeconds(10))
+                  .untilAsserted(() -> assertThat(attempts.get(FAILING_EVENT).get()).isEqualTo(6));
+        Awaitility.waitAtMost(Duration.ofSeconds(10)).until(subscription::isStoppedByErrorPolicy);
+        awaitStoppedByErrorPolicyCount(2);
+        assertThat(handled).containsExactly(1L);
+        awaitDurableResumePoint(FAILING_EVENT);
+
+        // Resumed after the cause is fixed: the failed event is handled once, then the subscription continues
+        failing.set(false);
+        assertThat(eventStoreSubscriptionManager.resumeSubscriptionIfStoppedByErrorPolicy(subscriberId, aggregateType)).isTrue();
+        Awaitility.waitAtMost(Duration.ofSeconds(10))
+                  .untilAsserted(() -> assertThat(handled).containsExactly(1L, 2L, 3L));
+        assertThat(attempts.get(FAILING_EVENT).get()).isEqualTo(7);
+        assertThat(attempts.get(1L).get()).isEqualTo(1);
+        assertThat(attempts.get(3L).get()).isEqualTo(1);
+        assertThat(subscription.isStoppedByErrorPolicy()).isFalse();
+        assertThat(subscription.isActive()).isTrue();
+        awaitDurableResumePoint(4);
+        awaitStoppedByErrorPolicyCount(2);
+
+        // No longer stopped: a resume is a no-op
+        assertThat(subscription.resumeIfStoppedByErrorPolicy()).isFalse();
+    }
+
+    @Test
+    void resuming_a_subscription_that_is_not_stopped_does_nothing_and_returns_false() {
+        eventStoreSubscriptionManager = startSubscriptionManager(SubscriptionErrorPolicy.skip());
+        var handled      = new CopyOnWriteArrayList<Long>();
+        var attempts     = new ConcurrentHashMap<Long, AtomicInteger>();
+        var subscription = subscribe(handled, attempts, () -> true);
+
+        appendThreeEvents();
+        Awaitility.waitAtMost(Duration.ofSeconds(10))
+                  .untilAsserted(() -> assertThat(handled).containsExactly(1L, 3L));
+        awaitDurableResumePoint(4);
+
+        assertThat(subscription.resumeIfStoppedByErrorPolicy()).isFalse();
+        assertThat(eventStoreSubscriptionManager.resumeSubscriptionIfStoppedByErrorPolicy(subscriberId, aggregateType)).isFalse();
+        assertThat(eventStoreSubscriptionManager.resumeSubscriptionIfStoppedByErrorPolicy(SubscriberId.of("Unknown"), aggregateType)).isFalse();
+        // Nothing was redelivered or restarted
+        assertThat(attempts.get(1L).get()).isEqualTo(1);
+        assertThat(attempts.get(FAILING_EVENT).get()).isEqualTo(1);
+        assertThat(subscription.isActive()).isTrue();
+        awaitDurableResumePoint(4);
+    }
+
+    @Test
+    void an_exclusive_subscription_stopped_by_its_error_policy_is_resumed_without_releasing_its_fenced_lock() throws InterruptedException {
+        var failing = new AtomicBoolean(true);
+        eventStoreSubscriptionManager = startSubscriptionManager(SubscriptionErrorPolicy.stop());
+        var handled      = new CopyOnWriteArrayList<Long>();
+        var attempts     = new ConcurrentHashMap<Long, AtomicInteger>();
+        var subscription = exclusivelySubscribe(handled, attempts, failing::get);
+        var lockName     = ((ExclusiveSubscription) subscription).lockName();
+        Awaitility.waitAtMost(Duration.ofSeconds(10)).until(subscription::isActive);
+
+        appendThreeEvents();
+
+        Awaitility.waitAtMost(Duration.ofSeconds(10)).until(subscription::isStoppedByErrorPolicy);
+        assertThat(attempts.get(FAILING_EVENT).get()).isEqualTo(1);
+        awaitDurableResumePoint(FAILING_EVENT);
+        var lockTokenWhileStopped = fencedLockManager.lookupLock(lockName).orElseThrow().getCurrentToken();
+        assertThat(fencedLockManager.isLockedByThisLockManagerInstance(lockName)).isTrue();
+
+        failing.set(false);
+        assertThat(subscription.resumeIfStoppedByErrorPolicy()).isTrue();
+        Awaitility.waitAtMost(Duration.ofSeconds(10))
+                  .untilAsserted(() -> assertThat(handled).containsExactly(1L, 2L, 3L));
+        assertThat(attempts.get(FAILING_EVENT).get()).isEqualTo(2);
+        assertThat(attempts.get(3L).get()).isEqualTo(1);
+        assertThat(subscription.isStoppedByErrorPolicy()).isFalse();
+        awaitDurableResumePoint(4);
+        // The lock was held throughout - neither released nor re-acquired
+        assertThat(subscription.isActive()).isTrue();
+        assertThat(fencedLockManager.isLockedByThisLockManagerInstance(lockName)).isTrue();
+        assertThat(fencedLockManager.lookupLock(lockName).orElseThrow().getCurrentToken()).isEqualTo(lockTokenWhileStopped);
+        assertThat(subscription.resumeIfStoppedByErrorPolicy()).isFalse();
+    }
+
     // ------------------------------------------------------------------------------------------------------- Batched
+
+    @Test
+    void batched_stop_is_resumed_at_the_failed_batch() throws InterruptedException {
+        var failing = new AtomicBoolean(true);
+        eventStoreSubscriptionManager = startSubscriptionManager(SubscriptionErrorPolicy.retryThenStop(1, Duration.ofMillis(20), Duration.ofMillis(50)));
+        var batchAttempts = new AtomicInteger();
+        var handled       = new CopyOnWriteArrayList<Long>();
+        appendThreeEvents();
+
+        var subscription = batchSubscribe(batchAttempts, handled, failing::get);
+
+        Awaitility.waitAtMost(Duration.ofSeconds(10)).until(subscription::isStoppedByErrorPolicy);
+        // 1 attempt + 1 retry, then stopped
+        assertThat(batchAttempts.get()).isEqualTo(2);
+        Thread.sleep(500);
+        assertThat(handled).isEmpty();
+        awaitDurableResumePoint(1);
+
+        failing.set(false);
+        assertThat(subscription.resumeIfStoppedByErrorPolicy()).isTrue();
+        Awaitility.waitAtMost(Duration.ofSeconds(10))
+                  .untilAsserted(() -> assertThat(handled).containsExactly(1L, 2L, 3L));
+        assertThat(batchAttempts.get()).isEqualTo(3);
+        assertThat(subscription.isStoppedByErrorPolicy()).isFalse();
+        awaitDurableResumePoint(4);
+    }
 
     @Test
     void batched_retry_n_then_skip_retries_the_batch_n_times_and_then_skips_it() {
@@ -389,17 +521,18 @@ class EventStoreSubscriptionManager_SubscriptionErrorPolicy_IT {
     // ------------------------------------------------------------------------------------------------------- Helpers
 
     private EventStoreSubscriptionManager startSubscriptionManager(SubscriptionErrorPolicy subscriptionErrorPolicy) {
+        fencedLockManager = PostgresqlFencedLockManager.builder()
+                                                       .setJdbi(jdbi)
+                                                       .setUnitOfWorkFactory(unitOfWorkFactory)
+                                                       .setLockManagerInstanceId("Node1")
+                                                       .setLockTimeOut(Duration.ofSeconds(3))
+                                                       .setLockConfirmationInterval(Duration.ofSeconds(1))
+                                                       .build();
         var builder = EventStoreSubscriptionManager.builder()
                                                    .setEventStore(eventStore)
                                                    .setEventStorePollingBatchSize(10)
                                                    .setEventStorePollingInterval(Duration.ofMillis(50))
-                                                   .setFencedLockManager(PostgresqlFencedLockManager.builder()
-                                                                                                    .setJdbi(jdbi)
-                                                                                                    .setUnitOfWorkFactory(unitOfWorkFactory)
-                                                                                                    .setLockManagerInstanceId("Node1")
-                                                                                                    .setLockTimeOut(Duration.ofSeconds(3))
-                                                                                                    .setLockConfirmationInterval(Duration.ofSeconds(1))
-                                                                                                    .build())
+                                                   .setFencedLockManager(fencedLockManager)
                                                    .setSnapshotResumePointsEvery(Duration.ofMillis(200))
                                                    .setDurableSubscriptionRepository(durableSubscriptionRepository);
         if (subscriptionErrorPolicy != null) {
@@ -428,6 +561,33 @@ class EventStoreSubscriptionManager_SubscriptionErrorPolicy_IT {
                                                                                    }
                                                                                    handled.add(globalOrder);
                                                                                });
+    }
+
+    /**
+     * As {@link #subscribe(List, Map, java.util.function.BooleanSupplier)}, but exclusively - governed by a fenced lock
+     */
+    private EventStoreSubscription exclusivelySubscribe(List<Long> handled, Map<Long, AtomicInteger> attempts, java.util.function.BooleanSupplier failEvent) {
+        return eventStoreSubscriptionManager.exclusivelySubscribeToAggregateEventsAsynchronously(subscriberId,
+                                                                                          aggregateType,
+                                                                                          GlobalEventOrder.FIRST_GLOBAL_EVENT_ORDER,
+                                                                                          Optional.empty(),
+                                                                                          new FencedLockAwareSubscriber() {
+                                                                                              @Override
+                                                                                              public void onLockAcquired(FencedLock fencedLock, SubscriptionResumePoint resumeFromAndIncluding) {
+                                                                                              }
+
+                                                                                              @Override
+                                                                                              public void onLockReleased(FencedLock fencedLock) {
+                                                                                              }
+                                                                                          },
+                                                                                          (PersistedEventHandler) event -> {
+                                                                                              var globalOrder = event.globalEventOrder().longValue();
+                                                                                              attempts.computeIfAbsent(globalOrder, order -> new AtomicInteger()).incrementAndGet();
+                                                                                              if (globalOrder == FAILING_EVENT && failEvent.getAsBoolean()) {
+                                                                                                  throw new IllegalStateException("Intentional failure handling event #" + globalOrder);
+                                                                                              }
+                                                                                              handled.add(globalOrder);
+                                                                                          });
     }
 
     private EventStoreSubscription batchSubscribe(AtomicInteger batchAttempts, List<Long> handled, java.util.function.BooleanSupplier failBatchContainingFailingEvent) {

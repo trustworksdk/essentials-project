@@ -114,8 +114,8 @@ public interface EventStoreSubscription extends Lifecycle, Subscription {
      * stopped this subscription? True once an event's handler failed under
      * {@link dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.subscription.SubscriptionErrorPolicy.Mode#STOP}:
      * the subscription handles no further events and its resume point stays at the failed event until the subscription
-     * is started again (application restart, fenced-lock hand-over, {@link #resetFrom(GlobalEventOrder, Consumer)}, or
-     * unsubscribe + subscribe), which resets it to false.
+     * is resumed ({@link #resumeIfStoppedByErrorPolicy()}) or started again (application restart, fenced-lock hand-over,
+     * {@link #resetFrom(GlobalEventOrder, Consumer)}, or unsubscribe + subscribe), which resets it to false.
      * <p>
      * This is the state to alert on - a stopped subscription is otherwise indistinguishable from a healthy one with no
      * new events. It is exported as the level-triggered gauge
@@ -138,6 +138,32 @@ public interface EventStoreSubscription extends Lifecycle, Subscription {
      * @return true if the {@code SubscriptionErrorPolicy} stopped this subscription and it has not been started again since
      */
     default boolean isStoppedByErrorPolicy() {
+        return false;
+    }
+
+    /**
+     * Resume a subscription that its
+     * {@link dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.subscription.SubscriptionErrorPolicy}
+     * stopped ({@link #isStoppedByErrorPolicy()}), without restarting the application: typically once the cause of the
+     * failure has been fixed. Delivery restarts at the subscription's resume point, which the stop held at the failed
+     * event (the first event of the failed batch), so the failed event is handled again first, and nothing after it is
+     * skipped. If it fails again, the policy applies again - and may stop the subscription at the same event again.
+     * <p>
+     * The resume point is saved before delivery restarts, and an exclusive subscription keeps its fenced lock throughout -
+     * the lock is neither released nor handed over. Works the same whether the events are delivered by polling or by CDC.
+     * <p>
+     * Only the instance that runs the stopped subscription can resume it - for an exclusive subscription the instance
+     * holding its fenced lock. Anywhere else, and for a subscription that is not stopped, this is a no-op that returns
+     * false.
+     * <p>
+     * The default returns false, for subscriptions that are not governed by a
+     * {@link dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.subscription.SubscriptionErrorPolicy}
+     * (the in-transaction subscriptions).
+     *
+     * @return true if the subscription was stopped by its error policy and has been resumed; false if it was not stopped
+     * by its error policy (or is not running in this instance), in which case nothing was done
+     */
+    default boolean resumeIfStoppedByErrorPolicy() {
         return false;
     }
 }

@@ -101,6 +101,7 @@ class AdminApiSerializationTest {
         assertMatchesContractSchema("CountResult", new CountResult(42L));
         assertMatchesContractSchema("ReleaseResult", new ReleaseResult(true));
         assertMatchesContractSchema("DeleteResult", new DeleteResult(true));
+        assertMatchesContractSchema("ResumeResult", new ResumeResult(true));
         assertMatchesContractSchema("PurgeResult", new PurgeResult(7));
         assertMatchesContractSchema("QueueNameResult", new QueueNameResult("orders"));
         assertMatchesContractSchema("GlobalEventOrderResult", new GlobalEventOrderResult(99L));

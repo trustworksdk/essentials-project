@@ -263,6 +263,30 @@ public class NonExclusiveAsynchronousSubscription extends AbstractEventStoreSubs
         return subscriber != null && subscriber.isStoppedByErrorPolicy();
     }
 
+    /**
+     * Stops and starts this subscription, as {@link #resetFrom(GlobalEventOrder, Consumer)} does but without moving the
+     * resume point: {@link #stop()} saves the resume point the {@link SubscriptionErrorPolicy} held at the failed event, and
+     * {@link #start()} subscribes a new subscriber from it. Synchronized so two concurrent resumes do not stop each other's
+     * restarted subscriber. See {@link EventStoreSubscription#resumeIfStoppedByErrorPolicy()}
+     */
+    @Override
+    public synchronized boolean resumeIfStoppedByErrorPolicy() {
+        if (!started || !isStoppedByErrorPolicy()) {
+            log.debug("[{}-{}] Not resuming - the subscription is not stopped by its SubscriptionErrorPolicy (started: {})",
+                      subscriberId,
+                      aggregateType,
+                      started);
+            return false;
+        }
+        log.info("[{}-{}] Resuming the subscription stopped by its SubscriptionErrorPolicy from and including globalOrder {}",
+                 subscriberId,
+                 aggregateType,
+                 resumePoint.getResumeFromAndIncluding());
+        stop();
+        start();
+        return true;
+    }
+
     @Override
     public boolean isActive() {
         return started;

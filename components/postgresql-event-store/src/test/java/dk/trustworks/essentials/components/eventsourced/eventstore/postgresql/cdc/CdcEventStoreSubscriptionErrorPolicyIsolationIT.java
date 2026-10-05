@@ -69,6 +69,7 @@ class CdcEventStoreSubscriptionErrorPolicyIsolationIT extends AbstractLogicalRep
     private SimpleMeterRegistry                                                     meterRegistry;
     private EventStoreSubscriptionManager                                           eventStoreSubscriptionManager;
     private ExecutorService                                                         dispatcher;
+    private CdcEventStore<SeparateTablePerAggregateEventStreamConfiguration>        cdcEventStore;
 
     @BeforeEach
     void setup() {
@@ -87,7 +88,7 @@ class CdcEventStoreSubscriptionErrorPolicyIsolationIT extends AbstractLogicalRep
         meterRegistry = new SimpleMeterRegistry();
         var cdcProperties = new CdcProperties();
         cdcProperties.getHealthCheck().setActiveCutbackDebounce(Duration.ofMillis(200));
-        var cdcEventStore = new CdcEventStore<>(eventStore,
+        cdcEventStore = new CdcEventStore<>(eventStore,
                                                 unitOfWorkFactory,
                                                 new PostgresqlEventStreamGapHandler<>(unitOfWorkFactory),
                                                 cdcBus,
@@ -223,6 +224,84 @@ class CdcEventStoreSubscriptionErrorPolicyIsolationIT extends AbstractLogicalRep
         });
         assertThat(subscription.isStoppedByErrorPolicy()).isFalse();
         assertThat(subscription.isActive()).isTrue();
+    }
+
+    /**
+     * A subscription served by the CDC bus that {@link SubscriptionErrorPolicy.Mode#RETRY_N_THEN_STOP} stopped is resumed
+     * at the failed event: the resumed subscription catches up from its held resume point - the failed event and what
+     * arrived on the bus while it was stopped - and then follows the bus again
+     */
+    @Test
+    void a_cdc_subscription_stopped_by_its_error_policy_is_resumed_at_the_failed_event() throws Exception {
+        var stoppingManager = EventStoreSubscriptionManager.builder()
+                                                           .setEventStore(cdcEventStore)
+                                                           .setEventStorePollingBatchSize(50)
+                                                           .setEventStorePollingInterval(Duration.ofMillis(50))
+                                                           .setFencedLockManager(PostgresqlFencedLockManager.builder()
+                                                                                                            .setJdbi(jdbi)
+                                                                                                            .setUnitOfWorkFactory(unitOfWorkFactory)
+                                                                                                            .setLockManagerInstanceId("node-2")
+                                                                                                            .setLockTimeOut(Duration.ofSeconds(3))
+                                                                                                            .setLockConfirmationInterval(Duration.ofMillis(500))
+                                                                                                            .build())
+                                                           .setSnapshotResumePointsEvery(Duration.ofSeconds(1))
+                                                           .setDurableSubscriptionRepository(new PostgresqlDurableSubscriptionRepository(jdbi, cdcEventStore))
+                                                           .setSubscriptionErrorPolicy(SubscriptionErrorPolicy.retryThenStop(1, Duration.ofMillis(50), Duration.ofMillis(50)))
+                                                           .build();
+        stoppingManager.start();
+        try {
+            // ACTIVE before subscribing, so pollEvents serves the live tail from the CDC bus
+            availability.active(SLOT);
+            var failing                = new java.util.concurrent.atomic.AtomicBoolean(true);
+            var attemptsAtFailingEvent = new AtomicInteger();
+            var received               = new CopyOnWriteArrayList<Long>();
+            var subscription = stoppingManager.subscribeToAggregateEventsAsynchronously(SubscriberId.of("orders-resumed"),
+                                                                                        ORDERS,
+                                                                                        GlobalEventOrder.FIRST_GLOBAL_EVENT_ORDER,
+                                                                                        Optional.empty(),
+                                                                                        (PersistedEventHandler) event -> {
+                                                                                            var globalOrder = event.globalEventOrder().longValue();
+                                                                                            if (globalOrder == FAILING_EVENT) {
+                                                                                                attemptsAtFailingEvent.incrementAndGet();
+                                                                                                if (failing.get()) {
+                                                                                                    throw new IllegalStateException("Intentional failure handling event #" + globalOrder);
+                                                                                                }
+                                                                                            }
+                                                                                            received.add(globalOrder);
+                                                                                        });
+
+            var one = appendOrder();
+            await().atMost(Duration.ofSeconds(15)).untilAsserted(() -> {
+                publishOnDispatcher(one).get(5, TimeUnit.SECONDS);
+                assertThat(received).containsExactly(1L);
+            });
+            publishOnDispatcher(appendOrder()).get(10, TimeUnit.SECONDS);
+            // 1 attempt + 1 retry, then stopped at #2
+            await().atMost(Duration.ofSeconds(10)).until(subscription::isStoppedByErrorPolicy);
+            assertThat(attemptsAtFailingEvent.get()).isEqualTo(2);
+            assertThat(subscription.isActive()).isTrue();
+
+            // Published while stopped - not handled
+            var three = appendOrder();
+            publishOnDispatcher(three).get(10, TimeUnit.SECONDS);
+            Thread.sleep(500);
+            assertThat(received).containsExactly(1L);
+
+            failing.set(false);
+            assertThat(subscription.resumeIfStoppedByErrorPolicy()).isTrue();
+            await().atMost(Duration.ofSeconds(15)).untilAsserted(() -> assertThat(received).containsExactly(1L, 2L, 3L));
+            assertThat(attemptsAtFailingEvent.get()).isEqualTo(3);
+            assertThat(subscription.isStoppedByErrorPolicy()).isFalse();
+
+            // ... and then follows the bus again. Republished until the bus leg is attached - repeats are filtered
+            var four = appendOrder();
+            await().atMost(Duration.ofSeconds(15)).untilAsserted(() -> {
+                publishOnDispatcher(four).get(5, TimeUnit.SECONDS);
+                assertThat(received).containsExactly(1L, 2L, 3L, 4L);
+            });
+        } finally {
+            stoppingManager.stop();
+        }
     }
 
     private Future<?> publishOnDispatcher(long globalOrder) {

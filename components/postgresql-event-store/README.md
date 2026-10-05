@@ -1469,10 +1469,12 @@ Every other exception is handled according to the `SubscriptionErrorPolicy` conf
 |--------|--------------------------------------------------------------------|
 | `SubscriptionErrorPolicy.skip()` (default) | The failure is logged at ERROR ("Skipping ... event because of error"), the resume point advances past the event, and the subscription continues with the next event. The event is **not** redelivered - not even after a restart. |
 | `SubscriptionErrorPolicy.retryThenSkip(maxRetries)`<br>`SubscriptionErrorPolicy.retryThenSkip(maxRetries, initialBackoff, maxBackoff)` | The handler is called again up to `maxRetries` times, each attempt in a new `UnitOfWork`, with an exponential backoff between attempts (by default 100 ms, doubling up to 1 s). If every retry fails, the event is skipped exactly as with `skip()`. |
-| `SubscriptionErrorPolicy.stop()` | The failure is logged at ERROR and the subscription stops at the failed event: its resume point is not advanced past it, and it handles no further events until it is started again (application restart, fenced-lock hand-over, `resetFrom(...)`, or unsubscribe and subscribe). A restarted subscription resumes *at* the failed event, so nothing is skipped; if the failure is permanent, it stops at the same event again. An exclusive subscription keeps its fenced lock while stopped, so the event does not flap to another node that would fail the same way. |
+| `SubscriptionErrorPolicy.stop()` | On the **first** failure the failure is logged at ERROR and the subscription stops at the failed event: its resume point is not advanced past it, and it handles no further events until it is resumed (see [Resuming a stopped subscription](#resuming-a-stopped-subscription)) or started again (application restart, fenced-lock hand-over, `resetFrom(...)`, or unsubscribe and subscribe). A resumed or restarted subscription continues *at* the failed event, so nothing is skipped; if the failure is permanent, it stops at the same event again. An exclusive subscription keeps its fenced lock while stopped, so the event does not flap to another node that would fail the same way. |
+| `SubscriptionErrorPolicy.retryThenStop(maxRetries)`<br>`SubscriptionErrorPolicy.retryThenStop(maxRetries, initialBackoff, maxBackoff)` | Retries exactly as `retryThenSkip(...)`; if every retry fails, stops exactly as `stop()`. |
 
 The default is `skip()`, which means a projection fed by a direct asynchronous subscription silently misses an event whose handler failed.
-Choose `retryThenSkip(...)` when failures are expected to be transient, and `stop()` when a missed event is worse than a stalled subscription.
+Choose `retryThenSkip(...)` when failures are expected to be transient, and `retryThenStop(...)` when a missed event is worse than a stalled subscription.
+`stop()` gives up on the first failure, and many failures are transient without being I/O errors - a serialization failure or deadlock (PostgreSQL `40001`/`40P01`), a lock that is not available (`55P03`), an optimistic-concurrency conflict - so under `stop()` each of them halts the subscription until someone resumes it.
 
 The policy is configured per `EventStoreSubscriptionManager` and carried to every asynchronous subscription it creates:
 
@@ -1491,9 +1493,9 @@ var subscriptionManager = EventStoreSubscriptionManager.builder()
 With the Spring Boot starter (`spring-boot-starter-postgresql-event-store`) the policy is configured through properties:
 
 ```properties
-# skip (default) | retry-n-then-skip | stop
+# skip (default) | retry-n-then-skip | stop | retry-n-then-stop
 essentials.eventstore.subscription-manager.error-policy.mode=retry-n-then-skip
-# Only used by retry-n-then-skip; must be at least 1. Default 3
+# Only used by retry-n-then-skip and retry-n-then-stop (stop never retries); must be at least 1. Default 3
 essentials.eventstore.subscription-manager.error-policy.max-retries=5
 # The wait before the first retry, doubled for each later retry. Default 100ms
 essentials.eventstore.subscription-manager.error-policy.initial-backoff=200ms
@@ -1561,7 +1563,7 @@ It applies to single-event asynchronous subscriptions; batched and in-transactio
 
 A subscription stopped by `stop()` otherwise looks exactly like a healthy subscription that has no new events, so surface the stop explicitly:
 
-- `EventStoreSubscription#isStoppedByErrorPolicy()` returns `true` from the moment the policy stopped the subscription until it is started again.
+- `EventStoreSubscription#isStoppedByErrorPolicy()` returns `true` from the moment the policy stopped the subscription until it is resumed or started again.
 - `EventStoreSubscriptionObserver#subscriptionStoppedByErrorPolicy(stoppedAtGlobalEventOrder, cause, eventStoreSubscription)` is called once per stop (see [EventStoreSubscriptionObserver](#eventstoresubscriptionobserver)).
 - `SubscriptionStoppedMicrometerMonitor` publishes the Micrometer gauge `essentials.eventstore.subscription.stopped` - `1` while the subscription is stopped, `0` otherwise (tags `subscriber_id`, `aggregate_type` and the optional `Module` tag). **This is the signal to alert on**, e.g. `max by (subscriber_id, aggregate_type) (essentials_eventstore_subscription_stopped) == 1`. It is an `EventStoreSubscriptionMonitor`, run by the `EventStoreSubscriptionMonitorManager`: the gauge is registered within one monitoring interval of the subscription becoming active and is then read live on every scrape, so it drops to `0` as soon as the subscription is started again or unsubscribed. It reports per JVM - an exclusive subscription reads `1` only on the instance holding its fenced lock - so aggregate with `max`, not `sum`. The Spring Boot starter wires it whenever a `MeterRegistry` is present.
 - `MeasurementEventStoreSubscriptionObserver` counts each stop in the Micrometer counter `essentials.eventstore.subscription.stopped_by_error_policy` (tags `subscriber_id`, `aggregate_type` and the optional `Module` tag). The counter records that a stop *happened*, not that the subscription is stopped *now*: `increase(...) > 0` resolves while the projection is still halted, and `> 0` keeps firing after it has been restarted - use it for history, and the gauge above for alerting.
@@ -1569,6 +1571,17 @@ A subscription stopped by `stop()` otherwise looks exactly like a healthy subscr
 
 `EventStoreSubscription#isActive()` deliberately stays `true` after a stop. It answers "is the subscription running in this instance" - for an exclusive subscription "does it hold the fenced lock" - and a stopped subscription still is: it keeps its lock on purpose, and the subscription manager's periodic resume-point checkpoint only saves active subscriptions, which is what persists the resume point held at the failed event if the process later dies without a graceful shutdown.
 Don't use `isActive()` to detect a stopped subscription.
+
+#### Resuming a stopped subscription
+
+Once the cause of the failure is fixed, a subscription stopped by its error policy is resumed without restarting the application:
+
+- `EventStoreSubscription#resumeIfStoppedByErrorPolicy()`
+- `EventStoreSubscriptionManager#resumeSubscriptionIfStoppedByErrorPolicy(subscriberId, aggregateType)`
+- the admin API: `POST /event-store/subscriptions/{subscriberId}/aggregate-types/{aggregateType}/resume` (role `essentials_subscription_writer`), or the *Resume* button on the admin UI's subscriptions page
+
+Delivery restarts at the resume point the stop held at the failed event (the first event of a failed batch), so that event is handled again first and nothing after it is skipped; if it fails again, the policy applies again and may stop the subscription at the same event. The resume point is saved before delivery restarts. It works the same for polling and CDC, and an exclusive subscription keeps its fenced lock throughout.
+Each returns `true` if the subscription was stopped and has been resumed, and `false` - doing nothing - for a subscription that is not stopped, or not running in this instance: only the instance running it, for an exclusive subscription the one holding its fenced lock, can resume it.
 
 ---
 

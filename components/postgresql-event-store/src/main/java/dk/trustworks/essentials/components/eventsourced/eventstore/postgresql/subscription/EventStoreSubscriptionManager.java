@@ -634,6 +634,20 @@ public interface EventStoreSubscriptionManager extends Lifecycle {
     Optional<EventStoreSubscription> getSubscription(SubscriberId subscriberId, AggregateType aggregateType);
 
     /**
+     * Resume the subscription of the given subscriber and aggregate type if its {@link SubscriptionErrorPolicy} stopped it -
+     * see {@link EventStoreSubscription#resumeIfStoppedByErrorPolicy()}.
+     *
+     * @param subscriberId  the unique identifier of the subscriber
+     * @param aggregateType the type of aggregate the subscriber subscribes to
+     * @return true if the subscription was stopped by its error policy and has been resumed; false if this manager has no
+     * such subscription, or it is not stopped by its error policy in this instance - nothing was done then
+     */
+    default boolean resumeSubscriptionIfStoppedByErrorPolicy(SubscriberId subscriberId, AggregateType aggregateType) {
+        return getSubscription(subscriberId, aggregateType).map(EventStoreSubscription::resumeIfStoppedByErrorPolicy)
+                                                           .orElse(false);
+    }
+
+    /**
      * @return current event order for the given subscriber only of the subscriber has a registered resume point
      */
     Optional<GlobalEventOrder> getCurrentEventOrder(SubscriberId subscriberId, AggregateType aggregateType);

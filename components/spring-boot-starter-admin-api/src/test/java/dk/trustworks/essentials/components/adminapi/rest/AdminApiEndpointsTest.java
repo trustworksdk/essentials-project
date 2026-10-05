@@ -21,7 +21,7 @@ import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.ap
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.api.EventStoreApi;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.AggregateType;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.persistence.CausationIndexNotEnabledException;
-import dk.trustworks.essentials.components.foundation.types.EventId;
+import dk.trustworks.essentials.components.foundation.types.*;
 import dk.trustworks.essentials.components.foundation.fencedlock.LockName;
 import dk.trustworks.essentials.components.foundation.fencedlock.api.*;
 import dk.trustworks.essentials.components.foundation.messaging.queue.*;
@@ -184,6 +184,35 @@ class AdminApiEndpointsTest {
             mockMvc.perform(delete(BASE + "/fenced-locks/my-lock"))
                    .andExpect(status().isOk())
                    .andExpect(jsonPath("$.released").value(true));
+        }
+
+        @Test
+        void resuming_a_subscription_stopped_by_its_error_policy_reports_that_it_was_resumed() throws Exception {
+            when(eventStoreApi.resumeSubscriptionStoppedByErrorPolicy(any(), eq(SubscriberId.of("OrderProjection")), eq(AggregateType.of("Orders"))))
+                    .thenReturn(true);
+
+            mockMvc.perform(post(BASE + "/event-store/subscriptions/OrderProjection/aggregate-types/Orders/resume"))
+                   .andExpect(status().isOk())
+                   .andExpect(jsonPath("$.resumed").value(true));
+        }
+
+        @Test
+        void resuming_a_subscription_that_is_not_stopped_is_a_normal_false_answer() throws Exception {
+            when(eventStoreApi.resumeSubscriptionStoppedByErrorPolicy(any(), any(), any())).thenReturn(false);
+
+            mockMvc.perform(post(BASE + "/event-store/subscriptions/OrderProjection/aggregate-types/Orders/resume"))
+                   .andExpect(status().isOk())
+                   .andExpect(jsonPath("$.resumed").value(false));
+        }
+
+        @Test
+        void resuming_a_subscription_without_the_subscription_writer_role_is_forbidden() throws Exception {
+            when(eventStoreApi.resumeSubscriptionStoppedByErrorPolicy(any(), any(), any()))
+                    .thenThrow(new EssentialsSecurityException("Unauthorized access required role is missing"));
+
+            mockMvc.perform(post(BASE + "/event-store/subscriptions/OrderProjection/aggregate-types/Orders/resume"))
+                   .andExpect(status().isForbidden())
+                   .andExpect(jsonPath("$.status").value(403));
         }
 
         @Test

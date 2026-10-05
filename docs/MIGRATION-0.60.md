@@ -821,9 +821,11 @@ register the component with an `EssentialsSchemaHarness` - see [LLM-foundation.m
 ### Decide what a failing event should do: `SubscriptionErrorPolicy`
 
 Nothing changes unless you configure it: the default, `skip()`, is 0.50's behaviour, where an asynchronous
-subscription logs a non-I/O handler failure at ERROR and moves past the event for good. Choose `retryThenSkip(...)` or
-`stop()` per `EventStoreSubscriptionManager` (Spring Boot:
-`essentials.eventstore.subscription-manager.error-policy.mode=retry-n-then-skip|stop`) where a missed event matters.
+subscription logs a non-I/O handler failure at ERROR and moves past the event for good. Choose `retryThenSkip(...)`,
+`retryThenStop(...)` or `stop()` per `EventStoreSubscriptionManager` (Spring Boot:
+`essentials.eventstore.subscription-manager.error-policy.mode=retry-n-then-skip|retry-n-then-stop|stop`) where a missed
+event matters. `stop()` halts on the first failure, transient ones included - prefer `retryThenStop(...)`, and resume a
+stopped subscription with `EventStoreSubscription#resumeIfStoppedByErrorPolicy()` or the admin API instead of a restart.
 
 **What to do:** alert on `essentials.eventstore.subscription.handle_event_failed`, and with `stop()` on the gauge
 `essentials.eventstore.subscription.stopped` (`1` while stopped; outside Spring Boot add a

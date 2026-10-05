@@ -417,8 +417,8 @@ Prefix: `essentials.eventstore.subscription-manager`
 | `max-event-store-polling-interval` | `2000ms` | Max backoff when idle |
 | `snapshot-resume-points-every` | `1s` | Save position frequency (only changed positions are written) |
 | `snapshot-resume-points-after-events` | `0` (off) | Opt-in: also save a position once it advanced this many global orders since its last save |
-| `error-policy.mode` | `skip` | `skip` \| `retry-n-then-skip` \| `stop` - what an async subscription does with an event whose handler throws a non-I/O exception. See [SubscriptionErrorPolicy](LLM-postgresql-event-store.md#direct-async-subscribers-skip-a-failing-event-by-default) |
-| `error-policy.max-retries` | `3` | `retry-n-then-skip` only; must be ≥ 1 |
+| `error-policy.mode` | `skip` | `skip` \| `retry-n-then-skip` \| `stop` \| `retry-n-then-stop` - what an async subscription does with an event whose handler throws a non-I/O exception. See [SubscriptionErrorPolicy](LLM-postgresql-event-store.md#direct-async-subscribers-skip-a-failing-event-by-default) |
+| `error-policy.max-retries` | `3` | `retry-n-then-skip` and `retry-n-then-stop` only (`stop` never retries); must be ≥ 1 |
 | `error-policy.initial-backoff` | `100ms` | Wait before the first retry, doubled per retry |
 | `error-policy.max-backoff` | `1s` | Cap on the wait between retries |
 

@@ -33,11 +33,54 @@ class SubscriptionErrorPolicyTest {
     }
 
     @Test
-    void only_retry_n_then_skip_retries() {
+    void only_the_retrying_modes_retry() {
         assertThat(SubscriptionErrorPolicy.retryThenSkip(4).retriesBeforeGivingUp()).isEqualTo(4);
+        assertThat(SubscriptionErrorPolicy.retryThenSkip(4).stopsOnError()).isFalse();
+        assertThat(SubscriptionErrorPolicy.retryThenStop(4).retriesBeforeGivingUp()).isEqualTo(4);
         assertThat(SubscriptionErrorPolicy.stop().retriesBeforeGivingUp()).isZero();
         assertThat(SubscriptionErrorPolicy.stop().stopsOnError()).isTrue();
+        // STOP has always ignored maxRetries - honouring it would silently start retrying where STOP was configured
         assertThat(new SubscriptionErrorPolicy(SubscriptionErrorPolicy.Mode.STOP, 5, Duration.ZERO, Duration.ZERO).retriesBeforeGivingUp()).isZero();
+    }
+
+    @Test
+    void retry_then_stop_retries_and_then_stops() {
+        var policy = SubscriptionErrorPolicy.retryThenStop(3, Duration.ofMillis(50), Duration.ofSeconds(2));
+        assertThat(policy.mode()).isEqualTo(SubscriptionErrorPolicy.Mode.RETRY_N_THEN_STOP);
+        assertThat(policy.maxRetries()).isEqualTo(3);
+        assertThat(policy.retriesBeforeGivingUp()).isEqualTo(3);
+        assertThat(policy.stopsOnError()).isTrue();
+        assertThat(policy.initialBackoff()).isEqualTo(Duration.ofMillis(50));
+        assertThat(policy.maxBackoff()).isEqualTo(Duration.ofSeconds(2));
+        assertThat(policy.backoffBeforeRetry(2)).isEqualTo(Duration.ofMillis(100));
+
+        var withDefaults = SubscriptionErrorPolicy.retryThenStop(2);
+        assertThat(withDefaults.initialBackoff()).isEqualTo(SubscriptionErrorPolicy.DEFAULT_INITIAL_BACKOFF);
+        assertThat(withDefaults.maxBackoff()).isEqualTo(SubscriptionErrorPolicy.DEFAULT_MAX_BACKOFF);
+    }
+
+    @Test
+    void the_modes_say_whether_they_retry_and_whether_they_stop() {
+        assertThat(SubscriptionErrorPolicy.Mode.SKIP.retries()).isFalse();
+        assertThat(SubscriptionErrorPolicy.Mode.SKIP.stops()).isFalse();
+        assertThat(SubscriptionErrorPolicy.Mode.RETRY_N_THEN_SKIP.retries()).isTrue();
+        assertThat(SubscriptionErrorPolicy.Mode.RETRY_N_THEN_SKIP.stops()).isFalse();
+        assertThat(SubscriptionErrorPolicy.Mode.STOP.retries()).isFalse();
+        assertThat(SubscriptionErrorPolicy.Mode.STOP.stops()).isTrue();
+        assertThat(SubscriptionErrorPolicy.Mode.RETRY_N_THEN_STOP.retries()).isTrue();
+        assertThat(SubscriptionErrorPolicy.Mode.RETRY_N_THEN_STOP.stops()).isTrue();
+    }
+
+    @Test
+    void an_invalid_retry_then_stop_policy_is_rejected() {
+        assertThatThrownBy(() -> SubscriptionErrorPolicy.retryThenStop(0)).isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> SubscriptionErrorPolicy.retryThenStop(-1)).isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> SubscriptionErrorPolicy.retryThenStop(1, Duration.ofSeconds(2), Duration.ofSeconds(1))).isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> SubscriptionErrorPolicy.retryThenStop(1, Duration.ofMillis(-1), Duration.ofSeconds(1))).isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> SubscriptionErrorPolicy.retryThenStop(1, null, Duration.ofSeconds(1))).isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> SubscriptionErrorPolicy.retryThenStop(1, Duration.ZERO, null)).isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> new SubscriptionErrorPolicy(SubscriptionErrorPolicy.Mode.RETRY_N_THEN_STOP, 0, Duration.ZERO, Duration.ZERO))
+                .isInstanceOf(IllegalArgumentException.class);
     }
 
     @Test

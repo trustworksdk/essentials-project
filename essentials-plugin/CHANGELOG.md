@@ -11,12 +11,17 @@ targets, with a `-N` suffix for plugin-only releases.
   early save after a number of events, the shard-owned queue's permanently held connections, and
   the `SCHEDULER_WRITER` role for running a scheduler job on demand. No skill, rule or script changed.
 - **`/essentials:doctor`** — checks the machine for the tools the commands run (python3 3.11+, uv or
-  pyyaml and jsonschema, the JDK `stack-pins.md` pins, Maven, Docker, npm, ripgrep) and says what each
+  pyyaml and jsonschema, the JDK `stack-pins.md` pins, Maven, Docker, npm, git, ripgrep) and says what each
   missing one costs: a command that stops, a gate not run, a compile-only smoke build, a slower
   fallback. `scripts/doctor.sh` does the probing, per profile (`init`, `review`, `slice`, `docs`, `all`)
   with `--json`; it is bash, because what it detects first is a missing or too-old Python. `/essentials:init`,
   `/essentials:review`, `/essentials:slice-check` and `/essentials:slice-map` now run it as their
   preflight instead of their own inline checks, with the same stops and degradations as before.
+- **Framework docs: retry-then-stop and resume** — `SubscriptionErrorPolicy.retryThenStop(...)`
+  (`error-policy.mode=retry-n-then-stop`), resuming a subscription its error policy stopped without a
+  restart (`EventStoreSubscription#resumeIfStoppedByErrorPolicy()`, the manager, and the admin API's
+  `POST .../resume`), and the new trap `ESS-117`: `stop()` halts a projection on its first transient
+  non-I/O failure.
 
 ## 0.60.0-2 — targets Essentials 0.60.0
 - **Slice law, loaded by lane** — `rules/slice-design.md` stays one file, but each lane-, kind- or

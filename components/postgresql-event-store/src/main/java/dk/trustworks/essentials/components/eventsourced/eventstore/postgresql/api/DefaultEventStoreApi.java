@@ -235,6 +235,17 @@ public class DefaultEventStoreApi implements EventStoreApi {
                                              .map(ApiSubscriptionStatistics::from);
     }
 
+    @Override
+    public boolean resumeSubscriptionStoppedByErrorPolicy(Object principal,
+                                                          SubscriberId subscriberId,
+                                                          AggregateType aggregateType) {
+        validateHasAnyEssentialsSecurityRoles(essentialsSecurityProvider, principal, SUBSCRIPTION_WRITER, ESSENTIALS_ADMIN);
+        requireNonNull(subscriberId, "No subscriberId provided");
+        requireNonNull(aggregateType, "No aggregateType provided");
+        return findSubscription(subscriberId, aggregateType).map(EventStoreSubscription::resumeIfStoppedByErrorPolicy)
+                                                            .orElse(false);
+    }
+
     private Optional<EventStoreSubscription> findSubscription(SubscriberId subscriberId, AggregateType aggregateType) {
         return eventStoreSubscriptionManager.flatMap(subscriptionManager -> subscriptionManager.getSubscription(subscriberId, aggregateType));
     }

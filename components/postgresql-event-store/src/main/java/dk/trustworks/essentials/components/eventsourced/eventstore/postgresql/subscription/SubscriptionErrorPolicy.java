@@ -45,14 +45,26 @@ import static dk.trustworks.essentials.shared.FailFast.*;
  *     handles it again.</li>
  *     <li>{@link Mode#STOP} - the subscription stops handling events at the failed event: its resume point is not
  *     advanced past it, the failure is logged at ERROR, and no further events are handled until the subscription is
- *     started again (application restart, fenced-lock hand-over, {@code resetFrom}, or unsubscribe + subscribe). A
- *     restarted subscription resumes <i>at</i> the failed event, so nothing is skipped. If the failure is permanent the
- *     subscription stops at the same event again. The subscription keeps any fenced lock it holds while stopped, so an
- *     exclusive subscription does not flap to another node that would fail the same way. A stopped subscription reports
- *     {@link EventStoreSubscription#isStoppedByErrorPolicy()} (its {@link EventStoreSubscription#isActive()} is unchanged)
- *     and is reported to
- *     {@link dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.observability.EventStoreSubscriptionObserver#subscriptionStoppedByErrorPolicy}.</li>
+ *     resumed ({@link EventStoreSubscription#resumeIfStoppedByErrorPolicy()}, also offered by the subscription manager
+ *     and the admin API) or started again (application restart, fenced-lock hand-over, {@code resetFrom}, or unsubscribe
+ *     + subscribe). A resumed or restarted subscription continues <i>at</i> the failed event, so nothing is skipped. If
+ *     the failure is permanent the subscription stops at the same event again. The subscription keeps any fenced lock it
+ *     holds while stopped, so an exclusive subscription does not flap to another node that would fail the same way. A
+ *     stopped subscription reports {@link EventStoreSubscription#isStoppedByErrorPolicy()} (its
+ *     {@link EventStoreSubscription#isActive()} is unchanged) and is reported to
+ *     {@link dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.observability.EventStoreSubscriptionObserver#subscriptionStoppedByErrorPolicy}.
+ *     <br><b>{@code STOP} gives up on the first failure</b>, and plenty of failures are transient without being I/O
+ *     errors: a serialization failure or deadlock (PostgreSQL SQLState {@code 40001} / {@code 40P01}), a lock that is not
+ *     available ({@code 55P03}), an optimistic-concurrency conflict on an append. Each of them would halt the subscription
+ *     until someone resumes it, so a projection that must not skip an event normally wants {@link Mode#RETRY_N_THEN_STOP}.</li>
+ *     <li>{@link Mode#RETRY_N_THEN_STOP} - retries exactly as {@link Mode#RETRY_N_THEN_SKIP}; if every retry fails, stops
+ *     exactly as {@link Mode#STOP}. A transient failure is retried away, a lasting one still never skips the event.</li>
  * </ul>
+ * {@code RETRY_N_THEN_STOP} is a mode of its own, not {@code STOP} with {@code maxRetries > 0}: {@code STOP} has always
+ * ignored {@link #maxRetries()} - and the Spring starter's {@code max-retries} property defaults to 3 whatever the mode -
+ * so honouring it for {@code STOP} would silently start retrying in every application already configured for
+ * {@code STOP}. {@link #stop()} keeps giving up on the first failure.
+ * <p>
  * The policy is configured per {@link EventStoreSubscriptionManager} with
  * {@link EventStoreSubscriptionManagerBuilder#setSubscriptionErrorPolicy(SubscriptionErrorPolicy)} and carried to every
  * asynchronous subscription it creates through {@link EventStoreSubscriptionManagerSettings#subscriptionErrorPolicy()}.
@@ -60,10 +72,10 @@ import static dk.trustworks.essentials.shared.FailFast.*;
  * {@code UnitOfWork}, nor to subscriptions that forward to an {@link Inbox}, which has its own redelivery policy.
  *
  * @param mode           what to do with an event whose handler failed
- * @param maxRetries     how many times {@link Mode#RETRY_N_THEN_SKIP} calls the handler again after the first failure. Must be {@code >= 1} for
- *                       {@link Mode#RETRY_N_THEN_SKIP}; ignored by the other modes
- * @param initialBackoff the wait before the first retry; each later retry doubles it, capped at {@code maxBackoff}. Ignored unless the mode is
- *                       {@link Mode#RETRY_N_THEN_SKIP}
+ * @param maxRetries     how many times {@link Mode#RETRY_N_THEN_SKIP} and {@link Mode#RETRY_N_THEN_STOP} call the handler again after the first
+ *                       failure. Must be {@code >= 1} for those two modes; ignored by the other modes
+ * @param initialBackoff the wait before the first retry; each later retry doubles it, capped at {@code maxBackoff}. Ignored unless the mode
+ *                       retries (see {@link Mode#retries()})
  * @param maxBackoff     the longest wait between two retries. Must be {@code >= initialBackoff}
  */
 public record SubscriptionErrorPolicy(Mode mode,
@@ -71,11 +83,11 @@ public record SubscriptionErrorPolicy(Mode mode,
                                       Duration initialBackoff,
                                       Duration maxBackoff) {
     /**
-     * Default wait before the first {@link Mode#RETRY_N_THEN_SKIP} retry
+     * Default wait before the first retry of a retrying mode
      */
     public static final Duration DEFAULT_INITIAL_BACKOFF = Duration.ofMillis(100);
     /**
-     * Default cap on the wait between two {@link Mode#RETRY_N_THEN_SKIP} retries
+     * Default cap on the wait between two retries of a retrying mode
      */
     public static final Duration DEFAULT_MAX_BACKOFF     = Duration.ofSeconds(1);
 
@@ -95,9 +107,28 @@ public record SubscriptionErrorPolicy(Mode mode,
          */
         RETRY_N_THEN_SKIP,
         /**
-         * Log at ERROR and stop handling events at the failed event, without advancing the resume point past it
+         * Log at ERROR and stop handling events at the failed event, without advancing the resume point past it. Gives up on
+         * the first failure, transient or not - see {@link #RETRY_N_THEN_STOP}
          */
-        STOP
+        STOP,
+        /**
+         * Call the handler again up to {@link SubscriptionErrorPolicy#maxRetries()} times with backoff, then stop as {@link #STOP}
+         */
+        RETRY_N_THEN_STOP;
+
+        /**
+         * @return true if this mode calls the handler again after a failure: {@link #RETRY_N_THEN_SKIP} and {@link #RETRY_N_THEN_STOP}
+         */
+        public boolean retries() {
+            return this == RETRY_N_THEN_SKIP || this == RETRY_N_THEN_STOP;
+        }
+
+        /**
+         * @return true if this mode stops the subscription once it gives up on an event: {@link #STOP} and {@link #RETRY_N_THEN_STOP}
+         */
+        public boolean stops() {
+            return this == STOP || this == RETRY_N_THEN_STOP;
+        }
     }
 
     public SubscriptionErrorPolicy {
@@ -105,7 +136,7 @@ public record SubscriptionErrorPolicy(Mode mode,
         requireNonNull(initialBackoff, "No initialBackoff provided");
         requireNonNull(maxBackoff, "No maxBackoff provided");
         requireTrue(maxRetries >= 0, "maxRetries must be >= 0");
-        requireTrue(mode != Mode.RETRY_N_THEN_SKIP || maxRetries >= 1, "maxRetries must be >= 1 when the mode is RETRY_N_THEN_SKIP");
+        requireTrue(!mode.retries() || maxRetries >= 1, "maxRetries must be >= 1 when the mode is " + mode);
         requireFalse(initialBackoff.isNegative(), "initialBackoff must not be negative");
         requireTrue(maxBackoff.compareTo(initialBackoff) >= 0, "maxBackoff must be >= initialBackoff");
     }
@@ -118,7 +149,7 @@ public record SubscriptionErrorPolicy(Mode mode,
     }
 
     /**
-     * @return the {@link Mode#STOP} policy
+     * @return the {@link Mode#STOP} policy, which stops at the first failure without retrying - see {@link #retryThenStop(int)}
      */
     public static SubscriptionErrorPolicy stop() {
         return STOP;
@@ -147,18 +178,44 @@ public record SubscriptionErrorPolicy(Mode mode,
     }
 
     /**
-     * @return how many times the handler is called again after its first failure: {@link #maxRetries()} for
-     * {@link Mode#RETRY_N_THEN_SKIP}, otherwise {@code 0}
+     * {@link Mode#RETRY_N_THEN_STOP} with {@link #DEFAULT_INITIAL_BACKOFF} and {@link #DEFAULT_MAX_BACKOFF}
+     *
+     * @param maxRetries how many times the handler is called again after the first failure before the subscription stops at the event.
+     *                   Must be {@code >= 1}
+     * @return the policy
      */
-    public int retriesBeforeGivingUp() {
-        return mode == Mode.RETRY_N_THEN_SKIP ? maxRetries : 0;
+    public static SubscriptionErrorPolicy retryThenStop(int maxRetries) {
+        return retryThenStop(maxRetries, DEFAULT_INITIAL_BACKOFF, DEFAULT_MAX_BACKOFF);
     }
 
     /**
-     * @return true if the policy is {@link Mode#STOP}
+     * {@link Mode#RETRY_N_THEN_STOP}: retry a failed event, and stop at it only once every retry failed - the policy for a
+     * subscription (typically a projection) that must not skip an event, without halting it on a transient failure.
+     *
+     * @param maxRetries     how many times the handler is called again after the first failure before the subscription stops at the event.
+     *                       Must be {@code >= 1}
+     * @param initialBackoff the wait before the first retry; each later retry doubles it. Must not be negative
+     * @param maxBackoff     the longest wait between two retries. Must be {@code >= initialBackoff}
+     * @return the policy
+     */
+    public static SubscriptionErrorPolicy retryThenStop(int maxRetries, Duration initialBackoff, Duration maxBackoff) {
+        return new SubscriptionErrorPolicy(Mode.RETRY_N_THEN_STOP, maxRetries, initialBackoff, maxBackoff);
+    }
+
+    /**
+     * @return how many times the handler is called again after its first failure: {@link #maxRetries()} for
+     * {@link Mode#RETRY_N_THEN_SKIP} and {@link Mode#RETRY_N_THEN_STOP}, otherwise {@code 0}
+     */
+    public int retriesBeforeGivingUp() {
+        return mode.retries() ? maxRetries : 0;
+    }
+
+    /**
+     * @return true if the policy stops the subscription once it gives up on an event: {@link Mode#STOP} and
+     * {@link Mode#RETRY_N_THEN_STOP}
      */
     public boolean stopsOnError() {
-        return mode == Mode.STOP;
+        return mode.stops();
     }
 
     /**

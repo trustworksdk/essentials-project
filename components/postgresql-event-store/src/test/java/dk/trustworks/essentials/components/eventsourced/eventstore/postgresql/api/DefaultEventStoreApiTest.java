@@ -23,7 +23,7 @@ import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.su
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.types.GlobalEventOrder;
 import dk.trustworks.essentials.components.foundation.types.SubscriberId;
 import dk.trustworks.essentials.shared.functional.tuple.Pair;
-import dk.trustworks.essentials.shared.security.EssentialsSecurityProvider;
+import dk.trustworks.essentials.shared.security.*;
 import org.junit.jupiter.api.*;
 
 import java.time.*;
@@ -104,6 +104,50 @@ class DefaultEventStoreApiTest {
             assertThat(subscription.stoppedByErrorPolicy()).isTrue();
         });
         assertThat(subscriptions).extracting(ApiSubscription::durableResumePointPresent).containsExactlyInAnyOrder(true, false);
+    }
+
+    @Test
+    void resuming_a_subscription_delegates_to_the_subscription_running_here() {
+        var stoppedProcessor = subscription(ORDER_PROCESSOR, true, true, false, 100L);
+        when(stoppedProcessor.resumeIfStoppedByErrorPolicy()).thenReturn(true);
+        when(subscriptionManager.getSubscription(ORDER_PROCESSOR, ORDERS)).thenReturn(Optional.of(stoppedProcessor));
+
+        assertThat(api.resumeSubscriptionStoppedByErrorPolicy("principal", ORDER_PROCESSOR, ORDERS)).isTrue();
+        verify(stoppedProcessor).resumeIfStoppedByErrorPolicy();
+    }
+
+    @Test
+    void resuming_a_subscription_that_does_not_run_here_answers_false() {
+        when(subscriptionManager.getSubscription(ORDER_PROCESSOR, ORDERS)).thenReturn(Optional.empty());
+
+        assertThat(api.resumeSubscriptionStoppedByErrorPolicy("principal", ORDER_PROCESSOR, ORDERS)).isFalse();
+
+        var apiWithoutSubscriptionManager = new DefaultEventStoreApi(new EssentialsSecurityProvider.AllAccessSecurityProvider(),
+                                                                     eventStore,
+                                                                     durableSubscriptionRepository);
+        assertThat(apiWithoutSubscriptionManager.resumeSubscriptionStoppedByErrorPolicy("principal", ORDER_PROCESSOR, ORDERS)).isFalse();
+    }
+
+    @Test
+    void resuming_a_subscription_requires_the_subscription_writer_role() {
+        var stoppedProcessor = subscription(ORDER_PROCESSOR, true, true, false, 100L);
+        when(subscriptionManager.getSubscription(ORDER_PROCESSOR, ORDERS)).thenReturn(Optional.of(stoppedProcessor));
+        var readerOnly = new EssentialsSecurityProvider() {
+            @Override
+            public boolean isAllowed(Object principal, String requiredRole) {
+                return EssentialsSecurityRoles.SUBSCRIPTION_READER.getRoleName().equals(requiredRole);
+            }
+
+            @Override
+            public Optional<String> getPrincipalName(Object principal) {
+                return Optional.of(String.valueOf(principal));
+            }
+        };
+        var readerOnlyApi = new DefaultEventStoreApi(readerOnly, eventStore, durableSubscriptionRepository, Optional.of(subscriptionManager), Optional.empty());
+
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> readerOnlyApi.resumeSubscriptionStoppedByErrorPolicy("principal", ORDER_PROCESSOR, ORDERS))
+                                        .isInstanceOf(EssentialsSecurityException.class);
+        verify(stoppedProcessor, never()).resumeIfStoppedByErrorPolicy();
     }
 
     /**

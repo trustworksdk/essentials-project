@@ -294,6 +294,8 @@ public class AdminUiDemoApplication {
                                                  OffsetDateTime.parse("2026-07-31T10:40:12Z")));
         when(api.findAllSubscriptionStatistics(any())).thenReturn(List.of(orderProcessorStatistics));
         when(api.findSubscriptionStatistics(any(), any(), any())).thenReturn(Optional.of(orderProcessorStatistics));
+        // InvoiceProjection above is stopped by its error policy, so the subscriptions view offers to resume it
+        when(api.resumeSubscriptionStoppedByErrorPolicy(any(), any(), any())).thenReturn(true);
 
         // A causation chain shaped like the webshop's capture flow: the order, the hold it led to, the capture request,
         // and the capture the gateway's webhook recorded. Start from 7c1e0f9a-0004-... to walk it back.

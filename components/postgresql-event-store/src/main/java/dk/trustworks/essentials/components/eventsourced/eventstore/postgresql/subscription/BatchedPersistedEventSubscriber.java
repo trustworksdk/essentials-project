@@ -300,7 +300,7 @@ public class BatchedPersistedEventSubscriber extends BaseSubscriber<PersistedEve
                       eventStoreSubscription.subscriberId(),
                       eventStoreSubscription.aggregateType(),
                       event.globalEventOrder(),
-                      SubscriptionErrorPolicy.Mode.STOP,
+                      subscriptionErrorPolicy.mode(),
                       stoppedByErrorPolicy,
                       resumeFrom);
             return;
@@ -513,7 +513,7 @@ public class BatchedPersistedEventSubscriber extends BaseSubscriber<PersistedEve
                                   immutableBatch.size(),
                                   firstEvent.globalEventOrder(),
                                   lastEvent.globalEventOrder(),
-                                  SubscriptionErrorPolicy.Mode.STOP,
+                                  subscriptionErrorPolicy.mode(),
                                   stoppedByErrorPolicy);
                         return 0;
                     }
@@ -663,12 +663,13 @@ public class BatchedPersistedEventSubscriber extends BaseSubscriber<PersistedEve
         var resumeFrom = holdResumePointAt(firstEventOfFailedBatch);
         cancelScheduledProcessing();
         log.error(msg("[{}-{}] Stopping the subscription because handling the batch starting at #{} failed and the SubscriptionErrorPolicy is {}. " +
-                              "The resume point stays at #{}, so no event is skipped: no further events are handled until the subscription is started again " +
-                              "(restart, resetFrom or unsubscribe/subscribe), and it then resumes at this batch",
+                              "The resume point stays at #{}, so no event is skipped: no further events are handled until the subscription is resumed " +
+                              "(EventStoreSubscription#resumeIfStoppedByErrorPolicy or the admin API) or started again (restart, resetFrom or unsubscribe/subscribe), " +
+                              "and it then continues at this batch",
                       eventStoreSubscription.subscriberId(),
                       eventStoreSubscription.aggregateType(),
                       firstEventOfFailedBatch.globalEventOrder(),
-                      SubscriptionErrorPolicy.Mode.STOP,
+                      subscriptionErrorPolicy.mode(),
                       resumeFrom), cause);
         try {
             eventStore.getEventStoreSubscriptionObserver().subscriptionStoppedByErrorPolicy(firstEventOfFailedBatch.globalEventOrder(), cause, eventStoreSubscription);

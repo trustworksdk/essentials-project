@@ -27,7 +27,7 @@ import java.util.function.*;
 import static dk.trustworks.essentials.shared.Exceptions.rethrowIfCriticalError;
 
 /**
- * The {@link SubscriptionErrorPolicy.Mode#RETRY_N_THEN_SKIP} retry loop shared by {@link PersistedEventSubscriber} and
+ * The retry loop of the retrying {@link SubscriptionErrorPolicy.Mode}s ({@code RETRY_N_THEN_SKIP}, {@code RETRY_N_THEN_STOP}) shared by {@link PersistedEventSubscriber} and
  * {@link BatchedPersistedEventSubscriber}.
  * <p>
  * The retries are deliberately <b>synchronous</b> - a plain loop with a sleep on the delivery thread - rather than a
@@ -167,7 +167,7 @@ final class SubscriptionErrorPolicyRetries {
     }
 
     /**
-     * Called before each {@link SubscriptionErrorPolicy.Mode#RETRY_N_THEN_SKIP} retry
+     * Called before each retry of a retrying {@link SubscriptionErrorPolicy.Mode}
      */
     @FunctionalInterface
     interface RetryListener {

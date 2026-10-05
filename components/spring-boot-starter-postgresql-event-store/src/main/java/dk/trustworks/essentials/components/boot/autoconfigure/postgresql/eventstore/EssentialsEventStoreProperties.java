@@ -535,7 +535,7 @@ public class EssentialsEventStoreProperties {
      * <p>
      * Properties example:
      * <pre>{@code
-     * essentials.eventstore.subscription-manager.error-policy.mode=retry-n-then-skip
+     * essentials.eventstore.subscription-manager.error-policy.mode=retry-n-then-stop
      * essentials.eventstore.subscription-manager.error-policy.max-retries=5
      * essentials.eventstore.subscription-manager.error-policy.initial-backoff=100ms
      * essentials.eventstore.subscription-manager.error-policy.max-backoff=5s
@@ -546,21 +546,24 @@ public class EssentialsEventStoreProperties {
          * What an asynchronous subscription does with an event whose handler failed with a non-I/O error (I/O errors are
          * always retried). SKIP (default): log at ERROR, advance the resume point past the event and continue - the event
          * is not redelivered. RETRY_N_THEN_SKIP: call the handler again up to max-retries times with backoff, then skip.
-         * STOP: log at ERROR and stop at the failed event without advancing the resume point past it; the subscription
-         * resumes at that event when it is started again.
+         * STOP: log at ERROR and stop at the failed event without advancing the resume point past it, on the first failure;
+         * the subscription continues at that event when it is resumed (admin API) or started again.
+         * RETRY_N_THEN_STOP: call the handler again up to max-retries times with backoff, then stop as STOP - the usual
+         * choice for a projection that must not skip events, as it does not halt on a transient failure.
          */
         private SubscriptionErrorPolicy.Mode mode           = SubscriptionErrorPolicy.Mode.SKIP;
         /**
-         * How many times RETRY_N_THEN_SKIP calls the handler again after its first failure. Must be at least 1. Ignored by
-         * the other modes.
+         * How many times RETRY_N_THEN_SKIP and RETRY_N_THEN_STOP call the handler again after its first failure. Must be at
+         * least 1. Ignored by the other modes.
          */
         private int                          maxRetries     = 3;
         /**
-         * The wait before the first RETRY_N_THEN_SKIP retry; each later retry doubles it, up to max-backoff.
+         * The wait before the first RETRY_N_THEN_SKIP or RETRY_N_THEN_STOP retry; each later retry doubles it, up to
+         * max-backoff.
          */
         private Duration                     initialBackoff = Duration.ofMillis(100);
         /**
-         * The longest wait between two RETRY_N_THEN_SKIP retries.
+         * The longest wait between two RETRY_N_THEN_SKIP or RETRY_N_THEN_STOP retries.
          */
         private Duration                     maxBackoff     = Duration.ofSeconds(1);
 
@@ -569,8 +572,10 @@ public class EssentialsEventStoreProperties {
          * <ul>
          *     <li>{@code SKIP} - log at ERROR, advance the resume point past the event and continue. The event is not redelivered</li>
          *     <li>{@code RETRY_N_THEN_SKIP} - call the handler again up to {@code max-retries} times with backoff, then skip as {@code SKIP}</li>
-         *     <li>{@code STOP} - log at ERROR and stop handling events at the failed event without advancing the resume point past it;
-         *     the subscription resumes at that event when it is started again (e.g. after a restart)</li>
+         *     <li>{@code STOP} - log at ERROR and stop handling events at the failed event, on its first failure, without advancing the
+         *     resume point past it; the subscription continues at that event when it is resumed (admin API,
+         *     {@code EventStoreSubscription#resumeIfStoppedByErrorPolicy()}) or started again (e.g. after a restart)</li>
+         *     <li>{@code RETRY_N_THEN_STOP} - call the handler again up to {@code max-retries} times with backoff, then stop as {@code STOP}</li>
          * </ul>
          *
          * @return the error policy mode
@@ -587,8 +592,8 @@ public class EssentialsEventStoreProperties {
         }
 
         /**
-         * How many times {@code RETRY_N_THEN_SKIP} calls the handler again after its first failure. Must be {@code >= 1}. Default 3.
-         * Ignored by the other modes.
+         * How many times {@code RETRY_N_THEN_SKIP} and {@code RETRY_N_THEN_STOP} call the handler again after its first failure.
+         * Must be {@code >= 1}. Default 3. Ignored by the other modes.
          *
          * @return the maximum number of retries
          */
@@ -597,14 +602,14 @@ public class EssentialsEventStoreProperties {
         }
 
         /**
-         * @param maxRetries how many times {@code RETRY_N_THEN_SKIP} calls the handler again after its first failure
+         * @param maxRetries how many times {@code RETRY_N_THEN_SKIP} and {@code RETRY_N_THEN_STOP} call the handler again after its first failure
          */
         public void setMaxRetries(int maxRetries) {
             this.maxRetries = maxRetries;
         }
 
         /**
-         * The wait before the first {@code RETRY_N_THEN_SKIP} retry; each later retry doubles it, up to {@code max-backoff}. Default 100 ms.
+         * The wait before the first retry of a retrying mode; each later retry doubles it, up to {@code max-backoff}. Default 100 ms.
          *
          * @return the wait before the first retry
          */
@@ -613,14 +618,14 @@ public class EssentialsEventStoreProperties {
         }
 
         /**
-         * @param initialBackoff the wait before the first {@code RETRY_N_THEN_SKIP} retry
+         * @param initialBackoff the wait before the first retry of a retrying mode
          */
         public void setInitialBackoff(Duration initialBackoff) {
             this.initialBackoff = initialBackoff;
         }
 
         /**
-         * The longest wait between two {@code RETRY_N_THEN_SKIP} retries. Default 1 s.
+         * The longest wait between two retries of a retrying mode. Default 1 s.
          *
          * @return the longest wait between two retries
          */
@@ -629,7 +634,7 @@ public class EssentialsEventStoreProperties {
         }
 
         /**
-         * @param maxBackoff the longest wait between two {@code RETRY_N_THEN_SKIP} retries
+         * @param maxBackoff the longest wait between two retries of a retrying mode
          */
         public void setMaxBackoff(Duration maxBackoff) {
             this.maxBackoff = maxBackoff;
@@ -640,7 +645,7 @@ public class EssentialsEventStoreProperties {
          */
         public SubscriptionErrorPolicy toSubscriptionErrorPolicy() {
             return new SubscriptionErrorPolicy(mode,
-                                               mode == SubscriptionErrorPolicy.Mode.RETRY_N_THEN_SKIP ? maxRetries : 0,
+                                               mode.retries() ? maxRetries : 0,
                                                initialBackoff,
                                                maxBackoff);
         }

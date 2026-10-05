@@ -720,7 +720,8 @@ alert on.
 |---|---|
 | `skip()` — **the default, unchanged from 0.50** | Log at ERROR, advance past the event, continue |
 | `retryThenSkip(n[, initialBackoff, maxBackoff])` | Call the handler again up to `n` times, each in a new `UnitOfWork`, with exponential backoff (default 100 ms doubling to 1 s), then skip |
-| `stop()` | Stop at the failed event without advancing the resume point; the subscription resumes *at* it when started again (restart, fenced-lock hand-over, `resetFrom`) |
+| `stop()` | On the first failure, stop at the failed event without advancing the resume point; the subscription continues *at* it when resumed (`EventStoreSubscription#resumeIfStoppedByErrorPolicy()`, the manager's `resumeSubscriptionIfStoppedByErrorPolicy(...)`, admin API `POST /event-store/subscriptions/{subscriberId}/aggregate-types/{aggregateType}/resume`) or started again (restart, fenced-lock hand-over, `resetFrom`) |
+| `retryThenStop(n[, initialBackoff, maxBackoff])` | Retry as `retryThenSkip`, then stop as `stop()` - the choice for a projection that must not skip an event without halting on a transient failure |
 
 A batched subscription applies the policy to the batch as a whole. In-transaction subscriptions and subscriptions
 that forward to an `Inbox` are not affected. **Upgrading changes nothing until you configure a policy.**

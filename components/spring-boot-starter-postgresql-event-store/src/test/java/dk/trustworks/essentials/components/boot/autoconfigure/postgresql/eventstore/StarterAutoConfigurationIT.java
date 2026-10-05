@@ -206,8 +206,16 @@ public class StarterAutoConfigurationIT {
                         .isEqualTo(SubscriptionErrorPolicy.retryThenSkip(5, Duration.ofMillis(50), Duration.ofSeconds(2))));
         contextRunner
                 .withPropertyValues("essentials.eventstore.subscription-manager.error-policy.mode=stop")
-                .run(ctx -> assertThat(ctx.getBean(DefaultEventStoreSubscriptionManager.class).getSubscriptionErrorPolicy().mode())
-                        .isEqualTo(SubscriptionErrorPolicy.Mode.STOP));
+                .run(ctx -> assertThat(ctx.getBean(DefaultEventStoreSubscriptionManager.class).getSubscriptionErrorPolicy())
+                        // STOP ignores the max-retries default of 3: it never retries
+                        .isEqualTo(SubscriptionErrorPolicy.stop()));
+        contextRunner
+                .withPropertyValues("essentials.eventstore.subscription-manager.error-policy.mode=retry-n-then-stop",
+                                    "essentials.eventstore.subscription-manager.error-policy.max-retries=4",
+                                    "essentials.eventstore.subscription-manager.error-policy.initial-backoff=50ms",
+                                    "essentials.eventstore.subscription-manager.error-policy.max-backoff=2s")
+                .run(ctx -> assertThat(ctx.getBean(DefaultEventStoreSubscriptionManager.class).getSubscriptionErrorPolicy())
+                        .isEqualTo(SubscriptionErrorPolicy.retryThenStop(4, Duration.ofMillis(50), Duration.ofSeconds(2))));
     }
 
     @Test

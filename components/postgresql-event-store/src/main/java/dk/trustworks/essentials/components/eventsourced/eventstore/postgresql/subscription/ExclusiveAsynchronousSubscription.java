@@ -51,9 +51,14 @@ public class ExclusiveAsynchronousSubscription extends AbstractEventStoreSubscri
     private volatile PersistedEventSubscriber subscription;
 
     private volatile boolean active;
+    /**
+     * Serializes the fenced-lock callbacks with {@link #resumeIfStoppedByErrorPolicy()}: a resume racing a lock release
+     * would otherwise subscribe a new subscriber after the release disposed the old one - delivering without the lock
+     */
+    private final Object     subscriberLifecycleLock = new Object();
 
     /**
-     * @param context                   the arguments shared by every subscription — see {@link EventStoreSubscriptionContext#builder()}
+     * @param context                 the arguments shared by every subscription — see {@link EventStoreSubscriptionContext#builder()}
      * @param durableContext            the resume-point arguments shared by the asynchronous subscriptions
      * @param fencedLockManager         the lock manager that decides which node owns this subscription
      * @param fencedLockAwareSubscriber callback notified when this node acquires or loses the subscription's lock
@@ -107,6 +112,12 @@ public class ExclusiveAsynchronousSubscription extends AbstractEventStoreSubscri
     }
 
     private void onLockAcquired(FencedLock fencedLock) {
+        synchronized (subscriberLifecycleLock) {
+            subscribeOnLockAcquired(fencedLock);
+        }
+    }
+
+    private void subscribeOnLockAcquired(FencedLock fencedLock) {
         log.info("[{}-{}] 🎉 Acquired lock. Looking up subscription resumePoint",
                 subscriberId,
                 aggregateType);
@@ -133,6 +144,14 @@ public class ExclusiveAsynchronousSubscription extends AbstractEventStoreSubscri
             log.error(msg("FencedLockAwareSubscriber#onLockAcquired failed for lock {} and resumePoint {}", fencedLock.getName(), resumePoint), e);
         }
 
+        subscribeFromResumePoint();
+    }
+
+    /**
+     * Subscribe a new {@link PersistedEventSubscriber} to the event store from {@link #resumePoint}. Called with the
+     * fenced lock held, under {@link #subscriberLifecycleLock}
+     */
+    private void subscribeFromResumePoint() {
         // The subscriber reports what it handled, and the event store resolves a gap fill's gap only then
         var acknowledgement = SubscriberAcknowledgement.create();
         subscription = PersistedEventSubscriber.builder()
@@ -158,6 +177,51 @@ public class ExclusiveAsynchronousSubscription extends AbstractEventStoreSubscri
     }
 
     private void onLockReleased(FencedLock fencedLock) {
+        synchronized (subscriberLifecycleLock) {
+            unsubscribeOnLockReleased(fencedLock);
+        }
+    }
+
+    /**
+     * Resumes this subscription without letting go of its fenced lock: the stopped subscriber is disposed, the resume point
+     * the {@link SubscriptionErrorPolicy} held at the failed event is saved, and a new subscriber is subscribed from it -
+     * the same steps a lock release followed by a re-acquire would take, minus the release, so the subscription cannot flap
+     * to another node in between. On an instance that does not hold the lock this returns false: only the lock holder
+     * runs (and so can stop) the subscription. See {@link EventStoreSubscription#resumeIfStoppedByErrorPolicy()}
+     */
+    @Override
+    public boolean resumeIfStoppedByErrorPolicy() {
+        synchronized (subscriberLifecycleLock) {
+            var stoppedSubscriber = subscription;
+            if (!started || !active || stoppedSubscriber == null || !stoppedSubscriber.isStoppedByErrorPolicy()) {
+                log.debug("[{}-{}] Not resuming - the subscription is not stopped by its SubscriptionErrorPolicy in this instance (started: {}, active (is-lock-acquired): {})",
+                          subscriberId,
+                          aggregateType,
+                          started,
+                          active);
+                return false;
+            }
+            log.info("[{}-{}] Resuming the subscription stopped by its SubscriptionErrorPolicy from and including globalOrder {} - keeping the fenced lock",
+                     subscriberId,
+                     aggregateType,
+                     resumePoint.getResumeFromAndIncluding());
+            // Already disposed by the stop itself (asynchronously) - disposing again makes sure it is before we subscribe anew
+            stoppedSubscriber.dispose();
+            try {
+                // Allow the reactive components to complete, as on a lock release
+                if (!isShutdownCleanupAbandoned()) {
+                    Thread.sleep(500);
+                }
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+            persistResumePointUntilSettled(durableSubscriptionRepository, resumePoint);
+            subscribeFromResumePoint();
+            return true;
+        }
+    }
+
+    private void unsubscribeOnLockReleased(FencedLock fencedLock) {
         if (!active) {
             return;
         }

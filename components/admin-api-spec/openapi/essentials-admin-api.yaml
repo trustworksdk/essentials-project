@@ -28,8 +28,8 @@ tags:
 - name: durable-queues
   description: Inspect and manage durable queue and dead-letter messages.
 - name: event-store
-  description: "Inspect event-store subscriptions and persisted event order, and walk\
-    \ event causation."
+  description: "Inspect event-store subscriptions and persisted event order, resume\
+    \ a subscription stopped by its error policy, and walk event causation."
 - name: cdc
   description: Inspect Change Data Capture runtime state and effective configuration.
 - name: event-store-statistics
@@ -2276,6 +2276,64 @@ paths:
       x-required-roles:
       - essentials_subscription_reader
       - essentials_admin
+  /event-store/subscriptions/{subscriberId}/aggregate-types/{aggregateType}/resume:
+    post:
+      tags:
+      - event-store
+      summary: "Resume a subscription that its error policy stopped (stoppedByErrorPolicy)\
+        \ without a restart. Delivery restarts at the failed event, so nothing is\
+        \ skipped; if it fails again the error policy applies again. An exclusive\
+        \ subscription keeps its fenced lock. Acts on this instance only, which must\
+        \ be running the subscription - for an exclusive subscription, holding its\
+        \ lock."
+      operationId: resumeSubscriptionStoppedByErrorPolicy
+      parameters:
+      - name: subscriberId
+        in: path
+        description: The subscriber id.
+        required: true
+        schema:
+          type: string
+      - name: aggregateType
+        in: path
+        description: The aggregate type the subscriber subscribes to.
+        required: true
+        schema:
+          type: string
+      responses:
+        "200":
+          description: 200 — Whether the subscription was resumed.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ResumeResult"
+        "400":
+          description: "Malformed or out-of-range parameter, or invalid request body."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: Unauthenticated.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Caller lacks one of the required roles.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "500":
+          description: Unexpected server error.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+      x-required-roles:
+      - essentials_subscription_writer
+      - essentials_admin
   /event-store/cdc/status:
     get:
       tags:
@@ -4027,10 +4085,10 @@ components:
         stoppedByErrorPolicy:
           type: boolean
           description: Whether the error policy of the subscription halted it after
-            a handler failure (mode STOP). It then handles no further events until
-            it is started again. active stays true for such a subscription. Always
-            false for an in-transaction subscription. Null when the subscription is
-            not running in this instance.
+            a handler failure (mode STOP or RETRY_N_THEN_STOP). It then handles no
+            further events until it is resumed or started again. active stays true
+            for such a subscription. Always false for an in-transaction subscription.
+            Null when the subscription is not running in this instance.
           nullable: true
     ApiSubscriptionEventHandlingStatistics:
       required:
@@ -4501,6 +4559,16 @@ components:
         released:
           type: boolean
       description: Outcome of a lock release.
+    ResumeResult:
+      required:
+      - resumed
+      type: object
+      properties:
+        resumed:
+          type: boolean
+      description: "Outcome of resuming a subscription stopped by its error policy.\
+        \ False is a normal answer, not an error: the subscription is not stopped\
+        \ by its error policy, or does not run in the instance that received the request."
     ResurrectDeadLetterMessageRequest:
       required:
       - deliveryDelay

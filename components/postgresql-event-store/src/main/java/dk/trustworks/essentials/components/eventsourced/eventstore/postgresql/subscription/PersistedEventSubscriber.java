@@ -46,7 +46,9 @@ import static dk.trustworks.essentials.shared.MessageFormatter.msg;
  *     which is responsible for error handling and for calling {@link EventStoreSubscription#request(long)} to continue event processing</li>
  *     <li>{@link SubscriptionErrorPolicy.Mode#RETRY_N_THEN_SKIP} - calls the handler again up to N times, then delegates to the <code>onErrorHandler</code></li>
  *     <li>{@link SubscriptionErrorPolicy.Mode#STOP} - keeps the resume point at the failed event, logs at ERROR and stops handling events
- *     (see {@link #isStoppedByErrorPolicy()})</li>
+ *     (see {@link #isStoppedByErrorPolicy()}). A stopped subscriber stays stopped: the subscription resumes by subscribing a new one at
+ *     the held resume point (see {@link EventStoreSubscription#resumeIfStoppedByErrorPolicy()})</li>
+ *     <li>{@link SubscriptionErrorPolicy.Mode#RETRY_N_THEN_STOP} - calls the handler again up to N times, then stops as {@code STOP}</li>
  * </ul>
  * Before the policy skips or stops, the event handler may take the failed event over instead - see
  * {@link PersistedEventHandler#handOffFailedEvent(PersistedEvent, Throwable)}.
@@ -303,7 +305,7 @@ public class PersistedEventSubscriber extends BaseSubscriber<PersistedEvent> {
                       eventStoreSubscription.aggregateType(),
                       e.globalEventOrder(),
                       e.event().getEventTypeOrName().getValue(),
-                      SubscriptionErrorPolicy.Mode.STOP,
+                      subscriptionErrorPolicy.mode(),
                       stoppedByErrorPolicy,
                       resumeFrom);
             return;
@@ -507,13 +509,14 @@ public class PersistedEventSubscriber extends BaseSubscriber<PersistedEvent> {
         stoppedByErrorPolicy = true;
         var resumeFrom = holdResumePointAt(e);
         log.error(msg("[{}-{}] (#{}) Stopping the subscription because handling the {} event failed and the SubscriptionErrorPolicy is {}. " +
-                              "The resume point stays at #{}, so no event is skipped: no further events are handled until the subscription is started again " +
-                              "(restart, fenced lock hand-over, resetFrom or unsubscribe/subscribe), and it then resumes at this event",
+                              "The resume point stays at #{}, so no event is skipped: no further events are handled until the subscription is resumed " +
+                              "(EventStoreSubscription#resumeIfStoppedByErrorPolicy or the admin API) or started again (restart, fenced lock hand-over, resetFrom or " +
+                              "unsubscribe/subscribe), and it then continues at this event",
                       eventStoreSubscription.subscriberId(),
                       eventStoreSubscription.aggregateType(),
                       e.globalEventOrder(),
                       e.event().getEventTypeOrName().getValue(),
-                      SubscriptionErrorPolicy.Mode.STOP,
+                      subscriptionErrorPolicy.mode(),
                       resumeFrom), cause);
         try {
             eventStore.getEventStoreSubscriptionObserver().subscriptionStoppedByErrorPolicy(e.globalEventOrder(), cause, eventStoreSubscription);

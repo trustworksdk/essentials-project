@@ -63,7 +63,7 @@ public interface PersistedEventHandler {
      * Called by the asynchronous subscriptions ({@link PersistedEventSubscriber}) on the delivery thread when handling
      * <code>event</code> failed and the {@link SubscriptionErrorPolicy} has run out of options: after its retries, in place of
      * skipping the event ({@link SubscriptionErrorPolicy.Mode#SKIP}, {@link SubscriptionErrorPolicy.Mode#RETRY_N_THEN_SKIP}) or
-     * stopping at it ({@link SubscriptionErrorPolicy.Mode#STOP}). The {@link UnitOfWork} the event was handled in has been
+     * stopping at it ({@link SubscriptionErrorPolicy.Mode#STOP}, {@link SubscriptionErrorPolicy.Mode#RETRY_N_THEN_STOP}). The {@link UnitOfWork} the event was handled in has been
      * rolled back by then and none is active, so a handler that takes the event over - e.g. by queueing it for redelivery
      * - must do so in a {@link UnitOfWork} of its own.
      * <p>

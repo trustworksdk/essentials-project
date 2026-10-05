@@ -1365,7 +1365,8 @@ The manager's `SubscriptionErrorPolicy` decides this (`dk.trustworks.essentials.
 |---|---|
 | `SubscriptionErrorPolicy.skip()` (default) | Log at ERROR, advance past the event, continue |
 | `SubscriptionErrorPolicy.retryThenSkip(n[, initialBackoff, maxBackoff])` | Call the handler again up to `n` times (new `UnitOfWork` each, exponential backoff, later events wait), then skip as above |
-| `SubscriptionErrorPolicy.stop()` | Log at ERROR and stop at the event without advancing the resume point; the subscription resumes *at* it when started again (restart, fenced-lock hand-over, `resetFrom`). A permanent failure stops it again - the subscription stalls rather than loses the event |
+| `SubscriptionErrorPolicy.stop()` | On the **first** failure: log at ERROR and stop at the event without advancing the resume point; the subscription continues *at* it when resumed (`EventStoreSubscription#resumeIfStoppedByErrorPolicy()`, admin API) or started again (restart, fenced-lock hand-over, `resetFrom`). A permanent failure stops it again - the subscription stalls rather than loses the event |
+| `SubscriptionErrorPolicy.retryThenStop(n[, initialBackoff, maxBackoff])` | Retry as `retryThenSkip`, then stop as `stop()` - **the usual choice for a projection that must not skip**: `stop()` also halts on a transient non-I/O failure (serialization failure / deadlock `40001`/`40P01`, `55P03`, optimistic-concurrency conflict), which `IOExceptionUtil` does not retry |
 
 ```java
 EventStoreSubscriptionManager.builder()
@@ -1374,8 +1375,8 @@ EventStoreSubscriptionManager.builder()
     .build();
 ```
 
-Spring Boot: `essentials.eventstore.subscription-manager.error-policy.mode=skip|retry-n-then-skip|stop` (default `skip`),
-plus `.max-retries` (default 3), `.initial-backoff` (100ms), `.max-backoff` (1s). Built directly, `PersistedEventSubscriberBuilder`
+Spring Boot: `essentials.eventstore.subscription-manager.error-policy.mode=skip|retry-n-then-skip|stop|retry-n-then-stop` (default `skip`),
+plus `.max-retries` (default 3, used by the two `retry-n-then-*` modes only - `stop` never retries), `.initial-backoff` (100ms), `.max-backoff` (1s). Built directly, `PersistedEventSubscriberBuilder`
 and `BatchedPersistedEventSubscriberBuilder` take the same `setSubscriptionErrorPolicy(...)`. The policy is per manager, applies
 to a batch as a whole, and does not touch in-transaction subscriptions (the exception rolls back the caller) or Inbox-forwarding
 subscriptions (the Inbox's `RedeliveryPolicy` applies). Alert on the Micrometer counter
@@ -1410,13 +1411,21 @@ Only a real stop counts: under CDC a subscription switches between polling and t
 recovers), which interrupts its delivery thread too, but a retry backoff it interrupts is waited out and the retries continue.
 
 **Detect a `stop()` explicitly** - a stopped subscription looks like a healthy one with no new events:
-`EventStoreSubscription#isStoppedByErrorPolicy()` (true until the subscription is started again), gauge
+`EventStoreSubscription#isStoppedByErrorPolicy()` (true until the subscription is resumed or started again), gauge
 `essentials.eventstore.subscription.stopped` (`1` while stopped - **alert on this**), observer callback
 `subscriptionStoppedByErrorPolicy(...)`, counter `essentials.eventstore.subscription.stopped_by_error_policy` (one per stop -
 records that a stop happened, so not an alert on its own), and admin API `ApiSubscription.stoppedByErrorPolicy`. **`isActive()` stays `true` after a stop, on purpose**: it means "running here" ("holds
 the fenced lock" for exclusive subscriptions), the lock is kept so the event doesn't flap to a node that fails the same way,
 and the manager's periodic checkpoint only saves active subscriptions - which is what persists the held resume point if the
 process later dies without a graceful stop. Never use `isActive()` to detect a stop.
+
+**Resume a stopped subscription without a restart** once the cause is fixed: `EventStoreSubscription#resumeIfStoppedByErrorPolicy()`,
+`EventStoreSubscriptionManager#resumeSubscriptionIfStoppedByErrorPolicy(subscriberId, aggregateType)`, or the admin API
+(`POST /event-store/subscriptions/{subscriberId}/aggregate-types/{aggregateType}/resume`, role `essentials_subscription_writer`).
+Delivery restarts at the held resume point - the failed event (batch) is handled again first, nothing is skipped, and if it fails
+again the policy applies again. Polling and CDC alike; an exclusive subscription keeps its fenced lock throughout. Returns `false`
+and does nothing for a subscription that is not stopped - or not running in this instance: only the instance running it (for an
+exclusive subscription, the lock holder) can resume it.
 
 ### Flush-published events cannot be recalled
 
