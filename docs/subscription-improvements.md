@@ -696,7 +696,9 @@ Testcontainers IT covering:
   decided. Before choosing, check whether non-exclusive subscriptions on several nodes writing the same
   `(subscriber_id, aggregate_type)` row need the cross-JVM guarantee anyway.
 
-  **Related dead code.** `SubscriptionResetOnPoisonNotifier`'s reset callback says it forces durable persistence.
-  It builds a fresh `SubscriptionResumePoint`, which starts with its persisted value equal to its current value, so
-  `isChanged()` is false and `saveResumePoints` filters it out without writing. The reset is still persisted, by
-  `overrideResumePoint` inside `resetFrom`, so behaviour is correct. The callback only misleads.
+  **Related dead code, removed.** `SubscriptionResetOnPoisonNotifier`'s reset callback claimed to force durable
+  persistence. It built a fresh `SubscriptionResumePoint`, which starts with its persisted value equal to its current
+  value, so `isChanged()` was false and `saveResumePoints` filtered it out without writing. That was already true of
+  the flag-based `isChanged()` it was written against. The reset was always persisted by `overrideResumePoint` inside
+  `resetFrom`, before the callback runs. The callback is now a no-op. Making it write would only have added a second
+  writer, from a second resume-point object, to the race described above.
