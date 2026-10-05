@@ -69,7 +69,7 @@
         <java.release.version>25</java.release.version>
         <java.version>${java.release.version}</java.version>
         <maven.compiler.release>${java.release.version}</maven.compiler.release>
-        <kotlin.version>2.4.10</kotlin.version>
+        <kotlin.version>2.4.20</kotlin.version>
         <!-- The language/API level artifacts are compiled against, kept independent of the compiler
              (kotlin.version) so a newer compiler still emits binaries/metadata an older consumer can read.
              These two properties are the single source for that level — the kotlin-maven-plugin blocks in
@@ -105,7 +105,7 @@
         <springdoc.version>3.1.1</springdoc.version>
         <objenesis.version>3.6</objenesis.version>
         <postgresql.version>42.7.13</postgresql.version>
-        <slf4j.version>2.0.18</slf4j.version>
+        <slf4j.version>2.0.20</slf4j.version>
         <awaitility.version>4.3.0</awaitility.version>
         <assertj.version>3.27.7</assertj.version>
         <!-- Used only by examples/essentials-performance-lab, for coordinated-omission-free latency
@@ -118,6 +118,9 @@
         <testcontainers-bom.version>2.0.5</testcontainers-bom.version>
         <jdbi3-bom.version>3.54.0</jdbi3-bom.version>
         <jackson3-bom.version>3.1.5</jackson3-bom.version>
+        <!-- Jackson 2, for the third-party code that still runs on it (swagger, avro, the generated admin client);
+             no Essentials persistence path uses it. See the import in dependencyManagement. -->
+        <jackson2-bom.version>2.22.3</jackson2-bom.version>
         <!-- Held ahead of the Spring Boot BOM (5.8.1 at spring-boot 4.1.1) for CVE-2026-18710 / -88032 / -88033;
              5.11.1 is the lowest release outside all three ranges. See the import in dependencyManagement. -->
         <mongodb-driver-bom.version>5.11.1</mongodb-driver-bom.version>
@@ -127,27 +130,27 @@
         <!-- Newest release; the floor is assertj-core's own 1.18.3, which is what Spring Boot's management
              was pulling back down. Take the plain version, never the `-jdk5` line Central reports as
              <latest> — that is the legacy Java 5 build, not a newer release. -->
-        <byte-buddy.version>1.18.12</byte-buddy.version>
+        <byte-buddy.version>1.18.14</byte-buddy.version>
         <!-- Deliberately held one patch back. 1.12.2 adds org.apache.avro.util.ClassSecurityValidator, which
              refuses to reflect any class not named in org.apache.avro.SERIALIZABLE_CLASSES /
              SERIALIZABLE_PACKAGES - a behaviour change, not a patch, and one that lands on consumers of
              types-avro rather than on us (CustomConversionsTest is simply the first thing to hit it).
              Taking it means deciding what the module's default trust list should be and saying so in the
              release notes; do that as its own change, not inside a patch batch. -->
-        <avro.version>1.12.1</avro.version>
+        <avro.version>1.12.2</avro.version>
         <commons-compress.version>1.28.0</commons-compress.version>
         <commons-lang3.version>3.20.0</commons-lang3.version>
         <commons-configuration2.version>2.15.1</commons-configuration2.version>
         <kafka-clients.version>4.3.1</kafka-clients.version>
-        <xmlunit-core.version>2.13.0</xmlunit-core.version>
-        <archunit-junit5.version>1.5.0</archunit-junit5.version>
+        <xmlunit-core.version>2.14.0</xmlunit-core.version>
+        <archunit-junit5.version>1.5.1</archunit-junit5.version>
         <java-uuid-generator.version>5.1.1</java-uuid-generator.version>
         <jmh.version>1.37</jmh.version>
         <reactive-streams.version>1.0.4</reactive-streams.version>
         <!-- Held ahead of the version the Spring Boot BOM manages, purely to clear CVEs Spring Boot has not
              yet picked up; drop the override once its BOM catches up. It is a patch-level move within the
              line Spring Boot already targets, so no API change is implied. -->
-        <tomcat.version>11.0.25</tomcat.version>
+        <tomcat.version>11.0.26</tomcat.version>
 
         <dokka.version>2.2.0</dokka.version>
         <maven-dependency-plugin.version>3.11.0</maven-dependency-plugin.version>
@@ -233,6 +236,19 @@
                 <groupId>tools.jackson</groupId>
                 <artifactId>jackson-bom</artifactId>
                 <version>${jackson3-bom.version}</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+            <!-- Jackson 2, held ahead of the Spring Boot BOM (2.21.5 at spring-boot 4.1.1) because swagger-core
+                 2.2.53 asks for a coherent 2.22.x set. Used only where ban-jackson-2 is lifted (types-avro,
+                 admin-api-spec, admin-api-client-java) and at test scope by the admin starters.
+                 Must sit BELOW the tools.jackson import: jackson-annotations is shared by both majors, and the
+                 first import wins, so Jackson 3 keeps owning it (2.21 at 3.1.5). See the matching
+                 requireUpperBoundDeps exclude. -->
+            <dependency>
+                <groupId>com.fasterxml.jackson</groupId>
+                <artifactId>jackson-bom</artifactId>
+                <version>${jackson2-bom.version}</version>
                 <type>pom</type>
                 <scope>import</scope>
             </dependency>
@@ -761,20 +777,16 @@
                                       Listed one artifact at a time on purpose: a new violation should fail
                                       the build and force a decision rather than land inside a wildcard.
 
-                                      Both entries exist because swagger-project-jakarta:2.2.52 (parent of the
-                                      swagger-core-jakarta admin-api-spec compiles against) declares a Jackson 2
-                                      set that does not agree with itself: jackson-databind-version=2.21.1 and
-                                      jackson-annotations-version=2.21, but jackson-version=2.22.0 for these
-                                      two. Jackson requires one version across the set, so *no* resolution can
-                                      honour that upper bound without splitting Jackson — including swagger's
-                                      own. Spring Boot's 2.21.5-for-everything is the coherent reading of it, and
-                                      it is already above the databind swagger asks for.
-                                      Re-check when swagger-core.version moves: if a release lines those three
-                                      properties up, drop these and let the rule speak.
+                                      jackson-annotations is excluded because both Jackson majors share it and
+                                      Jackson 3 owns it (see the com.fasterxml.jackson:jackson-bom import):
+                                      tools.jackson 3.1.5 pins 2.21, while swagger-core-jakarta 2.2.53 asks for
+                                      the 2.22 that pairs with its Jackson 2.22.x. Raising it would move every
+                                      module's Jackson 3 runtime onto an annotations release Jackson 3.1 does not
+                                      ship with. Drop this exclude when jackson3-bom.version moves to 3.2.x, which
+                                      pairs with annotations 2.22.
                                     -->
                                     <excludes>
-                                        <exclude>com.fasterxml.jackson.datatype:jackson-datatype-jsr310</exclude>
-                                        <exclude>com.fasterxml.jackson.dataformat:jackson-dataformat-yaml</exclude>
+                                        <exclude>com.fasterxml.jackson.core:jackson-annotations</exclude>
                                     </excludes>
                                 </requireUpperBoundDeps>
                                 <banDuplicatePomDependencyVersions/>

@@ -46,7 +46,7 @@
         <!-- Versions for libraries only used by the examples and therefore not managed by the Essentials parent POM
              nor by the Spring Boot BOM it imports. -->
         <loki-logback-appender.version>2.1.0</loki-logback-appender.version>
-        <snappy-java.version>1.1.10.8</snappy-java.version>
+        <snappy-java.version>1.1.10.10</snappy-java.version>
     </properties>
 
     <dependencies>
