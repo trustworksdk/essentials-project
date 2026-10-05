@@ -273,8 +273,8 @@ Close with:
 - The wiring performed, named explicitly.
 - What the user must still fill in — invariants in the decider, fields on the event, the query in the
   view repository.
-- The self-check: re-read `rules/slice-design.md` § Red flags and confirm none of the structural
-  entries applies to what was just emitted.
+- The self-check: walk `rules/slice-design.md` § Red flags, as printed in Step 1, and confirm none of
+  the structural entries applies to what was just emitted.
 
 ## 8. Project rules pointer
 

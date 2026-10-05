@@ -239,7 +239,8 @@ Do **not** stamp `lastSyncedAt`: that field belongs to an external generator's s
 
 ## 7. Verify what the change touched — not the whole project
 
-Re-read `rules/slice-design.md` § Red flags and confirm no structural entry now applies. Then run only
+Walk `rules/slice-design.md` § Red flags, as already printed for this lane, and confirm no structural
+entry now applies. Then run only
 the gates the change class implicates:
 
 | Class | Gates worth checking, by name |

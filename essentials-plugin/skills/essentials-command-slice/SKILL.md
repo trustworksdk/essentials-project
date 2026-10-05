@@ -35,9 +35,14 @@ Supplied by the dispatching command. **Never re-elicit these.**
 ## Step 1 — Load the law and the shared procedure
 
 ```
-Read ${CLAUDE_PLUGIN_ROOT}/rules/slice-design.md
+python3 ${CLAUDE_PLUGIN_ROOT}/scripts/slice-law.py --lane <lane> --kind command --project <projectRoot>
 Read ${CLAUDE_PLUGIN_ROOT}/references/slice/slice-authoring.md
 ```
+
+`slice-law.py` prints the sections of `rules/slice-design.md` that apply to this lane, this kind and
+the project's persistence, and names the ones it left out — that output is the law for this skill,
+cited by the file's own section names. Entered from `essentials-change`, the law is already in
+context: when its header line names this `lane`, do not print it again.
 
 §R1, §R2, §R3, §R4, §R5 and § Wiring is part of done all bind here. Cite them; do not restate them.
 
@@ -323,7 +328,8 @@ On the **service-entity** lane also state, explicitly:
   state is the finding.
 - The **write** table needs a migration; no read-model migration exists on this lane.
 
-Re-read `rules/slice-design.md` § Red flags and confirm none of the structural entries applies to
+Walk § Red flags in the law printed in Step 1 — do not load it again — and confirm none of the
+structural entries applies to
 what you just emitted — in particular that no existing Decider or handler gained a branch, no existing
 API file gained a mapping, and nothing in `events/` or `entities/` names a command type (§R4).
 

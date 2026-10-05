@@ -33,12 +33,16 @@ Detection is Glob and Grep only. Do not run a build, and do not walk the whole s
 ## Step 1 — Load the law and the procedure
 
 ```
-Read ${CLAUDE_PLUGIN_ROOT}/rules/slice-design.md
+python3 ${CLAUDE_PLUGIN_ROOT}/scripts/slice-law.py --project <project root>
 Read ${CLAUDE_PLUGIN_ROOT}/references/slice/change-procedure.md
 ```
 
 The law is the structure; the procedure is how a change moves through it. Cite both by section name;
-restate neither.
+restate neither. `slice-law.py` prints the sections of `rules/slice-design.md` that apply to the
+lanes and the persistence the project shows, and names the ones it left out; print one of those with
+`--section "<name>"` when the change reaches it — a new bounded context on a lane the project does
+not use yet is the usual case. Load the law once: a kind skill entered in Step 4 skips its own
+Step 1 print when this one's header names its lane.
 
 Read `${CLAUDE_PLUGIN_ROOT}/references/slice/manifest-guide.md` when the change touches manifest
 fields you are not certain of, and let the `essentials-docs` skill answer framework-API questions —
@@ -120,7 +124,7 @@ read.
 
 ## Step 6 — Verify what was touched
 
-`change-procedure.md` §7. Re-read § Red flags, check only the gates the class implicates, run the
+`change-procedure.md` §7. Walk § Red flags in the law printed in Step 1 — do not load it again — check only the gates the class implicates, run the
 touched slice's test where the project has one, and *offer* — do not run — the full
 `/essentials:slice-check`.
 

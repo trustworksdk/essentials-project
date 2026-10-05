@@ -40,6 +40,13 @@ Java or Kotlin source under DIR imports a Spring Data repository package, or a b
 a Spring Data starter or artifact; other when neither does. With neither --project nor --store,
 every store is printed.
 
+Without --lane, --project also decides which lanes to print: every directory holding a slice
+directory (`use_cases/`, `views/`, `automations/`, `external_systems/`) is a bounded context, on the
+aggregate lane when it has `aggregates/`, the service-entity lane when it has `entities/`, the
+decider lane otherwise; a project with no bounded context yet gets every lane. That is a choice of
+what to print, never a lane verdict — a BC showing two lanes prints both here and is reported by
+`slice-source.py` (`bcs[].lane`) and `/essentials:slice-check`.
+
 NAME is a heading or its short name (the part before ` — ` or `: `), so `--section R5` and
 `--section "Service-entity style"` both work. The printed text drops the scope lines and keeps
 everything else byte for byte.
@@ -216,6 +223,25 @@ def detect_store(project: Path) -> str:
     return "other"
 
 
+SLICE_DIRS = {"use_cases", "views", "automations", "external_systems"}
+
+
+def detect_lanes(project: Path) -> set[str]:
+    """The lanes of the project's bounded contexts, by marker directory; every lane when it has none."""
+    lanes: set[str] = set()
+    for dirpath, dirnames, _ in os.walk(project):
+        dirnames[:] = sorted(d for d in dirnames if d not in SKIP_DIRS)
+        present = set(dirnames)
+        if present & SLICE_DIRS:
+            if "aggregates" in present:
+                lanes.add("aggregate")
+            if "entities" in present:
+                lanes.add("service-entity")
+            if not present & {"aggregates", "entities"}:
+                lanes.add("decider")
+    return lanes or set(DIMENSIONS["lane"])
+
+
 def applies(section: Section, wanted: dict[str, set[str]]) -> bool:
     return all(not (wanted.get(dim) or set(DIMENSIONS[dim])).isdisjoint(values)
                for dim, values in section.scope.items())
@@ -305,7 +331,7 @@ def main(argv=None) -> int:
         parser.add_argument(f"--{dim}", action="append", choices=values, default=[],
                             help=f"repeatable; omitted means every {dim}")
     parser.add_argument("--project", type=Path, metavar="DIR",
-                        help="detect --store from the project at DIR")
+                        help="detect --store, and --lane when not given, from the project at DIR")
     parser.add_argument("--section", action="append", default=[], metavar="NAME",
                         help="print this section and its subsections only (repeatable)")
     parser.add_argument("--outline", action="store_true", help="list sections, scopes and sizes")
@@ -324,6 +350,8 @@ def main(argv=None) -> int:
             if wanted["store"]:
                 raise UsageError("--project decides --store; give one or the other")
             wanted["store"] = {detect_store(args.project)}
+            if not wanted["lane"]:
+                wanted["lane"] = detect_lanes(args.project)
         if args.outline:
             outline(preamble, sections, wanted, sys.stdout)
         elif args.section:

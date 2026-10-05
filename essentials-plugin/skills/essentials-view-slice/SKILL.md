@@ -34,9 +34,14 @@ Supplied by the dispatching command. **Never re-elicit these.**
 ## Step 1 — Load the law and the shared procedure
 
 ```
-Read ${CLAUDE_PLUGIN_ROOT}/rules/slice-design.md
+python3 ${CLAUDE_PLUGIN_ROOT}/scripts/slice-law.py --lane <lane> --kind view --project <projectRoot>
 Read ${CLAUDE_PLUGIN_ROOT}/references/slice/slice-authoring.md
 ```
+
+`slice-law.py` prints the sections of `rules/slice-design.md` that apply to this lane, this kind and
+the project's persistence, and names the ones it left out — that output is the law for this skill,
+cited by the file's own section names. Entered from `essentials-change`, the law is already in
+context: when its header line names this `lane`, do not print it again.
 
 The files are written by `scripts/render-slice.py` (`slice-authoring.md` §4b). This skill decides the
 shape, runs the script, then fills the TODOs and reports.
@@ -300,7 +305,7 @@ Report the files written. State what the user must fill in: the view's real fiel
 serves, and the API's actual query — plus, on the event-sourced lanes, a handler per projected event
 and the indexes those queries need.
 
-Re-read `rules/slice-design.md` § Red flags, then confirm per lane:
+Walk § Red flags in the law printed in Step 1 — do not load it again — then confirm per lane:
 
 - **Decider / aggregate:** every projection `@MessageHandler` takes `OrderedMessage`; no update omits
   the version; in Java the `@Id` field is `public` and the `@Configuration` class is named

@@ -46,9 +46,14 @@ Say that, and tell the user the slice is theirs to write by hand as an `EventBus
 ## Step 1 — Load the law and the shared procedure
 
 ```
-Read ${CLAUDE_PLUGIN_ROOT}/rules/slice-design.md
+python3 ${CLAUDE_PLUGIN_ROOT}/scripts/slice-law.py --lane <lane> --kind translation --project <projectRoot>
 Read ${CLAUDE_PLUGIN_ROOT}/references/slice/slice-authoring.md
 ```
+
+`slice-law.py` prints the sections of `rules/slice-design.md` that apply to this lane, this kind and
+the project's persistence, and names the ones it left out — that output is the law for this skill,
+cited by the file's own section names. Entered from `essentials-change`, the law is already in
+context: when its header line names this `lane`, do not print it again.
 
 The files are written by `scripts/render-slice.py` (`slice-authoring.md` §4b). This skill decides the
 shape, runs the script, then prunes, fills the TODOs and reports.
@@ -168,7 +173,8 @@ On `inbound` or `both`, an empty `maps` still means this is not a translation sl
 Report the files written. State plainly what is still missing: the client implementation, the real
 field mappings in both directions, and the contract test.
 
-Re-read `rules/slice-design.md` § Red flags, then check the ACL invariant directly: grep the rest of
+Walk § Red flags in the law printed in Step 1 — do not load it again — then check the ACL invariant
+directly: grep the rest of
 the bounded context for the external type names and confirm zero hits outside this directory.
 
 ## Red flags specific to this kind

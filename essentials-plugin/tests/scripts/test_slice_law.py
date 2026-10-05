@@ -96,6 +96,21 @@ class SliceLaw(unittest.TestCase):
         code, _, err = run("--project", str(PLUGIN / "no-such-dir"))
         self.assertEqual(code, 2, err)
 
+    def test_project_decides_the_lanes_unless_given(self):
+        fixtures = PLUGIN / "tests" / "fixtures"
+        for fixture, lanes in (("worked-example", "decider"), ("service-entity", "service-entity"),
+                               ("aggregate-lane", "aggregate"),
+                               ("multi-lane", "decider,aggregate,service-entity")):
+            with self.subTest(fixture=fixture):
+                code, out, err = run("--project", str(fixtures / fixture))
+                self.assertEqual(code, 0, err)
+                self.assertIn(f"lane={lanes} ", out.split("\n", 1)[0])
+        code, out, _ = run("--lane", "decider", "--project", str(fixtures / "service-entity"))
+        self.assertIn("lane=decider ", out.split("\n", 1)[0])
+        with tempfile.TemporaryDirectory() as tmp:
+            code, out, _ = run("--project", tmp)
+            self.assertIn("lane=decider,aggregate,service-entity ", out.split("\n", 1)[0])
+
     def test_section_by_short_name_brings_its_subsections(self):
         code, out, _ = run("--section", "Spring Data repository surface")
         self.assertEqual(code, 0)

@@ -160,7 +160,7 @@ For a full overview of the docs, the master index is `references/llm/LLM.md` —
 When Claude is **about to write or modify** code that uses Essentials types (importing `dk.trustworks.essentials.*` or referencing framework types from the description above), open both of these before writing:
 
 - `Read` `references/design/essentials-design.md` — aggregate boundaries, event-processor selection (`InTransactionEventProcessor` vs `ViewEventProcessor`), uniqueness enforcement, error-handling policy, and the design anti-patterns. Language-neutral, with Java and Kotlin shown side by side.
-- `Read` `rules/slice-design.md` — the slice-design law, if the change adds, moves, or restructures a slice.
+- `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/slice-law.py --project <project root>` — the slice-design law (`rules/slice-design.md`, printed for the project's lanes and persistence), if the change adds, moves, or restructures a slice.
 
 **Apply** the guidance to what you write — don't just read it.
 
