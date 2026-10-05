@@ -17,6 +17,7 @@
 package dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.cdc;
 
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.gap.*;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.internal.GapMiddlesAwaitedInMemory;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.types.GlobalEventOrder;
 import dk.trustworks.essentials.types.LongRange;
 import org.slf4j.*;
@@ -83,7 +84,7 @@ final class CdcDeliveryTracker {
      * ({@code SubscriptionGapHandler#transientGapGiveUpThreshold()}) overrides it - see {@link #startingAfter(String, long, Duration)};
      * with a {@code NoEventStreamGapHandler}, or a promotion strategy that is not a plain age, this is the only rule
      */
-    static final Duration DEFAULT_GAP_TIMEOUT      = Duration.ofSeconds(120);
+    static final Duration DEFAULT_GAP_TIMEOUT      = GapMiddlesAwaitedInMemory.DEFAULT_GAP_TIMEOUT;
     /**
      * Bound on the runs held above the watermark - each one stands for at least one gap below it - and on the earlier gaps
      */
@@ -115,11 +116,13 @@ final class CdcDeliveryTracker {
      * moved a million forward under a running subscription - had a million transient gaps written before the event was
      * handed on, and given up order by order once {@code gapTimeout} had passed.
      * <p>
-     * Half of {@link #DEFAULT_MAX_TRACKED_GAPS}: one gap is recorded at most as many orders deep as the tracker waits for
-     * separate gaps at once - far more than the events normally in flight on one event table. A gap no wider than twice
-     * this is recorded in full.
+     * The bound is {@link SubscriptionGapHandler#MAX_AWAITED_ORDERS_PER_GAP_END}, shared with the polling path, whose gap
+     * handler records a gap's ends - and whose subscriptions await its middle in memory - the same way. It is half of
+     * {@link #DEFAULT_MAX_TRACKED_GAPS}: one gap is recorded at most as many orders deep as the tracker waits for separate
+     * gaps at once - far more than the events normally in flight on one event table. A gap no wider than twice this is
+     * recorded in full.
      */
-    static final int      MAX_AWAITED_ORDERS_PER_GAP_END = DEFAULT_MAX_TRACKED_GAPS / 2;
+    static final int      MAX_AWAITED_ORDERS_PER_GAP_END = SubscriptionGapHandler.MAX_AWAITED_ORDERS_PER_GAP_END;
 
     /**
      * What {@link #markDelivered} found. For {@link Kind#OPENED_GAP} the gap is {@code [gapFromInclusive .. order - 1]},
