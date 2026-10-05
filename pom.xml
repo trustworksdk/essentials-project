@@ -423,6 +423,14 @@
                 <artifactId>kafka-clients</artifactId>
                 <version>${kafka-clients.version}</version>
             </dependency>
+            <!-- The slf4j-api in <dependencies> below only reaches modules that inherit it; a module that re-declares
+                 slf4j-api without a version (the shard-owned queue modules) otherwise gets Spring Boot's managed
+                 version instead of ${slf4j.version}. Version only - each module keeps its own scope. -->
+            <dependency>
+                <groupId>org.slf4j</groupId>
+                <artifactId>slf4j-api</artifactId>
+                <version>${slf4j.version}</version>
+            </dependency>
         </dependencies>
     </dependencyManagement>
 
