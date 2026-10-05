@@ -25,6 +25,7 @@ import java.time.*;
 import java.util.*;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.BooleanSupplier;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -36,18 +37,25 @@ import static org.assertj.core.api.Assertions.assertThat;
  * <p>
  * The storage here blocks {@link FencedLockStorage#releaseLockInDB} until the test lets it go, so a local release that
  * waits on the DB never happens within the assertion window.
+ * <p>
+ * The DB release is best effort, so it must neither undo the confirmations made in the same tick (it runs in its own
+ * {@link UnitOfWork}, after the confirmation one has completed) nor hold up the confirmation thread against a DB that has
+ * just failed on IO (no DB release when the confirmation {@link UnitOfWork} failed on IO, and none after the first IO failure).
  */
 class DBFencedLockManagerLostLockReleaseTest {
-    private static final LockName LOCK_NAME = LockName.of("lost-lock");
+    private static final LockName LOCK_NAME       = LockName.of("lost-lock");
+    private static final LockName OTHER_LOCK_NAME = LockName.of("other-lock");
 
-    private BlockingReleaseLockStorage storage;
-    private TestDBFencedLockManager    lockManager;
+    private BlockingReleaseLockStorage   storage;
+    private ThreadLocalUnitOfWorkFactory unitOfWorkFactory;
+    private TestDBFencedLockManager      lockManager;
 
     @BeforeEach
     void setup() {
         storage = new BlockingReleaseLockStorage();
+        unitOfWorkFactory = new ThreadLocalUnitOfWorkFactory();
         lockManager = new TestDBFencedLockManager(storage,
-                                                  new ThreadLocalUnitOfWorkFactory(),
+                                                  unitOfWorkFactory,
                                                   FencedLockManagerSettings.builder()
                                                                            .setLockManagerInstanceId("node1")
                                                                            .setLockTimeOut(Duration.ofSeconds(3))
@@ -71,6 +79,73 @@ class DBFencedLockManagerLostLockReleaseTest {
     @Test
     void a_lock_whose_confirmation_fails_with_an_io_error_is_released_locally_before_the_db_release_completes() {
         verifyLostLockIsReleasedLocallyFirst(ConfirmOutcome.IO_FAILURE);
+    }
+
+    @Test
+    void a_failing_db_release_of_a_lost_lock_does_not_roll_back_the_confirmations_made_in_the_same_tick() {
+        // Given
+        storage.allowReleaseInDB.countDown();
+        storage.releaseInDBFailure = new IllegalStateException("Release failed");
+        var confirmedLock = lockManager.tryAcquireLock(OTHER_LOCK_NAME).orElseThrow();
+        var lostLock      = lockManager.tryAcquireLock(LOCK_NAME).orElseThrow();
+
+        // When
+        storage.confirmOutcomeByLock.put(LOCK_NAME, ConfirmOutcome.TAKEN_OVER);
+
+        // Then the DB release is attempted in a UnitOfWork of its own
+        Awaitility.waitAtMost(Duration.ofSeconds(5))
+                  .untilAsserted(() -> assertThat(storage.releaseInDBUnitOfWorks).hasSize(1));
+        assertThat(lostLock.isLocked()).isFalse();
+        var confirmationUnitOfWork = storage.lastConfirmationUnitOfWork.get(LOCK_NAME);
+        assertThat(storage.releaseInDBUnitOfWorks.getFirst()).isNotSameAs(confirmationUnitOfWork);
+
+        // And the confirmation UnitOfWork of that tick - which also confirmed the other lock - is committed, not rolled back
+        assertThat(confirmationUnitOfWork.status()).isEqualTo(UnitOfWorkStatus.Committed);
+        assertThat(confirmedLock.isLocked()).isTrue();
+    }
+
+    @Test
+    void no_db_release_is_attempted_when_the_confirmation_unit_of_work_fails_with_an_io_error() {
+        // Given
+        storage.allowReleaseInDB.countDown();
+        var lock      = lockManager.tryAcquireLock(LOCK_NAME).orElseThrow();
+        var otherLock = lockManager.tryAcquireLock(OTHER_LOCK_NAME).orElseThrow();
+
+        // When
+        unitOfWorkFactory.failCommitWithIOException = true;
+
+        // Then every lock is released locally
+        Awaitility.waitAtMost(Duration.ofSeconds(5))
+                  .untilAsserted(() -> {
+                      assertThat(lock.isLocked()).isFalse();
+                      assertThat(otherLock.isLocked()).isFalse();
+                  });
+        // And none in the DB that has just failed on IO - the rows expire after lockTimeOut
+        assertThat(storage.releaseInDBUnitOfWorks).isEmpty();
+    }
+
+    @Test
+    void the_db_release_of_lost_locks_stops_at_the_first_io_failure() {
+        // Given
+        storage.allowReleaseInDB.countDown();
+        storage.releaseInDBFailure = new UncheckedIOException(new IOException("Connection lost"));
+        var lock      = lockManager.tryAcquireLock(LOCK_NAME).orElseThrow();
+        var otherLock = lockManager.tryAcquireLock(OTHER_LOCK_NAME).orElseThrow();
+
+        // When
+        storage.confirmOutcome = ConfirmOutcome.IO_FAILURE;
+
+        // Then both locks are released locally, but only one DB release is attempted
+        Awaitility.waitAtMost(Duration.ofSeconds(5))
+                  .untilAsserted(() -> {
+                      assertThat(lock.isLocked()).isFalse();
+                      assertThat(otherLock.isLocked()).isFalse();
+                      assertThat(storage.releaseInDBUnitOfWorks).hasSize(1);
+                  });
+        Awaitility.await()
+                  .during(Duration.ofMillis(500))
+                  .atMost(Duration.ofSeconds(2))
+                  .untilAsserted(() -> assertThat(storage.releaseInDBUnitOfWorks).hasSize(1));
     }
 
     private void verifyLostLockIsReleasedLocallyFirst(ConfirmOutcome lostOutcome) {
@@ -121,13 +196,18 @@ class DBFencedLockManagerLostLockReleaseTest {
     }
 
     /**
-     * Stores nothing: the single lock is acquired by insert, confirmed per {@link #confirmOutcome}, and released in the DB
-     * only once {@link #allowReleaseInDB} is counted down.
+     * Stores nothing: a lock is acquired by insert, confirmed per {@link #confirmOutcomeByLock} falling back to
+     * {@link #confirmOutcome}, and released in the DB only once {@link #allowReleaseInDB} is counted down - then failing
+     * with {@link #releaseInDBFailure} when set.
      */
     static class BlockingReleaseLockStorage implements FencedLockStorage<ThreadLocalUnitOfWork, DBFencedLock> {
-        final    CountDownLatch  allowReleaseInDB   = new CountDownLatch(1);
-        final    List<Long>      releasedInDBTokens = new CopyOnWriteArrayList<>();
-        volatile ConfirmOutcome  confirmOutcome     = ConfirmOutcome.CONFIRMED;
+        final    CountDownLatch                       allowReleaseInDB           = new CountDownLatch(1);
+        final    List<Long>                           releasedInDBTokens         = new CopyOnWriteArrayList<>();
+        final    Map<LockName, ConfirmOutcome>        confirmOutcomeByLock       = new ConcurrentHashMap<>();
+        final    Map<LockName, ThreadLocalUnitOfWork> lastConfirmationUnitOfWork = new ConcurrentHashMap<>();
+        final    List<ThreadLocalUnitOfWork>          releaseInDBUnitOfWorks     = new CopyOnWriteArrayList<>();
+        volatile ConfirmOutcome                       confirmOutcome             = ConfirmOutcome.CONFIRMED;
+        volatile RuntimeException                     releaseInDBFailure;
 
         @Override
         public void initializeLockStorage(DBFencedLockManager<ThreadLocalUnitOfWork, DBFencedLock> lockManager, ThreadLocalUnitOfWork uow) {
@@ -135,7 +215,8 @@ class DBFencedLockManagerLostLockReleaseTest {
 
         @Override
         public boolean confirmLockInDB(DBFencedLockManager<ThreadLocalUnitOfWork, DBFencedLock> lockManager, ThreadLocalUnitOfWork uow, DBFencedLock fencedLock, OffsetDateTime confirmedTimestamp) {
-            return switch (confirmOutcome) {
+            lastConfirmationUnitOfWork.put(fencedLock.getName(), uow);
+            return switch (confirmOutcomeByLock.getOrDefault(fencedLock.getName(), confirmOutcome)) {
                 case CONFIRMED -> true;
                 case TAKEN_OVER -> false;
                 case IO_FAILURE -> throw new UncheckedIOException(new IOException("Connection lost"));
@@ -144,6 +225,7 @@ class DBFencedLockManagerLostLockReleaseTest {
 
         @Override
         public boolean releaseLockInDB(DBFencedLockManager<ThreadLocalUnitOfWork, DBFencedLock> lockManager, ThreadLocalUnitOfWork uow, DBFencedLock fencedLock) {
+            releaseInDBUnitOfWorks.add(uow);
             try {
                 if (!allowReleaseInDB.await(30, TimeUnit.SECONDS)) {
                     return false;
@@ -151,6 +233,9 @@ class DBFencedLockManagerLostLockReleaseTest {
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
                 return false;
+            }
+            if (releaseInDBFailure != null) {
+                throw releaseInDBFailure;
             }
             releasedInDBTokens.add(fencedLock.getCurrentToken());
             return true;
@@ -227,6 +312,10 @@ class DBFencedLockManagerLostLockReleaseTest {
      */
     static class ThreadLocalUnitOfWorkFactory implements UnitOfWorkFactory<ThreadLocalUnitOfWork> {
         private final ThreadLocal<ThreadLocalUnitOfWork> currentUnitOfWork = new ThreadLocal<>();
+        /**
+         * When set, every commit fails with an IO exception - as when the DB has become unreachable
+         */
+        volatile boolean failCommitWithIOException;
 
         @Override
         public ThreadLocalUnitOfWork getRequiredUnitOfWork() {
@@ -241,7 +330,7 @@ class DBFencedLockManagerLostLockReleaseTest {
         public ThreadLocalUnitOfWork getOrCreateNewUnitOfWork() {
             var unitOfWork = currentUnitOfWork.get();
             if (unitOfWork == null) {
-                unitOfWork = new ThreadLocalUnitOfWork(currentUnitOfWork::remove);
+                unitOfWork = new ThreadLocalUnitOfWork(currentUnitOfWork::remove, () -> failCommitWithIOException);
                 currentUnitOfWork.set(unitOfWork);
                 unitOfWork.start();
             }
@@ -254,13 +343,18 @@ class DBFencedLockManagerLostLockReleaseTest {
         }
     }
 
+    /**
+     * Like the real unit of work implementations, committing a unit of work marked rollback-only rolls it back
+     */
     static class ThreadLocalUnitOfWork implements UnitOfWork {
-        private final Runnable         onCompleted;
-        private       UnitOfWorkStatus status;
-        private       Throwable        causeOfRollback;
+        private final    Runnable         onCompleted;
+        private final    BooleanSupplier  failCommitWithIOException;
+        private volatile UnitOfWorkStatus status;
+        private volatile Throwable        causeOfRollback;
 
-        ThreadLocalUnitOfWork(Runnable onCompleted) {
+        ThreadLocalUnitOfWork(Runnable onCompleted, BooleanSupplier failCommitWithIOException) {
             this.onCompleted = onCompleted;
+            this.failCommitWithIOException = failCommitWithIOException;
         }
 
         @Override
@@ -270,6 +364,13 @@ class DBFencedLockManagerLostLockReleaseTest {
 
         @Override
         public void commit() {
+            if (status == UnitOfWorkStatus.MarkedForRollbackOnly) {
+                rollback(causeOfRollback);
+                return;
+            }
+            if (failCommitWithIOException.getAsBoolean()) {
+                throw new UncheckedIOException(new IOException("Connection lost during commit"));
+            }
             status = UnitOfWorkStatus.Committed;
             onCompleted.run();
         }

@@ -429,9 +429,11 @@ MongoClientSettings.builder()
 ```
 
 A lock that fails confirmation is released locally - `lockReleased` called - before the manager tries to release it in
-the database. That best-effort database release can still be slow: MongoDB driver 5.12+ retries a timed-out
-connection establishment with backoff, so against an unreachable server it takes several connect timeouts. Until it
-fails or succeeds, another node waits for `lockTimeOut` before taking the lock over.
+the database. That best-effort database release runs after the confirmation transaction, each in its own, so a failing
+release never rolls back the locks confirmed in the same tick. It can still be slow: MongoDB driver 5.12+ retries a
+timed-out connection establishment with backoff, so against an unreachable server one attempt takes several connect
+timeouts. So the manager stops at the first IO failure, and when the confirmation itself failed on IO it does not try
+the database at all. A lock left unreleased in the database is taken over by another node once `lockTimeOut` has passed.
 
 ### ⚠️ Always Release Locks
 
