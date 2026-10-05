@@ -669,6 +669,50 @@ module for SQL persistence.
 
 ---
 
+## `types-spring-web`: springdoc describes semantic types as their JSON (opt-in)
+
+Nothing changes unless you opt in. It is listed here because the OpenAPI document of every application that runs
+springdoc is wrong without it, and nothing fails to tell you so.
+
+Out of the box springdoc describes each semantic type as the Java object it is, not as the JSON it is written as: a
+`CharSequenceType` id becomes a component with `bytes`, `empty` and `value` properties, and a Kotlin value-class
+property is published under its mangled getter name (`orderId-nb-kci0`) while the wire carries `orderId`. Every client
+generated from that document (Orval, openapi-generator) types the ids wrongly.
+
+### Opting in
+
+`types-spring-web` now ships `SingleValueTypeModelConverter`, a swagger-core `ModelConverter`. Like the rest of the
+module it is **not auto-configured**: declare it as a bean in the application that runs springdoc, which adds every
+`ModelConverter` bean to its model resolution.
+
+```java
+@Bean
+SingleValueTypeModelConverter singleValueTypeModelConverter() {
+    return new SingleValueTypeModelConverter();
+}
+```
+
+```kotlin
+@Bean
+fun singleValueTypeModelConverter() = SingleValueTypeModelConverter()
+```
+
+springdoc is a `provided` dependency, so the application declares its own `springdoc-openapi-starter-webmvc-*` or
+`-webflux-*`. The converter works the same under WebMvc and WebFlux.
+
+### What opting in does to a generated client
+
+Every semantic type that the web mapper writes as a bare scalar is then published as that scalar's schema (`string`,
+`integer`/`int64`, `string`/`date-time`, ...), and Kotlin properties keep their real names. The document now agrees
+with the wire, but a client regenerated from it changes type: an id that was an object becomes a `string`, and a
+mangled Kotlin property gets its real name. Code written against the old generated types has to follow, so regenerate
+the client as part of opting in.
+
+The full per-type table is in
+[`LLM-types-spring-web.md` § OpenAPI with springdoc](../LLM/LLM-types-spring-web.md#openapi-with-springdoc).
+
+---
+
 ## Database schema harness
 
 Every Essentials component that owns tables now *describes* its schema instead of executing DDL itself, and a
