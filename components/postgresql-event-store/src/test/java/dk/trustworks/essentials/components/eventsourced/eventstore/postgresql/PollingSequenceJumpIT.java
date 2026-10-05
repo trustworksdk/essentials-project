@@ -246,6 +246,63 @@ class PollingSequenceJumpIT {
         subscription.stop();
     }
 
+    /**
+     * With the settings a Spring Boot starter user gets - batch size 10, polling interval 100 ms, a jittered back-off up to
+     * 2 s - the poll range used to reach the event above a jump of a million only after it had grown over the hole on
+     * empty polls: thousands of polls, hours. A poll after an empty one now looks up the lowest order persisted at or
+     * above its read position and reads straight from there.
+     */
+    @Test
+    void events_after_a_jump_of_a_million_arrive_within_seconds_with_the_default_polling_settings() throws Exception {
+        eventStoreSubscriptionManager.stop();
+        var pollingInterval = Duration.ofMillis(100);
+        eventStoreSubscriptionManager = EventStoreSubscriptionManager.builder()
+                                                                     .setEventStore(eventStore)
+                                                                     .setEventStorePollingBatchSize(10)
+                                                                     .setEventStorePollingInterval(pollingInterval)
+                                                                     // As EventStoreConfiguration in spring-boot-starter-postgresql-event-store builds it
+                                                                     .setEventStorePollingOptimizerFactory(eventStreamLogName -> new JitteredEventStorePollingOptimizer(eventStreamLogName,
+                                                                                                                                                                        pollingInterval.toMillis(),
+                                                                                                                                                                        pollingInterval.toMillis() / 2,
+                                                                                                                                                                        2_000,
+                                                                                                                                                                        0.1d))
+                                                                     .setFencedLockManager(PostgresqlFencedLockManager.builder()
+                                                                                                                      .setJdbi(jdbi)
+                                                                                                                      .setUnitOfWorkFactory(unitOfWorkFactory)
+                                                                                                                      .setLockManagerInstanceId("node-defaults")
+                                                                                                                      .setLockTimeOut(Duration.ofSeconds(3))
+                                                                                                                      .setLockConfirmationInterval(Duration.ofMillis(500))
+                                                                                                                      .build())
+                                                                     .setDurableSubscriptionRepository(new PostgresqlDurableSubscriptionRepository(jdbi, eventStore))
+                                                                     .build();
+        eventStoreSubscriptionManager.start();
+        var received     = new CopyOnWriteArrayList<Long>();
+        var subscriberId = SubscriberId.of("orders-polling-sequence-jump-defaults");
+        appendOrders(3);
+        long head = highestPersisted();
+        var subscription = eventStoreSubscriptionManager.subscribeToAggregateEventsAsynchronously(subscriberId,
+                                                                                                  aggregateType,
+                                                                                                  GlobalEventOrder.FIRST_GLOBAL_EVENT_ORDER,
+                                                                                                  Optional.empty(),
+                                                                                                  event -> received.add(event.globalEventOrder().longValue()));
+        await().atMost(Duration.ofSeconds(15)).untilAsserted(() -> assertThat(received).containsExactly(head - 2, head - 1, head));
+        // Idle long enough for the back-off to reach its maximum
+        Thread.sleep(3_000);
+
+        moveSequenceTo(head + JUMP);
+        appendOrders(2);
+        long jumped = highestPersisted() - 1;
+        var  jumpedAt = System.nanoTime();
+        await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> assertThat(received).containsExactly(head - 2, head - 1, head, jumped, jumped + 1));
+        assertThat(Duration.ofNanos(System.nanoTime() - jumpedAt)).isLessThan(Duration.ofSeconds(10));
+        assertThat(transientGapCount(subscriberId)).isEqualTo(2L * MAX_AWAITED_ORDERS_PER_GAP_END);
+
+        // And the next event as usual
+        appendOrders(1);
+        await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> assertThat(received).contains(jumped + 2));
+        subscription.stop();
+    }
+
     @Test
     void the_lowest_global_order_persisted_within_a_range_is_found() {
         appendOrders(3);

@@ -26,8 +26,9 @@ targets, with a `-N` suffix for plugin-only releases.
 - **Framework docs: bounded polling gaps** — a poll now records a new gap only
   `SubscriptionGapHandler.MAX_AWAITED_ORDERS_PER_GAP_END` (5,000) orders deep from each end and awaits
   the middle of a wider one (sequence `setval`, restore) in memory only, as CDC does, instead of writing a
-  transient-gap row per order; and the new persistence-strategy lookup
-  `findLowestGlobalEventOrderPersisted(uow, aggregateType, LongRange)` a custom strategy should override.
+  transient-gap row per order; a poll after an empty one steps straight over such a gap instead of
+  widening its range for hours; and the new persistence-strategy lookup behind both,
+  `findLowestGlobalEventOrderPersisted(uow, aggregateType, LongRange)`, a custom strategy should override.
 
 ## 0.60.0-2 — targets Essentials 0.60.0
 - **Slice law, loaded by lane** — `rules/slice-design.md` stays one file, but each lane-, kind- or

@@ -772,7 +772,9 @@ transaction normally holds. The middle of a wider gap (sequence `setval` forward
 concurrent commit) is awaited in memory only, as on CDC: each poll re-queries it with one indexed lookup, a late commit there
 within `transientGapGiveUpThreshold()` (120 s by default) is delivered once as a gap fill, and then it is given up writing no
 rows. A restart or crash inside that window loses it. A custom `AggregateEventStreamPersistenceStrategy` should override
-`findLowestGlobalEventOrderPersisted(uow, aggregateType, LongRange)` with an index lookup (the default loads the range).
+`findLowestGlobalEventOrderPersisted(uow, aggregateType, LongRange)` with an index lookup (the default loads the range):
+a poll after an empty one also uses it to read straight from the lowest order persisted at or above its read position, so
+events after a sequence jump arrive at the next poll instead of after hours of empty polls widening the range.
 
 Each poll re-asks for the subscriber's open transient gaps. Default `PostgresqlEventStreamGapHandler` constructors: all open
 gaps up to 50; beyond that the 20 highest + 10 lowest + a rotating window of 20 (max 50 per poll). A custom

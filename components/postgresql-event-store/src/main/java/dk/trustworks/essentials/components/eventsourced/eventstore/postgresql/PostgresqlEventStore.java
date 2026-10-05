@@ -695,14 +695,16 @@ public final class PostgresqlEventStore<CONFIG extends AggregateEventStreamConfi
                         lastBatchSizeForThisQuery.set(batchSizeForThisQuery);
                     }
 
-                    var globalOrderRange = LongRange.from(nextFromInclusiveGlobalOrder.get(), batchSizeForThisQuery);
+                    // After an empty poll: straight over a hole at the read position, or nothing to read in the range at all
+                    var rangeWithEvents  = rangeToRead(unitOfWork, aggregateType, nextFromInclusiveGlobalOrder.get(), batchSizeForThisQuery, batchFetchSize, consecutiveNoPersistedEventsReturned.get(), eventStreamLogName);
+                    var globalOrderRange = rangeWithEvents.orElseGet(() -> LongRange.from(nextFromInclusiveGlobalOrder.get(), batchSizeForThisQuery));
                     var transientGapsToIncludeInQuery = subscriptionGapHandler.map(gapHandler -> findTransientGapsToIncludeInQuery(gapHandler, aggregateType, globalOrderRange))
                                                                               .orElse(null);
 
                     var loadEventsByGlobalOrderTiming = StopWatch.start("loadEventsByGlobalOrder(" + actualSubscriberId + ", " + aggregateType + ")");
                     // Every tenant's events: see loadEventsForPoll. Plus those committed late in the middle of a wide gap
                     var gapMiddleFills = loadGapMiddleFills(gapMiddlesAwaitedInMemory, unitOfWork, aggregateType, batchFetchSize, onlyIncludeEventIfItBelongsToTenant, eventStreamLogName);
-                    var loadedEvents   = withGapMiddleFills(gapMiddleFills, loadEventsForPoll(aggregateType, globalOrderRange, transientGapsToIncludeInQuery, onlyIncludeEventIfItBelongsToTenant));
+                    var loadedEvents   = withGapMiddleFills(gapMiddleFills, loadEventsForPoll(aggregateType, rangeWithEvents, globalOrderRange, transientGapsToIncludeInQuery, onlyIncludeEventIfItBelongsToTenant));
                     // Without the gap fills handed on before and not acknowledged yet: their gap is open, so they are read again
                     var persistedEvents = notAwaitingAcknowledgement(eventsBelongingToTenant(loadedEvents, tenantFilter(aggregateType, onlyIncludeEventIfItBelongsToTenant)), awaitingAcknowledgement);
                     eventStoreSubscriptionObserver.eventStorePolled(actualSubscriberId,
@@ -1194,7 +1196,9 @@ public final class PostgresqlEventStore<CONFIG extends AggregateEventStreamConfi
                                               batchSizeForThisQuery);
                 }
 
-                var globalOrderRange = LongRange.from(nextFromInclusiveGlobalOrder.get(), batchSizeForThisQuery);
+                // After an empty poll: straight over a hole at the read position, or nothing to read in the range at all
+                var rangeWithEvents  = rangeToRead(unitOfWork, aggregateType, nextFromInclusiveGlobalOrder.get(), batchSizeForThisQuery, Math.min(batchFetchSize, remainingDemandForEvents), consecutiveNoPersistedEventsReturned.get(), eventStreamLogName);
+                var globalOrderRange = rangeWithEvents.orElseGet(() -> LongRange.from(nextFromInclusiveGlobalOrder.get(), batchSizeForThisQuery));
                 var transientGapsToIncludeInQuery = subscriptionGapHandler.map(gapHandler -> findTransientGapsToIncludeInQuery(gapHandler, aggregateType, globalOrderRange))
                                                                           .orElse(null);
 
@@ -1202,7 +1206,7 @@ public final class PostgresqlEventStore<CONFIG extends AggregateEventStreamConfi
                 // Every tenant's events: see loadEventsForPoll
                 // Plus the events committed late in the middle of a wide gap, at most a batch of them
                 var gapMiddleFills = loadGapMiddleFills(gapMiddlesAwaitedInMemory, unitOfWork, aggregateType, batchFetchSize, onlyIncludeEventIfItBelongsToTenant, eventStreamLogName);
-                var loadedEvents   = withGapMiddleFills(gapMiddleFills, loadEventsForPoll(aggregateType, globalOrderRange, transientGapsToIncludeInQuery, onlyIncludeEventIfItBelongsToTenant));
+                var loadedEvents   = withGapMiddleFills(gapMiddleFills, loadEventsForPoll(aggregateType, rangeWithEvents, globalOrderRange, transientGapsToIncludeInQuery, onlyIncludeEventIfItBelongsToTenant));
                 var tenantFilter = tenantFilter(aggregateType, onlyIncludeEventIfItBelongsToTenant);
                 eventStoreSubscriptionObserver.eventStorePolled(subscriberId,
                                                                 aggregateType,
@@ -1382,7 +1386,70 @@ public final class PostgresqlEventStore<CONFIG extends AggregateEventStreamConfi
      * their global order, tenant and a few small columns are transferred; they are never deserialized, nor published.
      * {@link dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.cdc.CdcEventStore}
      * loads every tenant for the same reason.
+     * <p>
+     * Nothing at all when {@link #rangeToRead} found nothing persisted at or above the read position and no transient
+     * gap is asked for again.
+     *
+     * @param rangeWithEvents what {@link #rangeToRead} returned
      */
+    private List<PersistedEvent> loadEventsForPoll(AggregateType aggregateType,
+                                                   Optional<LongRange> rangeWithEvents,
+                                                   LongRange globalOrderRange,
+                                                   List<GlobalEventOrder> transientGapsToIncludeInQuery,
+                                                   Optional<Tenant> onlyIncludeEventIfItBelongsToTenant) {
+        if (rangeWithEvents.isEmpty() && (transientGapsToIncludeInQuery == null || transientGapsToIncludeInQuery.isEmpty())) {
+            // Nothing is persisted at or above the read position, and no transient gap is asked for: the lookup that
+            // found that replaced the range query
+            return List.of();
+        }
+        return loadEventsForPoll(aggregateType, globalOrderRange, transientGapsToIncludeInQuery, onlyIncludeEventIfItBelongsToTenant);
+    }
+
+    /**
+     * The global order range a poll reads. Right after a poll that read nothing, one indexed lookup of the lowest global
+     * order persisted at or above the read position
+     * ({@link AggregateEventStreamPersistenceStrategy#findLowestGlobalEventOrderPersisted(EventStoreUnitOfWork, AggregateType, LongRange)})
+     * takes the place of reading the range:
+     * <ul>
+     *     <li>none - the stream is idle at its head: empty, and the poll reads no range (only the transient gaps it asks
+     *     for again, if any). An idle subscription so costs one index lookup per poll, as the range query it replaces did;</li>
+     *     <li>one above the range - a hole at the read position, such as a sequence moved forward ({@code setval}, a
+     *     restore): the range is widened straight to it plus {@code batchSize}, so the hole is passed - and reconciled,
+     *     bounded (see {@link GapEnds}) - by this poll. It used to be passed only after the range had grown over it on
+     *     empty polls: with the default settings a hole of a million orders took hours. The range holds at most
+     *     {@code batchSize} events, as nothing lies below the order found;</li>
+     *     <li>one within the range - the range as resolved.</li>
+     * </ul>
+     * A poll after one that read events reads its range without the lookup: while events keep coming nothing is added.
+     *
+     * @return the range to read, or empty when nothing is persisted at or above {@code nextFromInclusiveGlobalOrder}
+     */
+    private Optional<LongRange> rangeToRead(EventStoreUnitOfWork unitOfWork,
+                                            AggregateType aggregateType,
+                                            long nextFromInclusiveGlobalOrder,
+                                            long batchSizeForThisQuery,
+                                            long batchSize,
+                                            int consecutiveNoPersistedEventsReturned,
+                                            String eventStreamLogName) {
+        var range = LongRange.from(nextFromInclusiveGlobalOrder, batchSizeForThisQuery);
+        if (consecutiveNoPersistedEventsReturned == 0) {
+            return Optional.of(range);
+        }
+        var lowest = persistenceStrategy.findLowestGlobalEventOrderPersisted(unitOfWork, aggregateType, LongRange.from(nextFromInclusiveGlobalOrder));
+        if (lowest.isEmpty()) {
+            return Optional.empty();
+        }
+        long lowestOrder = lowest.get().longValue();
+        if (lowestOrder <= range.getToInclusive()) {
+            return Optional.of(range);
+        }
+        log.debug("[{}] The lowest global order persisted at or above {} is {}: widening this poll's range over the hole in between",
+                  eventStreamLogName,
+                  nextFromInclusiveGlobalOrder,
+                  lowestOrder);
+        return Optional.of(LongRange.between(nextFromInclusiveGlobalOrder, lowestOrder + Math.max(1, batchSize) - 1));
+    }
+
     private List<PersistedEvent> loadEventsForPoll(AggregateType aggregateType,
                                                    LongRange globalOrderRange,
                                                    List<GlobalEventOrder> transientGapsToIncludeInQuery,
