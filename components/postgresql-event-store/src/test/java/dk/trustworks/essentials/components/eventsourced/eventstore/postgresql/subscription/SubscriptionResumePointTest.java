@@ -134,4 +134,84 @@ class SubscriptionResumePointTest {
         assertThat(resumePoint.isChanged()).isTrue();
         assertThat(resumePoint.unpersistedAdvance()).isZero();
     }
+
+    @Test
+    void test_a_reposition_starts_a_new_epoch_and_advancing_does_not() {
+        var resumePoint = resumePointAt(100);
+        assertThat(resumePoint.getRepositionEpoch()).isZero();
+
+        resumePoint.advanceResumeFromAndIncluding(GlobalEventOrder.of(150));
+        assertThat(resumePoint.getRepositionEpoch()).isZero();
+
+        resumePoint.setResumeFromAndIncluding(GlobalEventOrder.of(10));
+        assertThat(resumePoint.getRepositionEpoch()).isEqualTo(1);
+        assertThat(resumePoint.snapshot()).isEqualTo(new SubscriptionResumePoint.Snapshot(GlobalEventOrder.of(10), 1));
+    }
+
+    @Test
+    void test_a_reposition_to_the_stored_value_still_needs_saving() {
+        // The store must learn the new epoch, or a save captured before the reset could still overwrite it
+        var resumePoint = resumePointAt(100);
+
+        resumePoint.setResumeFromAndIncluding(GlobalEventOrder.of(100));
+
+        assertThat(resumePoint.isChanged()).isTrue();
+    }
+
+    @Test
+    void test_a_save_captured_before_a_reset_cannot_mark_the_reset_persisted() {
+        // The race S6 in docs/subscription-improvements.md: a save binds 500, a reset to 10 is saved and marked,
+        // then the older save's markAsPersisted arrives
+        var resumePoint = resumePointAt(100);
+        resumePoint.advanceResumeFromAndIncluding(GlobalEventOrder.of(500));
+        var staleSave = resumePoint.snapshot();
+
+        resumePoint.setResumeFromAndIncluding(GlobalEventOrder.of(10));
+        resumePoint.markAsPersisted(resumePoint.snapshot(), OffsetDateTime.now());
+        resumePoint.markAsPersisted(staleSave, OffsetDateTime.now());
+
+        assertThat(resumePoint.isChanged()).isFalse();
+        assertThat(resumePoint.snapshot()).isEqualTo(new SubscriptionResumePoint.Snapshot(GlobalEventOrder.of(10), 1));
+    }
+
+    @Test
+    void test_a_save_captured_before_a_reset_may_finish_marking_after_the_reset_started() {
+        // The stale save commits first and the reset is persisted afterwards - the reset's mark must win
+        var resumePoint = resumePointAt(100);
+        resumePoint.advanceResumeFromAndIncluding(GlobalEventOrder.of(500));
+        var staleSave = resumePoint.snapshot();
+        resumePoint.setResumeFromAndIncluding(GlobalEventOrder.of(10));
+
+        resumePoint.markAsPersisted(staleSave, OffsetDateTime.now());
+        assertThat(resumePoint.isChanged()).as("the reset is not persisted yet").isTrue();
+
+        resumePoint.markAsPersisted(resumePoint.snapshot(), OffsetDateTime.now());
+        assertThat(resumePoint.isChanged()).isFalse();
+    }
+
+    @Test
+    void test_a_superseded_snapshot_is_not_retried_until_the_resume_point_advances() {
+        var resumePoint = resumePointAt(100);
+        resumePoint.advanceResumeFromAndIncluding(GlobalEventOrder.of(150));
+
+        resumePoint.markAsSuperseded(resumePoint.snapshot());
+        assertThat(resumePoint.isChanged()).isFalse();
+
+        resumePoint.advanceResumeFromAndIncluding(GlobalEventOrder.of(151));
+        assertThat(resumePoint.isChanged()).isTrue();
+    }
+
+    @Test
+    void test_a_superseded_snapshot_older_than_this_instances_own_reposition_is_ignored() {
+        var resumePoint = resumePointAt(100);
+        resumePoint.advanceResumeFromAndIncluding(GlobalEventOrder.of(500));
+        var staleSave = resumePoint.snapshot();
+        resumePoint.setResumeFromAndIncluding(GlobalEventOrder.of(10));
+        resumePoint.markAsPersisted(resumePoint.snapshot(), OffsetDateTime.now());
+
+        resumePoint.markAsSuperseded(staleSave);
+
+        assertThat(resumePoint.isChanged()).isFalse();
+        assertThat(resumePoint.unpersistedAdvance()).isZero();
+    }
 }

@@ -664,37 +664,48 @@ Testcontainers IT covering:
   rewind a resume point on purpose and persist through the same `saveResumePoints`, so the guard would silently
   drop every reset.
 
-- **S6 — OPEN: a save in flight can overwrite a concurrent reset.** Not introduced by S5, but S5 makes saves more
-  frequent and so widens the exposure.
+- **S6 — RESOLVED in 0.60: a save in flight could overwrite a concurrent reset.** S5 did not introduce this, but by
+  making saves more frequent it made the race more likely to hit.
 
   **The sequence.**
   1. The manager's save thread (periodic or S5) selects an *active* subscription and binds its current resume
      point, X.
   2. On another thread, the subscription is reset to Y < X. `resetFrom` calls `stop()`, then `overrideResumePoint`,
      which sets Y, writes it, and marks Y persisted.
-  3. The save from step 1 commits after step 2, so the row holds X again. It then calls `markAsPersisted(X)`.
-  4. In memory the resume point is Y and the last-persisted value is X, so `isChanged()` is true. Once `resetFrom`
-     calls `start()` and the subscription is active again, the next save writes Y.
+  3. The save from step 1 commits after step 2, so the row holds X again.
+  4. The next save wrote Y back, so the row was wrong for at most one save interval. **If the node died inside that
+     window, the reset was lost.** The subscription resumed from X and never re-processed Y..X-1.
 
-  The database is therefore wrong for at most one save interval. **If the node dies inside that window, the reset is
-  lost.** The subscription resumes from X and never re-processes Y..X-1. The same interleaving during a plain
-  `stop()` (no reset) only regresses the row to an older value. That causes redelivery, which is allowed under
-  at-least-once delivery, but `persistResumePointUntilSettled` may already have returned, and nothing re-saves an
-  inactive subscription.
+  **Fix: a reposition epoch, compared and set in SQL.** `durable_subscriptions.reposition_epoch BIGINT NOT NULL
+  DEFAULT 0` (added by the contributor's repeatable `ADD COLUMN IF NOT EXISTS`). `SubscriptionResumePoint`
+  increments its epoch on every deliberate reposition (`setResumeFromAndIncluding`) and never on progress
+  (`advanceResumeFromAndIncluding`). A save binds `snapshot()`, i.e. value and epoch captured together, and runs
+  `UPDATE … SET …, reposition_epoch = :e WHERE … AND reposition_epoch <= :e`.
+  - Stale save commits after the reset: the stored epoch is newer, so 0 rows are updated and the reset stays.
+  - Stale save commits before the reset: the reset's epoch is newer, so it overwrites.
+  - A reset to the value already stored still needs saving, because `isChanged()` compares value *and* epoch, so
+    the store learns the new epoch.
+  - The in-memory bookkeeping follows the same rule. `markAsPersisted(Snapshot, …)` ignores a snapshot from an older
+    epoch than the one last recorded, so a stale save that finishes after the reset cannot mark the resume point
+    clean at the stale value.
+  - A refused save is recorded with `markAsSuperseded(Snapshot)`, so it is not retried on every tick. If this
+    instance's own reset overtook it, that is logged at DEBUG. Otherwise another writer moved the row (a stale
+    instance, or non-exclusive subscriptions on several nodes sharing a row), and that is a WARN once per resume
+    point.
 
-  **Why it is not fixed yet.** Every fix costs something on a path that matters:
-  - *Hold the resume point's monitor across bind → commit → `markAsPersisted`.* `advanceResumeFromAndIncluding` is
-    `synchronized` on the same object, so event-handler threads would block for every database round-trip of the
-    save. That defeats the point of saving asynchronously.
-  - *Compare-and-set in SQL* (a `reposition_epoch` / version column, `UPDATE … WHERE epoch = :expected`). Correct,
-    and safe across JVMs too, but a schema change to `durable_subscriptions` with a migration path.
-  - *In-JVM self-heal.* `setResumeFromAndIncluding` bumps an epoch. The saver captures the epoch with the value it
-    binds, and if the epoch changed by commit time it immediately re-saves the current value. No schema change, and
-    the window shrinks from one save interval to one round-trip, but it does not close.
+  **Why a counter and not a timestamp.** Ordering must not depend on clocks: nodes' clocks differ, two writes can land
+  in the same millisecond, and a clock stepping backwards would let a stale write through. `last_updated` stays
+  informational.
 
-  Leaning toward the self-heal now and compare-and-set at the next schema-changing release, but that has not been
-  decided. Before choosing, check whether non-exclusive subscriptions on several nodes writing the same
-  `(subscriber_id, aggregate_type)` row need the cross-JVM guarantee anyway.
+  **Rejected alternatives.**
+  - *Plain optimistic locking* (`version = version + 1 WHERE version = :expected`) makes the *second* writer lose,
+    so a stale save that commits first would turn the reset into the refused write.
+  - *Holding the resume point's monitor across bind → commit.* This blocks event-handler threads, which advance
+    under the same monitor, for every save round-trip.
+  - *An in-JVM self-heal* (re-save on epoch change). It narrows the window without closing it.
+
+  Pinned by `SubscriptionResumePointTest` (both commit orders in memory) and `PostgresqlDurableSubscriptionRepositoryIT`
+  (both orders against the database, a reset to the same value, and upgrading a 0.50 table).
 
   **Related dead code, removed.** `SubscriptionResetOnPoisonNotifier`'s reset callback claimed to force durable
   persistence. It built a fresh `SubscriptionResumePoint`, which starts with its persisted value equal to its current

@@ -385,8 +385,9 @@ public class DefaultEventStoreSubscriptionManager implements EventStoreSubscript
     }
 
     /**
-     * Only ever called on the single resume-point scheduler thread. Open issue: a save in flight here can overwrite a reset
-     * that commits concurrently on another thread - tracked as S6 in docs/subscription-improvements.md
+     * Only ever called on the single resume-point scheduler thread. A save in flight here cannot overwrite a reset that
+     * commits concurrently on another thread: the repository refuses a write from an older reposition epoch - see
+     * {@link SubscriptionResumePoint} and S6 in docs/subscription-improvements.md
      */
     private void saveResumePointsOfActiveSubscribers(Predicate<SubscriptionResumePoint> filter) {
         try {

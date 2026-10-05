@@ -1233,7 +1233,7 @@ This enables:
 **How it works:**
 
 1. The `DurableSubscriptionRepository` (e.g., `PostgresqlDurableSubscriptionRepository`) persists resume points to the database
-2. The `EventStoreSubscriptionManager` periodically snapshots resume points (configured via `setSnapshotResumePointsEvery`). Only resume points that changed are written. To also save a busy subscriber's resume point once it has advanced a given number of global event orders, opt in with `setSnapshotResumePointsAfterEvents(n)`
+2. The `EventStoreSubscriptionManager` periodically snapshots resume points (configured via `setSnapshotResumePointsEvery`). Only resume points that changed are written. To also save a busy subscriber's resume point once it has advanced a given number of global event orders, opt in with `setSnapshotResumePointsAfterEvents(n)`. Each save carries the resume point's reposition epoch, which a subscription reset increments, so a save that read the resume point before a reset can never overwrite the reset
 3. On startup, the subscription queries its last persisted resume point and continues from there
 
 **First subscription behavior:**
