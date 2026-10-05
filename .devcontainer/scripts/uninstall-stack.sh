@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # =============================================================================
 # Local-first agent stack — reverse / uninstall
-# Removes the graphify + headroom + native-LSP integration that post-create.sh
-# installed. Run manually from inside the container; NOT wired into any lifecycle
-# hook (teardown is a deliberate, rarely-run action).
+# Removes the graphify + headroom + rtk + native-LSP integration that
+# post-create.sh installed. Run manually from inside the container; NOT wired
+# into any lifecycle hook (teardown is a deliberate, rarely-run action).
 #
 #   bash .devcontainer/scripts/uninstall-stack.sh           # de-register + unwrap
 #   bash .devcontainer/scripts/uninstall-stack.sh --purge   # also drop graph cache
@@ -31,10 +31,38 @@ if command -v headroom &> /dev/null; then
     uv tool uninstall headroom-ai 2>&1 || echo "    NOTE: could not uv-tool-uninstall headroom-ai."
 fi
 
-# --- rtk: remove the Claude Code PreToolUse hook ------------------------------
+# --- rtk: remove its global docs (and any global hook an older generation left) --
 if command -v rtk &> /dev/null; then
-    echo "  rtk: removing Claude Code hook (rtk init -g --uninstall)..."
-    ( cd "$HOME" && rtk init -g --uninstall ) 2>&1 || echo "    NOTE: 'rtk init -g --uninstall' failed or hook was not installed."
+    echo "  rtk: removing global docs and any global hook (rtk init -g --uninstall)..."
+    ( cd "$HOME" && rtk init -g --uninstall ) 2>&1 || echo "    NOTE: 'rtk init -g --uninstall' failed or nothing was installed."
+fi
+
+# --- rtk: remove the project hook post-create.sh installed ----------------------
+# (runs even if rtk itself is already gone). The script is deleted only while it
+# carries the managed marker; a customised copy is kept and its entry left wired.
+_rtk_hook="$WORKSPACE/.claude/hooks/rtk-bash-rewrite.sh"
+if [ -f "$_rtk_hook" ] && grep -q 'managed by devcontainer-generator' "$_rtk_hook" 2>/dev/null; then
+    if [ -f "$WORKSPACE/.claude/settings.json" ] && command -v jq &> /dev/null; then
+        echo "  Removing the rtk PreToolUse hook entry from .claude/settings.json..."
+        _hooktmp="$(mktemp)"
+        if jq '
+            if (.hooks?.PreToolUse | type) == "array"
+            then .hooks.PreToolUse |= (map(
+                   if (.hooks | type) == "array"
+                   then .hooks |= map(select(((.command? // "") | test("rtk-bash-rewrite\\.sh")) | not))
+                   else . end)
+                 | map(select((.hooks | type) != "array" or (.hooks | length) > 0)))
+            else . end
+            | if (.hooks?.PreToolUse | type) == "array" and (.hooks.PreToolUse | length) == 0 then del(.hooks.PreToolUse) else . end
+            | if (.hooks | type) == "object" and (.hooks | length) == 0 then del(.hooks) else . end
+        ' "$WORKSPACE/.claude/settings.json" > "$_hooktmp" 2>/dev/null; then
+            mv "$_hooktmp" "$WORKSPACE/.claude/settings.json"
+        else
+            rm -f "$_hooktmp"
+            echo "    NOTE: could not edit .claude/settings.json — remove the rtk-bash-rewrite.sh entry by hand."
+        fi
+    fi
+    rm -f "$_rtk_hook"
 fi
 
 # --- graphify: uninstall skill + tool, strip the managed .gitignore block -----

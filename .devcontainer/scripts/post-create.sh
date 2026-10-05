@@ -480,32 +480,150 @@ fi
 # =============================================================================
 # rtk — Rust Token Killer (Conditional, part of the local-first stack)
 # https://github.com/rtk-ai/rtk (Apache-2.0). Transparent CLI-output compression:
-# it rewrites Claude Code's Bash commands (e.g. `cargo test` -> `rtk cargo test`)
+# it rewrites Claude Code's Bash commands (e.g. `cargo test` → `rtk cargo test`)
 # via a PreToolUse hook, shrinking command output 60-90% before it hits context.
-# The `rtk` binary is installed at build time (see Dockerfile); here we install
-# its Claude Code hook with `rtk init -g`. This is the lean, proxy-free way to get
-# rtk's job — independent of headroom (headroom's own rtk path needs the proxy).
+# The `rtk` binary is installed at build time (see Dockerfile). The hook is the
+# PROJECT's: .claude/hooks/rtk-bash-rewrite.sh, wired in the tracked
+# .claude/settings.json. It calls `rtk hook claude` and passes the rewrite on,
+# except that inside .claude/worktrees/ it never puts git behind rtk — Claude Code
+# refuses `rtk git …` from an agent started with isolation "worktree" (it cannot
+# see that the command targets the agent's own worktree), so with rtk's global
+# hook a worktree agent could not `git add` or `git commit` at all. This is the
+# lean, proxy-free way to get rtk's job — independent of headroom.
 # =============================================================================
 if [ "${INSTALL_RTK:-false}" = "true" ]; then
     echo "Setting up rtk (CLI-output compression)..."
+    # Hard override: blocks the daily ping AND suppresses the consent prompt that
+    # `rtk init` would otherwise raise (upstream #1307). The value is compared for
+    # literal string equality against "1" — "true"/"yes" silently do nothing.
     export RTK_TELEMETRY_DISABLED=1
     if [ "${INSTALL_CLAUDE:-false}" = "true" ] && command -v claude &> /dev/null && command -v rtk &> /dev/null; then
-        # Idempotency check: `rtk init --show` ALWAYS exits 0 — it's a status
-        # display, not a test — so its exit code CANNOT gate the install (doing so
-        # made every run take the "already installed" branch and never install the
-        # hook). Parse its output instead: the operative signal is the settings.json
-        # line reading "RTK hook configured" — that's the PreToolUse entry Claude
-        # Code actually fires on. Run from $HOME so any global RTK.md lands outside the repo.
-        if ( cd "$HOME" && rtk init --show 2>&1 ) | grep -q "settings.json: RTK hook configured"; then
-            echo "  rtk Claude Code hook already installed"
+        # 1. The hook script. Written only while it carries the managed marker, so a
+        #    project that customises it keeps its version (same rule as graphify-nudge.sh).
+        mkdir -p /workspace/.claude/hooks
+        _rtk_hook=/workspace/.claude/hooks/rtk-bash-rewrite.sh
+        if [ ! -f "$_rtk_hook" ] || grep -q 'managed by devcontainer-generator' "$_rtk_hook" 2>/dev/null; then
+            cat > "$_rtk_hook" <<'RTK_HOOK_EOF'
+#!/usr/bin/env bash
+# rtk-bash-rewrite.sh — this project's PreToolUse(Bash) hook for rtk (Rust Token Killer).
+# managed by devcontainer-generator (post-create.sh rewrites this file while this line is present)
+#
+# rtk's own hook (`rtk hook claude`) rewrites a Bash command to its rtk form — `git status` becomes
+# `rtk git status` — so the output is compressed before it reaches the model. This wrapper runs that
+# hook and passes its answer on unchanged, with one exception:
+#
+#   Inside a worktree under .claude/worktrees/, a rewrite that would put git behind rtk is dropped
+#   and the command runs as typed.
+#
+# Why: Claude Code refuses any git command from an agent started with isolation "worktree" unless it
+# can see that the command targets the agent's own worktree. `rtk git status` hides git behind a
+# launcher, so it is refused ("this command runs rtk with a git command among its operands … cannot
+# be shown not to be git. Refusing to run it"). Before this wrapper, worktree agents could not
+# `git add` or `git commit` at all; they called /usr/bin/git to get past rtk, or stopped with their
+# work staged. Every other rewrite (ls, grep, …) is still applied in a worktree: the guard only
+# reads git.
+#
+# .devcontainer/scripts/post-create.sh writes this file and wires it in the committed
+# .claude/settings.json, so every clone gets the same behaviour. It also strips rtk's own hook from
+# ~/.claude/settings.json: two hooks rewriting the same command would race, and the global one has
+# no worktree exception. Delete the marker line above to keep a customised copy.
+#
+# Fails open: no rtk on PATH, RTK_HOOK_DISABLED=1, or no jq in a worktree — the command runs as
+# typed, or as rtk rewrote it. Never blocks a command on its own account.
+
+# Read stdin first, even on the early exits: a hook that exits without reading it can kill the
+# writer with SIGPIPE.
+input="$(cat)"
+[ "${RTK_HOOK_DISABLED:-}" = "1" ] && exit 0
+command -v rtk >/dev/null 2>&1 || exit 0
+
+out="$(printf '%s' "$input" | rtk hook claude)"
+rc=$?
+
+if [ "$rc" -eq 0 ] && [ -n "$out" ] && command -v jq >/dev/null 2>&1; then
+  cwd="$(printf '%s' "$input" | jq -r '.cwd // empty' 2>/dev/null)"
+  case "$cwd" in
+    */.claude/worktrees/*)
+      rewritten="$(printf '%s' "$out" | jq -r '.hookSpecificOutput.updatedInput.command // empty' 2>/dev/null)"
+      # `rtk git …` anywhere in the command: at the start, after `&&`/`;`/`|`/`(`, or behind
+      # `rtk proxy`. Dropping the whole rewrite keeps the command exactly as the model wrote it.
+      if [[ "$rewritten" =~ (^|[^[:alnum:]_./-])rtk([[:space:]]+proxy)?[[:space:]]+git([[:space:]]|$) ]]; then
+        exit 0
+      fi
+      ;;
+  esac
+fi
+
+[ -n "$out" ] && printf '%s\n' "$out"
+exit "$rc"
+RTK_HOOK_EOF
+            chmod +x "$_rtk_hook"
+        fi
+        # 2. Wire it in the tracked .claude/settings.json (once; created if absent).
+        if command -v jq &> /dev/null; then
+            _rtk_proj=/workspace/.claude/settings.json
+            [ -f "$_rtk_proj" ] || echo '{}' > "$_rtk_proj"
+            if ! jq -e '[.hooks.PreToolUse[]?.hooks[]?.command // empty | select(test("rtk-bash-rewrite\\.sh"))] | length > 0' "$_rtk_proj" >/dev/null 2>&1; then
+                _rtk_tmp="$(mktemp)"
+                if jq '.hooks.PreToolUse = ([{"matcher":"Bash","hooks":[{"type":"command","command":"bash \"${CLAUDE_PROJECT_DIR:-.}/.claude/hooks/rtk-bash-rewrite.sh\"","timeout":10}]}] + (.hooks.PreToolUse // []))' \
+                      "$_rtk_proj" > "$_rtk_tmp" 2>/dev/null; then
+                    mv "$_rtk_tmp" "$_rtk_proj"
+                    echo "    → hook wired in .claude/settings.json (commit it with .claude/hooks/rtk-bash-rewrite.sh)"
+                else
+                    rm -f "$_rtk_tmp"
+                    echo "  WARNING: could not wire the rtk hook into .claude/settings.json (jq failed)."
+                fi
+            fi
         else
-            # --auto-patch: patch settings.json WITHOUT the interactive prompt that
-            # plain `rtk init -g` shows. post-create runs non-interactively, so the
-            # prompt would otherwise be skipped and leave the hook unconfigured.
-            echo "  Installing rtk PreToolUse hook (rtk init -g --auto-patch)..."
+            echo "  WARNING: jq not found — the rtk hook is not wired; Bash commands are not rewritten."
+        fi
+        # 3. rtk's docs, once. `rtk init -g --auto-patch` writes three USER-GLOBAL
+        #    things (on the Claude config named volume, none in the project repo):
+        #      a. a PreToolUse hook in ~/.claude/settings.json  (stripped in step 4)
+        #      b. ~/.claude/RTK.md — a SHORT companion (~200 tokens) covering the rtk-ONLY
+        #         meta commands the hook cannot rewrite for you (rtk gain / discover / proxy)
+        #      c. a one-line `@RTK.md` IMPORT in ~/.claude/CLAUDE.md that pulls (b) in
+        #    (c) is an import, NOT the full catalog: the ~2k-token <!-- rtk-instructions -->
+        #    command reference is what PROJECT-scoped `rtk init` (no -g) writes inline into
+        #    a project CLAUDE.md. The global path is deliberately the lean variant — out of
+        #    the repo and roughly an order of magnitude cheaper in always-on context. Do not
+        #    "fix" the missing catalog; the hook rewrites commands whether or not it is loaded.
+        #    The gate is RTK.md, not `rtk init --show`: that ALWAYS exits 0 (a status
+        #    display), and its "hook configured" line is now false by design.
+        #    --auto-patch: no interactive prompt (post-create runs non-interactively).
+        if [ ! -f "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/RTK.md" ]; then
+            echo "  Installing rtk docs (rtk init -g --auto-patch)..."
             ( cd "$HOME" && rtk init -g --auto-patch ) 2>&1 \
-                && echo "    -> hook installed (Bash commands auto-rewritten to rtk)" \
-                || echo "  WARNING: 'rtk init -g --auto-patch' failed — install the hook manually with: rtk init -g --auto-patch"
+                || echo "  WARNING: 'rtk init -g --auto-patch' failed — rtk's docs are missing; the project hook still works."
+        fi
+        # 4. Strip rtk's global hook, on every run — a volume from an older generation
+        #    still has one, and two hooks rewriting the same command race.
+        _rtk_user="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/settings.json"
+        if [ -f "$_rtk_user" ] && command -v jq &> /dev/null \
+           && jq -e '[.hooks.PreToolUse[]?.hooks[]?.command // empty | select(test("^rtk hook claude$|rtk-rewrite\\.sh"))] | length > 0' "$_rtk_user" >/dev/null 2>&1; then
+            _rtk_tmp="$(mktemp "${_rtk_user}.XXXXXX")"
+            if jq '.hooks.PreToolUse |= (map(.hooks |= map(select((.command // "") | test("^rtk hook claude$|rtk-rewrite\\.sh") | not)))
+                                         | map(select((.hooks | length) > 0)))' "$_rtk_user" > "$_rtk_tmp"; then
+                mv "$_rtk_tmp" "$_rtk_user"
+                echo "    → removed rtk's global hook from ~/.claude/settings.json (the project hook runs it)"
+            else
+                rm -f "$_rtk_tmp"
+                echo "  WARNING: could not strip rtk's global hook from $_rtk_user — remove the 'rtk hook claude' entry by hand."
+            fi
+        fi
+        # Report what actually landed so a partial install is visible rather than silent.
+        _rtk_claude_md="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/CLAUDE.md"
+        if [ -f "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/RTK.md" ]; then
+            echo "    → ~/.claude/RTK.md present (rtk-only meta commands)"
+        else
+            echo "    NOTE: ~/.claude/RTK.md missing — 'rtk gain / discover / proxy' go undocumented."
+        fi
+        if grep -qE '^\s*@RTK\.md\s*$|rtk-instructions' "$_rtk_claude_md" 2>/dev/null; then
+            echo "    → user CLAUDE.md imports RTK.md (global — nothing added to your repo)"
+        else
+            echo "    NOTE: no @RTK.md import in $_rtk_claude_md. The hook still rewrites Bash"
+            echo "          commands without it; only the rtk-only meta commands go undocumented."
+            echo "          Re-run with: rtk init -g"
         fi
     elif ! command -v rtk &> /dev/null; then
         echo "  NOTE: rtk binary not found (INSTALL_RTK build arg not applied?) — skipping hook install."
@@ -738,8 +856,8 @@ if [ "${INSTALL_HEADROOM:-false}" = "true" ]; then
     echo "    → Reverse with: headroom mcp uninstall"
 fi
 if [ "${INSTALL_RTK:-false}" = "true" ]; then
-    echo "  rtk (CLI-output compression — PreToolUse hook rewrites Bash -> rtk)"
-    echo "    -> Verify: rtk init --show   |   Reverse: rtk init -g --uninstall"
+    echo "  rtk (CLI-output compression — .claude/hooks/rtk-bash-rewrite.sh rewrites Bash → rtk)"
+    echo "    → Commit .claude/hooks/rtk-bash-rewrite.sh   |   Reverse: bash .devcontainer/scripts/uninstall-stack.sh"
 fi
 echo ""
 echo "Installed Language Servers:"
