@@ -29,6 +29,7 @@ import dk.trustworks.essentials.components.foundation.messaging.eip.store_and_fo
 import dk.trustworks.essentials.components.foundation.messaging.queue.*;
 import dk.trustworks.essentials.components.foundation.reactive.command.DurableLocalCommandBus;
 import dk.trustworks.essentials.components.foundation.transaction.*;
+import dk.trustworks.essentials.shared.Exceptions;
 import org.slf4j.*;
 
 import java.util.*;
@@ -359,7 +360,11 @@ public abstract class ViewEventProcessor extends AbstractEventProcessor {
         handle.savepoint(DIRECT_HANDLING_SAVEPOINT);
         try {
             patternMatchingMessageHandlerDelegate.accept(msg);
-        } catch (RuntimeException handlerFailure) {
+        } catch (Exception handlerFailure) {
+            // Exception, not RuntimeException: a handler's own checked exception arrives wrapped (ReflectionException), but a
+            // MessageHandlerInterceptor written in Kotlin, or one that sneaky-throws, can raise a checked one. Escaping this
+            // block it would skip the rollback to the savepoint, and handlePersistedEvent would queue the event in this
+            // UnitOfWork - committing the handler's partial writes with it
             try {
                 // Jdbi forgets the savepoint on rollback, so there is nothing to release afterwards
                 handle.rollbackToSavepoint(DIRECT_HANDLING_SAVEPOINT);
@@ -377,7 +382,7 @@ public abstract class ViewEventProcessor extends AbstractEventProcessor {
                                                               "the event cannot be queued in it, as committing it would persist or publish them",
                                                               handlerFailure);
             }
-            throw handlerFailure;
+            throw Exceptions.<RuntimeException, RuntimeException>sneakyThrow(handlerFailure);
         }
         handle.release(DIRECT_HANDLING_SAVEPOINT);
     }

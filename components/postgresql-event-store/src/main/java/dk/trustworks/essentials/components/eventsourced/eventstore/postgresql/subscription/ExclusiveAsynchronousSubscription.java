@@ -58,7 +58,7 @@ public class ExclusiveAsynchronousSubscription extends AbstractEventStoreSubscri
     private final Object     subscriberLifecycleLock = new Object();
 
     /**
-     * @param context                 the arguments shared by every subscription — see {@link EventStoreSubscriptionContext#builder()}
+     * @param context                   the arguments shared by every subscription — see {@link EventStoreSubscriptionContext#builder()}
      * @param durableContext            the resume-point arguments shared by the asynchronous subscriptions
      * @param fencedLockManager         the lock manager that decides which node owns this subscription
      * @param fencedLockAwareSubscriber callback notified when this node acquires or loses the subscription's lock

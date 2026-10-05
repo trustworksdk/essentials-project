@@ -31,6 +31,8 @@ import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.su
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.transaction.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.types.GlobalEventOrder;
 import dk.trustworks.essentials.components.foundation.messaging.*;
+import dk.trustworks.essentials.components.foundation.messaging.eip.store_and_forward.MessageHandlerInterceptor;
+import dk.trustworks.essentials.components.foundation.messaging.eip.store_and_forward.operation.InvokeMessageHandlerMethod;
 import dk.trustworks.essentials.components.foundation.messaging.queue.*;
 import dk.trustworks.essentials.components.foundation.postgresql.SqlExecutionTimeLogger;
 import dk.trustworks.essentials.components.foundation.reactive.command.*;
@@ -38,7 +40,9 @@ import dk.trustworks.essentials.components.foundation.transaction.*;
 import dk.trustworks.essentials.components.foundation.types.SubscriberId;
 import dk.trustworks.essentials.components.queue.postgresql.PostgresqlDurableQueues;
 import dk.trustworks.essentials.reactive.command.CmdHandler;
+import dk.trustworks.essentials.shared.Exceptions;
 import dk.trustworks.essentials.shared.collections.Lists;
+import dk.trustworks.essentials.shared.interceptor.InterceptorChain;
 import org.awaitility.Awaitility;
 import org.jdbi.v3.core.Jdbi;
 import org.jdbi.v3.postgres.PostgresPlugin;
@@ -68,6 +72,12 @@ public class ViewEventProcessorIT {
      * primary key violation on its first attempt - after it already wrote a row - and succeed on later attempts
      */
     public static final String        SQL_FAILS_ON_FIRST_ATTEMPT              = "SqlFailsOnFirstAttempt order details";
+    /**
+     * {@link EventProcessorIT.OrderPlacedEvent#orderDetails} that makes the test processor write a view row on its first
+     * attempt, after which {@link CheckedExceptionThrowingInterceptor} sneaky-throws a checked exception; later attempts
+     * succeed
+     */
+    public static final String        INTERCEPTOR_THROWS_CHECKED_ON_FIRST_ATTEMPT = "InterceptorThrowsCheckedOnFirstAttempt order details";
     /**
      * {@link EventProcessorIT.OrderPlacedEvent#orderDetails} that makes the test processor append an
      * {@link EventProcessorIT.OrderConfirmedEvent} through the {@link PostgresqlEventStore} and then fail
@@ -203,7 +213,7 @@ public class ViewEventProcessorIT {
                                                                                            fencedLockManager,
                                                                                            durableQueues,
                                                                                            commandBus,
-                                                                                           List.of()),
+                                                                                           List.of(new CheckedExceptionThrowingInterceptor())),
                                                         eventStore);
         testProcessor.start();
     }
@@ -369,6 +379,29 @@ public class ViewEventProcessorIT {
         assertThat(testProcessor.getSqlFailureAttempts(orderId)).isEqualTo(2);
         assertThat(durableQueues.getTotalMessagesQueuedFor(queueName)).isZero();
         assertThat(durableQueues.getTotalDeadLetterMessagesQueuedFor(queueName)).isZero();
+    }
+
+    /**
+     * A {@link MessageHandlerInterceptor} written in Kotlin, or one that sneaky-throws, can raise a checked exception
+     * around the direct handler. It must be rolled back to the savepoint like any other failure, so the handler's
+     * partial writes are undone before the event is queued in the same transaction - not committed with it
+     */
+    @Test
+    public void verify_a_checked_exception_from_an_interceptor_rolls_back_the_handlers_partial_writes_and_gets_queued() {
+        var orderId = EventProcessorIT.OrderId.random();
+        unitOfWorkFactory.usingUnitOfWork(uow -> {
+            eventStore.appendToStream(TEST_ORDERS, orderId, List.of(new EventProcessorIT.OrderPlacedEvent(orderId, INTERCEPTOR_THROWS_CHECKED_ON_FIRST_ATTEMPT)));
+        });
+
+        // The first (direct) attempt writes a 'partial' row, then the interceptor throws a checked exception. The queued
+        // redelivery succeeds - once
+        var queueName = testProcessor.getDurableQueueName();
+        Awaitility.waitAtMost(Duration.ofSeconds(10))
+                  .untilAsserted(() -> assertThat(orderViewStatuses(orderId)).containsExactly("done"));
+        assertThat(testProcessor.getInterceptorFailureAttempts(orderId)).isEqualTo(2);
+        assertThat(durableQueues.getTotalMessagesQueuedFor(queueName)).isZero();
+        assertThat(durableQueues.getTotalDeadLetterMessagesQueuedFor(queueName)).isZero();
+        assertThat(handleEventFailedEvents).isEmpty();
     }
 
     private List<String> orderViewStatuses(EventProcessorIT.OrderId orderId) {
@@ -627,6 +660,12 @@ public class ViewEventProcessorIT {
         private Consumer<ConcurrentMap<AggregateType, GlobalEventOrder>> resetCallback;
         private final AtomicInteger orderPlacedEventCounter = new AtomicInteger(0);
         private final ConcurrentMap<String, AtomicInteger> sqlFailureAttempts = new ConcurrentHashMap<>();
+        private final ConcurrentMap<String, AtomicInteger> interceptorFailureAttempts = new ConcurrentHashMap<>();
+        /**
+         * Set by a handler on the delivery thread to have {@link CheckedExceptionThrowingInterceptor} fail the attempt
+         * after the handler returned
+         */
+        private final ThreadLocal<Boolean>                 checkedFailureRequested    = ThreadLocal.withInitial(() -> false);
         private final AtomicInteger appendedEventsBeforeFailing = new AtomicInteger(0);
         /**
          * Appends the registered events when the {@link UnitOfWork} commits - the way an aggregate repository's
@@ -778,6 +817,16 @@ public class ViewEventProcessorIT {
                 eventStore.getUnitOfWorkFactory().usingUnitOfWork(joinedUnitOfWork -> {
                     throw new RuntimeException(event.orderDetails);
                 });
+            } else if (event.orderDetails.equals(INTERCEPTOR_THROWS_CHECKED_ON_FIRST_ATTEMPT)) {
+                var orderId = event.orderId.toString();
+                var attempt = interceptorFailureAttempts.computeIfAbsent(orderId, id -> new AtomicInteger()).incrementAndGet();
+                if (attempt == 1) {
+                    // A partial view update - the interceptor then fails the attempt with a checked exception
+                    unitOfWork.handle().execute("INSERT INTO order_view (order_id, status) VALUES (?, 'partial')", orderId);
+                    checkedFailureRequested.set(true);
+                } else {
+                    unitOfWork.handle().execute("INSERT INTO order_view (order_id, status) VALUES (?, 'done')", orderId);
+                }
             } else if (event.orderDetails.equals(SQL_FAILS_ON_FIRST_ATTEMPT)) {
                 var orderId = event.orderId.toString();
                 var attempt = sqlFailureAttempts.computeIfAbsent(orderId, id -> new AtomicInteger()).incrementAndGet();
@@ -801,9 +850,44 @@ public class ViewEventProcessorIT {
             return appendedEventsBeforeFailing.get();
         }
 
+        public int getInterceptorFailureAttempts(EventProcessorIT.OrderId orderId) {
+            var attempts = interceptorFailureAttempts.get(orderId.toString());
+            return attempts != null ? attempts.get() : 0;
+        }
+
+        /**
+         * @return true, once, after a handler asked {@link CheckedExceptionThrowingInterceptor} to fail the attempt on this thread
+         */
+        boolean takeCheckedFailureRequest() {
+            var requested = checkedFailureRequested.get();
+            checkedFailureRequested.remove();
+            return requested;
+        }
+
         public int getSqlFailureAttempts(EventProcessorIT.OrderId orderId) {
             var attempts = sqlFailureAttempts.get(orderId.toString());
             return attempts != null ? attempts.get() : 0;
+        }
+    }
+
+    /**
+     * Fails a handler invocation with a <b>checked</b> exception after the handler returned, when the handler asked for it
+     * - what a {@link MessageHandlerInterceptor} written in Kotlin, or one using a sneaky throw, can do. The handler's own
+     * checked exceptions arrive wrapped in a {@code ReflectionException}; an interceptor's are rethrown as they are
+     */
+    static final class CheckedExceptionThrowingInterceptor implements MessageHandlerInterceptor {
+        @Override
+        public void intercept(InvokeMessageHandlerMethod operation, InterceptorChain<InvokeMessageHandlerMethod, Void, MessageHandlerInterceptor> interceptorChain) {
+            interceptorChain.proceed();
+            if (operation.invokeMethodOn instanceof TestOrderViewEventProcessor processor && processor.takeCheckedFailureRequest()) {
+                Exceptions.sneakyThrow(new InterceptorCheckedException("Intentional checked failure from an interceptor"));
+            }
+        }
+    }
+
+    static final class InterceptorCheckedException extends Exception {
+        InterceptorCheckedException(String message) {
+            super(message);
         }
     }
 }
