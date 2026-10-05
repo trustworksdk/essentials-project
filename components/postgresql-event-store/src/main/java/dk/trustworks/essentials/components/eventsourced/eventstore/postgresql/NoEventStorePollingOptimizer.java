@@ -17,10 +17,15 @@
 package dk.trustworks.essentials.components.eventsourced.eventstore.postgresql;
 
 /**
- * The {@link EventStorePollingOptimizer} returned by {@link EventStorePollingOptimizer#None()}. A class of its own so
- * the polling worker can tell it from an optimizer that returns a zero delay on purpose (such as
+ * The {@link EventStorePollingOptimizer} returned by {@link EventStorePollingOptimizer#None()}. It returns a zero
+ * delay and leaves {@link #mayRepollImmediatelyAfterAnEmptyPoll()} at its default {@code false}, so the polling
+ * worker waits the polling interval after an empty poll instead of re-polling at once. Only an optimizer that
+ * returns zero on purpose (such as
  * {@link dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.subscription.notify.NotifyAwareEventStorePollingOptimizer},
- * which returns zero to re-poll at once when a NOTIFY has landed).
+ * which re-polls at once when a NOTIFY has landed) overrides that capability.
+ * <p>
+ * The polling worker decides from that capability, never from this type, so wrapping or decorating {@code None()}
+ * is safe. Do not add an {@code instanceof} check for this class.
  */
 final class NoEventStorePollingOptimizer implements EventStorePollingOptimizer {
     @Override
