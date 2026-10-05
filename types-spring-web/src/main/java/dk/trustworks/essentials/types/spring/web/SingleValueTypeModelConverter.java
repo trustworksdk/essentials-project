@@ -244,20 +244,29 @@ public final class SingleValueTypeModelConverter implements ModelConverter {
             return;
         }
 
-        var renamed = new LinkedHashMap<String, Schema>();
+        var renamed     = new LinkedHashMap<String, Schema>();
+        var kotlinNames = new HashMap<String, String>();
         properties.forEach((name, propertySchema) -> {
             var kotlinName = name.indexOf('-') > 0 ? kotlinPropertyNameFor(type, name) : null;
             if (kotlinName == null) {
                 renamed.putIfAbsent(name, propertySchema);
-            } else if (!properties.containsKey(kotlinName)) {
+                return;
+            }
+            kotlinNames.put(name, kotlinName);
+            if (!properties.containsKey(kotlinName)) {
                 renamed.putIfAbsent(kotlinName, propertySchema);
-                if (model.getRequired() != null) {
-                    model.getRequired().replaceAll(required -> required.equals(name) ? kotlinName : required);
-                }
             }
             // else: the real name is already published, the mangled one is a duplicate of it
         });
         model.setProperties(renamed);
+        if (model.getRequired() != null) {
+            // Both names describe the one Kotlin property, written once under its Kotlin name, so a required mangled
+            // entry makes that name required - also when it was published already and the mangled duplicate dropped.
+            // setRequired keeps only names that are properties and drops duplicates.
+            model.setRequired(model.getRequired().stream()
+                                   .map(required -> kotlinNames.getOrDefault(required, required))
+                                   .toList());
+        }
     }
 
     /**

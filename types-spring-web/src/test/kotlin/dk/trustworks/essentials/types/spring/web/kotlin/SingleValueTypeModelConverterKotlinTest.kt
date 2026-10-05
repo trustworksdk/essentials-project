@@ -19,9 +19,15 @@ package dk.trustworks.essentials.types.spring.web.kotlin
 import dk.trustworks.essentials.jackson.types.EssentialTypesJacksonModule
 import dk.trustworks.essentials.types.spring.web.SingleValueTypeModelConverter
 import io.swagger.v3.core.converter.AnnotatedType
+import io.swagger.v3.core.converter.ModelConverter
+import io.swagger.v3.core.converter.ModelConverterContext
+import io.swagger.v3.core.converter.ModelConverterContextImpl
 import io.swagger.v3.core.converter.ModelConverters
 import io.swagger.v3.core.util.Json
 import io.swagger.v3.core.util.Json31
+import io.swagger.v3.oas.models.media.ObjectSchema
+import io.swagger.v3.oas.models.media.Schema
+import io.swagger.v3.oas.models.media.StringSchema
 import org.assertj.core.api.Assertions.assertThat
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.params.ParameterizedTest
@@ -88,6 +94,34 @@ class SingleValueTypeModelConverterKotlinTest {
 
         // swagger-core marks nothing required for a plain data class; if that changes, the names must still be the real ones
         required?.values()?.forEach { assertThat(it.asString()).doesNotContain("-") }
+    }
+
+    @Test
+    fun `a required mangled duplicate of an already published property leaves only the kotlin name required`() {
+        // The shape swagger-core produces when something else (an annotation, a Jackson 2 Kotlin module) also publishes
+        // the real name: both the Kotlin name and the mangled getter name, the requiredness on the mangled one
+        val mangledName = KtOrderLine::class.java.methods
+            .map { it.name }
+            .single { it.startsWith("getOrderId-") }
+            .removePrefix("get")
+            .replaceFirstChar { it.lowercase() }
+        val introspected = ObjectSchema()
+            .addProperty("orderId", StringSchema())
+            .addProperty(mangledName, StringSchema())
+            .addProperty("quantity", StringSchema())
+        introspected.required = mutableListOf(mangledName)
+        val swaggerCore = object : ModelConverter {
+            override fun resolve(type: AnnotatedType, context: ModelConverterContext, chain: Iterator<ModelConverter>): Schema<*> =
+                introspected
+        }
+
+        val converter = SingleValueTypeModelConverter()
+        val schema = converter.resolve(AnnotatedType(KtOrderLine::class.java),
+                                       ModelConverterContextImpl(converter),
+                                       listOf<ModelConverter>(swaggerCore).iterator())
+
+        assertThat(schema.properties.keys).containsExactly("orderId", "quantity")
+        assertThat(schema.required).containsExactly("orderId")
     }
 
     @ParameterizedTest(name = "openapi31={0}")
