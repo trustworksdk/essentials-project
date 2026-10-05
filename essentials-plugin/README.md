@@ -12,6 +12,7 @@ Claude Code plugin for the **Trustworks Essentials** Java/Kotlin framework.
 - **`/essentials:slice-map` command** — the orientation view for a project already on the law, which neither of the other two provides: `slice-check` audits and `slice-discover` infers, but nothing answered *"what is here, where is X implemented, how does this connect?"*. Built by `scripts/slice-index.py` from every `slice.yaml`, with packages, files, payload keys and read-model columns added by `scripts/slice-source.py` — it never reads a method body for meaning — and derives five sections: contexts with their slices; a **message-flow graph** (commands in → slice → events out → the slices that react, plus the commands an automation dispatches and the external systems a translation slice bridges); the publisher → event → consumer flow indexed by event; write targets (multiple writers on one target called out first) with cross-context reads and their mandatory `via:` reader; and an endpoint → slice index. Prints by default; `--html <file>` renders a single self-contained page where the graph pans, zooms to the cursor, maximises to full screen, isolates a node's one-hop neighbourhood on click, filters by slice kind and message type with one chip each, and dims to the same query box that filters every other view. Hovering any node gives a card with its package, class list, endpoints, messages in and out, invariants and what enforces each, tests, and any divergence flag. `--view graph` prints the same graph as indented chains in the terminal. Stamps the git HEAD SHA, runs eight cheap divergence checks so the map is not fiction, and grades nothing — declared structure is not audited structure.
 - **`/essentials:upgrade` command** — the other half of `init`, and the thing `init` never does: bring an **existing** project up to what the installed plugin ships. It is an audit that offers repairs, not a regeneration — it never diffs the project against the template tree `init` renders from (a project diverges from its render the day work starts), so every finding is derived from the project's own files plus the current stack contract, the decidable half by `scripts/stack-lint.py`. Three groups: the two files that leave the plugin (the slice-rules pointer, and the slice-manifest lint gate — **installed here** when the project predates it, which is the case `/essentials:slice-check` gate 12 structurally cannot see); the orientation files (the `CLAUDE.md` framework-knowledge block, the workspace pointer, the version stamp); and conformance against **S1–S11**, led by the S2.1 set — the requirements that compile cleanly and then kill context startup under a message naming nothing relevant. Reports everything before writing anything, offers each fix individually, and re-runs the context-start check when it changed a dependency or a config class. `--check` is a report-only dry run. It never regenerates a skeleton, never edits slice source, never re-asks the init questions, and **never moves a version pin** — a pin move is an upgrade decision that wants an ADR, not a side effect of catching up — except a Kotlin compiler too old for the project's own Java baseline, which does not compile. It reads the project's own Essentials version and keeps apart, as applying with the Essentials upgrade, every finding whose fix would break an application still on its older release.
 - **`/essentials:review` command** — review a change — the current branch, a ref, a pull request by number, or a path — against the traps index (`LLM-traps.md`), the stack contract and the slice law. The deterministic half runs as scripts (`review-scan.py` for trap signatures in the added lines, `stack-lint.py`, `slice-lint.py`, `slice-source.py`); the model judges only what they cannot see. Every finding carries an id with a link to the section that owns it: `ESS-NNN` for a trap, `ESS-S<n>` for a stack requirement, `ESS-G<gate>` for a slice-law gate. Findings the change did not introduce are counted, not listed. Reports by default; `--fix` applies the mechanical fixes the scripts describe, one at a time, each confirmed.
+- **`/essentials:doctor` command** — checks this machine for the tools the commands run (Requirements, below) and says what each missing one costs: a command that stops, a gate that is not run, a compile-only smoke build, a slower fallback. `scripts/doctor.sh` does the probing, for one command's profile (`init`, `review`, `slice`, `docs`) or all of them; it is bash, because the first thing it detects is a missing Python, and `init`, `review`, `slice-check` and `slice-map` run it as their preflight. Explains each gap with an install hint for the OS; installs nothing.
 - **`/essentials:intro` command** — read-only orientation. Detects whether the current repository already uses Essentials, then prints the docs skill, `/essentials:init` and what it sets up, the framework's core principles, and what is deliberately absent. Runs no build and scaffolds nothing.
 
 ## Install
@@ -32,6 +33,8 @@ default — turn it on in the `/plugin` Marketplaces tab, or refresh with
 
 ## Requirements
 
+Run `/essentials:doctor` to check them on this machine: it lists each one with the version found and what a missing one costs.
+
 - **Python 3.11 or newer** for every command that runs a script. The deterministic checks are scripts, and a command without them stops or marks its gates not run rather than guessing.
 - **[`uv`](https://docs.astral.sh/uv/)** for the scripts that need `pyyaml` or `jsonschema` (`slice-lint.py`, `slice-source.py`, `slice-index.py`). Each pins its dependencies in PEP 723 inline metadata, and the commands run them with `uv run --script`, which installs exactly those versions. Without `uv`, `python3 <script>` works where those packages are already installed (or `pipx run <script>`, which reads the same metadata). `init-render.py`, `render-slice.py`, `slice-law.py`, `stack-lint.py`, `review-scan.py` and `check-citations.py` are standard library only.
 - **For `/essentials:init`'s smoke build:** the JDK `references/stack/stack-pins.md` pins, Maven, and Docker (without Docker the result is compile-only and says so); `npm` to check a frontend.
@@ -45,6 +48,13 @@ default — turn it on in the `/plugin` Marketplaces tab, or refresh with
 ```
 
 Prints what the plugin offers and what `/essentials:init` sets up. Read-only.
+
+```
+/essentials:doctor            # every requirement below, and what each missing one costs
+/essentials:doctor slice      # only what add-slice, slice-check and slice-map run (also: init, review, docs)
+```
+
+Checks the tools the commands run (§ Requirements). Read-only; it suggests installs and never runs one.
 
 ### Looking up framework knowledge
 
@@ -161,7 +171,7 @@ essentials-plugin/
 │   ├── essentials-view-slice/
 │   ├── essentials-automation-slice/
 │   └── essentials-translation-slice/
-├── commands/                    (12: init, upgrade, intro, review, add-slice, 4 per-kind,
+├── commands/                    (13: init, upgrade, intro, doctor, review, add-slice, 4 per-kind,
 │                                 slice-check, slice-discover, slice-map)
 ├── scripts/                     (the deterministic half of the commands. Python 3.11+; the three
 │   │                             needing pyyaml/jsonschema pin them in PEP 723 metadata for
@@ -181,6 +191,8 @@ essentials-plugin/
 │   │                             how the slice skills load it; --check holds the byte budgets)
 │   ├── stack-lint.py            (the decidable half of S1–S11: ESS-S findings with fix descriptors)
 │   ├── review-scan.py           (trap signatures in a diff's added lines: ESS-NNN findings)
+│   ├── doctor.sh                (bash, not Python: which required tools are here and what each
+│   │                             missing one costs, per command profile; --json for scripts)
 │   └── check-citations.py       (plugin lint: a pin or S-requirement restated outside
 │                                 references/stack/, or a citation of a slice-law section
 │                                 that rules/slice-design.md does not have)
@@ -225,7 +237,7 @@ essentials-plugin/
 │   ├── review/                  (review-scan's signature diffs; judgement patches over two fixtures)
 │   ├── citations/               (check-citations --self-test input)
 │   └── scripts/                 (the unittest suites: slice-lint, render-slice, slice-source,
-│                                 slice-index, slice-law, review-scan)
+│                                 slice-index, slice-law, review-scan, search.sh, doctor.sh)
 └── evals/                       (claude plugin eval suite for the model-judgement steps —
                                   maintainer, before release; see evals/README.md)
 ```

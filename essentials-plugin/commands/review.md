@@ -60,12 +60,13 @@ only as Step 6 describes. `--out` writes only the path the user named; with no p
 
 - `${CLAUDE_PLUGIN_ROOT}` unset ⇒ abort: "This command must be invoked from within Claude Code with the
   essentials plugin installed."
-- `python3` ≥ 3.11 is required; without it no deterministic check can run, so stop and say so rather
-  than review by eye.
-- `slice-lint.py` and `slice-source.py` need `pyyaml` (and `slice-lint.py` `jsonschema`). They carry their
-  pinned dependencies in inline script metadata, which `uv run --script` installs. Without `uv`,
-  `python3 <script>` works where the dependencies are installed; where they are not, the script exits 2
-  and its gates are **not run** (Step 3). `review-scan.py` and `stack-lint.py` are standard library only.
+- Run `"${CLAUDE_PLUGIN_ROOT}/scripts/doctor.sh" --for review`. Exit 1 is its `python3` line: no
+  Python 3.11 or newer, so no deterministic check can run. Stop and say so rather than review by eye.
+- Its `uv` line decides how Step 3 runs `slice-lint.py` and `slice-source.py`, which carry their pinned
+  `pyyaml` (and, for slice-lint, `jsonschema`) in inline script metadata: `ok` ⇒ `uv run --script`, as
+  written below; any other status ⇒ `python3 <script>` in its place, which uses the packages already
+  installed. A script whose package is missing exits 2 and its gates are **not run** (Step 3); the line
+  says in advance which one. `review-scan.py` and `stack-lint.py` are standard library only.
 
 ## Step 1 — Gate and facts
 

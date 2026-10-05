@@ -63,8 +63,12 @@ uv run --script ${CLAUDE_PLUGIN_ROOT}/scripts/slice-source.py <project-root> --c
 ```
 
 Both carry their pinned dependencies (`pyyaml`, and `jsonschema` for slice-lint) in inline script
-metadata, which `uv run --script` installs. Without `uv`, `python3 <script>` works where those packages
-are already installed. Pass `--bc <name>` to `slice-source.py` when the audit is scoped to one bounded
+metadata, which `uv run --script` installs. Which runner applies is the `uv` line of
+`"${CLAUDE_PLUGIN_ROOT}/scripts/doctor.sh" --for slice`, run first: `ok` ⇒ `uv run --script` as above;
+any other status ⇒ `python3 <script>` in its place, which uses the packages already installed, and a
+script whose package is missing exits 2 (table below) — the line names which one, and how to install
+it. Ignore doctor's exit code here: it is non-zero when `/essentials:slice-map` could not run, which
+does not stop this audit; a missing or too-old `python3` with no `uv` shows as both scripts exiting 2. Pass `--bc <name>` to `slice-source.py` when the audit is scoped to one bounded
 context. Run slice-lint over the whole project even then, because ids and ownership are
 project-wide sets.
 

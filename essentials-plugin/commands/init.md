@@ -47,7 +47,7 @@ directory empty".
 
 ```bash
 test -n "${CLAUDE_PLUGIN_ROOT}" || echo "CLAUDE_PLUGIN_ROOT unset"
-python3 -c 'import sys; sys.exit(sys.version_info < (3, 11))' || echo "needs Python 3.11+"
+"${CLAUDE_PLUGIN_ROOT}/scripts/doctor.sh" --for init
 ls -A 2>/dev/null | head
 
 # Is this already an Essentials project?
@@ -57,8 +57,12 @@ grep -rl 'dk\.trustworks\.essentials' --include=pom.xml --include=build.gradle \
 grep -l 'Trustworks Essentials framework knowledge' CLAUDE.md */CLAUDE.md 2>/dev/null | head -3
 ```
 
-No Python 3.11 or newer ⇒ stop and say so: the renderer is the only way this command writes a
-project, and there is no hand-written fallback.
+`doctor.sh` exits 1 ⇒ stop and say so, with its `python3` line: no Python 3.11 or newer, and the
+renderer is the only way this command writes a project, so there is no hand-written fallback. Its other
+lines do not stop init; they say now what Steps 12 and 13.7 will lose — no JDK of the pinned major or no
+`mvn` (no wrapper, no smoke build), no running Docker (the smoke build is `compiled-only`), no `npm` (no
+frontend lockfile or check). Tell the user once, before the questions, so a missing tool can be fixed
+before the build rather than discovered by it; Step 13.7 still checks Docker itself when it builds.
 
 **Any hit in the second group means this is already an Essentials project, and `/essentials:init` is
 the wrong command.** Do **not** fall through to Step 1 and offer the subdirectory option as the

@@ -156,7 +156,7 @@ default_merge_base() {
 # One function per plugin-docs step, in the job's order. Each runs in the directory that CI step ran in.
 
 steps=(llm-sync citations ess-ids plugin-version symlinks slice-lint render-slice slice-source slice-index slice-law stack-lint
-    init-render review-scan docs-search check-patches check-expected eval-graders eval-flags slice-compile-table render-check)
+    init-render review-scan docs-search doctor check-patches check-expected eval-graders eval-flags slice-compile-table render-check)
 declare -A step_desc=(
     [llm-sync]="regenerate references/llm/ from LLM/ (sync-plugin-llm.sh) and fail on drift"
     [citations]="only stack-pins.md / stack-contract.md state a pin or an S-requirement; every slice-law § cite resolves (check-citations.py)"
@@ -172,6 +172,7 @@ declare -A step_desc=(
     [init-render]="every answer set renders and lints; the nine cells match their goldens (init-render.py)"
     [review-scan]="review signatures (review-scan.py --self-test + unit tests)"
     [docs-search]="the essentials-docs search script (test_search.py)"
+    [doctor]="doctor.sh's requirement lines, JSON and exit codes per profile on stubbed tools (test_doctor.py)"
     [check-patches]="review judgement cases, deterministic half (check-patches.py)"
     [check-expected]="fixture expected.yaml anchors still point at their lines (check-expected.py)"
     [eval-graders]="eval graders generated from their expected results, not edited (evals/build.py --check)"
@@ -325,6 +326,10 @@ step_review-scan() {
 
 step_docs-search() {
     x "$plugin" uv run python -m unittest discover -s tests/scripts -p 'test_search.py'
+}
+
+step_doctor() {
+    x "$plugin" uv run python -m unittest discover -s tests/scripts -p 'test_doctor.py'
 }
 
 step_check-patches() {

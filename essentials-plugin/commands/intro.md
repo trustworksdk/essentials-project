@@ -139,6 +139,10 @@ or auditing a slice, seeing the whole map, and reviewing a change.
                          moves no version pin but a Kotlin compiler too old for
                          the project's Java baseline.
                          --check is a report-only dry run.
+  /essentials:doctor     Checks this machine for the tools the commands run —
+                         python3, uv, the pinned JDK, Maven, Docker, npm — and
+                         says what each missing one costs: a command that stops,
+                         a gate not run, a compile-only build. Installs nothing.
 
 ━━━ WHAT /essentials:init SETS UP ━━━
 

@@ -97,6 +97,9 @@ jobs:
       - name: Docs search (search.sh)
         run: scripts/plugin-check.sh step docs-search
 
+      - name: Requirements check (doctor.sh)
+        run: scripts/plugin-check.sh step doctor
+
       - name: Review judgement cases, deterministic half (check-patches.py)
         run: scripts/plugin-check.sh step check-patches
 

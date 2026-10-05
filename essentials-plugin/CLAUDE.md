@@ -97,6 +97,8 @@ that load.
   Every script is Python ≥ 3.11 and either standard library only (`#!/usr/bin/env python3`) or
   pins its dependencies in PEP 723 inline metadata and runs with `uv run --script`. The pins
   travel with the copy init installs into projects. Scripts are Pyright-clean in basic mode.
+  The one exception is `scripts/doctor.sh`, bash (3.2-safe, no tools beyond those it probes) because it
+  detects a missing Python; its impact lines restate what each command does without a tool, so they move with that command.
 - **Goldens are committed and byte-diffed; regenerating one is a review, not a fix.**
   `tests/golden/init/`, `tests/slice-golden/`, `tests/slice-index/golden/` and
   `tests/slice-source/golden/` are what the renderers and readers produce today. Each has an

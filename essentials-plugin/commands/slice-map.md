@@ -83,9 +83,12 @@ uv run --script ${CLAUDE_PLUGIN_ROOT}/scripts/slice-index.py map <root> \
 ```
 
 All three carry their pinned `pyyaml` in inline script metadata, which `uv run --script` installs.
-Without `uv`, `python3 <script>` works where `pyyaml` is installed. The output of `map` is the data
-contract of Step 6, complete. **Take it as it is.** Do not re-read the manifests to re-derive a field,
-and do not add a node, edge or flag the script did not emit.
+Which runner applies is the `uv` line of `"${CLAUDE_PLUGIN_ROOT}/scripts/doctor.sh" --for slice`, run
+first: `ok` ⇒ `uv run --script` as above; `FALLBACK` or `PARTIAL` ⇒ `python3 <script>` in its place,
+which uses the `pyyaml` already installed; `MISSING` (no `uv`, and no `python3` 3.11+ with `pyyaml`) ⇒
+`slice-index.py` cannot run: stop, as for exit 2 below, and quote doctor's lines for what to install.
+The output of `map` is the data contract of Step 6, complete. **Take it as it is.** Do not re-read the
+manifests to re-derive a field, and do not add a node, edge or flag the script did not emit.
 
 | Script | Exit | What it means here |
 |---|---|---|
