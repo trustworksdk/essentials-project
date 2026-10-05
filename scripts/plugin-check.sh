@@ -159,7 +159,7 @@ steps=(llm-sync citations ess-ids plugin-version symlinks slice-lint render-slic
     init-render review-scan docs-search check-patches check-expected eval-graders eval-flags slice-compile-table render-check)
 declare -A step_desc=(
     [llm-sync]="regenerate references/llm/ from LLM/ (sync-plugin-llm.sh) and fail on drift"
-    [citations]="only stack-pins.md / stack-contract.md state a pin or an S-requirement (check-citations.py)"
+    [citations]="only stack-pins.md / stack-contract.md state a pin or an S-requirement; every slice-law § cite resolves (check-citations.py)"
     [ess-ids]="ESS-NNN ids on LLM/LLM-traps.md: unique, contiguous, tombstoned, resolved (check-ess-ids.py)"
     [plugin-version]="a change under essentials-plugin/ moves plugin.json's version, to the pin with an optional -N"
     [symlinks]="no tracked symlinks under essentials-plugin/"

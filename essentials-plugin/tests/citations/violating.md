@@ -18,3 +18,11 @@ Tests pull in objenesis {{pin:objenesis.version}} through the Mockito BOM. <!-- 
 S5 is the rule here, and every write MUST follow it: {{quote:S5}} <!-- expect: restated-requirement -->
 
 JDBI is held at {{pin:jdbi3-bom.version}} for now. <!-- expect: pinned-version --> <!-- expect: allow-marker --> <!-- cite-ok: -->
+
+Re-read `rules/slice-design.md` § Warning signs before reporting. <!-- expect: law-section -->
+
+The write style is §R9 of the law. <!-- expect: law-section -->
+
+See `rules/slice-design.md` § Red flags, and § No such section either. <!-- expect: law-section -->
+
+The law has no numbered sections (`rules/slice-design.md` §4). <!-- expect: law-section -->

@@ -179,7 +179,8 @@ essentials-plugin/
 │   ├── stack-lint.py            (the decidable half of S1–S11: ESS-S findings with fix descriptors)
 │   ├── review-scan.py           (trap signatures in a diff's added lines: ESS-NNN findings)
 │   └── check-citations.py       (plugin lint: a pin or S-requirement restated outside
-│                                 references/stack/)
+│                                 references/stack/, or a citation of a slice-law section
+│                                 that rules/slice-design.md does not have)
 ├── references/
 │   ├── llm/                     (31 docs — the framework docs, LLM.md plus 30 LLM-*.md incl.
 │   │                             LLM-traps.md. Generated from the repository's LLM/ by

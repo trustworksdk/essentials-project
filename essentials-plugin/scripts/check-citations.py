@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""check-citations — the plugin cites the stack contract and the pins; it never restates them.
+"""check-citations — the plugin cites the stack contract, the pins and the slice law; it never restates them.
 
 Why this exists
 ---------------
@@ -32,6 +32,20 @@ restated-requirement
     heuristic is deliberately narrow: a false positive costs a maintainer more than a missed case.
     Fenced code blocks are not prose and are skipped for this rule.
 
+law-section
+    A citation of a section of `rules/slice-design.md` that names no heading in it. Skills,
+    commands, references and templates cite the slice law by section name and never restate it
+    (`essentials-plugin/CLAUDE.md` § Design invariants), so a renamed or removed heading leaves every
+    citer pointing at nothing — and nothing fails. Checked: a `§` right after `slice-design.md`;
+    a bare `§R<n>` anywhere (the R-numbers are the law's alone); a `§` chained onto one of those
+    by `,`, `and`, `plus`, `or` or `then` on the same line; and every `§` inside the law itself
+    that does not follow another file's name. A citation matches when its text starts with a
+    heading, or with a heading's short name (the part before ` — ` or `: `, so `§ Service-entity
+    style` and `§R5` both resolve). The text is read across the next two lines, so a citation
+    wrapped mid-name still matches. Templates and goldens are scanned too: the citations they
+    carry are rendered into user projects, where nothing can check them, so a heading name is a
+    public name and the template is the last place a dangling one can be caught.
+
 allow-marker
     A `cite-ok` marker with no reason. An exception nobody can explain is not an exception.
 
@@ -56,6 +70,9 @@ CHANGELOG.md                         a release record: the version a release tar
 tests/fixtures/**                    sample projects the slice tooling reads; their build files pin
                                      what a user's project pinned, not what this plugin pins
 tests/citations/**                   this script's own self-test samples, which must violate
+                                     (also exempt from law-section, with CHANGELOG.md and
+                                     references/llm/**; every other file is checked for it,
+                                     fixtures and goldens included)
 tests/golden/**                      renderer output (scripts/init-render.py --update-golden): it
                                      carries every pin it rendered by design, and init-render.py
                                      --check fails it the moment it differs from a fresh render
@@ -82,8 +99,8 @@ Exit codes
 ----------
     0   no findings (with --self-test: every expectation met)
     1   findings (with --self-test: an expectation not met)
-    2   could not run — bad arguments, an unreadable stack-pins.md or stack-contract.md, or a pins
-        table with no version in it
+    2   could not run — bad arguments, an unreadable stack-pins.md, stack-contract.md or
+        rules/slice-design.md, or a pins table with no version in it
 
 Self-test
 ---------
@@ -91,7 +108,8 @@ Self-test
 `<!-- expect: <rule> -->`; `tests/citations/clean.md` must produce nothing. The samples do not
 carry literal pins or contract text: `{{pin:<name>}}` is replaced by that row's current value in
 `stack-pins.md`, and `{{quote:S<n>}}` by the first sentence of that requirement, so a pin move or a
-contract edit does not break the self-test.
+contract edit does not break the self-test. The law-section samples cite the real headings of
+`rules/slice-design.md`, so renaming one of those it cites breaks the self-test on purpose.
 
     python3 scripts/check-citations.py --self-test
 """
@@ -106,6 +124,7 @@ from pathlib import Path
 
 PINS = "references/stack/stack-pins.md"
 CONTRACT = "references/stack/stack-contract.md"
+LAW = "rules/slice-design.md"
 BINDINGS = {
     "references/stack/java-spring-boot.md",
     "references/stack/kotlin-spring-boot.md",
@@ -122,6 +141,10 @@ NOT_A_PIN = {
     ".claude-plugin/plugin.json":
         re.compile(r'^\s*"version"\s*:\s*"[\d.]+(-\d+)?"\s*,?\s*$'),
 }
+
+# Not scanned for law-section: a release record cites the law as it stood, the LLM docs never cite it.
+LAW_EXEMPT_FILES = {"CHANGELOG.md"}
+LAW_EXEMPT_DIRS = ("references/llm/", "tests/citations/")
 
 SCANNED_SUFFIXES = {
     ".md", ".template", ".java", ".kt", ".kts", ".yaml", ".yml", ".json", ".html",
@@ -153,6 +176,12 @@ EXPECT = re.compile(r"<!--\s*expect:\s*([\w-]+)\s*-->")
 WORD = re.compile(r"[a-z0-9]+(?:[._'][a-z0-9]+)*")
 FENCE = re.compile(r"^\s*(```|~~~)")
 BLOCK_START = re.compile(r"^\s*(?:[-*+]\s|\d+[.)]\s|\||#|>)")
+SECTION = re.compile(r"§")
+LAW_FILE_BEFORE = re.compile(r"slice-design\.md`?\)?\s*$")
+OTHER_FILE_BEFORE = re.compile(r"[\w.-]\.(?:md|json|ya?ml|html|template)`?\)?\s*$")
+CHAIN_SEPARATOR = re.compile(r"\s*(?:,\s*(?:(?:and|plus|or|then)\s+)?|\s(?:and|plus|or|then)\s+)$")
+R_NUMBER = re.compile(r"R(\d+)(?!\d)")
+CONTINUATION = re.compile(r"^\s*(?:\*(?!\*)|//|#+|>|-|\|)?\s*")
 SENTENCE_END = re.compile(r"(?<=[.!?])[*_`)\"']*\s+(?=[A-Z*`(\[_\"])")
 
 
@@ -277,6 +306,83 @@ def read_contract(path: Path):
     return contract
 
 
+def law_text(text: str) -> str:
+    """Markdown emphasis and code spans dropped, whitespace collapsed: how a citation is compared."""
+    return re.sub(r"\s+", " ", text.replace("`", "").replace("*", "")).strip()
+
+
+def read_law(path: Path):
+    """(section names, R-numbers) of the slice law: every ##/### heading, and its short name."""
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError as exc:
+        raise UsageError(f"cannot read {path}: {exc}")
+    names, numbers, in_fence = set(), set(), False
+    for line in text.splitlines():
+        if FENCE.match(line):
+            in_fence = not in_fence
+            continue
+        m = re.match(r"^#{2,3}\s+(.+?)\s*$", line)
+        if in_fence or not m:
+            continue
+        heading = law_text(m.group(1))
+        names.add(heading)
+        names.add(re.split(r" — |: ", heading, maxsplit=1)[0])
+        r = R_NUMBER.match(heading)
+        if r:
+            numbers.add(int(r.group(1)))
+    if not names:
+        raise UsageError(f"no section headings found in {path}")
+    return names, numbers
+
+
+def law_findings(rel, lines, law):
+    """[(line_index, message)] for every slice-law citation that names no section of the law."""
+    names, numbers = law
+    in_law = rel == LAW
+    out = []
+    def is_name(cited):
+        r = R_NUMBER.match(cited)
+        if r:
+            return int(r.group(1)) in numbers
+        return any(
+            cited.startswith(n) and (len(cited) == len(n) or not cited[len(n)].isalnum())
+            for n in names
+        )
+
+    for i, line in enumerate(lines):
+        previous_law_end = None
+        for m in SECTION.finditer(line):
+            before = line[: m.start()]
+            rest = line[m.end():]
+            for follow in lines[i + 1 : i + 3]:
+                rest += " " + CONTINUATION.sub("", follow, count=1)
+            cited = law_text(rest)
+            if in_law:
+                is_law = not OTHER_FILE_BEFORE.search(before)
+            elif LAW_FILE_BEFORE.search(before):
+                is_law = True
+            elif OTHER_FILE_BEFORE.search(before):
+                is_law = False
+            elif R_NUMBER.match(cited):
+                is_law = True
+            else:
+                # Chained onto the previous law citation: nothing between the two but that
+                # citation's own section name and a separator ("§R1, §R2 and § Wiring is part of done").
+                is_law = False
+                if previous_law_end is not None:
+                    between = line[previous_law_end : m.start()]
+                    sep = CHAIN_SEPARATOR.search(between)
+                    is_law = bool(sep) and is_name(law_text(between[: sep.start()]).removesuffix("'s"))
+            previous_law_end = m.end() if is_law else None
+            if not is_law:
+                continue
+            if not is_name(cited):
+                out.append((i, f"§ {cited[:48].rstrip()} names no section of {LAW} — "
+                               "cite a heading that exists, or rename the citers with the heading"))
+    return out
+
+
 # ---------------------------------------------------------------------------------------------
 # Scanning
 
@@ -350,7 +456,8 @@ def cited_numbers(sentence):
     return numbers
 
 
-def check_text(rel, text, patterns, contract, prose, restatement_rule=True):
+def check_text(rel, text, patterns, contract, prose, restatement_rule=True, law=None,
+               pin_rules=True):
     findings, lines = [], text.splitlines()
     seen_markers = set()
 
@@ -364,7 +471,7 @@ def check_text(rel, text, patterns, contract, prose, restatement_rule=True):
         findings.append(Finding(rel, first + 1, rule, message))
 
     not_a_pin = NOT_A_PIN.get(rel)
-    for i, line in enumerate(lines):
+    for i, line in enumerate(lines if pin_rules else ()):
         if not_a_pin and not_a_pin.match(line):
             continue
         for name, value, pattern in patterns:
@@ -373,7 +480,11 @@ def check_text(rel, text, patterns, contract, prose, restatement_rule=True):
                        f"{value} is the `{name}` pin — cite references/stack/stack-pins.md, "
                        "do not restate it")
 
-    if prose and restatement_rule:
+    if law is not None:
+        for i, message in law_findings(rel, lines, law):
+            report(i, i, "law-section", message)
+
+    if prose and restatement_rule and pin_rules:
         for unit in prose_units(lines):
             for first, last, sentence in sentences(unit):
                 numbers = cited_numbers(sentence)
@@ -397,14 +508,16 @@ def check_text(rel, text, patterns, contract, prose, restatement_rule=True):
     return findings
 
 
-def scan(root: Path, patterns, contract):
+def scan(root: Path, patterns, contract, law):
     findings = []
     for dirpath, dirnames, filenames in os.walk(root):
         dirnames[:] = sorted(d for d in dirnames if d not in SKIP_DIRS)
         for filename in sorted(filenames):
             path = Path(dirpath) / filename
             rel = path.relative_to(root).as_posix()
-            if rel in EXEMPT_FILES or rel.startswith(EXEMPT_DIRS):
+            pin_rules = not (rel in EXEMPT_FILES or rel.startswith(EXEMPT_DIRS))
+            law_rule = not (rel in LAW_EXEMPT_FILES or rel.startswith(LAW_EXEMPT_DIRS))
+            if not (pin_rules or law_rule):
                 continue
             if path.suffix not in SCANNED_SUFFIXES:
                 continue
@@ -415,7 +528,9 @@ def scan(root: Path, patterns, contract):
             findings.extend(
                 check_text(rel, text, patterns, contract,
                            prose=path.suffix in PROSE_SUFFIXES,
-                           restatement_rule=rel not in BINDINGS)
+                           restatement_rule=rel not in BINDINGS,
+                           law=law if law_rule else None,
+                           pin_rules=pin_rules)
             )
     return findings
 
@@ -424,7 +539,7 @@ def scan(root: Path, patterns, contract):
 # Self-test
 
 
-def self_test(root: Path, pins, patterns, contract, out):
+def self_test(root: Path, pins, patterns, contract, law, out):
     values = {name: value for name, value in pins}
     samples = root / "tests" / "citations"
 
@@ -449,7 +564,7 @@ def self_test(root: Path, pins, patterns, contract, out):
             text = render(path)
         except OSError as exc:
             raise UsageError(f"cannot read {path}: {exc}")
-        found = check_text(f"tests/citations/{name}", text, patterns, contract, prose=True)
+        found = check_text(f"tests/citations/{name}", text, patterns, contract, prose=True, law=law)
         got = {(f.line, f.rule) for f in found}
         want = set()
         if not expect_clean:
@@ -476,13 +591,15 @@ def main(argv=None):
     parser = argparse.ArgumentParser(
         prog="check-citations",
         description="Flag version pins and S1-S11 requirement text restated outside "
-        "stack-pins.md / stack-contract.md. Deterministic; reports, never writes.",
+        "stack-pins.md / stack-contract.md, and citations of rules/slice-design.md sections that "
+        "do not exist. Deterministic; reports, never writes.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=f"""\
 rules:
   pinned-version        a stack-pins.md value outside the files allowed to carry it
   restated-requirement  a MUST/SHOULD sentence citing S<n> that shares {MIN_RUN}+ consecutive
                         words with that requirement's text in stack-contract.md
+  law-section           a citation of a rules/slice-design.md section that names no heading in it
   allow-marker          a cite-ok marker with no reason
 
 output:  path:line: rule: message   (path relative to ROOT)
@@ -490,7 +607,8 @@ allow:   <!-- cite-ok: reason --> on the flagged line or the line above it
 exempt:  stack-pins.md, stack-contract.md, CHANGELOG.md, references/llm/**,
          tests/fixtures/**, tests/citations/**, tests/golden/**, the seed spec's
          "openapi" line, plugin.json's "version" line; the three binding docs in references/stack/ are exempt
-         from restated-requirement only
+         from restated-requirement only. law-section exempts only CHANGELOG.md,
+         references/llm/** and tests/citations/**
 exit:    0 clean, 1 findings, 2 usage error (bad arguments, unreadable pins/contract)
          with --self-test: 0 every expectation met, 1 one was not""",
     )
@@ -510,13 +628,14 @@ exit:    0 clean, 1 findings, 2 usage error (bad arguments, unreadable pins/cont
         pins = read_pins(root / PINS)
         patterns = pin_patterns(pins)
         contract = read_contract(root / CONTRACT)
+        law = read_law(root / LAW)
         if args.self_test:
-            return self_test(root, pins, patterns, contract, sys.stdout)
+            return self_test(root, pins, patterns, contract, law, sys.stdout)
     except UsageError as exc:
         print(f"check-citations: {exc}", file=sys.stderr)
         return 2
 
-    findings = scan(root, patterns, contract)
+    findings = scan(root, patterns, contract, law)
     findings.sort(key=lambda f: (f.path, f.line, f.rule))
     for f in findings:
         print(f)
@@ -526,8 +645,9 @@ exit:    0 clean, 1 findings, 2 usage error (bad arguments, unreadable pins/cont
             print(f"{len(findings)} finding(s). Cite stack-pins.md / stack-contract.md, or mark a "
                   f"deliberate exception with <!-- cite-ok: reason -->.", file=sys.stderr)
         else:
-            print(f"No restated pins or requirements ({len(pins)} pins, "
-                  f"{len(contract)} requirements checked).", file=sys.stderr)
+            print(f"No restated pins or requirements, no dangling law citations ({len(pins)} pins, "
+                  f"{len(contract)} requirements, {len(law[0])} law section names checked).",
+                  file=sys.stderr)
     return 1 if findings else 0
 
 
