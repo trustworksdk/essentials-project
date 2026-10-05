@@ -24,9 +24,10 @@ targets, with a `-N` suffix for plugin-only releases.
   non-I/O failure. A handler can override the manager's policy for its own subscription
   (`subscriptionErrorPolicy()`, a processor's `getSubscriptionErrorPolicy()`).
 - **Framework docs: bounded polling gaps** — a poll now records a new gap only
-  `SubscriptionGapHandler.MAX_AWAITED_ORDERS_PER_GAP_END` (5,000) orders deep from each end, and skips
-  the middle of a wider one (sequence `setval`, restore) with a WARN instead of writing a transient-gap
-  row per order; what that costs a transaction of more than 10,000 events is stated alongside.
+  `SubscriptionGapHandler.MAX_AWAITED_ORDERS_PER_GAP_END` (5,000) orders deep from each end and awaits
+  the middle of a wider one (sequence `setval`, restore) in memory only, as CDC does, instead of writing a
+  transient-gap row per order; and the new persistence-strategy lookup
+  `findLowestGlobalEventOrderPersisted(uow, aggregateType, LongRange)` a custom strategy should override.
 
 ## 0.60.0-2 — targets Essentials 0.60.0
 - **Slice law, loaded by lane** — `rules/slice-design.md` stays one file, but each lane-, kind- or

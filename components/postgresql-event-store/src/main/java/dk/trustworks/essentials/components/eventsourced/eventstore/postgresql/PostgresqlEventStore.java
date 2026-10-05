@@ -533,6 +533,8 @@ public final class PostgresqlEventStore<CONFIG extends AggregateEventStreamConfi
         var lastBatchSizeForThisQuery            = new AtomicLong(batchFetchSize);
         var nextFromInclusiveGlobalOrder         = new AtomicLong(fromInclusiveGlobalOrder);
         var subscriptionGapHandler               = subscriberId.map(eventStreamGapHandler::gapHandlerFor);
+        // Like the read position, shared by every subscribe of the flux
+        var gapMiddlesAwaitedInMemory            = subscriptionGapHandler.map(GapMiddlesAwaitedInMemory::awaitedAsLongAs);
 
         var eventStoreOptimizer = eventStorePollingOptimizerFactory.map(pollingOptimizerFactory -> pollingOptimizerFactory.apply(eventStreamLogName)).orElse(EventStorePollingOptimizer.None());
 
@@ -558,7 +560,8 @@ public final class PostgresqlEventStore<CONFIG extends AggregateEventStreamConfi
                                                           subscriptionGapHandler,
                                                           actualSubscriberId,
                                                           eventStoreOptimizer,
-                                                          awaitingAcknowledgement));
+                                                          awaitingAcknowledgement,
+                                                          gapMiddlesAwaitedInMemory));
             });
 
             // Also when a polling worker ended the flux with an error (see PollEventStoreTask), not just on cancel
@@ -629,6 +632,8 @@ public final class PostgresqlEventStore<CONFIG extends AggregateEventStreamConfi
         var lastBatchSizeForThisQuery            = new AtomicLong(batchFetchSize);
         var nextFromInclusiveGlobalOrder         = new AtomicLong(fromInclusiveGlobalOrder);
         var subscriptionGapHandler               = subscriberId.map(eventStreamGapHandler::gapHandlerFor);
+        // Like the read position, shared by every subscribe of the flux
+        var gapMiddlesAwaitedInMemory            = subscriptionGapHandler.map(GapMiddlesAwaitedInMemory::awaitedAsLongAs);
         var actualSubscriberId                   = subscriberId.orElse(NO_SUBSCRIBER_ID);
 
         // One per subscription (each subscribe gets its own), as in pollEvents
@@ -695,8 +700,9 @@ public final class PostgresqlEventStore<CONFIG extends AggregateEventStreamConfi
                                                                               .orElse(null);
 
                     var loadEventsByGlobalOrderTiming = StopWatch.start("loadEventsByGlobalOrder(" + actualSubscriberId + ", " + aggregateType + ")");
-                    // Every tenant's events: see loadEventsForPoll
-                    var loadedEvents = loadEventsForPoll(aggregateType, globalOrderRange, transientGapsToIncludeInQuery, onlyIncludeEventIfItBelongsToTenant);
+                    // Every tenant's events: see loadEventsForPoll. Plus those committed late in the middle of a wide gap
+                    var gapMiddleFills = loadGapMiddleFills(gapMiddlesAwaitedInMemory, unitOfWork, aggregateType, batchFetchSize, onlyIncludeEventIfItBelongsToTenant, eventStreamLogName);
+                    var loadedEvents   = withGapMiddleFills(gapMiddleFills, loadEventsForPoll(aggregateType, globalOrderRange, transientGapsToIncludeInQuery, onlyIncludeEventIfItBelongsToTenant));
                     // Without the gap fills handed on before and not acknowledged yet: their gap is open, so they are read again
                     var persistedEvents = notAwaitingAcknowledgement(eventsBelongingToTenant(loadedEvents, tenantFilter(aggregateType, onlyIncludeEventIfItBelongsToTenant)), awaitingAcknowledgement);
                     eventStoreSubscriptionObserver.eventStorePolled(actualSubscriberId,
@@ -707,7 +713,7 @@ public final class PostgresqlEventStore<CONFIG extends AggregateEventStreamConfi
                                                                     persistedEvents,
                                                                     loadEventsByGlobalOrderTiming.stop().getDuration());
                     // The gaps filled by events about to be emitted stay open until they have been - see gapFillsAmong
-                    var gapFillsToEmit = gapFillsAmong(persistedEvents, transientGapsToIncludeInQuery);
+                    var gapFillsToEmit = gapFillsAmong(persistedEvents, gapsReadAgain(transientGapsToIncludeInQuery, gapMiddleFills));
                     var gapReconciliation = subscriptionGapHandler.map(gapHandler -> {
                         var reconcileGapsTiming = StopWatch.start("reconcileGaps(" + actualSubscriberId + ", " + aggregateType + ")");
                         var outcome = reconcileGaps(gapHandler,
@@ -754,6 +760,8 @@ public final class PostgresqlEventStore<CONFIG extends AggregateEventStreamConfi
                                                   transientGapsToIncludeInQuery);
                     }
 
+                    // Once the reconciliation committed: the middles of the wide gaps it found, and the middle fills read
+                    trackGapMiddles(gapMiddlesAwaitedInMemory, globalOrderRange, loadedEvents, eventStreamLogName);
                     // Right before they are emitted - once the reconciliation committed - so the subscriber can acknowledge them
                     awaitingAcknowledgement.ifPresent(awaiting -> awaiting.awaitAcknowledgement(gapFillsToEmit));
                     var emitted = Flux.fromIterable(persistedEvents);
@@ -1011,6 +1019,10 @@ public final class PostgresqlEventStore<CONFIG extends AggregateEventStreamConfi
          */
         private final Optional<GapFillsAwaitingAcknowledgement> awaitingAcknowledgement;
         /**
+         * Present when the subscription has a gap handler - see {@link GapMiddlesAwaitedInMemory}
+         */
+        private final Optional<GapMiddlesAwaitedInMemory>       gapMiddlesAwaitedInMemory;
+        /**
          * Whether the latest {@link #pollForEvents} read any event, whether or not it belonged to the subscriber's tenant.
          * Only touched by the thread running this task.
          */
@@ -1033,7 +1045,8 @@ public final class PostgresqlEventStore<CONFIG extends AggregateEventStreamConfi
                                   Optional<SubscriptionGapHandler> subscriptionGapHandler,
                                   SubscriberId subscriberId,
                                   EventStorePollingOptimizer pollingOptimizer,
-                                  Optional<GapFillsAwaitingAcknowledgement> awaitingAcknowledgement) {
+                                  Optional<GapFillsAwaitingAcknowledgement> awaitingAcknowledgement,
+                                  Optional<GapMiddlesAwaitedInMemory> gapMiddlesAwaitedInMemory) {
             this.demandForEvents = demandForEvents;
             this.sink = sink;
             this.aggregateType = aggregateType;
@@ -1049,6 +1062,7 @@ public final class PostgresqlEventStore<CONFIG extends AggregateEventStreamConfi
             this.subscriberId = subscriberId;
             this.pollingOptimizer = pollingOptimizer;
             this.awaitingAcknowledgement = awaitingAcknowledgement;
+            this.gapMiddlesAwaitedInMemory = gapMiddlesAwaitedInMemory;
         }
 
         @Override
@@ -1186,7 +1200,9 @@ public final class PostgresqlEventStore<CONFIG extends AggregateEventStreamConfi
 
                 var loadEventsByGlobalOrderTiming = StopWatch.start("loadEventsByGlobalOrder(" + subscriberId + ", " + aggregateType + ")");
                 // Every tenant's events: see loadEventsForPoll
-                var loadedEvents = loadEventsForPoll(aggregateType, globalOrderRange, transientGapsToIncludeInQuery, onlyIncludeEventIfItBelongsToTenant);
+                // Plus the events committed late in the middle of a wide gap, at most a batch of them
+                var gapMiddleFills = loadGapMiddleFills(gapMiddlesAwaitedInMemory, unitOfWork, aggregateType, batchFetchSize, onlyIncludeEventIfItBelongsToTenant, eventStreamLogName);
+                var loadedEvents   = withGapMiddleFills(gapMiddleFills, loadEventsForPoll(aggregateType, globalOrderRange, transientGapsToIncludeInQuery, onlyIncludeEventIfItBelongsToTenant));
                 var tenantFilter = tenantFilter(aggregateType, onlyIncludeEventIfItBelongsToTenant);
                 eventStoreSubscriptionObserver.eventStorePolled(subscriberId,
                                                                 aggregateType,
@@ -1211,7 +1227,7 @@ public final class PostgresqlEventStore<CONFIG extends AggregateEventStreamConfi
                                               remainingDemandForEvents);
                 }
                 // The gaps filled by events about to be published stay open until they have been - see gapFillsAmong
-                var gapFillsToPublish = gapFillsAmong(eventsToPublish, transientGapsToIncludeInQuery);
+                var gapFillsToPublish = gapFillsAmong(eventsToPublish, gapsReadAgain(transientGapsToIncludeInQuery, gapMiddleFills));
 
                 var gapReconciliation = subscriptionGapHandler.map(gapHandler -> {
                     var reconcileGapsTiming = StopWatch.start("reconcileGaps(" + subscriberId + ", " + aggregateType + ")");
@@ -1253,6 +1269,8 @@ public final class PostgresqlEventStore<CONFIG extends AggregateEventStreamConfi
                     }
 
                     // Right before they are published - once the reconciliation committed - so the subscriber can acknowledge them
+                    // Only the consumed events: a middle fill beyond the demand stays awaited, and is read again
+                    trackGapMiddles(gapMiddlesAwaitedInMemory, globalOrderRange, consumedEvents, eventStreamLogName);
                     awaitingAcknowledgement.ifPresent(awaiting -> awaiting.awaitAcknowledgement(gapFillsToPublish));
                     for (int index = 0; index < eventsToPublish.size(); index++) {
                         if (sink.isCancelled()) {
@@ -1375,6 +1393,118 @@ public final class PostgresqlEventStore<CONFIG extends AggregateEventStreamConfi
                                                     null);
         onlyIncludeEventIfItBelongsToTenant.ifPresent(operation::setOnlyLoadPayloadIfEventBelongsToTenant);
         return loadEventsByGlobalOrder(operation).toList();
+    }
+
+    /**
+     * The events that committed late in the middles of wide gaps a polling subscription awaits in memory only (see
+     * {@link GapMiddlesAwaitedInMemory}), after dropping the middles whose timeout has passed - for every tenant, as
+     * {@link #loadEventsForPoll} reads them.
+     * <p>
+     * One indexed lookup per awaited middle ({@link AggregateEventStreamPersistenceStrategy#findLowestGlobalEventOrderPersisted(EventStoreUnitOfWork, AggregateType, LongRange)})
+     * finds the lowest event committed in it - in practice there is none, and nothing else is read. From the first middle
+     * that has one, at most {@code maxEvents} orders are loaded, so a middle a large transaction filled is read a batch per
+     * poll, never at once; every order loaded is awaited, so none is read twice.
+     *
+     * @return the events found, lowest first - none when nothing is awaited
+     */
+    private List<PersistedEvent> loadGapMiddleFills(Optional<GapMiddlesAwaitedInMemory> gapMiddlesAwaitedInMemory,
+                                                    EventStoreUnitOfWork unitOfWork,
+                                                    AggregateType aggregateType,
+                                                    long maxEvents,
+                                                    Optional<Tenant> onlyIncludeEventIfItBelongsToTenant,
+                                                    String eventStreamLogName) {
+        if (gapMiddlesAwaitedInMemory.isEmpty() || gapMiddlesAwaitedInMemory.get().isEmpty()) {
+            return List.of();
+        }
+        var awaited = gapMiddlesAwaitedInMemory.get();
+        var dropped = awaited.dropTimedOut();
+        if (!dropped.isEmpty()) {
+            log.debug("[{}] Stopped awaiting the middle(s) {} of wide gaps after {} - awaited in memory only, so nothing is recorded for them",
+                      eventStreamLogName,
+                      dropped,
+                      awaited.timeout());
+        }
+        for (var middle : awaited.awaited()) {
+            var lowest = persistenceStrategy.findLowestGlobalEventOrderPersisted(unitOfWork, aggregateType, middle)
+                                            .map(GlobalEventOrder::longValue)
+                                            .filter(order -> order >= middle.fromInclusive && order <= middle.getToInclusive());
+            if (lowest.isPresent()) {
+                long from = lowest.get();
+                return loadEventsForPoll(aggregateType,
+                                         LongRange.between(from, Math.min(middle.getToInclusive(), from + Math.max(1, maxEvents) - 1)),
+                                         null,
+                                         onlyIncludeEventIfItBelongsToTenant);
+            }
+        }
+        return List.of();
+    }
+
+    /**
+     * {@code loadedEvents} with the {@code gapMiddleFills} - in global order, each order once
+     */
+    private static List<PersistedEvent> withGapMiddleFills(List<PersistedEvent> gapMiddleFills, List<PersistedEvent> loadedEvents) {
+        if (gapMiddleFills.isEmpty()) {
+            return loadedEvents;
+        }
+        var byGlobalOrder = new TreeMap<Long, PersistedEvent>();
+        gapMiddleFills.forEach(event -> byGlobalOrder.put(event.globalEventOrder().longValue(), event));
+        loadedEvents.forEach(event -> byGlobalOrder.putIfAbsent(event.globalEventOrder().longValue(), event));
+        return List.copyOf(byGlobalOrder.values());
+    }
+
+    /**
+     * The gaps a poll read again: the transient gaps it asked for, and the orders of the middle fills it found - both are
+     * delivered as gap fills (see {@link #gapFillsAmong})
+     *
+     * @param transientGapsIncludedInQuery may be null
+     */
+    private static List<GlobalEventOrder> gapsReadAgain(List<GlobalEventOrder> transientGapsIncludedInQuery, List<PersistedEvent> gapMiddleFills) {
+        if (gapMiddleFills.isEmpty()) {
+            return transientGapsIncludedInQuery;
+        }
+        var gaps = new ArrayList<GlobalEventOrder>();
+        if (transientGapsIncludedInQuery != null) {
+            gaps.addAll(transientGapsIncludedInQuery);
+        }
+        gapMiddleFills.forEach(event -> gaps.add(event.globalEventOrder()));
+        return gaps;
+    }
+
+    /**
+     * Once a poll's reconciliation committed, and before it hands anything on: every event it consumed stops being awaited
+     * in a middle - whichever query read it, and whether or not it belongs to the subscriber's tenant - so it is never read
+     * as a middle fill again; and the middles of the wide gaps its reconciliation found are awaited from now on. The
+     * reconciliation recorded only their ends as transient gaps (see {@link GapEnds}).
+     *
+     * @param consumedEvents the events the poll consumed - the ones it gave the reconciliation, apart from the gap fills
+     *                       awaiting acknowledgement
+     */
+    private static void trackGapMiddles(Optional<GapMiddlesAwaitedInMemory> gapMiddlesAwaitedInMemory,
+                                        LongRange globalOrderRange,
+                                        List<PersistedEvent> consumedEvents,
+                                        String eventStreamLogName) {
+        if (gapMiddlesAwaitedInMemory.isEmpty() || consumedEvents.isEmpty()) {
+            return;
+        }
+        var awaited = gapMiddlesAwaitedInMemory.get();
+        consumedEvents.forEach(event -> awaited.delivered(event.globalEventOrder().longValue()));
+        var gapEnds = GapEnds.below(globalOrderRange.fromInclusive, consumedEvents.stream().mapToLong(event -> event.globalEventOrder().longValue()));
+        for (var middle : gapEnds.awaitedInMemoryOnly()) {
+            awaited.await(middle);
+            long gapFrom = middle.fromInclusive - SubscriptionGapHandler.MAX_AWAITED_ORDERS_PER_GAP_END;
+            long gapTo   = middle.getToInclusive() + SubscriptionGapHandler.MAX_AWAITED_ORDERS_PER_GAP_END;
+            log.warn("[{}] Global order {} opened a gap of {} orders above {} - the global order sequence was moved forward, or a large append has not committed. " +
+                             "Awaiting the {} lowest and the {} highest of them durably, and the {} in between ({}) in memory only: a restart within {} does not wait for those",
+                     eventStreamLogName,
+                     gapTo + 1,
+                     gapTo - gapFrom + 1,
+                     gapFrom - 1,
+                     SubscriptionGapHandler.MAX_AWAITED_ORDERS_PER_GAP_END,
+                     SubscriptionGapHandler.MAX_AWAITED_ORDERS_PER_GAP_END,
+                     middle.getToInclusive() - middle.fromInclusive + 1,
+                     middle,
+                     awaited.timeout());
+        }
     }
 
     /**

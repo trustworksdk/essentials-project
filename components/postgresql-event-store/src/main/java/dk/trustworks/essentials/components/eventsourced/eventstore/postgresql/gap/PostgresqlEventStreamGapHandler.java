@@ -18,6 +18,7 @@ package dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.g
 
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.*;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.internal.GapEnds;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.persistence.AggregateEventStreamConfiguration;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.subscription.EventStoreSubscriptionManager;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.subscription.jdbi.*;
@@ -112,43 +113,6 @@ public final class PostgresqlEventStreamGapHandler<CONFIG extends AggregateEvent
     private static boolean covers(NavigableMap<Long, Long> rangesByFromInclusive, long order) {
         var startingAtOrBelow = rangesByFromInclusive.floorEntry(order);
         return startingAtOrBelow != null && startingAtOrBelow.getValue() >= order;
-    }
-
-    /**
-     * The gaps a reconciliation finds: every hole from where its query range starts up to the highest event it was given
-     * - before the lowest event at or above that start, and between two consecutive events. A hole no wider than twice
-     * {@link SubscriptionGapHandler#MAX_AWAITED_ORDERS_PER_GAP_END} is {@link #awaited} in full; of a wider one only that
-     * many orders at each end are, and the middle is {@link #notAwaited}. Found by walking the events, so finding them
-     * costs as much as the events, whatever the width of the holes.
-     *
-     * @param awaited    closed ranges of the orders to record as transient gaps, ascending and disjoint
-     * @param notAwaited closed ranges of the middles of the holes too wide to wait for in full, ascending and disjoint
-     */
-    record NewGaps(List<LongRange> awaited, List<LongRange> notAwaited) {
-        /**
-         * @param fromInclusive where the reconciled query range starts: what the subscription has already seen lies below
-         * @param eventOrders   the global orders of the events the reconciliation was given, in any order and with any
-         *                      duplicates; those below {@code fromInclusive} - gap fills - open no gap
-         */
-        static NewGaps below(long fromInclusive, LongStream eventOrders) {
-            var awaited     = new ArrayList<LongRange>();
-            var notAwaited  = new ArrayList<LongRange>();
-            var nextMissing = fromInclusive;
-            for (var order : eventOrders.filter(order -> order >= fromInclusive).sorted().distinct().toArray()) {
-                if (order > nextMissing) {
-                    var lastMissing = order - 1;
-                    if (lastMissing - nextMissing + 1 > 2L * SubscriptionGapHandler.MAX_AWAITED_ORDERS_PER_GAP_END) {
-                        awaited.add(LongRange.between(nextMissing, nextMissing + SubscriptionGapHandler.MAX_AWAITED_ORDERS_PER_GAP_END - 1));
-                        notAwaited.add(LongRange.between(nextMissing + SubscriptionGapHandler.MAX_AWAITED_ORDERS_PER_GAP_END, lastMissing - SubscriptionGapHandler.MAX_AWAITED_ORDERS_PER_GAP_END));
-                        awaited.add(LongRange.between(lastMissing - SubscriptionGapHandler.MAX_AWAITED_ORDERS_PER_GAP_END + 1, lastMissing));
-                    } else {
-                        awaited.add(LongRange.between(nextMissing, lastMissing));
-                    }
-                }
-                nextMissing = order + 1;
-            }
-            return new NewGaps(List.copyOf(awaited), List.copyOf(notAwaited));
-        }
     }
 
     /**
@@ -468,25 +432,14 @@ public final class PostgresqlEventStreamGapHandler<CONFIG extends AggregateEvent
          * <p>
          * A new gap is a hole in the global order from where {@code globalOrderQueryRange} starts up to the highest of
          * {@code persistedEvents}. It is recorded as transient gaps only up to {@link #MAX_AWAITED_ORDERS_PER_GAP_END}
-         * orders deep from each end; the middle of a wider hole is recorded nowhere - no transient gap, so never a permanent
-         * gap either - and logged as a WARN. Finding the holes walks the events, never the orders of the range, so a
-         * reconciliation costs as much as the events and the bounded ends, whatever the width of a hole: a
-         * {@code setval} that moved the sequence a million forward under a running polling subscription, whose query
-         * range then widened over the million on empty polls, used to write a million transient-gap rows, which every
-         * later poll loaded, sorted and filtered, and which were then promoted to a million permanent-gap rows.
-         * <p>
-         * A polling subscription skips the middle; it does not wait for it in memory the way a CDC subscription does
-         * (until its gap timeout, no rows written). A CDC subscription is handed every event that commits, whatever its
-         * order, so waiting for an order costs it nothing but remembering it. A poll reads only the range above the subscription's read position and the
-         * transient gaps it asks for again <i>by order</i>, so an order below the read position that is not a transient
-         * gap is never read again. Waiting for the middle would take another range query on every poll, or a range
-         * parameter for the persistence strategy's load (an SPI change every strategy must implement), plus a record per
-         * subscription of which middle orders it has delivered, threaded through both poll loops' demand and acknowledgement
-         * handling so that none is delivered twice - for orders no transaction can normally hold. The read position and
-         * the subscriber's resume point move past the middle with the event above it and never back, so an event that
-         * commits in the middle later is neither delivered nor delivered twice: it is missed by this subscriber. That is
-         * the price stated at {@link #MAX_AWAITED_ORDERS_PER_GAP_END}; a poll's range widens over a hole only after many
-         * empty polls, so a transaction must stay uncommitted that long for its events to land in the middle of one.
+         * orders deep from each end ({@link GapEnds}); the middle of a wider hole is recorded nowhere - no transient gap,
+         * so never a permanent gap either. The subscription awaits it in memory only: the polling event store re-queries
+         * it by range on every poll until the gap handler's give-up threshold has passed, and the CDC event store's
+         * delivery tracker is handed it with every commit. A restart or crash inside that window loses it. Finding the
+         * holes walks the events, never the orders of the range, so a reconciliation costs as much as the events and the
+         * bounded ends, whatever the width of a hole: a {@code setval} that moved the sequence a million forward under a
+         * running polling subscription used to write a million transient-gap rows, which every later poll loaded, sorted
+         * and filtered, and which were then promoted to a million permanent-gap rows.
          */
         @Override
         public GapReconciliation reconcileGapsAndReport(AggregateType aggregateType, LongRange globalOrderQueryRange, List<PersistedEvent> persistedEvents, List<GlobalEventOrder> transientGapsIncludedInQuery) {
@@ -521,26 +474,24 @@ public final class PostgresqlEventStreamGapHandler<CONFIG extends AggregateEvent
             var newCount = 0;
 
             // New Transient Gaps - walked hole by hole between the events, never order by order across the range: a hole
-            // can be a million orders wide, and only the orders at its two ends are recorded (see NewGaps)
+            // can be a million orders wide, and only the orders at its two ends are recorded (see GapEnds)
             if (!persistedEvents.isEmpty()) {
-                var newGaps = NewGaps.below(globalOrderQueryRange.fromInclusive,
+                var newGaps = GapEnds.below(globalOrderQueryRange.fromInclusive,
                                             persistedEvents.stream().mapToLong(persistedEvent -> persistedEvent.globalEventOrder().longValue()));
-                if (!newGaps.notAwaited().isEmpty()) {
-                    log.warn("[{}] Not waiting for the middle of {} '{}' gap(s) wider than {} orders: {} - only the {} orders at each end of such a gap are recorded as transient gaps. " +
-                                     "An order in the middle is held by no transaction still in flight - the global order sequence was moved forward (setval, a restore) - unless a single transaction " +
-                                     "appended more than {} events and has not committed yet. The middle is recorded neither as a transient nor as a permanent gap, and an event that commits there later is not delivered to this subscriber",
-                             subscriberId,
-                             newGaps.notAwaited().size(),
-                             aggregateType,
-                             2L * MAX_AWAITED_ORDERS_PER_GAP_END,
-                             newGaps.notAwaited(),
-                             MAX_AWAITED_ORDERS_PER_GAP_END,
-                             2L * MAX_AWAITED_ORDERS_PER_GAP_END);
+                if (!newGaps.awaitedInMemoryOnly().isEmpty()) {
+                    log.debug("[{}] Not recording the middle of {} '{}' gap(s) wider than {} orders as transient gaps: {} - only the {} orders at each end. " +
+                                      "The subscription awaits the middle in memory only",
+                              subscriberId,
+                              newGaps.awaitedInMemoryOnly().size(),
+                              aggregateType,
+                              2L * MAX_AWAITED_ORDERS_PER_GAP_END,
+                              newGaps.awaitedInMemoryOnly(),
+                              MAX_AWAITED_ORDERS_PER_GAP_END);
                 }
-                if (!newGaps.awaited().isEmpty()) {
+                if (!newGaps.recorded().isEmpty()) {
                     // Verify if the transient gap is already marked permanent by another subscriber (permanent gaps are defined across subscribers per aggregate type).
                     // Only the permanent gaps within the awaited ranges are read - all of the aggregate type's were read before
-                    var permanentGapsAmongTheNewTransientGaps = permanentGapsWithin(aggregateType, newGaps.awaited());
+                    var permanentGapsAmongTheNewTransientGaps = permanentGapsWithin(aggregateType, newGaps.recorded());
                     if (!permanentGapsAmongTheNewTransientGaps.isEmpty()) {
                         log.debug("[{}] Removed {} permanent gaps among the newly discovered transient gaps for {}: {}",
                                   subscriberId,
@@ -548,7 +499,7 @@ public final class PostgresqlEventStreamGapHandler<CONFIG extends AggregateEvent
                                   aggregateType,
                                   permanentGapsAmongTheNewTransientGaps);
                     }
-                    var newTransientGapsToAdd = newGaps.awaited()
+                    var newTransientGapsToAdd = newGaps.recorded()
                                                        .stream()
                                                        .flatMapToLong(LongRange::stream)
                                                        .filter(globalEventOrder -> !permanentGapsAmongTheNewTransientGaps.contains(globalEventOrder))
@@ -558,7 +509,7 @@ public final class PostgresqlEventStreamGapHandler<CONFIG extends AggregateEvent
                               subscriberId,
                               newTransientGapsToAdd.size(),
                               aggregateType,
-                              newGaps.awaited(),
+                              newGaps.recorded(),
                               persistedEvents.size());
                     newCount = addNewTransientGaps(aggregateType, newTransientGapsToAdd);
                 }

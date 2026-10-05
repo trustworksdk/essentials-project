@@ -243,7 +243,9 @@ after it (and takes a higher global order too).
 
 *Restarts.* A subscriber's resume point moves past a gap, which is safe only while the
 gap is recorded durably. The polling path and every back-fill page record the gaps in
-what they load as transient gaps with the gap handler; an event from the bus is not
+what they load as transient gaps with the gap handler - bounded the same way, 5 000
+orders deep from each end, the polling path awaiting the middle of a wider gap in memory
+only, re-querying it on every poll until the same timeout; an event from the bus is not
 loaded, so a delivered event that opens a gap records it - synchronously, before the
 event reaches the handler - and one that fills a gap resolves it, each in a short unit
 of work of its own (reported as a gap reconciliation, like a poll's). A gap is resolved

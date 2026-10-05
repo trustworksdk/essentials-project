@@ -335,6 +335,28 @@ public interface AggregateEventStreamPersistenceStrategy<CONFIG extends Aggregat
     Optional<GlobalEventOrder> findLowestGlobalEventOrderPersisted(EventStoreUnitOfWork unitOfWork, AggregateType aggregateType);
 
     /**
+     * Find the lowest {@link GlobalEventOrder} persisted within {@code globalOrderRange}, for every tenant.
+     * <p>
+     * The polling event store asks this - one lookup, never a scan of the range - to step over a hole in the global order
+     * at once (a sequence moved forward with {@code setval}, a restore) instead of widening its query range poll by poll,
+     * and to find an event that commits late in the middle of a wide gap it awaits in memory.
+     * <p>
+     * The default implementation loads the events of the range in global order and takes the first:
+     * correct for any strategy, but a strategy whose store can answer it with an index lookup should override it - as
+     * {@code SeparateTablePerAggregateTypePersistenceStrategy} does with a {@code MIN} over the global order primary key.
+     *
+     * @param unitOfWork       the current unit of work
+     * @param aggregateType    the aggregate type that the underlying {@link AggregateEventStream} is associated with
+     * @param globalOrderRange the range to look in - closed, or open-ended upwards
+     * @return the lowest {@link GlobalEventOrder} persisted within the range, or {@link Optional#empty()} if there is none
+     */
+    default Optional<GlobalEventOrder> findLowestGlobalEventOrderPersisted(EventStoreUnitOfWork unitOfWork, AggregateType aggregateType, LongRange globalOrderRange) {
+        try (var events = loadEventsByGlobalOrder(unitOfWork, aggregateType, globalOrderRange, List.of(), Optional.empty())) {
+            return events.findFirst().map(PersistedEvent::globalEventOrder);
+        }
+    }
+
+    /**
      * Load all the <code>eventIds</code> related to the specified <code>aggregateType</code>
      * @param unitOfWork the current unit of work
      * @param aggregateType the aggregate type that the specified <code>eventIds</code> are associated with

@@ -1323,6 +1323,31 @@ public final class SeparateTablePerAggregateTypePersistenceStrategy implements A
         }
     }
 
+    /**
+     * One {@code MIN} over the global order column, the table's primary key: an index lookup, whatever the width of the range
+     */
+    @Override
+    public Optional<GlobalEventOrder> findLowestGlobalEventOrderPersisted(EventStoreUnitOfWork unitOfWork, AggregateType aggregateType, LongRange globalOrderRange) {
+        requireNonNull(unitOfWork, "No unitOfWork provided");
+        requireNonNull(aggregateType, "No aggregateType provided");
+        requireNonNull(globalOrderRange, "No globalOrderRange provided");
+
+        var configuration = getAggregateEventStreamConfiguration(aggregateType);
+        var sql = globalOrderRange.isClosedRange()
+                  ? "SELECT MIN({:globalOrderColumnName}) FROM {:tableName} WHERE {:globalOrderColumnName} BETWEEN :fromInclusive AND :toInclusive"
+                  : "SELECT MIN({:globalOrderColumnName}) FROM {:tableName} WHERE {:globalOrderColumnName} >= :fromInclusive";
+        var query = unitOfWork.handle()
+                              .createQuery(bind(sql,
+                                                arg("globalOrderColumnName", configuration.eventStreamTableColumnNames.globalOrderColumn),
+                                                arg("tableName", configuration.eventStreamTableName)))
+                              .bind("fromInclusive", globalOrderRange.fromInclusive);
+        if (globalOrderRange.isClosedRange()) {
+            query.bind("toInclusive", globalOrderRange.getToInclusive());
+        }
+        // As Long: the GlobalEventOrder mapper does not map the NULL of an empty range to null
+        return Optional.ofNullable(query.mapTo(Long.class).one()).map(GlobalEventOrder::of);
+    }
+
     private String loadEventQuerySql(SeparateTablePerAggregateEventStreamConfiguration configuration) {
         String sql = "SELECT * FROM {:tableName} WHERE \n" +
                 "   {:eventIdColumn} = :eventId";

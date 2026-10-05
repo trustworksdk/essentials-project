@@ -44,11 +44,12 @@ public interface SubscriptionGapHandler {
      * million permanent-gap rows.
      * <p>
      * The middle is held by a transaction still in flight only when a single one appended more than twice this many
-     * events and a concurrent commit overtook it. Whether such an event is still delivered depends on the path: the CDC
-     * event store is handed every commit, so it waits for the middle in memory only, until its gap timeout (a restart or
-     * crash inside that window loses it). A polling subscription cannot re-read below its read position except by order,
-     * so the {@link PostgresqlEventStreamGapHandler}, which applies this bound when it reconciles a poll, skips the middle
-     * with a WARN and that subscription misses such an event (see its {@code reconcileGapsAndReport}).
+     * events and a concurrent commit overtook it. Both event stores therefore await the middle <b>in memory only</b>,
+     * until {@link #transientGapGiveUpThreshold()} (120 seconds when that is empty) has passed: the CDC event store is
+     * handed every commit, and a polling subscription re-queries the middle by range on every poll. An event that commits
+     * there within that window is delivered like any gap fill; afterwards the middle is dropped without writing anything.
+     * A restart or crash inside the window loses it - the resume point moved past it with the event that revealed it. The
+     * {@link PostgresqlEventStreamGapHandler} applies this bound when it reconciles, a poll or a CDC back-fill page alike.
      */
     int MAX_AWAITED_ORDERS_PER_GAP_END = 5_000;
 

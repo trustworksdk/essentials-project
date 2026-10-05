@@ -970,6 +970,61 @@ class PollingGapHandlingIT {
         assertThat(transientGapsOf(subscriberId)).isEmpty();
     }
 
+    /**
+     * The middle of a gap wider than twice {@link dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.gap.SubscriptionGapHandler#MAX_AWAITED_ORDERS_PER_GAP_END}
+     * gets no transient gap; the subscription awaits it in memory only, re-querying it on every poll. A transaction
+     * holding an order there that commits late is delivered once - through both polling flavours - and only to the
+     * subscription of its tenant: another tenant's event there is read once, and neither delivered nor read again.
+     */
+    @ParameterizedTest
+    @EnumSource(PollingMode.class)
+    void late_commits_in_the_middle_of_a_wide_gap_are_read_once_and_delivered_to_their_tenant(PollingMode pollingMode) throws Exception {
+        var subscriberId = SubscriberId.of("wide-gap-middle-" + pollingMode);
+        var received     = new CopyOnWriteArrayList<Long>();
+        var first        = appendCommitted(TENANT_A);
+        moveSequenceTo(first + 20_000 - 1);
+        tenantOfNextEvent = TENANT_A;
+        var ours = appendAndHoldOpen();
+        tenantOfNextEvent = TENANT_B;
+        var theirs = appendAndHoldOpen();
+        assertThat(List.of(ours.globalOrder, theirs.globalOrder)).containsExactly(first + 20_000, first + 20_001);
+        moveSequenceTo(first + 40_000);
+        var jumped = appendCommitted(TENANT_A);
+
+        subscription = poll(pollingMode, subscriberId, GlobalEventOrder.FIRST_GLOBAL_EVENT_ORDER.longValue(), Optional.of(TENANT_A), 1_000)
+                .subscribe(event -> received.add(event.globalEventOrder().longValue()));
+        Awaitility.waitAtMost(Duration.ofSeconds(60)).untilAsserted(() -> assertThat(received).containsExactly(first, jumped));
+        // Only the ends of the gap are recorded
+        assertThat(transientGapsOf(subscriberId)).hasSize(2 * dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.gap.SubscriptionGapHandler.MAX_AWAITED_ORDERS_PER_GAP_END)
+                                                 .doesNotContain(GlobalEventOrder.of(ours.globalOrder), GlobalEventOrder.of(theirs.globalOrder));
+
+        theirs.commit();
+        ours.commit();
+        var marker = appendCommitted(TENANT_A);
+        Awaitility.waitAtMost(Duration.ofSeconds(10)).untilAsserted(() -> assertThat(received).contains(marker));
+        Thread.sleep(POLLING_INTERVAL.multipliedBy(10).toMillis());
+
+        assertThat(received).containsExactly(first, jumped, ours.globalOrder, marker);
+        assertThat(reconciled).as("read once each")
+                              .filteredOn(event -> event.globalEventOrder().longValue() == ours.globalOrder || event.globalEventOrder().longValue() == theirs.globalOrder)
+                              .hasSize(2);
+        assertThat(unitOfWorkFactory.withUnitOfWork(() -> eventStore.getEventStreamGapHandler().getPermanentGapsFor(aggregateType).toList())).isEmpty();
+    }
+
+    /**
+     * {@code setval}: the next global order handed out is {@code lastValue + 1}
+     */
+    private void moveSequenceTo(long lastValue) {
+        var sequenceName = unitOfWorkFactory.withUnitOfWork(uow -> eventStore.getPersistenceStrategy()
+                                                                             .resolveGlobalEventOrderSequenceName(uow, aggregateType)
+                                                                             .orElseThrow());
+        unitOfWorkFactory.usingUnitOfWork(uow -> uow.handle().createQuery("SELECT setval(:seq, :value)")
+                                                    .bind("seq", sequenceName)
+                                                    .bind("value", lastValue)
+                                                    .mapTo(Long.class)
+                                                    .one());
+    }
+
     private Disposable subscribe(PollingMode pollingMode, SubscriberId subscriberId, Optional<Tenant> tenant, List<Long> received) {
         return poll(pollingMode, subscriberId, GlobalEventOrder.FIRST_GLOBAL_EVENT_ORDER.longValue(), tenant)
                 .subscribe(event -> received.add(event.globalEventOrder().longValue()));
