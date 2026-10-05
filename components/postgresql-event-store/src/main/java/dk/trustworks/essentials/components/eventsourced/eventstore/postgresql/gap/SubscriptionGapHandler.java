@@ -191,7 +191,7 @@ public interface SubscriptionGapHandler {
      * gaps of the aggregate type - and change nothing else: no gap is resolved or promoted.
      * <p>
      * Called by a subscription that tracks gaps itself - the CDC event store - for a gap no event marks the upper end of:
-     * the lower end of a gap so wide that the subscription waits only for its two ends (the upper end is recorded through
+     * the lower end of a gap so wide that the subscription records only its two ends (the upper end is recorded through
      * {@link #reconcileGapsAndReport(AggregateType, LongRange, List, List)} with the event that opened the gap). The event
      * store calls it inside a unit of work of its own, holding this handler's monitor, never across the commit.
      * <p>

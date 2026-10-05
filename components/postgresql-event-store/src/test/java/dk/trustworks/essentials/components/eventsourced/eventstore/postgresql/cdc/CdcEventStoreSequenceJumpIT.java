@@ -41,9 +41,9 @@ import static org.awaitility.Awaitility.await;
 /**
  * The event table's global order sequence is moved a million forward ({@code setval}) under a running CDC subscription -
  * as a restore or a manual fix of the sequence would. The next event opens a gap of a million orders. The subscription
- * waits only for the orders at its two ends - those a transaction still in flight can hold - so it records a bounded
- * number of transient gaps before handing the event on, gives up the middle at once without making it a permanent gap,
- * and keeps delivering: the event a transaction that took its order before the jump commits afterwards included.
+ * records only the orders at its two ends as transient gaps - a bounded number, before handing the event on - awaits the
+ * middle in memory only, makes nothing a permanent gap, and keeps delivering: the events of transactions that took their orders before the jump, at the lower end of the
+ * gap, and in its middle - awaited in memory only - and commit afterwards included.
  * <p>
  * The CDC bus is fed directly, as {@link CdcEventStoreLiveTailHoleIT} does, so the test does not depend on WAL timing.
  */
@@ -88,7 +88,7 @@ class CdcEventStoreSequenceJumpIT extends AbstractLogicalReplicationPostgresIT {
                                                                                 Duration.ofSeconds(1),
                                                                                 new PostgresqlDurableSubscriptionRepository(jdbi, cdcEventStore));
         eventStoreSubscriptionManager.start();
-        inFlightWriter = Executors.newSingleThreadExecutor();
+        inFlightWriter = Executors.newFixedThreadPool(2);
     }
 
     @AfterEach
@@ -115,17 +115,13 @@ class CdcEventStoreSequenceJumpIT extends AbstractLogicalReplicationPostgresIT {
         await().atMost(Duration.ofSeconds(15)).untilAsserted(() -> assertThat(received).containsExactly(1L, 2L, 3L));
 
         // A writer takes the next order (head + 1) before the sequence moves, and commits only after the event above the jump
-        var tookItsOrder = new CountDownLatch(1);
-        var mayCommit    = new CountDownLatch(1);
-        var inFlight = inFlightWriter.submit(() -> unitOfWorkFactory.usingUnitOfWork(() -> {
-            appendOrder();
-            tookItsOrder.countDown();
-            if (!mayCommit.await(30, TimeUnit.SECONDS)) {
-                throw new IllegalStateException("Never allowed to commit");
-            }
-        }));
-        assertThat(tookItsOrder.await(10, TimeUnit.SECONDS)).isTrue();
+        var mayCommit     = new CountDownLatch(1);
+        var inFlight      = holdAnAppendOpen(mayCommit);
         long inFlightOrder = head + 1;
+        // Another one takes an order in the middle of what becomes the gap, and commits late too
+        long inMiddleOrder = head + JUMP / 2;
+        moveSequenceTo(inMiddleOrder - 1);
+        var inMiddle = holdAnAppendOpen(mayCommit);
 
         moveSequenceTo(inFlightOrder + JUMP);
         appendOrders(1);
@@ -134,16 +130,20 @@ class CdcEventStoreSequenceJumpIT extends AbstractLogicalReplicationPostgresIT {
         publish(jumped);
 
         await().atMost(Duration.ofSeconds(15)).untilAsserted(() -> assertThat(received).contains(jumped));
-        // Recorded before the event was handed on: only the two ends of the gap, nothing given up as permanent
+        // Recorded before the event was handed on: only the two ends of the gap - the middle is awaited in memory only -
+        // and nothing given up as permanent
         assertThat(transientGapCount(subscriberId)).isPositive()
                                                    .isLessThanOrEqualTo(2L * CdcDeliveryTracker.MAX_AWAITED_ORDERS_PER_GAP_END);
         assertThat(permanentGapCount()).isZero();
 
-        // The in-flight writer commits: its order lies at the lower end of the gap, which is waited for
+        // Both writers commit, within the gap timeout: the event at the lower end of the gap and the one in its middle
+        // are delivered
         mayCommit.countDown();
         inFlight.get(10, TimeUnit.SECONDS);
+        inMiddle.get(10, TimeUnit.SECONDS);
         publish(inFlightOrder);
-        await().atMost(Duration.ofSeconds(15)).untilAsserted(() -> assertThat(received).contains(inFlightOrder));
+        publish(inMiddleOrder);
+        await().atMost(Duration.ofSeconds(15)).untilAsserted(() -> assertThat(received).contains(inFlightOrder, inMiddleOrder));
 
         // And later events keep coming
         appendOrders(1);
@@ -151,8 +151,27 @@ class CdcEventStoreSequenceJumpIT extends AbstractLogicalReplicationPostgresIT {
         publish(after);
         await().atMost(Duration.ofSeconds(15)).untilAsserted(() -> assertThat(received).contains(after));
 
-        assertThat(received).as("each event once").containsExactly(1L, 2L, 3L, jumped, inFlightOrder, after);
+        assertThat(received).as("each event once").containsExactly(1L, 2L, 3L, jumped, inFlightOrder, inMiddleOrder, after);
+        assertThat(transientGapCount(subscriberId)).isLessThanOrEqualTo(2L * CdcDeliveryTracker.MAX_AWAITED_ORDERS_PER_GAP_END);
+        assertThat(permanentGapCount()).isZero();
         subscription.stop();
+    }
+
+    /**
+     * Appends one event on a thread of its own, and keeps its transaction open until {@code mayCommit}: returns once the
+     * event took its global order
+     */
+    private Future<?> holdAnAppendOpen(CountDownLatch mayCommit) throws InterruptedException {
+        var tookItsOrder = new CountDownLatch(1);
+        var appending = inFlightWriter.submit(() -> unitOfWorkFactory.usingUnitOfWork(() -> {
+            appendOrder();
+            tookItsOrder.countDown();
+            if (!mayCommit.await(30, TimeUnit.SECONDS)) {
+                throw new IllegalStateException("Never allowed to commit");
+            }
+        }));
+        assertThat(tookItsOrder.await(10, TimeUnit.SECONDS)).isTrue();
+        return appending;
     }
 
     private void publish(long globalOrder) {

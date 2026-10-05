@@ -390,11 +390,12 @@ class CdcDeliveryTrackerTest {
 
     /**
      * A global order a million above the highest delivered - the sequence moved forward under the running subscription -
-     * costs no more than any gap the tracker waits for in full: only its two ends are waited for, the middle is given up
-     * at once, and what is drained once the timeout passed is the two ends, as two ranges
+     * costs one run, like any gap: its two ends are to be recorded durably, its middle is awaited in memory only. A late
+     * commit inside the middle is delivered, and splits it without costing more; once the timeout passed the ends drain
+     * for the gap handler and the middle apart, as ranges, nothing listed order by order
      */
     @Test
-    void a_gap_of_a_million_orders_is_waited_for_only_at_its_two_ends() {
+    void a_gap_of_a_million_orders_is_recorded_only_at_its_two_ends_and_awaits_its_middle_in_memory() {
         var  tracker = tracker(0, 100);
         long end     = CdcDeliveryTracker.MAX_AWAITED_ORDERS_PER_GAP_END;
         long r       = 10;
@@ -406,43 +407,77 @@ class CdcDeliveryTrackerTest {
         var jumped = r + 1_000_000;
         var opened = tracker.markDelivered(jumped);
 
+        var middle = LongRange.between(r + 1 + end, jumped - 1 - end);
         assertThat(opened.kind()).isEqualTo(Kind.OPENED_GAP);
-        assertThat(opened.givenUpAtOnce()).contains(LongRange.between(r + 1 + end, jumped - 1 - end));
-        assertThat(opened.awaitedGapsBelow(jumped)).containsExactly(LongRange.between(r + 1, r + end),
-                                                                    LongRange.between(jumped - end, jumped - 1));
-        assertThat(tracker.awaitedGaps(Integer.MAX_VALUE)).as("only the two ends are waited for").hasSize((int) (2 * end));
+        assertThat(opened.awaitedInMemoryOnly()).contains(middle);
+        assertThat(opened.durablyAwaitedGapsBelow(jumped)).containsExactly(LongRange.between(r + 1, r + end),
+                                                                           LongRange.between(jumped - end, jumped - 1));
+        assertThat(tracker.toString()).as("one run and one in-memory range, whatever the width")
+                                      .contains("runsAboveWatermark=1", "awaitedInMemoryOnly=1");
         assertThat(tracker.resumeFromInclusive()).isEqualTo(r + 1);
+        assertThat(tracker.isDelivered(r + 500_000)).isFalse();
 
-        // The middle is dropped at once, and never handed to the gap handler: it was not waited for
-        assertThat(tracker.markDelivered(r + 500_000).kind()).isEqualTo(Kind.DUPLICATE);
-        assertThat(tracker.isDelivered(r + 1 + end)).isTrue();
-        assertThat(tracker.drainTimedOutGaps()).isEmpty();
-        // Both ends are waited for
+        // A late commit inside the middle, before the timeout: delivered like any gap fill, once
+        var inMiddle = r + 500_000;
+        assertThat(tracker.markDelivered(inMiddle).kind()).isEqualTo(Kind.FILLED_GAP);
+        assertThat(tracker.markDelivered(inMiddle).kind()).isEqualTo(Kind.DUPLICATE);
+        assertThat(tracker.toString()).contains("runsAboveWatermark=2", "awaitedInMemoryOnly=1");
+        // Both ends are waited for too
         assertThat(tracker.markDelivered(r + 1).kind()).isEqualTo(Kind.FILLED_GAP);
         assertThat(tracker.markDelivered(jumped - 1).kind()).isEqualTo(Kind.FILLED_GAP);
+        assertThat(tracker.drainTimedOutGaps()).isEmpty();
+        assertThat(tracker.drainTimedOutGapsAwaitedInMemoryOnly()).isEmpty();
 
         advanceClock(GAP_TIMEOUT);
-        var drained = tracker.drainTimedOutGaps();
+        var drained             = tracker.drainTimedOutGaps();
+        var drainedInMemoryOnly = tracker.drainTimedOutGapsAwaitedInMemoryOnly();
 
-        assertThat(drained).containsExactly(LongRange.between(r + 2, r + end), LongRange.between(jumped - end, jumped - 2));
+        assertThat(drained).as("only the ends, for the gap handler")
+                           .containsExactly(LongRange.between(r + 2, r + end), LongRange.between(jumped - end, jumped - 2));
         assertThat(orders(drained)).hasSize((int) (2 * end - 2));
+        assertThat(drainedInMemoryOnly).as("the middle, around the order delivered inside it, as nothing to record")
+                                       .containsExactly(LongRange.between(middle.fromInclusive, inMiddle - 1),
+                                                        LongRange.between(inMiddle + 1, middle.getToInclusive()));
         assertThat(tracker.watermark()).isEqualTo(jumped);
-        assertThat(tracker.awaitedGaps(Integer.MAX_VALUE)).isEmpty();
+        assertThat(tracker.toString()).contains("runsAboveWatermark=0", "awaitedInMemoryOnly=0");
+        assertThat(tracker.markDelivered(r + 600_000).kind()).isEqualTo(Kind.DUPLICATE);
         assertThat(tracker.markDelivered(jumped + 1).kind()).isEqualTo(Kind.IN_ORDER);
     }
 
     @Test
-    void a_gap_no_wider_than_both_ends_together_is_waited_for_in_full() {
+    void a_gap_no_wider_than_both_ends_together_is_recorded_in_full() {
         long end = CdcDeliveryTracker.MAX_AWAITED_ORDERS_PER_GAP_END;
 
-        var fits = tracker(0, 100).markDelivered(2 * end + 1);
-        var tracker = tracker(0, 100);
-        var oneMore = tracker.markDelivered(2 * end + 2);
+        var fits    = tracker(0, 100).markDelivered(2 * end + 1);
+        var oneMore = tracker(0, 100).markDelivered(2 * end + 2);
 
-        assertThat(fits.givenUpAtOnce()).isEmpty();
-        assertThat(fits.awaitedGapsBelow(2 * end + 1)).containsExactly(LongRange.between(1, 2 * end));
-        assertThat(oneMore.givenUpAtOnce()).contains(LongRange.only(end + 1));
-        assertThat(tracker.awaitedGaps(Integer.MAX_VALUE)).hasSize((int) (2 * end));
+        assertThat(fits.awaitedInMemoryOnly()).isEmpty();
+        assertThat(fits.durablyAwaitedGapsBelow(2 * end + 1)).containsExactly(LongRange.between(1, 2 * end));
+        assertThat(oneMore.awaitedInMemoryOnly()).contains(LongRange.only(end + 1));
+        assertThat(oneMore.durablyAwaitedGapsBelow(2 * end + 2)).containsExactly(LongRange.between(1, end), LongRange.between(end + 2, 2 * end + 1));
+    }
+
+    /**
+     * A wide gap is one run, as any gap: the cap counts it once. Given up because of the cap, neither its ends nor its
+     * middle are collected
+     */
+    @Test
+    void a_wide_gap_given_up_because_of_the_cap_is_collected_neither_for_the_gap_handler_nor_as_in_memory_only() {
+        var tracker = tracker(0, 2);
+        tracker.collectTimedOutGaps();
+        var wide = 1_000_000L;
+        tracker.markDelivered(wide);
+        tracker.markDelivered(wide + 2);
+        assertThat(tracker.watermark()).as("two gaps, at the cap").isZero();
+
+        // A third gap: the oldest, the wide one, is given up at once
+        tracker.markDelivered(wide + 4);
+
+        assertThat(tracker.watermark()).isEqualTo(wide);
+        assertThat(tracker.toString()).contains("awaitedInMemoryOnly=0");
+        advanceClock(GAP_TIMEOUT);
+        assertThat(tracker.drainTimedOutGapsAwaitedInMemoryOnly()).isEmpty();
+        assertThat(tracker.drainTimedOutGaps()).containsExactly(LongRange.only(wide + 1), LongRange.only(wide + 3));
     }
 
     @Test

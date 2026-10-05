@@ -937,7 +937,7 @@ public class CdcEventStore<CONFIG extends AggregateEventStreamConfiguration> imp
             var  delivery    = tracker.markDelivered(globalOrder);
             recordGivenUpGaps();
             switch (delivery.kind()) {
-                case OPENED_GAP -> recordOpenedGap(event, delivery.awaitedGapsBelow(globalOrder));
+                case OPENED_GAP -> recordOpenedGap(event, delivery.durablyAwaitedGapsBelow(globalOrder));
                 case FILLED_GAP -> gapFillsBeingHandedOn.ifPresent(gapFills -> gapFills.awaitAcknowledgement(List.of(event)));
                 case DUPLICATE -> dropped(event);
                 default -> {
@@ -1059,10 +1059,18 @@ public class CdcEventStore<CONFIG extends AggregateEventStreamConfiguration> imp
          * awaiting acknowledgement, and a given-up order is none, so this never promotes a gap the subscriber is still
          * owed. In a unit of work of its own, holding the gap handler's monitor, never across the commit; a failure is
          * logged and the orders are handed back to the tracker, so the next call tries them again.
+         * <p>
+         * The middles of wide gaps, awaited in memory only, are drained too, and nothing is written for them: they were
+         * never recorded as transient gaps (see {@link CdcDeliveryTracker#MAX_AWAITED_ORDERS_PER_GAP_END}).
          */
         private void recordGivenUpGaps() {
             if (gapHandler.isEmpty()) return;
-            // Ranges, one per gap: the gap handler promotes each range in one go, not order by order
+            var givenUpInMemoryOnly = tracker.drainTimedOutGapsAwaitedInMemoryOnly();
+            if (!givenUpInMemoryOnly.isEmpty()) {
+                log.debug("[{}-{}] Gave up the gap(s) {}, awaited in memory only - nothing to record",
+                          gapHandler.get().subscriberId(), aggregateType, givenUpInMemoryOnly);
+            }
+            // Ranges, one per gap end: the gap handler promotes each range in one go, not order by order
             var givenUp = tracker.drainTimedOutGaps();
             if (givenUp.isEmpty()) return;
             var handler = gapHandler.get();
@@ -1089,13 +1097,12 @@ public class CdcEventStore<CONFIG extends AggregateEventStreamConfiguration> imp
          * for and got). The gaps the tracker gives up on after its timeout are given up through {@link #recordGivenUpGaps()}
          * instead.
          * <p>
-         * Only the orders the tracker waits for are recorded ({@code awaitedGaps}, see
+         * Only the orders the tracker awaits durably are recorded ({@code awaitedGaps}, see
          * {@link CdcDeliveryTracker#MAX_AWAITED_ORDERS_PER_GAP_END}): the gap right below the event, through the
-         * reconciliation, and - for a gap so wide the tracker waits only for its two ends - its lower end through
-         * {@link SubscriptionGapHandler#addTransientGaps}. The middle the tracker gave up at once is recorded nowhere: it
-         * was not waited for, so it must not become a permanent gap of the aggregate type; and the subscriber's resume
-         * point moves past it with this event, so no later subscription of the subscriber waits for it either - just as
-         * this one does not.
+         * reconciliation, and - for a gap so wide the tracker awaits its middle in memory only - its lower end through
+         * {@link SubscriptionGapHandler#addTransientGaps}. The middle is recorded nowhere: the subscriber's resume point
+         * moves past it with this event, so a restart within the gap timeout does not wait for it - the same as for a gap
+         * the tracker gives up because of its cap.
          */
         private void recordOpenedGap(PersistedEvent event, List<LongRange> awaitedGaps) {
             if (gapHandler.isEmpty()) return;

@@ -797,9 +797,11 @@ gap is dropped by the running subscription and after a restart. Recorded with th
 subscription ends, retried after a failed write. A give-up is a permanent gap of the whole aggregate type (every subscriber
 skips it), so the caller must have waited at least `transientGapGiveUpThreshold()` for each gap passed: gaps CDC drops
 because > 10,000 are waited for at once stay transient, and a restarted subscription waits for them again.
-CDC waits for at most 5,000 orders at each end of a new gap (what in-flight transactions can hold); the middle of a wider
-gap (sequence `setval` forward, restore, big rollback) is dropped at once and recorded nowhere. Its lower end is recorded via
-`addTransientGaps(AggregateType, LongRange)` - default records nothing, so a custom handler's restart skips it.
+CDC records at most 5,000 orders at each end of a new gap as transient gaps (what in-flight transactions can hold); the
+middle of a wider gap (sequence `setval` forward, restore, big rollback) is awaited in memory only - a late commit there
+within the timeout is delivered, then it is given up writing no rows; a restart or crash inside that window loses it. The
+lower end is recorded via `addTransientGaps(AggregateType, LongRange)` - default records nothing, so a custom handler's
+restart skips it.
 `PostgresqlEventStreamGapHandler` promotes given-up gaps immediately
 at the give-up when the promotion strategy states a threshold (`thresholdBased(n)` / `permanentGapThreshold()`), else only those
 the strategy deems ready; a custom handler may override the default. CDC records a gap a bus event opens without claiming any
