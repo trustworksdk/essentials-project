@@ -26,3 +26,6 @@ The write style is §R9 of the law. <!-- expect: law-section -->
 See `rules/slice-design.md` § Red flags, and § No such section either. <!-- expect: law-section -->
 
 The law has no numbered sections (`rules/slice-design.md` §4). <!-- expect: law-section -->
+
+A wrapped citation of the law is still checked: see `rules/slice-design.md`
+§ Red banners. <!-- expect: law-section -->

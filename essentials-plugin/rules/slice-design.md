@@ -175,30 +175,15 @@ Specifically allowed — this is *assembly*, not translation:
   Typing the wire contract directly — the command as the `@RequestBody`, a semantic id as the
   `@PathVariable` — is the *stronger* form of this rule and **the default shape to write**. It rests
   on registrations, and a registration is never implied by a dependency being present, so confirm
-  rather than assume:
-
-  - **Path variables / request params.** A Kotlin `@JvmInline value class` id binds with **nothing
-    from Essentials** — Kotlin unboxes it in the JVM signature, so Spring sees a `String`. A Java id
-    extending `CharSequenceType` needs `SingleValueTypeConverter`, registered by `@Import`ing
-    `EssentialsWebMvcConfigurer` or `EssentialsWebFluxConfigurer` from `types-spring-web`.
-    That module auto-configures nothing; the import *is* the registration, and a missing one surfaces
-    as **HTTP 500**, not 400. Spring's own conversion binds an id with a public `String` constructor or a
-    static `valueOf`/`of`/`from(String)`, so the 500 hits only an id without one. Import the configurer
-    for every Java id anyway (`references/stack/stack-contract.md` S4).
-  - **Request bodies.** `EssentialTypesJacksonModule` (`types-jackson3`) must be on the **web**
-    `JsonMapper`. The Essentials starters publish it as a `@Bean`, which Spring Boot adds to its
-    auto-configured web mapper; it is silently lost when no Essentials starter is on the classpath
-    (expose the bean yourself) or when the application replaces Boot's `JsonMapper` with its own. The
-    persistence mapper is built separately and never picks it up. Kotlin value types additionally
-    need `KotlinModule` on **both** mappers, or they serialize wrapped (`{"value":"…"}`) instead of
-    scalar, silently: a `KotlinModule` `@Bean` reaches the web mapper only, and the persistence mapper
-    needs your own serializer bean built with
-    `EssentialsObjectMappers.createJackson3ObjectMapper(KotlinModule.Builder().build())`
-    (`references/stack/kotlin-spring-boot.md` § Serialization — S3.4 in full).
+  rather than assume. Path variables and request params bind through the typed edge
+  (`references/stack/stack-contract.md` S4); request and response bodies through the web mapper
+  (S3.3), and on Kotlin through the module both mappers need (S3.4,
+  `references/stack/kotlin-spring-boot.md` § Serialization). Every one of them fails at runtime, not
+  at compile time.
 
   Where a registration genuinely is absent, taking plain fields and constructing the typed value in
   the handler is assembly, not an adapter, and remains correct — but it is the fallback, not the
-  default. See `references/llm/LLM-types-spring-web.md` and `references/llm/LLM-types-jackson.md`.
+  default.
 - Serialisation and validation concerns — `@JsonProperty`, `@field:NotBlank` — which belong **on the
   command or view type itself**, not on a parallel copy of it.
 
@@ -453,12 +438,6 @@ classification:
 > operation wants. And the bus does **not** impose durability: durability attaches only to
 > `sendAndDontWait` on a `DurableLocalCommandBus`, and `LocalCommandBus` is non-durable by
 > construction. Choosing `send` costs a synchronous call nothing and keeps the handler discoverable.
->
-> | Method | Blocking | Returns | Durable |
-> |---|---|---|---|
-> | `send(cmd)` | yes | the handler's result | n/a |
-> | `sendAsync(cmd)` | no | `Mono<R>` | n/a |
-> | `sendAndDontWait(cmd)` | no | nothing | only on `DurableLocalCommandBus` |
 >
 > Proof: `references/llm/LLM-reactive.md` § LocalCommandBus API — `CommandBus` interface and the
 > method-comparison table.
@@ -778,89 +757,100 @@ decider and just as invisible.
 
 ## Red flags
 
-Structural:
+The checklist a self-check walks. Each entry names the section that holds its reasoning; read that
+section rather than arguing the entry from its one line. The structural entries are layout and
+boundary findings, the behavioural ones correctness bugs.
 
-- A decider class handling two or more command types, or an object with several `decideXxx()` methods.
-- A **command** slice's API file with more than one request mapping.
+### Structural — every lane
+
+- A decider class handling two or more command types, or an object with several `decideXxx()`
+  methods (§R1).
+- A **command** slice's API file with more than one request mapping (§R2).
 - An API file serving more than one slice, or a view API method that reads a read model this slice
-  does not own. (Several query methods over the slice's *own* read model are fine — R2.)
+  does not own. Several query methods over the slice's *own* read model are fine (§R2).
 - A `…Request`/`…Response` type that mirrors the command or the read model field for field, or any
-  mapper/assembler/converter class between the API and the slice's own types (R2).
-- Two view slices projecting the same events into the same read-model shape with **no `supersedes`
-  link** between them — one slice split by mistake, or a migration twin that never declared itself.
-- A `_v2` view slice whose superseded original is still `status: live`, or still present a release
-  after the swap — the retirement never happened.
-- A file in `events/` declaring two or more concrete variants.
-- `use_cases/_shared/` containing a decider, an API handler, or a repository.
-- A `use_cases/_shared/` `State` + `Evolver` with **fewer than three** decider consumers — premature
-  promotion; move it back into the one slice that folds it (§ The `_shared/` promotion bar).
-- A field on `_shared/State` that only one decider reads — the shared state is drifting toward the
-  union of everyone's needs.
+  mapper/assembler/converter class between the API and the slice's own types (§R2).
+- A file in `events/` declaring two or more concrete variants (§R3).
 - A `controllers/`, `services/`, `repositories/`, `adapters/`, `ports/`, `infrastructure/`, `dto/`, or
-  `mappers/` directory inside a bounded context.
+  `mappers/` directory inside a bounded context (§ Directory vocabulary).
 - An import that reaches into another slice's package beyond its `events/` and `types/` — except a
   command type named solely to dispatch it on the command bus (§R4).
-- **More than one write style in a BC** — any two of per-slice deciders, `aggregates/`, and
-  `entities/` (§R5). Two designs competing over one consistency boundary. Pick one.
-- A `<bc>/entities/` directory in a BC that also references an `EventStore` or an `AggregateType` —
-  either it is not on the service-entity lane, or the lane is being abandoned by drift (§R5).
-- A decider-style BC with **no** `routing/` — nothing tells the configurator which deciders serve the
-  aggregate type or how to extract the stream id from a command (§ Directory vocabulary).
-- A command in a decider-style BC that does **not** implement its BC's routing marker — the checker
-  will not match it, so that command silently routes nowhere.
-- A sealed routing marker — sealing it means adding a command edits an existing file, which is the
-  open/closed hinge the whole slice model turns on (§R3's contrast table in `slice-model.md` §4.1).
-- A `<bc>/routing/` in a BC on the aggregate or service-entity style — a decider-style vestige with no
-  configurator asking it anything, and a misleading signal about the BC's write style (§R5).
-- A query method on the BC's write repository whose only callers are view slices or API handlers —
-  the read side served from the write model (§ The read side on this lane).
-- A view slice injecting the BC's write repository, or calling `save`/`delete` anywhere.
-- A `@RestController` returning an `@Entity` / `@Document` type directly — a managed, mutable object
-  handed to the caller, and every field of the write model made part of the wire contract.
-- A Spring Data repository extending `JpaRepository`, `MongoRepository`, `CrudRepository`, or another
-  CRUD-family interface instead of the bare `Repository` marker — its surface is now everything the
-  framework offers rather than what the slice declared, and on a view slice that includes `save` and
-  `delete` over the write model (§ Spring Data repository surface).
-- A Spring Data-backed query returning the mapped `@Entity` / `@Document` where a closed interface
-  projection belongs (§ Spring Data repository surface).
-- A `use_cases/_shared/` in a service-entity BC — there are no evolvers to promote, so it is a service
-  class in disguise (§R5).
 - An entity, an aggregate, or an event importing a command type from `use_cases/<slice>/` (§R4).
-- An aggregate whose method count tracks the slice count, or whose methods mostly `apply(...)` with no
-  invariant behind them — R1's router, returned as a class (§ The aggregate's own bar).
-- A getter or query method on an aggregate that exists to feed an API — the read side being served
-  from the write model. Project it into a view slice instead.
-- A command slice in an aggregate-style BC that appends events directly rather than through the
-  aggregate — it has stepped outside the consistency boundary the style exists to hold.
-- An entity whose method count tracks the slice count, or whose public methods only assign fields —
-  setters with better names (§ The entity's own bar). **Not** a finding: accessors whose only callers
-  are the ORM and `toString()`.
+- **More than one write style in a BC** — any two of per-slice deciders, `aggregates/`, and
+  `entities/` (§R5).
 
-Behavioural (these are correctness bugs, not just layout):
+### Structural — event-sourced view slices
 
-- Loading another aggregate inside a command handler.
+- Two view slices projecting the same events into the same read-model shape with **no `supersedes`
+  link** between them — one slice split by mistake, or a migration twin that never declared itself
+  (§ Evolving a view slice).
+- A `_v2` view slice whose superseded original is still `status: live`, or still present a release
+  after the swap — the retirement never happened (§ Evolving a view slice).
+
+### Structural — decider lane
+
+- `use_cases/_shared/` containing a decider, an API handler, or a repository (§ Sanctioned sharing).
+- A `use_cases/_shared/` `State` + `Evolver` with **fewer than three** decider consumers, or with a
+  field only one decider reads (§ The `_shared/` promotion bar).
+- A decider-style BC with **no** `routing/`, or a command in it that does **not** implement its BC's
+  routing marker — that command silently routes nowhere (§ Directory vocabulary).
+- A sealed routing marker — adding a command then edits an existing file (§R3's contrast table in
+  `slice-model.md` §4.1).
+
+### Structural — aggregate lane
+
+- A `<bc>/routing/` — a decider-style vestige no configurator asks anything (§ Aggregate style).
+- An aggregate whose method count tracks the slice count, whose methods mostly `apply(...)` with no
+  invariant behind them, or with a getter or query method that exists to feed an API (§ The
+  aggregate's own bar).
+- A command slice that appends events directly rather than through the aggregate — outside the
+  consistency boundary the style exists to hold (§ Aggregate style).
+
+### Structural — service-entity lane
+
+- A `<bc>/routing/`, or a `use_cases/_shared/` — neither has a job on this lane; a `_shared/` here is
+  a service class in disguise (§ Service-entity style).
+- A `<bc>/entities/` directory in a BC that also references an `EventStore` or an `AggregateType` —
+  not on this lane, or abandoning it by drift (§ Service-entity style).
+- A query method on the BC's write repository whose only callers are view slices or API handlers, or
+  a view slice injecting the write repository or calling `save`/`delete` anywhere (§ The read side
+  on this lane).
+- An entity whose method count tracks the slice count, or whose public methods only assign fields.
+  **Not** a finding: accessors whose only callers are the ORM and `toString()` (§ The entity's own
+  bar).
+- A `@RestController` returning an `@Entity` / `@Document`, or a Spring Data-backed query returning
+  the mapped type where a closed interface projection belongs (§ The read shape is a closed
+  interface projection).
+- A Spring Data repository extending `JpaRepository`, `MongoRepository`, `CrudRepository`, or another
+  CRUD-family interface instead of the bare `Repository` marker (§ Repositories extend the bare
+  `Repository` marker).
+
+### Behavioural — every lane
+
+- Loading another aggregate inside a command handler, or modifying several aggregates in one
+  transaction.
 - Querying a read model inside a decider to check an invariant — racy; use a transaction-time
   uniqueness projection instead.
-- Modifying several aggregates in one transaction.
 - Synchronous cross-context calls where an event would do.
-- A **view projection**'s `@MessageHandler` that omits `OrderedMessage` — without `message.order` it
-  cannot compare the event's `EventOrder` against the row's stored `version`, so redelivery
-  double-applies. (The parameter is *optional* to the dispatcher; a single-argument handler is
-  invoked normally. This is a projection-idempotency requirement, not a handler-dispatch one — do
-  not flag it on handlers that carry no versioned state.)
 - Bypassing the command bus to call a decider directly.
-- A public setter on a service-entity entity that writes a field an invariant method guards — the
-  guard becomes bypassable, which on this lane is the defect the ORM pushes you into
-  (§ The entity's own bar).
+
+### Behavioural — event-sourced lanes
+
+- A `@MessageHandler` that writes versioned state — a view projection, or an automation persisting
+  process state — and omits `OrderedMessage`: without `message.order` it cannot compare the event's
+  `EventOrder` against the row's stored `version`, so redelivery double-applies. The parameter is
+  *optional* to the dispatcher; do not flag a handler that carries no versioned state.
+
+### Behavioural — service-entity lane
+
+- A public setter on an entity that writes a field an invariant method guards — the guard becomes
+  bypassable (§ The entity's own bar).
 - A Spring Data query method that declares a projection return type but is **named after a CRUD base
-  method** — `findById`, `findAll`, `count`, `getReferenceById` and the rest of the reserved list.
-  Spring Data matches it to the base implementation by name and parameters, ignores the declared
-  projection, and returns the entity; it presents as a `ClassCastException` at the call site rather
-  than as a wiring failure (§ Spring Data repository surface).
-- A mutable value object passed by reference from a command into a persisted entity on the
-  service-entity lane — the command and the long-lived row now share state. Defensive-copy it. (The
-  event-sourced lanes never hand a command's value object to a long-lived object, so this is
-  lane-specific; see `references/design/essentials-design.md` § State-stored entities.)
+  method** — it returns the entity and presents as a `ClassCastException` at the call site (§ Never
+  name a query method after a CRUD base method).
+- A mutable value object passed by reference from a command into a persisted entity — the command and
+  the long-lived row now share state; defensive-copy it (`references/design/essentials-design.md`
+  § State-stored entities).
 
 ## Reporting severities
 
@@ -884,36 +874,61 @@ look, but a 40-line file serving two slices is the worse problem.
 
 ## Anti-Rationalisation
 
+The arguments that sound reasonable mid-change, and the verdict on each. The reasoning lives in the
+section each row names.
+
+### Every lane
+
 | Rationalisation | Reality |
 |---|---|
-| "One decider for all order commands is less duplication." | It makes every future slice edit the same file. That is the god-decider this law exists to prevent (R1). |
-| "It is just one more endpoint on the existing controller." | If that controller belongs to another slice, it is now two slices' concern — which is the violation, whatever the endpoint does (R2). |
-| "Every query shape needs its own view slice." | Only when it serves a different purpose over a different read-model shape. Otherwise you get N slices sharing one read model (breaking R4) or N projections of the same events. Same model → same slice, another method (R2). |
-| "This view now needs one more event, so it is a new slice." | No — the slice is the read model's *purpose*, not its day-one event set. Extend the projection and rebuild. The only reason to stand up a second directory is a rollout constraint, and then it is a declared, temporary twin with a retirement step (§ Evolving a view slice). |
-| "The `_v2` view works; we will delete `v1` next sprint." | Then you have two permanent slices over one read model — the R4 violation the twin was a temporary exemption from. Retirement is part of the change; `slice-check` reports it as outstanding until `v1` is gone. |
-| "The API needs a Request DTO so the wire shape is decoupled." | Decoupled from what? The command *is* the wire shape. A field-for-field mirror doubles the edit surface and decouples nothing. Assembling a command from a path variable plus a body is fine; a parallel type hierarchy is not (R2). |
-| "Returning the read model leaks internals." | The read model is a projection built for exactly this query — there is nothing behind it to leak. If it holds something the API must not expose, that is a deliberate divergence to record, not a reason for a routine mapper (R2). |
-| "I will add this filter by reading the other view's repository." | That is reaching into another slice's internals (R4). Either it belongs in *that* slice's API, or this slice needs to project the data itself. |
-| "All the events in one file is easier to read." | Until two slices need to change it in the same sprint. One variant, one file (R3). |
-| "I only need to read the other slice's state, not change it." | Then you do not need *its* state — you need *a* state. Fold the events yourself with your own evolver; you are already handed the stream. Reaching into its fold couples you to its decision logic (R4). If it is a **different aggregate's** state, you cannot have it at all inside a decider — that is a consistency-boundary crossing, so use a transaction-time read view for the one shared invariant, or accept eventual consistency via an automation. Issuing its command is not the answer here: a command causes an effect, and a decider returns an event, not state. |
-| "Two deciders fold the same events, so let's share the evolver." | Two is a coincidence. Promote at **three**, and only if none of them needs a field the others do not — otherwise `_shared/State` becomes the union of everyone's needs and you have rebuilt the god aggregate one layer down (§ The `_shared/` promotion bar). The exception is two deciders enforcing the same named invariant, where drift between folds is a bug. |
-| "Sharing the state now saves a refactor later." | Promotion is a two-file move that keeps every name — that *is* the cheap refactor. Un-sharing after three slices have bent `State` to their own needs is the expensive one. Wait for the third consumer. |
-| "We use `AggregateRoot`, so this slice law is not for us." | Only one paragraph of it changes — where the decision lives (§R5). The four kinds, the directory vocabulary, one API file per slice, one variant per event file, the import boundary, and wiring-is-part-of-done all apply unchanged. Aggregate style is a sanctioned lane in this law, not an exemption from it. |
-| "We are not event-sourced, so this slice law is not for us." | One paragraph changes — where the decision lives and how its state is stored (§R5). The four kinds, one API file per slice, one variant per event file, the import boundary, and wiring-is-part-of-done all apply unchanged. Service-entity style is a sanctioned lane, not an exemption. |
-| "The repository is shared, so it needs a `repositories/` folder." | It is shared *by the write path*, which is why it lives in `entities/` beside the entity it persists. A `repositories/` folder is a layer, and it invites every slice to add its own finder to one interface (§R5). |
-| "It is one more finder on the existing repository — the view needs it." | Then the read side is being served from the write model. Give the view its own narrow query interface and its own read shape; the write repository loads by id and saves (§ The read side on this lane). |
-| "Returning the JPA entity is simpler than a projection interface." | It hands the caller a managed, mutable object and makes every field of the write model part of your wire contract. A closed projection interface is a declaration, not a mapper — it is the *cheaper* option, not the ceremonial one (R2). |
-| "`JpaRepository` gives us `findAll` for free — why type the methods out?" | Free is the problem: it also gives every caller `deleteAll`, and on a view slice it gives them `save` over the write model. The bare `Repository` marker makes the declared surface the whole surface, so three lines on the write repository buy a surface a reviewer can read off the file instead of inferring (§ Spring Data repository surface). |
-| "A projection interface is a DTO with extra steps." | A DTO is a class you write and then keep in sync by hand; a projection is a declaration Spring Data satisfies, checked against the mapped type at startup. That difference is exactly what §R2's no-adapter rule turns on — the projection is not a mapper, so it is not the thing R2 forbids. |
-| "`findById` is the obvious name for the projection's lookup." | And it is the one name that cannot work. Spring Data matches it to the base implementation by name and parameters, ignores your projection type, and returns the entity — a `ClassCastException` at the call site, not a wiring error, and not at startup. `findOrderStatusById` derives the same `id = ?` query and does project (§ Spring Data repository surface). |
-| "There is no event store, so we do not need a `views/` slice — just query the entity." | The query still has an owner, a shape, and a test, and `views/<slice>/` is where those live. What this lane skips is the *projector*, not the slice (§ The read side on this lane). |
-| "Adopting the slice law means adopting the event store." | Service-entity style is a sanctioned lane with no event store in it (§R5). Formalising the entity into `entities/` and splitting the god handler is the whole adoption — no new dependency, no replay, no projections. |
-| "The ORM makes us expose getters, so the no-query-surface bar cannot apply." | The bar distinguishes by **caller**, not by shape: accessors the ORM and `toString()` use are machinery; the same getter called from a controller or a view is the finding. `@Access(AccessType.FIELD)` plus package-private accessors makes the distinction structural (§ The entity's own bar). |
-| "The aggregate is exactly the god class R1 forbids." | R1 forbids a *router* — one component dispatching over N command types. An aggregate with named methods, each carrying its own invariant, is not that. It becomes that when the methods stop having invariants, which is what § The aggregate's own bar tests for. |
-| "The aggregate is shared, so it belongs in `use_cases/_shared/`." | `_shared/` is state reconstruction only — its whole value is that a decision component there is a violation on sight. An aggregate *is* a decision component, so it gets `aggregates/`, where the rules that apply to it can be stated instead of carved out. |
-| "We already have the aggregate, so the new command is just another method on it." | The method is the *decision*; the slice is everything else. That command still needs its own directory, command type, API file, and test (§R1, §R2). Skipping them is how an aggregate-style BC decays into a layered one with an aggregate in the middle. |
-| "We are on Kotlin, so we will use `AggregateRoot` too." | The Kotlin event-sourcing module ships no aggregate pattern — you would be reaching into the Java family through interop and giving up the Kotlin decider API that Slice Zero and §R3 assume. Legal, but a decision to state out loud, not to drift into (§R5). |
-| "The decider can just query the read model to check uniqueness." | Read models are eventually consistent; the check is racy by construction. Use a transaction-time projection with a unique constraint. |
-| "I will wire the bean up later." | An unwired decider passes every unit test and fails every integration test. Wiring is part of done. |
-| "Kotlin does not need `permits`, so Java should not either." | Java's sealed types require it. The one-name append is sanctioned; dropping `sealed` to avoid it is not (R3). |
-| "This external system is basically internal, so no ACL." | The boundary is what defines it, not the org chart. Another team's service is external (translation kind). |
+| "One decider for all order commands is less duplication." | It makes every future slice edit the same file — the god-decider (§R1). |
+| "It is just one more endpoint on the existing controller." | If that controller belongs to another slice, it is now two slices' concern, whatever the endpoint does (§R2). |
+| "Every query shape needs its own view slice." | Only a different purpose over a different read-model shape does. Same model → same slice, another method (§R2). |
+| "This view now needs one more event, so it is a new slice." | The slice is the read model's *purpose*, not its day-one event set. Extend it (§ Evolving a view slice). |
+| "The API needs a Request DTO so the wire shape is decoupled." | The command *is* the wire shape; a mirror doubles the edit surface and decouples nothing (§ The command and the view *are* the contract). |
+| "Returning the read model leaks internals." | It is a projection built for this query. A field the API must not expose is a deliberate divergence to record, not a reason for a mapper (§ The command and the view *are* the contract). |
+| "I will add this filter by reading the other view's repository." | That reaches into another slice (§R4). Put it in *that* slice's API, or project the data yourself. |
+| "All the events in one file is easier to read." | Until two slices change it in the same sprint (§R3). |
+| "I only need to read the other slice's state, not change it." | You need *a* state, not *its* state: fold the events yourself (§R4). Another aggregate's state is out of reach inside a decider — use a transaction-time read view, or an automation (§ Sanctioned sharing). |
+| "The decider can just query the read model to check uniqueness." | Read models are eventually consistent; the check is racy. Use a transaction-time projection with a unique constraint (§R1). |
+| "I will wire the bean up later." | An unwired decider passes every unit test and fails every integration test (§ Wiring is part of done). |
+| "Kotlin does not need `permits`, so Java should not either." | Java's sealed types require it; the one-name append is sanctioned, dropping `sealed` is not (§R3). |
+| "This external system is basically internal, so no ACL." | The boundary defines it, not the org chart. Another team's service is external (§ The four slice kinds). |
+
+### Event-sourced lanes
+
+| Rationalisation | Reality |
+|---|---|
+| "The `_v2` view works; we will delete `v1` next sprint." | Then there are two permanent slices over one read model. Retirement is part of the change (§ Evolving a view slice). |
+
+### Decider lane
+
+| Rationalisation | Reality |
+|---|---|
+| "Two deciders fold the same events, so let's share the evolver." | Two is a coincidence; promote at three, and only without a union. The exception is one named invariant (§ The `_shared/` promotion bar). |
+| "Sharing the state now saves a refactor later." | Promotion is a two-file move that keeps every name; un-sharing a bent `State` is the expensive refactor (§ The `_shared/` promotion bar). |
+
+### Aggregate lane
+
+| Rationalisation | Reality |
+|---|---|
+| "We use `AggregateRoot`, so this slice law is not for us." | Only where the decision lives changes; everything else applies unchanged (§ Aggregate style). |
+| "The aggregate is exactly the god class R1 forbids." | R1 forbids a *router*. Named methods with their own invariants are not one — until they lose them (§ The aggregate's own bar). |
+| "The aggregate is shared, so it belongs in `use_cases/_shared/`." | `_shared/` is state reconstruction only; a decision component there is a violation on sight. It gets `aggregates/` (§ Aggregate style). |
+| "We already have the aggregate, so the new command is just another method on it." | The method is the *decision*; the slice — directory, command type, API file, test — is everything else (§R1, §R2). |
+| "We are on Kotlin, so we will use `AggregateRoot` too." | Kotlin ships no aggregate pattern; this is Java interop that gives up the Kotlin decider API. A decision to state, not drift into (§ Aggregate style). |
+
+### Service-entity lane
+
+| Rationalisation | Reality |
+|---|---|
+| "We are not event-sourced, so this slice law is not for us." | Only where the decision lives and how state is stored changes; everything else applies unchanged (§ Service-entity style). |
+| "Adopting the slice law means adopting the event store." | This lane has none. Formalise the entity into `entities/` and split the god handler (§ Service-entity style). |
+| "There is no event store, so we do not need a `views/` slice — just query the entity." | The query still has an owner, a shape and a test. The lane skips the *projector*, not the slice (§ The read side on this lane). |
+| "The repository is shared, so it needs a `repositories/` folder." | It is shared by the write path, so it lives in `entities/`; a `repositories/` folder is a layer (§ Service-entity style). |
+| "It is one more finder on the existing repository — the view needs it." | That serves the read side from the write model. The view gets its own query interface and read shape (§ The read side on this lane). |
+| "The ORM makes us expose getters, so the no-query-surface bar cannot apply." | The bar goes by **caller**, not shape (§ The entity's own bar). |
+| "Returning the JPA entity is simpler than a projection interface." | It hands out a managed, mutable object and the whole write model as wire contract. The projection is the cheaper option (§ The read shape is a closed interface projection). |
+| "A projection interface is a DTO with extra steps." | A DTO is kept in sync by hand; a projection is a declaration checked at startup — not the mapper R2 forbids (§ The read shape is a closed interface projection). |
+| "`JpaRepository` gives us `findAll` for free — why type the methods out?" | It also gives every caller `deleteAll`, and a view `save` over the write model (§ Repositories extend the bare `Repository` marker). |
+| "`findById` is the obvious name for the projection's lookup." | It is the one name that cannot work (§ Never name a query method after a CRUD base method). |

@@ -29,3 +29,5 @@ severities, and so does `rules/slice-design.md` § The command and the view *are
 
 Another document's sections are not the law's: `slice-model.md` §4.1, change-procedure §5.1, and
 the findings in §4 of this guide.
+A wrapped citation of another file stays that file's: see `references/design/essentials-design.md`
+§ State-stored entities.

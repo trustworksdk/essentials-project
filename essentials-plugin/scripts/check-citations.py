@@ -354,6 +354,9 @@ def law_findings(rel, lines, law):
         previous_law_end = None
         for m in SECTION.finditer(line):
             before = line[: m.start()]
+            if i > 0 and not CONTINUATION.sub("", before, count=1):
+                # The § opens a wrapped line: whose section it is was said at the end of the last one.
+                before = lines[i - 1].rstrip() + " "
             rest = line[m.end():]
             for follow in lines[i + 1 : i + 3]:
                 rest += " " + CONTINUATION.sub("", follow, count=1)
