@@ -15,12 +15,12 @@ in every project generated afterwards — and in every golden under `tests/golde
 |---|---|---|
 | `spring-boot-starter-parent` | **4.1.1** | Essentials 0.60.0 requires Boot 4.1.x and is built and tested against 4.1.1; 4.0.x and 3.x unsupported (S1) |
 | `java.version` | **25** | Baseline is **25** (S1) — Essentials class files are built at `--release 25` |
-| `kotlin.version` | **2.4.10** | The compiler Essentials itself builds with. Essentials artifacts carry Kotlin 2.3 `@Metadata` (language and API level 2.3); the floor is Kotlin **2.3**, because an older compiler cannot target JVM 25, and the application's `jvmTarget` must be 25 to inline Essentials' `inline`/`reified` functions. **Load-bearing on Java projects too** — `postgresql-document-db` is Kotlin, so `kotlin-stdlib-jdk8`/`kotlin-reflect` are runtime/compile requirements with no Kotlin sources present (S2.1) |
+| `kotlin.version` | **2.4.20** | The compiler Essentials itself builds with. Essentials artifacts carry Kotlin 2.3 `@Metadata` (language and API level 2.3); the floor is Kotlin **2.3**, because an older compiler cannot target JVM 25, and the application's `jvmTarget` must be 25 to inline Essentials' `inline`/`reified` functions. **Load-bearing on Java projects too** — `postgresql-document-db` is Kotlin, so `kotlin-stdlib-jdk8`/`kotlin-reflect` are runtime/compile requirements with no Kotlin sources present (S2.1) |
 | `essentials.version` | **0.60.0** | One property, every Essentials artifact (S1) |
 | `springdoc.version` | 3.1.1 | `springdoc-openapi-starter-webflux-ui`; the WebMvc variant on a servlet stack. Essentials builds `types-spring-web`'s springdoc converter against the same release (root `pom.xml` `springdoc.version`) |
 | `spring-modulith.version` | 2.0.7 | BOM import |
 | `testcontainers-bom.version` | 2.0.5 | 2.x artifact names: `testcontainers-postgresql`, `testcontainers-mongodb`, `testcontainers-kafka` (S10) |
-| `jdbi3-bom.version` | 3.54.0 | BOM import |
+| `jdbi3-bom.version` | 3.55.0 | BOM import |
 | `mockito-bom.version` | 5.23.0 | BOM import |
 | `objenesis.version` | 3.6 | |
 | `awaitility.version` | 4.3.0 | `awaitility-kotlin` on Kotlin |
@@ -28,7 +28,7 @@ in every project generated afterwards — and in every golden under `tests/golde
 | jqwik | 1.9.3 | `jqwik` + `jqwik-kotlin` on Kotlin; `jqwik` alone on Java (S10) |
 | PostgreSQL image | postgres:18.4 | Docker Compose and the Testcontainers base (`IntegrationTestBase`); the tag Essentials' own integration tests use |
 | MongoDB image | mongo:8.2 | Docker Compose and the Testcontainers base, both run as a replica set |
-| `mongodb.version` | 5.11.1 | The MongoDB Java driver, `mongo` profile only: set above Spring Boot's managed driver, as Essentials itself builds and tests against it, for CVE-2026-18710, CVE-2026-88032 and CVE-2026-88033 (S11 — Boot reads this property for its `mongodb-driver-bom` import) |
+| `mongodb.version` | 5.13.0 | The MongoDB Java driver, `mongo` profile only: set above Spring Boot's managed driver, as Essentials itself builds and tests against it, for CVE-2026-18710, CVE-2026-88032 and CVE-2026-88033 (S11 — Boot reads this property for its `mongodb-driver-bom` import) |
 
 ### Build plugins
 

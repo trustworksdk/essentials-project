@@ -1275,7 +1275,7 @@ export default defineConfig({
         <java.version>25</java.version>
         <!-- Spring Boot manages Kotlin too; this property is what overrides it. Load-bearing on a Java
              project as well: postgresql-document-db is written in Kotlin (S2.1). -->
-        <kotlin.version>2.4.10</kotlin.version>
+        <kotlin.version>2.4.20</kotlin.version>
         <!-- One property drives every Essentials artifact (S1). -->
         <essentials.version>0.60.0</essentials.version>
         <springdoc.version>3.1.1</springdoc.version>
@@ -1287,7 +1287,7 @@ export default defineConfig({
         <assertj.version>3.27.7</assertj.version>
         <awaitility.version>4.3.0</awaitility.version>
         <!-- Not managed by Spring Boot: imported as BOMs below. -->
-        <jdbi3-bom.version>3.54.0</jdbi3-bom.version>
+        <jdbi3-bom.version>3.55.0</jdbi3-bom.version>
         <spring-modulith.version>2.0.7</spring-modulith.version>
         <jqwik.version>1.9.3</jqwik.version>
     </properties>

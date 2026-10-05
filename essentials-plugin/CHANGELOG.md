@@ -3,6 +3,16 @@
 Each entry is a release, headed by its `plugin.json` version: the Essentials release the plugin
 targets, with a `-N` suffix for plugin-only releases.
 
+## 0.60.0-2 — targets Essentials 0.60.0
+- **Stack pins** — `kotlin.version` 2.4.20, `jdbi3-bom.version` 3.55.0 and `mongodb.version` 5.13.0, the versions
+  Essentials itself now builds and tests against (`references/stack/stack-pins.md`; the nine init goldens move with
+  them).
+- **Bundled docs** — Avro 1.12.2+ refuses a `SpecificDatumReader` for a generated record outside its trusted
+  packages; the fix is `org.apache.avro.SERIALIZABLE_PACKAGES` (`LLM-types-avro.md`).
+- **Bundled docs** — how fast a Mongo node notices a lost FencedLock is bounded by the `MongoClient` socket timeouts,
+  and the best-effort database release after a lost lock can take several connect timeouts on MongoDB driver 5.12+
+  (`LLM-springdata-mongo-distributed-fenced-lock.md`).
+
 ## 0.60.0-1 — targets Essentials 0.60.0
 - **Slice check** — a new Advisory clause of gate 6, `6 raw id` (`ESS-G6`), reports a `@PathVariable` or
   `@RequestParam` id typed as a plain `String`, `Long`, `UUID` or other scalar in a command or view slice,

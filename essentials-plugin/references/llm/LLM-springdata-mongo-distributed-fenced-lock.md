@@ -413,6 +413,26 @@ MongoClient client = MongoClients.create(
 .setLockConfirmationInterval(Duration.ofSeconds(10))  // 3x buffer
 ```
 
+### ⚠️ Socket Timeouts Decide How Fast a Lost Lock Is Noticed
+
+A node learns it lost its database when a confirmation fails, so the worst case before it lets go is
+`lockConfirmationInterval` + however long the driver takes to fail that confirmation. Give the `MongoClient` explicit
+socket timeouts well below `lockTimeOut` - the Essentials integration tests use `connectTimeout(1, SECONDS)` and
+`readTimeout(1, SECONDS)`:
+
+```java
+MongoClientSettings.builder()
+                   .applyConnectionString(new ConnectionString(mongoUri))
+                   .applyToSocketSettings(socket -> socket.connectTimeout(1, SECONDS)
+                                                          .readTimeout(1, SECONDS))
+                   .build();
+```
+
+A lock that fails confirmation is released locally - `lockReleased` called - before the manager tries to release it in
+the database. That best-effort database release can still be slow: MongoDB driver 5.12+ retries a timed-out
+connection establishment with backoff, so against an unreachable server it takes several connect timeouts. Until it
+fails or succeeds, another node waits for `lockTimeOut` before taking the lock over.
+
 ### ⚠️ Always Release Locks
 
 ```java

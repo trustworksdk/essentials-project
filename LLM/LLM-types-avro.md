@@ -243,6 +243,7 @@ See [README Maven Configuration](../types-avro/README.md#maven-plugin-configurat
 - **UTC timezone** - JSR-310 converters use `ZoneId.of("UTC")`; create with `Clock.systemUTC()`
 - **Millisecond precision** - Temporal types truncate nanoseconds; use `.withNano(0)` for consistency
 - **Null safety** - All conversions return `null` for `null` input
+- **Avro 1.12.2+ trusts only listed packages** - `new SpecificDatumReader<>(MyRecord.class)` throws `SecurityException` ("This class is not trusted to be included in Avro schemas") for a generated record outside Avro's own trusted list. Trust your record packages with `-Dorg.apache.avro.SERIALIZABLE_PACKAGES=com.example.events` (comma-separated), or through `org.apache.avro.util.ClassSecurityValidator`. `avro` is `provided`, so this follows the Avro version you declare, not Essentials
 
 ---
 
