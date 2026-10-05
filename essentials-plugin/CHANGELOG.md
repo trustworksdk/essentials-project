@@ -4,6 +4,18 @@ Each entry is a release, headed by its `plugin.json` version: the Essentials rel
 targets, with a `-N` suffix for plugin-only releases.
 
 ## 0.60.0-2 — targets Essentials 0.60.0
+- **Slice law, loaded by lane** — `rules/slice-design.md` stays one file, but each lane-, kind- or
+  Spring Data-specific section now carries a scope line, and the slice skills and the change router
+  load it through the new `scripts/slice-law.py`, which prints only the sections that apply to the
+  bounded context's lane, the slice kind and whether the project uses Spring Data repositories, and
+  names what it left out. A decider-lane command slice loads about 36 KB of the law instead of 68 KB,
+  and a slice reached through a change request loads it once instead of twice; the self-checks walk
+  § Red flags from what was already printed instead of re-reading the file. `/essentials:slice-check`
+  and `/essentials:slice-discover` still read it whole.
+- **Slice law, shorter** — the R2 paragraph on binding typed ids and bodies now cites stack-contract
+  S3.3, S3.4 and S4 instead of restating them; § Red flags and § Anti-Rationalisation are grouped
+  into subsections per lane and per Spring Data, each entry reduced to its verdict and the section
+  that carries the reasoning. No rule changed, and no section heading a citation uses was renamed.
 - **Stack pins** — `kotlin.version` 2.4.20, `jdbi3-bom.version` 3.55.0 and `mongodb.version` 5.13.0, the versions
   Essentials itself now builds and tests against (`references/stack/stack-pins.md`; the nine init goldens move with
   them).
