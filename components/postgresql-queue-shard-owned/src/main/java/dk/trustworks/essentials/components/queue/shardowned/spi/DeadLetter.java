@@ -30,13 +30,14 @@ package dk.trustworks.essentials.components.queue.shardowned.spi;
  * waiting on a decision about that one. {@code attempts} does not separate them — a takeover bumps it
  * on rows that were never delivered, so a message that never ran can still show attempts.
  *
+ * @param keyOrder          the message's own position within its key; {@code 0} for an unordered message
  * @param blockedByKeyOrder the {@code key_order} of the dead letter this message is stuck behind, or
  *                          null when the message was itself tried and failed. A column on the row
  *                          rather than a convention inside {@code lastError}: the error text is for a
  *                          human, and a discriminator parsed out of prose is one bad edit from
  *                          silently reclassifying every row.
  */
-public record DeadLetter(MessageId id, String key, byte[] payload, int payloadType, int attempts, String lastError,
+public record DeadLetter(MessageId id, String key, long keyOrder, byte[] payload, int payloadType, int attempts, String lastError,
                          Long blockedByKeyOrder) {
 
     /**

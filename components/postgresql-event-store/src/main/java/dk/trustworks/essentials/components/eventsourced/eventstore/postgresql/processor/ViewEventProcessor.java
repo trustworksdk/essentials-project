@@ -22,6 +22,7 @@ import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.su
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.transaction.EventStoreUnitOfWork;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.types.GlobalEventOrder;
 import dk.trustworks.essentials.components.foundation.Lifecycle;
+import dk.trustworks.essentials.components.foundation.causation.CausationContext;
 import dk.trustworks.essentials.components.foundation.fencedlock.*;
 import dk.trustworks.essentials.components.foundation.messaging.*;
 import dk.trustworks.essentials.components.foundation.messaging.eip.store_and_forward.*;
@@ -267,7 +268,9 @@ public abstract class ViewEventProcessor extends AbstractEventProcessor {
                                            new EventReferenceOrderedMessage(aggregateType, key, event.eventOrder(), meta));
             } else {
                 var payload = event.event().deserialize();
-                handleDirectlyUnderSavepoint(OrderedMessage.of(payload, key, order, meta));
+                var msg     = OrderedMessage.of(payload, key, order, meta);
+                CausationContext.where(event.eventId())
+                                .run(() -> handleDirectlyUnderSavepoint(msg));
             }
         } catch (UnitOfWorkRequiresRollbackException e) {
             throw e;

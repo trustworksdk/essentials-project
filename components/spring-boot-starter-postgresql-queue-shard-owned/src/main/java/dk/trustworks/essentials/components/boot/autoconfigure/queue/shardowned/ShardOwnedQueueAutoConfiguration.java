@@ -18,6 +18,8 @@ package dk.trustworks.essentials.components.boot.autoconfigure.queue.shardowned;
 
 import dk.trustworks.essentials.components.adminapi.rest.AdminApiPrincipalResolver;
 import dk.trustworks.essentials.components.foundation.json.JSONSerializer;
+import dk.trustworks.essentials.components.foundation.lifecycle.ShutdownAware;
+import dk.trustworks.essentials.components.foundation.postgresql.stats.*;
 // Single-type imports, not the package: foundation...queue and shardowned.spi both export QueueName,
 // and this class imports the spi package wholesale.
 import dk.trustworks.essentials.components.foundation.messaging.queue.DurableQueues;
@@ -82,6 +84,20 @@ public class ShardOwnedQueueAutoConfiguration {
     private static final Logger log = LoggerFactory.getLogger(ShardOwnedQueueAutoConfiguration.class);
 
     /**
+     * The engine's tables, reported by the PostgreSQL table statistics. Its table names are fixed
+     */
+    @Bean
+    public PostgresqlStatisticsTableProvider essentialsShardOwnedQueuesStatisticsTables() {
+        return PostgresqlStatisticsTableProvider.of(PostgresqlStatisticsTable.SECTION_SHARD_OWNED_QUEUES,
+                                                    ShardOwnedSchema.UNORDERED_TABLE,
+                                                    ShardOwnedSchema.ORDERED_TABLE,
+                                                    ShardOwnedSchema.DLQ_TABLE,
+                                                    ShardOwnedSchema.LEASE_TABLE,
+                                                    ShardOwnedSchema.INSTANCE_TABLE,
+                                                    ShardOwnedSchema.REGISTRY_TABLE);
+    }
+
+    /**
      * The engine's tuning, as one object, so a queue and the runtime cannot be configured from
      * different halves of the same properties.
      */
@@ -109,6 +125,16 @@ public class ShardOwnedQueueAutoConfiguration {
         var provider = new CompositeDataSourcePoolMetadataProvider(poolMetadataProviders.orderedStream().toList());
         return new ShardRuntime(dataSource, settings, new ShardOwnerMetrics(),
                                 SpringConnectionPoolMetadata.of(dataSource, provider));
+    }
+
+    /**
+     * Passes the application's shutdown signal on to the {@link ShardRuntime}, which depends on {@code shared} alone and
+     * so cannot be a {@link ShutdownAware} itself: its pump wait on stop is then bounded by what is left of the shutdown
+     * timeout ({@code essentials.life-cycles.shutdown-timeout}).
+     */
+    @Bean
+    public ShutdownAware shardRuntimeShutdownBridge(ShardRuntime shardRuntime) {
+        return shutdown -> shardRuntime.shutdownStarting(shutdown::remaining);
     }
 
     /**
@@ -159,7 +185,8 @@ public class ShardOwnedQueueAutoConfiguration {
                                                          ShardOwnedQueueProperties properties,
                                                          ShardOwnedQueueInitializer initializer,
                                                          ObjectProvider<MessageQueueInterceptor> interceptors,
-                                                         ObjectProvider<QueueObserver> observers) {
+                                                         ObjectProvider<QueueObserver> observers,
+                                                         ObjectProvider<ShardOwnedQueueMetrics> metrics) {
         var instanceId = properties.getInstanceId() != null && !properties.getInstanceId().isBlank()
                          ? properties.getInstanceId()
                          : defaultInstanceId();
@@ -169,7 +196,29 @@ public class ShardOwnedQueueAutoConfiguration {
         // need to declare an empty bean to satisfy the constructor.
         return new ShardOwnedQueueFactory(dataSource, runtime, settings, instanceId, initializer,
                                           interceptors.orderedStream().toList(),
-                                          observers.orderedStream().toList());
+                                          observers.orderedStream().toList(),
+                                          metrics.orderedStream().toList());
+    }
+
+    /**
+     * Micrometer meters for every queue the factory builds, whenever Micrometer is on the classpath.
+     * <p>
+     * A nested configuration guarded by class NAME, so that an application without Micrometer never
+     * loads a class whose signature mentions it. On by default, because the event meters are free;
+     * {@code essentials.shard-owned-queue.metrics.enabled=false} turns them off, and the gauges that
+     * cost queries have switches of their own.
+     */
+    @Configuration(proxyBeanMethods = false)
+    @ConditionalOnClass(name = "io.micrometer.core.instrument.MeterRegistry")
+    @ConditionalOnProperty(prefix = "essentials.shard-owned-queue.metrics", name = "enabled",
+                           havingValue = "true", matchIfMissing = true)
+    static class MicrometerMetricsConfiguration {
+        @Bean
+        @ConditionalOnMissingBean(name = "shardOwnedQueueMicrometerMetrics")
+        ShardOwnedQueueMetrics shardOwnedQueueMicrometerMetrics(ObjectProvider<io.micrometer.core.instrument.MeterRegistry> registries,
+                                                                ShardOwnedQueueProperties properties) {
+            return new MicrometerShardOwnedQueueMetrics(registries, properties.getMetrics());
+        }
     }
 
 

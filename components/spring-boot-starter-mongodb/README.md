@@ -242,6 +242,7 @@ essentials:
 
 ```properties
 essentials.life-cycles.start-life-cycles=true
+essentials.life-cycles.shutdown-timeout=10s
 essentials.reactive-bean-post-processor-enabled=true
 essentials.immutable-jackson-module-enabled=true
 ```
@@ -249,6 +250,7 @@ essentials.immutable-jackson-module-enabled=true
 | Property | Default | Description                                                                                                                                                                                                                       |
 |----------|---------|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
 | `life-cycles.start-life-cycles` | `true` | **true**: Automatically call `start()` on all `Lifecycle` beans (FencedLockManager, DurableQueues, etc.) when ApplicationContext starts, and `stop()` on shutdown.  <br/>**false**: You must manually start/stop Lifecycle beans. |
+| `life-cycles.shutdown-timeout` | `10s` | Time budget for stopping every `Lifecycle` bean on shutdown. Database cleanup during shutdown (releasing fenced locks, saving resume points, unscheduling jobs) gets one short attempt and is skipped once the database proves unreachable; a bean still stopping when the budget is spent is abandoned so the application can exit. Locks and leases left behind expire on their own. |
 | `reactive-bean-post-processor-enabled` | `true` | **true**: Auto-register `EventHandler` beans with `EventBus` and `CommandHandler` beans with `CommandBus`.  <br/>**false**: You must manually register handlers with their buses.                                                 |
 | `immutable-jackson-module-enabled` | `true` | **true**: Enable `EssentialsImmutableJacksonModule` for deserializing immutable objects (requires Objenesis).  <br/>**false**: Disable even if Objenesis is available.                                                                 |
 

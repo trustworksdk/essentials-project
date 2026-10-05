@@ -54,6 +54,19 @@ import java.util.concurrent.atomic.*;
  * Ordering is checked as messages arrive: each ordered message carries its key's sequence number, and
  * the handler asserts it is greater than the last one seen for that key. A violation is counted
  * rather than thrown, because the point is to observe the property under load, not to fail a demo.
+ *
+ * <h2>Injected faults</h2>
+ * {@link #injectFaults} puts messages on both lanes whose handler fails on purpose: <b>retry</b> messages
+ * fail a fixed number of times and then succeed, <b>poison</b> messages fail on every attempt and end up
+ * dead-lettered. They are built to leave the traffic above untouched:
+ * <ul>
+ *     <li>They carry their own payload types, so they are neither ordering-checked nor counted as
+ *         handled price ticks or account activity.</li>
+ *     <li>Every ordered fault message gets a key of its own that nothing else ever uses. A dead
+ *         letter blocks its key and dead-letters whatever arrives for it afterwards, so a poison
+ *         message on an {@code ACC-} key would take that account's activity down with it; and a
+ *         retrying message holds its key for the length of its backoff.</li>
+ * </ul>
  */
 @Component
 public class QueueLoadGenerator {
@@ -63,6 +76,15 @@ public class QueueLoadGenerator {
     /** Anything non-zero; the engine treats payload type as opaque application metadata. */
     private static final int PRICE_TICK      = 1;
     private static final int ACCOUNT_ACTIVITY = 2;
+    /** Fails the number of times its payload names, then succeeds. */
+    private static final int FAULT_RETRY      = 3;
+    /** Fails on every attempt, so it is dead-lettered once the attempts run out. */
+    private static final int FAULT_POISON     = 4;
+    /**
+     * A message on a blocked key: the head fails until it is resurrected, and the messages behind it
+     * are parked by the engine until then. See {@link #injectBlockedKey}.
+     */
+    private static final int FAULT_BLOCKED_KEY = 5;
 
     private final QueueLoadGeneratorProperties properties;
     private final ShardOwnedQueueFactory       queues;
@@ -75,6 +97,26 @@ public class QueueLoadGenerator {
     private final AtomicLong orderViolations   = new AtomicLong();
     private final AtomicLong spikes            = new AtomicLong();
     private final AtomicReference<Instant> lastSpikeAt = new AtomicReference<>();
+    private final AtomicLong retryFaultsEnqueued  = new AtomicLong();
+    private final AtomicLong retryFaultsRecovered = new AtomicLong();
+    private final AtomicLong poisonFaultsEnqueued = new AtomicLong();
+    private final AtomicLong injectedFailures     = new AtomicLong();
+    /** Numbers the single-use keys of ordered fault messages; see {@link #injectFaults}. */
+    private final AtomicLong nextFaultKey         = new AtomicLong();
+    private final AtomicLong blockedKeysCreated          = new AtomicLong();
+    private final AtomicLong blockedKeyMessagesEnqueued  = new AtomicLong();
+    private final AtomicLong blockedKeyMessagesDelivered = new AtomicLong();
+    /**
+     * The ids blocked-key heads were enqueued under. A head fails while it still has one of these, and
+     * succeeds once resurrected, because resurrecting gives a message a fresh sequence value and so a
+     * fresh id. That is what makes a blocked key recoverable by {@code resurrectKey} without a switch
+     * anybody has to remember to flip.
+     * <p>
+     * In memory, so it is this instance's knowledge only. With several instances the key's unit may be
+     * owned by another one, which has never heard of the id and delivers the head first time — the key
+     * then never blocks. Run a single instance to exercise it.
+     */
+    private final Set<MessageId> blockedHeadIds = ConcurrentHashMap.newKeySet();
 
     /** Highest sequence handled per key, which is what makes an ordering violation observable here. */
     private final ConcurrentMap<String, Long> highestPerKey = new ConcurrentHashMap<>();
@@ -108,6 +150,9 @@ public class QueueLoadGenerator {
      * The previous run's backlog still drains; it simply belongs to keys nothing produces any more.
      */
     private final String keyPrefix;
+    /** Same instance id and run token as {@link #keyPrefix}, so fault keys can never collide with account keys. */
+    private final String faultKeyPrefix;
+    private final String blockedKeyPrefix;
 
     /**
      * Its own scheduler, like {@code TradingLoadGeneratorManager}, rather than {@code @Scheduled}.
@@ -124,7 +169,10 @@ public class QueueLoadGenerator {
         this.queues = queues;
         // The instance id separates concurrent producers; the run token separates this JVM from the ones
         // before it. See keyPrefix.
-        this.keyPrefix = "ACC-" + queues.instanceId() + "-" + Long.toString(System.currentTimeMillis(), 36) + "-";
+        var instanceAndRun = queues.instanceId() + "-" + Long.toString(System.currentTimeMillis(), 36) + "-";
+        this.keyPrefix = "ACC-" + instanceAndRun;
+        this.faultKeyPrefix = "FAULT-" + instanceAndRun;
+        this.blockedKeyPrefix = "BLOCKED-" + instanceAndRun;
         if (properties.isEnabled()) {
             start();
         }
@@ -157,6 +205,25 @@ public class QueueLoadGenerator {
                         if (payloadType == ACCOUNT_ACTIVITY) {
                             recordOrdering(key, payload);
                             orderedHandled.incrementAndGet();
+                        } else if (payloadType == FAULT_RETRY) {
+                            failUntilAttempt(messageId, payload);
+                        } else if (payloadType == FAULT_BLOCKED_KEY) {
+                            boolean head;
+                            // Under the lock injectBlockedKey holds across enqueue-and-register, so a
+                            // head delivered the instant its enqueue commits waits to be recognised.
+                            synchronized (blockedHeadIds) {
+                                head = blockedHeadIds.contains(messageId);
+                            }
+                            if (head) {
+                                injectedFailures.incrementAndGet();
+                                throw new InjectedFault("Blocked-key head " + messageId + " on '" + key
+                                                        + "' - fails until it is resurrected");
+                            }
+                            recordOrdering(key, payload);
+                            blockedKeyMessagesDelivered.incrementAndGet();
+                        } else if (payloadType == FAULT_POISON) {
+                            injectedFailures.incrementAndGet();
+                            throw new InjectedFault("Poison message " + messageId + " - fails on every attempt");
                         } else {
                             unorderedHandled.incrementAndGet();
                         }
@@ -293,6 +360,128 @@ public class QueueLoadGenerator {
     }
 
     /**
+     * Enqueue fault messages on both lanes, alongside whatever the sustained arm and spikes are doing.
+     * <p>
+     * Each ordered fault message gets a key no other message has or will have, so a poison message
+     * blocks only a key nothing else is waiting on, and a retrying one delays nothing but itself.
+     * {@code key_order} is always 0: a key with one message has nothing to order.
+     *
+     * @param retriesPerLane   messages per lane that fail {@code failuresPerRetry} times, then succeed
+     * @param poisonPerLane    messages per lane that fail every attempt and are dead-lettered
+     * @param failuresPerRetry failures before a retry message succeeds; must stay below the consumer's
+     *                         {@code maxAttempts}, or it is a poison message by another name
+     * @return how many messages were enqueued across both lanes
+     */
+    public int injectFaults(int retriesPerLane, int poisonPerLane, int failuresPerRetry) {
+        if (!running.get()) {
+            throw new IllegalStateException("The queue load generator is not running");
+        }
+        var maxAttempts = consumerOptions().maxAttempts();
+        if (retriesPerLane < 0 || poisonPerLane < 0) {
+            throw new IllegalArgumentException("Fault counts cannot be negative");
+        }
+        if (retriesPerLane > 0 && (failuresPerRetry < 1 || failuresPerRetry >= maxAttempts)) {
+            throw new IllegalArgumentException("failuresPerRetry must be between 1 and " + (maxAttempts - 1)
+                                               + " - the consumer dead-letters after " + maxAttempts + " attempts");
+        }
+        var messages = new ArrayList<Message>((retriesPerLane + poisonPerLane) * 2);
+        var retryPayload = payload(Integer.toString(failuresPerRetry));
+        for (var index = 0; index < retriesPerLane; index++) {
+            messages.add(Message.of(retryPayload, FAULT_RETRY));
+            messages.add(Message.ordered(retryPayload, FAULT_RETRY, nextFaultKey(), 0));
+        }
+        var poisonPayload = payload("poison");
+        for (var index = 0; index < poisonPerLane; index++) {
+            messages.add(Message.of(poisonPayload, FAULT_POISON));
+            messages.add(Message.ordered(poisonPayload, FAULT_POISON, nextFaultKey(), 0));
+        }
+        if (messages.isEmpty()) {
+            return 0;
+        }
+        try {
+            queue.enqueue(messages);
+        } catch (Exception e) {
+            throw new IllegalStateException("Fault injection failed", e);
+        }
+        retryFaultsEnqueued.addAndGet(retriesPerLane * 2L);
+        poisonFaultsEnqueued.addAndGet(poisonPerLane * 2L);
+        log.info("Injected faults: {} retry (failing {} time(s) each) and {} poison message(s) per lane",
+                 retriesPerLane, failuresPerRetry, poisonPerLane);
+        return messages.size();
+    }
+
+    /**
+     * One ordered key that stops: its head ({@code key_order} 0) fails every attempt and is
+     * dead-lettered, and the {@code behind} messages after it are parked by the engine without being
+     * delivered — a key never advances past a dead letter. Resurrecting the key
+     * ({@code POST .../shard-owned-queues/{queue}/ordered-keys/{key}/resurrect}) puts all of them back;
+     * the head then succeeds, having a new id, and the key replays in {@code key_order}, which the
+     * ordering check verifies as it would for account activity.
+     *
+     * @return the key, so the caller can resurrect it
+     */
+    public String injectBlockedKey(int behind) {
+        if (!running.get()) {
+            throw new IllegalStateException("The queue load generator is not running");
+        }
+        if (behind < 0 || behind > 10_000) {
+            throw new IllegalArgumentException("behind must be between 0 and 10000");
+        }
+        var key = blockedKeyPrefix + nextFaultKey.getAndIncrement();
+        var messages = new ArrayList<Message>(behind + 1);
+        for (var order = 0; order <= behind; order++) {
+            messages.add(Message.ordered(payload(Long.toString(order)), FAULT_BLOCKED_KEY, key, order));
+        }
+        List<MessageId> ids;
+        try {
+            // The enqueue commits before its ids are returned, so a fast consumer can be handed the
+            // head before it is registered; the handler reads the set under this lock, so it waits.
+            synchronized (blockedHeadIds) {
+                ids = queue.enqueue(messages);
+                blockedHeadIds.add(ids.getFirst());
+            }
+        } catch (Exception e) {
+            throw new IllegalStateException("Blocked-key injection failed", e);
+        }
+        blockedKeysCreated.incrementAndGet();
+        blockedKeyMessagesEnqueued.addAndGet(messages.size());
+        log.info("Injected blocked key '{}': head {} fails until resurrected, {} message(s) behind it",
+                 key, ids.getFirst(), behind);
+        return key;
+    }
+
+    private String nextFaultKey() {
+        return faultKeyPrefix + nextFaultKey.getAndIncrement();
+    }
+
+    /**
+     * Fail until the message has been tried {@code failures} times, reading the count from the queue.
+     * <p>
+     * The handler is not given the attempt count, so it asks for the row by id — the lookup
+     * {@link MessageHandler} documents for exactly this, paid only by fault messages. The count comes
+     * from the database, not from memory here, so it holds when a rebalance hands the message to
+     * another instance between attempts. While a message is in flight, {@code attempts} is the number
+     * of failures recorded so far.
+     */
+    private void failUntilAttempt(MessageId messageId, byte[] payload) throws Exception {
+        var failures = Integer.parseInt(new String(payload, StandardCharsets.UTF_8));
+        var attemptsSoFar = queue.getMessage(messageId).map(QueuedMessage::attempts).orElse(failures);
+        if (attemptsSoFar < failures) {
+            injectedFailures.incrementAndGet();
+            throw new InjectedFault("Retry message " + messageId + " - injected failure "
+                                    + (attemptsSoFar + 1) + " of " + failures);
+        }
+        retryFaultsRecovered.incrementAndGet();
+    }
+
+    /** Thrown on purpose by fault messages, so a log reader can tell an injected failure from a real one. */
+    static final class InjectedFault extends RuntimeException {
+        InjectedFault(String message) {
+            super(message, null, false, false);
+        }
+    }
+
+    /**
      * The property the ordered lane sells, checked where it can actually be observed.
      * <p>
      * Counted rather than thrown: a violation is a finding to surface on the dashboard, and throwing
@@ -346,9 +535,15 @@ public class QueueLoadGenerator {
                                    orderedEnqueued.get(), orderedHandled.get(),
                                    orderViolations.get(),
                                    spikes.get(), lastSpikeAt.get(),
+                                   retryFaultsEnqueued.get(), retryFaultsRecovered.get(),
+                                   poisonFaultsEnqueued.get(), injectedFailures.get(),
+                                   blockedKeysCreated.get(), blockedKeyMessagesEnqueued.get(),
+                                   blockedKeyMessagesDelivered.get(),
                                    depth == null ? 0 : depth.unordered(),
                                    depth == null ? 0 : depth.ordered(),
                                    depth == null ? 0 : depth.deadLettered(),
+                                   depth == null ? 0 : depth.parkedBehindDeadLetter(),
+                                   depth == null ? 0 : depth.blockedKeys(),
                                    health == null ? 0 : health.unorderedOwned(),
                                    health == null ? 0 : health.orderedOwned(),
                                    health == null ? 0 : health.unownedShards(),
@@ -371,6 +566,18 @@ public class QueueLoadGenerator {
     }
 
     /**
+     * @param retryFaultsEnqueued  retry messages enqueued across both lanes; each should end up in
+     *                             {@code retryFaultsRecovered}
+     * @param poisonFaultsEnqueued poison messages enqueued across both lanes; each should end up in
+     *                             {@code deadLetteredDepth}
+     * @param injectedFailures     handler invocations that failed on purpose
+     * @param blockedKeyMessagesDelivered messages on blocked keys delivered after a resurrect; equals
+     *                             {@code blockedKeyMessagesEnqueued} once every blocked key is resurrected
+     * @param parkedBehindDeadLetterDepth dead letters parked unhandled behind another on their key, right
+     *                             now; falls back to zero when the key is resurrected
+     * @param blockedKeys          ordered keys stopped behind a dead letter right now, across the queue -
+     *                             blocked keys from {@code /faults/blocked-key} and each poison
+     *                             message's single-use key alike
      * @param unownedShards the number worth alerting on — depth cannot tell "nobody is consuming"
      *                      from "busy", and this can
      */
@@ -383,9 +590,18 @@ public class QueueLoadGenerator {
                                   long orderViolations,
                                   long spikes,
                                   Instant lastSpikeAt,
+                                  long retryFaultsEnqueued,
+                                  long retryFaultsRecovered,
+                                  long poisonFaultsEnqueued,
+                                  long injectedFailures,
+                                  long blockedKeysCreated,
+                                  long blockedKeyMessagesEnqueued,
+                                  long blockedKeyMessagesDelivered,
                                   long unorderedDepth,
                                   long orderedDepth,
                                   long deadLetteredDepth,
+                                  long parkedBehindDeadLetterDepth,
+                                  long blockedKeys,
                                   int unorderedShardsOwned,
                                   int orderedUnitsOwned,
                                   int unownedShards,

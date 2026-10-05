@@ -16,7 +16,7 @@
 
 package dk.trustworks.essentials.components.foundation.scheduler.api;
 
-import java.util.List;
+import java.util.*;
 
 /**
  * Interface defining operations for interacting with scheduled jobs and their execution details.
@@ -89,4 +89,24 @@ public interface SchedulerApi {
      * @throws dk.trustworks.essentials.shared.security.EssentialsSecurityException if the provided principal does not have the required permissions to access the pg_cron jobs
      */
     long getTotalExecutorJobs(Object principal);
+
+    /**
+     * Runs a job registered with the scheduler once, now, and waits for the outcome. Its schedule is not changed.
+     * <p>
+     * An executor job runs only on the instance holding the scheduler's fenced lock; a pg_cron job can be run from
+     * any instance, and the run is not recorded in pg_cron's run history. A manual run is not coordinated with a
+     * scheduled run of the same job. See {@link dk.trustworks.essentials.components.foundation.scheduler.EssentialsScheduler#runJobNow(String)}.
+     *
+     * @param principal the principal requesting the run
+     * @param jobName   the job's name, as listed by {@link #getExecutorJobs(Object, long, long)} or
+     *                  {@link #getPgCronJobs(Object, long, long)}
+     * @return the outcome, or empty if no job of that name is registered with this application's scheduler
+     * @throws dk.trustworks.essentials.shared.security.EssentialsSecurityException if the principal is not
+     *                                                                               authorized
+     * @throws dk.trustworks.essentials.components.foundation.scheduler.ScheduledJobNotRunnableHereException for an
+     *                                                                               executor job when this
+     *                                                                               instance does not hold the
+     *                                                                               scheduler lock
+     */
+    Optional<ApiScheduledJobRun> runJobNow(Object principal, String jobName);
 }

@@ -26,6 +26,7 @@ import dk.trustworks.essentials.reactive.command.CommandBus;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.test.annotation.DirtiesContext;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 import org.testcontainers.postgresql.PostgreSQLContainer;
@@ -59,6 +60,7 @@ import static org.awaitility.Awaitility.await;
         "trading-demo.risk-approval.latency=1s",
         "trading-demo.risk-approval.rejected-symbols=RISKY"
 })
+@DirtiesContext // close while this class's container is still up; a cached context outlives it and stalls the next context switch
 class InstrumentRiskApprovalTest {
     /**
      * Generous for the same reason as {@code TradingDemoApplicationTest}'s: the automation and the projection both run

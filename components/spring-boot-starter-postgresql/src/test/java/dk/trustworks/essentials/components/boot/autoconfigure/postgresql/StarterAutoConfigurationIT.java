@@ -19,7 +19,8 @@ package dk.trustworks.essentials.components.boot.autoconfigure.postgresql;
 import dk.trustworks.essentials.components.foundation.fencedlock.api.DBFencedLockApi;
 import dk.trustworks.essentials.components.foundation.messaging.queue.api.DurableQueuesApi;
 import dk.trustworks.essentials.components.foundation.messaging.queue.health.DurableQueuesHealthIndicator;
-import dk.trustworks.essentials.components.foundation.postgresql.api.PostgresqlQueryStatisticsApi;
+import dk.trustworks.essentials.components.foundation.postgresql.api.*;
+import dk.trustworks.essentials.components.foundation.postgresql.stats.PostgresqlStatisticsTable;
 import dk.trustworks.essentials.components.foundation.scheduler.api.*;
 import dk.trustworks.essentials.components.foundation.ttl.TTLJob;
 import dk.trustworks.essentials.components.queue.postgresql.PostgresqlDurableQueues;
@@ -38,6 +39,7 @@ import java.time.Duration;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.tuple;
 
 @Testcontainers
 public class StarterAutoConfigurationIT {
@@ -96,6 +98,14 @@ public class StarterAutoConfigurationIT {
             assertThat(ctx).hasSingleBean(PostgresqlQueryStatisticsApi.class);
             PostgresqlQueryStatisticsApi postgresqlQueryStatisticsApi = ctx.getBean(PostgresqlQueryStatisticsApi.class);
             assertThat(postgresqlQueryStatisticsApi.getTopTenSlowestQueries("principal")).isNotNull();
+            assertThat(postgresqlQueryStatisticsApi.getSlowestQueries("principal", QueryStatisticsOrder.MEAN_TIME, 25)).isNotNull();
+
+            assertThat(ctx).hasSingleBean(PostgresqlTableStatisticsApi.class);
+            var tableStatistics = ctx.getBean(PostgresqlTableStatisticsApi.class).fetchTableStatistics("principal");
+            assertThat(tableStatistics).extracting(ApiTableStatistics::section, ApiTableStatistics::tableName)
+                                       .contains(tuple(PostgresqlStatisticsTable.SECTION_DURABLE_QUEUES, "durable_queues"),
+                                                 tuple(PostgresqlStatisticsTable.SECTION_FENCED_LOCKS, "fenced_locks"),
+                                                 tuple(PostgresqlStatisticsTable.SECTION_INFRASTRUCTURE, "essentials_schema_history"));
 
             assertThat(ctx).hasSingleBean(SchedulerApi.class);
             SchedulerApi schedulerApi = ctx.getBean(SchedulerApi.class);

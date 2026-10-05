@@ -102,6 +102,42 @@ Spring Boot Docker Compose will start PostgreSQL automatically when the `compose
   ./examples/essentials-trading-demo/run-instance.sh 2   # port 8081, id demo-2
 ```
 
+## Metrics, Traces And Logs In Grafana
+
+Add the `observability` profile to get the same stack as `essentials-spring-examples` — an OpenTelemetry
+collector, Prometheus, Tempo, Loki and Grafana — with dashboards for this demo:
+
+```
+./examples/essentials-trading-demo/run-instance.sh 1 observability
+./examples/essentials-trading-demo/run-instance.sh 2 observability   # optional second instance
+```
+
+or `-Dspring-boot.run.profiles=compose,observability` directly. Then open Grafana at
+[http://localhost:3000](http://localhost:3000) (no login) and Prometheus at [http://localhost:9090](http://localhost:9090).
+
+| Dashboard | Shows |
+|---|---|
+| Shard-owned queues | backlog per queue and lane, dead letters, **blocked keys** and **parked** messages right now, unowned shards and live instances, enqueue/delivery rates and latency, failures/retries, work per instance, ownership changes |
+| Event store and aggregates | appends and stream reads per aggregate type, subscription handling, snapshot load/save |
+| Commands and message handlers | command-bus latency per command, handler invocations, the DurableQueues operations behind Inbox and the projections |
+| Logs, Traces, Metrics | HTTP latency, a trace, and the log lines that carry its trace id |
+
+How it is wired:
+
+- The observability services are behind a compose profile, so a run **without** the Spring profile still
+  starts PostgreSQL only. Their configuration and the dashboards live in [observability/](observability/).
+- Metrics and traces are pushed over OTLP to the collector (`localhost:4318`), which remote-writes metrics
+  into Prometheus and forwards traces to Tempo; logs are pushed to Loki by `logback-spring.xml`. Every
+  series and log line is labelled with the instance id (`demo-1`, `demo-2`).
+- The shard-owned queue's depth and health gauges are turned on in
+  [application-observability.yml](src/main/resources/application-observability.yml); they are off by default
+  because each refresh is a query.
+- Traces start at HTTP requests — the admin API, the console and the load-generator endpoints. The
+  generators' background work does not produce spans.
+- The containers use the same host ports as `essentials-spring-examples`' stack, so only one of the two can
+  run at a time. `docker compose -f examples/essentials-trading-demo/compose.yml --profile observability down`
+  stops them.
+
 ## Run From IntelliJ
 
 Create a Spring Boot run configuration for:

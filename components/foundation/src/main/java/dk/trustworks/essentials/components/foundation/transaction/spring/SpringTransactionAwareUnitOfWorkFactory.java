@@ -170,7 +170,11 @@ public abstract class SpringTransactionAwareUnitOfWorkFactory<TRX_MGR extends Pl
             while (processingStatus.get() == UnitOfWorkLifecycleCallback.BeforeCommitProcessingStatus.REQUIRED) {
                 log.trace("BeforeCommit: Performing BeforeCommitProcessing since processingStatus is {}", processingStatus.get());
                 processingStatus.set(UnitOfWorkLifecycleCallback.BeforeCommitProcessingStatus.COMPLETED);
-                unitOfWork.unitOfWorkLifecycleCallbackResources.forEach((key, resources) -> {
+                var registrationsBeforeThisPass = unitOfWork.lifecycleCallbackResourceRegistrations;
+                // A snapshot, because a callback may register further resources while it runs; the next pass picks them up
+                var snapshot = new LinkedHashMap<UnitOfWorkLifecycleCallback<Object>, List<Object>>();
+                unitOfWork.unitOfWorkLifecycleCallbackResources.forEach((callback, resources) -> snapshot.put(callback, new ArrayList<>(resources)));
+                snapshot.forEach((key, resources) -> {
                     try {
                         log.trace("BeforeCommit: Calling {} with {} associated resource(s)",
                                   key.getClass().getName(),
@@ -188,6 +192,12 @@ public abstract class SpringTransactionAwareUnitOfWorkFactory<TRX_MGR extends Pl
                     }
                 });
                 beforeCommitAfterCallingLifecycleCallbackResources(unitOfWork);
+                if (unitOfWork.lifecycleCallbackResourceRegistrations != registrationsBeforeThisPass) {
+                    // A resource registered during this pass - by a callback, or by an in-transaction handler run from
+                    // beforeCommitAfterCallingLifecycleCallbackResources - has not been through beforeCommit yet
+                    log.trace("BeforeCommit: resources were registered during the pass - performing another");
+                    processingStatus.set(UnitOfWorkLifecycleCallback.BeforeCommitProcessingStatus.REQUIRED);
+                }
             }
         }
 

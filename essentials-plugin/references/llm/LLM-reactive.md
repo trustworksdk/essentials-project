@@ -237,6 +237,22 @@ LocalCommandBus(SendAndDontWaitErrorHandler errorHandler, CommandBusInterceptor.
 | `sendAndDontWait(cmd)` | No | void | `SendAndDontWaitErrorHandler` callback | ❌ Lost on restart |
 | `sendAndDontWait(cmd, delay)` | No | void | `SendAndDontWaitErrorHandler` callback | ❌ Lost on restart |
 
+**Threads**: only `send` runs the handler on the caller's thread. `sendAsync` and `sendAndDontWait` run it on Reactor's
+`boundedElastic` (`publishOn` fuses with `Mono.fromCallable`), so `ThreadLocal`/`ScopedValue` context does not reach
+the handler on its own. Carry it with a `CommandContextPropagator`:
+
+```java
+public interface CommandContextPropagator {
+    // Called on the SENDING thread; return an invocation that restores the captured context around the handler
+    <R> Callable<R> propagate(Callable<R> handlerInvocation);
+}
+
+commandBus.addContextPropagator(myPropagator);   // AbstractCommandBus; first added wraps outermost
+```
+
+The propagator captures at *send*, so a `sendAsync` `Mono` subscribed later still carries the sender's context.
+[foundation](./LLM-foundation.md#event-causation) supplies `CausationCommandContextPropagator`.
+
 ### CommandHandler Types
 
 **Package:** `dk.trustworks.essentials.reactive.command`

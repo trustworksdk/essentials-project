@@ -18,6 +18,7 @@ package dk.trustworks.essentials.components.foundation.fencedlock;
 
 import dk.trustworks.essentials.components.foundation.IOExceptionUtil;
 import dk.trustworks.essentials.components.foundation.fencedlock.FencedLockEvents.*;
+import dk.trustworks.essentials.components.foundation.lifecycle.*;
 import dk.trustworks.essentials.components.foundation.transaction.*;
 import dk.trustworks.essentials.reactive.*;
 import dk.trustworks.essentials.shared.concurrent.ThreadFactoryBuilder;
@@ -41,7 +42,7 @@ import static dk.trustworks.essentials.shared.MessageFormatter.msg;
  * @param <UOW>  the type of {@link UnitOfWork} required
  * @param <LOCK> the concrete type of {@link DBFencedLock} used
  */
-public abstract class DBFencedLockManager<UOW extends UnitOfWork, LOCK extends DBFencedLock> implements FencedLockManager {
+public abstract class DBFencedLockManager<UOW extends UnitOfWork, LOCK extends DBFencedLock> implements FencedLockManager, ShutdownAware {
     protected final Logger log = LoggerFactory.getLogger(this.getClass());
 
     private final FencedLockStorage<UOW, LOCK>                lockStorage;
@@ -77,6 +78,11 @@ public abstract class DBFencedLockManager<UOW extends UnitOfWork, LOCK extends D
      * Paused is used for testing purposes to pause async lock acquiring and confirmation
      */
     private volatile boolean paused;
+    /**
+     * Set by {@link #shutdownStarting(ShutdownContext)}, cleared by {@link #stop()}. While set, no background work touches
+     * the database and lock releases are a bounded best effort - see {@link #shutdownStarting(ShutdownContext)}
+     */
+    private volatile ShutdownContext shutdown;
 
     private   ScheduledExecutorService lockConfirmationExecutor;
     private   ScheduledExecutorService asyncLockAcquiringExecutor;
@@ -84,7 +90,7 @@ public abstract class DBFencedLockManager<UOW extends UnitOfWork, LOCK extends D
      * {@link #tryAcquireLock(LockName)}/{@link #tryAcquireLock(LockName, Duration)} and {@link #acquireLock(LockName)} pause interval between retries
      */
     protected int                      syncAcquireLockPauseIntervalMs = 100;
-    private   ScheduledFuture<?>       confirmationScheduledFuture;
+    private volatile ScheduledFuture<?> confirmationScheduledFuture;
 
     /**
      * @param lockStorage       the lock storage used for the lock manager
@@ -179,7 +185,7 @@ public abstract class DBFencedLockManager<UOW extends UnitOfWork, LOCK extends D
     }
 
     private void confirmAllLocallyAcquiredLocks() {
-        if (stopping) {
+        if (stopping || shutdown != null) {
             log.debug("[{}] Shutting down, skipping confirmAllLocallyAcquiredLocks", lockManagerInstanceId);
             return;
         }
@@ -326,12 +332,62 @@ public abstract class DBFencedLockManager<UOW extends UnitOfWork, LOCK extends D
     }
 
     /**
+     * From here on nothing in this lock manager waits on the database for longer than the shutdown allows:
+     * <ul>
+     *     <li>the confirmation and async-acquiring ticks are cancelled, interrupting any that are blocked - each holds
+     *     {@code reentrantLock} for its whole database round-trip, so a tick waiting out the connection timeout used to
+     *     hold up every release queued behind it</li>
+     *     <li>no new async acquiring is started, and ticks that still run return straight away</li>
+     *     <li>a lock release is one {@link ShutdownContext#attemptCleanup bounded attempt}, skipped once the database has
+     *     shown itself unreachable. The lock is dropped locally either way; its row expires after the lock timeout</li>
+     * </ul>
+     * Releases are called from other components' shutdown - an event processor stopping its subscription cancels its
+     * lock acquiring - typically before this lock manager's own {@link #stop()}, which is why this cannot wait for it.
+     */
+    @Override
+    public void shutdownStarting(ShutdownContext shutdown) {
+        requireNonNull(shutdown, "No shutdown provided");
+        this.shutdown = shutdown;
+        // Deliberately without reentrantLock: the ticks being cancelled may be holding it
+        var confirmation = confirmationScheduledFuture;
+        if (confirmation != null) {
+            confirmation.cancel(true);
+        }
+        asyncLockAcquirings.values().forEach(acquiring -> acquiring.cancel(true));
+        log.debug("[{}] Shutdown starting - lock confirmation and async acquiring cancelled", lockManagerInstanceId);
+    }
+
+    private void releaseLockDuringShutdown(LOCK lock, ShutdownContext shutdown) {
+        if (!locksAcquiredByThisLockManager.containsKey(lock.getName())) {
+            return;
+        }
+        var released = shutdown.attemptCleanup(msg("[{}] release fenced lock '{}'", lockManagerInstanceId, lock.getName()), () -> {
+            // Interruptibly, so the attempt's timeout also covers waiting for the lock
+            reentrantLock.lockInterruptibly();
+            try {
+                unitOfWorkFactory.usingUnitOfWork(uow -> lockStorage.releaseLockInDB(this, uow, lock));
+            } finally {
+                reentrantLock.unlock();
+            }
+        });
+        locksAcquiredByThisLockManager.remove(lock.getName());
+        lock.markAsReleased();
+        notify(new LockReleased(lock, this));
+        log.debug("[{}] {} lock '{}' during shutdown", lockManagerInstanceId, released ? "Released" : "Dropped (left to expire)", lock.getName());
+    }
+
+    /**
      * Internal method only to be called by subclasses of {@link DBFencedLockManager} and {@link DBFencedLock}
      *
      * @param lock the lock to be released
      */
     protected void releaseLock(LOCK lock) {
         requireNonNull(lock, "No lock was provided");
+        var shutdown = this.shutdown;
+        if (shutdown != null) {
+            releaseLockDuringShutdown(lock, shutdown);
+            return;
+        }
         if (locksAcquiredByThisLockManager.containsKey(lock.getName())) {
             log.debug("[{}] Releasing lock '{}': {}", lockManagerInstanceId, lock.getName(), lock);
             var releaseWithSuccess = withUnitOfWork(uow -> lockStorage.releaseLockInDB(this, uow, lock),
@@ -468,6 +524,7 @@ public abstract class DBFencedLockManager<UOW extends UnitOfWork, LOCK extends D
 
                 started = false;
                 stopping = false;
+                shutdown = null;
             } finally {
                 reentrantLock.unlock();
             }
@@ -673,7 +730,7 @@ public abstract class DBFencedLockManager<UOW extends UnitOfWork, LOCK extends D
             // being reset does stop()/start() around the reset, and a subscription manager shutting down in between
             // used to make this throw a NullPointerException on the caller's own (often non-pooled) thread.
             var executor = asyncLockAcquiringExecutor;
-            if (!started || stopping || executor == null) {
+            if (!started || stopping || shutdown != null || executor == null) {
                 log.debug("[{}] Lock Manager isn't started - ignoring async lock acquiring for lock '{}'", lockManagerInstanceId, lockName);
                 return;
             }
@@ -701,7 +758,7 @@ public abstract class DBFencedLockManager<UOW extends UnitOfWork, LOCK extends D
     private void asyncLockAcquiringTick(LockName lockName, LockCallback lockCallback) {
         try {
             reentrantLock.lock();
-            if (!started) {
+            if (!started || shutdown != null) {
                 return;
             }
             var existingLock = locksAcquiredByThisLockManager.get(lockName);

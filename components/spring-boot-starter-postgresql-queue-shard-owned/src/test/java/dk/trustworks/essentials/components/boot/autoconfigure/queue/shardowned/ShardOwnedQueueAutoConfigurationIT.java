@@ -152,6 +152,126 @@ class ShardOwnedQueueAutoConfigurationIT {
     }
 
     /**
+     * One runtime while queues are actually consuming, not just one runtime bean. The factory used to
+     * build its queues without the bean, so their consumers borrowed a second, shared runtime per
+     * DataSource: two sets of pumps and two listeners, six connections held for good instead of three
+     * — on a default pool of ten, enough to fail the trading demo's start-up. The bean's pumps are the
+     * only ones there should be.
+     */
+    @Test
+    void consuming_queues_run_on_the_runtime_bean_rather_than_a_second_one() {
+        runner().withPropertyValues("essentials.shard-owned-queue.queues.orders=2",
+                                    "essentials.shard-owned-queue.queues.shipments=2")
+                .run(context -> {
+                    var factory = context.getBean(ShardOwnedQueueFactory.class);
+                    var delivered = ConcurrentHashMap.<String>newKeySet();
+                    for (var name : List.of("orders", "shipments")) {
+                        var queue = factory.queue(name);
+                        queue.consume((messageId, key, payload, payloadType) -> delivered.add(new String(payload, StandardCharsets.UTF_8)),
+                                      ConsumerOptions.defaults());
+                        queue.enqueue(List.of(Message.of(name.getBytes(StandardCharsets.UTF_8), 1)));
+                    }
+                    Awaitility.await().atMost(Duration.ofSeconds(30))
+                              .untilAsserted(() -> assertThat(delivered).contains("orders", "shipments"));
+
+                    // Awaited, because pump threads of an earlier test's runtime may still be exiting.
+                    var pumps = context.getBean(ShardRuntime.class).pumpCount();
+                    Awaitility.await().atMost(Duration.ofSeconds(10))
+                              .untilAsserted(() -> assertThat(livePumpThreads())
+                                      .describedAs("pump threads in the process; one runtime has %s", pumps)
+                                      .isEqualTo(pumps));
+                });
+    }
+
+    private static long livePumpThreads() {
+        return Thread.getAllStackTraces().keySet().stream()
+                     .filter(thread -> thread.isAlive() && thread.getName().equals("shard-queue-pump"))
+                     .count();
+    }
+
+    /**
+     * With a MeterRegistry in the context, every queue the factory builds is metered and tagged with
+     * its own name. The engine has shipped MicrometerQueueObserver all along; nothing created one, so
+     * a Spring application got no queue metrics at all.
+     */
+    @Test
+    void a_meter_registry_gets_per_queue_meters_tagged_with_the_queue_name() {
+        runner().withBean(io.micrometer.core.instrument.MeterRegistry.class,
+                          io.micrometer.core.instrument.simple.SimpleMeterRegistry::new)
+                .withPropertyValues("essentials.shard-owned-queue.queues.orders=2",
+                                    "essentials.shard-owned-queue.queues.shipments=2")
+                .run(context -> {
+                    var registry = context.getBean(io.micrometer.core.instrument.MeterRegistry.class);
+                    var factory  = context.getBean(ShardOwnedQueueFactory.class);
+                    var delivered = ConcurrentHashMap.<String>newKeySet();
+                    var orders = factory.queue("orders");
+                    orders.consume((messageId, key, payload, payloadType) -> delivered.add(new String(payload, StandardCharsets.UTF_8)),
+                                   ConsumerOptions.defaults());
+                    factory.queue("shipments");
+                    orders.enqueue(List.of(Message.of("hello".getBytes(StandardCharsets.UTF_8), 1)));
+                    Awaitility.await().atMost(Duration.ofSeconds(30)).until(() -> delivered.contains("hello"));
+
+                    assertThat(registry.get("essentials.queue.enqueued").tag("queue", "orders").tag("lane", "unordered")
+                                       .counter().count()).isEqualTo(1.0d);
+                    Awaitility.await().atMost(Duration.ofSeconds(10))
+                              .untilAsserted(() -> assertThat(registry.get("essentials.queue.delivery").tag("queue", "orders")
+                                                                      .timer().count()).isEqualTo(1L));
+                    assertThat(registry.get("essentials.queue.enqueued").tag("queue", "shipments").tag("lane", "unordered")
+                                       .counter().count())
+                            .describedAs("one series per queue, not one shared by all of them")
+                            .isZero();
+                    assertThat(registry.find("essentials.queue.depth").gauges())
+                            .describedAs("the gauges that cost queries stay off unless asked for")
+                            .isEmpty();
+                });
+    }
+
+    @Test
+    void the_depth_and_health_gauges_are_opt_in() {
+        runner().withBean(io.micrometer.core.instrument.MeterRegistry.class,
+                          io.micrometer.core.instrument.simple.SimpleMeterRegistry::new)
+                .withPropertyValues("essentials.shard-owned-queue.queues.orders=2",
+                                    "essentials.shard-owned-queue.metrics.depth-gauges=true",
+                                    "essentials.shard-owned-queue.metrics.health-gauges=true",
+                                    "essentials.shard-owned-queue.metrics.gauge-max-age=100ms")
+                .run(context -> {
+                    var registry = context.getBean(io.micrometer.core.instrument.MeterRegistry.class);
+                    var orders = context.getBean(ShardOwnedQueueFactory.class).queue("orders");
+                    orders.enqueue(List.of(Message.of("waiting".getBytes(StandardCharsets.UTF_8), 1)));
+
+                    Awaitility.await().atMost(Duration.ofSeconds(10))
+                              .untilAsserted(() -> assertThat(registry.get("essentials.queue.depth").tag("queue", "orders")
+                                                                      .tag("lane", "unordered").gauge().value())
+                                      .isEqualTo(1.0d));
+                    assertThat(registry.get("essentials.queue.keys.blocked").tag("queue", "orders").gauge().value()).isZero();
+                    assertThat(registry.get("essentials.queue.deadletters.parked").tag("queue", "orders").gauge().value()).isZero();
+                    assertThat(registry.find("essentials.queue.shards.unowned").tag("queue", "orders").gauge()).isNotNull();
+                });
+    }
+
+    @Test
+    void the_metrics_can_be_turned_off_and_are_absent_without_micrometer() {
+        runner().withBean(io.micrometer.core.instrument.MeterRegistry.class,
+                          io.micrometer.core.instrument.simple.SimpleMeterRegistry::new)
+                .withPropertyValues("essentials.shard-owned-queue.queues.orders=2",
+                                    "essentials.shard-owned-queue.metrics.enabled=false")
+                .run(context -> {
+                    assertThat(context).doesNotHaveBean(ShardOwnedQueueMetrics.class);
+                    context.getBean(ShardOwnedQueueFactory.class).queue("orders");
+                    assertThat(context.getBean(io.micrometer.core.instrument.MeterRegistry.class)
+                                      .find("essentials.queue.enqueued").counters()).isEmpty();
+                });
+        // Micrometer is optional for this starter; the context must still start without it.
+        runner().withClassLoader(new org.springframework.boot.test.context.FilteredClassLoader(io.micrometer.core.instrument.MeterRegistry.class))
+                .withPropertyValues("essentials.shard-owned-queue.queues.orders=2")
+                .run(context -> {
+                    assertThat(context).hasNotFailed();
+                    assertThat(context).doesNotHaveBean(ShardOwnedQueueMetrics.class);
+                    context.getBean(ShardOwnedQueueFactory.class).queue("orders");
+                });
+    }
+
+    /**
      * Two instances for one name would register as two competing consumers of the same queue in one
      * process, halve each other's fair share, and each serve half of it for no reason.
      */

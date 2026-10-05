@@ -22,6 +22,7 @@ import dk.trustworks.essentials.components.eventsourced.aggregates.api.*;
 import dk.trustworks.essentials.components.foundation.fencedlock.api.DBFencedLockApi;
 import dk.trustworks.essentials.components.foundation.messaging.queue.api.DurableQueuesApi;
 import dk.trustworks.essentials.components.foundation.postgresql.api.PostgresqlQueryStatisticsApi;
+import dk.trustworks.essentials.components.foundation.postgresql.api.PostgresqlTableStatisticsApi;
 import dk.trustworks.essentials.components.foundation.scheduler.api.SchedulerApi;
 import dk.trustworks.essentials.shared.security.*;
 import org.junit.jupiter.api.Test;
@@ -43,6 +44,7 @@ class EssentialsAdminApiAutoConfigurationTest {
                     .withBean(DBFencedLockApi.class, () -> mock(DBFencedLockApi.class))
                     .withBean(SchedulerApi.class, () -> mock(SchedulerApi.class))
                     .withBean(PostgresqlQueryStatisticsApi.class, () -> mock(PostgresqlQueryStatisticsApi.class))
+                    .withBean(PostgresqlTableStatisticsApi.class, () -> mock(PostgresqlTableStatisticsApi.class))
                     .withBean(DurableQueuesApi.class, () -> mock(DurableQueuesApi.class))
                     .withBean(EventStoreApi.class, () -> mock(EventStoreApi.class))
                     .withBean(CdcApi.class, () -> mock(CdcApi.class))
@@ -55,6 +57,7 @@ class EssentialsAdminApiAutoConfigurationTest {
         contextRunner.run(context -> assertThat(context).hasSingleBean(FencedLocksController.class)
                                                         .hasSingleBean(SchedulerController.class)
                                                         .hasSingleBean(PostgresqlQueryStatisticsController.class)
+                                                        .hasSingleBean(PostgresqlTableStatisticsController.class)
                                                         .hasSingleBean(DurableQueuesController.class)
                                                         .hasSingleBean(EventStoreController.class)
                                                         .hasSingleBean(CdcController.class)

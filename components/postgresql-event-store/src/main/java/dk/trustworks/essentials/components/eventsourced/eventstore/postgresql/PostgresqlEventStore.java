@@ -319,6 +319,45 @@ public final class PostgresqlEventStore<CONFIG extends AggregateEventStreamConfi
                 .proceed();
     }
 
+    /**
+     * {@inheritDoc}
+     * <p>
+     * One {@link #loadEvent(LoadEvent)} per registered aggregate type, in table-name order, so every lookup goes through
+     * the {@link EventStoreInterceptor} chain like any other {@link LoadEvent}.
+     */
+    @Override
+    public Optional<PersistedEvent> findEvent(EventId eventId) {
+        requireNonNull(eventId, "No eventId provided");
+        return persistenceStrategy.getSeparateTablePerEventStreamTableNameAggregates()
+                                  .entrySet()
+                                  .stream()
+                                  .sorted(Map.Entry.comparingByKey())
+                                  .map(tableAndAggregateType -> findEventIn(tableAndAggregateType.getValue(), eventId))
+                                  .flatMap(Optional::stream)
+                                  .findFirst();
+    }
+
+    private Optional<PersistedEvent> findEventIn(AggregateType aggregateType, EventId eventId) {
+        try {
+            return loadEvent(new LoadEvent(aggregateType, eventId));
+        } catch (IllegalArgumentException e) {
+            // A UUID-typed event-id column cannot hold an id that is not a UUID, so the event is not in this table
+            return Optional.empty();
+        }
+    }
+
+    @Override
+    public List<PersistedEvent> loadEventsCausedBy(LoadEventsCausedBy operation) {
+        requireNonNull(operation, "You must supply a LoadEventsCausedBy operation instance");
+        return newInterceptorChainForOperation(operation,
+                                               this,
+                                               eventStoreInterceptors,
+                                               (eventStoreInterceptor, eventStoreInterceptorChain) -> eventStoreInterceptor.intercept(operation, eventStoreInterceptorChain),
+                                               () -> persistenceStrategy.loadEventsCausedBy(unitOfWorkFactory.getRequiredUnitOfWork(),
+                                                                                            operation.causedByEventId))
+                .proceed();
+    }
+
     @Override
     public List<PersistedEvent> loadEvents(LoadEvents operation) {
         requireNonNull(operation, "You must supply an LoadEvents operation instance");

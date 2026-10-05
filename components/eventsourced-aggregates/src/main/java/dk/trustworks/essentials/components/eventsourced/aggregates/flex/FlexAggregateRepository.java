@@ -232,6 +232,11 @@ public interface FlexAggregateRepository<ID, AGGREGATE_TYPE extends FlexAggregat
         private final Class<ID>                                          aggregateIdType;
         private final EventStoreUnitOfWorkFactory                        unitOfWorkFactory;
         private final FlexAggregateRepositoryUnitOfWorkLifecycleCallback unitOfWorkCallback;
+        /**
+         * The cause bound when each {@link EventsToPersist} joined the UnitOfWork, so its events are appended under that
+         * cause rather than under whatever is bound when the UnitOfWork commits - see {@link CausesCapturedAtRegistration}
+         */
+        private final CausesCapturedAtRegistration<EventsToPersist<ID, Object>> causesCapturedAtRegistration = new CausesCapturedAtRegistration<>();
         private final AggregateType                                      aggregateType;
 
         /**
@@ -349,8 +354,9 @@ public interface FlexAggregateRepository<ID, AGGREGATE_TYPE extends FlexAggregat
             log.debug("Adding {} with id '{}' to the current UnitOfWork so it will be persisted at commit time",
                       aggregateRootImplementationType.getName(),
                       eventsToPersist.aggregateId);
-            unitOfWorkFactory.getRequiredUnitOfWork()
-                             .registerLifecycleCallbackForResource(eventsToPersist, unitOfWorkCallback);
+            var unitOfWork = unitOfWorkFactory.getRequiredUnitOfWork();
+            causesCapturedAtRegistration.capture(unitOfWork, eventsToPersist);
+            unitOfWork.registerLifecycleCallbackForResource(eventsToPersist, unitOfWorkCallback);
         }
 
         @Override
@@ -378,10 +384,12 @@ public interface FlexAggregateRepository<ID, AGGREGATE_TYPE extends FlexAggregat
                         } else {
                             log.debug("Persisting {} event(s) related to '{}' with id '{}'", eventsToPersist.events.size(), aggregateRootImplementationType.getName(), eventsToPersist.aggregateId);
                         }
-                        eventStore.appendToStream(aggregateType,
-                                                  eventsToPersist.aggregateId,
-                                                  eventsToPersist.eventOrderOfLastRehydratedEvent,
-                                                  eventsToPersist.events);
+                        causesCapturedAtRegistration.runWithCapturedCause(unitOfWork,
+                                                                          eventsToPersist,
+                                                                          () -> eventStore.appendToStream(aggregateType,
+                                                                                                          eventsToPersist.aggregateId,
+                                                                                                          eventsToPersist.eventOrderOfLastRehydratedEvent,
+                                                                                                          eventsToPersist.events));
                         eventsToPersist.markEventsAsCommitted();
                         processingStatus.set(BeforeCommitProcessingStatus.REQUIRED);
                     }
@@ -396,7 +404,7 @@ public interface FlexAggregateRepository<ID, AGGREGATE_TYPE extends FlexAggregat
 
             @Override
             public void afterCommit(UnitOfWork unitOfWork, List<EventsToPersist<ID, Object>> associatedResources) {
-
+                causesCapturedAtRegistration.release(unitOfWork);
             }
 
             @Override
@@ -406,7 +414,7 @@ public interface FlexAggregateRepository<ID, AGGREGATE_TYPE extends FlexAggregat
 
             @Override
             public void afterRollback(UnitOfWork unitOfWork, java.util.List<EventsToPersist<ID, Object>> associatedResources, Throwable causeOfTheRollback) {
-
+                causesCapturedAtRegistration.release(unitOfWork);
             }
         }
     }

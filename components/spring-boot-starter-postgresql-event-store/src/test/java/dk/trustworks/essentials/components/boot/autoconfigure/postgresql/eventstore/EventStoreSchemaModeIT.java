@@ -124,6 +124,36 @@ class EventStoreSchemaModeIT {
         assertThat(exists("orders_events")).isFalse();
     }
 
+    /**
+     * The causation index is opt-in. Switching it on for a deployment that is validated adds a schema change the
+     * deployment does not have yet, so registering an event stream table is refused until it is applied; in create mode
+     * the harness simply adds it.
+     */
+    @Test
+    void enabling_the_causation_index_is_a_schema_change_validate_mode_refuses_until_it_is_applied() throws Exception {
+        contextRunner.run(ctx -> {
+            assertThat(ctx).hasNotFailed();
+            persistenceStrategy(ctx).addAggregateEventStreamConfiguration(ORDERS, AggregateIdSerializer.serializerFor(UUID.class));
+        });
+        assertThat(exists("orders_events_caused_by_event_id")).as("off by default").isFalse();
+
+        contextRunner.withPropertyValues("essentials.schema.mode=validate", "essentials.eventstore.causation.index-enabled=true")
+                     .run(ctx -> {
+                         assertThat(ctx).hasNotFailed();
+                         assertThatThrownBy(() -> persistenceStrategy(ctx).addAggregateEventStreamConfiguration(ORDERS, AggregateIdSerializer.serializerFor(UUID.class)))
+                                 .isInstanceOf(SchemaValidationException.class)
+                                 .hasMessageContaining("'event-stream-caused-by-index' on 'orders_events': not applied");
+                     });
+        assertThat(exists("orders_events_caused_by_event_id")).as("validate executes nothing").isFalse();
+
+        contextRunner.withPropertyValues("essentials.eventstore.causation.index-enabled=true")
+                     .run(ctx -> {
+                         assertThat(ctx).hasNotFailed();
+                         persistenceStrategy(ctx).addAggregateEventStreamConfiguration(ORDERS, AggregateIdSerializer.serializerFor(UUID.class));
+                     });
+        assertThat(exists("orders_events_caused_by_event_id")).as("create mode adds it").isTrue();
+    }
+
     @Test
     void an_application_declared_closing_books_setup_brings_its_generation_table_to_the_harness() throws Exception {
         var closingBooks = contextRunner.withUserConfiguration(ClosingBooksApplicationConfiguration.class);

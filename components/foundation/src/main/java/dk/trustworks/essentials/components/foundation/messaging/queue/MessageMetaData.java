@@ -37,6 +37,13 @@ public final class MessageMetaData implements Map<String, String>, Serializable 
      * of the consumer under this key
      */
     public static String              FENCED_LOCK_TOKEN = "FENCED_LOCK_TOKEN";
+    /**
+     * The id of the event that caused the message to be queued - see
+     * {@link dk.trustworks.essentials.components.foundation.causation.CausationContext}. Written when the message is
+     * queued while a cause is bound, and re-bound around the message's handler on delivery, by
+     * {@link CausationDurableQueuesInterceptor}
+     */
+    public static final String        CAUSED_BY_EVENT_ID = "essentials.causedByEventId";
     private final Map<String, String> metaData;
 
     public MessageMetaData(Map<String, String> metaData) {

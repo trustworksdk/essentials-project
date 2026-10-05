@@ -1546,6 +1546,16 @@ public class CdcEventStore<CONFIG extends AggregateEventStreamConfiguration> imp
     }
 
     @Override
+    public Optional<PersistedEvent> findEvent(EventId eventId) {
+        return eventStore.findEvent(eventId);
+    }
+
+    @Override
+    public List<PersistedEvent> loadEventsCausedBy(LoadEventsCausedBy operation) {
+        return eventStore.loadEventsCausedBy(operation);
+    }
+
+    @Override
     public List<PersistedEvent> loadEvents(LoadEvents operation) {
         return eventStore.loadEvents(operation);
     }

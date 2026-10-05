@@ -520,6 +520,46 @@ public interface EventStore {
     Optional<PersistedEvent> loadEvent(LoadEvent operation);
 
     /**
+     * Find an event by its id alone, across every {@link AggregateType} registered with this event store - "what
+     * caused this event?" is {@code findEvent(event.causedByEventId().get())}.<br>
+     * Each lookup uses the event-stream table's event-id index; no extra index is needed.
+     * <p>
+     * Only the aggregate types registered with this event store are searched. The default implementation throws
+     * {@link UnsupportedOperationException}.
+     *
+     * @param eventId the id of the event
+     * @return the event, or {@link Optional#empty()} if no registered event stream contains it
+     */
+    default Optional<PersistedEvent> findEvent(EventId eventId) {
+        throw new UnsupportedOperationException(getClass().getName() + " does not support finding an event by its id alone");
+    }
+
+    /**
+     * Load every event whose {@link PersistedEvent#causedByEventId()} is the given event id - "what did this event
+     * cause?" - across every registered {@link AggregateType}. Within an aggregate type the events come in
+     * global-event-order; there is no order across aggregate types.
+     * <p>
+     * Requires the opt-in caused-by-event-id index ({@code essentials.eventstore.causation.index-enabled}), and fails
+     * without it rather than scanning every event-stream table.
+     *
+     * @param causedByEventId the id of the causing event
+     * @return the events caused by it; empty if none
+     */
+    default List<PersistedEvent> loadEventsCausedBy(EventId causedByEventId) {
+        return loadEventsCausedBy(new LoadEventsCausedBy(causedByEventId));
+    }
+
+    /**
+     * See {@link #loadEventsCausedBy(EventId)}. The default implementation throws {@link UnsupportedOperationException}.
+     *
+     * @param operation the operation
+     * @return the events caused by the operation's event id
+     */
+    default List<PersistedEvent> loadEventsCausedBy(LoadEventsCausedBy operation) {
+        throw new UnsupportedOperationException(getClass().getName() + " does not support loading the events caused by an event");
+    }
+
+    /**
      * Load the events belonging to <code>aggregateType</code> which have the specified <code>eventId</code>'s
      *
      * @param aggregateType the aggregate type that the underlying {@link AggregateEventStream}, for which we want to load the events specified by the <code>eventIds</code> parameter

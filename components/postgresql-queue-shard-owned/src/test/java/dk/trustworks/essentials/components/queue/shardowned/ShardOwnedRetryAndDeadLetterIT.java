@@ -144,6 +144,107 @@ class ShardOwnedRetryAndDeadLetterIT {
     }
 
     /**
+     * The poison message above has its shard to itself, so nothing is ever acknowledged around it.
+     * With traffic flowing, the messages after it are acknowledged while it waits out its backoff, and
+     * the acknowledgement is a range delete ({@code seq <= n}) over the handled prefix. A message
+     * waiting for a retry is neither in flight nor a hole, so the range used to take it with it: the
+     * in-memory schedule still redelivered it, the final failure's dead-letter move found no row, and
+     * the message disappeared — not parked, not queued, no error. Found by the trading demo's
+     * fault-injection harness; every unordered poison message went missing.
+     */
+    @Test
+    void a_poison_message_is_dead_lettered_while_the_traffic_around_it_is_acknowledged() throws Exception {
+        var poisonDeliveries = new AtomicInteger();
+        var handled = ConcurrentHashMap.<String>newKeySet();
+
+        try (var queue = new ShardOwnedQueue(dataSource, QUEUE_ID, SHARD_COUNT, "instance-1")) {
+            queue.startConsuming((messageId, payload, payloadType) -> {
+                var body = new String(payload, StandardCharsets.UTF_8);
+                if (body.equals("poison")) {
+                    poisonDeliveries.incrementAndGet();
+                    throw new IllegalStateException("always fails");
+                }
+                handled.add(body);
+            }, ShardOwnerSettings.defaults(), SHARD_COUNT, RedeliveryPolicy.fixed(Duration.ofMillis(300), 3));
+
+            queue.enqueue(List.of("poison".getBytes(StandardCharsets.UTF_8)), 1);
+            // Traffic on every shard for the whole of the poison message's backoff, so acknowledgements
+            // above it keep arriving while it is waiting.
+            var sent = 0;
+            var until = System.nanoTime() + Duration.ofMillis(1_500).toNanos();
+            while (System.nanoTime() < until) {
+                var batch = new ArrayList<byte[]>();
+                for (var index = 0; index < 20; index++) {
+                    batch.add(("m-" + sent++).getBytes(StandardCharsets.UTF_8));
+                }
+                queue.enqueue(batch, 1);
+                Thread.sleep(25L);
+            }
+            var expected = sent;
+
+            Awaitility.await().atMost(Duration.ofSeconds(30))
+                      .untilAsserted(() -> assertThat(handled).hasSize(expected));
+            Awaitility.await().atMost(Duration.ofSeconds(30))
+                      .untilAsserted(() -> assertThat(queue.deadLetterCount())
+                              .as("the poison message must be parked, not swept away by a neighbour's ack")
+                              .isEqualTo(1L));
+            assertThat(poisonDeliveries.get()).as("policy allows 3 attempts").isEqualTo(3);
+            assertThat(new String(queue.deadLetters().getFirst().payload(), StandardCharsets.UTF_8)).isEqualTo("poison");
+            Awaitility.await().atMost(Duration.ofSeconds(10))
+                      .untilAsserted(() -> assertThat(queue.remaining()).isZero());
+        }
+    }
+
+    /**
+     * The same hazard for a message that recovers: while it waits for its retry, its row is the only
+     * durable record of it. Checked in the table rather than by the eventual delivery, because the
+     * in-memory schedule redelivers it either way — the row having gone only shows after a crash.
+     */
+    @Test
+    void a_message_waiting_for_its_retry_keeps_its_row_while_later_messages_are_acknowledged() throws Exception {
+        var failedOnce = new CountDownLatch(1);
+        var flakyHandled = new AtomicInteger();
+        var handled = new AtomicInteger();
+
+        try (var queue = new ShardOwnedQueue(dataSource, QUEUE_ID, SHARD_COUNT, "instance-1")) {
+            queue.startConsuming((messageId, payload, payloadType) -> {
+                if (new String(payload, StandardCharsets.UTF_8).equals("flaky")) {
+                    if (failedOnce.getCount() > 0) {
+                        failedOnce.countDown();
+                        throw new IllegalStateException("fail once");
+                    }
+                    flakyHandled.incrementAndGet();
+                    return;
+                }
+                handled.incrementAndGet();
+            }, ShardOwnerSettings.defaults(), SHARD_COUNT, RedeliveryPolicy.fixed(Duration.ofSeconds(3), 3));
+
+            queue.enqueue(List.of("flaky".getBytes(StandardCharsets.UTF_8)), 1);
+            assertThat(failedOnce.await(10, TimeUnit.SECONDS)).isTrue();
+
+            // One enqueue call places its whole batch on one shard, round-robin per call, so two
+            // rounds of SHARD_COUNT batches put later messages on the flaky message's shard too.
+            for (var batch = 0; batch < SHARD_COUNT * 2; batch++) {
+                var later = new ArrayList<byte[]>();
+                for (var index = 0; index < 10; index++) {
+                    later.add(("m-" + batch + "-" + index).getBytes(StandardCharsets.UTF_8));
+                }
+                queue.enqueue(later, 1);
+            }
+            Awaitility.await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> assertThat(handled).hasValue(SHARD_COUNT * 20));
+            // Well inside the 3s backoff, and long after the ack flush for the later messages.
+            Thread.sleep(300L);
+            assertThat(flakyHandled).as("still waiting out its backoff").hasValue(0);
+            assertThat(queue.remaining()).as("the retrying message's row must survive the range acknowledgement").isEqualTo(1L);
+
+            Awaitility.await().atMost(Duration.ofSeconds(15)).untilAsserted(() -> assertThat(flakyHandled).hasValue(1));
+            Awaitility.await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> assertThat(queue.remaining()).isZero());
+            Thread.sleep(1_000L);
+            assertThat(flakyHandled).as("acknowledged once it succeeded, not redelivered").hasValue(1);
+        }
+    }
+
+    /**
      * The ordering-critical case: a message that fails must keep its key blocked, or a later message
      * for that key overtakes the one still being retried — which would break the guarantee while
      * every message still eventually arrives.

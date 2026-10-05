@@ -72,4 +72,11 @@ public class SchedulerController {
     public CountResult getTotalExecutorJobs() {
         return new CountResult(schedulerApi.getTotalExecutorJobs(principalResolver.requireAuthenticatedPrincipal()));
     }
+
+    @PostMapping("/scheduler/jobs/{jobName}/run")
+    public ApiScheduledJobRun runJobNow(@PathVariable String jobName) {
+        return schedulerApi.runJobNow(principalResolver.requireAuthenticatedPrincipal(), jobName)
+                           .orElseThrow(() -> new AdminApiResourceNotFoundException(
+                                   "No job named '" + jobName + "' is registered with this application's scheduler"));
+    }
 }

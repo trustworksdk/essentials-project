@@ -17,7 +17,7 @@
 ```
 
 **Dependencies from other modules**:
-- `DBFencedLockApi`, `DurableQueuesApi`, `SchedulerApi`, `PostgresqlQueryStatisticsApi` from [foundation](./LLM-foundation.md)
+- `DBFencedLockApi`, `DurableQueuesApi`, `SchedulerApi`, `PostgresqlQueryStatisticsApi`, `PostgresqlTableStatisticsApi` from [foundation](./LLM-foundation.md)
 - `EventStoreApi`, `CdcApi`, `PostgresqlEventStoreStatisticsApi` from [postgresql-event-store](./LLM-postgresql-event-store.md)
 - SPI beans are wired by [spring-boot-starter-modules](./LLM-spring-boot-starter-modules.md)
 
@@ -46,11 +46,13 @@ Mounted under `/api/essentials/admin/v1` (configurable). Contract paths are rela
 |-----|-------|----------------|
 | `fenced-locks` | `GET /fenced-locks`, `DELETE /fenced-locks/{lockName}` | `essentials_lock_reader` / `essentials_lock_writer` |
 | `scheduler` | `GET /scheduler/pg-cron-jobs[/count]`, `.../{jobId}/run-details[/count]`, `GET /scheduler/executor-jobs[/count]` | `essentials_scheduler_reader` |
-| `postgresql-query-statistics` | `GET /postgresql/query-statistics/top-ten-slowest` | `essentials_postgresql_stats_reader` |
+| `scheduler` | `POST /scheduler/jobs/{jobName}/run` — 404 for a job this application's scheduler did not register, 409 for an executor job when the request reached an instance not holding the scheduler lock | `essentials_scheduler_writer` |
+| `postgresql-query-statistics` | `GET /postgresql/query-statistics/slowest?orderBy=TOTAL_TIME\|MEAN_TIME\|MAX_TIME\|CALLS\|BLOCKS_READ&limit=1..100`, `GET /postgresql/query-statistics/top-ten-slowest` | `essentials_postgresql_stats_reader` |
+| `postgresql-table-statistics` | `GET /postgresql/table-statistics` — every Essentials table, grouped by section | `essentials_postgresql_stats_reader` |
 | `durable-queues` | `GET /durable-queues`, message get/delete/resurrect/mark-as-dead-letter, per-queue messages, dead-letters, counts, statistics, purge | `essentials_queue_reader` / `essentials_queue_writer` |
-| `event-store` | `GET /event-store/subscriptions`, `GET /event-store/subscriptions/statistics`, `GET /event-store/subscriptions/{subscriberId}/aggregate-types/{aggregateType}/statistics`, `GET /event-store/aggregate-types/{aggregateType}/highest-global-event-order` | `essentials_subscription_reader` |
+| `event-store` | `GET /event-store/subscriptions`, `GET /event-store/subscriptions/statistics`, `GET /event-store/subscriptions/{subscriberId}/aggregate-types/{aggregateType}/statistics`, `GET /event-store/aggregate-types/{aggregateType}/highest-global-event-order`, `GET /event-store/aggregate-types/{aggregateType}/aggregates/{aggregateId}/events?limit=`, `GET /event-store/events/{eventId}`, `GET /event-store/events/{eventId}/causation-chain?maxDepth=`, `GET /event-store/events/{eventId}/caused-events` | `essentials_subscription_reader` |
 | `cdc` | `GET /event-store/cdc/status` | `essentials_subscription_reader` |
-| `event-store-statistics` | `GET /event-store/statistics/table-sizes`, `table-activity`, `table-cache-hit-ratio` | `essentials_postgresql_stats_reader` |
+| `event-store-statistics` | `GET /event-store/statistics/table-sizes`, `table-activity`, `table-cache-hit-ratio` — event-stream tables only; `postgresql-table-statistics` covers them and every other Essentials table | `essentials_postgresql_stats_reader` |
 
 `essentials_admin` satisfies every operation. Each operation lists its roles in the contract under `x-required-roles`.
 
@@ -91,6 +93,7 @@ The `native` library generates no auth helpers by design, matching the contract 
 
 - **Adding an operation touches 3 places**: the `*Api` SPI, the `EssentialsAdminApiSpec` mapping table, and a controller. A conformance test fails until all three agree.
 - **PostgreSQL-oriented**: the scheduler and statistics endpoints are backed by `pg_cron` and `pg_stat_statements`. The MongoDB starter wires no `*Api` beans, so there is no admin API surface there.
+- **Event causation returns no payloads**: the aggregate-events and the three `/event-store/events/...` operations return `ApiCausationEvent`. Start from an aggregate (`.../aggregates/{aggregateId}/events`, the most recent `limit` events, default 100, at most 1000), pick an event, then walk; the aggregate id is converted with the type's configured id serializer. The `/events/...` operations return `ApiCausationEvent` (id, type, aggregate, order, timestamp, `causedByEventId`). `causation-chain` walks back through recorded causes (default 20, at most 100 steps). `caused-events` answers `409` until `essentials.eventstore.causation.index-enabled=true`. The console's *Event causation* page uses them, and a queue row whose `ApiQueuedMessage.referencedAggregateType` is set (an `EventProcessor` inbox message; `orderedMessageKey` is the aggregate id) links to it. See [event causation](./LLM-postgresql-event-store.md#event-causation)
 - **Subscription statistics are per-instance, subscription rows are not**: `GET /event-store/subscriptions` reports resume points from the database, so it lists the subscriptions of every instance, while the two `.../statistics` operations are counted in memory by the instance that answers. A subscription running elsewhere has no statistics, and an exclusive subscription only handles events where it holds its fenced lock — read a zero counter together with `active`/`lock`, never as a stall. A zero counter can also mean a halted subscription: `stoppedByErrorPolicy` (on each `ApiSubscription` row) is `true` once the subscription's `SubscriptionErrorPolicy` stopped it after a handler failure (mode `STOP`), and it then still reports `active: true`, so never read `active` alone as healthy. `stoppedByErrorPolicy` is `null` when the subscription does not run in the instance that answers, and always `false` for an in-transaction subscription. The admin UI shows such a subscription with a "Stopped by error policy" badge in place of "Active". Turn collection off with `essentials.eventstore.subscription-manager.statistics.enabled=false`, and the endpoints answer empty/`404`.
 - **Destructive operations are exposed**: `DELETE /durable-queues/queues/{queueName}/messages` purges a queue. Role enforcement is entirely your `EssentialsSecurityProvider` implementation.
 - **`5xx` bodies carry no detail** — the cause is logged instead, so internal failures cannot leak schema names, SQL, or hostnames.

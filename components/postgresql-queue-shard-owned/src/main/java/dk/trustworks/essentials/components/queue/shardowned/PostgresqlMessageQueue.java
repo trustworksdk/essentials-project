@@ -79,6 +79,14 @@ public final class PostgresqlMessageQueue implements MessageQueue {
     private final    String            instanceId;
 
     private final ShardOwnerSettings settings;
+    /**
+     * The runtime this queue's consumers run on, or null to borrow the one shared per
+     * {@code DataSource}. A caller that already owns a runtime must pass it: borrowing then stands up
+     * a SECOND runtime next to it, with its own pumps and listener, each holding a connection for
+     * good. The Spring starter did exactly that — its runtime bean held three connections and served
+     * nothing, while the queues ran on a shared one holding three more.
+     */
+    private final ShardRuntime       runtime;
 
     private final List<ShardOwnedQueue>         consumers          = new ArrayList<>();
     /**
@@ -118,6 +126,7 @@ public final class PostgresqlMessageQueue implements MessageQueue {
         this.shardCount = shardCount;
         this.instanceId = requireNonNull(instanceId, "No instanceId provided");
         this.settings = ShardOwnerSettings.defaults();
+        this.runtime = null;
         this.storage = new ShardOwnedStorage(dataSource, queueId);
     }
 
@@ -128,11 +137,21 @@ public final class PostgresqlMessageQueue implements MessageQueue {
      */
     PostgresqlMessageQueue(DataSource dataSource, short queueId, int shardCount, String instanceId,
                            ShardOwnerSettings settings) {
+        this(dataSource, queueId, shardCount, instanceId, settings, null);
+    }
+
+    /**
+     * @param runtime the runtime this queue's consumers run on, or null to borrow the one shared per
+     *                {@code DataSource}
+     */
+    PostgresqlMessageQueue(DataSource dataSource, short queueId, int shardCount, String instanceId,
+                           ShardOwnerSettings settings, ShardRuntime runtime) {
         this.dataSource = requireNonNull(dataSource, "No dataSource provided");
         this.queueId = queueId;
         this.shardCount = shardCount;
         this.instanceId = requireNonNull(instanceId, "No instanceId provided");
         this.settings = requireNonNull(settings, "No settings provided");
+        this.runtime = runtime;
         this.storage = new ShardOwnedStorage(dataSource, queueId);
     }
 
@@ -496,8 +515,9 @@ public final class PostgresqlMessageQueue implements MessageQueue {
                                                .setInstanceId(consumerInstanceId)
                                                .setMetrics(engineMetrics)
                                                .setParallelConsumers(options.parallelConsumers())
+                                               .setRuntime(runtime)
                                                .build();
-        unorderedConsumer.configureUnordered((messageId, payload, payloadType) -> invoke(handler, messageId, null, payload, payloadType),
+        unorderedConsumer.configureUnordered((messageId, payload, payloadType) -> invoke(handler, messageId, null, 0L, payload, payloadType),
                                              settings, options.maxShards(), policy);
         // setShardCount is INERT on this consumer and is passed only because the builder requires a
         // positive value — it cannot know the lane, since configureOrdered comes after build(). Every
@@ -514,8 +534,19 @@ public final class PostgresqlMessageQueue implements MessageQueue {
                                              .setInstanceId(consumerInstanceId)
                                              .setMetrics(engineMetrics)
                                              .setParallelConsumers(options.parallelConsumers())
+                                             .setRuntime(runtime)
                                              .build();
-        orderedConsumer.configureOrdered((messageId, key, payload, payloadType) -> invoke(handler, messageId, key, payload, payloadType),
+        orderedConsumer.configureOrdered(new OrderedPayloadHandler() {
+                                            @Override
+                                            public void handle(MessageId messageId, String key, byte[] payload, int payloadType) {
+                                                throw new IllegalStateException("The ordered owner delivers with the key order");
+                                            }
+
+                                            @Override
+                                            public void handle(MessageId messageId, String key, long keyOrder, byte[] payload, int payloadType) {
+                                                invoke(handler, messageId, key, keyOrder, payload, payloadType);
+                                            }
+                                        },
                                          settings, options.maxShards(), policy);
         // Registration, the started flag and the two start() calls are ONE critical section, and the
         // same lock start() and stop() take. Guarding only the list left two holes.
@@ -616,30 +647,30 @@ public final class PostgresqlMessageQueue implements MessageQueue {
      * checked exception means the same thing as one that throws unchecked — the message failed — and
      * the redelivery policy should not care which.
      */
-    private void invoke(MessageHandler handler, MessageId messageId, String key, byte[] payload, int payloadType) {
+    private void invoke(MessageHandler handler, MessageId messageId, String key, long keyOrder, byte[] payload, int payloadType) {
         if (interceptors.isEmpty()) {
             // The hot path, once per delivered message. No operation object, no chain, no lambda.
-            deliver(handler, messageId, key, payload, payloadType);
+            deliver(handler, messageId, key, keyOrder, payload, payloadType);
             return;
         }
-        var operation = new HandleMessage(messageId, key, payload, payloadType);
+        var operation = new HandleMessage(messageId, key, keyOrder, payload, payloadType);
         InterceptorChain.<HandleMessage, Void, MessageQueueInterceptor>newInterceptorChainForOperation(
                 operation,
                 interceptors,
                 (interceptor, chain) -> interceptor.intercept(operation, chain),
                 () -> {
-                    deliver(handler, messageId, key, payload, payloadType);
+                    deliver(handler, messageId, key, keyOrder, payload, payloadType);
                     return null;
                 }).proceed();
     }
 
-    private void deliver(MessageHandler handler, MessageId messageId, String key, byte[] payload, int payloadType) {
+    private void deliver(MessageHandler handler, MessageId messageId, String key, long keyOrder, byte[] payload, int payloadType) {
         var startNanos       = System.nanoTime();
         var handlerFailure   = new Throwable[1];
         var handlerSucceeded = new boolean[1];
         Runnable delivery = () -> {
             try {
-                handler.handle(messageId, key, payload, payloadType);
+                handler.handle(messageId, key, keyOrder, payload, payloadType);
                 handlerSucceeded[0] = true;
             } catch (RuntimeException e) {
                 handlerFailure[0] = e;
@@ -741,7 +772,9 @@ public final class PostgresqlMessageQueue implements MessageQueue {
             ordered += depth.count();
             oldestReady = earliest(oldestReady, depth.oldestReadyAt());
         }
-        return new QueueDepth(unordered, ordered, storage.countDeadLetters(), oldestReady);
+        var deadLetters = storage.deadLetterSummary();
+        return new QueueDepth(unordered, ordered, deadLetters.total(), oldestReady,
+                              deadLetters.parked(), deadLetters.blockedKeys());
     }
 
     private static Instant earliest(Instant a, Instant b) {
@@ -766,7 +799,7 @@ public final class PostgresqlMessageQueue implements MessageQueue {
     public Optional<QueuedMessage> getMessage(MessageId messageId) throws SQLException {
         requireNonNull(messageId, "No messageId provided");
         return storage.findMessage(messageId.shard(), messageId.sequence(), isOrdered(messageId))
-                      .map(stored -> new QueuedMessage(messageId, stored.key(), stored.payload(),
+                      .map(stored -> new QueuedMessage(messageId, stored.key(), stored.keyOrder(), stored.payload(),
                                                        stored.payloadType(), stored.attempts(),
                                                        stored.enqueuedAt(), stored.visibleAt()));
     }
@@ -774,7 +807,11 @@ public final class PostgresqlMessageQueue implements MessageQueue {
     @Override
     public boolean deleteMessage(MessageId messageId) throws SQLException {
         requireNonNull(messageId, "No messageId provided");
-        return storage.deleteMessage(messageId.shard(), messageId.sequence(), isOrdered(messageId));
+        // A dead letter keeps the id it had in its lane, so the same id addresses it after it is
+        // parked. The live lane is tried first; a sequence value is never reused, so the id cannot
+        // match a live row and a dead letter at once.
+        return storage.deleteMessage(messageId.shard(), messageId.sequence(), isOrdered(messageId))
+                || storage.deleteDeadLetter(messageId.shard(), messageId.sequence(), isOrdered(messageId));
     }
 
     @Override
@@ -806,6 +843,7 @@ public final class PostgresqlMessageQueue implements MessageQueue {
                                                                      : MessageId.Lane.UNORDERED,
                                                                      listed.shard(), listed.seq()),
                                                        listed.message().key(),
+                                                       listed.message().keyOrder(),
                                                        listed.message().payload(),
                                                        listed.message().payloadType(),
                                                        listed.message().attempts(),
@@ -821,7 +859,7 @@ public final class PostgresqlMessageQueue implements MessageQueue {
                                                                ? MessageId.Lane.ORDERED
                                                                : MessageId.Lane.UNORDERED,
                                                                row.shard(), row.seq()),
-                                                 row.key(), row.payload(), row.payloadType(),
+                                                 row.key(), row.keyOrder(), row.payload(), row.payloadType(),
                                                  row.attempts(), row.error(), row.blockedByKeyOrder()))
                       .toList();
     }

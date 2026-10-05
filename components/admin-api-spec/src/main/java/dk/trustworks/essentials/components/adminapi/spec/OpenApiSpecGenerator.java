@@ -484,6 +484,17 @@ public final class OpenApiSpecGenerator {
             return this;
         }
 
+        /**
+         * Declares a {@code 409}: the request is valid but cannot be carried out in the server's current state, or on
+         * the instance it reached. Opt-in, as only a few operations can answer it.
+         */
+        OperationSpec conflict(String description) {
+            this.conflictDescription = description;
+            return this;
+        }
+
+        private String conflictDescription;
+
         // ---- terminal response builders (register the operation) ----
 
         void responseArray(String schemaName) {
@@ -561,6 +572,9 @@ public final class OpenApiSpecGenerator {
                      .addApiResponse("403", error("Caller lacks one of the required roles."));
             if (notFound) {
                 responses.addApiResponse("404", error("No value exists for the given identifier."));
+            }
+            if (conflictDescription != null) {
+                responses.addApiResponse("409", error(conflictDescription));
             }
             return responses.addApiResponse("500", error("Unexpected server error."));
         }

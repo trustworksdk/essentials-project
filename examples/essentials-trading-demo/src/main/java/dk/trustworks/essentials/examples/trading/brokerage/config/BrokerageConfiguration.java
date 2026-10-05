@@ -36,6 +36,7 @@ import dk.trustworks.essentials.examples.trading.brokerage.events.TradingAccount
 import dk.trustworks.essentials.examples.trading.brokerage.types.TradingAccountGenerationId;
 import dk.trustworks.essentials.examples.trading.brokerage.types.TradingAccountId;
 import io.micrometer.core.instrument.MeterRegistry;
+import dk.trustworks.essentials.examples.trading.brokerage.use_cases.settle_trade.ClearingHouseProperties;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -55,7 +56,7 @@ import java.util.Optional;
  * streams they name.
  */
 @Configuration
-@EnableConfigurationProperties(TradingAccountClosingBooksProperties.class)
+@EnableConfigurationProperties({TradingAccountClosingBooksProperties.class, ClearingHouseProperties.class})
 public class BrokerageConfiguration {
 
     /**

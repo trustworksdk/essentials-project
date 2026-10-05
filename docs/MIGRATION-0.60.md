@@ -1070,3 +1070,49 @@ compile clean, and so are easy to miss:
   `spring-boot-starter-admin-api`. Don't carry a Vaadin dependency across, and expect both to serve nothing until
   you implement `EssentialsAuthenticatedUser` and `EssentialsSecurityProvider` — see
   [LLM-admin-api.md § Security](../LLM/LLM-admin-api.md#security).
+
+---
+
+## Event causation
+
+Events now record which event caused them - see the [release notes](./RELEASE-NOTES-0.60.0.md#29-event-causation)
+and [event-causation.md](./event-causation.md).
+
+### On by default with the starter
+
+There is nothing to do to get it. New events appended in reaction to another event get a `caused_by_event_id`;
+existing rows keep their nulls and must not be backfilled - a cause invented afterwards is not a record of what
+happened. To keep the old behaviour, set `essentials.eventstore.causation.enabled=false`.
+
+If you build the event store yourself, register `CausationPersistableEventEnricher` with the persistence strategy
+(`setPersistableEventEnrichers(...)`), `CausationDurableQueuesInterceptor` with your `DurableQueues`, and
+`CausationCommandContextPropagator` with your command buses (`addContextPropagator(...)`).
+
+### Queued messages carry one more metadata entry
+
+While a cause is bound, `Inbox`, `Outbox` and `DurableLocalCommandBus.sendAndDontWait` add
+`essentials.causedByEventId` to the message's `MessageMetaData`. A test asserting the exact contents of the metadata
+will see it.
+
+### A cause that a UUID column cannot hold no longer fails the append
+
+With `identifier-column-type: uuid`, a `causedByEventId` that is not a UUID used to fail the append. It is now
+dropped with a warning: causation must never fail a business transaction. Correlation ids keep the old behaviour.
+
+### Optional: the caused-by index
+
+`EventStore.loadEventsCausedBy(EventId)` and the admin API's `caused-events` operation need a partial index on
+`caused_by_event_id`, which is off by default. `essentials.eventstore.causation.index-enabled=true` adds it to every
+event-stream table through the schema harness, in the same transaction as the rest of the schema, so on a large
+table it blocks writes while it builds. Build it concurrently first, for each event-stream table:
+
+```sql
+CREATE INDEX CONCURRENTLY IF NOT EXISTS <table>_caused_by_event_id
+    ON <table> (caused_by_event_id) WHERE caused_by_event_id IS NOT NULL;
+```
+
+`SeparateTablePerAggregateTypePersistenceStrategy.causationIndexStatement(configuration)` returns the exact
+statement for a table (with `CREATE INDEX` in place of `CREATE INDEX CONCURRENTLY`), for custom column names. With
+the index in place, enabling the property only records the change. In `essentials.schema.mode=validate` the property
+adds a schema change that must be applied first - the emitted script contains it.
+

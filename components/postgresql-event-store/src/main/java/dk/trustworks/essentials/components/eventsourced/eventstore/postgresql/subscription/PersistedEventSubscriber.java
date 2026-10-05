@@ -19,6 +19,7 @@ package dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.s
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.PersistedEvent;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.types.GlobalEventOrder;
+import dk.trustworks.essentials.components.foundation.causation.CausationContext;
 import dk.trustworks.essentials.components.foundation.IOExceptionUtil;
 import dk.trustworks.essentials.shared.Exceptions;
 import dk.trustworks.essentials.shared.time.StopWatch;
@@ -325,7 +326,8 @@ public class PersistedEventSubscriber extends BaseSubscriber<PersistedEvent> {
                             e.eventOrder()
                     );
                     return SubscriptionErrorPolicyRetries.callRetryingPerPolicy(
-                            () -> eventStore.getUnitOfWorkFactory()
+                            // The binding encloses the UnitOfWork, so it also covers events appended lazily when it commits
+                            () -> CausationContext.where(e.eventId()).call(() -> eventStore.getUnitOfWorkFactory()
                                             .withUnitOfWork(unitOfWork -> {
                                                 var handleEventTiming = StopWatch.start("handleEvent (" + eventStoreSubscription.subscriberId() + ", " + eventStoreSubscription.aggregateType() + ")");
                                                 var result = eventHandler.handleWithBackPressure(e);
@@ -338,7 +340,7 @@ public class PersistedEventSubscriber extends BaseSubscriber<PersistedEvent> {
                                                 // handling, and stays open if this unit of work rolls back
                                                 acknowledgement.acknowledge(e);
                                                 return result;
-                                            }),
+                                            })),
                             subscriptionErrorPolicy,
                             forwardToEventHandlerRetryBackoffSpec,
                             policyRetriesPerformed,

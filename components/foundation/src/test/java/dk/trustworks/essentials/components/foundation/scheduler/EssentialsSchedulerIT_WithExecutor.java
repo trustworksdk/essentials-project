@@ -25,8 +25,10 @@ import org.testcontainers.junit.jupiter.*;
 
 import java.time.Duration;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.awaitility.Awaitility.waitAtMost;
 
 @Testcontainers
@@ -202,5 +204,83 @@ public class EssentialsSchedulerIT_WithExecutor extends AbstractEssentialsSchedu
 
         essentialsScheduler2.stop();
         fencedLockManager2.stop();
+    }
+
+    @Test
+    public void an_executor_job_is_run_on_demand_by_the_lock_holder_under_its_registered_or_stored_name() {
+        var unitOfWorkFactory = new JdbiUnitOfWorkFactory(jdbi);
+        var fencedLockManager = new TestFencedLockManager(jdbi);
+        fencedLockManager.start();
+        var scheduler = new DefaultEssentialsScheduler(unitOfWorkFactory, fencedLockManager, 2);
+        scheduler.start();
+        waitAtMost(Duration.ofSeconds(5)).until(() -> fencedLockManager.isLockAcquired(scheduler.getLockName()));
+
+        try {
+            var runs = new AtomicInteger();
+            // Scheduled far enough out that only the on-demand runs count
+            scheduler.scheduleExecutorJob(new ExecutorJob("countRuns", new FixedDelay(1, 1, TimeUnit.HOURS), runs::incrementAndGet));
+            scheduler.scheduleExecutorJob(new ExecutorJob("alwaysFails", new FixedDelay(1, 1, TimeUnit.HOURS), () -> {
+                throw new IllegalStateException("boom");
+            }));
+
+            var run = scheduler.runJobNow("countRuns");
+            assertThat(run).hasValueSatisfying(r -> {
+                assertThat(r.jobName()).isEqualTo("countRuns");
+                assertThat(r.jobType()).isEqualTo(ScheduledJobRun.JobType.EXECUTOR);
+                assertThat(r.succeeded()).isTrue();
+                assertThat(r.error()).isNull();
+            });
+            // The name as stored in the executor jobs table - and listed by the admin API - carries the instance suffix
+            var storedName = scheduler.fetchExecutorJobEntries(0, 10).stream()
+                                      .map(ExecutorScheduledJobRepository.ExecutorJobEntry::name)
+                                      .filter(name -> name.startsWith("countRuns"))
+                                      .findFirst().orElseThrow();
+            assertThat(scheduler.runJobNow(storedName)).hasValueSatisfying(r -> assertThat(r.succeeded()).isTrue());
+            assertThat(runs).hasValue(2);
+
+            assertThat(scheduler.runJobNow("alwaysFails")).hasValueSatisfying(r -> {
+                assertThat(r.succeeded()).isFalse();
+                assertThat(r.error()).contains("IllegalStateException").contains("boom");
+            });
+            assertThat(scheduler.runJobNow("noSuchJob")).isEmpty();
+        } finally {
+            scheduler.stop();
+            fencedLockManager.stop();
+        }
+    }
+
+    @Test
+    public void an_executor_job_is_not_run_on_demand_by_an_instance_that_does_not_hold_the_lock() {
+        var unitOfWorkFactory = new JdbiUnitOfWorkFactory(jdbi);
+        var lockManager1      = new TestFencedLockManager(jdbi);
+        var lockManager2      = new TestFencedLockManager(jdbi);
+        lockManager1.start();
+        lockManager2.start();
+        var scheduler1 = new DefaultEssentialsScheduler(unitOfWorkFactory, lockManager1, 2);
+        var scheduler2 = new DefaultEssentialsScheduler(unitOfWorkFactory, lockManager2, 2);
+        scheduler1.start();
+        waitAtMost(Duration.ofSeconds(5)).until(() -> lockManager1.isLockAcquired(scheduler1.getLockName()));
+        scheduler2.start();
+
+        try {
+            var runs = new AtomicInteger();
+            scheduler1.scheduleExecutorJob(new ExecutorJob("countRuns", new FixedDelay(1, 1, TimeUnit.HOURS), runs::incrementAndGet));
+            scheduler2.scheduleExecutorJob(new ExecutorJob("countRuns", new FixedDelay(1, 1, TimeUnit.HOURS), runs::incrementAndGet));
+
+            // The holder is read with lookupLock. The test lock manager only knows the locks it holds itself, so here
+            // it is unknown; PostgresqlFencedLockManager reads it from the lock table
+            assertThatThrownBy(() -> scheduler2.runJobNow("countRuns"))
+                    .isInstanceOfSatisfying(ScheduledJobNotRunnableHereException.class,
+                                            e -> assertThat(e.getLockHolderInstanceId()).isIn(null, lockManager1.getLockManagerInstanceId()))
+                    .hasMessageContaining("countRuns");
+            assertThat(runs).hasValue(0);
+            assertThat(scheduler1.runJobNow("countRuns")).hasValueSatisfying(r -> assertThat(r.succeeded()).isTrue());
+            assertThat(runs).hasValue(1);
+        } finally {
+            scheduler2.stop();
+            scheduler1.stop();
+            lockManager2.stop();
+            lockManager1.stop();
+        }
     }
 }

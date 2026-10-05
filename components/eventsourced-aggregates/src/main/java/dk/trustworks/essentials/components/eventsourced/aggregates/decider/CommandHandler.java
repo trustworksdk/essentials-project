@@ -21,7 +21,9 @@ import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.AggregateType;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.persistence.AggregateEventStreamConfiguration;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.types.EventOrder;
+import dk.trustworks.essentials.components.foundation.causation.CausationContext;
 import dk.trustworks.essentials.components.foundation.transaction.*;
+import dk.trustworks.essentials.components.foundation.types.EventId;
 import dk.trustworks.essentials.shared.functional.tuple.Pair;
 import dk.trustworks.essentials.types.LongRange;
 import org.slf4j.*;
@@ -227,7 +229,8 @@ public interface CommandHandler<COMMAND, EVENT, ERROR> {
                                                                                                                                              aggregateType,
                                                                                                                                              aggregateId,
                                                                                                                                              eventOrderOfLastRehydratedEvent.get(),
-                                                                                                                                             events),
+                                                                                                                                             events,
+                                                                                                                                             CausationContext.current()),
                                                                                                 new DeciderUnitOfWorkLifecycleCallback());
                                   }, () -> {
                                       log.debug("[{}] !!! No active UnitOfWork so will NOT persist {} events associated withﬁ '{}' with aggregateId '{}'",
@@ -259,6 +262,12 @@ public interface CommandHandler<COMMAND, EVENT, ERROR> {
             }
 
             class DeciderUnitOfWorkLifecycleCallback implements UnitOfWorkLifecycleCallback<EventsToAppendToStream<ID, EVENT, STATE>> {
+                /**
+                 * The commit calls {@link #beforeCommit} once per pass, and makes another pass whenever any callback asks
+                 * for one or new resources were registered - so the same events must not be appended twice
+                 */
+                private final Set<EventsToAppendToStream<ID, EVENT, STATE>> appended = Collections.newSetFromMap(new IdentityHashMap<>());
+
                 @Override
                 public BeforeCommitProcessingStatus beforeCommit(UnitOfWork unitOfWork, List<EventsToAppendToStream<ID, EVENT, STATE>> associatedResources) {
                     log.trace("[{}] beforeCommit processing {} '{}' registered with the UnitOfWork being committed",
@@ -266,6 +275,9 @@ public interface CommandHandler<COMMAND, EVENT, ERROR> {
                               associatedResources.size(),
                               stateType.getName());
                     associatedResources.forEach(eventsToAppendToStream -> {
+                        if (!appended.add(eventsToAppendToStream)) {
+                            return;
+                        }
                         log.trace("[{}] beforeCommit processing '{}' with id '{}'",
                                   aggregateType,
                                   stateType.getName(),
@@ -287,11 +299,14 @@ public interface CommandHandler<COMMAND, EVENT, ERROR> {
                                       eventsToAppendToStream.aggregateId());
                         }
                         // TODO: Expand support for marking EventsToAppendToStream as having been appended which will allow synchronous EventHandler to trigger additional changes within the same UnitOfWork
-                        var persistedEvents = eventStore.appendToStream(aggregateType,
-                                                                        eventsToAppendToStream.aggregateId(),
-                                                                        eventsToAppendToStream.eventOrderOfLastRehydratedEvent(),
-                                                                        eventsToAppendToStream.events());
-                        optionalAggregateSnapshotRepository.ifPresent(repository -> repository.aggregateUpdated(eventsToAppendToStream.state(), persistedEvents));
+                        // Appended under the cause bound when the command was handled, not whatever is bound when the UnitOfWork commits
+                        CausationContext.where(eventsToAppendToStream.causedBy()).run(() -> {
+                            var persistedEvents = eventStore.appendToStream(aggregateType,
+                                                                            eventsToAppendToStream.aggregateId(),
+                                                                            eventsToAppendToStream.eventOrderOfLastRehydratedEvent(),
+                                                                            eventsToAppendToStream.events());
+                            optionalAggregateSnapshotRepository.ifPresent(repository -> repository.aggregateUpdated(eventsToAppendToStream.state(), persistedEvents));
+                        });
                     });
                     return BeforeCommitProcessingStatus.COMPLETED;
                 }
@@ -323,7 +338,8 @@ public interface CommandHandler<COMMAND, EVENT, ERROR> {
                     AggregateType aggregateType,
                     ID aggregateId,
                     EventOrder eventOrderOfLastRehydratedEvent,
-                    List<EVENT> events) {
+                    List<EVENT> events,
+                    Optional<EventId> causedBy) {
             }
         };
     }

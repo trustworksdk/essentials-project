@@ -86,6 +86,7 @@ import org.springframework.http.HttpMethod;
 import org.springframework.http.HttpStatusCode;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
+import org.springframework.test.annotation.DirtiesContext;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 import org.testcontainers.postgresql.PostgreSQLContainer;
@@ -119,10 +120,13 @@ import static org.awaitility.Awaitility.await;
 @Testcontainers
 @SpringBootTest(properties = {
         "trading-demo.simulation.enabled=false",
+        // These tests send every settlement command themselves, so the settle_trade automation must not also drive them
+        "trading-demo.simulation.trade-lifecycle=scripted",
         "trading-demo.accounts.closing-books.event-threshold=100000",
         "essentials.eventstore.archives.enabled=true"
 }, webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 @AutoConfigureTestRestTemplate
+@DirtiesContext // close while this class's container is still up; a cached context outlives it and stalls the next context switch
 class TradingDemoApplicationTest {
     /**
      * Generous on purpose: the three brokerage projections are driven by the event-store subscription manager over a

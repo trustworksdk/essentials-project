@@ -18,6 +18,13 @@ spring:
     username: essentials
     password: password
     driver-class-name: org.postgresql.Driver
+    # Headroom over Hikari's default of 10. The shard-owned queue runtime holds 3 connections
+    # permanently (2 pumps + 1 listener) and logs its share of the pool at start-up; the rest is shared
+    # by event-store subscriptions, both load generators, lease renewal and the projections. Until the
+    # starter passed its runtime to its queues there were two runtimes holding 6, and a restart against
+    # a database the demo had already run on failed start-up with the pool exhausted.
+    hikari:
+      maximum-pool-size: 20
 
 essentials:
   immutable-jackson-module-enabled: true
@@ -87,6 +94,7 @@ essentials:
       # CDC is OFF by default (CdcProperties#enabled = false) — it needs database-side setup the
       # framework won't assume. The demo opts in, and the compose Postgres is started with
       # `wal_level=logical`, `max_replication_slots=10` and `max_wal_senders=10` (see compose.yml)
+      # - and `max_slot_wal_keep_size=2GB`, so a slot nobody reads invalidates instead of filling the disk -
       # with a superuser role, which covers the server-side prerequisites.
       enabled: true
       #

@@ -18,13 +18,14 @@ package dk.trustworks.essentials.components.foundation.postgresql.api;
 
 import dk.trustworks.essentials.components.foundation.postgresql.PostgresqlUtil;
 import dk.trustworks.essentials.components.foundation.transaction.jdbi.JdbiUnitOfWorkFactory;
-import dk.trustworks.essentials.shared.security.EssentialsSecurityProvider;
+import dk.trustworks.essentials.shared.security.*;
 import org.jdbi.v3.core.Jdbi;
 import org.junit.jupiter.api.Test;
 import org.testcontainers.postgresql.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.*;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
  * The best-effort {@code CREATE EXTENSION pg_stat_statements}, against real servers.
@@ -113,6 +114,53 @@ class DefaultPostgresqlQueryStatisticsApiIT {
         });
         jdbi(preloaded, preloaded.getUsername(), preloaded.getPassword())
                 .useHandle(handle -> assertThat(PostgresqlUtil.isPGLibraryPreloaded(handle, "pg_stat_statements")).isTrue());
+    }
+
+    @Test
+    void slowest_queries_are_ranked_by_the_requested_order_and_cover_only_the_current_database() {
+        var jdbi = jdbi(preloaded, preloaded.getUsername(), preloaded.getPassword());
+        var api  = new DefaultPostgresqlQueryStatisticsApi(ALL_ACCESS, new JdbiUnitOfWorkFactory(jdbi));
+        jdbi.useHandle(handle -> {
+            handle.execute("SELECT pg_stat_statements_reset()");
+            handle.execute("CREATE TABLE IF NOT EXISTS slow_query_subject (id INT)");
+            // One statement called often but cheap, one called once but slow
+            for (int i = 0; i < 50; i++) {
+                handle.createQuery("SELECT count(*) FROM slow_query_subject WHERE id = :id").bind("id", i).mapTo(Long.class).one();
+            }
+            handle.execute("SELECT pg_sleep(0.2)");
+        });
+
+        var byCalls = api.getSlowestQueries("principal", QueryStatisticsOrder.CALLS, 1);
+        assertThat(byCalls).hasSize(1);
+        assertThat(byCalls.getFirst().query()).contains("slow_query_subject");
+        assertThat(byCalls.getFirst().calls()).isEqualTo(50);
+
+        var byMean = api.getSlowestQueries("principal", QueryStatisticsOrder.MEAN_TIME, 1);
+        assertThat(byMean.getFirst().query()).contains("pg_sleep");
+        assertThat(byMean.getFirst().maxTime()).isGreaterThanOrEqualTo(200);
+
+        var all = api.getSlowestQueries("principal", QueryStatisticsOrder.TOTAL_TIME, 1_000);
+        assertThat(all).hasSizeLessThanOrEqualTo(PostgresqlQueryStatisticsApi.MAX_SLOWEST_QUERIES_LIMIT);
+        assertThat(all).noneMatch(q -> q.query().contains("pg_stat_statements"));
+        assertThat(api.getTopTenSlowestQueries("principal")).hasSizeLessThanOrEqualTo(10);
+    }
+
+    @Test
+    void slowest_queries_reject_a_limit_below_one() {
+        var api = new DefaultPostgresqlQueryStatisticsApi(ALL_ACCESS, new JdbiUnitOfWorkFactory(jdbi(preloaded, preloaded.getUsername(), preloaded.getPassword())));
+
+        assertThatThrownBy(() -> api.getSlowestQueries("principal", QueryStatisticsOrder.TOTAL_TIME, 0))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    @Test
+    void query_statistics_require_the_stats_reader_role() {
+        // validateRoles used to call the boolean hasAnyEssentialsSecurityRoles and ignore its result
+        var api = new DefaultPostgresqlQueryStatisticsApi(new EssentialsSecurityProvider.NoAccessSecurityProvider(),
+                                                          new JdbiUnitOfWorkFactory(jdbi(preloaded, preloaded.getUsername(), preloaded.getPassword())));
+
+        assertThatThrownBy(() -> api.getTopTenSlowestQueries("principal")).isInstanceOf(EssentialsSecurityException.class);
+        assertThatThrownBy(() -> api.getSlowestQueries("principal", QueryStatisticsOrder.MEAN_TIME, 5)).isInstanceOf(EssentialsSecurityException.class);
     }
 
     private static Jdbi jdbi(PostgreSQLContainer container, String user, String password) {

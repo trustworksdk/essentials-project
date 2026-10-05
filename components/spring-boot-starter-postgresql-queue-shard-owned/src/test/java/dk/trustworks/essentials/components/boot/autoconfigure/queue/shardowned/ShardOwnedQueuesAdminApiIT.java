@@ -202,6 +202,8 @@ class ShardOwnedQueuesAdminApiIT {
 
                     var status = api.getQueueStatus(admin, orders).orElseThrow();
                     assertThat(status.unorderedDepth()).isEqualTo(1);
+                    assertThat(status.blockedKeys()).as("no key is stopped").isZero();
+                    assertThat(status.parkedBehindDeadLetterDepth()).isZero();
                     assertThat(status.fullyOwned())
                             .describedAs("nothing is consuming this queue")
                             .isFalse();
@@ -232,7 +234,7 @@ class ShardOwnedQueuesAdminApiIT {
         assertThat(mapper.writeValueAsString(List.of(QueueName.of("orders"), QueueName.of("shipments"))))
                 .isEqualTo("[\"orders\",\"shipments\"]");
         assertThat(mapper.writeValueAsString(new ApiShardOwnedQueueStatus(QueueName.of("orders"),
-                                                                          4, 64, 1, 0, 0, 0, 0, 68, false, 0, 64)))
+                                                                          4, 64, 1, 0, 0, 0, 0, 68, false, 0, 64, 0, 0)))
                 .describedAs("nested in a DTO too, which is where it actually reaches a client")
                 .contains("\"queueName\":\"orders\"");
     }

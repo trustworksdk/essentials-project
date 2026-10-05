@@ -3,6 +3,14 @@
 Each entry is a release, headed by its `plugin.json` version: the Essentials release the plugin
 targets, with a `-N` suffix for plugin-only releases.
 
+## 0.60.0-3 — targets Essentials 0.60.0
+- **Framework docs, brought up to the 0.60 release branch** — `references/llm/` now carries what
+  landed on `release/0.60` alongside the plugin: event causation (`CausationContext`, how a cause is
+  recorded, carried across durable queues and command buses, and looked up, plus the admin API's
+  causation operations), subscription resume points saved every second by default with an opt-in
+  early save after a number of events, the shard-owned queue's permanently held connections, and
+  the `SCHEDULER_WRITER` role for running a scheduler job on demand. No skill, rule or script changed.
+
 ## 0.60.0-2 — targets Essentials 0.60.0
 - **Slice law, loaded by lane** — `rules/slice-design.md` stays one file, but each lane-, kind- or
   Spring Data-specific section now carries a scope line, and the slice skills and the change router

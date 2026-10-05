@@ -114,6 +114,11 @@ public abstract class GenericHandleAwareUnitOfWorkFactory<UOW extends HandleAwar
         private UnitOfWorkStatus status;
         private Throwable        causeOfRollback;
         private Handle           handle;
+        /**
+         * Counts {@link #registerLifecycleCallbackForResource(Object, UnitOfWorkLifecycleCallback)} calls, so
+         * {@link #commit()} can tell that a pass registered new resources and make another
+         */
+        private long             lifecycleCallbackResourceRegistrations;
 
         public GenericHandleAwareUnitOfWork(GenericHandleAwareUnitOfWorkFactory<?> unitOfWorkFactory) {
             this.unitOfWorkFactory = requireNonNull(unitOfWorkFactory, "No unitOfWorkFactory instance provided");
@@ -162,7 +167,10 @@ public abstract class GenericHandleAwareUnitOfWorkFactory<UOW extends HandleAwar
                 while (processingStatus.get() == UnitOfWorkLifecycleCallback.BeforeCommitProcessingStatus.REQUIRED) {
                     log.trace("BeforeCommit: Performing BeforeCommitProcessing since processingStatus is {}", processingStatus.get());
                     processingStatus.set(UnitOfWorkLifecycleCallback.BeforeCommitProcessingStatus.COMPLETED);
-                    unitOfWorkLifecycleCallbackResources.forEach((key, resources) -> {
+                    var registrationsBeforeThisPass = lifecycleCallbackResourceRegistrations;
+                    // A snapshot, because a callback may register further resources while it runs - with flush-and-publish an
+                    // in-transaction handler runs inside the append a callback makes. Those are picked up by the next pass
+                    snapshotOf(unitOfWorkLifecycleCallbackResources).forEach((key, resources) -> {
                         try {
                             log.trace("BeforeCommit: Calling {} with {} associated resource(s)",
                                       key.getClass().getName(),
@@ -181,6 +189,13 @@ public abstract class GenericHandleAwareUnitOfWorkFactory<UOW extends HandleAwar
                         }
                     });
                     beforeCommitting();
+                    if (lifecycleCallbackResourceRegistrations != registrationsBeforeThisPass) {
+                        // A resource registered during this pass - by a callback, or by an in-transaction handler run from
+                        // beforeCommitting() - has not been through beforeCommit yet. Without another pass its changes
+                        // would be committed without ever being written
+                        log.trace("BeforeCommit: resources were registered during the pass - performing another");
+                        processingStatus.set(UnitOfWorkLifecycleCallback.BeforeCommitProcessingStatus.REQUIRED);
+                    }
                 }
 
                 log.trace("Committing Managed UnitOfWork: {}", info());
@@ -274,7 +289,14 @@ public abstract class GenericHandleAwareUnitOfWorkFactory<UOW extends HandleAwar
             requireNonNull(associatedUnitOfWorkCallback, "You must provide a UnitOfWorkLifecycleCallback");
             List<Object> resources = unitOfWorkLifecycleCallbackResources.computeIfAbsent((UnitOfWorkLifecycleCallback<Object>) associatedUnitOfWorkCallback, callback -> new LinkedList<>());
             resources.add(resource);
+            lifecycleCallbackResourceRegistrations++;
             return resource;
+        }
+
+        private static Map<UnitOfWorkLifecycleCallback<Object>, List<Object>> snapshotOf(Map<UnitOfWorkLifecycleCallback<Object>, List<Object>> callbackResources) {
+            var snapshot = new LinkedHashMap<UnitOfWorkLifecycleCallback<Object>, List<Object>>();
+            callbackResources.forEach((callback, resources) -> snapshot.put(callback, new ArrayList<>(resources)));
+            return snapshot;
         }
 
         @Override

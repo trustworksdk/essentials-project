@@ -80,7 +80,9 @@ See [spring-boot-starter-postgresql README](../components/spring-boot-starter-po
 - Performance logging interceptors
 
 **Admin APIs:**
-- `DBFencedLockApi`, `DurableQueuesApi`, `PostgresqlQueryStatisticsApi`, `SchedulerApi`
+- `DBFencedLockApi`, `DurableQueuesApi`, `PostgresqlQueryStatisticsApi`, `PostgresqlTableStatisticsApi`, `SchedulerApi`
+- `PostgresqlStatisticsTableProvider` beans for the durable queues, fenced lock and infrastructure tables. The event
+  store and shard-owned queue starters add their own; declare one to report application tables too
 
 **Lifecycle:**
 - `DefaultLifecycleManager` - Manages Lifecycle beans
@@ -128,7 +130,12 @@ See [spring-boot-starter-postgresql-event-store README](../components/spring-boo
 
 **Event Publishing:**
 - `EventStoreEventBus` - Local event publishing
-- `PersistableEventMapper` - Event metadata mapping
+- `PersistableEventMapper` - Event metadata mapping (sets no correlation id, tenant or cause)
+
+**Event Causation** (unless `essentials.eventstore.causation.enabled=false`):
+- `CausationPersistableEventEnricher` - Writes each event's `causedByEventId`
+- `CausationDurableQueuesInterceptor` - Carries the cause across Inbox/Outbox/durable command bus
+- `CausationCommandContextPropagator` - Added to every command-bus bean, for `sendAsync`/`sendAndDontWait`
 
 **Observability:**
 - `MicrometerTracingEventStoreInterceptor` - Distributed tracing (when enabled)
@@ -274,6 +281,7 @@ Prefix: `essentials`
 | Property | Default | Effect |
 |----------|---------|--------|
 | `life-cycles.start-life-cycles` | `true` | Auto-start Lifecycle beans |
+| `life-cycles.shutdown-timeout` | `10s` | Shutdown budget for stopping Lifecycle beans; bounded, best-effort DB cleanup during shutdown |
 | `reactive-bean-post-processor-enabled` | `true` | Auto-register handlers |
 | `immutable-jackson-module-enabled` | `true` | Enable immutable deserialization |
 
@@ -389,6 +397,15 @@ EventStreamGapHandler<SeparateTablePerAggregateEventStreamConfiguration> eventSt
 
 Prefix: `essentials.eventstore.cdc`. **Disabled by default** (`enabled=false`; every CDC bean is gated on `enabled=true`, no `matchIfMissing`): no slot, no publication changes, no tailer, polling as before. Opt in with `essentials.eventstore.cdc.enabled=true`; then `mode=auto` (falls back to polling if CDC cannot start), `delivery-mode=inbox`, `plugin=pgoutput`. All properties carry descriptions and defaults in the starter's `spring-configuration-metadata.json`. Details: [starter README: CDC Configuration](../components/spring-boot-starter-postgresql-event-store/README.md#cdc-configuration-hybrid-logical-replication), [LLM-postgresql-event-store.md](LLM-postgresql-event-store.md).
 
+#### Event Causation
+
+Prefix: `essentials.eventstore.causation` - see [event causation](./LLM-postgresql-event-store.md#event-causation)
+
+| Property | Default | Notes |
+|----------|---------|-------|
+| `enabled` | `true` | Record which event caused each event; `false` turns off every part that writes it |
+| `index-enabled` | `false` | Partial index on `caused_by_event_id` in every event-stream table; required by `EventStore.loadEventsCausedBy` and the admin `caused-events` operation. A schema change - pre-build concurrently on large tables |
+
 #### Subscription Manager
 
 Prefix: `essentials.eventstore.subscription-manager`
@@ -398,7 +415,8 @@ Prefix: `essentials.eventstore.subscription-manager`
 | `event-store-polling-batch-size` | `10` | Events per poll |
 | `event-store-polling-interval` | `100ms` | When processing events |
 | `max-event-store-polling-interval` | `2000ms` | Max backoff when idle |
-| `snapshot-resume-points-every` | `10s` | Save position frequency |
+| `snapshot-resume-points-every` | `1s` | Save position frequency (only changed positions are written) |
+| `snapshot-resume-points-after-events` | `0` (off) | Opt-in: also save a position once it advanced this many global orders since its last save |
 | `error-policy.mode` | `skip` | `skip` \| `retry-n-then-skip` \| `stop` - what an async subscription does with an event whose handler throws a non-I/O exception. See [SubscriptionErrorPolicy](LLM-postgresql-event-store.md#direct-async-subscribers-skip-a-failing-event-by-default) |
 | `error-policy.max-retries` | `3` | `retry-n-then-skip` only; must be ≥ 1 |
 | `error-policy.initial-backoff` | `100ms` | Wait before the first retry, doubled per retry |
@@ -613,7 +631,7 @@ Enum: `dk.trustworks.essentials.shared.security.EssentialsSecurityRoles`
 - `QUEUE_READER` / `QUEUE_PAYLOAD_READER` / `QUEUE_WRITER`
 - `SUBSCRIPTION_READER` / `SUBSCRIPTION_WRITER`
 - `POSTGRESQL_STATS_READER`
-- `SCHEDULER_READER`
+- `SCHEDULER_READER` / `SCHEDULER_WRITER`
 
 ---
 
@@ -718,6 +736,7 @@ public PostgresqlDurableQueues postgresqlDurableQueues(...) {
 
 - ⚠️ **Bean Conditionals**: Event Store provides own `UnitOfWorkFactory`, `EventBus`, `JSONSerializer` (PostgreSQL starter skips these when EventStore on classpath)
 - ⚠️ **Lifecycle Start**: Set `start-life-cycles=false` to manually control lifecycle
+- ⚠️ **Shutdown with the database gone**: cleanup on stop (fenced-lock release, resume-point save, job unscheduling) is one bounded attempt and skipped once the DB proves unreachable; `life-cycles.shutdown-timeout` (10s) caps the whole stop. Implement `ShutdownAware` (foundation `lifecycle`) on your own `Lifecycle` beans whose `stop()` touches the DB, and run that work through `ShutdownContext.attemptCleanup(...)`
 - ⚠️ **MongoDB CharSequenceTypes**: Must register types using ObjectId values or used as Map keys
 - ⚠️ **Flush Publishing**: Enable only if sagas need per-event coordination (impacts transaction semantics)
 - ⚠️ **Admin UI**: Requires both `EssentialsAuthenticatedUser` implementation AND Spring Security config (not auto-configured)

@@ -40,6 +40,7 @@ import org.slf4j.*;
 import java.time.*;
 import java.util.*;
 import java.util.concurrent.*;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
@@ -146,6 +147,11 @@ public final class SeparateTablePerAggregateTypePersistenceStrategy implements A
      * {@code pg_notify} trigger, and the listener is told about each table once its schema has been handed on.
      */
     private final AtomicReference<Consumer<String>>                                                           notifyTriggerListener              = new AtomicReference<>();
+    /**
+     * Set by {@link #enableCausationIndex()}: every event-stream table's contribution then includes a partial index on
+     * its caused-by-event-id column, which {@link #loadEventsCausedBy(EventStoreUnitOfWork, EventId)} requires
+     */
+    private final AtomicBoolean                                                                               causationIndexEnabled              = new AtomicBoolean();
     /**
      * Where the schema of a newly registered event-stream table goes: this strategy's own create applier in
      * {@link SchemaOwnership#COMPONENT} mode, the harness' applier once one {@link #attach(SchemaChangeSink) attached}.
@@ -463,6 +469,50 @@ public final class SeparateTablePerAggregateTypePersistenceStrategy implements A
         }
     }
 
+    /**
+     * Add a partial index on the caused-by-event-id column of every event-stream table - those registered so far, and
+     * every one registered later - so {@link #loadEventsCausedBy(EventStoreUnitOfWork, EventId)} ("what did this event
+     * cause?") is an index lookup rather than a sequential scan of every table.
+     * <p>
+     * The index is partial ({@code WHERE caused_by_event_id IS NOT NULL}), so events without a cause - all historical
+     * ones, and anything started by a request, a scheduler or a person - stay out of it. It is created like the rest of
+     * the table's schema, by whichever applier owns this strategy's schema, and with {@code IF NOT EXISTS}: on a large
+     * existing table, build the same index by hand with {@code CREATE INDEX CONCURRENTLY} first - see
+     * {@link #causationIndexStatement(SeparateTablePerAggregateEventStreamConfiguration)} for its exact name and
+     * predicate - and this then finds it in place.
+     * <p>
+     * Idempotent. Off by default: the backward lookup ("what caused this event?") uses the existing event-id index and
+     * needs none of this.
+     */
+    public final void enableCausationIndex() {
+        if (causationIndexEnabled.compareAndSet(false, true)) {
+            for (var cfg : aggregateTypeConfigurations.values()) {
+                initializeEventStorageFor(cfg);
+            }
+        }
+    }
+
+    /**
+     * @return whether {@link #enableCausationIndex()} has been called
+     */
+    public final boolean isCausationIndexEnabled() {
+        return causationIndexEnabled.get();
+    }
+
+    /**
+     * The statement that creates the caused-by-event-id index of an event-stream table. Public so the exact statement can
+     * be pre-built by hand, concurrently, on a large table before {@link #enableCausationIndex()} is switched on.
+     *
+     * @param eventStreamConfiguration the event-stream table's configuration
+     * @return the {@code CREATE INDEX IF NOT EXISTS} statement
+     */
+    public static String causationIndexStatement(SeparateTablePerAggregateEventStreamConfiguration eventStreamConfiguration) {
+        requireNonNull(eventStreamConfiguration, "No eventStreamConfiguration provided");
+        return bind("CREATE INDEX IF NOT EXISTS {:tableName}_{:causedByColumn} ON {:tableName} ({:causedByColumn}) WHERE {:causedByColumn} IS NOT NULL",
+                    arg("tableName", eventStreamConfiguration.eventStreamTableName),
+                    arg("causedByColumn", eventStreamConfiguration.eventStreamTableColumnNames.causedByEventIdColumn));
+    }
+
     @Override
     public String moduleId() {
         return MODULE_ID;
@@ -499,6 +549,9 @@ public final class SeparateTablePerAggregateTypePersistenceStrategy implements A
         var changes = new ArrayList<SchemaChange>(3);
         changes.add(SchemaChange.repeatable("event-stream-table", eventStreamTableName, createEventStreamTableStatement(eventStreamConfiguration)));
         changes.add(SchemaChange.repeatable("event-stream-tenant-index", eventStreamTableName, createTenantIndexStatement(eventStreamConfiguration)));
+        if (causationIndexEnabled.get()) {
+            changes.add(SchemaChange.repeatable("event-stream-caused-by-index", eventStreamTableName, causationIndexStatement(eventStreamConfiguration)));
+        }
         if (notifyTriggerListener.get() != null) {
             changes.add(SchemaChange.repeatable("change-notification-trigger",
                                                 eventStreamTableName,
@@ -943,9 +996,16 @@ public final class SeparateTablePerAggregateTypePersistenceStrategy implements A
         if (persistableEvent.causedByEventId()
                             .isPresent()) {
             if (configuration.eventIdColumnType == IdentifierColumnType.UUID) {
-                causedByEventId = UUID.fromString(persistableEvent.causedByEventId()
-                                                                  .get()
-                                                                  .toString());
+                // A cause is diagnostic metadata and must never fail the append it is attached to. One that cannot be
+                // stored in a UUID column - bound explicitly, or carried over from a TEXT-typed event stream with custom
+                // event ids - is dropped with a warning instead
+                var cause = persistableEvent.causedByEventId().get().toString();
+                try {
+                    causedByEventId = UUID.fromString(cause);
+                } catch (IllegalArgumentException e) {
+                    log.warn("[{}] Not recording causedByEventId '{}' for event '{}': the event-stream table's event-id column type is UUID and the cause is not a UUID",
+                             configuration.aggregateType, cause, persistableEvent.eventId());
+                }
             } else {
                 causedByEventId = persistableEvent.causedByEventId()
                                                   .get();
@@ -1146,6 +1206,53 @@ public final class SeparateTablePerAggregateTypePersistenceStrategy implements A
                          .setFetchSize(1)
                          .map(new PersistedEventRowMapper(this, configuration))
                          .findOne();
+    }
+
+    /**
+     * {@inheritDoc}
+     * <p>
+     * One indexed query per registered event-stream table, in table-name order; within a table the events come in
+     * global-event-order. There is no order across tables - a global event order is per table.
+     *
+     * @throws IllegalStateException if {@link #enableCausationIndex()} has not been called - the lookup would otherwise be
+     *                               a sequential scan of every event-stream table
+     */
+    @Override
+    public List<PersistedEvent> loadEventsCausedBy(EventStoreUnitOfWork unitOfWork, EventId causedByEventId) {
+        requireNonNull(unitOfWork, "No unitOfWork provided");
+        requireNonNull(causedByEventId, "No causedByEventId provided");
+        if (!causationIndexEnabled.get()) {
+            throw new CausationIndexNotEnabledException("Looking up the events caused by an event needs the caused-by-event-id index, which is not enabled. "
+                                                    + "Set essentials.eventstore.causation.index-enabled=true, or call enableCausationIndex() on the "
+                                                    + SeparateTablePerAggregateTypePersistenceStrategy.class.getSimpleName()
+                                                    + ". On large existing tables build the index concurrently first - see docs/event-causation.md");
+        }
+        var events = new ArrayList<PersistedEvent>();
+        aggregateTypeConfigurations.values()
+                                   .stream()
+                                   .sorted(Comparator.comparing(cfg -> cfg.eventStreamTableName))
+                                   .forEach(configuration -> {
+                                       Object cause;
+                                       if (configuration.eventIdColumnType == IdentifierColumnType.UUID) {
+                                           try {
+                                               cause = UUID.fromString(causedByEventId.toString());
+                                           } catch (IllegalArgumentException e) {
+                                               // Not a UUID, so no event in a UUID-typed table can have been caused by it
+                                               return;
+                                           }
+                                       } else {
+                                           cause = causedByEventId;
+                                       }
+                                       events.addAll(unitOfWork.handle()
+                                                               .createQuery(bind("SELECT * FROM {:tableName} WHERE {:causedByColumn} = :causedBy ORDER BY {:globalOrderColumn}",
+                                                                                 arg("tableName", configuration.eventStreamTableName),
+                                                                                 arg("causedByColumn", configuration.eventStreamTableColumnNames.causedByEventIdColumn),
+                                                                                 arg("globalOrderColumn", configuration.eventStreamTableColumnNames.globalOrderColumn)))
+                                                               .bind("causedBy", cause)
+                                                               .map(new PersistedEventRowMapper(this, configuration))
+                                                               .list());
+                                   });
+        return events;
     }
 
     @Override

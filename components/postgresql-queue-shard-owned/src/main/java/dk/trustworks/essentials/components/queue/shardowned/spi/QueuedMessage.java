@@ -21,6 +21,7 @@ import java.time.Instant;
 /**
  * One message as it currently sits in its lane, for inspection.
  *
+ * @param keyOrder  the message's position within its key; {@code 0} for an unordered message
  * @param attempts  deliveries recorded so far. On the fast path this is written at failure or at
  *                  takeover rather than at dispatch, so a message read while in flight shows one
  *                  lower than the number of times a handler has actually seen it
@@ -29,6 +30,7 @@ import java.time.Instant;
  */
 public record QueuedMessage(MessageId id,
                             String key,
+                            long keyOrder,
                             byte[] payload,
                             int payloadType,
                             int attempts,

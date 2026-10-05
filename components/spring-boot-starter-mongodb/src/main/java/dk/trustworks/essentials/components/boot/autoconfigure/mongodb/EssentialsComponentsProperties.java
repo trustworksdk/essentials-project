@@ -33,6 +33,7 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.context.annotation.Configuration;
 import reactor.core.publisher.Sinks;
 
+import dk.trustworks.essentials.components.foundation.lifecycle.ShutdownContext;
 import java.time.*;
 
 /**
@@ -568,7 +569,8 @@ public class EssentialsComponentsProperties {
     }
 
     public static class LifeCycleProperties {
-        private boolean startLifeCycles = true;
+        private boolean  startLifeCycles = true;
+        private Duration shutdownTimeout = ShutdownContext.DEFAULT_SHUTDOWN_TIMEOUT;
 
         /**
          * Get property that determines if lifecycle beans should be started automatically
@@ -586,6 +588,26 @@ public class EssentialsComponentsProperties {
          */
         public void setStartLifeCycles(boolean startLifeCycles) {
             this.startLifeCycles = startLifeCycles;
+        }
+
+        /**
+         * The time budget for stopping every Essentials {@code Lifecycle} bean on shutdown (default 10s). Once it has
+         * passed, a bean still stopping is abandoned so the application can exit, and the remaining beans skip their
+         * database cleanup - fenced locks and leases they held expire on their own. Database cleanup is also skipped as
+         * soon as the database proves unreachable, so with a healthy database this is only a backstop
+         *
+         * @return the shutdown time budget
+         */
+        public Duration getShutdownTimeout() {
+            return shutdownTimeout;
+        }
+
+        /**
+         * @param shutdownTimeout the time budget for stopping every Essentials {@code Lifecycle} bean on shutdown
+         * @see #getShutdownTimeout()
+         */
+        public void setShutdownTimeout(Duration shutdownTimeout) {
+            this.shutdownTimeout = shutdownTimeout;
         }
     }
 

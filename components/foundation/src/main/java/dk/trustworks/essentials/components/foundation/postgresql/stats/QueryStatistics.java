@@ -17,24 +17,43 @@
 package dk.trustworks.essentials.components.foundation.postgresql.stats;
 
 /**
- * Represents statistics for specific database queries.
+ * Statistics for one normalized statement, as recorded by PostgreSQL's {@code pg_stat_statements}.
  * <p>
- * This record includes details about individual database queries, such as:
- * - The query string itself.
- * - The total execution time for the query.
- * - The number of times the query was called.
- * - The mean time per execution of the query.
- * <p>
- * This structure is intended for use in monitoring and analyzing query
- * performance in a PostgreSQL database, particularly in scenarios
- * where `pg_stat_statements` or other query tracking tools are utilized.
+ * Times are in milliseconds. {@code totalTime} and {@code meanTime} include planning time; {@code minTime},
+ * {@code maxTime} and {@code stddevTime} are execution time only, as {@code pg_stat_statements} does not track
+ * those for planning.
+ *
+ * @param query          the normalized statement text
+ * @param totalTime      total planning and execution time across all calls
+ * @param calls          number of calls
+ * @param meanTime       mean planning and execution time per call
+ * @param rows           rows retrieved or affected, summed over all calls
+ * @param minTime        fastest execution
+ * @param maxTime        slowest execution
+ * @param stddevTime     standard deviation of the execution time
+ * @param sharedBlksHit  shared blocks found in shared buffers
+ * @param sharedBlksRead shared blocks read from outside shared buffers
+ * @param cacheHitRatio  {@code sharedBlksHit} as a percentage 0-100 of all shared blocks accessed, one decimal.
+ *                       {@code null} when the statement accessed no shared blocks
  */
 public record QueryStatistics(
         String query,
         double totalTime,
         long calls,
-        double meanTime
+        double meanTime,
+        long rows,
+        double minTime,
+        double maxTime,
+        double stddevTime,
+        long sharedBlksHit,
+        long sharedBlksRead,
+        Double cacheHitRatio
 ) {
 
+    /**
+     * The statistics as reported before the per-call and buffer statistics were added
+     */
+    public QueryStatistics(String query, double totalTime, long calls, double meanTime) {
+        this(query, totalTime, calls, meanTime, 0, 0, 0, 0, 0, 0, null);
+    }
 }
-

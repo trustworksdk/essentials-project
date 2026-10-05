@@ -16,6 +16,8 @@
 
 package dk.trustworks.essentials.examples.trading._demo_harness;
 
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
 /**
@@ -68,6 +70,53 @@ public class QueueLoadGeneratorController {
     public SpikeResult spike(@RequestParam(required = false, defaultValue = "0") int size) {
         var enqueued = generator.spike(size);
         return new SpikeResult(enqueued, generator.status());
+    }
+
+    /**
+     * Messages on each lane that fail on purpose, without touching the ordering check or the account
+     * keys; see {@link QueueLoadGenerator#injectFaults}.
+     *
+     * @param retries  messages per lane that fail {@code failures} times, then succeed
+     * @param poison   messages per lane that fail every attempt and are dead-lettered
+     * @param failures failures before a retry message succeeds; below the consumer's max attempts
+     */
+    @PostMapping("/faults")
+    public FaultResult faults(@RequestParam(defaultValue = "10") int retries,
+                              @RequestParam(defaultValue = "0") int poison,
+                              @RequestParam(defaultValue = "1") int failures) {
+        var enqueued = generator.injectFaults(retries, poison, failures);
+        return new FaultResult(enqueued, generator.status());
+    }
+
+    /**
+     * One ordered key that stops at a dead letter, with {@code behind} messages parked after it; see
+     * {@link QueueLoadGenerator#injectBlockedKey}. The response names the admin API call that
+     * resurrects it.
+     */
+    @PostMapping("/faults/blocked-key")
+    public BlockedKeyResult blockedKey(@RequestParam(defaultValue = "5") int behind,
+                                       @Value("${essentials.admin-api.base-path:/api/essentials/admin/v1}") String adminBasePath) {
+        var key = generator.injectBlockedKey(behind);
+        var queueName = generator.status().queueName();
+        return new BlockedKeyResult(key, behind + 1,
+                                    "POST " + adminBasePath + "/shard-owned-queues/" + queueName + "/ordered-keys/"
+                                    + key + "/resurrect");
+    }
+
+    /**
+     * @param messages  the head plus the messages behind it
+     * @param resurrect the admin API call that puts the whole key back
+     */
+    public record BlockedKeyResult(String key, int messages, String resurrect) {
+    }
+
+    /** A fault request the generator refuses is the caller's mistake, not the server's. */
+    @ExceptionHandler(IllegalArgumentException.class)
+    public ResponseEntity<String> badRequest(IllegalArgumentException e) {
+        return ResponseEntity.badRequest().body(e.getMessage());
+    }
+
+    public record FaultResult(int enqueued, QueueLoadGenerator.QueueLoadStatus status) {
     }
 
     public record SpikeResult(int enqueued, QueueLoadGenerator.QueueLoadStatus status) {

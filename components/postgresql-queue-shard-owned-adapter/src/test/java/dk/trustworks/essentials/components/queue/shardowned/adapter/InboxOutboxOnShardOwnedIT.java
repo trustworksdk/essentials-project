@@ -18,12 +18,15 @@ package dk.trustworks.essentials.components.queue.shardowned.adapter;
 
 import com.zaxxer.hikari.*;
 import dk.trustworks.essentials.components.distributed.fencedlock.postgresql.PostgresqlFencedLockManager;
+import dk.trustworks.essentials.components.foundation.causation.CausationContext;
 import dk.trustworks.essentials.components.foundation.json.EssentialsObjectMappers;
 import dk.trustworks.essentials.components.foundation.messaging.*;
 import dk.trustworks.essentials.components.foundation.messaging.eip.store_and_forward.*;
 import dk.trustworks.essentials.components.foundation.messaging.queue.*;
 import dk.trustworks.essentials.components.foundation.messaging.queue.operations.*;
+import dk.trustworks.essentials.components.foundation.transaction.*;
 import dk.trustworks.essentials.components.foundation.transaction.jdbi.*;
+import dk.trustworks.essentials.components.foundation.types.EventId;
 import dk.trustworks.essentials.components.queue.shardowned.ShardOwnedSchema;
 import org.awaitility.Awaitility;
 import org.jdbi.v3.core.Jdbi;
@@ -146,6 +149,59 @@ class InboxOutboxOnShardOwnedIT {
     }
 
     /**
+     * Event causation crosses the shard-owned engine the way it crosses the default one: the cause bound when the
+     * message is added travels in its metadata, and is bound again around the handler and the UnitOfWork the Inbox
+     * commits it in. On this engine the {@code HandleQueuedMessage} interceptor sees a partial message, so this also
+     * pins that the interceptor reads nothing but the metadata.
+     */
+    @Test
+    void an_inbox_message_added_with_a_cause_bound_is_handled_and_committed_under_that_cause() {
+        durableQueues.addInterceptor(new CausationDurableQueuesInterceptor());
+        var cause                 = EventId.of("cause-on-shard-owned");
+        var seenWhileHandling     = new CopyOnWriteArrayList<Optional<EventId>>();
+        var seenWhileCommitting   = new CopyOnWriteArrayList<Optional<EventId>>();
+        var inbox = Inboxes.durableQueueBasedInboxes(durableQueues, lockManager)
+                           .getOrCreateInbox(InboxConfig.builder()
+                                                        .inboxName(InboxName.of("orders"))
+                                                        .redeliveryPolicy(RedeliveryPolicy.fixedBackoff(Duration.ofMillis(200), 3))
+                                                        .messageConsumptionMode(MessageConsumptionMode.SingleGlobalConsumer)
+                                                        .numberOfParallelMessageConsumers(1)
+                                                        .build(),
+                                             message -> {
+                                                 seenWhileHandling.add(CausationContext.current());
+                                                 unitOfWorkFactory.getRequiredUnitOfWork()
+                                                                  .registerLifecycleCallbackForResource("cause", new RecordCauseAtCommit(seenWhileCommitting));
+                                             });
+
+        CausationContext.where(cause).run(() -> inbox.addMessageReceived(new OrderPlaced("order-1", 100)));
+
+        Awaitility.await().atMost(Duration.ofSeconds(30))
+                  .untilAsserted(() -> assertThat(seenWhileCommitting).hasSize(1));
+        assertThat(seenWhileHandling).containsExactly(Optional.of(cause));
+        assertThat(seenWhileCommitting).containsExactly(Optional.of(cause));
+    }
+
+    private record RecordCauseAtCommit(List<Optional<EventId>> seen) implements UnitOfWorkLifecycleCallback<String> {
+        @Override
+        public BeforeCommitProcessingStatus beforeCommit(UnitOfWork unitOfWork, List<String> associatedResources) {
+            seen.add(CausationContext.current());
+            return BeforeCommitProcessingStatus.COMPLETED;
+        }
+
+        @Override
+        public void afterCommit(UnitOfWork unitOfWork, List<String> associatedResources) {
+        }
+
+        @Override
+        public void beforeRollback(UnitOfWork unitOfWork, List<String> associatedResources, Throwable causeOfTheRollback) {
+        }
+
+        @Override
+        public void afterRollback(UnitOfWork unitOfWork, List<String> associatedResources, Throwable causeOfTheRollback) {
+        }
+    }
+
+    /**
      * The metadata has to survive the envelope, because {@code SingleGlobalConsumer} puts the fenced
      * lock's token into it on the way to the handler and applications routinely carry correlation ids
      * there. It travels as a separate field rather than inside the payload, so a payload that happens
@@ -250,6 +306,13 @@ class InboxOutboxOnShardOwnedIT {
         assertThat(everything)
                 .as("both lanes are listed")
                 .hasSize(30);
+        assertThat(everything.stream()
+                             .map(QueuedMessage::getMessage)
+                             .filter(OrderedMessage.class::isInstance)
+                             .map(OrderedMessage.class::cast)
+                             .map(ordered -> ordered.getKey() + "@" + ordered.getOrder()))
+                .as("an ordered message is listed with its own order, not 0")
+                .containsExactlyInAnyOrder("key-0@0", "key-1@1", "key-2@2", "key-3@3", "key-4@4");
 
         // Walk it in pages of 7, which does not divide 30 — a boundary bug hides behind a clean divisor.
         var paged = new ArrayList<String>();
@@ -375,9 +438,13 @@ class InboxOutboxOnShardOwnedIT {
                   .untilAsserted(() -> assertThat(latch.getCount()).isZero());
 
         assertThat(perKey).hasSize(3);
+        // Exactly the producer's orders, not merely sorted ones: every message used to come back with order 0, which is
+        // sorted - so this passed while an EventProcessor, resolving each forwarded event by its order, only ever saw an
+        // aggregate's first event
+        var producersOrders = java.util.stream.LongStream.range(0, 100).boxed().toList();
         perKey.forEach((key, orders) -> assertThat(orders)
-                .as("key '%s' must be delivered in the order its producer assigned", key)
-                .isSorted());
+                .as("key '%s' must be delivered with, and in, the order its producer assigned", key)
+                .containsExactlyElementsOf(producersOrders));
     }
 
     /**

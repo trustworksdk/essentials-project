@@ -19,6 +19,7 @@ package dk.trustworks.essentials.components.foundation.postgresql;
 import tools.jackson.databind.json.JsonMapper;
 import dk.trustworks.essentials.components.foundation.IOExceptionUtil;
 import dk.trustworks.essentials.components.foundation.json.*;
+import dk.trustworks.essentials.components.foundation.lifecycle.*;
 import dk.trustworks.essentials.components.foundation.postgresql.ListenNotify.SqlOperation;
 import dk.trustworks.essentials.reactive.EventBus;
 import dk.trustworks.essentials.shared.Lifecycle;
@@ -73,8 +74,14 @@ import static dk.trustworks.essentials.shared.MessageFormatter.msg;
  * <b>Failure to adequately sanitize and validate this value could expose the application to SQL injection
  * vulnerabilities, compromising the security and integrity of the database.</b>
  */
-public final class MultiTableChangeListener<T extends TableChangeNotification> implements Lifecycle, Closeable {
+public final class MultiTableChangeListener<T extends TableChangeNotification> implements Lifecycle, ShutdownAware, Closeable {
     private static final Logger log = LoggerFactory.getLogger(MultiTableChangeListener.class);
+
+    /**
+     * Set once the application is shutting down: polling has been cancelled and {@code UNLISTEN} is skipped - see
+     * {@link #shutdownStarting(ShutdownContext)}
+     */
+    private volatile ShutdownContext shutdown;
 
     private final Jdbi                                      jdbi;
     private final Duration                                  pollingInterval;
@@ -87,7 +94,7 @@ public final class MultiTableChangeListener<T extends TableChangeNotification> i
     private final ConcurrentMap<String, Class<? extends T>> listenForNotificationsRelatedToTables;
     private final AtomicReference<Handle>                   handleReference;
     private       ScheduledExecutorService                  executorService;
-    private       ScheduledFuture<?>                        scheduledFuture;
+    private volatile ScheduledFuture<?>                     scheduledFuture;
     private final boolean                                   filterDuplicateNotifications;
     private final NotificationFilterChain                   notificationFilterChain;
     private volatile boolean started;
@@ -267,8 +274,27 @@ public final class MultiTableChangeListener<T extends TableChangeNotification> i
         }
     }
 
+    /**
+     * Stops the poll loop, which otherwise reconnects and re-issues {@code LISTEN} for every table on each tick against a
+     * database that may be gone, and makes {@code UNLISTEN} a no-op from here on. A {@code LISTEN} lasts only as long as
+     * its database session, so it ends with the connection anyway - while each {@code UNLISTEN} after a failed poll had to
+     * open a new connection first, one connection timeout per table when the database is unreachable.
+     */
+    @Override
+    public void shutdownStarting(ShutdownContext shutdown) {
+        this.shutdown = requireNonNull(shutdown, "No shutdown provided");
+        var future = scheduledFuture;
+        if (future != null) {
+            future.cancel(true);
+        }
+    }
+
     private void unlisten(String tableName) {
         requireNonBlank(tableName, "No tableName provided");
+        if (shutdown != null) {
+            log.debug("Shutting down - not issuing UNLISTEN for '{}', the LISTEN ends with the session", tableName);
+            return;
+        }
         log.info("Removing table change LISTENER for '{}'", tableName);
         PostgresqlUtil.checkIsValidTableOrColumnName(tableName);
         try {

@@ -14,7 +14,7 @@ What lives here is the machinery that makes the demo demonstrate something:
 | `TradingDashboard*` | The lightweight status screen and its SSE stream |
 | `DirectInstrumentPriceService` | A deliberately **non**-event-sourced latest-price table, written with raw JDBC, whose only purpose is to be benchmarked against the `market_data` aggregate path |
 | `QueueLoadGenerator` | Drives the **shard-owned queue engine** on both lanes at once — sustained trickle plus on-demand spikes — and checks per-key ordering as messages arrive |
-| `QueueLoadGeneratorController` | `/api/admin/queue-load` — status, start/stop, `POST /spike?size=N` |
+| `QueueLoadGeneratorController` | `/api/admin/queue-load` — status, start/stop, `POST /spike?size=N`, `POST /faults?retries=N&poison=M&failures=K`, `POST /faults/blocked-key?behind=N` |
 
 **The dashboard's SSE emitters never time out, so `TradingDashboardStreamService` completes them on `ContextClosedEvent`.** Without that an open dashboard tab held Spring Boot's graceful shutdown for the full 30 s phase timeout on every Ctrl-C, ending in `AsyncRequestTimeoutException`.
 
@@ -127,6 +127,45 @@ Measured after those three were fixed, one instance, 4 unordered shards and 64 o
 | ordering violations | 0, against a 34 000-deep ordered queue |
 | dead letters | 0 |
 | ownership | 4 + 64 units, `fullyOwned` throughout |
+
+### Injected faults
+
+`POST /api/admin/queue-load/faults?retries=N&poison=M&failures=K` enqueues, on each lane, N messages
+that fail K times and then succeed, and M that fail every attempt and are dead-lettered after the
+consumer's `maxAttempts` (3 by default, so K must be 1 or 2). They are kept apart from the traffic
+above, and both halves of that are load-bearing:
+
+- **Own payload types**, so they are never ordering-checked and never counted as ticks or account
+  activity. Watch `retryFaultsRecovered`, `injectedFailures` and `deadLetteredDepth` instead.
+- **A single-use key per ordered fault message** (`FAULT-<instanceId>-<runToken>-<n>`). A dead
+  letter blocks its key and dead-letters everything that arrives for it afterwards, so a poison
+  message on an `ACC-` key would silently take that account's activity down with it.
+
+The retry handler reads the attempt count with `MessageQueue.getMessage(messageId)` — the handler
+is not given it — so the count lives in the database and survives a rebalance to another instance.
+Poison dead letters stay until someone deletes or resurrects them; resurrecting one just fails it
+again.
+
+`POST /faults/blocked-key?behind=N` builds the one case the single-use fault keys cannot show: a key
+that stops. Its head (`key_order` 0) fails until resurrected and the N behind it are parked by the
+engine unhandled. The response names the admin call that recovers it,
+`POST <admin-base>/shard-owned-queues/trading-events/ordered-keys/<key>/resurrect`; the key then
+replays in `key_order`, checked by the same ordering assertion as account activity. Deleting the head
+first skips it — the rest stay parked behind the lowest remaining dead letter until the resurrect.
+
+- **"Fails until resurrected" is keyed on the head's `MessageId`.** Resurrecting gives a message a
+  fresh sequence value, so a new id; the handler fails only under the id it was enqueued with. The
+  set is in memory, so it is **single-instance only**: with two instances the key's unit may belong
+  to the other one, which delivers the head first time and the key never blocks.
+- **Head registration and the handler share one lock.** `enqueue` commits before it returns the ids,
+  so a fast consumer can be handed the head before it is known to be one.
+
+
+Its first run found an engine defect: every **unordered** poison message vanished — neither queued
+nor dead-lettered — because the unordered lane's range acknowledgement deleted rows waiting out a
+retry backoff. Fixed in the engine; see "The unordered range ack" in
+`components/postgresql-queue-shard-owned/CLAUDE.md`. After a fault run,
+`deadLetteredDepth` should equal `poisonFaultsEnqueued`.
 
 `unownedShards` is the field to watch, not depth: depth cannot tell "nobody is consuming" from
 "busy", and this engine's ownership failures have historically been invisible in depth alone.

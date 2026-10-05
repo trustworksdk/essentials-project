@@ -21,6 +21,7 @@ In-process event bus + command bus for JVM-local messaging. Maven: `essentials-r
 | `LocalCommandBus` | Concrete `AbstractCommandBus`; `sendAndDontWait` = fire-and-forget via `Mono.fromCallable` on `boundedElastic`; delayed send via single-thread `ScheduledExecutorService` |
 | `AnnotatedCommandHandler` | Reflects `@Handler`/`@CmdHandler` methods at construction; caches command-type→`Method`; `canHandle` uses `isAssignableFrom`; invokes via `Method.invoke`, sneaky-throws target exception |
 | `ReactiveHandlersBeanPostProcessor` | `DestructionAwareBeanPostProcessor`; auto-registers all `EventHandler`/`CommandHandler` beans post-init; uses `@AsyncEventHandler` annotation to choose sync vs async registration; skips `ROLE_INFRASTRUCTURE` beans |
+| `CommandContextPropagator` | SPI: called on the **sending** thread for `sendAsync`/`sendAndDontWait`, returns the invocation that restores captured context around the handler on the Reactor worker. `AbstractCommandBus.addContextPropagator`; first added = outermost. `foundation` supplies `CausationCommandContextPropagator` |
 | `CommandBusInterceptorChain` | Chain-of-responsibility; interceptors sorted by `@Order`; separate intercept methods for `send`/`sendAsync`/`sendAndDontWait` |
 
 ## Test Structure
@@ -48,6 +49,7 @@ In-process event bus + command bus for JVM-local messaging. Maven: `essentials-r
 - **Overflow retry uses `LockSupport.parkNanos`** — blocking retry on the calling thread with exponential backoff (max 1s); after `overflowMaxRetries` → `EventPublishOverflowException` via `OnErrorHandler`
 - **`FAIL_NON_SERIALIZED` never counts toward retry limit** — retried indefinitely until it succeeds (Reactor thread-safety signal)
 - **Command-type cache cleared on every add/remove** — `commandTypeToCommandHandlerCache.clear()` on `addCommandHandler`/`removeCommandHandler`; safe but causes re-resolution burst on hot paths
+- **`sendAndDontWait`/`sendAsync` run the handler on `boundedElastic`, not the caller** — `publishOn` fuses with `Mono.fromCallable` and pulls the callable onto the worker (only `send` runs on the caller). ThreadLocal/ScopedValue context is lost unless carried by a `CommandContextPropagator`; propagation must be captured at send (`propagateContext(...)` on the sending thread), never inside the callable
 - **`LocalCommandBus.sendAndDontWait` is non-durable** — fire-and-forget on `boundedElastic`; no persistence, no retry on JVM crash
 - **`ReactiveHandlersBeanPostProcessor` resolves `EventBus`/`CommandBus` lazily** — first handler bean post-processed triggers `getBeansOfType`/`getBean`; ensure buses are defined as beans before handlers to avoid circular issues
 - **`AnnotatedCommandHandler` uses `isAssignableFrom`** — handles command subclasses; multiple matching methods → `MultipleCommandHandlersFoundException` at resolution time, not registration time

@@ -46,6 +46,8 @@ notes summarise both and link to them rather than repeating every table.
    - [1.5 Durable queues](#15-durable-queues)
    - [1.6 Database objects changed on first startup](#16-database-objects-changed-on-first-startup)
    - [1.7 Subscription statistics records have a new component](#17-subscription-statistics-records-have-a-new-component)
+   - [1.8 `ApiQueuedMessage` has three new components](#18-apiqueuedmessage-has-three-new-components)
+   - [1.9 Resume-point saves carry a reposition epoch](#19-resume-point-saves-carry-a-reposition-epoch)
 2. [New features](#2-new-features)
 3. [Bug fixes](#3-bug-fixes)
 4. [Deprecations](#4-deprecations)
@@ -206,6 +208,22 @@ The `UnitOfWork`/`EventStoreUnitOfWork` defaults throw `UnsupportedOperationExce
 reads as "state present"; every Essentials implementation overrides them.
 → [MIGRATION-0.60 § A failed `ViewEventProcessor` handler that changed state is queued only after a rollback](MIGRATION-0.60.md#a-failed-vieweventprocessor-handler-that-changed-state-is-queued-only-after-a-rollback)
 
+#### 1.1.7 Events start recording their cause
+
+With the Spring Boot event-store starter, every event appended in reaction to another event now records that event's
+id in `caused_by_event_id`, and every message queued while a cause is bound carries one more `MessageMetaData`
+entry, `essentials.causedByEventId`. Nothing changes for a `PersistableEventMapper` that sets a cause itself. No
+schema change, and existing rows keep their nulls. `essentials.eventstore.causation.enabled=false` restores the old
+behaviour. See [§2.9](#29-event-causation).
+
+#### 1.1.8 Spring saves subscription resume points every second, not every 10 seconds
+
+`essentials.eventstore.subscription-manager.snapshot-resume-points-every` now defaults to `1s`, the default
+`EventStoreSubscriptionManager.builder()` already used. After a crash, a subscriber now redelivers about one
+second of already-handled events instead of up to ten. Only resume points that changed since the last save are
+written, in one batched `UPDATE`, so an idle subscriber still causes no database writes. A busy one costs at most
+one statement per second. Set the property to `10s` to restore the old behaviour.
+
 ---
 
 ### 1.2 Platform: Java 25, Spring Boot 4.1, Kotlin 2.3
@@ -351,6 +369,7 @@ old statistics data matters to you, because nothing exports it first.
 | `DROP INDEX IF EXISTS idx_<table>_ordered_ready` | every queue table | Measured at zero scans in every workload shape; no longer created |
 | Drop `trg_log_message_delivery_stats`, `log_message_delivery_stats()` and the statistics table | only if the trigger exists | Runs once. The table name is read from the function body, and the table is dropped only if its columns match. A table whose trigger you already removed by hand survives; drop it yourself |
 | `CREATE TABLE IF NOT EXISTS essentials_schema_history` | always | The schema harness's ledger — see [§2.2](#22-database-schema-harness) |
+| `ALTER TABLE durable_subscriptions ADD COLUMN IF NOT EXISTS reposition_epoch BIGINT NOT NULL DEFAULT 0` | always (no-op once present) | Guards resume points against a stale save overwriting a reset — see [§1.9](#19-resume-point-saves-carry-a-reposition-epoch). Metadata-only in PostgreSQL 11+, so no table rewrite. Uses your `durableSubscriptionsTableName` if you configured one |
 
 ⚠️ **The index drops are not zero-downtime safe on a large queue table.** They run inside the bootstrap
 transaction under the framework's advisory lock, so a concurrently starting instance waits for them. Plan the
@@ -371,6 +390,40 @@ there is no gap activity to report. The admin API response only gains an optiona
 [§2.10](#210-choose-what-an-async-subscription-does-with-a-failing-event)). Code that builds it, or deconstructs it with
 a record pattern, passes one more argument; `null` means "not known here". The admin API response only gains an
 optional `stoppedByErrorPolicy` field.
+
+### 1.8 `ApiQueuedMessage` has three new components
+
+`ApiQueuedMessage` ends with `orderedMessageKey`, `orderedMessageOrder` and `referencedAggregateType`, so its
+constructor takes three more arguments. Only code that builds it itself is affected, such as test fixtures and mocks
+of `DurableQueuesApi`; pass `null, null, null` for an unordered message. The admin API response only gains three
+optional fields. `referencedAggregateType` is set for messages that refer to a persisted event - an `EventProcessor`'s
+inbox messages - and is what lets the console link a stuck or dead-lettered event message to its causation (see
+[§2.9](#29-event-causation)). It is routing information, not payload, so it is present without the payload role.
+
+### 1.9 Resume-point saves carry a reposition epoch
+
+A save that read a subscription's resume point before a reset could commit after the reset and overwrite it. If the
+node then died before the next save corrected the row, the reset was lost and the events it should have replayed
+were skipped. `durable_subscriptions` now has a `reposition_epoch` column ([§1.6](#16-database-objects-changed-on-first-startup)).
+Every deliberate reposition (`SubscriptionResumePoint.setResumeFromAndIncluding`, which every subscription reset goes
+through) increments the epoch. Normal progress (`advanceResumeFromAndIncluding`) does not. Every save writes value and
+epoch together and is refused when the stored epoch is newer, so the reset wins whichever write commits first.
+
+What you may need to change:
+
+- **`essentials.schema.mode=validate` or `emit`**: the framework does not alter the table itself. Apply the
+  `ALTER TABLE` from §1.6, or take it from the emitted script, before starting 0.60.
+- **A custom `DurableSubscriptionRepository`**: store and return the epoch
+  (`new SubscriptionResumePoint(…, repositionEpoch, lastUpdated)`). In `saveResumePoints`, bind
+  `SubscriptionResumePoint.snapshot()`, refuse a write whose epoch is older than the stored one, and record the outcome
+  with `markAsPersisted(Snapshot, OffsetDateTime)` or `markAsSuperseded(Snapshot)`. An implementation that ignores the
+  epoch keeps working as before: it is just not protected against the race.
+- **`markAsPersisted(GlobalEventOrder, OffsetDateTime)`** is deprecated. It cannot tell which epoch the written
+  value belonged to.
+
+A refused save is logged once per resume point at WARN when the row was repositioned by a writer other than this
+subscription. That is a stale instance, or non-exclusive subscriptions on several nodes sharing one row, which already
+overwrote each other's resume points before 0.60. The row keeps the reset, and restarting the subscription picks it up.
 
 ---
 
@@ -826,6 +879,57 @@ Six additions let a custom gap setup and polling optimizer keep what the default
 [§ CDC gives up waiting for a gap at the gap handler's threshold](MIGRATION-0.60.md#cdc-gives-up-waiting-for-a-gap-at-the-gap-handlers-threshold),
 [`spring-boot-starter-postgresql-event-store` README § Gap Handling](../components/spring-boot-starter-postgresql-event-store/README.md#gap-handling)
 
+### 2.9 Event causation
+
+Every persisted event can now record which event caused it, so "why did this happen?" is a lookup. The event store
+always had the `caused_by_event_id` column, and the starter's default mapper claimed to fill it, but nothing did.
+
+- **Recorded by default.** The framework binds the delivered event as the cause around every handler it calls -
+  `EventProcessor` (both `REQUIRED` and `UnitOfWorkMode.NONE` handlers), `ViewEventProcessor`,
+  `InTransactionEventProcessor`, and async and in-transaction subscriptions - and `CausationPersistableEventEnricher`
+  writes it. Lazily appending repositories record the cause bound when the aggregate joined the UnitOfWork.
+- **Carried across hand-offs**: through `Inbox`, `Outbox` and `DurableLocalCommandBus.sendAndDontWait` in message
+  metadata (`CausationDurableQueuesInterceptor`), and through `sendAsync`/`sendAndDontWait` on a Reactor worker by
+  a new command-bus SPI, `CommandContextPropagator`.
+- **Bound explicitly** where the framework cannot see it - a webhook answering an event it looked up, a batched
+  subscription - with `CausationContext.where(eventId)`.
+- **Looked up** with `EventStore.findEvent(EventId)` ("what caused this?") and `EventStore.loadEventsCausedBy(EventId)`
+  ("what did this cause?"); the latter needs the opt-in partial index
+  `essentials.eventstore.causation.index-enabled=true`.
+- **Admin API and console**: list an aggregate's recent events (`GET /event-store/aggregate-types/{aggregateType}/aggregates/{aggregateId}/events`),
+  then walk from any of them with `GET /event-store/events/{eventId}`, `…/causation-chain` and `…/caused-events`. The
+  console's *Event causation* page starts from an aggregate type and id, or an event id, and a queued or dead-lettered
+  `EventProcessor` inbox message links to it. Identity and cause only, no payloads.
+- **Cost**, measured in the performance lab: no measurable difference on appends or through an `EventProcessor`;
+  WAL grows by the stored id. Across a durable queue, about 116 bytes of WAL per message and 0.5% throughput.
+
+Correlation ids are still not populated; trace context covers "what did this request do". Design and measurements:
+[event-causation.md](./event-causation.md). How to configure it: [LLM-postgresql-event-store.md](../LLM/LLM-postgresql-event-store.md#event-causation).
+
+### 2.10 Save a busy subscriber's resume point early (opt-in)
+
+Resume points are saved every `snapshotResumePointsEvery`, so after a crash a subscriber redelivers whatever it handled
+since the last tick. On a high-throughput subscriber that can be many events. `snapshotResumePointsAfterEvents` adds a
+bound by count: a resume point that has advanced that many `GlobalEventOrder` positions since it was last saved is
+written ahead of the next tick.
+
+```java
+EventStoreSubscriptionManager.builder()
+    ...
+    .setSnapshotResumePointsAfterEvents(1000)
+    .build();
+```
+
+```properties
+essentials.eventstore.subscription-manager.snapshot-resume-points-after-events=1000
+```
+
+`0`, the default, disables it. The threshold is checked in memory every tenth of `snapshotResumePointsEvery`, kept
+between 50 ms and 1 second. The check runs on the same thread as the periodic save, so the two never write concurrently.
+Only resume points past the threshold are written, so an idle or slow subscriber costs no extra database writes. The
+distance is counted in global event order positions. For a tenant-filtered subscriber, or across gaps, it is an upper
+bound on the events actually handled.
+
 ---
 
 ## 3. Bug fixes
@@ -868,6 +972,9 @@ Six additions let a custom gap setup and polling optimizer keep what the default
 | **A default gap selection wrapped by a decorator or called from a custom strategy shared one rotation across subscriptions.** Each subscription now keeps its own, per `defaultSelection()` instance, so a strategy composing two instances keeps a rotation for each. It holds only while the selection is called on the gap handler's own thread; called from an executor or a `CompletableFuture`, an instance rotates with its own rotation, shared by every subscription that reaches it that way | Custom `ResolveTransientGapsToIncludeInQueryStrategy` |
 | **Re-subscribing an acknowledged polling flux left the previous subscribe's registration behind,** and a `SubscriberAcknowledgement` reused for a second subscription went unnoticed. Subscribing the flux of `pollEvents` or `unboundedPollForEvents` again (`retry()`, `repeat()`), on `PostgresqlEventStore` and `CdcEventStore` alike, now gives each subscribe its own state and disposes the previous subscribe's registration once that subscribe has ended: no listener is left behind and no WARN is logged. A gap fill the previous subscribe handed on and that was not acknowledged keeps its gap, and the next subscribe hands it on again - at least once, so possibly twice, never lost. A one-time WARN is logged only while more than one registration on an instance is active at once, i.e. one acknowledgement shared by two subscriptions | Direct `pollEvents` / `unboundedPollForEvents` callers |
 | **The starter's README said CDC was enabled by default.** It is disabled unless `essentials.eventstore.cdc.enabled=true`; the README now says so, and gained a Gap Handling section | `spring-boot-starter-postgresql-event-store` |
+
+| **An aggregate saved by an in-transaction handler could be silently lost.** The commit only made another `beforeCommit` pass when a callback asked for one, so a resource registered during the last pass - by an in-transaction subscription handler, after an event appended directly with `appendToStream` - was committed without ever being written. The commit now makes another pass whenever resources were registered during one, and works on a snapshot of the callbacks so a callback registering more cannot fail it | In-transaction subscriptions and `InTransactionEventProcessor` handlers that change aggregates through a repository |
+| **A decider command and a stateful-repository change in one UnitOfWork failed the transaction.** The decider `CommandHandler` appended its events again on every commit pass, and a `StatefulAggregateRepository` append always asks for one. It now appends each command's events once | Decider `CommandHandler` users |
 
 **The 0.50.1 fixes are all in 0.60,** either merged directly or made unnecessary by other work. The polling
 unit-of-work leak fix came in unchanged. The Jackson 2-specific fixes are no longer needed now that Jackson 2
