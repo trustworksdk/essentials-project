@@ -80,4 +80,20 @@ public interface PersistedEventHandler {
     default boolean handOffFailedEvent(PersistedEvent event, Throwable failure) {
         return false;
     }
+
+    /**
+     * The {@link SubscriptionErrorPolicy} for the asynchronous subscription this handler is subscribed with, in place of
+     * the policy of the {@link EventStoreSubscriptionManager} - so one manager can serve a projection that must stop at a
+     * failed event and a side-effect subscriber that skips it. See {@link SubscriptionErrorPolicy} for which setting wins.
+     * <p>
+     * Read each time the subscription subscribes its subscriber (start, fenced-lock acquisition, {@code resetFrom},
+     * {@link EventStoreSubscription#resumeIfStoppedByErrorPolicy()}), so return the same policy every time. Not read by the
+     * in-transaction subscriptions, which the policy does not govern.
+     *
+     * @return the policy for this handler's subscription, or {@link Optional#empty()} (the default) to use the
+     * {@link EventStoreSubscriptionManager}'s policy
+     */
+    default Optional<SubscriptionErrorPolicy> subscriptionErrorPolicy() {
+        return Optional.empty();
+    }
 }

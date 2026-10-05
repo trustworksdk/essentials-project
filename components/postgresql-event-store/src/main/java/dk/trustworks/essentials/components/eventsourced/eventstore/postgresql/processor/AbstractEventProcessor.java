@@ -20,6 +20,8 @@ import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.serializer.AggregateIdSerializer;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.subscription.EventStoreSubscriptionManager;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.subscription.PersistedEventHandler;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.subscription.SubscriptionErrorPolicy;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.types.*;
 import dk.trustworks.essentials.components.foundation.causation.CausationContext;
 import dk.trustworks.essentials.components.foundation.json.JSONDeserializationException;
@@ -494,6 +496,30 @@ public abstract class AbstractEventProcessor implements Lifecycle {
                                                                                                      .orElse(GlobalEventOrder.FIRST_GLOBAL_EVENT_ORDER));
         }
         return aggregateType -> GlobalEventOrder.FIRST_GLOBAL_EVENT_ORDER;
+    }
+
+    /**
+     * The {@link SubscriptionErrorPolicy} for this processor's event store subscriptions, in place of the policy of the
+     * {@link EventStoreSubscriptionManager} - override it to give this processor a policy of its own, e.g.
+     * <pre>{@code
+     * @Override
+     * protected Optional<SubscriptionErrorPolicy> getSubscriptionErrorPolicy() {
+     *     return Optional.of(SubscriptionErrorPolicy.retryThenStop(5));
+     * }
+     * }</pre>
+     * The policy decides what happens when the subscription's handler fails: for an {@link EventProcessor} that is
+     * forwarding the event to its {@code Inbox} (the {@code Inbox}'s {@link RedeliveryPolicy} governs the handling
+     * itself); for a {@link ViewEventProcessor} it is how often a failure the processor cannot queue in the
+     * subscription's {@code UnitOfWork} is retried before it is queued in its own (see
+     * {@link PersistedEventHandler#handOffFailedEvent(PersistedEvent, Throwable)}), and what happens if that queueing fails.
+     * Read each time a subscription subscribes, so return the same policy every time. See {@link SubscriptionErrorPolicy}
+     * for which setting wins.
+     *
+     * @return the policy for this processor's subscriptions, or {@link Optional#empty()} (the default) to use the
+     * {@link EventStoreSubscriptionManager}'s policy
+     */
+    protected Optional<SubscriptionErrorPolicy> getSubscriptionErrorPolicy() {
+        return Optional.empty();
     }
 
     /**

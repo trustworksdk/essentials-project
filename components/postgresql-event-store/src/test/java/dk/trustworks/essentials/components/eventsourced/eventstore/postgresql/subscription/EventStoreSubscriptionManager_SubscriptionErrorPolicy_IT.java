@@ -375,6 +375,85 @@ class EventStoreSubscriptionManager_SubscriptionErrorPolicy_IT {
         assertThat(subscription.resumeIfStoppedByErrorPolicy()).isFalse();
     }
 
+    // ------------------------------------------------------------------------------------------- Per-handler policy
+
+    /**
+     * One manager, policy {@code SKIP}: a projection whose handler asks for {@code STOP} stops at the failed event, while
+     * a side-effect subscriber on the same manager and aggregate type, with no policy of its own, skips it. The batched
+     * path honours a handler's policy the same way
+     */
+    @Test
+    void a_handlers_own_policy_wins_over_the_managers_for_its_subscription_only() throws InterruptedException {
+        eventStoreSubscriptionManager = startSubscriptionManager(SubscriptionErrorPolicy.skip());
+        var projectionId       = SubscriberId.of(subscriberId + "-Projection");
+        var projectionHandled  = new CopyOnWriteArrayList<Long>();
+        var projectionAttempts = new AtomicInteger();
+        var projection = eventStoreSubscriptionManager.subscribeToAggregateEventsAsynchronously(projectionId,
+                                                                                                aggregateType,
+                                                                                                GlobalEventOrder.FIRST_GLOBAL_EVENT_ORDER,
+                                                                                                Optional.empty(),
+                                                                                                new PersistedEventHandler() {
+                                                                                                    @Override
+                                                                                                    public void handle(PersistedEvent event) {
+                                                                                                        var globalOrder = event.globalEventOrder().longValue();
+                                                                                                        if (globalOrder == FAILING_EVENT) {
+                                                                                                            projectionAttempts.incrementAndGet();
+                                                                                                            throw new IllegalStateException("Intentional failure handling event #" + globalOrder);
+                                                                                                        }
+                                                                                                        projectionHandled.add(globalOrder);
+                                                                                                    }
+
+                                                                                                    @Override
+                                                                                                    public Optional<SubscriptionErrorPolicy> subscriptionErrorPolicy() {
+                                                                                                        return Optional.of(SubscriptionErrorPolicy.stop());
+                                                                                                    }
+                                                                                                });
+        var sideEffectHandled  = new CopyOnWriteArrayList<Long>();
+        var sideEffectAttempts = new ConcurrentHashMap<Long, AtomicInteger>();
+        var sideEffect = subscribe(sideEffectHandled, sideEffectAttempts, () -> true);
+        var batchedProjectionId = SubscriberId.of(subscriberId + "-BatchedProjection");
+        var batchedHandled      = new CopyOnWriteArrayList<Long>();
+        var batched = eventStoreSubscriptionManager.batchSubscribeToAggregateEventsAsynchronously(batchedProjectionId,
+                                                                                                  aggregateType,
+                                                                                                  GlobalEventOrder.FIRST_GLOBAL_EVENT_ORDER,
+                                                                                                  Optional.empty(),
+                                                                                                  10,
+                                                                                                  Duration.ofMillis(200),
+                                                                                                  new BatchedPersistedEventHandler() {
+                                                                                                      @Override
+                                                                                                      public int handleBatch(List<PersistedEvent> events) {
+                                                                                                          var globalOrders = events.stream().map(e -> e.globalEventOrder().longValue()).toList();
+                                                                                                          if (globalOrders.contains(FAILING_EVENT)) {
+                                                                                                              throw new IllegalStateException("Intentional failure handling batch " + globalOrders);
+                                                                                                          }
+                                                                                                          batchedHandled.addAll(globalOrders);
+                                                                                                          return events.size();
+                                                                                                      }
+
+                                                                                                      @Override
+                                                                                                      public Optional<SubscriptionErrorPolicy> subscriptionErrorPolicy() {
+                                                                                                          return Optional.of(SubscriptionErrorPolicy.stop());
+                                                                                                      }
+                                                                                                  });
+
+        appendThreeEvents();
+
+        // The side-effect subscriber gets the manager's SKIP
+        Awaitility.waitAtMost(Duration.ofSeconds(10))
+                  .untilAsserted(() -> assertThat(sideEffectHandled).containsExactly(1L, 3L));
+        assertThat(sideEffect.isStoppedByErrorPolicy()).isFalse();
+        awaitDurableResumePoint(subscriberId, 4);
+        // The projections get their own STOP
+        Awaitility.waitAtMost(Duration.ofSeconds(10)).until(projection::isStoppedByErrorPolicy);
+        Awaitility.waitAtMost(Duration.ofSeconds(10)).until(batched::isStoppedByErrorPolicy);
+        Thread.sleep(1000);
+        assertThat(projectionHandled).containsExactly(1L);
+        assertThat(projectionAttempts.get()).isEqualTo(1);
+        assertThat(batchedHandled).isEmpty();
+        awaitDurableResumePoint(projectionId, FAILING_EVENT);
+        awaitDurableResumePoint(batchedProjectionId, 1);
+    }
+
     // ------------------------------------------------------------------------------------------------------- Batched
 
     @Test
@@ -650,8 +729,12 @@ class EventStoreSubscriptionManager_SubscriptionErrorPolicy_IT {
     }
 
     private void awaitDurableResumePoint(long expectedResumeFromAndIncluding) {
+        awaitDurableResumePoint(subscriberId, expectedResumeFromAndIncluding);
+    }
+
+    private void awaitDurableResumePoint(SubscriberId ofSubscriber, long expectedResumeFromAndIncluding) {
         Awaitility.waitAtMost(Duration.ofSeconds(10))
-                  .untilAsserted(() -> assertThat(durableSubscriptionRepository.getResumePoint(subscriberId, aggregateType))
+                  .untilAsserted(() -> assertThat(durableSubscriptionRepository.getResumePoint(ofSubscriber, aggregateType))
                           .hasValueSatisfying(resumePoint -> assertThat(resumePoint.getResumeFromAndIncluding().longValue()).isEqualTo(expectedResumeFromAndIncluding)));
     }
 

@@ -140,7 +140,9 @@ public final class EventStoreSubscriptionManagerBuilder {
      * What the asynchronous subscriptions created by the {@link EventStoreSubscriptionManager} do when their
      * {@link PersistedEventHandler} / {@link BatchedPersistedEventHandler} throws an exception that isn't an I/O error
      * (I/O errors are always retried). Default: {@link SubscriptionErrorPolicy#skip()} - log at ERROR, advance the
-     * resume point past the event and continue with the next one.
+     * resume point past the event and continue with the next one. A handler whose {@code subscriptionErrorPolicy()}
+     * returns a policy of its own ({@link PersistedEventHandler#subscriptionErrorPolicy()},
+     * {@link BatchedPersistedEventHandler#subscriptionErrorPolicy()}) overrides this one for its subscription.
      *
      * @param subscriptionErrorPolicy the policy - see {@link SubscriptionErrorPolicy}
      * @return this builder

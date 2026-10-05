@@ -1490,6 +1490,15 @@ var subscriptionManager = EventStoreSubscriptionManager.builder()
 
 `PersistedEventSubscriberBuilder` and `BatchedPersistedEventSubscriberBuilder` offer the same `setSubscriptionErrorPolicy(...)` for a subscriber that is built directly rather than through the manager.
 
+The manager's policy applies to every subscription whose event handler has none of its own. A `PersistedEventHandler` or `BatchedPersistedEventHandler` that returns a policy from `subscriptionErrorPolicy()` (default `Optional.empty()`) overrides it for its own subscription, so one manager can serve a projection that must stop at a failed event and a side-effect subscriber that skips it. A `ViewEventProcessor` or `EventProcessor` sets it by overriding `getSubscriptionErrorPolicy()`:
+
+```java
+@Override
+protected Optional<SubscriptionErrorPolicy> getSubscriptionErrorPolicy() {
+    return Optional.of(SubscriptionErrorPolicy.retryThenStop(5));
+}
+```
+
 With the Spring Boot starter (`spring-boot-starter-postgresql-event-store`) the policy is configured through properties:
 
 ```properties

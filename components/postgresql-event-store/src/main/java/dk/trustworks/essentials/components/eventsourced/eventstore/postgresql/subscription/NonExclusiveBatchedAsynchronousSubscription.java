@@ -103,7 +103,7 @@ public class NonExclusiveBatchedAsynchronousSubscription extends AbstractEventSt
                                                           .setEventStore(eventStore)
                                                           .setMaxBatchSize(maxBatchSize)
                                                           .setMaxLatency(maxLatency)
-                                                          .setSubscriptionErrorPolicy(eventStoreSubscriptionManagerSettings.subscriptionErrorPolicy())
+                                                          .setSubscriptionErrorPolicy(eventStoreSubscriptionManagerSettings.subscriptionErrorPolicyFor(eventHandler))
                                                           .setSubscriberAcknowledgement(acknowledgement)
                                                           .build();
             eventStore.pollEvents(aggregateType,

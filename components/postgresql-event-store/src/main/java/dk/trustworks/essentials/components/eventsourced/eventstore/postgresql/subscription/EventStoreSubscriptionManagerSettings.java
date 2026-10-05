@@ -18,8 +18,10 @@ package dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.s
 
 
 import java.time.Duration;
+import java.util.Optional;
 
 import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
+import static dk.trustworks.essentials.shared.MessageFormatter.msg;
 
 /**
  * Represents settings for managing EventStore subscriptions.
@@ -53,5 +55,37 @@ public record EventStoreSubscriptionManagerSettings(int eventStorePollingBatchSi
                                                  Duration eventStorePollingInterval,
                                                  Duration snapshotResumePointsEvery) {
         this(eventStorePollingBatchSize, eventStorePollingInterval, snapshotResumePointsEvery, SubscriptionErrorPolicy.skip());
+    }
+
+    /**
+     * The {@link SubscriptionErrorPolicy} an asynchronous subscription of <code>eventHandler</code> applies: the handler's
+     * own {@link PersistedEventHandler#subscriptionErrorPolicy()} if it returns one, otherwise {@link #subscriptionErrorPolicy()}
+     *
+     * @param eventHandler the subscription's event handler
+     * @return the policy the subscription applies
+     */
+    public SubscriptionErrorPolicy subscriptionErrorPolicyFor(PersistedEventHandler eventHandler) {
+        requireNonNull(eventHandler, "No eventHandler provided");
+        return effectivePolicy(eventHandler.subscriptionErrorPolicy(), eventHandler);
+    }
+
+    /**
+     * The {@link SubscriptionErrorPolicy} a batched subscription of <code>eventHandler</code> applies: the handler's own
+     * {@link BatchedPersistedEventHandler#subscriptionErrorPolicy()} if it returns one, otherwise {@link #subscriptionErrorPolicy()}
+     *
+     * @param eventHandler the subscription's event handler
+     * @return the policy the subscription applies
+     */
+    public SubscriptionErrorPolicy subscriptionErrorPolicyFor(BatchedPersistedEventHandler eventHandler) {
+        requireNonNull(eventHandler, "No eventHandler provided");
+        return effectivePolicy(eventHandler.subscriptionErrorPolicy(), eventHandler);
+    }
+
+    @SuppressWarnings("OptionalUsedAsFieldOrParameterType")
+    private SubscriptionErrorPolicy effectivePolicy(Optional<SubscriptionErrorPolicy> handlerPolicy, Object eventHandler) {
+        return requireNonNull(handlerPolicy,
+                              msg("subscriptionErrorPolicy() of event handler '{}' returned null - return Optional.empty() to use the EventStoreSubscriptionManager's policy",
+                                  eventHandler))
+                .orElse(subscriptionErrorPolicy);
     }
 }

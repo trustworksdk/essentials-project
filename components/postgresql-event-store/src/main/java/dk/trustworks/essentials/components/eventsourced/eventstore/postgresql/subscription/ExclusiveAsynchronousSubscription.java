@@ -160,7 +160,7 @@ public class ExclusiveAsynchronousSubscription extends AbstractEventStoreSubscri
                                                .setOnErrorHandler(ExclusiveAsynchronousSubscription.this::onErrorHandlingEvent)
                                                .setEventStorePollingBatchSize(eventStoreSubscriptionManagerSettings.eventStorePollingBatchSize())
                                                .setEventStore(eventStore)
-                                               .setSubscriptionErrorPolicy(eventStoreSubscriptionManagerSettings.subscriptionErrorPolicy())
+                                               .setSubscriptionErrorPolicy(eventStoreSubscriptionManagerSettings.subscriptionErrorPolicyFor(eventHandler))
                                                .setSubscriberAcknowledgement(acknowledgement)
                                                .build();
 

@@ -333,7 +333,22 @@ public abstract class EventProcessor extends AbstractEventProcessor {
 
                                                                                 }
                                                                             },
-                                                                            event -> forwardEventToInbox(event, inbox));
+                                                                            new PersistedEventHandler() {
+                                                                                @Override
+                                                                                public void handle(PersistedEvent event) {
+                                                                                    forwardEventToInbox(event, inbox);
+                                                                                }
+
+                                                                                @Override
+                                                                                public Optional<SubscriptionErrorPolicy> subscriptionErrorPolicy() {
+                                                                                    return getSubscriptionErrorPolicy();
+                                                                                }
+
+                                                                                @Override
+                                                                                public String toString() {
+                                                                                    return processorName;
+                                                                                }
+                                                                            });
                                                                     log.info("⚙️ [{}] Created exclusive '{}' subscription: {}",
                                                                              processorName,
                                                                              aggregateType,

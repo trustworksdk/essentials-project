@@ -65,10 +65,22 @@ import static dk.trustworks.essentials.shared.FailFast.*;
  * so honouring it for {@code STOP} would silently start retrying in every application already configured for
  * {@code STOP}. {@link #stop()} keeps giving up on the first failure.
  * <p>
- * The policy is configured per {@link EventStoreSubscriptionManager} with
- * {@link EventStoreSubscriptionManagerBuilder#setSubscriptionErrorPolicy(SubscriptionErrorPolicy)} and carried to every
- * asynchronous subscription it creates through {@link EventStoreSubscriptionManagerSettings#subscriptionErrorPolicy()}.
- * It does not apply to in-transaction subscriptions, where a handler exception rolls back the caller's
+ * <b>Which setting wins:</b> the event handler's own policy, then the manager's.
+ * <ol>
+ *     <li>A {@link PersistedEventHandler#subscriptionErrorPolicy()} or {@link BatchedPersistedEventHandler#subscriptionErrorPolicy()}
+ *     that returns a policy decides for the subscription of that handler - and only for it. A {@code ViewEventProcessor} or
+ *     {@code EventProcessor} sets it by overriding {@code AbstractEventProcessor#getSubscriptionErrorPolicy()}. This is what
+ *     lets one manager serve a projection that must stop at a failed event and a side-effect subscriber that skips it.</li>
+ *     <li>Otherwise the policy of the {@link EventStoreSubscriptionManager} that created the subscription applies:
+ *     {@link EventStoreSubscriptionManagerBuilder#setSubscriptionErrorPolicy(SubscriptionErrorPolicy)} (Spring Boot:
+ *     {@code essentials.eventstore.subscription-manager.error-policy.*}), carried through
+ *     {@link EventStoreSubscriptionManagerSettings#subscriptionErrorPolicy()}, and {@link #skip()} when it is not set.</li>
+ * </ol>
+ * {@link EventStoreSubscriptionManagerSettings#subscriptionErrorPolicyFor(PersistedEventHandler)} resolves it; a subscriber
+ * built directly with {@link PersistedEventSubscriberBuilder} or {@link BatchedPersistedEventSubscriberBuilder} applies
+ * exactly the policy given to its builder.
+ * <p>
+ * The policy does not apply to in-transaction subscriptions, where a handler exception rolls back the caller's
  * {@code UnitOfWork}, nor to subscriptions that forward to an {@link Inbox}, which has its own redelivery policy.
  *
  * @param mode           what to do with an event whose handler failed

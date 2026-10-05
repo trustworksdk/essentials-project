@@ -1377,12 +1377,26 @@ EventStoreSubscriptionManager.builder()
 
 Spring Boot: `essentials.eventstore.subscription-manager.error-policy.mode=skip|retry-n-then-skip|stop|retry-n-then-stop` (default `skip`),
 plus `.max-retries` (default 3, used by the two `retry-n-then-*` modes only - `stop` never retries), `.initial-backoff` (100ms), `.max-backoff` (1s). Built directly, `PersistedEventSubscriberBuilder`
-and `BatchedPersistedEventSubscriberBuilder` take the same `setSubscriptionErrorPolicy(...)`. The policy is per manager, applies
+and `BatchedPersistedEventSubscriberBuilder` take the same `setSubscriptionErrorPolicy(...)`. The policy is per manager (a handler can override it - below), applies
 to a batch as a whole, and does not touch in-transaction subscriptions (the exception rolls back the caller) or Inbox-forwarding
 subscriptions (the Inbox's `RedeliveryPolicy` applies). Alert on the Micrometer counter
 `essentials.eventstore.subscription.handle_event_failed` (tags `subscriber_id`, `aggregate_type`, `event_handler`,
 `event_type`), which counts every event that exhausted the policy. For durable per-event retry with dead-lettering,
 forward to an `Inbox` (`EventProcessor`) instead.
+
+**One manager, different policies per subscription.** A handler's own policy wins over the manager's, for its subscription only:
+override `default Optional<SubscriptionErrorPolicy> subscriptionErrorPolicy()` on `PersistedEventHandler` /
+`BatchedPersistedEventHandler` (default `Optional.empty()` = the manager's policy). `ViewEventProcessor` and `EventProcessor`
+take it by overriding `protected Optional<SubscriptionErrorPolicy> getSubscriptionErrorPolicy()`. So projections can
+`retryThenStop(...)` while side-effect subscribers on the same manager skip. Spring Boot has no per-subscriber property - the
+`error-policy.*` properties set the manager's policy only.
+
+```java
+@Override
+protected Optional<SubscriptionErrorPolicy> getSubscriptionErrorPolicy() {   // in a ViewEventProcessor / EventProcessor
+    return Optional.of(SubscriptionErrorPolicy.retryThenStop(5));
+}
+```
 
 **A handler can take a failed event over instead of the policy giving up.** `PersistedEventHandler#handOffFailedEvent(event, failure)`
 (default `false`) is called on the delivery thread once the policy has used up its retries, in place of skipping or stopping, after

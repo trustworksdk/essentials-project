@@ -723,6 +723,9 @@ alert on.
 | `stop()` | On the first failure, stop at the failed event without advancing the resume point; the subscription continues *at* it when resumed (`EventStoreSubscription#resumeIfStoppedByErrorPolicy()`, the manager's `resumeSubscriptionIfStoppedByErrorPolicy(...)`, admin API `POST /event-store/subscriptions/{subscriberId}/aggregate-types/{aggregateType}/resume`) or started again (restart, fenced-lock hand-over, `resetFrom`) |
 | `retryThenStop(n[, initialBackoff, maxBackoff])` | Retry as `retryThenSkip`, then stop as `stop()` - the choice for a projection that must not skip an event without halting on a transient failure |
 
+An event handler can override the manager's policy for its own subscription - `PersistedEventHandler` /
+`BatchedPersistedEventHandler#subscriptionErrorPolicy()`, or `getSubscriptionErrorPolicy()` on a `ViewEventProcessor` /
+`EventProcessor` - so projections and side-effect subscribers on one manager can differ.
 A batched subscription applies the policy to the batch as a whole. In-transaction subscriptions and subscriptions
 that forward to an `Inbox` are not affected. **Upgrading changes nothing until you configure a policy.**
 

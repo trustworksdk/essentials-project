@@ -21,7 +21,8 @@ targets, with a `-N` suffix for plugin-only releases.
   (`error-policy.mode=retry-n-then-stop`), resuming a subscription its error policy stopped without a
   restart (`EventStoreSubscription#resumeIfStoppedByErrorPolicy()`, the manager, and the admin API's
   `POST .../resume`), and the new trap `ESS-117`: `stop()` halts a projection on its first transient
-  non-I/O failure.
+  non-I/O failure. A handler can override the manager's policy for its own subscription
+  (`subscriptionErrorPolicy()`, a processor's `getSubscriptionErrorPolicy()`).
 
 ## 0.60.0-2 — targets Essentials 0.60.0
 - **Slice law, loaded by lane** — `rules/slice-design.md` stays one file, but each lane-, kind- or

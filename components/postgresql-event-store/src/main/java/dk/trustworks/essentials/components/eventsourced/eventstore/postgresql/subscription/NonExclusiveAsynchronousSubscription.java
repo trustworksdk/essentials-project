@@ -91,7 +91,7 @@ public class NonExclusiveAsynchronousSubscription extends AbstractEventStoreSubs
                                                    .setOnErrorHandler(this::onErrorHandlingEvent)
                                                    .setEventStorePollingBatchSize(eventStoreSubscriptionManagerSettings.eventStorePollingBatchSize())
                                                    .setEventStore(eventStore)
-                                                   .setSubscriptionErrorPolicy(eventStoreSubscriptionManagerSettings.subscriptionErrorPolicy())
+                                                   .setSubscriptionErrorPolicy(eventStoreSubscriptionManagerSettings.subscriptionErrorPolicyFor(eventHandler))
                                                    .setSubscriberAcknowledgement(acknowledgement)
                                                    .build();
             eventStore.pollEvents(aggregateType,

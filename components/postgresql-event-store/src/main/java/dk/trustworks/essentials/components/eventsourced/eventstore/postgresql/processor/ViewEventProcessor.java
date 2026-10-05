@@ -200,6 +200,11 @@ public abstract class ViewEventProcessor extends AbstractEventProcessor {
                                                                             }
 
                                                                             @Override
+                                                                            public Optional<SubscriptionErrorPolicy> subscriptionErrorPolicy() {
+                                                                                return getSubscriptionErrorPolicy();
+                                                                            }
+
+                                                                            @Override
                                                                             public String toString() {
                                                                                 return processorName;
                                                                             }
