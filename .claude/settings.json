@@ -28,5 +28,8 @@
     "pyright-lsp@claude-plugins-official": true,
     "jdtls-lsp@claude-plugins-official": true,
     "kotlin-lsp@claude-plugins-official": true
+  },
+  "worktree": {
+    "baseRef": "head"
   }
 }
