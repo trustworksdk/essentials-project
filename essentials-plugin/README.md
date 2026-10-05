@@ -33,7 +33,7 @@ default — turn it on in the `/plugin` Marketplaces tab, or refresh with
 ## Requirements
 
 - **Python 3.11 or newer** for every command that runs a script. The deterministic checks are scripts, and a command without them stops or marks its gates not run rather than guessing.
-- **[`uv`](https://docs.astral.sh/uv/)** for the scripts that need `pyyaml` or `jsonschema` (`slice-lint.py`, `slice-source.py`, `slice-index.py`). Each pins its dependencies in PEP 723 inline metadata, and the commands run them with `uv run --script`, which installs exactly those versions. Without `uv`, `python3 <script>` works where those packages are already installed (or `pipx run <script>`, which reads the same metadata). `init-render.py`, `render-slice.py`, `stack-lint.py`, `review-scan.py` and `check-citations.py` are standard library only.
+- **[`uv`](https://docs.astral.sh/uv/)** for the scripts that need `pyyaml` or `jsonschema` (`slice-lint.py`, `slice-source.py`, `slice-index.py`). Each pins its dependencies in PEP 723 inline metadata, and the commands run them with `uv run --script`, which installs exactly those versions. Without `uv`, `python3 <script>` works where those packages are already installed (or `pipx run <script>`, which reads the same metadata). `init-render.py`, `render-slice.py`, `slice-law.py`, `stack-lint.py`, `review-scan.py` and `check-citations.py` are standard library only.
 - **For `/essentials:init`'s smoke build:** the JDK `references/stack/stack-pins.md` pins, Maven, and Docker (without Docker the result is compile-only and says so); `npm` to check a frontend.
 
 ## Usage
@@ -152,7 +152,8 @@ essentials-plugin/
 ├── CLAUDE.md                    (maintainer instructions: what moves together, the invariants,
 │                                 the pre-commit checks and the release checklist)
 ├── rules/
-│   └── slice-design.md          (THE SLICE LAW — standalone, cited never restated)
+│   └── slice-design.md          (THE SLICE LAW — standalone, cited never restated; its sections
+│                                 carry lane / kind / store scope lines for slice-law.py)
 ├── skills/
 │   ├── essentials-docs/         (auto-loaded knowledge skill + search.sh)
 │   ├── essentials-change/       (auto-loaded change router — prose in, slice change out)
@@ -176,6 +177,8 @@ essentials-plugin/
 │   ├── slice-source.py          (syntactic facts from Java/Kotlin sources; --check backs
 │   │                             slice-check gates 6, 11(b), 14)
 │   ├── slice-index.py           (slice-map's data, terminal graph, locate queries and HTML page)
+│   ├── slice-law.py             (prints the slice law's sections for one lane, kind and project —
+│   │                             how the slice skills load it; --check holds the byte budgets)
 │   ├── stack-lint.py            (the decidable half of S1–S11: ESS-S findings with fix descriptors)
 │   ├── review-scan.py           (trap signatures in a diff's added lines: ESS-NNN findings)
 │   └── check-citations.py       (plugin lint: a pin or S-requirement restated outside
@@ -217,12 +220,12 @@ essentials-plugin/
 │   ├── slice-golden/            (rendered slice compositions, byte-diffed by render-slice.py check)
 │   ├── slice-compile/           (which composition or fixture builds on which host; the two-BC
 │   │                             boot test)
-│   ├── slice-source/, slice-index/, stack-lint/
+│   ├── slice-source/, slice-index/, slice-law/, stack-lint/
 │   │                            (each script's cases and goldens)
 │   ├── review/                  (review-scan's signature diffs; judgement patches over two fixtures)
 │   ├── citations/               (check-citations --self-test input)
 │   └── scripts/                 (the unittest suites: slice-lint, render-slice, slice-source,
-│                                 slice-index, review-scan)
+│                                 slice-index, slice-law, review-scan)
 └── evals/                       (claude plugin eval suite for the model-judgement steps —
                                   maintainer, before release; see evals/README.md)
 ```

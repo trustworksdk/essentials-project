@@ -155,7 +155,7 @@ default_merge_base() {
 # ---- steps ------------------------------------------------------------------------------------------------------
 # One function per plugin-docs step, in the job's order. Each runs in the directory that CI step ran in.
 
-steps=(llm-sync citations ess-ids plugin-version symlinks slice-lint render-slice slice-source slice-index stack-lint
+steps=(llm-sync citations ess-ids plugin-version symlinks slice-lint render-slice slice-source slice-index slice-law stack-lint
     init-render review-scan docs-search check-patches check-expected eval-graders eval-flags slice-compile-table render-check)
 declare -A step_desc=(
     [llm-sync]="regenerate references/llm/ from LLM/ (sync-plugin-llm.sh) and fail on drift"
@@ -167,6 +167,7 @@ declare -A step_desc=(
     [render-slice]="slice templates render to the committed goldens (render-slice.py check + unit tests)"
     [slice-source]="slice source facts (test_slice_source.py)"
     [slice-index]="slice index and graph (test_slice_index.py)"
+    [slice-law]="slice-law scope lines valid, every lane x kind view within budget and matching its golden (test_slice_law.py)"
     [stack-lint]="stack contract lint (stack-lint.py --self-test + unit tests)"
     [init-render]="every answer set renders and lints; the nine cells match their goldens (init-render.py)"
     [review-scan]="review signatures (review-scan.py --self-test + unit tests)"
@@ -300,6 +301,10 @@ step_slice-source() {
 
 step_slice-index() {
     x "$plugin" uv run --script tests/scripts/test_slice_index.py
+}
+
+step_slice-law() {
+    x "$plugin" uv run --script tests/scripts/test_slice_law.py
 }
 
 step_stack-lint() {

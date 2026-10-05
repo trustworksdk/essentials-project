@@ -10,6 +10,11 @@ This file is **self-contained**. It depends on no other plugin. Framework API de
 These rules are **advisory-by-construction** — this plugin ships no enforcement hooks.
 `/essentials:slice-check` is the opt-in audit that reports against them.
 
+A `<!-- slice-law: … -->` line under a heading scopes that section, and every section under it, to
+the lanes (§R5), the slice kinds, or the persistence (`store=spring-data`) it names; a section
+without one applies everywhere. `scripts/slice-law.py` prints only the sections that apply to a
+lane, a kind and a project, which is how the slice skills load this file.
+
 ## Slice Zero: detect the language and the bounded context before advising
 
 Never recommend a structure before you know which language the target module is written in and which
@@ -153,6 +158,7 @@ Automation and translation slices have no external API at all.
 usually a read model doing two jobs — apply test 1 before adding the next one.
 
 ### The command and the view *are* the contract — no adapter layer
+<!-- slice-law: kind=command,view -->
 
 A slice needs no request/response DTOs and no mapper. The **command type is the request body**; the
 **read model is the response body**. Return the view entity from the query method; accept the
@@ -193,6 +199,7 @@ the point — record why in the slice's `CLAUDE.md` so it reads as a decision ra
 most of your views need fields hidden, the read models are projecting more than the slices serve.
 
 ## Evolving a view slice
+<!-- slice-law: lane=decider,aggregate kind=view -->
 
 **This section applies to the two event-sourced lanes only.** On the service-entity style there is no
 projection to rebuild and no stream to replay, so a shape change is an ordinary schema migration and
@@ -330,6 +337,7 @@ edits nothing. The other two are deliberate departures, and each needs a reason 
   discovers a year later it needed the history it never kept.
 
 ### Decider style — the API differs per language
+<!-- slice-law: lane=decider -->
 
 The two languages use different APIs and templates must never cross-pollinate them:
 
@@ -343,6 +351,7 @@ All under `dk.trustworks.essentials.components.*`. See `references/llm/LLM-kotli
 and `references/llm/LLM-eventsourced-aggregates.md` for the full signatures — and never invent one.
 
 ### Aggregate style — the aggregate is the consistency boundary
+<!-- slice-law: lane=aggregate -->
 
 Here the aggregate *is* the decision component, and every command slice in the BC calls it. That is
 not an R1 violation: R1 forbids a **router** — one component dispatching over N command types — and
@@ -385,6 +394,7 @@ it will compile, be implemented by nothing that matters, and mislead the next re
 write style. `routing/` is decider-lane-only, and required there — see § Directory vocabulary.
 
 ### The aggregate's own bar
+<!-- slice-law: lane=aggregate -->
 
 The `_shared/` promotion bar does not apply — an aggregate is shared *by construction*, and counting
 consumers would be meaningless. Its fields are bounded by its invariants, not by its callers, which
@@ -403,6 +413,7 @@ Failing (1) or (3) across most methods is the signal to migrate the BC to decide
 trimming.
 
 ### Service-entity style — the decision lives on a state-stored entity
+<!-- slice-law: lane=service-entity -->
 
 The decision lives on an **entity reached through a repository and mutated in place inside a
 transaction**. State is the row or document itself, not a fold over a stream. Domain events are still
@@ -498,6 +509,7 @@ they are declared. §R2's no-adapter rule, §R4's boundary, and § Wiring is par
 unchanged.
 
 ### The read side on this lane
+<!-- slice-law: lane=service-entity -->
 
 On the event-sourced lanes a view slice owns a **separate** read model, so §R4's ownership rule is
 easy: nobody else touches that table. Here there is **one** table, shared by the write side and every
@@ -530,6 +542,7 @@ Three consequences, stated so tooling and reviewers do not have to infer them:
   guidance here.
 
 ### The entity's own bar
+<!-- slice-law: lane=service-entity -->
 
 The `_shared/` promotion bar does not apply, for the same reason it does not apply to an aggregate:
 the entity is shared by construction. Its own failure mode is different from the aggregate's, though,
@@ -558,6 +571,7 @@ idempotency check that is the entity's whole reason to exist. That is a class of
 lane has.
 
 ## Spring Data repository surface
+<!-- slice-law: store=spring-data -->
 
 **Scope: every Spring Data repository interface in an Essentials project** — the write repository on
 the service-entity lane, a view slice's query interface, and any read model backed by Spring Data JPA
@@ -711,6 +725,7 @@ without one is reaching across a boundary. Within a BC the seam is optional, and
 keeps it from becoming a service layer reassembled one interface at a time.
 
 ### The `_shared/` promotion bar
+<!-- slice-law: lane=decider -->
 
 **The default is a per-slice `State` + `Evolver`, living in the slice directory.** A decider is
 handed its aggregate's events; folding them itself is the normal case, not a workaround. These folds
@@ -780,6 +795,7 @@ boundary findings, the behavioural ones correctness bugs.
   `entities/` (§R5).
 
 ### Structural — event-sourced view slices
+<!-- slice-law: lane=decider,aggregate kind=view -->
 
 - Two view slices projecting the same events into the same read-model shape with **no `supersedes`
   link** between them — one slice split by mistake, or a migration twin that never declared itself
@@ -788,6 +804,7 @@ boundary findings, the behavioural ones correctness bugs.
   after the swap — the retirement never happened (§ Evolving a view slice).
 
 ### Structural — decider lane
+<!-- slice-law: lane=decider -->
 
 - `use_cases/_shared/` containing a decider, an API handler, or a repository (§ Sanctioned sharing).
 - A `use_cases/_shared/` `State` + `Evolver` with **fewer than three** decider consumers, or with a
@@ -798,6 +815,7 @@ boundary findings, the behavioural ones correctness bugs.
   `slice-model.md` §4.1).
 
 ### Structural — aggregate lane
+<!-- slice-law: lane=aggregate -->
 
 - A `<bc>/routing/` — a decider-style vestige no configurator asks anything (§ Aggregate style).
 - An aggregate whose method count tracks the slice count, whose methods mostly `apply(...)` with no
@@ -807,6 +825,7 @@ boundary findings, the behavioural ones correctness bugs.
   consistency boundary the style exists to hold (§ Aggregate style).
 
 ### Structural — service-entity lane
+<!-- slice-law: lane=service-entity -->
 
 - A `<bc>/routing/`, or a `use_cases/_shared/` — neither has a job on this lane; a `_shared/` here is
   a service class in disguise (§ Service-entity style).
@@ -818,6 +837,10 @@ boundary findings, the behavioural ones correctness bugs.
 - An entity whose method count tracks the slice count, or whose public methods only assign fields.
   **Not** a finding: accessors whose only callers are the ORM and `toString()` (§ The entity's own
   bar).
+
+### Structural — Spring Data repositories
+<!-- slice-law: store=spring-data -->
+
 - A `@RestController` returning an `@Entity` / `@Document`, or a Spring Data-backed query returning
   the mapped type where a closed interface projection belongs (§ The read shape is a closed
   interface projection).
@@ -835,6 +858,7 @@ boundary findings, the behavioural ones correctness bugs.
 - Bypassing the command bus to call a decider directly.
 
 ### Behavioural — event-sourced lanes
+<!-- slice-law: lane=decider,aggregate -->
 
 - A `@MessageHandler` that writes versioned state — a view projection, or an automation persisting
   process state — and omits `OrderedMessage`: without `message.order` it cannot compare the event's
@@ -842,15 +866,20 @@ boundary findings, the behavioural ones correctness bugs.
   *optional* to the dispatcher; do not flag a handler that carries no versioned state.
 
 ### Behavioural — service-entity lane
+<!-- slice-law: lane=service-entity -->
 
 - A public setter on an entity that writes a field an invariant method guards — the guard becomes
   bypassable (§ The entity's own bar).
-- A Spring Data query method that declares a projection return type but is **named after a CRUD base
-  method** — it returns the entity and presents as a `ClassCastException` at the call site (§ Never
-  name a query method after a CRUD base method).
 - A mutable value object passed by reference from a command into a persisted entity — the command and
   the long-lived row now share state; defensive-copy it (`references/design/essentials-design.md`
   § State-stored entities).
+
+### Behavioural — Spring Data repositories
+<!-- slice-law: store=spring-data -->
+
+- A Spring Data query method that declares a projection return type but is **named after a CRUD base
+  method** — it returns the entity and presents as a `ClassCastException` at the call site (§ Never
+  name a query method after a CRUD base method).
 
 ## Reporting severities
 
@@ -877,7 +906,7 @@ look, but a 40-line file serving two slices is the worse problem.
 The arguments that sound reasonable mid-change, and the verdict on each. The reasoning lives in the
 section each row names.
 
-### Every lane
+### Rationalisations — every lane
 
 | Rationalisation | Reality |
 |---|---|
@@ -895,20 +924,23 @@ section each row names.
 | "Kotlin does not need `permits`, so Java should not either." | Java's sealed types require it; the one-name append is sanctioned, dropping `sealed` is not (§R3). |
 | "This external system is basically internal, so no ACL." | The boundary defines it, not the org chart. Another team's service is external (§ The four slice kinds). |
 
-### Event-sourced lanes
+### Rationalisations — event-sourced view slices
+<!-- slice-law: lane=decider,aggregate kind=view -->
 
 | Rationalisation | Reality |
 |---|---|
 | "The `_v2` view works; we will delete `v1` next sprint." | Then there are two permanent slices over one read model. Retirement is part of the change (§ Evolving a view slice). |
 
-### Decider lane
+### Rationalisations — decider lane
+<!-- slice-law: lane=decider -->
 
 | Rationalisation | Reality |
 |---|---|
 | "Two deciders fold the same events, so let's share the evolver." | Two is a coincidence; promote at three, and only without a union. The exception is one named invariant (§ The `_shared/` promotion bar). |
 | "Sharing the state now saves a refactor later." | Promotion is a two-file move that keeps every name; un-sharing a bent `State` is the expensive refactor (§ The `_shared/` promotion bar). |
 
-### Aggregate lane
+### Rationalisations — aggregate lane
+<!-- slice-law: lane=aggregate -->
 
 | Rationalisation | Reality |
 |---|---|
@@ -918,7 +950,8 @@ section each row names.
 | "We already have the aggregate, so the new command is just another method on it." | The method is the *decision*; the slice — directory, command type, API file, test — is everything else (§R1, §R2). |
 | "We are on Kotlin, so we will use `AggregateRoot` too." | Kotlin ships no aggregate pattern; this is Java interop that gives up the Kotlin decider API. A decision to state, not drift into (§ Aggregate style). |
 
-### Service-entity lane
+### Rationalisations — service-entity lane
+<!-- slice-law: lane=service-entity -->
 
 | Rationalisation | Reality |
 |---|---|
@@ -928,6 +961,12 @@ section each row names.
 | "The repository is shared, so it needs a `repositories/` folder." | It is shared by the write path, so it lives in `entities/`; a `repositories/` folder is a layer (§ Service-entity style). |
 | "It is one more finder on the existing repository — the view needs it." | That serves the read side from the write model. The view gets its own query interface and read shape (§ The read side on this lane). |
 | "The ORM makes us expose getters, so the no-query-surface bar cannot apply." | The bar goes by **caller**, not shape (§ The entity's own bar). |
+
+### Rationalisations — Spring Data repositories
+<!-- slice-law: store=spring-data -->
+
+| Rationalisation | Reality |
+|---|---|
 | "Returning the JPA entity is simpler than a projection interface." | It hands out a managed, mutable object and the whole write model as wire contract. The projection is the cheaper option (§ The read shape is a closed interface projection). |
 | "A projection interface is a DTO with extra steps." | A DTO is kept in sync by hand; a projection is a declaration checked at startup — not the mapper R2 forbids (§ The read shape is a closed interface projection). |
 | "`JpaRepository` gives us `findAll` for free — why type the methods out?" | It also gives every caller `deleteAll`, and a view `save` over the write model (§ Repositories extend the bare `Repository` marker). |

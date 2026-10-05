@@ -81,6 +81,9 @@ jobs:
       - name: Slice index and graph (slice-index.py)
         run: scripts/plugin-check.sh step slice-index
 
+      - name: Slice law views per lane and kind (slice-law.py)
+        run: scripts/plugin-check.sh step slice-law
+
       - name: Stack contract lint (stack-lint.py)
         run: scripts/plugin-check.sh step stack-lint
 

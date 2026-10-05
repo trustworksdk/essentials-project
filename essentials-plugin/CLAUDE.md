@@ -53,7 +53,7 @@ file-by-file enumeration of `references/llm/` — that is the skill's module ind
 | A slice template added, removed, or changed | `references/slice/api-provenance.md` (re-run its verification snippet) and the owning kind skill's emission table. Then `python3 scripts/render-slice.py update-golden` and review the `tests/slice-golden/` diff, `uv run --script tests/scripts/test_slice_source.py` (it reads the goldens), and `../scripts/plugin-check.sh scaffold slices` — the goldens compile and start only there |
 | A new placeholder in a slice template | The placeholder table in `references/slice/slice-authoring.md` §4 — `render-slice.py` refuses an unknown one (exit 2) |
 | The pointer template's body changed | Bump its `<!-- essentials-slices-rules: vN -->` stamp by one **in the same edit** — the counter continues from its current value and never restarts at `v1`, because existing projects carry the values already issued and a lower number would never be offered a refresh. `/essentials:init` copies the file straight from `references/slice/project-rules-pointer.md.template`; there is no second copy |
-| A section added/renamed in `rules/slice-design.md` | Every skill, command, reference and template citing it by section name — `scripts/check-citations.py` (rule `law-section`) names each one left dangling — and the intro's `━━━ CORE PRINCIPLES ━━━` block. A template's citations are rendered into user projects, where nothing checks them: a rename strands every project scaffolded before it, so rename only for a reason |
+| A section added/renamed in `rules/slice-design.md`, or a scope line under a heading changed | Its scope line (`<!-- slice-law: lane=… kind=… store=… -->`, grammar in `scripts/slice-law.py`'s docstring): a section without one is printed to every reader, so a lane- or kind-specific section left unscoped costs every other lane its bytes. Then `python3 tests/scripts/test_slice_law.py --update-golden` and review the `tests/slice-law/views.golden` diff; `slice-law.py --check` fails a view over its budget — raise `BUDGET_VIEW` only as a decision. Then every skill, command, reference and template citing it by section name — `scripts/check-citations.py` (rule `law-section`) names each one left dangling — and the intro's `━━━ CORE PRINCIPLES ━━━` block. A template's citations are rendered into user projects, where nothing checks them: a rename strands every project scaffolded before it, so rename only for a reason |
 | A change class, decision point, or guard rail in `references/slice/change-procedure.md` | `skills/essentials-change/SKILL.md`, which routes by those §-numbers and breaks silently if they move. A decision point also gets a case in `tests/fixtures/change-router/cases.yaml`; then `uv run --script evals/build.py` |
 | A manifest field's meaning, or which field a kind declares its inbound events in | `references/slice/manifest-guide.md` §3, `references/slice/manifest-reconciliation.md` §1–§2 (derivable/human-owned split + extraction rules), `commands/slice-check.md` gate 11 and its `--fix-manifests` field list, and **every reader** — `scripts/slice-index.py`, `scripts/slice-source.py`, `commands/slice-map.md` Steps 2–4 and the graph builder in `references/slice/slice-map-template.html` |
 | `references/slice/slice-map-template.html` or the data contract in `commands/slice-map.md` §6 | The other one — they are one contract — then `uv run --script tests/scripts/test_slice_index.py` and `python3 tests/fixtures/slice-map/render-check.py`, and check the by-eye rows of that fixture's `TEST-GUIDE.md` |
@@ -90,8 +90,8 @@ that load.
   rendering a project or a slice, parsing manifests, the syntactic facts of a source file, the
   decidable half of S1–S11, a trap's grep-able signature — is a script under `scripts/` with a
   committed golden or test, and the command takes its output verbatim: `init-render.py`,
-  `render-slice.py`, `slice-lint.py`, `slice-source.py`, `slice-index.py`, `stack-lint.py`,
-  `review-scan.py`. The model elicits, reads code for what a script cannot decide, merges into files
+  `render-slice.py`, `slice-lint.py`, `slice-source.py`, `slice-index.py`, `slice-law.py`,
+  `stack-lint.py`, `review-scan.py`. The model elicits, reads code for what a script cannot decide, merges into files
   the user already has, and diagnoses failures. It never writes a rendered file freehand and never
   re-derives what a script reports: a model doing mechanical work produces confident wrong answers.
   Every script is Python ≥ 3.11 and either standard library only (`#!/usr/bin/env python3`) or
@@ -189,7 +189,10 @@ that load.
 - **`rules/slice-design.md` is the slice law, and it is standalone.** It depends on no other
   plugin — an Essentials project gets the whole law from this plugin. Skills and commands cite it
   **by section name and never restate it**. `rules/` is a plugin convention, not a Claude Code
-  extension point: it costs nothing until something `Read`s it.
+  extension point: it costs nothing until something loads it. **It stays one file.** A reader that
+  knows its lane and kind loads it through `scripts/slice-law.py`, which prints only the sections
+  their scope lines allow; splitting it into per-lane files instead would break every citation of a
+  moved section, including the ones the templates render into user projects.
 - **The four slice skills write files, through `scripts/render-slice.py`, and that is deliberate.**
   `essentials-docs` stays model-invoked because its auto-trigger *is* the product; the slice skills
   are the opposite — `disable-model-invocation: true`, entered by path from a command that has
