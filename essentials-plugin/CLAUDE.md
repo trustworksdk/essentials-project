@@ -44,13 +44,13 @@ file-by-file enumeration of `references/llm/` — that is the skill's module ind
 | Change | Also update |
 |---|---|
 | Command / skill added, removed, or re-scoped | `commands/intro.md`, `README.md` (the "What it does" list, Usage, the command count and the Layout block), and the `.claude-plugin/plugin.json` description, which names the commands |
-| A script, a test directory or an eval case added, or the command that runs a check changed | The `plugin-docs` job in `.github/workflows/maven.yml` **and** § Before committing below. They are one list: every CI step has its local line there, and a check that runs in only one of the two is either unenforced or unreproducible. Then `README.md`'s Layout block |
+| A script, a test directory or an eval case added, or the command that runs a check changed | Its step in `../scripts/plugin-check.sh`, the one list of the plugin's checks (`list` names them), **and** one `scripts/plugin-check.sh step <name>` line in the `plugin-docs` job of `.github/workflows/maven.yml`. CI runs the script's steps, so a check in the script but not the job is unenforced, and a command inlined in the job instead of the script cannot be reproduced locally. A check no CI step can run goes in the script's `manual` checks; a path that needs a scaffold build or an eval run gets a rule in its `classify`, so `changed` reports it. Then `README.md`'s Layout block |
 | A doc added to or removed from `LLM/` | The skill's Module Index in `skills/essentials-docs/SKILL.md`, the doc count in `README.md`'s Layout block, and the intro's key-facts line |
 | A trap line added to or retired from `LLM/LLM-traps.md` | Its id: the next free `ESS-NNN`, anchored `<a id="ess-nnn"></a>`; a retired id moves under `## Retired ids` as a tombstone and is never reused (`python3 ../scripts/check-ess-ids.py --baseline HEAD`). Then whether it has a grep-able signature in `scripts/review-scan.py`: add it with a positive and an `expect-not` case in `tests/review/signatures/`; a retired id makes the scan refuse to run until its signature goes. Then `sh ../scripts/sync-plugin-llm.sh` |
-| A file under `references/init-assets/project/` (or its `manifest.json`), a pin, or an S2.1 row | The step of `commands/init.md` that asks the question gating it — the command and the tree are one contract. Then `python3 scripts/init-render.py --all-combinations`, `--update-golden`, and review the `tests/golden/init/*.tree` diff; `../scripts/plugin-scaffold.sh matrix` when it changes what gets built |
+| A file under `references/init-assets/project/` (or its `manifest.json`), a pin, or an S2.1 row | The step of `commands/init.md` that asks the question gating it — the command and the tree are one contract. Then `python3 scripts/init-render.py --all-combinations`, `--update-golden`, and review the `tests/golden/init/*.tree` diff; `../scripts/plugin-check.sh scaffold matrix` when it changes what gets built |
 | A file `/essentials:init` copies into a project, or a capability it offers to install | `commands/upgrade.md` Group A — an existing project reaches that capability **only** through `/essentials:upgrade`. A capability added to init alone ships to new projects and to nobody else, which is the gap `upgrade` exists to close |
 | A requirement (S1–S11) added or re-scoped such that an existing project could now be non-conformant | The Group C table in `commands/upgrade.md`, with its severity and the symptom the failure presents as. A requirement no upgrade check names is one existing projects cannot discover except by booting and misreading a stack trace |
-| A slice template added, removed, or changed | `references/slice/api-provenance.md` (re-run its verification snippet) and the owning kind skill's emission table. Then `python3 scripts/render-slice.py update-golden` and review the `tests/slice-golden/` diff, `uv run --script tests/scripts/test_slice_source.py` (it reads the goldens), and `../scripts/plugin-scaffold.sh slices` — the goldens compile and start only there |
+| A slice template added, removed, or changed | `references/slice/api-provenance.md` (re-run its verification snippet) and the owning kind skill's emission table. Then `python3 scripts/render-slice.py update-golden` and review the `tests/slice-golden/` diff, `uv run --script tests/scripts/test_slice_source.py` (it reads the goldens), and `../scripts/plugin-check.sh scaffold slices` — the goldens compile and start only there |
 | A new placeholder in a slice template | The placeholder table in `references/slice/slice-authoring.md` §4 — `render-slice.py` refuses an unknown one (exit 2) |
 | The pointer template's body changed | Bump its `<!-- essentials-slices-rules: vN -->` stamp by one **in the same edit** — the counter continues from its current value and never restarts at `v1`, because existing projects carry the values already issued and a lower number would never be offered a refresh. `/essentials:init` copies the file straight from `references/slice/project-rules-pointer.md.template`; there is no second copy |
 | A section added/renamed in `rules/slice-design.md` | Every skill and command citing it by section name, and the intro's `━━━ CORE PRINCIPLES ━━━` block |
@@ -70,7 +70,7 @@ file-by-file enumeration of `references/llm/` — that is the skill's module ind
 | A `references/llm/` doc states an obligation a generated project must meet (a non-transitive dependency, a required registration, a package move) | `stack-contract.md` — **restate it as a requirement**. `/essentials:init` never reads `references/llm/`, so a `Proof:` line alone does not ship it |
 | Java or Kotlin lane capability changes (a command starts or stops supporting a language) | The **Status paragraph** of the affected `references/stack/<language>-spring-boot.md`, `commands/intro.md` (and its `━━━ DELIBERATELY ABSENT ━━━` block when the Kotlin aggregate lane is concerned), and `README.md` § Deliberately absent |
 | A doc changed in `LLM/` | Run `scripts/sync-plugin-llm.sh` from the repository root (the pre-commit hook installed by `scripts/install-git-hooks.sh` does it for you) and commit both. Never edit `references/llm/` — the hook refuses the commit and the CI drift gate fails it |
-| A fixture's source changed | `uv run --script tests/fixtures/check-expected.py` names every `expected.yaml` line that moved: fix them and keep `TEST-GUIDE.md` in step, then `uv run --script evals/build.py`. For `worked-example` or `service-entity`, `uv run --script tests/review/judgement/check-patches.py`: a patch that no longer applies is re-cut, and its `expected.yaml` lines moved. For a compiled fixture, `../scripts/plugin-scaffold.sh slices --case fixture-<name>` |
+| A fixture's source changed | `uv run --script tests/fixtures/check-expected.py` names every `expected.yaml` line that moved: fix them and keep `TEST-GUIDE.md` in step, then `uv run --script evals/build.py`. For `worked-example` or `service-entity`, `uv run --script tests/review/judgement/check-patches.py`: a patch that no longer applies is re-cut, and its `expected.yaml` lines moved. For a compiled fixture, `../scripts/plugin-check.sh scaffold slices --case fixture-<name>` |
 | A fixture's `expected.yaml`, `tests/fixtures/change-router/cases.yaml`, or an eval's `oracle.yaml` changed | `uv run --script evals/build.py`, and commit the regenerated graders. Never hand-edit a `gen-*` grader or a `change-*` case |
 | A feature planned, started, or dropped | Nothing. The plugin names only what ships: no planned or backlog item in the intro, the README or `commands/init.md`, because a list of future work shipped in the plugin goes stale. A feature appears when it ships |
 
@@ -321,54 +321,27 @@ that load.
 
 ## Before committing
 
-Every line runs from `essentials-plugin/` (`..` is the repository root). The first block is the
-`plugin-docs` job of `.github/workflows/maven.yml`, step for step and in its order, with the same
-commands and arguments; each line exits 0. Keep the two equal. It needs `git` and `uv`: every script
-runs through uv on Python 3.11, the scripts' declared minimum (uv fetches that interpreter if absent,
-and the scripts with a PEP 723 header get their pinned `pyyaml` / `jsonschema` the same way).
+From the repository root, `scripts/plugin-check.sh quick` runs every step of the `plugin-docs` job of
+`.github/workflows/maven.yml`, in its order, with the same commands, arguments and `UV_PYTHON=3.11`: CI calls the
+same script one step at a time, so the two cannot drift. Each step exits 0. `scripts/plugin-check.sh list` names the
+steps and `step <name>` reruns one. It needs `git` and `uv` (uv fetches Python 3.11, the scripts' declared minimum, and
+the PEP 723 pins). Locally `ess-ids` compares with HEAD and `plugin-version` with the merge base with `origin/main`
+(CI: `HEAD^1`), so an unbumped plugin change fails before the push. `render-check` shows SKIPPED without a headless
+Chrome (the arm64 devcontainer): nothing was checked, which is not a pass; pass `--chrome PATH` where one runs.
 
-```bash
-cd essentials-plugin
-export UV_PYTHON=3.11   # the scripts' declared minimum; uv fetches it if absent
-
-# references/llm/ is generated from LLM/. CI re-runs the sync on the commit and fails if `git status` then lists
-# anything under references/llm (the pre-commit hook syncs from the index). Before a commit the working tree
-# differs from HEAD, so here: every references/llm/ path listed has its LLM/ twin listed; commit both.
-sh ../scripts/sync-plugin-llm.sh && git status --porcelain --untracked-files=all -- ../LLM references/llm
-# Only stack-pins.md / stack-contract.md state a pin or an S-requirement; mark an exception `<!-- cite-ok: reason -->`.
-uv run --script scripts/check-citations.py --self-test && uv run --script scripts/check-citations.py
-# ESS-NNN ids on LLM/LLM-traps.md: unique, contiguous, tombstoned, every citation resolves (CI: --baseline HEAD^1).
-uv run --script ../scripts/check-ess-ids.py --self-test && uv run --script ../scripts/check-ess-ids.py --baseline HEAD
-git ls-files -s -- . | awk '$1 == "120000" { print $4 }'                  # tracked symlinks: must print nothing
-uv run --script tests/scripts/test_slice_lint.py                          # every fixture, golden and script case; pins multi-lane's one intended finding (ML-5)
-uv run --script scripts/render-slice.py check && uv run python -m unittest discover -s tests/scripts -p 'test_render_slice.py'
-uv run --script tests/scripts/test_slice_source.py
-uv run --script tests/scripts/test_slice_index.py
-uv run --script scripts/stack-lint.py --self-test && uv run python -m unittest tests/stack-lint/test_stack_lint.py
-uv run --script scripts/init-render.py --self-test && uv run --script scripts/init-render.py --all-combinations && uv run --script scripts/init-render.py --check
-uv run --script scripts/review-scan.py --self-test && uv run python -m unittest discover -s tests/scripts -p 'test_review_scan.py'
-uv run --script tests/review/judgement/check-patches.py
-# Oracles: expected.yaml anchors still point at their lines; the eval graders match their oracles (no model call).
-uv run --script tests/fixtures/check-expected.py --self-test && uv run --script tests/fixtures/check-expected.py
-uv run --script evals/build.py --check
-uv run --script tests/slice-compile/overlay.py check                            # every fixture is compiled or listed as not compiled
-# The slice-map page, in headless Chrome. CI installs chrome-headless-shell (Chrome for Testing, linux64) and fails
-# on exit 3. The devcontainer is arm64, where that build does not run: here it prints SKIPPED and exits 3, which
-# is not a pass. On a machine with Chrome, pass --chrome PATH (or let it find one on the PATH) and expect 0.
-uv run --script tests/fixtures/slice-map/render-check.py
-```
+`scripts/plugin-check.sh changed [BASE]` maps every changed path to its row in the companion table above and prints
+what else the change needs, with the commands.
 
 The scaffold builds — the `scaffold ·` jobs beside `verify`, run on every PR — when a template, a pin,
-the init tree, an S2.1 row or a fixture's source changed. They need the JDK the stack pins name, Maven,
-Docker, and the reactor in the local repository first: `mvn clean install -DskipTests
--DskipDependencyCheck=true` from the repository root, with nothing else building there (CI installs
-only the Essentials modules the init templates declare, `-am`; a full install is a superset). About
-1.5 minutes each once warm. The frontend legs need Node; run them in each cell with a frontend, after
-the matrix (`--work` names where the cells are; the default is `${TMPDIR:-/tmp}/essentials-scaffold`).
+the init tree, an S2.1 row or a fixture's source changed: `scripts/plugin-check.sh scaffold [matrix|slices|all]`.
+It installs the reactor first (`mvn clean install -DskipTests -DskipDependencyCheck=true`; `--no-install` skips it;
+CI installs only the Essentials modules the init templates declare, `-am`, and a full install is a superset), refuses
+without Maven, a JDK or Docker, and needs nothing else building in this checkout (root `CLAUDE.md`, `target/`). The
+remaining arguments go to `scripts/plugin-scaffold.sh`. About 1.5 minutes per mode once warm. The frontend legs are
+not automated and need Node; run them in each cell with a frontend, after the matrix (`--work` names where the cells
+are; the default is `${TMPDIR:-/tmp}/essentials-scaffold`).
 
 ```bash
-../scripts/plugin-scaffold.sh matrix     # the nine init cells: render, stack-lint, verify, spec check
-../scripts/plugin-scaffold.sh slices     # the slice goldens and compiled fixtures on their hosts
 # frontend legs, per cell with a frontend, in <work>/<cell>/project/frontend (the first command is the
 # `frontend-lockfile` hook of references/init-assets/project/manifest.json):
 npm install --package-lock-only --no-audit --no-fund && npm ci && npx orval && npx tsc --noEmit && npx vitest run && npx eslint . && npm run build
@@ -380,44 +353,25 @@ Scheduled, not per PR (`.github/workflows/plugin-scaffold-scheduled.yml`, nightl
 rendered `CLAUDE.md`'s inner-loop command, the Compose dev loop, the S2.1 dependency-removal run and
 the released-version run.
 
-Checks no CI step runs — read the output:
-
-```bash
-ls references/llm | wc -l                                    # matches the spelled-out count in commands/intro.md
-grep -n '^## ' rules/slice-design.md                         # matches intro's CORE PRINCIPLES block
-# the HTML template's substitution point must match commands/slice-map.md §6 verbatim
-grep -c 'const SLICE_MAP = /\* __SLICE_MAP_DATA__ \*/ null;' \
-  references/slice/slice-map-template.html commands/slice-map.md      # 1 and 1
-# No unquoted endpoint path in any manifest this plugin ships — one hit is a file that is not YAML.
-# This is the same one-liner slice-check gate 1 and slice-map Step 2 give users, so it stays honest.
-# Scope it to slice.yaml: the guides deliberately show the broken form as a counter-example.
-grep -rn "path: [^\"']*{" --include=slice.yaml .                      # must print nothing
-# must be empty — the design guide lives at references/design/essentials-design.md, and no
-# command of another plugin is routed to. This file is excluded: it names the patterns it guards against.
-grep -rnE "LLM-essentials-design|LLM-opinionated|/sdd:" . \
-  --include=*.md --include=*.json --include=*.template --include=*.yaml | grep -vE "^(\./)?CLAUDE\.md:"
-# Both halves of the init/upgrade split are present: everything init copies into a project must
-# have a Group A counterpart in upgrade, or existing projects can never receive it.
-grep -c 'slice-lint\.py' commands/upgrade.md                 # >= 1
-grep -c 'essentials-slices-rules' commands/upgrade.md        # >= 1
-# The stamp placeholder is the renderer's to substitute; --all-combinations fails on a leftover.
-grep -l '{{essentialsVersion}}' references/init-assets/project/CLAUDE.md.template   # the file
-grep -c '^> Proof:' references/stack/stack-contract.md       # >= 9: every requirement carries its evidence
-```
+Checks no CI step runs: `scripts/plugin-check.sh manual` — the bundled-docs count in the intro, the
+slice-map data point, unquoted manifest paths, stale design-guide names and `/sdd:` routes, both halves of the
+init/upgrade split, the version-stamp placeholder and the `Proof:` lines. It prints `rules/slice-design.md`'s
+sections beside the intro's `━━━ CORE PRINCIPLES ━━━` block as READ: compare them by eye.
 
 ## Before a release
 
-A release is a commit that reaches the marketplace ref with a new `plugin.json` version. Before it:
+A release is a commit that reaches the marketplace ref with a new `plugin.json` version. Before it, run
+`scripts/plugin-check.sh release` (with `--chrome PATH` on a machine with Chrome): quick, manual, scaffold all, the
+eval suite over every case with the flags of `evals/README.md` § Run it, `claude plugin validate essentials-plugin`
+and `claude plugin validate .` (the marketplace manifest), and `CHANGELOG.md`'s top heading against the
+`plugin.json` version and the `essentials.version` pin. A SKIPPED `render-check` fails it: a release needs exit 0,
+not 3. It ends with what no script can check:
 
-1. § Before committing, all three blocks, green — including `render-check.py` with a Chrome (exit 0,
-   not 3), the scaffold builds and the frontend legs — and the latest run of
-   `plugin-scaffold-scheduled.yml` green (start it by hand if the ref has not had a nightly run).
-2. `claude plugin validate essentials-plugin` (and `claude plugin validate .` from the repository
-   root for the marketplace manifest): passes. One warning is expected and by design — this
-   `CLAUDE.md` not being loaded as plugin context (it is the maintainers' file).
-3. The eval suite, as `evals/README.md` § Run it describes: `uv run --script evals/build.py --check`,
-   then `claude plugin eval essentials-plugin --scaffold --trust-plugin …` with the flags given
-   there. Read every case under the threshold in the report before deciding; one red run of three is
-   noise until it repeats.
+1. The latest run of `plugin-scaffold-scheduled.yml` green (start it by hand if the ref has not had a nightly run),
+   and the frontend legs above.
+2. `claude plugin validate`: one warning is expected and by design — this `CLAUDE.md` not being loaded as plugin
+   context (it is the maintainers' file).
+3. The eval report: read every case under the threshold before deciding; one red run of three is noise until it
+   repeats.
 4. `CHANGELOG.md` names what the release adds or changes under a heading with the new `plugin.json`
    version, and the Essentials release it targets (the `essentials.version` pin).

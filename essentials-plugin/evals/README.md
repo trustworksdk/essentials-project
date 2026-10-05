@@ -24,6 +24,10 @@ claude plugin eval essentials-plugin --scaffold --trust-plugin \
   --ablation none --judge-model sonnet --threshold 0.8 -j 4 --no-publish
 ```
 
+`scripts/plugin-check.sh evals` runs both, with these flags, after checking the prerequisites above;
+`--changed [BASE]` runs one case at a time for every case directory the change touched, `--dry-run` prints the
+commands. The `eval-flags` step of `plugin-check.sh quick` (and CI) fails when this command and the script's differ.
+
 | Flag | Why |
 |---|---|
 | `--scaffold` | Every case stages its project with a `scaffold.sh`; without the flag the model gets an empty directory |

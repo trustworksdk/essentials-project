@@ -37,7 +37,7 @@ set -eu
 
 pins=essentials-plugin/references/stack/stack-pins.md
 
-# The pin from stack-pins.md on stdin. Same extraction as the plugin-version step in .github/workflows/maven.yml.
+# The pin from stack-pins.md on stdin. Same extraction as essentials_pin in scripts/plugin-check.sh (the plugin-version step).
 pin_version() {
     sed -n 's/^| `essentials.version` | \*\*\([^*]*\)\*\*.*/\1/p'
 }

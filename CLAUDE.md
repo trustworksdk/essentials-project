@@ -26,6 +26,8 @@ mvn clean install -DskipDependencyCheck=true          # skip OWASP check
 mvn clean install -P test-release                     # simulated release
 ```
 
+Plugin/`LLM/` work: `scripts/plugin-check.sh changed` → what change needs; `quick` before commit (= CI `plugin-docs`); `--help` for rest.
+
 Integration-test speed knobs (ITs are ~99% of the build's wall clock):
 
 ```bash
@@ -49,7 +51,6 @@ scripts/test-timings.sh --csv > before.csv            # capture a baseline to di
 - **No timestamp ordering** — event ordering via EventOrder/GlobalEventOrder, never timestamps
 - **`FailFast` inside a `@MessageHandler` dead-letters the message on first delivery** — the queue consumer applies a built-in permanent-error list *after* consulting the `RedeliveryPolicy`'s `MessageDeliveryErrorHandler`, and `IllegalArgumentException` is on it, as thrown by `requireNonNull`/`requireTrue` and Kotlin `require(...)`. Opt out per type with `alwaysRetryOn(...)`, which overrides the list for `IllegalArgumentException` and `ClassCastException` but not for the three that can never succeed on a retry. A match anywhere in the cause chain counts. Throw a retryable exception when the condition may become true later; details in `LLM/LLM-foundation.md`
 - **Docker required for integration tests** — `mvn test` runs without Docker; `mvn verify` needs Docker (TestContainers)
-- **Parallel agents** — an agent is done only when its notification arrives (count them; file presence proves nothing); check every worktree branch descends from local `HEAD` before merging (`git merge-base --is-ancestor`); stage explicit paths, never `git add -A`. Why + recipes: `parallel-agents` skill (`.claude/skills/parallel-agents/`)
 - **`target/` has more than one writer — suspect that before debugging the source.** The VS Code Java language server compiles into the very same `target/classes` Maven uses (the generated `.classpath` sets `output="target/classes"`), and a second concurrent `mvn` run — another terminal, or an agent session — `clean`s and repopulates those directories under the first one. Two symptoms, one cause, neither meaning what it says:
   - **`java.lang.Error: Unresolved compilation problem: …`** in a *test* failure. That text is Eclipse JDT output, never javac. Where ECJ's inference is weaker than javac's, it writes a class whose method bodies just throw; Maven's incremental compiler then sees the `.class` as newer than the `.java` and skips recompiling, so the broken bytecode runs. Known case: `shared`'s `ComparableTuple.toList()` — `List.of(_1, _2)` under `T extends Comparable<? super T>` bounds, which ECJ rejects and javac accepts.
   - **`package dk.trustworks.essentials.… does not exist`** compiling a *downstream* module (e.g. `immutable` against `shared`), when that module's POM plainly declares the dependency. A whole package vanishing means the upstream jar got built from a half-populated `target/classes`, not that anything is wrong with the code.

@@ -23,7 +23,10 @@ jobs:
   # copy (scripts/sync-plugin-llm.sh). The pre-commit hook keeps the two in step on a contributor's machine, but hooks
   # are per clone and optional, so this gate is what enforces it. `git status` rather than `git diff`, so a doc added
   # to LLM/ without its copy fails too. No symlinks under the plugin: Git for Windows checks them out as text files.
-  # Every other deterministic check of the plugin runs here as well, one step per script so a failure names its oracle.
+  # Every other deterministic check of the plugin runs here as well, one step per check so a failure names its oracle.
+  # The commands live in scripts/plugin-check.sh, the one list of the plugin's checks: each step below is one
+  # `plugin-check.sh step <name>`, which runs exactly what this job ran inline, ::error:: annotations included.
+  # A new check is a step there plus one step line here. Locally: `scripts/plugin-check.sh quick` runs them all.
   # None needs a JDK, Docker or Node: stdlib Python, plus uv for the scripts whose PEP 723 header pins pyyaml/jsonschema,
   # plus a headless Chrome for the slice-map page. The whole job takes about a minute.
   plugin-docs:
@@ -31,14 +34,14 @@ jobs:
     runs-on: ubuntu-latest
     # Every Python in this job runs on the oldest version the scripts declare (`requires-python = ">=3.11"`), so CI proves
     # the minimum rather than whatever the runner ships. uv reads UV_PYTHON (and fetches that interpreter); the stdlib
-    # scripts go through `uv run` as well, and the scripts' own child processes use sys.executable. Locally:
-    # `export UV_PYTHON=3.11`, then the same commands.
+    # scripts go through `uv run` as well, and the scripts' own child processes use sys.executable. plugin-check.sh
+    # defaults UV_PYTHON to the same value locally.
     env:
       UV_PYTHON: '3.11'
 
     steps:
       # Two commits deep, so check-ess-ids and the plugin-version check can compare with HEAD^1: the base side of a pull
-      # request's merge commit, or the previous commit on a push.
+      # request's merge commit, or the previous commit on a push. Both steps pass it as --base; nothing guesses it.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 2
@@ -47,123 +50,71 @@ jobs:
       - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
 
       - name: Regenerate the plugin's copy of LLM/ and fail on any difference
-        run: |
-          sh scripts/sync-plugin-llm.sh
-          drift=$(git status --porcelain --untracked-files=all -- essentials-plugin/references/llm)
-          if [ -n "$drift" ]; then
-            echo "::error::essentials-plugin/references/llm/ is out of step with LLM/. Edit LLM/ only, run scripts/sync-plugin-llm.sh and commit both:"
-            echo "$drift"
-            exit 1
-          fi
+        run: scripts/plugin-check.sh step llm-sync
 
       # Stack requirements (S1-S11) and version pins live in references/stack/; everything else in the plugin cites them.
       - name: Plugin citation convention
-        run: |
-          uv run --script essentials-plugin/scripts/check-citations.py --self-test
-          uv run --script essentials-plugin/scripts/check-citations.py
+        run: scripts/plugin-check.sh step citations
 
       # ESS-NNN ids on LLM/LLM-traps.md are what /essentials:review reports: unique, contiguous, never reused.
       - name: ESS id catalogue (LLM/LLM-traps.md)
-        run: |
-          uv run --script scripts/check-ess-ids.py --self-test
-          uv run --script scripts/check-ess-ids.py --baseline HEAD^1
+        run: scripts/plugin-check.sh step ess-ids --base HEAD^1
 
       # Claude Code updates an installed plugin only when plugin.json's version string changes, so a plugin change
       # without a new version never reaches a user. An LLM/ edit counts: it regenerates references/llm/.
       - name: Plugin version moves with the plugin
-        run: |
-          if git diff --quiet HEAD^1 HEAD -- essentials-plugin/; then
-            echo "essentials-plugin/ unchanged against HEAD^1"
-            exit 0
-          fi
-          old=$(git show HEAD^1:essentials-plugin/.claude-plugin/plugin.json | jq -r '.version // ""')
-          new=$(jq -r '.version // ""' essentials-plugin/.claude-plugin/plugin.json)
-          if [ -z "$new" ] || [ "$new" = "$old" ]; then
-            echo "::error file=essentials-plugin/.claude-plugin/plugin.json::essentials-plugin/ changed but plugin.json version is still '${new}'. Set it to the Essentials version the plugin targets, or add or raise the -N suffix for a plugin-only release (essentials-plugin/CLAUDE.md)."
-            exit 1
-          fi
-          pin=$(sed -n 's/^| `essentials.version` | \*\*\([^*]*\)\*\*.*/\1/p' essentials-plugin/references/stack/stack-pins.md)
-          if ! printf '%s\n' "$new" | grep -Eq "^${pin//./\\.}(-[0-9]+)?$"; then
-            echo "::error file=essentials-plugin/.claude-plugin/plugin.json::plugin.json version '${new}' is not the essentials.version pin '${pin}' (stack-pins.md) or that pin with a -N suffix."
-            exit 1
-          fi
-          echo "plugin version ${old:-none} -> ${new}"
+        run: scripts/plugin-check.sh step plugin-version --base HEAD^1
 
       - name: Fail on symlinks under essentials-plugin/
-        run: |
-          links=$(git ls-files -s -- essentials-plugin | awk '$1 == "120000" { print $4 }')
-          if [ -n "$links" ]; then
-            echo "::error::Symlinks are tracked under essentials-plugin/; commit a copy instead:"
-            echo "$links"
-            exit 1
-          fi
+        run: scripts/plugin-check.sh step symlinks
 
       # Every fixture, slice golden and slice-source case, the project-installed copy, and multi-lane's one intended finding.
       - name: Slice manifest lint (slice-lint.py)
-        working-directory: essentials-plugin
-        run: uv run --script tests/scripts/test_slice_lint.py
+        run: scripts/plugin-check.sh step slice-lint
 
       - name: Slice templates render to the committed goldens (render-slice.py)
-        working-directory: essentials-plugin
-        run: |
-          uv run --script scripts/render-slice.py check
-          uv run python -m unittest discover -s tests/scripts -p 'test_render_slice.py'
+        run: scripts/plugin-check.sh step render-slice
 
       - name: Slice source facts (slice-source.py)
-        working-directory: essentials-plugin
-        run: uv run --script tests/scripts/test_slice_source.py
+        run: scripts/plugin-check.sh step slice-source
 
       - name: Slice index and graph (slice-index.py)
-        working-directory: essentials-plugin
-        run: uv run --script tests/scripts/test_slice_index.py
+        run: scripts/plugin-check.sh step slice-index
 
       - name: Stack contract lint (stack-lint.py)
-        working-directory: essentials-plugin
-        run: |
-          uv run --script scripts/stack-lint.py --self-test
-          uv run python -m unittest tests/stack-lint/test_stack_lint.py
+        run: scripts/plugin-check.sh step stack-lint
 
       # Every answer combination renders and passes stack-lint; the nine golden cells match their committed .tree files.
       - name: /essentials:init renders to the committed goldens (init-render.py)
-        working-directory: essentials-plugin
-        run: |
-          uv run --script scripts/init-render.py --self-test
-          uv run --script scripts/init-render.py --all-combinations
-          uv run --script scripts/init-render.py --check
+        run: scripts/plugin-check.sh step init-render
 
       - name: Review signatures (review-scan.py)
-        working-directory: essentials-plugin
-        run: |
-          uv run --script scripts/review-scan.py --self-test
-          uv run python -m unittest discover -s tests/scripts -p 'test_review_scan.py'
+        run: scripts/plugin-check.sh step review-scan
 
       - name: Docs search (search.sh)
-        working-directory: essentials-plugin
-        run: uv run python -m unittest discover -s tests/scripts -p 'test_search.py'
+        run: scripts/plugin-check.sh step docs-search
 
       - name: Review judgement cases, deterministic half (check-patches.py)
-        working-directory: essentials-plugin
-        run: uv run --script tests/review/judgement/check-patches.py
+        run: scripts/plugin-check.sh step check-patches
 
       - name: Fixture expectations match their sources (check-expected.py)
-        working-directory: essentials-plugin
-        run: |
-          uv run --script tests/fixtures/check-expected.py --self-test
-          uv run --script tests/fixtures/check-expected.py
+        run: scripts/plugin-check.sh step check-expected
 
       # The eval suite itself is maintainer-run before a release; this only proves its graders are regenerated, not edited.
       - name: Eval graders generated from their sources (evals/build.py)
-        working-directory: essentials-plugin
-        run: uv run --script evals/build.py --check
+        run: scripts/plugin-check.sh step eval-graders
+
+      - name: Eval command in evals/README.md matches the script (plugin-check.sh evals)
+        run: scripts/plugin-check.sh step eval-flags
 
       - name: Slice-compile case table (overlay.py)
-        working-directory: essentials-plugin
-        run: uv run --script tests/slice-compile/overlay.py check
+        run: scripts/plugin-check.sh step slice-compile-table
 
       # chrome-headless-shell from Chrome for Testing, as a zip: no Node, no apt. Its libraries come with the runner's
       # own Chrome install. One exact build, checked against a committed sha256 before it runs: no lookup through the
       # last-known-good JSON, so neither a new Stable release nor whatever URL that file names can change what runs here.
       # To bump: pick a version from that JSON, download its linux64 zip from the URL below, set both values from it.
+      # CI-only setup, not a check, so it stays inline.
       - name: Install chrome-headless-shell (Chrome for Testing, pinned)
         id: chrome
         env:
@@ -180,14 +131,9 @@ jobs:
       # The slice-map page's layout is JavaScript; the check runs it in the browser and parses the DOM it leaves.
       # Exit 3 means "no Chrome, skipped", which locally is a notice and here is a failure.
       - name: slice-map page renders (render-check.py)
-        working-directory: essentials-plugin
-        run: |
-          status=0
-          uv run --script tests/fixtures/slice-map/render-check.py --chrome "${{ steps.chrome.outputs.path }}" || status=$?
-          if [ "$status" -eq 3 ]; then
-            echo "::error::render-check.py skipped: it found no Chrome. In CI a skip is a failure."
-          fi
-          exit "$status"
+        env:
+          PLUGIN_CHECK_CHROME: ${{ steps.chrome.outputs.path }}
+        run: scripts/plugin-check.sh step render-check
 
   # Full build including Testcontainers-backed integration tests.
   verify:
@@ -288,6 +234,8 @@ jobs:
   # installs the reactor subset they name once and hands it on as an artifact. The subset is read from the init pom
   # templates, so a template that starts using another module installs it without a workflow edit. Each scaffold job
   # keeps its own Maven cache (key: its job id), so none of them replaces the one `verify` restores.
+  # These jobs call scripts/plugin-scaffold.sh directly rather than `plugin-check.sh scaffold`: that wrapper is the local
+  # entry point (full reactor install, then both modes), and CI has its own subset install, artifact hand-off and caches.
   scaffold-install:
     name: scaffold · install the reactor subset
     runs-on: ubuntu-latest

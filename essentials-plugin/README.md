@@ -227,7 +227,8 @@ essentials-plugin/
 ```
 
 The scaffold builds that compile and start the rendered projects and slices against the framework
-live in the repository: `scripts/plugin-scaffold.sh` at its root.
+live in the repository: `scripts/plugin-scaffold.sh` at its root. Beside it, `scripts/plugin-check.sh`
+runs every check above (the CI job calls it step by step) and says which ones a change needs.
 
 ## Deliberately absent
 
