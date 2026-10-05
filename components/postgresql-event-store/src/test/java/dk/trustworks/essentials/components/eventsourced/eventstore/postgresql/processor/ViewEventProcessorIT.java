@@ -226,6 +226,10 @@ public class ViewEventProcessorIT {
         if (fencedLockManager != null) {
             fencedLockManager.stop();
         }
+        // The container is per test, so an unclosed pool outlives it and keeps retrying its port for the rest of the fork
+        if (ds != null) {
+            ds.close();
+        }
     }
 
     @Test
