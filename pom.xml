@@ -122,8 +122,9 @@
              no Essentials persistence path uses it. See the import in dependencyManagement. -->
         <jackson2-bom.version>2.22.3</jackson2-bom.version>
         <!-- Held ahead of the Spring Boot BOM (5.8.1 at spring-boot 4.1.1) for CVE-2026-18710 / -88032 / -88033;
-             5.11.1 is the lowest release outside all three ranges. See the import in dependencyManagement. -->
-        <mongodb-driver-bom.version>5.11.1</mongodb-driver-bom.version>
+             5.11.1 is the lowest release outside all three ranges; 5.13.0 is taken as the newest 5.x. See the import
+             in dependencyManagement. -->
+        <mongodb-driver-bom.version>5.13.0</mongodb-driver-bom.version>
         <!-- Held ahead of the Spring Boot BOM (4.2.17 at spring-boot 4.1.1) for CVE-2026-89044; 4.2.18 is the
              first release outside the range. See the import in dependencyManagement. -->
         <netty-bom.version>4.2.18.Final</netty-bom.version>
@@ -300,7 +301,7 @@
                  The whole BOM rather than direct entries, because the driver ships as a set (bson, core, sync,
                  bson-record-codec, ...) and Spring Boot's BOM does not expose mongodb.version to us - it is a
                  property of an import. Must sit above spring-boot-dependencies. Drop it once Spring Boot manages
-                 5.11.1 or later (4.2 does). -->
+                 ${mongodb-driver-bom.version} or later; dropping it earlier downgrades the driver. -->
             <dependency>
                 <groupId>org.mongodb</groupId>
                 <artifactId>mongodb-driver-bom</artifactId>

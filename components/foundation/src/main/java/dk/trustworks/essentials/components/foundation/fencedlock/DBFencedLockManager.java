@@ -202,6 +202,7 @@ public abstract class DBFencedLockManager<UOW extends UnitOfWork, LOCK extends D
             }
             var confirmedTimestamp = OffsetDateTime.now(Clock.systemUTC());
             usingUnitOfWork(uow -> {
+                var lostLocks = new ArrayList<LOCK>();
                 locksAcquiredByThisLockManager.forEach((lockName, fencedLock) -> {
                     if (fencedLock.getLockedByLockManagerInstanceId() == null) {
                         log.debug("[{}] Skipping confirming lock '{}' since lockedByLockManagerInstanceId is NULL: {}", lockManagerInstanceId, fencedLock.getName(), fencedLock);
@@ -231,20 +232,15 @@ public abstract class DBFencedLockManager<UOW extends UnitOfWork, LOCK extends D
                         } else {
                             // We failed to confirm this lock, someone must have taken over the lock in the meantime
                             log.info("[{}] Failed to confirm lock '{}': {}", lockManagerInstanceId, fencedLock.getName(), fencedLock);
-                            try {
-                                fencedLock.release();
-                            } catch (Exception e) {
-                                if (IOExceptionUtil.isIOException(e)) {
-                                    log.debug(msg("[{}] Failed to release lock '{}'", lockManagerInstanceId, fencedLock.getName()), e);
-                                } else {
-                                    log.error(msg("[{}] Failed to release lock '{}'", lockManagerInstanceId, fencedLock.getName()), e);
-                                }
+                            if (releaseLostLockLocally(fencedLock)) {
+                                lostLocks.add(fencedLock);
                             }
                         }
                     } catch (Exception e) {
                         log.error(msg("[{}] Technical failure while trying to confirm lock '{}'", lockManagerInstanceId, fencedLock.getName()), e);
                     }
                 });
+                lostLocks.forEach(this::releaseLostLockInDB);
             }, e -> {
                 if (IOExceptionUtil.isIOException(e)) {
                     log.debug("[{}] Failed to acknowledge the {} locks acquired by this Lock Manager Instance", lockManagerInstanceId, locksAcquiredByThisLockManager.size(), e);
@@ -254,17 +250,13 @@ public abstract class DBFencedLockManager<UOW extends UnitOfWork, LOCK extends D
 
                 if (IOExceptionUtil.isIOException(e) && releaseAcquiredLocksInCaseOfIOExceptionsDuringLockConfirmation) {
                     log.info("[{}] Releasing all locally acquired locks due to IO Exception", lockManagerInstanceId);
+                    var lostLocks = new ArrayList<LOCK>();
                     locksAcquiredByThisLockManager.forEach((lockName, fencedLock) -> {
-                        try {
-                            fencedLock.release();
-                        } catch (Exception ex) {
-                            if (IOExceptionUtil.isIOException(ex)) {
-                                log.debug(msg("[{}] Failed to release lock '{}'", lockManagerInstanceId, fencedLock.getName()), ex);
-                            } else {
-                                log.error(msg("[{}] Failed to release lock '{}'", lockManagerInstanceId, fencedLock.getName()), ex);
-                            }
+                        if (releaseLostLockLocally(fencedLock)) {
+                            lostLocks.add(fencedLock);
                         }
                     });
+                    lostLocks.forEach(this::releaseLostLockInDB);
                 }
             });
             if (log.isTraceEnabled()) {
@@ -279,6 +271,59 @@ public abstract class DBFencedLockManager<UOW extends UnitOfWork, LOCK extends D
         }
     }
 
+
+    /**
+     * First half of releasing a lock this instance failed to confirm: remove it locally, mark it as released and
+     * notify {@link LockReleased}, without any DB round trip. The lock is already lost, so the local release must
+     * not wait on the DB: when the DB is unreachable a release attempt can take several times the socket timeout
+     * (MongoDB driver 5.12+ retries connection establishment with backoff), and for all that time this instance
+     * would keep reporting a lock that another instance may take over once <code>lockTimeOut</code> has passed.
+     * The best-effort DB release follows in {@link #releaseLostLockInDB(DBFencedLock)}.
+     *
+     * @param lock the lock that could not be confirmed
+     * @return true if the lock was held locally and has now been released, false if it was already gone
+     */
+    private boolean releaseLostLockLocally(LOCK lock) {
+        if (locksAcquiredByThisLockManager.remove(lock.getName()) == null) {
+            return false;
+        }
+        log.debug("[{}] Releasing lost lock '{}' locally: {}", lockManagerInstanceId, lock.getName(), lock);
+        // Runs on the confirmation thread, partly outside any catch: a throwing lockReleased callback or event
+        // subscriber must not escape and end the scheduled confirmation.
+        try {
+            lock.markAsReleased();
+        } catch (Exception e) {
+            rethrowIfCriticalError(e);
+            log.error(msg("[{}] Failure while marking lost lock '{}' as released", lockManagerInstanceId, lock.getName()), e);
+        }
+        try {
+            notify(new LockReleased(lock, this));
+        } catch (Exception e) {
+            rethrowIfCriticalError(e);
+            log.error(msg("[{}] Failure while notifying that lost lock '{}' was released", lockManagerInstanceId, lock.getName()), e);
+        }
+        return true;
+    }
+
+    /**
+     * Second half of releasing a lost lock (see {@link #releaseLostLockLocally(DBFencedLock)}): a best-effort release
+     * in the DB, so another instance does not have to wait for <code>lockTimeOut</code>. The storage matches on lock
+     * name and fence token, so this never releases a newer acquisition of the same lock.
+     *
+     * @param lock the lost lock, already released locally
+     */
+    private void releaseLostLockInDB(LOCK lock) {
+        var releasedInDB = withUnitOfWork(uow -> lockStorage.releaseLockInDB(this, uow, lock),
+                                          e -> {
+                                              if (IOExceptionUtil.isIOException(e)) {
+                                                  log.debug(msg("[{}] Failed to release lost lock '{}' in DB", lockManagerInstanceId, lock.getName()), e);
+                                              } else {
+                                                  log.error(msg("[{}] Failed to release lost lock '{}' in DB", lockManagerInstanceId, lock.getName()), e);
+                                              }
+                                              return false;
+                                          });
+        log.debug("[{}] Lost lock '{}' {} in DB", lockManagerInstanceId, lock.getName(), releasedInDB ? "released" : "not released");
+    }
 
     /**
      * Internal method only to be called by subclasses of {@link DBFencedLockManager} and {@link DBFencedLock}
