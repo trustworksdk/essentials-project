@@ -3,7 +3,7 @@
 #
 # Sourced or executed from a case's scaffold.sh, which `claude plugin eval --scaffold` runs with the
 # empty run workspace as its working directory. Copies <fixture> (a path from the plugin root) into
-# it, leaving out the fixture's oracle files: the model under test must not see TEST-GUIDE.md,
+# it, leaving out the fixture's expectation files: the model under test must not see TEST-GUIDE.md,
 # expected.yaml or cases.yaml.
 #
 # usage: stage.sh <fixture-path-from-plugin-root> [--set name=value]... [--git]

@@ -15,9 +15,9 @@ repository (`persistence/ShippingOrders`, which the law puts in `entities/`): it
 identify a write repository by type rather than by path, so a path-keyed implementation fails the
 fixture loudly instead of passing it silently.
 
-The sources carry no oracle labels: the findings and traps live only here and in `expected.yaml`
+The sources carry no answer labels: the findings and traps live only here and in `expected.yaml`
 (machine-readable, `path:line` + anchor per entry). When the two disagree, fix both.
-`uv run --script tests/fixtures/check-expected.py` (from `essentials-plugin/`) checks `expected.yaml` against the tree and that no source carries an oracle label.
+`uv run --script tests/fixtures/check-expected.py` (from `essentials-plugin/`) checks `expected.yaml` against the tree and that no source carries an answer label.
 
 Eval: `evals/slice-check-service-entity/`, and change-router's `gate-service-entity` case — graders generated from `expected.yaml`; how to run and read it: `evals/README.md`.
 

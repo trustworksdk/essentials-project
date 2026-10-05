@@ -1,7 +1,7 @@
 # Test guide — `/essentials:review` judgement cases
 
 Two realistic changes to two fixtures, each carrying findings a script reports, findings only a reader
-can see, candidates that must be dismissed, and traps that must stay silent. The machine-readable oracle
+can see, candidates that must be dismissed, and traps that must stay silent. The machine-readable version
 is `<case>.expected.yaml` beside each patch; this file describes the same expectations for a human. When
 they disagree, fix both.
 
@@ -24,7 +24,7 @@ Then, in Claude Code with the plugin loaded, in `$tmp`: `/essentials:review HEAD
 can read them is graded on reading, not reviewing.
 
 The eval suite builds the same sandbox: `evals/review-<case>/scaffold.sh`, run by `claude plugin eval
---scaffold`. Its graders are generated from `<case>.expected.yaml` by `evals/build.py` (`oracle.yaml`
+--scaffold`. Its graders are generated from `<case>.expected.yaml` by `evals/build.py` (`grading.yaml`
 names the sections), plus two hand-written ones per case (`graders/report-shape.md`, and
 `graders/pre-existing.md` for `service-entity`). Edit the expected file, never a `gen-*` grader, then
 run `uv run --script evals/build.py`.

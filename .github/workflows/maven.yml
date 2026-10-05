@@ -23,7 +23,7 @@ jobs:
   # copy (scripts/sync-plugin-llm.sh). The pre-commit hook keeps the two in step on a contributor's machine, but hooks
   # are per clone and optional, so this gate is what enforces it. `git status` rather than `git diff`, so a doc added
   # to LLM/ without its copy fails too. No symlinks under the plugin: Git for Windows checks them out as text files.
-  # Every other deterministic check of the plugin runs here as well, one step per check so a failure names its oracle.
+  # Every other deterministic check of the plugin runs here as well, one step per check so a failure names its check.
   # The commands live in scripts/plugin-check.sh, the one list of the plugin's checks: each step below is one
   # `plugin-check.sh step <name>`, which runs exactly what this job ran inline, ::error:: annotations included.
   # A new check is a step there plus one step line here. Locally: `scripts/plugin-check.sh quick` runs them all.

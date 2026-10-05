@@ -181,6 +181,6 @@ name the others, and recommend re-running per module — do not silently sample.
 
 ## Verification fixture
 
-`tests/fixtures/brownfield-layered/` is the oracle: a layered Spring/JPA tree whose ground truth is
+`tests/fixtures/brownfield-layered/` is the test fixture: a layered Spring/JPA tree whose ground truth is
 written out in its `TEST-GUIDE.md`, including the false positives a run must **not** produce. Run
 against it after changing anything in `discovery-heuristics.md`.

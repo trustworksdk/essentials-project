@@ -10,7 +10,7 @@ wiring edits at the anchor comments the BC scaffold carries. None of that is jud
 language model doing it by hand is the only way it can go wrong. The kind skills call this
 script; the model then fills the TODOs, prunes what the slice does not need and reports.
 
-It also carries the oracle for the templates: `check` re-renders the compositions in
+It also carries the check for the templates: `check` re-renders the compositions in
 `tests/slice-golden/compositions.json` and byte-diffs them against the committed goldens.
 
 Usage

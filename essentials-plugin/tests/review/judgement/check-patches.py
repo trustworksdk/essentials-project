@@ -3,7 +3,7 @@
 # requires-python = ">=3.11"
 # dependencies = ["pyyaml==6.0.3", "jsonschema==4.26.0"]
 # ///
-"""check-patches — the deterministic half of the /essentials:review judgement oracle.
+"""check-patches — the deterministic half of the /essentials:review judgement check.
 
 Each `<case>.expected.yaml` here names a fixture, a patch and what /essentials:review must report for
 it. The model-judged rows are graded by the eval suite; this script checks everything that needs no

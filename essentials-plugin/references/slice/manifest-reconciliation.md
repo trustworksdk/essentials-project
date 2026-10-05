@@ -139,8 +139,8 @@ Order matters, because early steps make later ones cheaper and each is separatel
 
 1. **Parse gate.** Run `scripts/slice-lint.py` and fix every manifest it reports as unparseable. Commit
    that alone — it is mechanical and a reviewer should not have to read it alongside semantic changes.
-   Re-run the linter afterwards: it is the oracle for this step, not your reading of the diff. After the
-   kind-by-kind pass below, `scripts/slice-source.py <root> --check` is the same kind of oracle for the
+   Re-run the linter afterwards: it is the authority for this step, not your reading of the diff. After the
+   kind-by-kind pass below, `scripts/slice-source.py <root> --check` is the same kind of authority for the
    derived fields: a manifest still reported under `11(b)` or `6 endpoint route` was not reconciled.
 2. **Kind-by-kind, not slice-by-slice.** Do all views, then all automations, then translations, then
    commands. One extraction rule at a time is far easier to review than one slice at a time, and a

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Map every slice golden composition and every compilable fixture onto a scaffold host.
 
-The slice-compile oracle builds rendered slice code and the Java/Kotlin fixtures inside a real project:
+The slice-compile check builds rendered slice code and the Java/Kotlin fixtures inside a real project:
 a host rendered by `scripts/init-render.py --host <lang>-<db>` (defined in `tests/golden/init/hosts.json`),
 with one or more overlays copied into its `backend/src/` by the repo-root `scripts/plugin-scaffold.sh build-host`.
 This script owns only the mapping and the overlay trees; it never renders a host and never runs Maven.

@@ -1,6 +1,6 @@
 # `slice-map` fixture — expected output
 
-Oracle for `references/slice/slice-map-template.html` and for the data contract in
+Expected output for `references/slice/slice-map-template.html` and for the data contract in
 `commands/slice-map.md` §6. The ground truth is written out here. Every row a DOM can show is also
 checked by `render-check.py`, which renders each data file in headless Chrome and asserts on the dumped
 DOM; its per-file values live in `expected.json`, next to this file. The rows marked **by eye** — pan,
@@ -157,7 +157,7 @@ eye**: a DOM dump never exercises the browser's click-target resolution.
   a real crossing minimisation, so a dense graph has crossings. Treat that as known, not as a bug.
 - **`package` and `files` are not manifest fields**, so nothing here proves the command reads them
   correctly off a real slice directory — only that the renderer shows them. `scripts/slice-source.py`
-  reads them from source and its goldens are the oracle for that half; `slice-index.py map
+  reads them from source and its goldens are the check for that half; `slice-index.py map
   --source-facts` merges them into this data.
 - **The divergence checks that need source are not exercised here.** The generated data files carry
   the manifest-only ones (id uniqueness, kind vs. directory, twin pairing, dangling consume) because

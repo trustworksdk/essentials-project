@@ -14,10 +14,10 @@ Run:
 `scripts/slice-lint.py tests/fixtures/multi-lane --require-schema` (from `essentials-plugin/`) exits **1 with exactly one
 finding**, ML-5 below; that is intended.
 
-The machine-readable oracle is `expected.yaml` next to this file (findings, non-findings, skipped
+The machine-readable version is `expected.yaml` next to this file (findings, non-findings, skipped
 gates, lanes, with `path:line` and an anchor per entry). This guide describes the same expectations
 for a human; when the two disagree, fix both.
-`uv run --script tests/fixtures/check-expected.py` (from `essentials-plugin/`) checks `expected.yaml` against the tree and that no source carries an oracle label.
+`uv run --script tests/fixtures/check-expected.py` (from `essentials-plugin/`) checks `expected.yaml` against the tree and that no source carries an answer label.
 
 Eval: `evals/slice-check-multi-lane/` — graders generated from `expected.yaml`; how to run and read it: `evals/README.md`.
 

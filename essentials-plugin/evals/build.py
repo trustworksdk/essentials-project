@@ -3,15 +3,15 @@
 # requires-python = ">=3.11"
 # dependencies = ["pyyaml==6.0.3"]
 # ///
-"""Generate the eval suite's graders from the fixtures' oracles.
+"""Generate the eval suite's graders from the fixtures' expected results.
 
 `claude plugin eval` has no custom-code graders: a grader sees the agent's final message, its trace, the
-files it created or one workspace file, never a file outside the run. So the oracles cannot be read at
+files it created or one workspace file, never a file outside the run. So the expected results cannot be read at
 grading time. They are compiled into grader files here instead, and `--check` fails when a committed
-grader no longer matches its oracle, which keeps one source of truth:
+grader no longer matches its expected results, which keeps one source of truth:
 
-- every case directory holding an `oracle.yaml` gets `graders/gen-*.md` from the fixture's
-  `expected.yaml` (format 1, `tests/fixtures/*/expected.yaml`). oracle.yaml keys: `expected` (path from the
+- every case directory holding a `grading.yaml` gets `graders/gen-*.md` from the fixture's
+  `expected.yaml` (format 1, `tests/fixtures/*/expected.yaml`). grading.yaml keys: `expected` (path from the
   plugin root), `command`, `sections` (which expected.yaml sections become graders), optional `ess_ids`
   (all | deterministic | none: which must_find `ess` ids must appear verbatim), `read_only` (no Write/Edit
   call) and `runs_scripts` (plugin scripts some Bash call must run);
@@ -22,7 +22,7 @@ Hand-written graders are any `graders/*.md` not starting with `gen-`; this scrip
 usage:
   uv run --script evals/build.py            write the generated files, delete stale ones
   uv run --script evals/build.py --check    exit 1 when a generated file is missing, stale or edited
-exit: 0 ok | 1 --check found drift | 2 an oracle is malformed (nothing written)
+exit: 0 ok | 1 --check found drift | 2 an expected or grading file is malformed (nothing written)
 """
 
 from __future__ import annotations
@@ -59,14 +59,14 @@ NOT_A_FINDING = (
     "a different finding, or named in a lane or inventory summary.")
 
 
-class OracleError(Exception):
+class MalformedError(Exception):
     pass
 
 
 def load(rel: str) -> Any:
     path = PLUGIN / rel
     if not path.is_file():
-        raise OracleError(f"{rel}: no such file")
+        raise MalformedError(f"{rel}: no such file")
     with path.open(encoding="utf-8") as f:
         return yaml.safe_load(f)
 
@@ -93,7 +93,7 @@ def gate_label(gate: Any) -> str:
 def slug(text: str) -> str:
     s = re.sub(r"[^a-z0-9]+", "-", str(text).lower()).strip("-")
     if not s:
-        raise OracleError(f"cannot make a file name from {text!r}")
+        raise MalformedError(f"cannot make a file name from {text!r}")
     return s
 
 
@@ -117,7 +117,7 @@ def where(entry: dict[str, Any]) -> str:
     return place
 
 
-# --- oracle cases: expected.yaml sections -------------------------------------------------------------
+# --- grading cases: expected.yaml sections ------------------------------------------------------------
 
 def intro(command: str) -> str:
     return (f"The agent's final message is the report `{command}` printed for a test project. Paths in it are "
@@ -128,7 +128,7 @@ def intro(command: str) -> str:
 def sec_runs_expect(exp: dict[str, Any], o: dict[str, Any], src: str) -> dict[str, str]:
     runs = [r for r in exp.get("runs") or [] if r.get("command") == o["command"] and r.get("expect")]
     if not runs:
-        raise OracleError(f"{src}: no runs[] entry for {o['command']} with an `expect`")
+        raise MalformedError(f"{src}: no runs[] entry for {o['command']} with an `expect`")
     body = intro(o["command"]) + f"PASS if the agent did this: {runs[0]['expect']}\nFAIL otherwise."
     return {"gen-expect.md": grader(f"{src} runs[{o['command']}].expect", "llm", body, weight=2)}
 
@@ -152,7 +152,7 @@ def sec_lanes(exp: dict[str, Any], o: dict[str, Any], src: str) -> dict[str, str
         lines.append(f"`{bc}`: {text}" + (f" — signals: {signals}" if signals else ""))
         first = first or bool(lane.get("report_before_findings"))
     if not lines:
-        raise OracleError(f"{src}: `lanes` is empty")
+        raise MalformedError(f"{src}: `lanes` is empty")
     body = (intro(o["command"]) + "PASS if the report states the write-style lane of each bounded context as below"
             + (", before its findings" if first else "") + ":\n" + bullets(lines)
             + "\nFAIL if a bounded context is missing, or its lane or verdict differs.")
@@ -163,13 +163,13 @@ def sec_must_find(exp: dict[str, Any], o: dict[str, Any], src: str) -> dict[str,
     out: dict[str, str] = {}
     ess_policy = o.get("ess_ids", "deterministic")
     if ess_policy not in ("all", "deterministic", "none"):
-        raise OracleError(f"{src}: ess_ids must be all | deterministic | none")
+        raise MalformedError(f"{src}: ess_ids must be all | deterministic | none")
     for e in exp.get("must_find") or []:
         eid = e.get("id")
         if not eid or not e.get("what"):
-            raise OracleError(f"{src}: must_find entry without id/what: {e}")
+            raise MalformedError(f"{src}: must_find entry without id/what: {e}")
         if e.get("severity") not in SEVERITIES:
-            raise OracleError(f"{src}: {eid}: severity {e.get('severity')!r} is not Blocking | Should-fix | Advisory")
+            raise MalformedError(f"{src}: {eid}: severity {e.get('severity')!r} is not Blocking | Should-fix | Advisory")
         req = []
         if e.get("file"):
             req.append(f"it concerns {where(e)}")
@@ -210,7 +210,7 @@ def sec_must_not_find(exp: dict[str, Any], o: dict[str, Any], src: str) -> dict[
     for e in exp.get("must_not_find") or []:
         eid = e.get("id")
         if not eid:
-            raise OracleError(f"{src}: must_not_find entry without id: {e}")
+            raise MalformedError(f"{src}: must_not_find entry without id: {e}")
         gates = [str(g) for g in e.get("not_gates") or ([] if e.get("not_ids") else ["*"])]
         kinds = [gate_label(g) for g in gates if g != "*"] + [f"id {i}" for i in e.get("not_ids") or []]
         under = "of any kind" if "*" in gates else "under " + " or ".join(kinds)
@@ -236,7 +236,7 @@ def sec_skipped(exp: dict[str, Any], o: dict[str, Any], src: str) -> dict[str, s
         scope = f" for bounded context `{s['bc']}`" if s.get("bc") else ""
         items.append(f"{gate_label(s['gate'])}{scope}: {s.get('why', '')}")
     if not items:
-        raise OracleError(f"{src}: `skipped` is empty")
+        raise MalformedError(f"{src}: `skipped` is empty")
     body = (intro(o["command"]) + "PASS if the report names each of these gates as not run, skipped or out of scope "
             "(a 'gates not run' block or an equivalent statement), rather than omitting it or calling it a pass:\n"
             + bullets(items) + "\nFAIL if any of them is missing or reported as passed.")
@@ -248,7 +248,7 @@ def sec_dismissed(exp: dict[str, Any], o: dict[str, Any], src: str) -> dict[str,
     for e in exp.get("dismissed") or []:
         eid = e.get("id")
         if not eid:
-            raise OracleError(f"{src}: dismissed entry without id: {e}")
+            raise MalformedError(f"{src}: dismissed entry without id: {e}")
         subject = (f"{e['ess']} " if e.get("ess") else "the candidate ") + (f"at {where(e)}" if e.get("file") else "")
         body = (intro(o["command"]) + f"PASS if the report lists {subject.strip()} as a dismissed candidate (under a "
                 "'Dismissed candidates' heading or an equivalent statement) with a reason, and does not report it as a "
@@ -268,7 +268,7 @@ def sec_not_run(exp: dict[str, Any], o: dict[str, Any], src: str) -> dict[str, s
     for e in exp.get("not_run") or []:
         eid = e.get("id")
         if not eid or not e.get("checks"):
-            raise OracleError(f"{src}: not_run entry without id/checks: {e}")
+            raise MalformedError(f"{src}: not_run entry without id/checks: {e}")
         body = (intro(o["command"]) + f"PASS if the report names {e['checks']} as not run (under a 'Not run' heading "
                 f"or an equivalent statement).\nWhy: {' '.join(str(e.get('why', '')).split())}\n"
                 "FAIL if the report omits it, calls those checks clean or passed, or reports findings from them anyway.")
@@ -279,7 +279,7 @@ def sec_not_run(exp: dict[str, Any], o: dict[str, Any], src: str) -> dict[str, s
 def sec_terrain(exp: dict[str, Any], o: dict[str, Any], src: str) -> dict[str, str]:
     t = exp.get("terrain") or {}
     if not t:
-        raise OracleError(f"{src}: `terrain` is empty")
+        raise MalformedError(f"{src}: `terrain` is empty")
     items = [f"build: {t.get('build')}, {t.get('modules')} module(s), language {t.get('language')}",
              "frameworks: " + ", ".join(t.get("frameworks") or [])]
     if t.get("essentials") is False:
@@ -295,7 +295,7 @@ def sec_terrain(exp: dict[str, Any], o: dict[str, Any], src: str) -> dict[str, s
 def sec_contexts(exp: dict[str, Any], o: dict[str, Any], src: str) -> dict[str, str]:
     c = exp.get("contexts") or {}
     if not c:
-        raise OracleError(f"{src}: `contexts` is empty")
+        raise MalformedError(f"{src}: `contexts` is empty")
     items = [f"exactly {c.get('count')} candidate bounded contexts — not one per package or layer"]
     for name, cand in (c.get("candidates") or {}).items():
         line = f"`{name}` owning " + ", ".join(cand.get("owns") or [])
@@ -313,7 +313,7 @@ def sec_contexts(exp: dict[str, Any], o: dict[str, Any], src: str) -> dict[str, 
 def sec_slices(exp: dict[str, Any], o: dict[str, Any], src: str) -> dict[str, str]:
     s = exp.get("slices") or {}
     if not s:
-        raise OracleError(f"{src}: `slices` is empty")
+        raise MalformedError(f"{src}: `slices` is empty")
     listed = [f"{x['kind']} `{x['slice']}` (from `{x['file']}`)" + (f" — {x['also']}" if x.get("also") else "")
               for x in s.get("list") or []]
     body = (intro(o["command"]) + f"PASS if the report proposes exactly {s.get('count')} candidate slices "
@@ -330,7 +330,7 @@ def sec_slices(exp: dict[str, Any], o: dict[str, Any], src: str) -> dict[str, st
 def sec_ladder(exp: dict[str, Any], o: dict[str, Any], src: str) -> dict[str, str]:
     lad = exp.get("ladder") or {}
     if not lad:
-        raise OracleError(f"{src}: `ladder` is empty")
+        raise MalformedError(f"{src}: `ladder` is empty")
     items = [f"{k.replace('_', ' ')}: {v}" for k, v in lad.items()]
     body = (intro(o["command"]) + "PASS if the report's migration ladder satisfies:\n" + bullets(items)
             + "\nFAIL otherwise.")
@@ -340,7 +340,7 @@ def sec_ladder(exp: dict[str, Any], o: dict[str, Any], src: str) -> dict[str, st
 def sec_slice_map(exp: dict[str, Any], o: dict[str, Any], src: str) -> dict[str, str]:
     m = exp.get("slice_map") or {}
     if not m:
-        raise OracleError(f"{src}: `slice_map` is empty")
+        raise MalformedError(f"{src}: `slice_map` is empty")
     out: dict[str, str] = {}
     head = intro(o["command"])
     edges = [f"{a} → {msg} → {b}" for a, msg, b in m.get("edges") or []]
@@ -373,28 +373,28 @@ def sec_slice_map(exp: dict[str, Any], o: dict[str, Any], src: str) -> dict[str,
 RENDER = {name: globals()[f"sec_{name}"] for name in SECTIONS}
 
 
-def oracle_case(case_dir: Path) -> dict[Path, str]:
-    o = yaml.safe_load((case_dir / "oracle.yaml").read_text(encoding="utf-8")) or {}
+def grading_case(case_dir: Path) -> dict[Path, str]:
+    o = yaml.safe_load((case_dir / "grading.yaml").read_text(encoding="utf-8")) or {}
     src = str(o.get("expected") or "")
     if not src or not o.get("command") or not o.get("sections"):
-        raise OracleError(f"{case_dir.name}/oracle.yaml: needs expected, command and sections")
+        raise MalformedError(f"{case_dir.name}/grading.yaml: needs expected, command and sections")
     exp = load(src)
     out: dict[Path, str] = {}
     for section in o["sections"]:
         if section not in RENDER:
-            raise OracleError(f"{case_dir.name}/oracle.yaml: unknown section {section!r} (known: {', '.join(SECTIONS)})")
+            raise MalformedError(f"{case_dir.name}/grading.yaml: unknown section {section!r} (known: {', '.join(SECTIONS)})")
         for name, text in RENDER[section](exp, o, src).items():
             path = case_dir / "graders" / name
             if path in out:
-                raise OracleError(f"{case_dir.name}: two graders named {name}")
+                raise MalformedError(f"{case_dir.name}: two graders named {name}")
             out[path] = text
     if o.get("read_only"):
         for tool in ("Write", "Edit"):
             out[case_dir / "graders" / f"gen-no-{tool.lower()}.md"] = grader(
-                f"{case_dir.name}/oracle.yaml read_only", "tool_used", tool=tool, min=0, max=0)
+                f"{case_dir.name}/grading.yaml read_only", "tool_used", tool=tool, min=0, max=0)
     for script in o.get("runs_scripts") or []:
         out[case_dir / "graders" / f"gen-ran-{slug(script)}.md"] = grader(
-            f"{case_dir.name}/oracle.yaml runs_scripts", "tool_used", tool="Bash",
+            f"{case_dir.name}/grading.yaml runs_scripts", "tool_used", tool="Bash",
             input_match=rf'"command":"{JSON_CHARS}{re.escape(script)}')
     return out
 
@@ -404,14 +404,14 @@ def oracle_case(case_dir: Path) -> dict[Path, str]:
 def change_case(c: dict[str, Any]) -> dict[Path, str]:
     cid = c.get("id")
     if not cid or not re.fullmatch(r"[a-z0-9]+(-[a-z0-9]+)*", cid):
-        raise OracleError(f"{CHANGE_CASES}: bad id {cid!r}")
+        raise MalformedError(f"{CHANGE_CASES}: bad id {cid!r}")
     for key in ("fixture", "request"):
         if not c.get(key):
-            raise OracleError(f"{CHANGE_CASES}: {cid}: `{key}` is required")
+            raise MalformedError(f"{CHANGE_CASES}: {cid}: `{key}` is required")
     if not (PLUGIN / c["fixture"]).is_dir():
-        raise OracleError(f"{CHANGE_CASES}: {cid}: no fixture directory {c['fixture']}")
+        raise MalformedError(f"{CHANGE_CASES}: {cid}: no fixture directory {c['fixture']}")
     if c.get("writes") not in ("none", "allowed"):
-        raise OracleError(f"{CHANGE_CASES}: {cid}: writes must be none | allowed")
+        raise MalformedError(f"{CHANGE_CASES}: {cid}: writes must be none | allowed")
     d = EVALS / f"change-{cid}"
     src = f"{CHANGE_CASES} {cid}"
     request = " ".join(str(c["request"]).split())
@@ -448,7 +448,7 @@ def change_case(c: dict[str, Any]) -> dict[Path, str]:
     else:
         allowed = cls if isinstance(cls, list) else [cls]
         if not allowed or any(x not in CLASSES for x in allowed):
-            raise OracleError(f"{src}: class must be A-E, a list of them, ask, silent, not-on-law or null")
+            raise MalformedError(f"{src}: class must be A-E, a list of them, ask, silent, not-on-law or null")
         opts = " or ".join(f"class {x} ({CLASS_TEXT[x]})" for x in allowed)
         body = (f"PASS if the reply explicitly classifies the request as {opts}, by letter or by an unambiguous "
                 "equivalent.\nFAIL if it names a different class or never classifies the request.")
@@ -500,13 +500,13 @@ def change_case(c: dict[str, Any]) -> dict[Path, str]:
 def generate() -> dict[Path, str]:
     GATES.update(gate_names())
     out: dict[Path, str] = {}
-    for oracle in sorted(EVALS.glob("*/oracle.yaml")):
-        out.update(oracle_case(oracle.parent))
+    for grading in sorted(EVALS.glob("*/grading.yaml")):
+        out.update(grading_case(grading.parent))
     doc = load(CHANGE_CASES) or {}
     ids = [c.get("id") for c in doc.get("cases") or []]
     dupes = sorted({i for i in ids if ids.count(i) > 1})
     if dupes:
-        raise OracleError(f"{CHANGE_CASES}: duplicate ids {dupes}")
+        raise MalformedError(f"{CHANGE_CASES}: duplicate ids {dupes}")
     for c in doc.get("cases") or []:
         out.update(change_case(c))
     return out
@@ -529,7 +529,7 @@ def main() -> int:
     args = ap.parse_args()
     try:
         out = generate()
-    except (OracleError, yaml.YAMLError, KeyError, TypeError, ValueError) as e:
+    except (MalformedError, yaml.YAMLError, KeyError, TypeError, ValueError) as e:
         print(f"build.py: {e}", file=sys.stderr)
         return 2
     files, dirs = stale(out)

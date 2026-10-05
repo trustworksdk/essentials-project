@@ -17,7 +17,7 @@ the `PATH`, and on Linux `bubblewrap` and `socat` (granting `Bash` runs every co
 OS sandbox, which needs them):
 
 ```bash
-uv run --script essentials-plugin/evals/build.py --check   # graders match their oracles (no model call)
+uv run --script essentials-plugin/evals/build.py --check   # graders match their expected results (no model call)
 
 claude plugin eval essentials-plugin --scaffold --trust-plugin \
   --allow-tools Bash Write Edit "WebFetch(domain:pypi.org)" "WebFetch(domain:files.pythonhosted.org)" \
@@ -66,11 +66,11 @@ Grader names say where their expectation lives:
 | `gen-dismissed-<id>`, `gen-not-run-<id>` | a review case's `dismissed` and `not_run` entries (`tests/review/judgement/*.expected.yaml`) |
 | `gen-terrain`, `gen-contexts`, `gen-slices`, `gen-ladder` | `slice-discover`'s passes in `brownfield-layered/expected.yaml` |
 | `gen-map-*` | `worked-example/expected.yaml` `slice_map` |
-| `gen-no-write`, `gen-no-edit`, `gen-ran-<script>` | the case's `oracle.yaml` (`read_only`, `runs_scripts`) |
+| `gen-no-write`, `gen-no-edit`, `gen-ran-<script>` | the case's `grading.yaml` (`read_only`, `runs_scripts`) |
 | `change-*/graders/gen-*` | the case in `tests/fixtures/change-router/cases.yaml` |
 | anything not starting `gen-` | hand-written, in the case directory (the add-slice cases) |
 
-A failing grader is either a plugin regression or a wrong oracle. Read the judge's evidence first; if the
+A failing grader is either a plugin regression or a wrong expectation. Read the judge's evidence first; if the
 report is right and the expectation is wrong, fix `expected.yaml` or `cases.yaml` and the fixture's
 `TEST-GUIDE.md` together, then regenerate. A case that fails in one run of three is noise until it
 repeats.
@@ -80,23 +80,23 @@ repeats.
 ```
 evals/
   build.py              generates every gen-* grader and every change-* case; --check reports drift
-  _lib/stage.sh         copies a fixture into the run workspace, without its oracle files
+  _lib/stage.sh         copies a fixture into the run workspace, without its expectation files
   <case>/case.yaml      the prompt, turn and time limits, allowed tools, the scaffold script
   <case>/scaffold.sh    stages the project the command runs against
-  <case>/oracle.yaml    which expected.yaml sections become graders (fixture cases)
+  <case>/grading.yaml   which expected.yaml sections become graders (fixture cases)
   <case>/graders/       gen-* generated; others hand-written
   review-*/             /essentials:review's cases, same format
 ```
 
-- **Never edit a `gen-*` grader or a `change-*` directory.** Edit the oracle —
+- **Never edit a `gen-*` grader or a `change-*` directory.** Edit the expected results —
   `tests/fixtures/<fixture>/expected.yaml` or `tests/fixtures/change-router/cases.yaml` — then run
-  `uv run --script essentials-plugin/evals/build.py`. `--check` exits 1 on drift, 2 on a malformed oracle.
+  `uv run --script essentials-plugin/evals/build.py`. `--check` exits 1 on drift, 2 on a malformed expected or grading file.
 - `claude plugin eval` has no custom-code graders and a grader cannot read a file outside the run,
-  which is why the oracles are compiled into graders here rather than read at grading time.
-- **The model never sees the oracle.** `stage.sh` leaves out `TEST-GUIDE.md`, `expected.yaml` and
+  which is why the expected results are compiled into graders here rather than read at grading time.
+- **The model never sees the expected results.** `stage.sh` leaves out `TEST-GUIDE.md`, `expected.yaml` and
   `cases.yaml`, and a run cannot read `evals/`. Fixture sources carry no finding labels either.
 - A new fixture case: a directory with `case.yaml`, a two-line `scaffold.sh` calling `_lib/stage.sh`,
-  and an `oracle.yaml`; then regenerate. A new change-router case: a new entry in `cases.yaml`; then
+  and a `grading.yaml`; then regenerate. A new change-router case: a new entry in `cases.yaml`; then
   regenerate.
 - After editing a case, run `claude plugin eval essentials-plugin --max-cost-usd 0 --scaffold
   --trust-plugin --allow-tools Bash Write Edit` once: it loads every case file and starts no run, so a

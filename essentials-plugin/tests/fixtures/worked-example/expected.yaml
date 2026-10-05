@@ -1,10 +1,10 @@
-# expected.yaml — the machine-readable oracle for this fixture (format 1). TEST-GUIDE.md is the
+# expected.yaml — the machine-readable expectations for this fixture (format 1). TEST-GUIDE.md is the
 # human description of the same expectations; when they disagree, fix both.
 #
 # Paths are relative to this fixture's directory. `line` is 1-based and `anchor` is text that must
 # appear on that line, so a stale line number is detectable. `gate` is the /essentials:slice-check
 # gate as written in commands/slice-check.md ("14", "8a", "6"); `ess` is the review id derived from
-# it (ESS-G<gate><clause>); both are null where the oracle is a law section rather than a numbered
+# it (ESS-G<gate><clause>); both are null where the expectation is a law section rather than a numbered
 # gate. Severities: Blocking | Should-fix | Advisory.
 #
 #   runs          which command runs against this fixture, with which argument
@@ -21,7 +21,7 @@
 #                 `rank` (payoff order) and `kind` instead of a gate, and severity is null by design
 #
 # `tests/fixtures/check-expected.py` checks this file against the tree (paths, line anchors, ess ids)
-# and that no fixture source carries an oracle hint.
+# and that no fixture source carries an answer hint.
 #
 # Entry fields beyond file/line/anchor: `symbol` narrows the match to a type or method; `also_names`
 # lists other files the same finding must cite; `may_merge_with` names a finding this one may be

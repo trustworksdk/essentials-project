@@ -201,9 +201,9 @@ essentials-plugin/
 │   │                             service-entity lanes)
 │   └── init-assets/project/     (the /essentials:init template tree + manifest.json, rendered by
 │                                 scripts/init-render.py; versions come only from stack-pins.md)
-├── tests/                       (the maintainers' oracles; nothing here reaches a project)
+├── tests/                       (the maintainers' expected results; nothing here reaches a project)
 │   ├── fixtures/                (synthetic inputs, each with a TEST-GUIDE.md and a machine-readable
-│   │                             oracle — expected.yaml, or cases.yaml for change-router and
+│   │                             expectation file — expected.yaml, or cases.yaml for change-router and
 │   │                             expected.json for slice-map: worked-example — the Kotlin
 │   │                             decider-lane orders context, the "already has manifests" case;
 │   │                             service-entity; aggregate-lane; multi-lane — gate 14's

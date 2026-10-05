@@ -24,8 +24,8 @@ holds one instance of everything the heuristics claim to find, **plus traps**: a
 only findings proves nothing about false positives, which are the failure mode that discredits an
 inference tool.
 
-The sources carry no oracle labels: the ground truth lives only here and in `expected.yaml`. Its ids: `P1`–`P7` for the findings (`P1`–`P4` ranked in Pass 3 order, `P5`–`P7` unranked), `N1`–`N8` for the must-nots.
-`uv run --script tests/fixtures/check-expected.py` (from `essentials-plugin/`) checks `expected.yaml` against the tree and that no source carries an oracle label.
+The sources carry no answer labels: the ground truth lives only here and in `expected.yaml`. Its ids: `P1`–`P7` for the findings (`P1`–`P4` ranked in Pass 3 order, `P5`–`P7` unranked), `N1`–`N8` for the must-nots.
+`uv run --script tests/fixtures/check-expected.py` (from `essentials-plugin/`) checks `expected.yaml` against the tree and that no source carries an answer label.
 
 Eval: `evals/slice-discover-brownfield-layered/` and `evals/slice-check-brownfield-layered/`; change-router's `gate-not-essentials` case — graders generated from `expected.yaml`; how to run and read it: `evals/README.md`.
 

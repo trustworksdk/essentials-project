@@ -405,7 +405,7 @@ silently omits a slice is the one output here that can mislead without being wro
 
 ## Verification fixture
 
-The scripts carry the oracle. `tests/scripts/test_slice_index.py` pins the map, the terminal graph and
+The scripts carry the checks. `tests/scripts/test_slice_index.py` pins the map, the terminal graph and
 the locate queries against goldens in `tests/slice-index/golden/`, over a saga cycle, a `supersedes`
 twin, a generated 60-context estate and the real fixtures. `tests/scripts/test_slice_source.py` pins the
 source facts, and `tests/fixtures/slice-map/render-check.py` renders the page in headless Chrome. By

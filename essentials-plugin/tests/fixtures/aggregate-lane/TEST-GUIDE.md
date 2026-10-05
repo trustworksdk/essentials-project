@@ -10,9 +10,9 @@ same for the `aggregate` row of `/essentials:slice-check` gate 14. Its view also
 query-discriminator cases: value-pinned, multi-parameter, an optional filter, and one bound only
 across two handlers.
 
-The machine-readable oracle is `expected.yaml` next to this file; this guide describes the same
+The machine-readable version is `expected.yaml` next to this file; this guide describes the same
 expectations for a human. When the two disagree, fix both.
-`uv run --script tests/fixtures/check-expected.py` (from `essentials-plugin/`) checks `expected.yaml` against the tree and that no source carries an oracle label.
+`uv run --script tests/fixtures/check-expected.py` (from `essentials-plugin/`) checks `expected.yaml` against the tree and that no source carries an answer label.
 
 Eval: `evals/slice-check-aggregate-lane/` — graders generated from `expected.yaml`; how to run and read it: `evals/README.md`.
 

@@ -24,6 +24,9 @@ targets, with a `-N` suffix for plugin-only releases.
 - **Bundled docs** — how fast a Mongo node notices a lost FencedLock is bounded by the `MongoClient` socket timeouts,
   and the best-effort database release after a lost lock can take several connect timeouts on MongoDB driver 5.12+
   (`LLM-springdata-mongo-distributed-fenced-lock.md`).
+- **Wording** — the tests and evals no longer call their expectations an "oracle", a term many
+  readers do not know and one easily mistaken for the Oracle database: they now say expected results,
+  and each eval case's `oracle.yaml` is now `grading.yaml`.
 
 ## 0.60.0-1 — targets Essentials 0.60.0
 - **Slice check** — a new Advisory clause of gate 6, `6 raw id` (`ESS-G6`), reports a `@PathVariable` or

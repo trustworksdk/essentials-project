@@ -1,4 +1,4 @@
-# The slower and rarer halves of the essentials plugin's scaffold oracle, kept off the pull-request path. The per-PR
+# The slower and rarer halves of the essentials plugin's scaffold check, kept off the pull-request path. The per-PR
 # jobs (maven.yml: scaffold-install, scaffold-matrix, scaffold-slices, scaffold-frontend) prove that every generated
 # project builds and starts in its tests; this workflow proves the things a user does next, which the PR jobs do not
 # run: the documented inner-loop command, the Compose dev loop, the S2.1 "what breaks without it" column, and the

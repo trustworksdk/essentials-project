@@ -3,10 +3,10 @@
 # requires-python = ">=3.11"
 # dependencies = ["pyyaml==6.0.3"]
 # ///
-"""check-expected — keep the fixtures' machine-readable oracles honest.
+"""check-expected — keep the fixtures' machine-readable expectations honest.
 
 Every fixture under tests/fixtures/ carries its expectations in two files: TEST-GUIDE.md (for a
-human) and expected.yaml (for a grader). The sources themselves carry no oracle labels, because a
+human) and expected.yaml (for a grader). The sources themselves carry no answer labels, because a
 model graded on a fixture reads its sources. This script checks the two halves of that contract:
 
   1. expected.yaml is true to the tree
@@ -16,10 +16,10 @@ model graded on a fixture reads its sources. This script checks the two halves o
      - `ess` is `ESS-G<gate>` when `gate` is set, and null when `gate` is null;
      - ids are unique within must_find, must_not_find and tolerated;
      - every `severity` is Blocking, Should-fix, Advisory or null.
-  2. no fixture source carries an oracle hint — FINDING/TRAP/CLEAN labels, "not a finding",
+  2. no fixture source carries an answer hint — FINDING/TRAP/CLEAN labels, "not a finding",
      "must not be reported", gate numbers, "ground truth", "false positive", the words fixture,
      oracle, deliberate(ly), planted, or a slice-check/slice-discover/TEST-GUIDE reference.
-     Only the oracle files (TEST-GUIDE.md, expected.yaml, cases.yaml) may say those things.
+     Only the expectation files (TEST-GUIDE.md, expected.yaml, cases.yaml) may say those things.
 
 A fixture directory with a TEST-GUIDE.md and neither expected.yaml nor cases.yaml (the change-router's
 case table) is also an error: decision (4) makes every fixture's expectations machine-readable.
@@ -48,19 +48,19 @@ from pathlib import Path
 import yaml
 
 # Directories that are not model-graded source trees: slice-map is renderer input with its own
-# oracle (render-check.py + expected.json).
+# check (render-check.py + expected.json).
 EXCLUDED = {"slice-map"}
 
 # The only files in a fixture that may name findings and traps.
-ORACLE_FILES = {"TEST-GUIDE.md", "expected.yaml", "cases.yaml"}
+EXPECTATION_FILES = {"TEST-GUIDE.md", "expected.yaml", "cases.yaml"}
 
 HINTS: list[tuple[str, re.Pattern[str]]] = [
     ("label", re.compile(r"\b(FINDING|TRAP|CLEAN)\b")),
     ("verdict", re.compile(r"\bnot a (finding|violation|query surface)\b", re.I)),
     ("verdict", re.compile(r"\bmust not (be )?(flag|report)", re.I)),
     ("gate", re.compile(r"\bgates?[- ]?\d+", re.I)),
-    ("oracle", re.compile(r"\b(ground truth|false positives?|oracle|fixture|planted)\b", re.I)),
-    ("oracle", re.compile(r"\bdeliberate(ly)?\b", re.I)),
+    ("answer", re.compile(r"\b(ground truth|false positives?|oracle|fixture|planted)\b", re.I)),
+    ("answer", re.compile(r"\bdeliberate(ly)?\b", re.I)),
     ("command", re.compile(r"\bslice-(check|discover)\b|TEST-GUIDE|expected\.yaml", re.I)),
 ]
 
@@ -174,7 +174,7 @@ def check_expected(fixture: Path, problems: list[Problem]) -> bool:
 
 def check_hints(fixture: Path, problems: list[Problem]) -> None:
     for path in sorted(fixture.rglob("*")):
-        if not path.is_file() or path.name in ORACLE_FILES:
+        if not path.is_file() or path.name in EXPECTATION_FILES:
             continue
         try:
             text = path.read_text(encoding="utf-8")
@@ -185,7 +185,7 @@ def check_hints(fixture: Path, problems: list[Problem]) -> None:
             for kind, pattern in HINTS:
                 m = pattern.search(line)
                 if m is not None:
-                    problems.append(Problem(fixture.name, f"{rel}:{n}", f"oracle hint ({kind}): {m.group(0)!r}"))
+                    problems.append(Problem(fixture.name, f"{rel}:{n}", f"answer hint ({kind}): {m.group(0)!r}"))
                     break
 
 
@@ -223,10 +223,10 @@ def self_test() -> int:
         ("duplicate id", good_src, good_exp.replace("id: T1", "id: F1").replace("must_not_find:", "must_find_extra:")
          + "tolerated:\n  - id: X\n  - id: X\n", 1, ["duplicate id X"]),
         ("hint label", good_src.replace("public class", "/** TRAP: fine. */\npublic class"), good_exp.replace("line: 4", "line: 5"),
-         1, ["oracle hint (label): 'TRAP'"]),
+         1, ["answer hint (label): 'TRAP'"]),
         ("hint gate", good_src.replace("package x;", "package x; // gate 14 ignores this"), good_exp, 1,
-         ["oracle hint (gate): 'gate 14'"]),
-        ("hint verdict", good_src.replace("package x;", "// Not a finding."), good_exp, 1, ["oracle hint (verdict)"]),
+         ["answer hint (gate): 'gate 14'"]),
+        ("hint verdict", good_src.replace("package x;", "// Not a finding."), good_exp, 1, ["answer hint (verdict)"]),
         ("bad severity", good_src, good_exp.replace("    gate:", "    severity: Should-fi\n    gate:"), 1,
          ["severity 'Should-fi' is not one of"]),
         ("anchor no line", good_src, good_exp.replace("    line: 4\n", ""), 1, ["anchor without a line"]),
@@ -271,7 +271,7 @@ def self_test() -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
-    ap = argparse.ArgumentParser(description="Check the fixtures' expected.yaml files and that sources carry no oracle hints.")
+    ap = argparse.ArgumentParser(description="Check the fixtures' expected.yaml files and that sources carry no answer hints.")
     ap.add_argument("--fixtures", type=Path, default=Path(__file__).resolve().parent)
     ap.add_argument("--quiet", action="store_true")
     ap.add_argument("--self-test", action="store_true")

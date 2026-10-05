@@ -10,7 +10,7 @@
 
 Goldens: `tests/slice-index/golden/` (terminal graph text, graph JSON with ranks, locate queries) and
 the three generated slice-map data files `tests/fixtures/slice-map/sample-data-{cycle,twin,scale}.json`,
-which render-check.py then renders in Chrome — so the map this script emits is the map the page oracle
+which render-check.py then renders in Chrome — so the map this script emits is the map the page check
 proves. Ranks are also cross-checked against `tests/fixtures/slice-map/expected.json`, the values the
 page was seen to produce.
 """

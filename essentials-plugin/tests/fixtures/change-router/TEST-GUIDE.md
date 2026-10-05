@@ -1,6 +1,6 @@
 # Test guide — `change-router`
 
-The oracle for the `essentials-change` skill (`skills/essentials-change/SKILL.md`), which routes a change
+The expected results for the `essentials-change` skill (`skills/essentials-change/SKILL.md`), which routes a change
 request written in prose through `references/slice/change-procedure.md`. Each case is one sentence a
 user might type; the expectation is the class the skill must name (§2), the slice that owns the change
 (§3), and what it must and must not do. Never shipped to a user.

@@ -1,4 +1,4 @@
-# service-entity.expected.yaml — the machine-readable oracle for /essentials:review on service-entity.patch
+# service-entity.expected.yaml — the machine-readable expectations for /essentials:review on service-entity.patch
 # (format 1). Field meanings: decider-lane.expected.yaml's header. TEST-GUIDE.md beside it is the human
 # description of the same expectations; when they disagree, fix both.
 

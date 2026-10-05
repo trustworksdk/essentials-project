@@ -174,7 +174,7 @@ declare -A step_desc=(
     [docs-search]="the essentials-docs search script (test_search.py)"
     [check-patches]="review judgement cases, deterministic half (check-patches.py)"
     [check-expected]="fixture expected.yaml anchors still point at their lines (check-expected.py)"
-    [eval-graders]="eval graders generated from their oracles, not edited (evals/build.py --check)"
+    [eval-graders]="eval graders generated from their expected results, not edited (evals/build.py --check)"
     [eval-flags]="evals/README.md § Run it's claude plugin eval command equals the flags \`evals\` runs"
     [slice-compile-table]="every fixture is compiled or listed as not compiled (overlay.py check)"
     [render-check]="slice-map page renders in headless Chrome (render-check.py; exit 3 = skipped, no Chrome)"
@@ -625,10 +625,10 @@ classify() {
                     fi ;;
                 evals/_lib/*)
                     printf 'evals:all\teval staging every case uses (evals/_lib/)\n' ;;
-                evals/*/oracle.yaml)
+                evals/*/grading.yaml)
                     name=${rel#evals/}
                     name=${name%%/*}
-                    printf 'quick\tcompanion: an eval'"'"'s oracle.yaml (evals/build.py, commit the graders)\n'
+                    printf 'quick\tcompanion: an eval'"'"'s grading.yaml (evals/build.py, commit the graders)\n'
                     printf 'evals:%s\teval case files changed\n' "$name" ;;
                 evals/*/*)
                     name=${rel#evals/}
@@ -1003,7 +1003,7 @@ cmd_evals() {
         return 0
     fi
 
-    x "$repo" "${build[@]}" || { echo "plugin-check evals: graders are out of step with their oracles; run evals/build.py and commit them" >&2; return 1; }
+    x "$repo" "${build[@]}" || { echo "plugin-check evals: graders are out of step with their expected results; run evals/build.py and commit them" >&2; return 1; }
     if ! $changed; then
         if [ -n "$case_glob" ]; then
             x "$repo" "${eval_cmd[@]}" --case "$case_glob" "${tail_args[@]}"

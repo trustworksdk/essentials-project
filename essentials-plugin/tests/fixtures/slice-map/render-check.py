@@ -139,7 +139,7 @@ def parse(html):
     return t.root
 
 
-# ---------------------------------------------------------------- the oracle's own derivation
+# ----------------------------------------------------------------- the check's own derivation
 
 
 def arr(v):

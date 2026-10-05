@@ -12,9 +12,9 @@ decider-lane} tree with manifests — the input the manifest-reading commands ar
 | `/essentials:slice-check` | The **Kotlin decider-lane** manifests; gate 11(b) against real `@MessageHandler` methods, one of them taking an import-aliased event type and one a fully-qualified one; a Kotlin `params = ["status"]` discriminator for gate 6 |
 | `references/slice/api-provenance.md` | The worked example whose Essentials imports the ledger proves |
 
-The machine-readable oracle is `expected.yaml` next to this file: the one expected finding, the
+The machine-readable version is `expected.yaml` next to this file: the one expected finding, the
 non-findings, the lane, the facts a source reader must extract, and the edges `slice-map` must draw.
-`uv run --script tests/fixtures/check-expected.py` (from `essentials-plugin/`) checks `expected.yaml` against the tree and that no source carries an oracle label.
+`uv run --script tests/fixtures/check-expected.py` (from `essentials-plugin/`) checks `expected.yaml` against the tree and that no source carries an answer label.
 
 Eval: `evals/slice-check-worked-example/` and `evals/slice-map-worked-example/`; the change-router cases run in a copy of it — graders generated from `expected.yaml`; how to run and read it: `evals/README.md`.
 
@@ -80,4 +80,4 @@ If you substitute, do it once and completely, so the tree does not end up half-r
 - **No `WarehouseClient` implementation.** The transport binding is the project's; the scaffold harness
   boots the tree with a test-only stub (`tests/slice-compile/stubs/worked-example/`).
 - **Nothing here verifies the slice templates.** The worked example is input to the manifest and
-  source readers, not a rendering oracle.
+  source readers, not a rendering check.

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""gen-scale — write a deterministic, many-context slice estate for the scale oracles.
+"""gen-scale — write a deterministic, many-context slice estate for the scale tests.
 
     gen-scale.py OUT_DIR [--bcs N]      (default N = 12: 48 slices, 100+ graph nodes)
 

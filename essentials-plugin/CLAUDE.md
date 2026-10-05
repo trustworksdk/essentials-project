@@ -58,7 +58,7 @@ file-by-file enumeration of `references/llm/` — that is the skill's module ind
 | A manifest field's meaning, or which field a kind declares its inbound events in | `references/slice/manifest-guide.md` §3, `references/slice/manifest-reconciliation.md` §1–§2 (derivable/human-owned split + extraction rules), `commands/slice-check.md` gate 11 and its `--fix-manifests` field list, and **every reader** — `scripts/slice-index.py`, `scripts/slice-source.py`, `commands/slice-map.md` Steps 2–4 and the graph builder in `references/slice/slice-map-template.html` |
 | `references/slice/slice-map-template.html` or the data contract in `commands/slice-map.md` §6 | The other one — they are one contract — then `uv run --script tests/scripts/test_slice_index.py` and `python3 tests/fixtures/slice-map/render-check.py`, and check the by-eye rows of that fixture's `TEST-GUIDE.md` |
 | `scripts/slice-index.py` or `scripts/slice-source.py` changed | Its test: `uv run --script tests/scripts/test_slice_index.py` / `test_slice_source.py`; `--update-golden` only for an intended change, and review the diff. After a slice-index change, rerun `render-check.py` |
-| A heuristic added/changed in `references/slice/discovery-heuristics.md` | `tests/fixtures/brownfield-layered/` — add a source element that exercises it and a row to that fixture's `TEST-GUIDE.md` and `expected.yaml`. A heuristic with no fixture element is unexercised; the fixture's `TEST-GUIDE.md` and `expected.yaml` are its oracle, run by `evals/` |
+| A heuristic added/changed in `references/slice/discovery-heuristics.md` | `tests/fixtures/brownfield-layered/` — add a source element that exercises it and a row to that fixture's `TEST-GUIDE.md` and `expected.yaml`. A heuristic with no fixture element is unexercised; the fixture's `TEST-GUIDE.md` and `expected.yaml` are its expected results, run by `evals/` |
 | `references/slice/slice-yaml.schema.json` changed | Keep it backward compatible: manifests written by another tool — a `generator` other than `essentials`, the optional event-model linkage — must still validate. Then `uv run --script tests/scripts/test_slice_lint.py`, which validates every fixture and every rendered golden: a schema tightening that the plugin's own artifacts fail is a defect in the tightening or in the artifacts, and you cannot tell which without both |
 | A gate added, removed, or re-scoped in `commands/slice-check.md` | Whether its mechanical part belongs in a script. Decidable from manifests alone (parsing, schema, id sets) → `scripts/slice-lint.py`. A syntactic fact of the Java/Kotlin source (an annotation, a handler's parameter type, a mapping's route) → `scripts/slice-source.py`, with a case under `tests/slice-source/cases/`. The judgement stays in the gate. Never the same check in both the script and the gate. Gate numbers are review ids (`ESS-G<gate><clause>`): never renumber, and a new gate gets its `<a id="g<n>">` anchor, which `/essentials:review` links to |
 | `scripts/slice-lint.py` changed | `commands/slice-check.md` Step 1.5 (its contract and exit codes), `references/slice/manifest-guide.md` § Validating a manifest, `commands/init.md` Step 9 and the hook template `references/init-assets/project/.githooks/pre-commit.template` — projects hold an installed copy that gate 12 diffs against this one — then `uv run --script tests/scripts/test_slice_lint.py` |
@@ -71,7 +71,7 @@ file-by-file enumeration of `references/llm/` — that is the skill's module ind
 | Java or Kotlin lane capability changes (a command starts or stops supporting a language) | The **Status paragraph** of the affected `references/stack/<language>-spring-boot.md`, `commands/intro.md` (and its `━━━ DELIBERATELY ABSENT ━━━` block when the Kotlin aggregate lane is concerned), and `README.md` § Deliberately absent |
 | A doc changed in `LLM/` | Run `scripts/sync-plugin-llm.sh` from the repository root (the pre-commit hook installed by `scripts/install-git-hooks.sh` does it for you) and commit both. Never edit `references/llm/` — the hook refuses the commit and the CI drift gate fails it |
 | A fixture's source changed | `uv run --script tests/fixtures/check-expected.py` names every `expected.yaml` line that moved: fix them and keep `TEST-GUIDE.md` in step, then `uv run --script evals/build.py`. For `worked-example` or `service-entity`, `uv run --script tests/review/judgement/check-patches.py`: a patch that no longer applies is re-cut, and its `expected.yaml` lines moved. For a compiled fixture, `../scripts/plugin-check.sh scaffold slices --case fixture-<name>` |
-| A fixture's `expected.yaml`, `tests/fixtures/change-router/cases.yaml`, or an eval's `oracle.yaml` changed | `uv run --script evals/build.py`, and commit the regenerated graders. Never hand-edit a `gen-*` grader or a `change-*` case |
+| A fixture's `expected.yaml`, `tests/fixtures/change-router/cases.yaml`, or an eval's `grading.yaml` changed | `uv run --script evals/build.py`, and commit the regenerated graders. Never hand-edit a `gen-*` grader or a `change-*` case |
 | A feature planned, started, or dropped | Nothing. The plugin names only what ships: no planned or backlog item in the intro, the README or `commands/init.md`, because a list of future work shipped in the plugin goes stale. A feature appears when it ships |
 
 There is no `references/architecture.md` in this plugin. Do not invent one — `README.md` carries
@@ -101,7 +101,7 @@ that load.
   `tests/golden/init/`, `tests/slice-golden/`, `tests/slice-index/golden/` and
   `tests/slice-source/golden/` are what the renderers and readers produce today. Each has an
   `--update-golden`; run it only for an intended change, then read the diff before committing. A
-  golden regenerated to make a red check green has stopped being an oracle.
+  golden regenerated to make a red check green has stopped checking anything.
 - **Exactly two copies leave the plugin, and the second was an explicit decision.** The first is
   `.claude/rules/essentials-slices.md` (below). The second is the lint gate — `scripts/slice-lint.py`
   plus a copy of `slice-yaml.schema.json` beside it — installed by `/essentials:init` Step 9 or
@@ -309,17 +309,19 @@ that load.
 - **`tests/fixtures/` is never shipped as user-facing content.** CI compiles the Java and Kotlin
   fixtures that hold application sources by overlaying them onto a rendered host
   (`tests/slice-compile/overlay.py` lists which, and why the rest are not); nothing builds them in
-  place. Each fixture's oracle is its `TEST-GUIDE.md` for a human and its `expected.yaml` for a
-  machine, kept in step by `tests/fixtures/check-expected.py`. The sources carry **no oracle hints**
-  — no finding labels, gate numbers or verdicts in names or comments — because the eval sandbox
-  stages the sources without the oracle files and the model must not read the answer. Fixtures must
-  stay obviously synthetic so nobody mistakes one for a template, and must contain **traps** as
-  well as findings — a fixture that only contains findings proves nothing about false positives.
+  place. Each fixture's expected results are its `TEST-GUIDE.md` for a human and its `expected.yaml`
+  for a machine, kept in step by `tests/fixtures/check-expected.py`. The sources carry **no answer
+  hints** — no finding labels, gate numbers or verdicts in names or comments — because the eval
+  sandbox stages the sources without the expectation files and the model must not read the answer.
+  Fixtures must stay obviously synthetic so nobody mistakes one for a template, and must contain
+  **traps** as well as findings — a fixture that only contains findings proves nothing about false
+  positives.
 - **The model-judgement steps are scored by `claude plugin eval`, before each release, not per PR.**
   `evals/` holds one case per judgement a command makes (the audits, discovery, the map, the change
-  router, add-slice, review). Its graders are generated by `evals/build.py` from the fixture oracles,
-  so an expectation is written once, in `expected.yaml` or `change-router/cases.yaml`; the CI gate is
-  `build.py --check`, which calls no model. A run costs real tokens and the model is not
+  router, add-slice, review). Its graders are generated by `evals/build.py` from the fixtures'
+  expected results, so an expectation is written once, in `expected.yaml` or
+  `change-router/cases.yaml`; the CI gate is `build.py --check`, which calls no model. A run costs
+  real tokens and the model is not
   deterministic: a single red run is a question, not a verdict (`evals/README.md`).
 
 ## Before committing

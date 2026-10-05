@@ -1,6 +1,6 @@
 # Fixture — `slice-map`
 
-Data for the renderer behind `/essentials:slice-map --html`, and the oracle that renders it. It is
+Data for the renderer behind `/essentials:slice-map --html`, and the check that renders it. It is
 **data, not a project**: no sources, no build.
 
 | File | What it is |

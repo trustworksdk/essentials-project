@@ -1,4 +1,4 @@
-# decider-lane.expected.yaml — the machine-readable oracle for /essentials:review on decider-lane.patch
+# decider-lane.expected.yaml — the machine-readable expectations for /essentials:review on decider-lane.patch
 # (format 1, the fixtures' expected.yaml shape plus the review sections below). TEST-GUIDE.md beside it is
 # the human description of the same expectations; when they disagree, fix both.
 #

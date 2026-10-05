@@ -1,5 +1,5 @@
 {
-  "about": "Oracle for scripts/stack-lint.py --self-test. Each fixture lists every finding it must produce as (check, file, line); anything else reported is a failure, and so is anything listed that is not reported. `line: null` is an absence with no natural line. `facts` passes the fact overrides; `expectFacts` asserts detection. A finding may also pin `targetOnly` and `appliesWithUpgrade` as the JSON reports them. Clean fixtures also carry traps: comments naming forbidden artifacts, keys and imports, which must stay silent.",
+  "about": "Expected results for scripts/stack-lint.py --self-test. Each fixture lists every finding it must produce as (check, file, line); anything else reported is a failure, and so is anything listed that is not reported. `line: null` is an absence with no natural line. `facts` passes the fact overrides; `expectFacts` asserts detection. A finding may also pin `targetOnly` and `appliesWithUpgrade` as the JSON reports them. Clean fixtures also carry traps: comments naming forbidden artifacts, keys and imports, which must stay silent.",
   "fixtures": {
     "clean/kotlin-pges-flux-embedded": {
       "exit": 0,

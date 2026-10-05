@@ -1,4 +1,4 @@
-# cases.yaml — the machine-readable oracle for the essentials-change skill (format 1). TEST-GUIDE.md in
+# cases.yaml — the machine-readable expectations for the essentials-change skill (format 1). TEST-GUIDE.md in
 # this directory is the human description of the same cases; when they disagree, fix both.
 #
 # Each case is one prose change request, run in a copy of `fixture` (a path from the plugin root). The
