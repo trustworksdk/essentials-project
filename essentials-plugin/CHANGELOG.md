@@ -4,6 +4,11 @@ Each entry is a release, headed by its `plugin.json` version: the Essentials rel
 targets, with a `-N` suffix for plugin-only releases.
 
 ## 0.60.0-3 — targets Essentials 0.60.0
+- **Licence** — the plugin now states its licence: Apache-2.0, the same as the Essentials repository.
+  `LICENSE` ships in the plugin directory and `plugin.json` carries `"license": "Apache-2.0"`, so an
+  installed copy, which does not include the repository's root `LICENSE.txt`, says what terms it
+  comes under. The scaffold templates stay without a copyright header on purpose: what they render
+  becomes the user's code.
 - **Framework docs, brought up to the 0.60 release branch** — `references/llm/` now carries what
   landed on `release/0.60` alongside the plugin: event causation (`CausationContext`, how a cause is
   recorded, carried across durable queues and command buses, and looked up, plus the admin API's
