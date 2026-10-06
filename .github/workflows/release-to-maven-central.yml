@@ -26,10 +26,16 @@ jobs:
       - name: Setting Project version to release tag_name
         run: mvn -B versions:set -DnewVersion=${{ github.event.release.tag_name }} -DgenerateBackupPoms=false
 
+      # Also a CI job on every push and pull request; repeated here so a release cut from a commit that skipped CI
+      # still cannot publish an example module.
+      - name: Every example module is excluded from the release
+        run: python3 scripts/check-release-exclusions.py
+
       - name: Release to Maven Central
         # The example modules are not published artifacts. They are left out of the reactor here, and the release
         # profile's excludeArtifacts in the root pom.xml also leaves them out of the bundle; a new example module
-        # goes in both. maven.deploy.skip does not do it - central-publishing-maven-plugin never reads it
+        # goes in both (scripts/check-release-exclusions.py fails until it does). maven.deploy.skip does not do it -
+        # central-publishing-maven-plugin never reads it
         run: >-
           mvn -B clean deploy -P release -DskipTests -DskipDependencyCheck=true
           -pl '!:essentials-trading-demo,!:essentials-performance-lab,!:essentials-spring-examples,!:postgresql-cqrs,!:postgresql-inbox-outbox,!:mongodb-inbox-outbox'
