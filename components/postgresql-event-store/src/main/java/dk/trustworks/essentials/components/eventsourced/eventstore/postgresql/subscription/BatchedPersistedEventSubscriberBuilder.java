@@ -46,6 +46,7 @@ public final class BatchedPersistedEventSubscriberBuilder {
     private Duration                              maxLatency;
     private SubscriptionErrorPolicy               subscriptionErrorPolicy               = SubscriptionErrorPolicy.skip();
     private SubscriberAcknowledgement             subscriberAcknowledgement;
+    private SubscriptionAutoResumer               autoResumer;
 
     /**
      * @param eventHandler the handler that batches of {@link PersistedEvent}s are forwarded to. Required
@@ -122,7 +123,9 @@ public final class BatchedPersistedEventSubscriberBuilder {
 
     /**
      * @param subscriptionErrorPolicy what to do when handling a batch fails with an error the retry spec doesn't retry.
-     *                                Defaults to {@link SubscriptionErrorPolicy#skip()}: call the <code>onErrorHandler</code>
+     *                                Defaults to {@link SubscriptionErrorPolicy#skip()}: call the <code>onErrorHandler</code>.
+     *                                A stopping policy stops the subscriber for good unless the subscriber has an auto-resumer
+     *                                (only the subscriptions an {@link EventStoreSubscriptionManager} creates do)
      * @return this builder instance for fluent chaining
      */
     public BatchedPersistedEventSubscriberBuilder setSubscriptionErrorPolicy(SubscriptionErrorPolicy subscriptionErrorPolicy) {
@@ -145,20 +148,35 @@ public final class BatchedPersistedEventSubscriberBuilder {
     }
 
     /**
+     * Package-private: only the subscriptions an {@link EventStoreSubscriptionManager} creates resume by themselves
+     *
+     * @param autoResumer resumes the subscription when the {@link SubscriptionErrorPolicy} stopped the subscriber and resumes
+     *                    automatically, and decides when a stopping policy skips an event instead. Optional: without it a
+     *                    stopped subscriber stays stopped until its subscription is resumed by hand
+     * @return this builder instance for fluent chaining
+     */
+    BatchedPersistedEventSubscriberBuilder setAutoResumer(SubscriptionAutoResumer autoResumer) {
+        this.autoResumer = autoResumer;
+        return this;
+    }
+
+    /**
      * Builds the subscriber.
      *
      * @return the subscriber
      */
     public BatchedPersistedEventSubscriber build() {
-        return new BatchedPersistedEventSubscriber(requireNonNull(eventHandler, "eventHandler cannot be null"),
-                                                   requireNonNull(eventStoreSubscription, "eventStoreSubscription cannot be null"),
-                                                   requireNonNull(onErrorHandler, "onErrorHandler cannot be null"),
-                                                   requireNonNull(forwardToEventHandlerRetryBackoffSpec, "forwardToEventHandlerRetryBackoffSpec cannot be null"),
-                                                   eventStorePollingBatchSize,
-                                                   requireNonNull(eventStore, "eventStore cannot be null"),
-                                                   maxBatchSize,
-                                                   requireNonNull(maxLatency, "maxLatency cannot be null"),
-                                                   requireNonNull(subscriptionErrorPolicy, "subscriptionErrorPolicy cannot be null"),
-                                                   subscriberAcknowledgement != null ? subscriberAcknowledgement : SubscriberAcknowledgement.create());
+        var subscriber = new BatchedPersistedEventSubscriber(requireNonNull(eventHandler, "eventHandler cannot be null"),
+                                                             requireNonNull(eventStoreSubscription, "eventStoreSubscription cannot be null"),
+                                                             requireNonNull(onErrorHandler, "onErrorHandler cannot be null"),
+                                                             requireNonNull(forwardToEventHandlerRetryBackoffSpec, "forwardToEventHandlerRetryBackoffSpec cannot be null"),
+                                                             eventStorePollingBatchSize,
+                                                             requireNonNull(eventStore, "eventStore cannot be null"),
+                                                             maxBatchSize,
+                                                             requireNonNull(maxLatency, "maxLatency cannot be null"),
+                                                             requireNonNull(subscriptionErrorPolicy, "subscriptionErrorPolicy cannot be null"),
+                                                             subscriberAcknowledgement != null ? subscriberAcknowledgement : SubscriberAcknowledgement.create());
+        subscriber.autoResumer = autoResumer;
+        return subscriber;
     }
 }

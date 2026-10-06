@@ -23,6 +23,7 @@ import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.ob
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.persistence.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.persistence.table_per_aggregate_type.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.serializer.json.EssentialsJSONEventSerializers;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.subscription.monitoring.SubscriptionStoppedMicrometerMonitor;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.test_data.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.transaction.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.types.*;
@@ -109,11 +110,41 @@ class EventStoreSubscriptionManager_SubscriptionErrorPolicy_IT {
         }
     }
 
+    // --------------------------------------------------------------------------------------------------------- Default
+
+    /**
+     * The default policy - {@code RETRY_N_THEN_STOP} with auto-resume - end to end, at its real delays: 1 attempt and 3
+     * retries, a stop, and a resume by itself 10 s later at the failed event, which then succeeds. Nothing is skipped
+     */
+    @Test
+    void by_default_a_failing_event_is_retried_then_stopped_at_and_resumed_by_itself() {
+        eventStoreSubscriptionManager = startSubscriptionManager(null);
+        assertThat(((DefaultEventStoreSubscriptionManager) eventStoreSubscriptionManager).getSubscriptionErrorPolicy()).isEqualTo(SubscriptionErrorPolicy.defaultPolicy());
+        var handled  = new CopyOnWriteArrayList<Long>();
+        var attempts = new ConcurrentHashMap<Long, AtomicInteger>();
+        // Fails the first attempt and every retry, succeeds once resumed
+        var subscription = subscribe(handled, attempts, () -> attempts.get(FAILING_EVENT).get() <= 1 + SubscriptionErrorPolicy.DEFAULT_MAX_RETRIES);
+
+        appendThreeEvents();
+
+        Awaitility.waitAtMost(Duration.ofSeconds(10)).until(subscription::isStoppedByErrorPolicy);
+        assertThat(attempts.get(FAILING_EVENT).get()).isEqualTo(1 + SubscriptionErrorPolicy.DEFAULT_MAX_RETRIES);
+        assertThat(handled).containsExactly(1L);
+        awaitStoppedByErrorPolicyCount(1);
+
+        Awaitility.waitAtMost(SubscriptionErrorPolicy.AutoResume.DEFAULT_INITIAL_DELAY.plusSeconds(10))
+                  .untilAsserted(() -> assertThat(handled).containsExactly(1L, 2L, 3L));
+        assertThat(attempts.get(FAILING_EVENT).get()).isEqualTo(2 + SubscriptionErrorPolicy.DEFAULT_MAX_RETRIES);
+        assertThat(subscription.isStoppedByErrorPolicy()).isFalse();
+        awaitDurableResumePoint(4);
+        assertThat(skippedAfterAutoResumesCount()).isZero();
+    }
+
     // ------------------------------------------------------------------------------------------------------------ SKIP
 
     @Test
-    void by_default_a_failing_event_is_skipped_and_the_subscription_continues() {
-        eventStoreSubscriptionManager = startSubscriptionManager(null);
+    void an_explicit_skip_policy_skips_the_failing_event_and_continues() {
+        eventStoreSubscriptionManager = startSubscriptionManager(SubscriptionErrorPolicy.skip());
         var handled  = new CopyOnWriteArrayList<Long>();
         var attempts = new ConcurrentHashMap<Long, AtomicInteger>();
         var subscription = subscribe(handled, attempts, () -> true);
@@ -127,22 +158,6 @@ class EventStoreSubscriptionManager_SubscriptionErrorPolicy_IT {
         awaitDurableResumePoint(4);
         assertThat(subscription.isStoppedByErrorPolicy()).isFalse();
         assertThat(stoppedByErrorPolicyCount()).isZero();
-        assertThat(((DefaultEventStoreSubscriptionManager) eventStoreSubscriptionManager).getSubscriptionErrorPolicy()).isEqualTo(SubscriptionErrorPolicy.skip());
-    }
-
-    @Test
-    void an_explicit_skip_policy_behaves_like_the_default() {
-        eventStoreSubscriptionManager = startSubscriptionManager(SubscriptionErrorPolicy.skip());
-        var handled  = new CopyOnWriteArrayList<Long>();
-        var attempts = new ConcurrentHashMap<Long, AtomicInteger>();
-        subscribe(handled, attempts, () -> true);
-
-        appendThreeEvents();
-
-        Awaitility.waitAtMost(Duration.ofSeconds(10))
-                  .untilAsserted(() -> assertThat(handled).containsExactly(1L, 3L));
-        assertThat(attempts.get(FAILING_EVENT).get()).isEqualTo(1);
-        awaitDurableResumePoint(4);
     }
 
     // ------------------------------------------------------------------------------------------------ RETRY_N_THEN_SKIP
@@ -221,7 +236,7 @@ class EventStoreSubscriptionManager_SubscriptionErrorPolicy_IT {
     @Test
     void stop_does_not_advance_past_the_failing_event_and_resumes_at_it_after_a_restart() throws InterruptedException {
         var failing = new AtomicBoolean(true);
-        eventStoreSubscriptionManager = startSubscriptionManager(SubscriptionErrorPolicy.stop());
+        eventStoreSubscriptionManager = startSubscriptionManager(SubscriptionErrorPolicy.stop().withoutAutoResume());
         var handled  = new CopyOnWriteArrayList<Long>();
         var attempts = new ConcurrentHashMap<Long, AtomicInteger>();
         var subscription = subscribe(handled, attempts, failing::get);
@@ -248,7 +263,7 @@ class EventStoreSubscriptionManager_SubscriptionErrorPolicy_IT {
 
         // Restart while the cause persists: the event is redelivered - not skipped - and the subscription stops at it again
         eventStoreSubscriptionManager.stop();
-        eventStoreSubscriptionManager = startSubscriptionManager(SubscriptionErrorPolicy.stop());
+        eventStoreSubscriptionManager = startSubscriptionManager(SubscriptionErrorPolicy.stop().withoutAutoResume());
         var restartedSubscription = subscribe(handled, attempts, failing::get);
         Awaitility.waitAtMost(Duration.ofSeconds(10))
                   .untilAsserted(() -> assertThat(attempts.get(FAILING_EVENT).get()).isEqualTo(2));
@@ -262,7 +277,7 @@ class EventStoreSubscriptionManager_SubscriptionErrorPolicy_IT {
         // Restart after the cause is fixed: the subscription resumes at the failed event and continues
         failing.set(false);
         eventStoreSubscriptionManager.stop();
-        eventStoreSubscriptionManager = startSubscriptionManager(SubscriptionErrorPolicy.stop());
+        eventStoreSubscriptionManager = startSubscriptionManager(SubscriptionErrorPolicy.stop().withoutAutoResume());
         var fixedSubscription = subscribe(handled, attempts, failing::get);
         Awaitility.waitAtMost(Duration.ofSeconds(10))
                   .untilAsserted(() -> assertThat(handled).containsExactly(1L, 2L, 3L));
@@ -276,7 +291,7 @@ class EventStoreSubscriptionManager_SubscriptionErrorPolicy_IT {
     @Test
     void retry_n_then_stop_retries_n_times_then_stops_and_a_resume_continues_at_the_failed_event() throws InterruptedException {
         var failing = new AtomicBoolean(true);
-        eventStoreSubscriptionManager = startSubscriptionManager(SubscriptionErrorPolicy.retryThenStop(2, Duration.ofMillis(20), Duration.ofMillis(50)));
+        eventStoreSubscriptionManager = startSubscriptionManager(SubscriptionErrorPolicy.retryThenStop(2, Duration.ofMillis(20), Duration.ofMillis(50)).withoutAutoResume());
         var handled      = new CopyOnWriteArrayList<Long>();
         var attempts     = new ConcurrentHashMap<Long, AtomicInteger>();
         var subscription = subscribe(handled, attempts, failing::get);
@@ -345,7 +360,7 @@ class EventStoreSubscriptionManager_SubscriptionErrorPolicy_IT {
     @Test
     void an_exclusive_subscription_stopped_by_its_error_policy_is_resumed_without_releasing_its_fenced_lock() throws InterruptedException {
         var failing = new AtomicBoolean(true);
-        eventStoreSubscriptionManager = startSubscriptionManager(SubscriptionErrorPolicy.stop());
+        eventStoreSubscriptionManager = startSubscriptionManager(SubscriptionErrorPolicy.stop().withoutAutoResume());
         var handled      = new CopyOnWriteArrayList<Long>();
         var attempts     = new ConcurrentHashMap<Long, AtomicInteger>();
         var subscription = exclusivelySubscribe(handled, attempts, failing::get);
@@ -373,6 +388,170 @@ class EventStoreSubscriptionManager_SubscriptionErrorPolicy_IT {
         assertThat(fencedLockManager.isLockedByThisLockManagerInstance(lockName)).isTrue();
         assertThat(fencedLockManager.lookupLock(lockName).orElseThrow().getCurrentToken()).isEqualTo(lockTokenWhileStopped);
         assertThat(subscription.resumeIfStoppedByErrorPolicy()).isFalse();
+    }
+
+    // ------------------------------------------------------------------------------------------------------ Auto-resume
+
+    @Test
+    void a_stopped_subscription_resumes_by_itself_at_the_failed_event_until_it_succeeds() {
+        eventStoreSubscriptionManager = startSubscriptionManager(SubscriptionErrorPolicy.retryThenStop(1, Duration.ofMillis(10), Duration.ofMillis(10))
+                                                                                        .withAutoResume(SubscriptionErrorPolicy.AutoResume.unlimited(Duration.ofMillis(200), Duration.ofMillis(400))));
+        var handled      = new CopyOnWriteArrayList<Long>();
+        var attempts     = new ConcurrentHashMap<Long, AtomicInteger>();
+        // Attempt + retry fail three times over (= 3 stops); the attempt after the third resume succeeds
+        var subscription = subscribe(handled, attempts, () -> attempts.get(FAILING_EVENT).get() <= 6);
+
+        appendThreeEvents();
+
+        Awaitility.waitAtMost(Duration.ofSeconds(10))
+                  .untilAsserted(() -> assertThat(handled).containsExactly(1L, 2L, 3L));
+        assertThat(attempts.get(FAILING_EVENT).get()).isEqualTo(7);
+        assertThat(attempts.get(3L).get()).isEqualTo(1);
+        // Every stop is reported - the alertable signal stays intact
+        awaitStoppedByErrorPolicyCount(3);
+        assertThat(subscription.isStoppedByErrorPolicy()).isFalse();
+        assertThat(subscription.isActive()).isTrue();
+        awaitDurableResumePoint(4);
+        assertThat(skippedAfterAutoResumesCount()).isZero();
+    }
+
+    @Test
+    void with_max_attempts_the_event_is_skipped_once_the_subscription_has_been_resumed_at_it_that_many_times() {
+        eventStoreSubscriptionManager = startSubscriptionManager(SubscriptionErrorPolicy.stop()
+                                                                                        .withAutoResume(SubscriptionErrorPolicy.AutoResume.skippingAfter(2, Duration.ofMillis(100), Duration.ofMillis(100))));
+        var handled      = new CopyOnWriteArrayList<Long>();
+        var attempts     = new ConcurrentHashMap<Long, AtomicInteger>();
+        var subscription = subscribe(handled, attempts, () -> true);
+
+        appendThreeEvents();
+
+        Awaitility.waitAtMost(Duration.ofSeconds(10))
+                  .untilAsserted(() -> assertThat(handled).containsExactly(1L, 3L));
+        // The first attempt and one after each of the 2 resumes - the third failure skips the event instead of stopping
+        assertThat(attempts.get(FAILING_EVENT).get()).isEqualTo(3);
+        awaitStoppedByErrorPolicyCount(2);
+        Awaitility.waitAtMost(Duration.ofSeconds(10))
+                  .untilAsserted(() -> assertThat(skippedAfterAutoResumesCount()).isEqualTo(1));
+        assertThat(subscription.isStoppedByErrorPolicy()).isFalse();
+        // Skipped: the resume point moves past the event, which is not redelivered
+        awaitDurableResumePoint(4);
+    }
+
+    @Test
+    void an_exclusive_subscription_resumes_by_itself_without_releasing_its_fenced_lock() {
+        eventStoreSubscriptionManager = startSubscriptionManager(SubscriptionErrorPolicy.stop()
+                                                                                        .withAutoResume(SubscriptionErrorPolicy.AutoResume.unlimited(Duration.ofMillis(200), Duration.ofMillis(200))));
+        var handled      = new CopyOnWriteArrayList<Long>();
+        var attempts     = new ConcurrentHashMap<Long, AtomicInteger>();
+        var subscription = exclusivelySubscribe(handled, attempts, () -> attempts.get(FAILING_EVENT).get() <= 2);
+        var lockName     = ((ExclusiveSubscription) subscription).lockName();
+        Awaitility.waitAtMost(Duration.ofSeconds(10)).until(subscription::isActive);
+        var lockToken = fencedLockManager.lookupLock(lockName).orElseThrow().getCurrentToken();
+
+        appendThreeEvents();
+
+        Awaitility.waitAtMost(Duration.ofSeconds(10))
+                  .untilAsserted(() -> assertThat(handled).containsExactly(1L, 2L, 3L));
+        assertThat(attempts.get(FAILING_EVENT).get()).isEqualTo(3);
+        awaitStoppedByErrorPolicyCount(2);
+        awaitDurableResumePoint(4);
+        // The lock was held throughout - neither released nor re-acquired
+        assertThat(fencedLockManager.isLockedByThisLockManagerInstance(lockName)).isTrue();
+        assertThat(fencedLockManager.lookupLock(lockName).orElseThrow().getCurrentToken()).isEqualTo(lockToken);
+    }
+
+    @Test
+    void a_batched_subscription_resumes_by_itself_at_the_failed_batch() {
+        eventStoreSubscriptionManager = startSubscriptionManager(SubscriptionErrorPolicy.retryThenStop(1, Duration.ofMillis(10), Duration.ofMillis(10))
+                                                                                        .withAutoResume(SubscriptionErrorPolicy.AutoResume.unlimited(Duration.ofMillis(200), Duration.ofMillis(200))));
+        var batchAttempts = new AtomicInteger();
+        var handled       = new CopyOnWriteArrayList<Long>();
+        appendThreeEvents();
+
+        // Attempt + retry fail, the attempt after the resume succeeds
+        var subscription = batchSubscribe(batchAttempts, handled, () -> batchAttempts.get() <= 2);
+
+        Awaitility.waitAtMost(Duration.ofSeconds(10))
+                  .untilAsserted(() -> assertThat(handled).containsExactly(1L, 2L, 3L));
+        assertThat(batchAttempts.get()).isEqualTo(3);
+        awaitStoppedByErrorPolicyCount(1);
+        assertThat(subscription.isStoppedByErrorPolicy()).isFalse();
+        awaitDurableResumePoint(4);
+    }
+
+    /**
+     * The stopped gauge is what alerts are written against, typically with a {@code for:} duration. A resumed subscription
+     * retries the poison event for a moment before it stops again - the gauge must not drop to 0 in that moment, or every
+     * automatic resume resets the alert's timer and it never fires
+     */
+    @Test
+    void the_stopped_gauge_stays_at_1_through_the_auto_resumes_of_a_poison_event_and_drops_to_0_once_it_is_handled() throws InterruptedException {
+        eventStoreSubscriptionManager = startSubscriptionManager(SubscriptionErrorPolicy.stop()
+                                                                                        .withAutoResume(SubscriptionErrorPolicy.AutoResume.unlimited(Duration.ofMillis(200), Duration.ofMillis(200))));
+        var handled      = new CopyOnWriteArrayList<Long>();
+        var attempts     = new ConcurrentHashMap<Long, AtomicInteger>();
+        var fixed        = new AtomicBoolean();
+        var subscription = subscribe(handled, attempts, () -> !fixed.get());
+        new SubscriptionStoppedMicrometerMonitor(eventStoreSubscriptionManager, meterRegistry, null).monitor(subscriberId, aggregateType);
+        var gauge = meterRegistry.find(SubscriptionStoppedMicrometerMonitor.SUBSCRIPTION_STOPPED_METRIC)
+                                 .tag("subscriber_id", subscriberId.toString())
+                                 .gauge();
+        assertThat(gauge).isNotNull();
+        assertThat(gauge.value()).isZero();
+
+        appendThreeEvents();
+        Awaitility.waitAtMost(Duration.ofSeconds(10)).until(() -> gauge.value() == 1);
+
+        // Sample the gauge as fast as possible across several resumes at the poison event
+        var samples   = new AtomicInteger();
+        var dropsTo0  = new AtomicInteger();
+        var sampling  = new AtomicBoolean(true);
+        var sampler = Thread.ofVirtual().start(() -> {
+            while (sampling.get()) {
+                samples.incrementAndGet();
+                if (gauge.value() == 0) {
+                    dropsTo0.incrementAndGet();
+                }
+                Thread.onSpinWait();
+            }
+        });
+        var stopsBefore = stoppedByErrorPolicyCount();
+        Awaitility.waitAtMost(Duration.ofSeconds(10))
+                  .until(() -> stoppedByErrorPolicyCount() >= stopsBefore + 3);
+        sampling.set(false);
+        sampler.join();
+        assertThat(samples.get()).isPositive();
+        assertThat(dropsTo0.get()).as("samples of 0 while resumed at the poison event").isZero();
+        assertThat(handled).containsExactly(1L);
+
+        // Fixed: the next resume handles the event, and the gauge drops to 0
+        fixed.set(true);
+        Awaitility.waitAtMost(Duration.ofSeconds(10))
+                  .untilAsserted(() -> assertThat(handled).containsExactly(1L, 2L, 3L));
+        Awaitility.waitAtMost(Duration.ofSeconds(10)).until(() -> gauge.value() == 0);
+        assertThat(subscription.isStoppedByErrorPolicy()).isFalse();
+        assertThat(subscription.isRecoveringFromErrorPolicyStop()).isFalse();
+    }
+
+    @Test
+    void a_pending_auto_resume_is_cancelled_when_the_subscription_manager_stops() throws InterruptedException {
+        eventStoreSubscriptionManager = startSubscriptionManager(SubscriptionErrorPolicy.stop()
+                                                                                        .withAutoResume(SubscriptionErrorPolicy.AutoResume.unlimited(Duration.ofSeconds(1), Duration.ofSeconds(1))));
+        var handled      = new CopyOnWriteArrayList<Long>();
+        var attempts     = new ConcurrentHashMap<Long, AtomicInteger>();
+        var subscription = subscribe(handled, attempts, () -> true);
+
+        appendThreeEvents();
+        Awaitility.waitAtMost(Duration.ofSeconds(10)).until(subscription::isStoppedByErrorPolicy);
+        assertThat(attempts.get(FAILING_EVENT).get()).isEqualTo(1);
+
+        eventStoreSubscriptionManager.stop();
+        // Well past the resume delay: nothing resumed the stopped subscription
+        Thread.sleep(2500);
+        assertThat(attempts.get(FAILING_EVENT).get()).isEqualTo(1);
+        assertThat(subscription.isStarted()).isFalse();
+        assertThat(handled).containsExactly(1L);
+        awaitDurableResumePoint(FAILING_EVENT);
     }
 
     // ------------------------------------------------------------------------------------------- Per-handler policy
@@ -405,7 +584,7 @@ class EventStoreSubscriptionManager_SubscriptionErrorPolicy_IT {
 
                                                                                                     @Override
                                                                                                     public Optional<SubscriptionErrorPolicy> subscriptionErrorPolicy() {
-                                                                                                        return Optional.of(SubscriptionErrorPolicy.stop());
+                                                                                                        return Optional.of(SubscriptionErrorPolicy.stop().withoutAutoResume());
                                                                                                     }
                                                                                                 });
         var sideEffectHandled  = new CopyOnWriteArrayList<Long>();
@@ -432,7 +611,7 @@ class EventStoreSubscriptionManager_SubscriptionErrorPolicy_IT {
 
                                                                                                       @Override
                                                                                                       public Optional<SubscriptionErrorPolicy> subscriptionErrorPolicy() {
-                                                                                                          return Optional.of(SubscriptionErrorPolicy.stop());
+                                                                                                          return Optional.of(SubscriptionErrorPolicy.stop().withoutAutoResume());
                                                                                                       }
                                                                                                   });
 
@@ -459,7 +638,7 @@ class EventStoreSubscriptionManager_SubscriptionErrorPolicy_IT {
     @Test
     void batched_stop_is_resumed_at_the_failed_batch() throws InterruptedException {
         var failing = new AtomicBoolean(true);
-        eventStoreSubscriptionManager = startSubscriptionManager(SubscriptionErrorPolicy.retryThenStop(1, Duration.ofMillis(20), Duration.ofMillis(50)));
+        eventStoreSubscriptionManager = startSubscriptionManager(SubscriptionErrorPolicy.retryThenStop(1, Duration.ofMillis(20), Duration.ofMillis(50)).withoutAutoResume());
         var batchAttempts = new AtomicInteger();
         var handled       = new CopyOnWriteArrayList<Long>();
         appendThreeEvents();
@@ -501,7 +680,7 @@ class EventStoreSubscriptionManager_SubscriptionErrorPolicy_IT {
     @Test
     void batched_stop_does_not_advance_past_the_failing_batch_and_resumes_at_it_after_a_restart() throws InterruptedException {
         var failing = new AtomicBoolean(true);
-        eventStoreSubscriptionManager = startSubscriptionManager(SubscriptionErrorPolicy.stop());
+        eventStoreSubscriptionManager = startSubscriptionManager(SubscriptionErrorPolicy.stop().withoutAutoResume());
         var batchAttempts = new AtomicInteger();
         var handled       = new CopyOnWriteArrayList<Long>();
         appendThreeEvents();
@@ -521,7 +700,7 @@ class EventStoreSubscriptionManager_SubscriptionErrorPolicy_IT {
 
         failing.set(false);
         eventStoreSubscriptionManager.stop();
-        eventStoreSubscriptionManager = startSubscriptionManager(SubscriptionErrorPolicy.stop());
+        eventStoreSubscriptionManager = startSubscriptionManager(SubscriptionErrorPolicy.stop().withoutAutoResume());
         batchSubscribe(batchAttempts, handled, failing::get);
         Awaitility.waitAtMost(Duration.ofSeconds(10))
                   .untilAsserted(() -> assertThat(handled).containsExactly(1L, 2L, 3L));
@@ -719,6 +898,13 @@ class EventStoreSubscriptionManager_SubscriptionErrorPolicy_IT {
     private void awaitStoppedByErrorPolicyCount(double expected) {
         Awaitility.waitAtMost(Duration.ofSeconds(10))
                   .untilAsserted(() -> assertThat(stoppedByErrorPolicyCount()).isEqualTo(expected));
+    }
+
+    private double skippedAfterAutoResumesCount() {
+        var counter = meterRegistry.find(MeasurementEventStoreSubscriptionObserver.SUBSCRIPTION_SKIPPED_EVENT_AFTER_AUTO_RESUMES_METRIC)
+                                   .tag("subscriber_id", subscriberId.toString())
+                                   .counter();
+        return counter == null ? 0 : counter.count();
     }
 
     private double handleEventFailedCount() {

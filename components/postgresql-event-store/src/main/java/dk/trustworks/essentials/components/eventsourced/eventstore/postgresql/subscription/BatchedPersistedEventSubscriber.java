@@ -96,6 +96,12 @@ public class BatchedPersistedEventSubscriber extends BaseSubscriber<PersistedEve
     private final Object                                resumePointLock = new Object();
     private volatile boolean                            stoppedByErrorPolicy;
     /**
+     * Resumes the subscription after a stop, and decides when a stopping policy skips a batch instead - set by the
+     * builder before the subscriber is subscribed. Null for a subscriber built outside an {@link EventStoreSubscriptionManager}'s
+     * subscription: it then stays stopped until resumed by hand
+     */
+    SubscriptionAutoResumer                             autoResumer;
+    /**
      * Set once the resume point must stay where {@link #holdResumePointAt(PersistedEvent)} left it: by a
      * {@link SubscriptionErrorPolicy.Mode#STOP}, or by a stop that interrupted the handling of a batch
      */
@@ -584,6 +590,10 @@ public class BatchedPersistedEventSubscriber extends BaseSubscriber<PersistedEve
                 schedulePartialBatchProcessing();
             })
             .subscribe(requestSize -> {
+                           if (!resumePointHeld) {
+                               // Handled - not a batch ignored because the subscriber had stopped
+                               movedPast(lastEvent);
+                           }
                            // Handle the request for more events
                            if (requestSize < 0) {
                                requestSize = 1;
@@ -611,12 +621,14 @@ public class BatchedPersistedEventSubscriber extends BaseSubscriber<PersistedEve
                                                                                                  eventHandler,
                                                                                                  failure,
                                                                                                  eventStoreSubscription);
-                           if (subscriptionErrorPolicy.stopsOnError()) {
+                           var cause = failure.getCause() != null ? failure.getCause() : failure;
+                           if (subscriptionErrorPolicy.stopsOnError() && !skippingAfterAutoResumes(firstEvent, lastEvent, cause)) {
                                // Not acknowledged: the restarted subscription resumes at the batch
-                               stopAt(firstEvent, failure.getCause() != null ? failure.getCause() : failure);
+                               stopAt(firstEvent, cause);
                            } else {
                                // Skipped - done with
                                acknowledgeGivenUp(immutableBatch);
+                               movedPast(lastEvent);
                                onErrorHandler.accept(lastEvent, failure.getCause());
                            }
                        });
@@ -636,6 +648,16 @@ public class BatchedPersistedEventSubscriber extends BaseSubscriber<PersistedEve
                          eventStoreSubscription.aggregateType(),
                          batch.getFirst().globalEventOrder(),
                          batch.getLast().globalEventOrder()), acknowledgementFailure);
+        }
+    }
+
+    /**
+     * Tell the {@link SubscriptionAutoResumer} the subscriber is done with the batch ending at <code>lastEvent</code> - a
+     * resumed subscription has recovered once it gets past the event it stopped at
+     */
+    private void movedPast(PersistedEvent lastEvent) {
+        if (autoResumer != null) {
+            autoResumer.movedPast(lastEvent.globalEventOrder());
         }
     }
 
@@ -664,7 +686,8 @@ public class BatchedPersistedEventSubscriber extends BaseSubscriber<PersistedEve
         cancelScheduledProcessing();
         log.error(msg("[{}-{}] Stopping the subscription because handling the batch starting at #{} failed and the SubscriptionErrorPolicy is {}. " +
                               "The resume point stays at #{}, so no event is skipped: no further events are handled until the subscription is resumed " +
-                              "(EventStoreSubscription#resumeIfStoppedByErrorPolicy or the admin API) or started again (restart, resetFrom or unsubscribe/subscribe), " +
+                              "(automatically, unless the policy's auto-resume is disabled, or by EventStoreSubscription#resumeIfStoppedByErrorPolicy or the admin API) " +
+                              "or started again (restart, resetFrom or unsubscribe/subscribe), " +
                               "and it then continues at this batch",
                       eventStoreSubscription.subscriberId(),
                       eventStoreSubscription.aggregateType(),
@@ -679,6 +702,39 @@ public class BatchedPersistedEventSubscriber extends BaseSubscriber<PersistedEve
                          eventStoreSubscription.aggregateType()), observerFailure);
         }
         Schedulers.boundedElastic().schedule(this::dispose);
+        if (autoResumer != null) {
+            autoResumer.stoppedAt(firstEventOfFailedBatch.globalEventOrder(), subscriptionErrorPolicy);
+        }
+    }
+
+    /**
+     * A stopping {@link SubscriptionErrorPolicy} gave up on the batch starting at <code>firstEvent</code>: skip the batch
+     * instead of stopping if the subscription has already been resumed {@link SubscriptionErrorPolicy.AutoResume#maxAttempts()}
+     * times at it
+     *
+     * @return true if the batch is to be skipped
+     */
+    private boolean skippingAfterAutoResumes(PersistedEvent firstEvent, PersistedEvent lastEvent, Throwable cause) {
+        if (autoResumer == null || !autoResumer.skipInsteadOfStopping(firstEvent.globalEventOrder(), subscriptionErrorPolicy)) {
+            return false;
+        }
+        var autoResumes = autoResumer.resumesAt(firstEvent.globalEventOrder());
+        log.error(msg("[{}-{}] Skipping the batch [#{} - #{}]: handling it failed again after the subscription had been resumed at it {} time(s), the maximum " +
+                              "its {} SubscriptionErrorPolicy allows. The resume point moves past the batch and it is not redelivered",
+                      eventStoreSubscription.subscriberId(),
+                      eventStoreSubscription.aggregateType(),
+                      firstEvent.globalEventOrder(),
+                      lastEvent.globalEventOrder(),
+                      autoResumes,
+                      subscriptionErrorPolicy.mode()), cause);
+        try {
+            eventStore.getEventStoreSubscriptionObserver().subscriptionSkippedEventAfterAutoResumes(firstEvent.globalEventOrder(), autoResumes, cause, eventStoreSubscription);
+        } catch (RuntimeException observerFailure) {
+            log.warn(msg("[{}-{}] EventStoreSubscriptionObserver#subscriptionSkippedEventAfterAutoResumes failed",
+                         eventStoreSubscription.subscriberId(),
+                         eventStoreSubscription.aggregateType()), observerFailure);
+        }
+        return true;
     }
 
     /**

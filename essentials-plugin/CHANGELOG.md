@@ -23,6 +23,18 @@ targets, with a `-N` suffix for plugin-only releases.
   `POST .../resume`), and the new trap `ESS-117`: `stop()` halts a projection on its first transient
   non-I/O failure. A handler can override the manager's policy for its own subscription
   (`subscriptionErrorPolicy()`, a processor's `getSubscriptionErrorPolicy()`).
+- **Framework docs: a failing event no longer skips by default** — the subscription manager's default
+  `SubscriptionErrorPolicy` is now `defaultPolicy()` (`retryThenStop(3)`; Spring Boot
+  `error-policy.mode=retry-n-then-stop`) with automatic resume: a stopped subscription resumes itself at the failed
+  event after 10 s, doubling to 5 min (`SubscriptionErrorPolicy.AutoResume`, `error-policy.auto-resume.*`). Opt-in
+  `AutoResume.skippingAfter(...)` skips an event after that many resumes, reported by the new observer callback
+  `subscriptionSkippedEventAfterAutoResumes` and counter `essentials.eventstore.subscription.skipped_after_auto_resumes`.
+  The section is now `LLM-postgresql-event-store.md` § Direct async subscribers retry, stop and resume at a failing
+  event; `ESS-058` and `ESS-117` are reworded for the new default, and the new trap `ESS-118` covers a subscription
+  that keeps stopping at a poison event (and the 0.50 upgrade that relied on skipping: `error-policy.mode=skip`).
+  The `essentials.eventstore.subscription.stopped` gauge stays at `1` through the automatic resumes until the failed
+  event is handled (new `EventStoreSubscription#isRecoveringFromErrorPolicyStop()`), so an alert's `for:` duration is
+  not reset by each resume.
 - **Framework docs: bounded polling gaps** — a poll now records a new gap only
   `SubscriptionGapHandler.MAX_AWAITED_ORDERS_PER_GAP_END` (5,000) orders deep from each end and awaits
   the middle of a wider one (sequence `setval`, restore) in memory only, as CDC does, instead of writing a

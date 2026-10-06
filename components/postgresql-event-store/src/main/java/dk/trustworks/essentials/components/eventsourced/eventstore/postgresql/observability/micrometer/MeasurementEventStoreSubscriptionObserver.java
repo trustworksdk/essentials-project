@@ -72,6 +72,13 @@ public class MeasurementEventStoreSubscriptionObserver implements EventStoreSubs
      * by {@link dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.subscription.monitoring.SubscriptionStoppedMicrometerMonitor}
      */
     public static final  String           SUBSCRIPTION_STOPPED_BY_ERROR_POLICY_METRIC = "essentials.eventstore.subscription.stopped_by_error_policy";
+    /**
+     * Counter of events (or batches) asynchronous subscriptions skipped after their stopping {@code SubscriptionErrorPolicy}
+     * had resumed them {@code AutoResume#maxAttempts()} times at the event, tagged {@code subscriber_id} and
+     * {@code aggregate_type}. Every increment is an event the subscription gave up on and will not redeliver - alert on
+     * {@code increase(...) > 0}
+     */
+    public static final  String           SUBSCRIPTION_SKIPPED_EVENT_AFTER_AUTO_RESUMES_METRIC = "essentials.eventstore.subscription.skipped_after_auto_resumes";
 
     private final MeasurementTaker measurementTaker;
     private final boolean          recordExecutionTimeEnabled;
@@ -100,7 +107,8 @@ public class MeasurementEventStoreSubscriptionObserver implements EventStoreSubs
     /**
      * Constructs a new observer recording timings to the supplied {@link MeasurementTaker} and the
      * {@value #HANDLE_EVENT_FAILED_METRIC} / {@value #HANDLE_EVENT_TRANSACTIONAL_FAILED_METRIC} /
-     * {@value #SUBSCRIPTION_STOPPED_BY_ERROR_POLICY_METRIC} counters to the supplied {@link MeterRegistry}.
+     * {@value #SUBSCRIPTION_STOPPED_BY_ERROR_POLICY_METRIC} / {@value #SUBSCRIPTION_SKIPPED_EVENT_AFTER_AUTO_RESUMES_METRIC}
+     * counters to the supplied {@link MeterRegistry}.
      * <p>
      * The counters do not depend on the {@link MeasurementTaker} recording: a failed event is an incident, not a
      * timing, so switching execution-time metrics off must not switch the alertable signal off with them.
@@ -360,7 +368,7 @@ public class MeasurementEventStoreSubscriptionObserver implements EventStoreSubs
         // Never throws: this runs on the subscription's delivery thread, in its error path
         try {
             var builder = Counter.builder(SUBSCRIPTION_STOPPED_BY_ERROR_POLICY_METRIC)
-                                 .description("Asynchronous subscriptions that stopped handling events because their SubscriptionErrorPolicy is STOP")
+                                 .description("Asynchronous subscriptions that stopped handling events at a failed event, as their SubscriptionErrorPolicy prescribes")
                                  .tag("subscriber_id", eventStoreSubscription.subscriberId().toString())
                                  .tag("aggregate_type", eventStoreSubscription.aggregateType().toString());
             if (moduleTag != null) {
@@ -370,6 +378,30 @@ public class MeasurementEventStoreSubscriptionObserver implements EventStoreSubs
         } catch (RuntimeException e) {
             log.warn(msg("Failed to count the stop of subscription '{}' at {} event #{} in '{}'",
                          eventStoreSubscription.subscriberId(), eventStoreSubscription.aggregateType(), stoppedAtGlobalEventOrder, SUBSCRIPTION_STOPPED_BY_ERROR_POLICY_METRIC), e);
+        }
+    }
+
+    @Override
+    public void subscriptionSkippedEventAfterAutoResumes(GlobalEventOrder skippedGlobalEventOrder,
+                                                         int autoResumes,
+                                                         Throwable cause,
+                                                         EventStoreSubscription eventStoreSubscription) {
+        if (meterRegistry == null) {
+            return;
+        }
+        // Never throws: this runs on the subscription's delivery thread, in its error path
+        try {
+            var builder = Counter.builder(SUBSCRIPTION_SKIPPED_EVENT_AFTER_AUTO_RESUMES_METRIC)
+                                 .description("Events asynchronous subscriptions skipped after their SubscriptionErrorPolicy had resumed them at the event its maximum number of times")
+                                 .tag("subscriber_id", eventStoreSubscription.subscriberId().toString())
+                                 .tag("aggregate_type", eventStoreSubscription.aggregateType().toString());
+            if (moduleTag != null) {
+                builder.tag(MODULE_TAG_NAME, moduleTag);
+            }
+            builder.register(meterRegistry).increment();
+        } catch (RuntimeException e) {
+            log.warn(msg("Failed to count the skip of subscription '{}' at {} event #{} in '{}'",
+                         eventStoreSubscription.subscriberId(), eventStoreSubscription.aggregateType(), skippedGlobalEventOrder, SUBSCRIPTION_SKIPPED_EVENT_AFTER_AUTO_RESUMES_METRIC), e);
         }
     }
 

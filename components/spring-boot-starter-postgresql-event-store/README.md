@@ -323,6 +323,37 @@ essentials.eventstore.subscription-manager.snapshot-resume-points-after-events=0
 | `snapshot-resume-points-every` | `1s` | How often to save each subscriber's position. Bounds how much is re-processed after a crash. Only positions that changed are written (one batched `UPDATE` per interval at most), so idle subscribers cost nothing |
 | `snapshot-resume-points-after-events` | `0` (off) | Opt-in. Also save a subscriber's position as soon as it has moved this many global event order positions since its last save, instead of waiting for the next `snapshot-resume-points-every` tick. Bounds re-processing after a crash by event count as well as by time. Checked in memory, so idle or slow subscribers cost nothing extra |
 
+#### Subscription error policy
+
+What an asynchronous subscription does when its event handler throws an exception that is not an I/O error (I/O errors are always retried).
+These properties set the manager's `SubscriptionErrorPolicy`; an event handler or processor can override it for its own subscription.
+See [Subscription Error Policy](../postgresql-event-store/README.md#subscription-error-policy).
+
+```properties
+essentials.eventstore.subscription-manager.error-policy.mode=retry-n-then-stop
+essentials.eventstore.subscription-manager.error-policy.max-retries=3
+essentials.eventstore.subscription-manager.error-policy.initial-backoff=100ms
+essentials.eventstore.subscription-manager.error-policy.max-backoff=1s
+essentials.eventstore.subscription-manager.error-policy.auto-resume.enabled=true
+essentials.eventstore.subscription-manager.error-policy.auto-resume.initial-delay=10s
+essentials.eventstore.subscription-manager.error-policy.auto-resume.max-delay=5m
+essentials.eventstore.subscription-manager.error-policy.auto-resume.max-attempts=0
+```
+
+| Property | Default | What It Controls |
+|----------|---------|------------------|
+| `error-policy.mode` | `retry-n-then-stop` | `retry-n-then-stop`: retry the event, then stop the subscription at it - without moving its resume point past it - and resume it by itself (see `auto-resume`), so no event is skipped. `stop`: the same, but on the first failure. `skip`: log at ERROR and move past the event, which is never redelivered - the behaviour before 0.60. `retry-n-then-skip`: retry, then skip |
+| `error-policy.max-retries` | `3` | How many times the two `retry-n-then-*` modes call the handler again after its first failure. Must be at least 1 |
+| `error-policy.initial-backoff` | `100ms` | The wait before the first retry, doubled for each later retry |
+| `error-policy.max-backoff` | `1s` | The longest wait between two retries |
+| `error-policy.auto-resume.enabled` | `true` | Whether a subscription stopped by `stop` or `retry-n-then-stop` resumes by itself at the failed event. `false`: it stays stopped until it is resumed through the admin API or the application restarts |
+| `error-policy.auto-resume.initial-delay` | `10s` | The wait before the first resume at an event, doubled for each later resume at the same event |
+| `error-policy.auto-resume.max-delay` | `5m` | The longest wait between two resumes |
+| `error-policy.auto-resume.max-attempts` | `0` (unlimited) | How many resumes at the same event before the next failure **skips** the event instead of stopping, counted in `essentials.eventstore.subscription.skipped_after_auto_resumes`. Opt-in: for an `EventProcessor` a skipped event never reaches the `Inbox` or its dead-letter queue |
+
+Every stop is still logged, and the `essentials.eventstore.subscription.stopped` gauge stays at `1` from the stop until the failed event is handled - through every automatic resume in between - so alert on that gauge: a subscription that keeps stopping at the same event needs a fix.
+Upgrading from 0.50, where a failing event was always skipped: set `error-policy.mode=skip` to keep that behaviour.
+
 ### CDC Operational API
 
 When CDC is enabled, the starter also exposes a `CdcApi` bean alongside `EventStoreApi`.

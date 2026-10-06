@@ -818,23 +818,51 @@ register the component with an `EssentialsSchemaHarness` - see [LLM-foundation.m
 
 ## Event store subscriptions
 
-### Decide what a failing event should do: `SubscriptionErrorPolicy`
+### A failing event is retried and stops the subscription instead of being skipped: `SubscriptionErrorPolicy`
 
-Nothing changes unless you configure it: the default, `skip()`, is 0.50's behaviour, where an asynchronous
-subscription logs a non-I/O handler failure at ERROR and moves past the event for good. Choose `retryThenSkip(...)`,
-`retryThenStop(...)` or `stop()` per `EventStoreSubscriptionManager` (Spring Boot:
-`essentials.eventstore.subscription-manager.error-policy.mode=retry-n-then-skip|retry-n-then-stop|stop`) where a missed
-event matters. `stop()` halts on the first failure, transient ones included - prefer `retryThenStop(...)`, and resume a
-stopped subscription with `EventStoreSubscription#resumeIfStoppedByErrorPolicy()` or the admin API instead of a restart.
+**This is a behaviour change for an application that configured nothing.** In 0.50 an asynchronous subscription
+(`subscribeToAggregateEventsAsynchronously`, `exclusivelySubscribeToAggregateEventsAsynchronously`,
+`batchSubscribeToAggregateEventsAsynchronously`, and the forward step of an `EventProcessor`) logged a non-I/O handler
+failure at ERROR and moved past the event for good. In 0.60 the `EventStoreSubscriptionManager` applies
+`SubscriptionErrorPolicy.defaultPolicy()`: the event is retried 3 times (100 ms doubling to 1 s), then the subscription
+**stops at the event** - its resume point stays there and no later event is handled - and **resumes by itself** after 10 s,
+doubling up to 5 min, for as long as the event keeps failing. No event is skipped any more, and a stopped subscription is
+never left halted; but an event that can never succeed now holds up its subscription until it is fixed, where 0.50 lost
+it silently.
 
-**What to do:** alert on `essentials.eventstore.subscription.handle_event_failed`, and with `stop()` on the gauge
-`essentials.eventstore.subscription.stopped` (`1` while stopped; outside Spring Boot add a
-`SubscriptionStoppedMicrometerMonitor` to your `EventStoreSubscriptionMonitorManager`) or
-`EventStoreSubscription#isStoppedByErrorPolicy()` - not on the `stopped_by_error_policy` counter, which only records
-that a stop happened.
-Don't use `isActive()` to detect a stopped subscription: it stays `true`. If you construct
-`MeasurementEventStoreSubscriptionObserver` yourself, use the 3-argument constructor with your `MeterRegistry` to get
-the counters. Details: [README § Subscription Error Policy](../components/postgresql-event-store/README.md#subscription-error-policy).
+The default was chosen for safety: a skip loses an event without a trace a projection could recover from, and a stop
+without automatic resume leaves an application partly running with only an alert to catch it. Skipping after a number of
+resumes is available but not the default, because for an `EventProcessor` the policy governs only the forward step
+(deserializing the event and adding it to the `Inbox`) - a skip there drops the event before it reaches the `Inbox`, so the
+dead-letter queue and its monitoring never see it.
+
+**What to do:**
+
+- **To keep 0.50's skipping**, set `SubscriptionErrorPolicy.skip()` on the manager
+  (`EventStoreSubscriptionManager.builder().setSubscriptionErrorPolicy(...)`, or the `EventStoreSubscriptionManagerSettings`
+  4-argument constructor; Spring Boot: `essentials.eventstore.subscription-manager.error-policy.mode=skip`), or per
+  subscription by overriding `subscriptionErrorPolicy()` on the handler / `getSubscriptionErrorPolicy()` on a processor.
+  `retryThenSkip(...)` (`retry-n-then-skip`) retries first.
+- Otherwise keep the default, or tune it: `error-policy.max-retries`, `.initial-backoff`, `.max-backoff`, and
+  `.auto-resume.enabled` / `.initial-delay` / `.max-delay` / `.max-attempts` (Java:
+  `policy.withAutoResume(SubscriptionErrorPolicy.AutoResume...)`, `withoutAutoResume()`). `max-attempts` above `0` skips an
+  event once it has been resumed that many times - see the caveat above. `stop()` halts on the first failure, transient ones
+  included - prefer `retryThenStop(...)`. A stopped subscription can also be resumed at once with
+  `EventStoreSubscription#resumeIfStoppedByErrorPolicy()` or the admin API.
+- **Alert on the gauge `essentials.eventstore.subscription.stopped`** (`1` while stopped, and through every automatic
+  resume until the failed event is handled, so a `for:` duration is not reset by the resumes; outside Spring Boot add a
+  `SubscriptionStoppedMicrometerMonitor` to your `EventStoreSubscriptionMonitorManager`) or
+  `EventStoreSubscription#isStoppedByErrorPolicy()` - a subscription that keeps stopping at the same event needs a fix - and
+  on `essentials.eventstore.subscription.handle_event_failed`. Not on the `stopped_by_error_policy` counter, which only
+  records that a stop happened. If you opt in to skipping after resumes, alert on
+  `essentials.eventstore.subscription.skipped_after_auto_resumes` too.
+- Don't use `isActive()` to detect a stopped subscription: it stays `true`. If you construct
+  `MeasurementEventStoreSubscriptionObserver` yourself, use the 3-argument constructor with your `MeterRegistry` to get
+  the counters.
+
+A subscriber you build directly with `PersistedEventSubscriberBuilder` / `BatchedPersistedEventSubscriberBuilder` still
+defaults to `skip()`: it has no subscription to resume it. Details:
+[README § Subscription Error Policy](../components/postgresql-event-store/README.md#subscription-error-policy).
 
 ### Batched and CDC handlers run on a thread of their own
 
@@ -867,8 +895,9 @@ the `EventStore`, left a `UnitOfWork` lifecycle resource with pending changes (a
 or marked the `UnitOfWork` rollback-only, the event is not queued in that `UnitOfWork`: the whole `UnitOfWork` rolls
 back, nothing the failed handler did is committed, the subscription's `SubscriptionErrorPolicy` retries the handler as
 for any failure, and when the policy would give up the event is queued in a `UnitOfWork` of its own instead. The event
-is therefore still queued, as in 0.50, under every policy - with two differences: under `retry-n-then-skip` the direct
-handler is retried in place before it is queued, and under `stop` the subscription does not stop for such an event.
+is therefore still queued, as in 0.50, under every policy - with two differences: under a retrying mode
+(`retry-n-then-stop`, the default, and `retry-n-then-skip`) the direct handler is retried in place before it is queued,
+and under a stopping mode (`retry-n-then-stop`, `stop`) the subscription does not stop for such an event.
 
 **What to do:**
 

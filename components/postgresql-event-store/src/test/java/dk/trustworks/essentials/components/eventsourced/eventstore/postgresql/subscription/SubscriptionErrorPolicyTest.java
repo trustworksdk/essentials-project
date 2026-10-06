@@ -25,11 +25,66 @@ import static org.assertj.core.api.Assertions.*;
 class SubscriptionErrorPolicyTest {
 
     @Test
-    void the_default_everywhere_is_skip() {
-        assertThat(SubscriptionErrorPolicy.skip().mode()).isEqualTo(SubscriptionErrorPolicy.Mode.SKIP);
-        assertThat(SubscriptionErrorPolicy.skip().retriesBeforeGivingUp()).isZero();
+    void the_default_retries_then_stops_and_resumes_by_itself_for_as_long_as_the_event_fails() {
+        var policy = SubscriptionErrorPolicy.defaultPolicy();
+        assertThat(policy.mode()).isEqualTo(SubscriptionErrorPolicy.Mode.RETRY_N_THEN_STOP);
+        assertThat(policy.retriesBeforeGivingUp()).isEqualTo(SubscriptionErrorPolicy.DEFAULT_MAX_RETRIES);
+        assertThat(policy.resumesAutomatically()).isTrue();
+        assertThat(policy.autoResume()).isEqualTo(SubscriptionErrorPolicy.AutoResume.defaults());
+        assertThat(policy.autoResume().skipsAfterMaxAttempts()).isFalse();
         assertThat(new EventStoreSubscriptionManagerSettings(10, Duration.ofMillis(100), Duration.ofSeconds(1)).subscriptionErrorPolicy())
-                .isEqualTo(SubscriptionErrorPolicy.skip());
+                .isEqualTo(SubscriptionErrorPolicy.defaultPolicy());
+        assertThat(EventStoreSubscriptionManager.builder()).extracting("subscriptionErrorPolicy").isEqualTo(SubscriptionErrorPolicy.defaultPolicy());
+    }
+
+    @Test
+    void a_subscriber_built_directly_still_defaults_to_skip() {
+        // It has no subscription to resume it, so a stopping default would halt it for good
+        assertThat(PersistedEventSubscriber.builder()).extracting("subscriptionErrorPolicy").isEqualTo(SubscriptionErrorPolicy.skip());
+        assertThat(BatchedPersistedEventSubscriber.builder()).extracting("subscriptionErrorPolicy").isEqualTo(SubscriptionErrorPolicy.skip());
+    }
+
+    @Test
+    void only_the_stopping_modes_resume_automatically() {
+        assertThat(SubscriptionErrorPolicy.stop().resumesAutomatically()).isTrue();
+        assertThat(SubscriptionErrorPolicy.retryThenStop(2).resumesAutomatically()).isTrue();
+        assertThat(SubscriptionErrorPolicy.skip().resumesAutomatically()).isFalse();
+        assertThat(SubscriptionErrorPolicy.retryThenSkip(2).resumesAutomatically()).isFalse();
+        assertThat(SubscriptionErrorPolicy.stop().withoutAutoResume().resumesAutomatically()).isFalse();
+        assertThat(SubscriptionErrorPolicy.stop().withoutAutoResume().autoResume()).isEqualTo(SubscriptionErrorPolicy.AutoResume.disabled());
+        // The 4-argument constructor carries the default auto-resume
+        assertThat(new SubscriptionErrorPolicy(SubscriptionErrorPolicy.Mode.STOP, 0, Duration.ZERO, Duration.ZERO).autoResume())
+                .isEqualTo(SubscriptionErrorPolicy.AutoResume.defaults());
+    }
+
+    @Test
+    void the_auto_resume_delay_doubles_up_to_the_max() {
+        var autoResume = SubscriptionErrorPolicy.AutoResume.defaults();
+        assertThat(autoResume.delayBeforeAttempt(1)).isEqualTo(Duration.ofSeconds(10));
+        assertThat(autoResume.delayBeforeAttempt(2)).isEqualTo(Duration.ofSeconds(20));
+        assertThat(autoResume.delayBeforeAttempt(5)).isEqualTo(Duration.ofSeconds(160));
+        assertThat(autoResume.delayBeforeAttempt(6)).isEqualTo(Duration.ofMinutes(5));
+        assertThat(autoResume.delayBeforeAttempt(Integer.MAX_VALUE)).isEqualTo(Duration.ofMinutes(5));
+        assertThat(SubscriptionErrorPolicy.AutoResume.unlimited(Duration.ZERO, Duration.ofSeconds(1)).delayBeforeAttempt(Integer.MAX_VALUE)).isEqualTo(Duration.ZERO);
+    }
+
+    @Test
+    void auto_resume_skips_after_max_attempts_only_when_asked_to() {
+        assertThat(SubscriptionErrorPolicy.AutoResume.unlimited(Duration.ofSeconds(1), Duration.ofSeconds(2)).skipsAfterMaxAttempts()).isFalse();
+        var skipping = SubscriptionErrorPolicy.AutoResume.skippingAfter(3, Duration.ofSeconds(1), Duration.ofSeconds(2));
+        assertThat(skipping.skipsAfterMaxAttempts()).isTrue();
+        assertThat(skipping.maxAttempts()).isEqualTo(3);
+        assertThat(new SubscriptionErrorPolicy.AutoResume(false, Duration.ZERO, Duration.ZERO, 3).skipsAfterMaxAttempts()).isFalse();
+    }
+
+    @Test
+    void an_invalid_auto_resume_is_rejected() {
+        assertThatThrownBy(() -> SubscriptionErrorPolicy.AutoResume.skippingAfter(0, Duration.ZERO, Duration.ZERO)).isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> new SubscriptionErrorPolicy.AutoResume(true, Duration.ZERO, Duration.ZERO, -1)).isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> SubscriptionErrorPolicy.AutoResume.unlimited(Duration.ofSeconds(2), Duration.ofSeconds(1))).isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> SubscriptionErrorPolicy.AutoResume.unlimited(Duration.ofMillis(-1), Duration.ofSeconds(1))).isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> SubscriptionErrorPolicy.AutoResume.unlimited(null, Duration.ofSeconds(1))).isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> SubscriptionErrorPolicy.stop().withAutoResume(null)).isInstanceOf(IllegalArgumentException.class);
     }
 
     @Test

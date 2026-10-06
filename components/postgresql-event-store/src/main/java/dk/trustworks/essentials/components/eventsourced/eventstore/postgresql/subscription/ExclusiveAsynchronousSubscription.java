@@ -162,6 +162,7 @@ public class ExclusiveAsynchronousSubscription extends AbstractEventStoreSubscri
                                                .setEventStore(eventStore)
                                                .setSubscriptionErrorPolicy(eventStoreSubscriptionManagerSettings.subscriptionErrorPolicyFor(eventHandler))
                                                .setSubscriberAcknowledgement(acknowledgement)
+                                               .setAutoResumer(autoResumer)
                                                .build();
 
         eventStore.pollEvents(aggregateType,
@@ -222,6 +223,8 @@ public class ExclusiveAsynchronousSubscription extends AbstractEventStoreSubscri
     }
 
     private void unsubscribeOnLockReleased(FencedLock fencedLock) {
+        // The subscription moves to the node that acquires the lock - it resumes at the held resume point there
+        autoResumer.subscriptionStopped();
         if (!active) {
             return;
         }
@@ -342,6 +345,7 @@ public class ExclusiveAsynchronousSubscription extends AbstractEventStoreSubscri
 
     @Override
     public void stop() {
+        autoResumer.subscriptionStopped();
         if (started) {
             fencedLockManager.cancelAsyncLockAcquiring(lockName);
             started = false;
@@ -363,6 +367,8 @@ public class ExclusiveAsynchronousSubscription extends AbstractEventStoreSubscri
     public void resetFrom(GlobalEventOrder subscribeFromAndIncludingGlobalOrder, Consumer<GlobalEventOrder> resetProcessor) {
         requireNonNull(subscribeFromAndIncludingGlobalOrder, "subscribeFromAndIncludingGlobalOrder must not be null");
         requireNonNull(resetProcessor, "resetProcessor must not be null");
+        // The resume point moves, so the count of resumes at the event the subscription stopped at no longer applies
+        autoResumer.reset();
 
         eventStoreSubscriptionObserver.resettingFrom(subscribeFromAndIncludingGlobalOrder, this);
         if (isStarted() && isActive()) {

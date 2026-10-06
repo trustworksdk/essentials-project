@@ -73,8 +73,12 @@ public class NonExclusiveBatchedAsynchronousSubscription extends AbstractEventSt
         this.eventHandler = requireNonNull(eventHandler, "No eventHandler provided");
     }
 
+    /**
+     * Synchronized with {@link #stop()} and {@link #resumeIfStoppedByErrorPolicy()}: a resume (stop + start) racing a stop
+     * of the subscription must not start it again after the stop
+     */
     @Override
-    public void start() {
+    public synchronized void start() {
         if (!started) {
             started = true;
             log.info("[{}-{}] Looking up subscription resumePoint",
@@ -105,6 +109,7 @@ public class NonExclusiveBatchedAsynchronousSubscription extends AbstractEventSt
                                                           .setMaxLatency(maxLatency)
                                                           .setSubscriptionErrorPolicy(eventStoreSubscriptionManagerSettings.subscriptionErrorPolicyFor(eventHandler))
                                                           .setSubscriberAcknowledgement(acknowledgement)
+                                                          .setAutoResumer(autoResumer)
                                                           .build();
             eventStore.pollEvents(aggregateType,
                             resumePoint.getResumeFromAndIncluding(),
@@ -178,7 +183,16 @@ public class NonExclusiveBatchedAsynchronousSubscription extends AbstractEventSt
     }
 
     @Override
-    public void stop() {
+    public synchronized void stop() {
+        // Also when not started: a resume must never start the subscription after it was stopped
+        autoResumer.subscriptionStopped();
+        stopSubscriber();
+    }
+
+    /**
+     * Stop without telling the {@link SubscriptionAutoResumer} - for a resume, which is still awaiting recovery from the stop
+     */
+    private void stopSubscriber() {
         if (started) {
             log.info("[{}-{}] Stopping subscription",
                     subscriberId,
@@ -222,9 +236,11 @@ public class NonExclusiveBatchedAsynchronousSubscription extends AbstractEventSt
     }
 
     @Override
-    public void resetFrom(GlobalEventOrder subscribeFromAndIncludingGlobalOrder, Consumer<GlobalEventOrder> resetProcessor) {
+    public synchronized void resetFrom(GlobalEventOrder subscribeFromAndIncludingGlobalOrder, Consumer<GlobalEventOrder> resetProcessor) {
         requireNonNull(subscribeFromAndIncludingGlobalOrder, "subscribeFromAndIncludingGlobalOrder must not be null");
         requireNonNull(resetProcessor, "resetProcessor must not be null");
+        // The resume point moves, so the count of resumes at the event the subscription stopped at no longer applies
+        autoResumer.reset();
 
         eventStoreSubscriptionObserver.resettingFrom(subscribeFromAndIncludingGlobalOrder, this);
         if (started) {
@@ -296,7 +312,9 @@ public class NonExclusiveBatchedAsynchronousSubscription extends AbstractEventSt
                  subscriberId,
                  aggregateType,
                  resumePoint.getResumeFromAndIncluding());
-        stop();
+        // Not stop(): the resumed subscription has yet to get past the failed event
+        autoResumer.cancel();
+        stopSubscriber();
         start();
         return true;
     }

@@ -44,6 +44,7 @@ public final class PersistedEventSubscriberBuilder {
     private EventStore                            eventStore;
     private SubscriptionErrorPolicy               subscriptionErrorPolicy               = SubscriptionErrorPolicy.skip();
     private SubscriberAcknowledgement             subscriberAcknowledgement;
+    private SubscriptionAutoResumer               autoResumer;
 
     /**
      * Indefinite retries for exceptions where {@link IOExceptionUtil#isIOException(Throwable)} returns true.
@@ -115,7 +116,9 @@ public final class PersistedEventSubscriberBuilder {
 
     /**
      * @param subscriptionErrorPolicy what to do when the event handler fails with an error the retry spec doesn't retry.
-     *                                Defaults to {@link SubscriptionErrorPolicy#skip()}: call the <code>onErrorHandler</code>
+     *                                Defaults to {@link SubscriptionErrorPolicy#skip()}: call the <code>onErrorHandler</code>.
+     *                                A stopping policy stops the subscriber for good unless the subscriber has an auto-resumer
+     *                                (only the subscriptions an {@link EventStoreSubscriptionManager} creates do)
      * @return this builder instance for fluent chaining
      */
     public PersistedEventSubscriberBuilder setSubscriptionErrorPolicy(SubscriptionErrorPolicy subscriptionErrorPolicy) {
@@ -138,18 +141,33 @@ public final class PersistedEventSubscriberBuilder {
     }
 
     /**
+     * Package-private: only the subscriptions an {@link EventStoreSubscriptionManager} creates resume by themselves
+     *
+     * @param autoResumer resumes the subscription when the {@link SubscriptionErrorPolicy} stopped the subscriber and resumes
+     *                    automatically, and decides when a stopping policy skips an event instead. Optional: without it a
+     *                    stopped subscriber stays stopped until its subscription is resumed by hand
+     * @return this builder instance for fluent chaining
+     */
+    PersistedEventSubscriberBuilder setAutoResumer(SubscriptionAutoResumer autoResumer) {
+        this.autoResumer = autoResumer;
+        return this;
+    }
+
+    /**
      * Builds the subscriber.
      *
      * @return the subscriber
      */
     public PersistedEventSubscriber build() {
-        return new PersistedEventSubscriber(requireNonNull(eventHandler, "eventHandler cannot be null"),
-                                            requireNonNull(eventStoreSubscription, "eventStoreSubscription cannot be null"),
-                                            requireNonNull(onErrorHandler, "onErrorHandler cannot be null"),
-                                            requireNonNull(forwardToEventHandlerRetryBackoffSpec, "forwardToEventHandlerRetryBackoffSpec cannot be null"),
-                                            eventStorePollingBatchSize,
-                                            requireNonNull(eventStore, "eventStore cannot be null"),
-                                            requireNonNull(subscriptionErrorPolicy, "subscriptionErrorPolicy cannot be null"),
-                                            subscriberAcknowledgement != null ? subscriberAcknowledgement : SubscriberAcknowledgement.create());
+        var subscriber = new PersistedEventSubscriber(requireNonNull(eventHandler, "eventHandler cannot be null"),
+                                                      requireNonNull(eventStoreSubscription, "eventStoreSubscription cannot be null"),
+                                                      requireNonNull(onErrorHandler, "onErrorHandler cannot be null"),
+                                                      requireNonNull(forwardToEventHandlerRetryBackoffSpec, "forwardToEventHandlerRetryBackoffSpec cannot be null"),
+                                                      eventStorePollingBatchSize,
+                                                      requireNonNull(eventStore, "eventStore cannot be null"),
+                                                      requireNonNull(subscriptionErrorPolicy, "subscriptionErrorPolicy cannot be null"),
+                                                      subscriberAcknowledgement != null ? subscriberAcknowledgement : SubscriberAcknowledgement.create());
+        subscriber.autoResumer = autoResumer;
+        return subscriber;
     }
 }

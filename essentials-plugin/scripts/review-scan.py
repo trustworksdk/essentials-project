@@ -221,8 +221,8 @@ SIGNATURES = [
     Signature("ess-058-async-subscription", "ESS-058", "candidate", "Advisory",
               ".subscribeToAggregateEventsAsynchronously(…) in main code",
               ("components/postgresql-event-store/src/main/java/dk/trustworks/essentials/components/eventsourced/"
-               "eventstore/postgresql/subscription/EventStoreSubscriptionManagerBuilder.java:34 "
-               "(SubscriptionErrorPolicy.skip() by default)",)),
+               "eventstore/postgresql/subscription/EventStoreSubscriptionManagerBuilder.java:35 "
+               "(SubscriptionErrorPolicy.defaultPolicy(): retry, stop, auto-resume)",)),
     Signature("ess-032-kotlin-converter-by-hand", "ESS-032", "candidate", "Advisory",
               "KotlinValueTypeConverter constructed in main code",
               ("types-spring-web/src/main/java/dk/trustworks/essentials/types/spring/web/EssentialsWebMvcConfigurer.java:55, "
@@ -926,10 +926,11 @@ class Scan:
             m = self.ASYNC_SUB.search(c)
             if m:
                 self.add("ess-058-async-subscription", fd.path, ln.no,
-                         "a direct async subscription — a failing handler is logged at ERROR and the event skipped "
-                         "(SubscriptionErrorPolicy.skip() is the default)",
-                         "set a SubscriptionErrorPolicy on the subscription manager (retryThenSkip/stop), or use an "
-                         "EventProcessor", mechanical=False, match=m.group(0))
+                         "a direct async subscription — no dead-letter queue: a failing event is retried, then the "
+                         "subscription stops at it and resumes by itself until it succeeds (SubscriptionErrorPolicy."
+                         "defaultPolicy()); a skipping policy loses the event",
+                         "alert on the essentials.eventstore.subscription.stopped gauge, or use an EventProcessor/"
+                         "ViewEventProcessor, whose durable queue dead-letters a failing event", mechanical=False, match=m.group(0))
             m = self.KOTLIN_CONVERTER.search(c)
             if m:
                 self.add("ess-032-kotlin-converter-by-hand", fd.path, ln.no,

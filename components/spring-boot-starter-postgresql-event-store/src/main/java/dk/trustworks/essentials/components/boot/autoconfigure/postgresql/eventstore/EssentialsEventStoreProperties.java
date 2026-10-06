@@ -518,8 +518,9 @@ public class EssentialsEventStoreProperties {
 
         /**
          * What the asynchronous event store subscriptions do when their event handler throws an exception that
-         * isn't an I/O error (I/O errors are always retried). Default mode {@code SKIP}: the event is logged at ERROR
-         * and skipped - the resume point advances past it and it is not redelivered.
+         * isn't an I/O error (I/O errors are always retried). Default mode {@code RETRY_N_THEN_STOP} with auto-resume: the
+         * event is retried, then the subscription stops at it and resumes by itself until the event succeeds - no event
+         * is skipped and no subscription stays halted.
          *
          * @return the subscription error policy configuration
          * @see SubscriptionErrorPolicy
@@ -539,19 +540,22 @@ public class EssentialsEventStoreProperties {
      * essentials.eventstore.subscription-manager.error-policy.max-retries=5
      * essentials.eventstore.subscription-manager.error-policy.initial-backoff=100ms
      * essentials.eventstore.subscription-manager.error-policy.max-backoff=5s
+     * essentials.eventstore.subscription-manager.error-policy.auto-resume.enabled=true
+     * essentials.eventstore.subscription-manager.error-policy.auto-resume.initial-delay=10s
+     * essentials.eventstore.subscription-manager.error-policy.auto-resume.max-delay=5m
+     * essentials.eventstore.subscription-manager.error-policy.auto-resume.max-attempts=0
      * }</pre>
      */
     public static class SubscriptionErrorPolicyProperties {
         /**
          * What an asynchronous subscription does with an event whose handler failed with a non-I/O error (I/O errors are
-         * always retried). SKIP (default): log at ERROR, advance the resume point past the event and continue - the event
-         * is not redelivered. RETRY_N_THEN_SKIP: call the handler again up to max-retries times with backoff, then skip.
-         * STOP: log at ERROR and stop at the failed event without advancing the resume point past it, on the first failure;
-         * the subscription continues at that event when it is resumed (admin API) or started again.
-         * RETRY_N_THEN_STOP: call the handler again up to max-retries times with backoff, then stop as STOP - the usual
-         * choice for a projection that must not skip events, as it does not halt on a transient failure.
+         * always retried). RETRY_N_THEN_STOP (default): call the handler again up to max-retries times with backoff, then
+         * stop at the event without advancing the resume point past it; the subscription resumes at it by itself (see
+         * auto-resume) - no event is skipped, and a transient failure does not halt it. STOP: as RETRY_N_THEN_STOP, but on
+         * the first failure. SKIP: log at ERROR, advance the resume point past the event and continue - the event is not
+         * redelivered. RETRY_N_THEN_SKIP: call the handler again up to max-retries times with backoff, then skip.
          */
-        private SubscriptionErrorPolicy.Mode mode           = SubscriptionErrorPolicy.Mode.SKIP;
+        private SubscriptionErrorPolicy.Mode mode           = SubscriptionErrorPolicy.Mode.RETRY_N_THEN_STOP;
         /**
          * How many times RETRY_N_THEN_SKIP and RETRY_N_THEN_STOP call the handler again after its first failure. Must be at
          * least 1. Ignored by the other modes.
@@ -566,16 +570,20 @@ public class EssentialsEventStoreProperties {
          * The longest wait between two RETRY_N_THEN_SKIP or RETRY_N_THEN_STOP retries.
          */
         private Duration                     maxBackoff     = Duration.ofSeconds(1);
+        /**
+         * Whether, and when, a subscription stopped by STOP or RETRY_N_THEN_STOP resumes by itself at the failed event.
+         */
+        private final AutoResumeProperties  autoResume     = new AutoResumeProperties();
 
         /**
-         * What an asynchronous subscription does with an event whose handler failed with a non-I/O error. Default {@code SKIP}.
+         * What an asynchronous subscription does with an event whose handler failed with a non-I/O error. Default {@code RETRY_N_THEN_STOP}.
          * <ul>
+         *     <li>{@code RETRY_N_THEN_STOP} - call the handler again up to {@code max-retries} times with backoff, then stop as {@code STOP}</li>
+         *     <li>{@code STOP} - log at ERROR and stop handling events at the failed event, on its first failure, without advancing the
+         *     resume point past it; the subscription continues at that event when it is resumed - by itself (see {@link #getAutoResume()}),
+         *     or by hand (admin API, {@code EventStoreSubscription#resumeIfStoppedByErrorPolicy()}) - or started again (e.g. after a restart)</li>
          *     <li>{@code SKIP} - log at ERROR, advance the resume point past the event and continue. The event is not redelivered</li>
          *     <li>{@code RETRY_N_THEN_SKIP} - call the handler again up to {@code max-retries} times with backoff, then skip as {@code SKIP}</li>
-         *     <li>{@code STOP} - log at ERROR and stop handling events at the failed event, on its first failure, without advancing the
-         *     resume point past it; the subscription continues at that event when it is resumed (admin API,
-         *     {@code EventStoreSubscription#resumeIfStoppedByErrorPolicy()}) or started again (e.g. after a restart)</li>
-         *     <li>{@code RETRY_N_THEN_STOP} - call the handler again up to {@code max-retries} times with backoff, then stop as {@code STOP}</li>
          * </ul>
          *
          * @return the error policy mode
@@ -641,13 +649,126 @@ public class EssentialsEventStoreProperties {
         }
 
         /**
+         * Whether, and when, a subscription stopped by {@code STOP} or {@code RETRY_N_THEN_STOP} resumes by itself at the failed
+         * event. Ignored by the other modes. Default: enabled, 10 s doubling up to 5 min, unlimited attempts.
+         *
+         * @return the auto-resume configuration
+         * @see SubscriptionErrorPolicy.AutoResume
+         */
+        public AutoResumeProperties getAutoResume() {
+            return autoResume;
+        }
+
+        /**
          * @return the {@link SubscriptionErrorPolicy} these properties describe
          */
         public SubscriptionErrorPolicy toSubscriptionErrorPolicy() {
             return new SubscriptionErrorPolicy(mode,
                                                mode.retries() ? maxRetries : 0,
                                                initialBackoff,
-                                               maxBackoff);
+                                               maxBackoff,
+                                               autoResume.toAutoResume());
+        }
+    }
+
+    /**
+     * Properties for {@link SubscriptionErrorPolicy.AutoResume}: how a subscription its error policy stopped resumes by
+     * itself. Each resume at the same event waits twice as long as the one before, from {@code initial-delay} up to
+     * {@code max-delay}; the count starts over when the subscription stops at another event. A stop is still reported
+     * (log, observer, the {@code essentials.eventstore.subscription.stopped} gauge) every time.
+     */
+    public static class AutoResumeProperties {
+        /**
+         * Resume a stopped subscription by itself. false: it stays stopped until it is resumed by hand (admin API) or
+         * started again.
+         */
+        private boolean  enabled      = true;
+        /**
+         * The wait before the first resume at an event; each later resume at the same event doubles it, up to max-delay.
+         */
+        private Duration initialDelay = Duration.ofSeconds(10);
+        /**
+         * The longest wait between two resumes.
+         */
+        private Duration maxDelay     = Duration.ofMinutes(5);
+        /**
+         * How many times the subscription is resumed at the same event before the next failure skips the event instead of
+         * stopping (reported as essentials.eventstore.subscription.skipped_after_auto_resumes). 0 (default): unlimited -
+         * keep resuming for as long as the event fails, never skip it.
+         */
+        private int      maxAttempts  = 0;
+
+        /**
+         * Resume a stopped subscription by itself. Default true.
+         *
+         * @return true if a stopped subscription resumes by itself
+         */
+        public boolean isEnabled() {
+            return enabled;
+        }
+
+        /**
+         * @param enabled resume a stopped subscription by itself
+         */
+        public void setEnabled(boolean enabled) {
+            this.enabled = enabled;
+        }
+
+        /**
+         * The wait before the first resume at an event; each later resume at the same event doubles it, up to
+         * {@code max-delay}. Default 10 s.
+         *
+         * @return the wait before the first resume
+         */
+        public Duration getInitialDelay() {
+            return initialDelay;
+        }
+
+        /**
+         * @param initialDelay the wait before the first resume at an event
+         */
+        public void setInitialDelay(Duration initialDelay) {
+            this.initialDelay = initialDelay;
+        }
+
+        /**
+         * The longest wait between two resumes. Default 5 min.
+         *
+         * @return the longest wait between two resumes
+         */
+        public Duration getMaxDelay() {
+            return maxDelay;
+        }
+
+        /**
+         * @param maxDelay the longest wait between two resumes
+         */
+        public void setMaxDelay(Duration maxDelay) {
+            this.maxDelay = maxDelay;
+        }
+
+        /**
+         * How many times the subscription is resumed at the same event before the next failure skips the event instead of
+         * stopping. Default 0: unlimited, never skip.
+         *
+         * @return the maximum number of resumes at one event, or 0 for unlimited
+         */
+        public int getMaxAttempts() {
+            return maxAttempts;
+        }
+
+        /**
+         * @param maxAttempts how many resumes at the same event before it is skipped; 0 for unlimited
+         */
+        public void setMaxAttempts(int maxAttempts) {
+            this.maxAttempts = maxAttempts;
+        }
+
+        /**
+         * @return the {@link SubscriptionErrorPolicy.AutoResume} these properties describe
+         */
+        public SubscriptionErrorPolicy.AutoResume toAutoResume() {
+            return new SubscriptionErrorPolicy.AutoResume(enabled, initialDelay, maxDelay, maxAttempts);
         }
     }
 

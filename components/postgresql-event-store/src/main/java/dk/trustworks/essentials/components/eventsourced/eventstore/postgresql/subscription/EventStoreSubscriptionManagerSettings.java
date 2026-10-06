@@ -44,8 +44,8 @@ public record EventStoreSubscriptionManagerSettings(int eventStorePollingBatchSi
     }
 
     /**
-     * Settings with the default {@link SubscriptionErrorPolicy#skip()} policy - the shape these settings had before the
-     * policy was added
+     * Settings with the {@link SubscriptionErrorPolicy#defaultPolicy()} - the shape these settings had before the policy
+     * was added
      *
      * @param eventStorePollingBatchSize Specifies the number of events to retrieve in each batch when polling the EventStore.
      * @param eventStorePollingInterval  Determines the interval between successive polling attempts to fetch events from the EventStore.
@@ -54,7 +54,7 @@ public record EventStoreSubscriptionManagerSettings(int eventStorePollingBatchSi
     public EventStoreSubscriptionManagerSettings(int eventStorePollingBatchSize,
                                                  Duration eventStorePollingInterval,
                                                  Duration snapshotResumePointsEvery) {
-        this(eventStorePollingBatchSize, eventStorePollingInterval, snapshotResumePointsEvery, SubscriptionErrorPolicy.skip());
+        this(eventStorePollingBatchSize, eventStorePollingInterval, snapshotResumePointsEvery, SubscriptionErrorPolicy.defaultPolicy());
     }
 
     /**

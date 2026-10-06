@@ -95,6 +95,12 @@ public class PersistedEventSubscriber extends BaseSubscriber<PersistedEvent> {
     private final Object resumePointLock = new Object();
     private volatile boolean stoppedByErrorPolicy;
     /**
+     * Resumes the subscription after a stop, and decides when a stopping policy skips an event instead - set by the
+     * builder before the subscriber is subscribed. Null for a subscriber built outside an {@link EventStoreSubscriptionManager}'s
+     * subscription: it then stays stopped until resumed by hand
+     */
+    SubscriptionAutoResumer autoResumer;
+    /**
      * Set once the resume point must stay where {@link #holdResumePointAt(PersistedEvent)} left it: by a
      * {@link SubscriptionErrorPolicy.Mode#STOP}, or by a stop that interrupted the handling of an event
      */
@@ -399,6 +405,7 @@ public class PersistedEventSubscriber extends BaseSubscriber<PersistedEvent> {
                     }
                 })
                 .subscribe(requestSize -> {
+                            movedPast(e);
                             if (requestSize < 0) {
                                 requestSize = 1;
                             }
@@ -424,6 +431,7 @@ public class PersistedEventSubscriber extends BaseSubscriber<PersistedEvent> {
                             if (handedOffToEventHandler(e, failure)) {
                                 // Taken over by the event handler - done with here
                                 acknowledgeGivenUp(e);
+                                movedPast(e);
                                 eventStoreSubscription.request(1);
                                 return;
                             }
@@ -431,12 +439,14 @@ public class PersistedEventSubscriber extends BaseSubscriber<PersistedEvent> {
                                     eventHandler,
                                     failure,
                                     eventStoreSubscription);
-                            if (subscriptionErrorPolicy.stopsOnError()) {
+                            var cause = failure.getCause() != null ? failure.getCause() : failure;
+                            if (subscriptionErrorPolicy.stopsOnError() && !skippingAfterAutoResumes(e, cause)) {
                                 // Not acknowledged: the restarted subscription resumes at it
-                                stopAt(e, failure.getCause() != null ? failure.getCause() : failure);
+                                stopAt(e, cause);
                             } else {
                                 // Skipped - done with
                                 acknowledgeGivenUp(e);
+                                movedPast(e);
                                 onErrorHandler.accept(e, failure.getCause());
                             }
                         });
@@ -456,6 +466,16 @@ public class PersistedEventSubscriber extends BaseSubscriber<PersistedEvent> {
                          eventStoreSubscription.aggregateType(),
                          e.globalEventOrder(),
                          e.event().getEventTypeOrName().getValue()), acknowledgementFailure);
+        }
+    }
+
+    /**
+     * Tell the {@link SubscriptionAutoResumer} the subscriber is done with <code>e</code> - a resumed subscription has
+     * recovered once it gets past the event it stopped at
+     */
+    private void movedPast(PersistedEvent e) {
+        if (autoResumer != null) {
+            autoResumer.movedPast(e.globalEventOrder());
         }
     }
 
@@ -510,8 +530,8 @@ public class PersistedEventSubscriber extends BaseSubscriber<PersistedEvent> {
         var resumeFrom = holdResumePointAt(e);
         log.error(msg("[{}-{}] (#{}) Stopping the subscription because handling the {} event failed and the SubscriptionErrorPolicy is {}. " +
                               "The resume point stays at #{}, so no event is skipped: no further events are handled until the subscription is resumed " +
-                              "(EventStoreSubscription#resumeIfStoppedByErrorPolicy or the admin API) or started again (restart, fenced lock hand-over, resetFrom or " +
-                              "unsubscribe/subscribe), and it then continues at this event",
+                              "(automatically, unless the policy's auto-resume is disabled, or by EventStoreSubscription#resumeIfStoppedByErrorPolicy or the admin API) " +
+                              "or started again (restart, fenced lock hand-over, resetFrom or unsubscribe/subscribe), and it then continues at this event",
                       eventStoreSubscription.subscriberId(),
                       eventStoreSubscription.aggregateType(),
                       e.globalEventOrder(),
@@ -526,6 +546,38 @@ public class PersistedEventSubscriber extends BaseSubscriber<PersistedEvent> {
                          eventStoreSubscription.aggregateType()), observerFailure);
         }
         Schedulers.boundedElastic().schedule(this::dispose);
+        if (autoResumer != null) {
+            autoResumer.stoppedAt(e.globalEventOrder(), subscriptionErrorPolicy);
+        }
+    }
+
+    /**
+     * A stopping {@link SubscriptionErrorPolicy} gave up on <code>e</code>: skip it instead of stopping if the
+     * subscription has already been resumed {@link SubscriptionErrorPolicy.AutoResume#maxAttempts()} times at it
+     *
+     * @return true if the event is to be skipped
+     */
+    private boolean skippingAfterAutoResumes(PersistedEvent e, Throwable cause) {
+        if (autoResumer == null || !autoResumer.skipInsteadOfStopping(e.globalEventOrder(), subscriptionErrorPolicy)) {
+            return false;
+        }
+        var autoResumes = autoResumer.resumesAt(e.globalEventOrder());
+        log.error(msg("[{}-{}] (#{}) Skipping the {} event: handling it failed again after the subscription had been resumed at it {} time(s), the maximum " +
+                              "its {} SubscriptionErrorPolicy allows. The resume point moves past the event and it is not redelivered",
+                      eventStoreSubscription.subscriberId(),
+                      eventStoreSubscription.aggregateType(),
+                      e.globalEventOrder(),
+                      e.event().getEventTypeOrName().getValue(),
+                      autoResumes,
+                      subscriptionErrorPolicy.mode()), cause);
+        try {
+            eventStore.getEventStoreSubscriptionObserver().subscriptionSkippedEventAfterAutoResumes(e.globalEventOrder(), autoResumes, cause, eventStoreSubscription);
+        } catch (RuntimeException observerFailure) {
+            log.warn(msg("[{}-{}] EventStoreSubscriptionObserver#subscriptionSkippedEventAfterAutoResumes failed",
+                         eventStoreSubscription.subscriberId(),
+                         eventStoreSubscription.aggregateType()), observerFailure);
+        }
+        return true;
     }
 
     /**

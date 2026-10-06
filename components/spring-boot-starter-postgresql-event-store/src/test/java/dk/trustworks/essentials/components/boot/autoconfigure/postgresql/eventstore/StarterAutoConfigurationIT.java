@@ -190,9 +190,13 @@ public class StarterAutoConfigurationIT {
     }
 
     @Test
-    void the_subscription_manager_skips_failing_events_unless_configured_otherwise() {
+    void the_subscription_manager_retries_then_stops_and_resumes_by_itself_unless_configured_otherwise() {
         contextRunner.run(ctx -> assertThat(ctx.getBean(DefaultEventStoreSubscriptionManager.class).getSubscriptionErrorPolicy())
-                .isEqualTo(SubscriptionErrorPolicy.skip()));
+                .isEqualTo(SubscriptionErrorPolicy.defaultPolicy())
+                .satisfies(policy -> {
+                    assertThat(policy.resumesAutomatically()).isTrue();
+                    assertThat(policy.autoResume().skipsAfterMaxAttempts()).isFalse();
+                }));
     }
 
     @Test
@@ -216,6 +220,17 @@ public class StarterAutoConfigurationIT {
                                     "essentials.eventstore.subscription-manager.error-policy.max-backoff=2s")
                 .run(ctx -> assertThat(ctx.getBean(DefaultEventStoreSubscriptionManager.class).getSubscriptionErrorPolicy())
                         .isEqualTo(SubscriptionErrorPolicy.retryThenStop(4, Duration.ofMillis(50), Duration.ofSeconds(2))));
+        contextRunner
+                .withPropertyValues("essentials.eventstore.subscription-manager.error-policy.auto-resume.initial-delay=2s",
+                                    "essentials.eventstore.subscription-manager.error-policy.auto-resume.max-delay=1m",
+                                    "essentials.eventstore.subscription-manager.error-policy.auto-resume.max-attempts=7")
+                .run(ctx -> assertThat(ctx.getBean(DefaultEventStoreSubscriptionManager.class).getSubscriptionErrorPolicy())
+                        .isEqualTo(SubscriptionErrorPolicy.defaultPolicy()
+                                                          .withAutoResume(SubscriptionErrorPolicy.AutoResume.skippingAfter(7, Duration.ofSeconds(2), Duration.ofMinutes(1)))));
+        contextRunner
+                .withPropertyValues("essentials.eventstore.subscription-manager.error-policy.auto-resume.enabled=false")
+                .run(ctx -> assertThat(ctx.getBean(DefaultEventStoreSubscriptionManager.class).getSubscriptionErrorPolicy())
+                        .isEqualTo(SubscriptionErrorPolicy.defaultPolicy().withoutAutoResume()));
     }
 
     @Test

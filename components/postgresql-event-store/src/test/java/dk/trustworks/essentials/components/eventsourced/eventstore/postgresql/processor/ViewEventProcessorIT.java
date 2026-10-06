@@ -127,7 +127,7 @@ public class ViewEventProcessorIT {
     private final List<PersistedEvent>    handleEventFailedEvents = new CopyOnWriteArrayList<>();
 
     /**
-     * Runs the annotated test with {@link SubscriptionErrorPolicy#stop()} instead of the default {@link SubscriptionErrorPolicy#skip()}
+     * Runs the annotated test with {@link SubscriptionErrorPolicy#stop()} (without auto-resume) instead of {@link SubscriptionErrorPolicy#skip()}
      */
     @Retention(RetentionPolicy.RUNTIME)
     @Target(ElementType.METHOD)
@@ -138,7 +138,7 @@ public class ViewEventProcessorIT {
     void setup(TestInfo testInfo) {
         var subscriptionErrorPolicy = testInfo.getTestMethod()
                                               .filter(method -> method.isAnnotationPresent(WithSubscriptionErrorPolicyStop.class))
-                                              .map(method -> SubscriptionErrorPolicy.stop())
+                                              .map(method -> SubscriptionErrorPolicy.stop().withoutAutoResume())
                                               .orElseGet(SubscriptionErrorPolicy::skip);
         cfg = new HikariConfig();
         cfg.setJdbcUrl(postgreSQLContainer.getJdbcUrl());

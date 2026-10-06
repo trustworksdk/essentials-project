@@ -33,7 +33,11 @@ import static dk.trustworks.essentials.shared.MessageFormatter.msg;
 
 /**
  * Maintains the level-triggered {@value #SUBSCRIPTION_STOPPED_METRIC} gauge: {@code 1} while a subscription is stopped
- * by its {@link SubscriptionErrorPolicy} ({@link EventStoreSubscription#isStoppedByErrorPolicy()}), {@code 0} otherwise.
+ * by its {@link SubscriptionErrorPolicy} ({@link EventStoreSubscription#isStoppedByErrorPolicy()}) or has been resumed
+ * but not yet got past the event it stopped at ({@link EventStoreSubscription#isRecoveringFromErrorPolicyStop()}),
+ * {@code 0} otherwise. A subscription resumed automatically at a poison event retries it for a moment before it stops
+ * again, so the gauge stays at {@code 1} through every resume until the event is handled, handed off or skipped - an
+ * alert with a {@code for:} duration is not reset by the resumes.
  * <p>
  * This is the signal to alert on for a halted projection, e.g. {@code max by (subscriber_id, aggregate_type) (essentials_eventstore_subscription_stopped) == 1}.
  * The {@value MeasurementEventStoreSubscriptionObserver#SUBSCRIPTION_STOPPED_BY_ERROR_POLICY_METRIC} counter only
@@ -57,7 +61,8 @@ import static dk.trustworks.essentials.shared.MessageFormatter.msg;
 public class SubscriptionStoppedMicrometerMonitor implements EventStoreSubscriptionMonitor {
     private static final Logger log = LoggerFactory.getLogger(SubscriptionStoppedMicrometerMonitor.class);
     /**
-     * Gauge: {@code 1} while the subscription is stopped by its {@link SubscriptionErrorPolicy}, {@code 0} otherwise
+     * Gauge: {@code 1} while the subscription is stopped by its {@link SubscriptionErrorPolicy}, or resumed but not yet past
+     * the event it stopped at, {@code 0} otherwise
      */
     public static final  String SUBSCRIPTION_STOPPED_METRIC = "essentials.eventstore.subscription.stopped";
     private static final String SUBSCRIBER_ID_TAG           = "subscriber_id";
@@ -101,8 +106,8 @@ public class SubscriptionStoppedMicrometerMonitor implements EventStoreSubscript
     private Gauge registerGauge(Pair<SubscriberId, AggregateType> key) {
         var subscriberId  = key._1;
         var aggregateType = key._2;
-        var builder = Gauge.builder(SUBSCRIPTION_STOPPED_METRIC, () -> isStoppedByErrorPolicy(subscriberId, aggregateType) ? 1 : 0)
-                           .description("1 while the subscription is stopped by its SubscriptionErrorPolicy (Mode.STOP), 0 otherwise")
+        var builder = Gauge.builder(SUBSCRIPTION_STOPPED_METRIC, () -> reportsStopped(subscriberId, aggregateType) ? 1 : 0)
+                           .description("1 while the subscription is stopped by its SubscriptionErrorPolicy, or resumed but not yet past the event it stopped at, 0 otherwise")
                            .tag(SUBSCRIBER_ID_TAG, subscriberId.toString())
                            .tag(AGGREGATE_TYPE_TAG, aggregateType.toString());
         if (moduleTag != null) {
@@ -111,9 +116,9 @@ public class SubscriptionStoppedMicrometerMonitor implements EventStoreSubscript
         return builder.register(meterRegistry);
     }
 
-    private boolean isStoppedByErrorPolicy(SubscriberId subscriberId, AggregateType aggregateType) {
+    private boolean reportsStopped(SubscriberId subscriberId, AggregateType aggregateType) {
         return eventStoreSubscriptionManager.getSubscription(subscriberId, aggregateType)
-                                            .map(EventStoreSubscription::isStoppedByErrorPolicy)
+                                            .map(subscription -> subscription.isStoppedByErrorPolicy() || subscription.isRecoveringFromErrorPolicyStop())
                                             .orElse(false);
     }
 }

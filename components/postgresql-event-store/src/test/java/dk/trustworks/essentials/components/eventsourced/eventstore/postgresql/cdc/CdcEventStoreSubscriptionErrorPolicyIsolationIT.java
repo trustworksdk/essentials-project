@@ -246,7 +246,7 @@ class CdcEventStoreSubscriptionErrorPolicyIsolationIT extends AbstractLogicalRep
                                                                                                             .build())
                                                            .setSnapshotResumePointsEvery(Duration.ofSeconds(1))
                                                            .setDurableSubscriptionRepository(new PostgresqlDurableSubscriptionRepository(jdbi, cdcEventStore))
-                                                           .setSubscriptionErrorPolicy(SubscriptionErrorPolicy.retryThenStop(1, Duration.ofMillis(50), Duration.ofMillis(50)))
+                                                           .setSubscriptionErrorPolicy(SubscriptionErrorPolicy.retryThenStop(1, Duration.ofMillis(50), Duration.ofMillis(50)).withoutAutoResume())
                                                            .build();
         stoppingManager.start();
         try {

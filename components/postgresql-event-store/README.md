@@ -1467,14 +1467,18 @@ Every other exception is handled according to the `SubscriptionErrorPolicy` conf
 
 | Policy | What happens to an event whose handler throws a non-I/O exception |
 |--------|--------------------------------------------------------------------|
-| `SubscriptionErrorPolicy.skip()` (default) | The failure is logged at ERROR ("Skipping ... event because of error"), the resume point advances past the event, and the subscription continues with the next event. The event is **not** redelivered - not even after a restart. |
+| `SubscriptionErrorPolicy.defaultPolicy()` (default) | `retryThenStop(3)` (`DEFAULT_MAX_RETRIES`) with automatic resume: the event is retried, then the subscription stops at it and resumes by itself until the event succeeds - see [A stopped subscription resumes by itself](#a-stopped-subscription-resumes-by-itself). No event is skipped and no subscription stays halted. |
+| `SubscriptionErrorPolicy.skip()` | The failure is logged at ERROR ("Skipping ... event because of error"), the resume point advances past the event, and the subscription continues with the next event. The event is **not** redelivered - not even after a restart. This was the only behaviour before 0.60. |
 | `SubscriptionErrorPolicy.retryThenSkip(maxRetries)`<br>`SubscriptionErrorPolicy.retryThenSkip(maxRetries, initialBackoff, maxBackoff)` | The handler is called again up to `maxRetries` times, each attempt in a new `UnitOfWork`, with an exponential backoff between attempts (by default 100 ms, doubling up to 1 s). If every retry fails, the event is skipped exactly as with `skip()`. |
-| `SubscriptionErrorPolicy.stop()` | On the **first** failure the failure is logged at ERROR and the subscription stops at the failed event: its resume point is not advanced past it, and it handles no further events until it is resumed (see [Resuming a stopped subscription](#resuming-a-stopped-subscription)) or started again (application restart, fenced-lock hand-over, `resetFrom(...)`, or unsubscribe and subscribe). A resumed or restarted subscription continues *at* the failed event, so nothing is skipped; if the failure is permanent, it stops at the same event again. An exclusive subscription keeps its fenced lock while stopped, so the event does not flap to another node that would fail the same way. |
-| `SubscriptionErrorPolicy.retryThenStop(maxRetries)`<br>`SubscriptionErrorPolicy.retryThenStop(maxRetries, initialBackoff, maxBackoff)` | Retries exactly as `retryThenSkip(...)`; if every retry fails, stops exactly as `stop()`. |
+| `SubscriptionErrorPolicy.stop()` | On the **first** failure the failure is logged at ERROR and the subscription stops at the failed event: its resume point is not advanced past it, and it handles no further events until it is resumed - by itself (see [A stopped subscription resumes by itself](#a-stopped-subscription-resumes-by-itself)) or by hand (see [Resuming a stopped subscription](#resuming-a-stopped-subscription)) - or started again (application restart, fenced-lock hand-over, `resetFrom(...)`, or unsubscribe and subscribe). A resumed or restarted subscription continues *at* the failed event, so nothing is skipped; if the failure is permanent, it stops at the same event again. An exclusive subscription keeps its fenced lock while stopped, so the event does not flap to another node that would fail the same way. |
+| `SubscriptionErrorPolicy.retryThenStop(maxRetries)`<br>`SubscriptionErrorPolicy.retryThenStop(maxRetries, initialBackoff, maxBackoff)` | Retries exactly as `retryThenSkip(...)`; if every retry fails, stops exactly as `stop()`. The mode of the default policy. |
 
-The default is `skip()`, which means a projection fed by a direct asynchronous subscription silently misses an event whose handler failed.
-Choose `retryThenSkip(...)` when failures are expected to be transient, and `retryThenStop(...)` when a missed event is worse than a stalled subscription.
-`stop()` gives up on the first failure, and many failures are transient without being I/O errors - a serialization failure or deadlock (PostgreSQL `40001`/`40P01`), a lock that is not available (`55P03`), an optimistic-concurrency conflict - so under `stop()` each of them halts the subscription until someone resumes it.
+The default never skips an event: a missed event in a projection is silent and permanent, whereas a stopped subscription is reported, alertable and - with automatic resume - never left halted until someone notices.
+The price is that an event that can never succeed (a poison event) holds up every later event of its subscription until it is fixed.
+Choose `skip()` or `retryThenSkip(...)` for a subscriber where an occasional missed event is acceptable, for example one that only triggers a best-effort side effect.
+`stop()` gives up on the first failure, and many failures are transient without being I/O errors - a serialization failure or deadlock (PostgreSQL `40001`/`40P01`), a lock that is not available (`55P03`), an optimistic-concurrency conflict - so under `stop()` each of them halts the subscription until it is resumed; `retryThenStop(...)` retries them away first.
+
+> **Upgrading from 0.50:** 0.50 skipped every event whose handler failed with a non-I/O error. With the 0.60 default the event is retried, then the subscription stops at it and keeps resuming. An application that relied on skipping sets `SubscriptionErrorPolicy.skip()` (Spring Boot: `essentials.eventstore.subscription-manager.error-policy.mode=skip`).
 
 The policy is configured per `EventStoreSubscriptionManager` and carried to every asynchronous subscription it creates:
 
@@ -1488,7 +1492,7 @@ var subscriptionManager = EventStoreSubscriptionManager.builder()
     .build();
 ```
 
-`PersistedEventSubscriberBuilder` and `BatchedPersistedEventSubscriberBuilder` offer the same `setSubscriptionErrorPolicy(...)` for a subscriber that is built directly rather than through the manager.
+`PersistedEventSubscriberBuilder` and `BatchedPersistedEventSubscriberBuilder` offer the same `setSubscriptionErrorPolicy(...)` for a subscriber that is built directly rather than through the manager. Their default stays `skip()`: a subscriber built directly has no subscription to resume it, so a stopping policy would leave it stopped for good.
 
 The manager's policy applies to every subscription whose event handler has none of its own. A `PersistedEventHandler` or `BatchedPersistedEventHandler` that returns a policy from `subscriptionErrorPolicy()` (default `Optional.empty()`) overrides it for its own subscription, so one manager can serve a projection that must stop at a failed event and a side-effect subscriber that skips it. A `ViewEventProcessor` or `EventProcessor` sets it by overriding `getSubscriptionErrorPolicy()`:
 
@@ -1502,20 +1506,54 @@ protected Optional<SubscriptionErrorPolicy> getSubscriptionErrorPolicy() {
 With the Spring Boot starter (`spring-boot-starter-postgresql-event-store`) the policy is configured through properties:
 
 ```properties
-# skip (default) | retry-n-then-skip | stop | retry-n-then-stop
-essentials.eventstore.subscription-manager.error-policy.mode=retry-n-then-skip
+# retry-n-then-stop (default) | stop | skip | retry-n-then-skip
+essentials.eventstore.subscription-manager.error-policy.mode=retry-n-then-stop
 # Only used by retry-n-then-skip and retry-n-then-stop (stop never retries); must be at least 1. Default 3
 essentials.eventstore.subscription-manager.error-policy.max-retries=5
 # The wait before the first retry, doubled for each later retry. Default 100ms
 essentials.eventstore.subscription-manager.error-policy.initial-backoff=200ms
 # The longest wait between two retries. Default 1s
 essentials.eventstore.subscription-manager.error-policy.max-backoff=5s
+# stop / retry-n-then-stop only: resume a stopped subscription by itself. Default true
+essentials.eventstore.subscription-manager.error-policy.auto-resume.enabled=true
+# The wait before the first resume at an event, doubled for each later resume at the same event. Default 10s
+essentials.eventstore.subscription-manager.error-policy.auto-resume.initial-delay=10s
+# The longest wait between two resumes. Default 5m
+essentials.eventstore.subscription-manager.error-policy.auto-resume.max-delay=5m
+# Resumes at the same event before the next failure skips it instead of stopping. Default 0 = unlimited, never skip
+essentials.eventstore.subscription-manager.error-policy.auto-resume.max-attempts=0
 ```
 
 **Scope:**
 - A batched subscription applies the policy to the batch as a whole: the whole batch is retried, skipped, or stopped at (the resume point then stays at the batch's first event).
 - In-transaction subscriptions are not governed by the policy: a handler exception propagates and rolls back the `UnitOfWork` that appended the events.
-- Subscriptions that forward events to an `Inbox` (as `EventProcessor` does) are not governed by it either: the Inbox's `RedeliveryPolicy` applies. When you need durable per-event retry with dead-lettering, use an `EventProcessor` instead of a direct subscription.
+- For a subscription that forwards events to an `Inbox` (as `EventProcessor` does) the policy governs only the forwarding itself - deserializing the event and adding it to the `Inbox`; the handling of the message is governed by the Inbox's `RedeliveryPolicy`. When you need durable per-event retry with dead-lettering, use an `EventProcessor` instead of a direct subscription.
+
+#### A stopped subscription resumes by itself
+
+When `stop()` or `retryThenStop(...)` stops a subscription, the subscription resumes itself at the failed event after a delay, as the policy's `autoResume()` - a `SubscriptionErrorPolicy.AutoResume(enabled, initialDelay, maxDelay, maxAttempts)` - prescribes.
+The delay doubles with every resume at the same event and starts over when the subscription stops at another event.
+
+| `AutoResume` | Behaviour |
+|--------------|-----------|
+| `AutoResume.defaults()` (default) | Resume after 10 s (`DEFAULT_INITIAL_DELAY`), doubling up to 5 min (`DEFAULT_MAX_DELAY`), for as long as the event keeps failing. `maxAttempts` is `UNLIMITED_ATTEMPTS` (`0`): the event is never skipped. |
+| `AutoResume.unlimited(initialDelay, maxDelay)` | The same, with your own delays. |
+| `AutoResume.skippingAfter(maxAttempts, initialDelay, maxDelay)` | Once the subscription has been resumed `maxAttempts` times at the same event, the next give-up **skips** the event instead of stopping: it is logged at ERROR, reported to `EventStoreSubscriptionObserver#subscriptionSkippedEventAfterAutoResumes(skippedGlobalEventOrder, autoResumes, cause, subscription)` and counted in `essentials.eventstore.subscription.skipped_after_auto_resumes`. The resume point moves past the event and it is not redelivered. |
+| `AutoResume.disabled()` | A stopped subscription stays stopped until it is resumed by hand or started again. |
+
+```java
+SubscriptionErrorPolicy.retryThenStop(5)
+                       .withAutoResume(SubscriptionErrorPolicy.AutoResume.unlimited(Duration.ofSeconds(30), Duration.ofMinutes(10)));
+SubscriptionErrorPolicy.stop().withoutAutoResume();   // stays stopped until resumed by hand
+```
+
+Every factory and the 4-argument constructor carry `AutoResume.defaults()`; `resumesAutomatically()` tells whether a policy resumes by itself.
+Every stop is still reported - the ERROR log, `subscriptionStoppedByErrorPolicy`, the `stopped_by_error_policy` counter - and `isStoppedByErrorPolicy()` stays `true` between attempts, so a subscription stuck on a poison event remains visible on the `essentials.eventstore.subscription.stopped` gauge (see [Observing a stopped subscription](#observing-a-stopped-subscription)).
+A pending resume is cancelled when the subscription is stopped or unsubscribed, when `resetFrom(...)` moves it (which also forgets the count of resumes), when it loses its fenced lock, and once the application starts shutting down. A manual resume still works at any time and cancels the pending automatic one.
+Only the subscriptions an `EventStoreSubscriptionManager` creates resume by themselves.
+
+Skipping after a number of resumes is opt-in rather than the default because a skip is easy to lose track of. For an `EventProcessor` the policy only governs the forward step, so a skip there drops the event *before* it reaches the `Inbox` - its dead-letter queue, and any monitoring of it, never sees the event. A direct `PersistedEventHandler` has no dead-letter queue at all.
+(`ViewEventProcessor` hands its business failures off to its durable queue, so its policy rarely gives up.) Opt in only where keeping the subscription moving matters more than the event, and alert on the skip counter.
 
 #### Retries run on the subscription's own thread
 
@@ -1570,11 +1608,12 @@ It applies to single-event asynchronous subscriptions; batched and in-transactio
 
 #### Observing a stopped subscription
 
-A subscription stopped by `stop()` otherwise looks exactly like a healthy subscription that has no new events, so surface the stop explicitly:
+A subscription stopped by its error policy otherwise looks exactly like a healthy subscription that has no new events, so surface the stop explicitly.
+Automatic resume does not make that unnecessary: a subscription that keeps stopping at the same event is stuck on an event that needs a fix.
 
-- `EventStoreSubscription#isStoppedByErrorPolicy()` returns `true` from the moment the policy stopped the subscription until it is resumed or started again.
-- `EventStoreSubscriptionObserver#subscriptionStoppedByErrorPolicy(stoppedAtGlobalEventOrder, cause, eventStoreSubscription)` is called once per stop (see [EventStoreSubscriptionObserver](#eventstoresubscriptionobserver)).
-- `SubscriptionStoppedMicrometerMonitor` publishes the Micrometer gauge `essentials.eventstore.subscription.stopped` - `1` while the subscription is stopped, `0` otherwise (tags `subscriber_id`, `aggregate_type` and the optional `Module` tag). **This is the signal to alert on**, e.g. `max by (subscriber_id, aggregate_type) (essentials_eventstore_subscription_stopped) == 1`. It is an `EventStoreSubscriptionMonitor`, run by the `EventStoreSubscriptionMonitorManager`: the gauge is registered within one monitoring interval of the subscription becoming active and is then read live on every scrape, so it drops to `0` as soon as the subscription is started again or unsubscribed. It reports per JVM - an exclusive subscription reads `1` only on the instance holding its fenced lock - so aggregate with `max`, not `sum`. The Spring Boot starter wires it whenever a `MeterRegistry` is present.
+- `EventStoreSubscription#isStoppedByErrorPolicy()` returns `true` from the moment the policy stopped the subscription until it is resumed or started again - and again after every resume at an event that keeps failing.
+- `EventStoreSubscriptionObserver#subscriptionStoppedByErrorPolicy(stoppedAtGlobalEventOrder, cause, eventStoreSubscription)` is called once per stop, so once more after every resume that fails again (see [EventStoreSubscriptionObserver](#eventstoresubscriptionobserver)).
+- `SubscriptionStoppedMicrometerMonitor` publishes the Micrometer gauge `essentials.eventstore.subscription.stopped` - `1` while the subscription is stopped, and from a resume until it has got past the failed event (`EventStoreSubscription#isRecoveringFromErrorPolicyStop()`), `0` otherwise. A resumed subscription retries the failed event for a moment before an event that keeps failing stops it again, so the gauge stays at `1` through every automatic resume and an alert with a `for:` duration is not reset by them (tags `subscriber_id`, `aggregate_type` and the optional `Module` tag). **This is the signal to alert on**, e.g. `max by (subscriber_id, aggregate_type) (essentials_eventstore_subscription_stopped) == 1`. It is an `EventStoreSubscriptionMonitor`, run by the `EventStoreSubscriptionMonitorManager`: the gauge is registered within one monitoring interval of the subscription becoming active and is then read live on every scrape, so it drops to `0` as soon as the subscription is started again or unsubscribed. It reports per JVM - an exclusive subscription reads `1` only on the instance holding its fenced lock - so aggregate with `max`, not `sum`. The Spring Boot starter wires it whenever a `MeterRegistry` is present.
 - `MeasurementEventStoreSubscriptionObserver` counts each stop in the Micrometer counter `essentials.eventstore.subscription.stopped_by_error_policy` (tags `subscriber_id`, `aggregate_type` and the optional `Module` tag). The counter records that a stop *happened*, not that the subscription is stopped *now*: `increase(...) > 0` resolves while the projection is still halted, and `> 0` keeps firing after it has been restarted - use it for history, and the gauge above for alerting.
 - The admin API reports it per subscription as `ApiSubscription.stoppedByErrorPolicy`.
 
@@ -1583,7 +1622,7 @@ Don't use `isActive()` to detect a stopped subscription.
 
 #### Resuming a stopped subscription
 
-Once the cause of the failure is fixed, a subscription stopped by its error policy is resumed without restarting the application:
+Once the cause of the failure is fixed, a subscription stopped by its error policy is resumed without restarting the application - automatic resume does it on its own schedule, and resuming by hand does it at once and cancels the pending automatic resume:
 
 - `EventStoreSubscription#resumeIfStoppedByErrorPolicy()`
 - `EventStoreSubscriptionManager#resumeSubscriptionIfStoppedByErrorPolicy(subscriberId, aggregateType)`
@@ -1850,7 +1889,7 @@ A handler that only **loaded** an aggregate leaves nothing pending, so its failu
 `hasPendingChanges` defaults to `true`, the safe answer, so a resource registered with a custom `UnitOfWorkLifecycleCallback` forces the full rollback (and the policy's retries) before the event is queued, unless that callback overrides `hasPendingChanges` to report when its resource is unchanged.
 
 > Under every `SubscriptionErrorPolicy` such an event therefore ends up in the view or in the queue.
-> The policy shapes only what happens first: `retryThenSkip(...)` retries the direct handler in place before the event is queued, and `stop()` does not stop the subscription for it.
+> The policy shapes only what happens first: a retrying policy - `retryThenStop(...)`, the default, or `retryThenSkip(...)` - retries the direct handler in place before the event is queued, and a stopping policy does not stop the subscription for it.
 
 #### Version = EventOrder Pattern for View Entities
 
@@ -2320,10 +2359,11 @@ Failures are reported through a callback per handler kind:
 | `handleEventFailed(event, PersistedEventHandler, cause, subscription)` | An asynchronous subscription's `PersistedEventHandler` failed and the `SubscriptionErrorPolicy` gave up on the event - it is about to be skipped, or the subscription stops at it |
 | `handleEventBatchFailed(events, BatchedPersistedEventHandler, cause, subscription)` | The same for a batched subscription: `handleBatch(...)` failed and the policy gave up on the batch. The events arrive in `GlobalEventOrder` order. Default no-op |
 | `handleEventFailed(event, TransactionalPersistedEventHandler, cause, subscription)` | An in-transaction subscription's handler failed (the exception then rolls back the caller's `UnitOfWork`) |
-| `subscriptionStoppedByErrorPolicy(stoppedAtGlobalEventOrder, cause, subscription)` | An asynchronous subscription stopped because its policy is `stop()`. Called once per stop, right after `handleEventFailed`/`handleEventBatchFailed` reported the failure, when `subscription.isStoppedByErrorPolicy()` already returns `true`. For a batched subscription `stoppedAtGlobalEventOrder` is the first event of the failed batch. Default no-op |
+| `subscriptionStoppedByErrorPolicy(stoppedAtGlobalEventOrder, cause, subscription)` | An asynchronous subscription stopped because its policy stops (`stop()`, `retryThenStop(...)`). Called once per stop - again after every automatic resume that fails at the event again - right after `handleEventFailed`/`handleEventBatchFailed` reported the failure, when `subscription.isStoppedByErrorPolicy()` already returns `true`. For a batched subscription `stoppedAtGlobalEventOrder` is the first event of the failed batch. Default no-op |
+| `subscriptionSkippedEventAfterAutoResumes(skippedGlobalEventOrder, autoResumes, cause, subscription)` | Only with `AutoResume.skippingAfter(...)`: the subscription had been resumed `autoResumes` times at the event, failed again and skipped it instead of stopping. Called right after `handleEventFailed`/`handleEventBatchFailed`. The resume point moves past the event and it is not redelivered. For a batched subscription the first event of the skipped batch. Default no-op |
 
 Neither failure callback fires for an event whose retries were abandoned because the subscription was being stopped - that event is handled again when the subscription is started again.
-The failure callbacks fire for every event the policy gives up on, skipped ones included; `subscriptionStoppedByErrorPolicy` marks a subscription that has halted until it is started again, which makes it the signal to alert on.
+The failure callbacks fire for every event the policy gives up on, skipped ones included; `subscriptionStoppedByErrorPolicy` marks a subscription that has halted until it is resumed or started again, and `subscriptionSkippedEventAfterAutoResumes` an event the subscription gave up on for good - the two to alert on.
 
 ### Built-in Implementations
 
@@ -2405,7 +2445,7 @@ public class CustomObserver implements EventStoreSubscriptionObserver {
     public void subscriptionStoppedByErrorPolicy(GlobalEventOrder stoppedAtGlobalEventOrder,
                                                  Throwable cause,
                                                  EventStoreSubscription subscription) {
-        // The subscription handles no further events until it is started again
+        // The subscription handles no further events until it is resumed (by default by itself, after a delay) or started again
         alertService.notifySubscriptionStopped(subscription.subscriberId(),
                                                subscription.aggregateType(),
                                                stoppedAtGlobalEventOrder,
@@ -2466,7 +2506,8 @@ var observer = new MeasurementEventStoreSubscriptionObserver(
 |---------|--------|------|
 | `essentials.eventstore.subscription.handle_event_failed` | Events an asynchronous subscription gave up on - skipped, or stopped at. A failed batch counts each of its events | `subscriber_id`, `aggregate_type`, `event_handler`, `event_type`, optional `Module` |
 | `essentials.eventstore.subscription.handle_event_transactional_failed` | Events an in-transaction subscription's handler failed to handle | `subscriber_id`, `aggregate_type`, `event_handler`, `event_type`, optional `Module` |
-| `essentials.eventstore.subscription.stopped_by_error_policy` | Asynchronous subscriptions stopped by a `stop()` policy - one per stop. Records that a stop happened, not whether the subscription is still stopped - alert on the `essentials.eventstore.subscription.stopped` gauge instead, see [Observing a stopped subscription](#observing-a-stopped-subscription) | `subscriber_id`, `aggregate_type`, optional `Module` |
+| `essentials.eventstore.subscription.stopped_by_error_policy` | Asynchronous subscriptions stopped by a stopping policy (`stop()`, `retryThenStop(...)`) - one per stop, so one more for every automatic resume that fails again. Records that a stop happened, not whether the subscription is still stopped - alert on the `essentials.eventstore.subscription.stopped` gauge instead, see [Observing a stopped subscription](#observing-a-stopped-subscription) | `subscriber_id`, `aggregate_type`, optional `Module` |
+| `essentials.eventstore.subscription.skipped_after_auto_resumes` | Events (or batches) skipped by `AutoResume.skippingAfter(...)` after the subscription had been resumed at them the maximum number of times. Each increment is an event the subscription gave up on and will not redeliver - alert on `increase(...) > 0` | `subscriber_id`, `aggregate_type`, optional `Module` |
 
 **Integration with monitoring systems:**
 - Prometheus (via Micrometer)

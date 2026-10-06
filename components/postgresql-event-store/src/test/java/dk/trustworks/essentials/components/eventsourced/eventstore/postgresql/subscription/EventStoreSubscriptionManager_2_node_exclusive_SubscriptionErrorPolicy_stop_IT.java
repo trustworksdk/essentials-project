@@ -186,7 +186,7 @@ class EventStoreSubscriptionManager_2_node_exclusive_SubscriptionErrorPolicy_sto
                                                                .setFencedLockManager(fencedLockManager)
                                                                .setSnapshotResumePointsEvery(Duration.ofMillis(200))
                                                                .setDurableSubscriptionRepository(durableSubscriptionRepository)
-                                                               .setSubscriptionErrorPolicy(SubscriptionErrorPolicy.stop())
+                                                               .setSubscriptionErrorPolicy(SubscriptionErrorPolicy.stop().withoutAutoResume())
                                                                .build();
         subscriptionManager.start();
         return new Node(unitOfWorkFactory, eventStore, durableSubscriptionRepository, fencedLockManager, subscriptionManager);

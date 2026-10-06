@@ -283,6 +283,15 @@ public class StatisticsCollectingEventStoreSubscriptionObserver implements Event
     }
 
     @Override
+    public void subscriptionSkippedEventAfterAutoResumes(GlobalEventOrder skippedGlobalEventOrder,
+                                                         int autoResumes,
+                                                         Throwable cause,
+                                                         EventStoreSubscription eventStoreSubscription) {
+        // Forward only: the failure itself was already recorded by handleEventFailed/handleEventBatchFailed
+        delegate.subscriptionSkippedEventAfterAutoResumes(skippedGlobalEventOrder, autoResumes, cause, eventStoreSubscription);
+    }
+
+    @Override
     public void resolveResumePoint(SubscriptionResumePoint resumePoint,
                                    GlobalEventOrder onFirstSubscriptionSubscribeFromAndIncludingGlobalOrder,
                                    EventStoreSubscription eventStoreSubscription,

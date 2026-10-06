@@ -143,7 +143,7 @@ See [spring-boot-starter-postgresql-event-store README](../components/spring-boo
 - `MeasurementEventStoreSubscriptionObserver` - Subscription metrics
 - `EventStoreSubscriptionMonitorManager` - Subscription health monitoring (runs every 1m by default)
 - `SubscriberGlobalOrderMicrometerMonitor` - Micrometer gauge for subscriber position (only when `management.tracing.enabled=true`)
-- `SubscriptionStoppedMicrometerMonitor` - gauge `essentials.eventstore.subscription.stopped` (`1` while a subscription is stopped by its `SubscriptionErrorPolicy`) - the alerting signal for a halted projection; wired whenever a `MeterRegistry` is present
+- `SubscriptionStoppedMicrometerMonitor` - gauge `essentials.eventstore.subscription.stopped` (`1` while a subscription is stopped by its `SubscriptionErrorPolicy`, and through its automatic resumes until the failed event is handled) - the alerting signal for a halted projection; wired whenever a `MeterRegistry` is present
 
 **Admin APIs:**
 - `EventStoreApi` - Query events, manage subscriptions
@@ -417,10 +417,14 @@ Prefix: `essentials.eventstore.subscription-manager`
 | `max-event-store-polling-interval` | `2000ms` | Max backoff when idle |
 | `snapshot-resume-points-every` | `1s` | Save position frequency (only changed positions are written) |
 | `snapshot-resume-points-after-events` | `0` (off) | Opt-in: also save a position once it advanced this many global orders since its last save |
-| `error-policy.mode` | `skip` | `skip` \| `retry-n-then-skip` \| `stop` \| `retry-n-then-stop` - the manager's policy, for every subscription whose handler has none of its own (`subscriptionErrorPolicy()` / a processor's `getSubscriptionErrorPolicy()`) - what an async subscription does with an event whose handler throws a non-I/O exception. See [SubscriptionErrorPolicy](LLM-postgresql-event-store.md#direct-async-subscribers-skip-a-failing-event-by-default) |
+| `error-policy.mode` | `retry-n-then-stop` | `retry-n-then-stop` \| `stop` \| `skip` \| `retry-n-then-skip` - the manager's policy, for every subscription whose handler has none of its own (`subscriptionErrorPolicy()` / a processor's `getSubscriptionErrorPolicy()`) - what an async subscription does with an event whose handler throws a non-I/O exception. The default retries, then stops at the event and auto-resumes - nothing is skipped. 0.50 skipped such an event: set `skip` to keep that. See [SubscriptionErrorPolicy](LLM-postgresql-event-store.md#direct-async-subscribers-retry-stop-and-resume-at-a-failing-event) |
 | `error-policy.max-retries` | `3` | `retry-n-then-skip` and `retry-n-then-stop` only (`stop` never retries); must be ≥ 1 |
 | `error-policy.initial-backoff` | `100ms` | Wait before the first retry, doubled per retry |
 | `error-policy.max-backoff` | `1s` | Cap on the wait between retries |
+| `error-policy.auto-resume.enabled` | `true` | A subscription stopped by `stop` / `retry-n-then-stop` resumes by itself at the failed event; `false` = stays stopped until resumed by hand (admin API) or restarted. Ignored by the skipping modes |
+| `error-policy.auto-resume.initial-delay` | `10s` | Wait before the first resume at an event, doubled per resume at the same event |
+| `error-policy.auto-resume.max-delay` | `5m` | Cap on the wait between resumes |
+| `error-policy.auto-resume.max-attempts` | `0` (unlimited) | Resumes at the same event before the next failure **skips** it instead of stopping (counter `essentials.eventstore.subscription.skipped_after_auto_resumes`). Opt-in: for an `EventProcessor` the skipped event never reaches the `Inbox` or its dead-letter queue |
 
 #### Subscription Monitor
 

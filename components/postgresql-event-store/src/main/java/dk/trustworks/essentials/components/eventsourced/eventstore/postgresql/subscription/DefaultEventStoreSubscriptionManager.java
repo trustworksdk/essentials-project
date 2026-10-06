@@ -184,7 +184,7 @@ public class DefaultEventStoreSubscriptionManager implements EventStoreSubscript
              startLifeCycles,
              eventStorePollingOptimizerFactory,
              snapshotResumePointsAfterEvents,
-             SubscriptionErrorPolicy.skip());
+             SubscriptionErrorPolicy.defaultPolicy());
     }
 
     /**
