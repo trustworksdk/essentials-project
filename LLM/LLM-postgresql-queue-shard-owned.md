@@ -177,7 +177,13 @@ The unordered lane *chases* each unresolved value with a query, so `holeExpiry` 
 |---|---|---|
 | `parallelConsumers` | 8 | Handlers in flight **for this consumer**. Same meaning as `ConsumeFromQueue.parallelConsumers` |
 | `maxShards` | unbounded | Cap on shards this instance holds |
-| `maxAttempts` / `retryDelay` / `retryMultiplier` / `maxRetryDelay` | 3 / 100 ms / 2.0 / 30 s | Redelivery policy |
+| `maxAttempts` | 3 | Deliveries before a dead letter, counting the first |
+| `retryBackoff` | `RetryBackoff.exponential(100 ms, 2.0, 30 s)` | Wait before each retry: `delayAfter(attemptsSoFar)`, where the first retry passes 1. `RetryBackoff.fixed(delay)`, `RetryBackoff.exponential(initial, multiplier, max)`, or any function |
+
+Through the `DurableQueues` adapter these come from the `ConsumeFromQueue`'s `RedeliveryPolicy`:
+`maxAttempts = maximumNumberOfRedeliveries + 1`, and the backoff delegates to the policy's own
+`calculateNextRedeliveryDelay`, so exponential, linear and fixed policies wait exactly as they do on
+`postgresql-queue`.
 
 ### What a handler is given
 

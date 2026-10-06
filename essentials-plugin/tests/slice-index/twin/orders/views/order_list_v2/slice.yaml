@@ -1,0 +1,21 @@
+schemaVersion: "1.3"
+slice: orders.order_list_v2
+kind: view
+bc: orders
+owner: orders-team
+status: live
+summary: Orders by customer, with cancellations.
+language: kotlin
+tier: cqrs-es
+lane: decider
+
+supersedes: orders.order_list
+serves: [ListOrdersV2]
+owns: [order_list_view]
+projections:
+  - { name: OrderListProjectionV2, aggregateTypes: [Orders], from: [OrderPlaced, OrderCancelled] }
+endpoints:
+  - { method: GET, path: "/api/v2/orders", auth: user }
+tests:
+  unit: { present: true }
+  integration: { present: false }

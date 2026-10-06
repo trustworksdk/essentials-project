@@ -1,0 +1,17 @@
+# review-scan signature fixture: YAML keys whose parents are outside the hunk are listed as not run, never guessed
+# No --root: the hunk shows `durable-queues:` and `mongodb:` but not their parents.
+# expect-not-run: backend/src/main/resources/application.yml:7 ess-088-mongo-key
+# expect-not-run: backend/src/main/resources/application.yml:21 ess-103-transactional-mode
+diff --git a/backend/src/main/resources/application.yml b/backend/src/main/resources/application.yml
+--- a/backend/src/main/resources/application.yml
++++ b/backend/src/main/resources/application.yml
+@@ -5,4 +5,5 @@
+     mongodb:
+       database: orders
++      uri: mongodb://localhost/orders
+       # filler 0
+       # filler 1
+@@ -18,2 +19,3 @@
+   durable-queues:
+     max-polling-interval: 2s
++    transactional-mode: fully-transactional

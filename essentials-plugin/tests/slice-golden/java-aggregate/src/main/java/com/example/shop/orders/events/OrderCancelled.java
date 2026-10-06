@@ -1,0 +1,25 @@
+package com.example.shop.orders.events;
+
+import com.example.shop.orders.types.OrderId;
+import com.fasterxml.jackson.annotation.JsonTypeName;
+
+/**
+ * Emitted by the cancel_order slice. One variant, one file (rules/slice-design.md §R3).
+ *
+ * This variant is logically OWNED by {@code use_cases/cancel_order/} — record that in the slice's
+ * CLAUDE.md. Never collect several variants into one file, and never edit another slice's variant.
+ *
+ * JAVA SEALED MECHANICS: this record must also be added to the {@code permits} clause of
+ * {@link OrderEvent}. That one-name append is the single sanctioned cross-slice edit in the
+ * slice law — it is a declaration-list change, not a change to another slice's decision-making.
+ *
+ * {@code @JsonTypeName} names this event's {@code @type} in its JSON; deserialization itself goes by
+ * the recorded class name.
+ */
+@JsonTypeName("OrderCancelled")
+public record OrderCancelled(
+        OrderId id,
+        // TODO: replace with the facts this event records
+        String placeholder
+) implements OrderEvent {
+}

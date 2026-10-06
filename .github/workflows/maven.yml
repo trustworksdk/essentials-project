@@ -19,6 +19,140 @@ on:
     branches: [ main, 'release/**' ]
 
 jobs:
+  # LLM/ is the only place the framework docs are edited; essentials-plugin/references/llm/ is a generated, committed
+  # copy (scripts/sync-plugin-llm.sh). The pre-commit hook keeps the two in step on a contributor's machine, but hooks
+  # are per clone and optional, so this gate is what enforces it. `git status` rather than `git diff`, so a doc added
+  # to LLM/ without its copy fails too. No symlinks under the plugin: Git for Windows checks them out as text files.
+  # Every other deterministic check of the plugin runs here as well, one step per check so a failure names its check.
+  # The commands live in scripts/plugin-check.sh, the one list of the plugin's checks: each step below is one
+  # `plugin-check.sh step <name>`, which runs exactly what this job ran inline, ::error:: annotations included.
+  # A new check is a step there plus one step line here. Locally: `scripts/plugin-check.sh quick` runs them all.
+  # None needs a JDK, Docker or Node: stdlib Python, plus uv for the scripts whose PEP 723 header pins pyyaml/jsonschema,
+  # plus a headless Chrome for the slice-map page. The whole job takes about a minute.
+  plugin-docs:
+    name: plugin LLM docs in sync
+    runs-on: ubuntu-latest
+    # Every Python in this job runs on the oldest version the scripts declare (`requires-python = ">=3.11"`), so CI proves
+    # the minimum rather than whatever the runner ships. uv reads UV_PYTHON (and fetches that interpreter); the stdlib
+    # scripts go through `uv run` as well, and the scripts' own child processes use sys.executable. plugin-check.sh
+    # defaults UV_PYTHON to the same value locally.
+    env:
+      UV_PYTHON: '3.11'
+
+    steps:
+      # Two commits deep, so check-ess-ids and the plugin-version check can compare with HEAD^1: the base side of a pull
+      # request's merge commit, or the previous commit on a push. Both steps pass it as --base; nothing guesses it.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 2
+
+      # v7 is the last setup-uv major with a moving tag; from v8 on the action publishes exact versions only.
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+
+      - name: Regenerate the plugin's copy of LLM/ and fail on any difference
+        run: scripts/plugin-check.sh step llm-sync
+
+      # Stack requirements (S1-S11) and version pins live in references/stack/; everything else in the plugin cites them.
+      - name: Plugin citation convention
+        run: scripts/plugin-check.sh step citations
+
+      # ESS-NNN ids on LLM/LLM-traps.md are what /essentials:review reports: unique, contiguous, never reused.
+      - name: ESS id catalogue (LLM/LLM-traps.md)
+        run: scripts/plugin-check.sh step ess-ids --base HEAD^1
+
+      # Claude Code updates an installed plugin only when plugin.json's version string changes, so a plugin change
+      # without a new version never reaches a user. An LLM/ edit counts: it regenerates references/llm/.
+      - name: Plugin version moves with the plugin
+        run: scripts/plugin-check.sh step plugin-version --base HEAD^1
+
+      - name: Fail on symlinks under essentials-plugin/
+        run: scripts/plugin-check.sh step symlinks
+
+      # Every fixture, slice golden and slice-source case, the project-installed copy, and multi-lane's one intended finding.
+      - name: Slice manifest lint (slice-lint.py)
+        run: scripts/plugin-check.sh step slice-lint
+
+      - name: Slice templates render to the committed goldens (render-slice.py)
+        run: scripts/plugin-check.sh step render-slice
+
+      - name: Slice source facts (slice-source.py)
+        run: scripts/plugin-check.sh step slice-source
+
+      - name: Slice index and graph (slice-index.py)
+        run: scripts/plugin-check.sh step slice-index
+
+      - name: Slice law views per lane and kind (slice-law.py)
+        run: scripts/plugin-check.sh step slice-law
+
+      - name: Stack contract lint (stack-lint.py)
+        run: scripts/plugin-check.sh step stack-lint
+
+      # Every answer combination renders and passes stack-lint; the nine golden cells match their committed .tree files.
+      - name: /essentials:init renders to the committed goldens (init-render.py)
+        run: scripts/plugin-check.sh step init-render
+
+      - name: Review signatures (review-scan.py)
+        run: scripts/plugin-check.sh step review-scan
+
+      - name: Docs search (search.sh)
+        run: scripts/plugin-check.sh step docs-search
+
+      - name: Requirements check (doctor.sh)
+        run: scripts/plugin-check.sh step doctor
+
+      - name: Review judgement cases, deterministic half (check-patches.py)
+        run: scripts/plugin-check.sh step check-patches
+
+      - name: Fixture expectations match their sources (check-expected.py)
+        run: scripts/plugin-check.sh step check-expected
+
+      # The eval suite itself is maintainer-run before a release; this only proves its graders are regenerated, not edited.
+      - name: Eval graders generated from their sources (evals/build.py)
+        run: scripts/plugin-check.sh step eval-graders
+
+      - name: Eval command in evals/README.md matches the script (plugin-check.sh evals)
+        run: scripts/plugin-check.sh step eval-flags
+
+      - name: Slice-compile case table (overlay.py)
+        run: scripts/plugin-check.sh step slice-compile-table
+
+      # chrome-headless-shell from Chrome for Testing, as a zip: no Node, no apt. Its libraries come with the runner's
+      # own Chrome install. One exact build, checked against a committed sha256 before it runs: no lookup through the
+      # last-known-good JSON, so neither a new Stable release nor whatever URL that file names can change what runs here.
+      # To bump: pick a version from that JSON, download its linux64 zip from the URL below, set both values from it.
+      # CI-only setup, not a check, so it stays inline.
+      - name: Install chrome-headless-shell (Chrome for Testing, pinned)
+        id: chrome
+        env:
+          CHROME_VERSION: 154.0.8037.92
+          CHROME_SHA256: 636aa5c79f2693632e9921b8bbb050038ba11672e02346c06c20f991aed096f9
+        run: |
+          zip="$RUNNER_TEMP/chrome-headless-shell.zip"
+          curl -fsSL -o "$zip" "https://storage.googleapis.com/chrome-for-testing-public/$CHROME_VERSION/linux64/chrome-headless-shell-linux64.zip"
+          echo "$CHROME_SHA256  $zip" | sha256sum --check --strict
+          unzip -q "$zip" -d "$RUNNER_TEMP"
+          echo "chrome-headless-shell $CHROME_VERSION"
+          echo "path=$RUNNER_TEMP/chrome-headless-shell-linux64/chrome-headless-shell" >> "$GITHUB_OUTPUT"
+
+      # The slice-map page's layout is JavaScript; the check runs it in the browser and parses the DOM it leaves.
+      # Exit 3 means "no Chrome, skipped", which locally is a notice and here is a failure.
+      - name: slice-map page renders (render-check.py)
+        env:
+          PLUGIN_CHECK_CHROME: ${{ steps.chrome.outputs.path }}
+        run: scripts/plugin-check.sh step render-check
+
+  # The example modules must never reach Maven Central, and maven.deploy.skip does not stop the release plugin. Each
+  # one is excluded by artifactId in the release profile's excludeArtifacts and in the release workflow's -pl, and
+  # sets skipPublishing=true in its own POM (or inherits it); this fails a change that adds, renames or removes an
+  # example module without updating all three. Stdlib Python, seconds.
+  release-exclusions:
+    name: examples excluded from the release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Every example module is excluded from the release
+        run: python3 scripts/check-release-exclusions.py
+
   # Full build including Testcontainers-backed integration tests.
   verify:
     name: verify (JDK ${{ matrix.java-version }})
@@ -29,9 +163,9 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Set up JDK ${{ matrix.java-version }}
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6.0.1
         with:
           java-version: ${{ matrix.java-version }}
           distribution: 'temurin'
@@ -51,7 +185,7 @@ jobs:
 
       - name: Upload JUnit test results
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: junit-results-jdk${{ matrix.java-version }}
           path: |
@@ -61,7 +195,7 @@ jobs:
 
       - name: Test Summary · Unit
         if: always()
-        uses: test-summary/action@v2
+        uses: test-summary/action@37b508cfee6d4d080eedd00b5bb240a6a784a6a5 # v2.6
         with:
           paths: '**/target/surefire-reports/TEST-*.xml'
         env:
@@ -69,7 +203,7 @@ jobs:
 
       - name: Test Summary · Integration
         if: always()
-        uses: test-summary/action@v2
+        uses: test-summary/action@37b508cfee6d4d080eedd00b5bb240a6a784a6a5 # v2.6
         with:
           paths: '**/target/failsafe-reports/TEST-*.xml'
         env:
@@ -85,9 +219,9 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Set up JDK ${{ matrix.java-version }}
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6.0.1
         with:
           java-version: ${{ matrix.java-version }}
           distribution: 'temurin'
@@ -98,7 +232,7 @@ jobs:
 
       - name: Upload JUnit test results
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: junit-results-unit-jdk${{ matrix.java-version }}
           path: '**/target/surefire-reports/'
@@ -106,8 +240,282 @@ jobs:
 
       - name: Test Summary · Unit
         if: always()
-        uses: test-summary/action@v2
+        uses: test-summary/action@37b508cfee6d4d080eedd00b5bb240a6a784a6a5 # v2.6
         with:
           paths: '**/target/surefire-reports/TEST-*.xml'
         env:
           NODE_OPTIONS: --max-old-space-size=4096
+
+  # What the essentials plugin generates, built the way users get it (scripts/plugin-scaffold.sh): the /essentials:init
+  # cells and the slice templates and fixtures on rendered host projects. In parallel with `verify`, whose wall clock
+  # stays untouched. The generated projects depend on DEV-SNAPSHOT artifacts, which are not on Central, so this job
+  # installs the reactor subset they name once and hands it on as an artifact. The subset is read from the init pom
+  # templates, so a template that starts using another module installs it without a workflow edit. Each scaffold job
+  # keeps its own Maven cache (key: its job id), so none of them replaces the one `verify` restores.
+  # These jobs call scripts/plugin-scaffold.sh directly rather than `plugin-check.sh scaffold`: that wrapper is the local
+  # entry point (full reactor install, then both modes), and CI has its own subset install, artifact hand-off and caches.
+  scaffold-install:
+    name: scaffold · install the reactor subset
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Set up JDK 25
+        uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6.0.1
+        with:
+          java-version: '25'
+          distribution: 'temurin'
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.m2/repository
+          key: scaffold-m2-${{ github.job }}-${{ hashFiles('**/pom.xml') }}
+          restore-keys: scaffold-m2-${{ github.job }}-
+
+      - name: Install the modules the generated projects depend on
+        run: |
+          modules=$(python3 - <<'PY'
+          import re
+          ids = set()
+          for f in ("pom.xml.template", "backend/pom.xml.template"):
+              text = open("essentials-plugin/references/init-assets/project/" + f).read()
+              for block in re.findall(r"<dependency>(.*?)</dependency>", text, re.S):
+                  if "<groupId>dk.trustworks.essentials" in block:
+                      ids.update(re.findall(r"<artifactId>([\w.-]+)</artifactId>", block))
+          print(",".join(":" + a for a in sorted(ids)))
+          PY
+          )
+          echo "modules: $modules (and what they need, -am)"
+          mvn -B -ntp install -DskipTests -DskipDependencyCheck=true -am -pl "$modules"
+          tar -C ~/.m2/repository -cf "$RUNNER_TEMP/essentials-reactor.tar" dk/trustworks/essentials
+          # Not cached: the next run installs fresh ones.
+          rm -rf ~/.m2/repository/dk/trustworks/essentials
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: essentials-reactor
+          path: ${{ runner.temp }}/essentials-reactor.tar
+          retention-days: 1
+
+  # The nine /essentials:init cells (tests/golden/init/cells.json): render, CI overlay, stack-lint, `verify` with its
+  # Testcontainers context ITs, then the regenerated contracts/openapi.json is checked. One job, not nine legs: a warm
+  # cell takes 10-15 s, so the whole set is about 1.5 min and a leg per cell would pay the runner's cold start nine times.
+  scaffold-matrix:
+    name: scaffold · init matrix (9 cells)
+    needs: scaffold-install
+    runs-on: ubuntu-latest
+    outputs:
+      frontend-cells: ${{ steps.cells.outputs.frontend }}
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Set up JDK 25
+        uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6.0.1
+        with:
+          java-version: '25'
+          distribution: 'temurin'
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.m2/repository
+          key: scaffold-m2-${{ github.job }}-${{ hashFiles('**/pom.xml', 'essentials-plugin/references/stack/stack-pins.md') }}
+          restore-keys: scaffold-m2-${{ github.job }}-
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: essentials-reactor
+          path: ${{ runner.temp }}
+      - name: Restore the installed reactor subset
+        run: |
+          mkdir -p ~/.m2/repository
+          tar -C ~/.m2/repository -xf "$RUNNER_TEMP/essentials-reactor.tar"
+
+      # Image tags from stack-pins.md (the renderer's own reading of it), pulled outside any test's startup timeout.
+      - name: Pre-pull the database images the generated projects use
+        run: |
+          python3 essentials-plugin/scripts/init-render.py --list-names |
+            awk -F '\t' '$1 == "{{pin:PostgreSQL image}}" || $1 == "{{pin:MongoDB image}}" { print $2 }' |
+            xargs -n 1 docker pull
+
+      - name: Cells with a frontend, for the frontend job
+        id: cells
+        run: |
+          echo "frontend=$(python3 -c 'import json; c = json.load(open("essentials-plugin/tests/golden/init/cells.json"))["cells"]; print(json.dumps([n for n in c if c[n]["frontend"] != "none"]))')" >> "$GITHUB_OUTPUT"
+
+      - name: Build every cell (plugin-scaffold.sh matrix)
+        run: scripts/plugin-scaffold.sh matrix --work "$RUNNER_TEMP/scaffold"
+
+      - name: Upload the regenerated contracts/openapi.json of every cell
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: scaffold-specs
+          path: ${{ runner.temp }}/scaffold/*/project/contracts/openapi.json
+          retention-days: 1
+
+      - name: Upload the logs of a failed cell
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: scaffold-matrix-logs
+          path: |
+            ${{ runner.temp }}/scaffold/*/*.log
+            ${{ runner.temp }}/scaffold/*/result
+            ${{ runner.temp }}/scaffold/*/project/backend/target/*-reports/
+          retention-days: 7
+      - name: Drop the reactor subset from the cache
+        if: always()
+        run: rm -rf ~/.m2/repository/dk/trustworks/essentials
+
+  # The ten slice-compile cases (tests/slice-compile/overlay.py): the seven slice-golden compositions, incl. the Java and
+  # Kotlin two-BC boot checks, and three fixtures, each on its rendered host. One job for the same reason as the matrix.
+  scaffold-slices:
+    name: scaffold · slice templates and fixtures (10 cases)
+    needs: scaffold-install
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Set up JDK 25
+        uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6.0.1
+        with:
+          java-version: '25'
+          distribution: 'temurin'
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.m2/repository
+          key: scaffold-m2-${{ github.job }}-${{ hashFiles('**/pom.xml', 'essentials-plugin/references/stack/stack-pins.md') }}
+          restore-keys: scaffold-m2-${{ github.job }}-
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: essentials-reactor
+          path: ${{ runner.temp }}
+      - name: Restore the installed reactor subset
+        run: |
+          mkdir -p ~/.m2/repository
+          tar -C ~/.m2/repository -xf "$RUNNER_TEMP/essentials-reactor.tar"
+
+      - name: Pre-pull the database images the generated projects use
+        run: |
+          python3 essentials-plugin/scripts/init-render.py --list-names |
+            awk -F '\t' '$1 == "{{pin:PostgreSQL image}}" || $1 == "{{pin:MongoDB image}}" { print $2 }' |
+            xargs -n 1 docker pull
+
+      - name: Build every case (plugin-scaffold.sh slices)
+        run: scripts/plugin-scaffold.sh slices --work "$RUNNER_TEMP/scaffold"
+
+      - name: Upload the logs of a failed case
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: scaffold-slices-logs
+          path: |
+            ${{ runner.temp }}/scaffold/*/*.log
+            ${{ runner.temp }}/scaffold/*/result
+            ${{ runner.temp }}/scaffold/*/project/backend/target/*-reports/
+          retention-days: 7
+      - name: Drop the reactor subset from the cache
+        if: always()
+        run: rm -rf ~/.m2/repository/dk/trustworks/essentials
+
+  # The generated frontend of each cell that has one, against the spec its `verify` regenerated in scaffold-matrix:
+  # lockfile hook, npm ci, Orval client, type check, the custom-fetch vitest, lint and the production build. The only job
+  # with Node, at the stack-pins pin, and it is the generated project's toolchain: the Essentials build stays Node-free.
+  # Embedded cells also run the project's own `mvn package`, which is what puts the SPA into the JAR. One leg per cell,
+  # unlike the matrix: a leg needs no JDK or Docker unless embedded, so its cold start is a Node setup, and its work
+  # (15-30 s measured) is mostly npm, which the cells cannot share. A red leg names its cell.
+  scaffold-frontend:
+    name: scaffold · frontend (${{ matrix.cell }})
+    needs: [ scaffold-install, scaffold-matrix ]
+    strategy:
+      fail-fast: false
+      matrix:
+        cell: ${{ fromJSON(needs.scaffold-matrix.outputs.frontend-cells) }}
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Render the cell with the spec its build regenerated
+        id: cell
+        env:
+          CELL: ${{ matrix.cell }}
+        run: |
+          python3 - "$CELL" "$RUNNER_TEMP/answers.json" <<'PY'
+          import json, sys
+          cells = json.load(open("essentials-plugin/tests/golden/init/cells.json"))
+          json.dump({**cells["defaults"], **cells["cells"][sys.argv[1]]}, open(sys.argv[2], "w"))
+          PY
+          python3 essentials-plugin/scripts/init-render.py --answers "$RUNNER_TEMP/answers.json" --out "$RUNNER_TEMP/project"
+          pins=$(python3 essentials-plugin/scripts/init-render.py --list-names)
+          {
+            echo "frontend=$(python3 -c 'import json, sys; print(json.load(open(sys.argv[1]))["frontend"])' "$RUNNER_TEMP/answers.json")"
+            echo "node=$(awk -F '\t' '$1 == "{{pin:Node}}" { sub(/^v/, "", $2); print $2 }' <<<"$pins")"
+            echo "essentials=$(sed -n 's:.*<revision>\(.*\)</revision>.*:\1:p' pom.xml | head -n 1)"
+          } >> "$GITHUB_OUTPUT"
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: scaffold-specs
+          path: ${{ runner.temp }}/specs
+      - name: Use the regenerated spec
+        env:
+          CELL: ${{ matrix.cell }}
+        run: cp "$RUNNER_TEMP/specs/$CELL/project/contracts/openapi.json" "$RUNNER_TEMP/project/contracts/openapi.json"
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ steps.cell.outputs.node }}
+
+      - name: Lockfile hook, as /essentials:init runs it
+        run: |
+          python3 essentials-plugin/scripts/init-render.py --answers "$RUNNER_TEMP/answers.json" --hooks |
+            python3 -c 'import json, sys; print(next(h["run"] for h in json.load(sys.stdin) if h["id"] == "frontend-lockfile"))' > "$RUNNER_TEMP/lockfile-hook.sh"
+          cd "$RUNNER_TEMP/project/frontend" && bash -e "$RUNNER_TEMP/lockfile-hook.sh"
+      - name: npm ci
+        working-directory: ${{ runner.temp }}/project/frontend
+        run: npm ci
+      - name: Orval client from contracts/openapi.json
+        working-directory: ${{ runner.temp }}/project/frontend
+        run: npx orval
+      - name: Type check
+        working-directory: ${{ runner.temp }}/project/frontend
+        run: npx tsc --noEmit
+      - name: custom-fetch test (vitest)
+        working-directory: ${{ runner.temp }}/project/frontend
+        run: npx vitest run
+      - name: Lint
+        working-directory: ${{ runner.temp }}/project/frontend
+        run: npx eslint .
+      - name: Production build
+        working-directory: ${{ runner.temp }}/project/frontend
+        run: npm run build
+
+      - name: Set up JDK 25
+        if: steps.cell.outputs.frontend == 'embedded'
+        uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6.0.1
+        with:
+          java-version: '25'
+          distribution: 'temurin'
+      - if: steps.cell.outputs.frontend == 'embedded'
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.m2/repository
+          key: scaffold-m2-${{ github.job }}-${{ hashFiles('**/pom.xml', 'essentials-plugin/references/stack/stack-pins.md') }}
+          restore-keys: scaffold-m2-${{ github.job }}-
+      - if: steps.cell.outputs.frontend == 'embedded'
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: essentials-reactor
+          path: ${{ runner.temp }}
+      - name: Embedded SPA into the JAR (the project's own mvn package, frontend profile on)
+        if: steps.cell.outputs.frontend == 'embedded'
+        working-directory: ${{ runner.temp }}/project
+        env:
+          ESSENTIALS_VERSION: ${{ steps.cell.outputs.essentials }}
+        run: |
+          mkdir -p ~/.m2/repository
+          tar -C ~/.m2/repository -xf "$RUNNER_TEMP/essentials-reactor.tar"
+          mvn -B -ntp -Dessentials.version="$ESSENTIALS_VERSION" package -DskipTests
+          for jar in backend/target/*.jar; do
+            unzip -l "$jar" | grep -Eq ' (BOOT-INF/classes/)?static/index\.html$' ||
+              { echo "::error::$jar has no static/index.html: the embedded SPA did not reach the JAR"; exit 1; }
+          done
+      - name: Drop the reactor subset from the cache
+        if: always() && steps.cell.outputs.frontend == 'embedded'
+        run: rm -rf ~/.m2/repository/dk/trustworks/essentials

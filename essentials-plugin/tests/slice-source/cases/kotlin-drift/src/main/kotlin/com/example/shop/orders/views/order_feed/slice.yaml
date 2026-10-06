@@ -1,0 +1,17 @@
+schemaVersion: "1.3"
+slice: orders.order_feed
+kind: view
+bc: orders
+owner: orders-team
+status: live
+summary: Feed of orders.
+generator: essentials
+language: kotlin
+tier: cqrs-es
+lane: decider
+serves: [OrderFeed]
+endpoints:
+  - { method: GET, path: "/api/orders/feed", auth: user }
+projections: []
+tests:
+  unit: { present: false }

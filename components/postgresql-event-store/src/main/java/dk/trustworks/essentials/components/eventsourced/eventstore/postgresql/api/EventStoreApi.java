@@ -88,6 +88,27 @@ public interface EventStoreApi {
                                                                   AggregateType aggregateType);
 
     /**
+     * Resume a subscription that its {@code SubscriptionErrorPolicy} stopped ({@link ApiSubscription#stoppedByErrorPolicy()}),
+     * without restarting the application - typically once the cause of the failure has been fixed. Delivery restarts at
+     * the failed event, so it is handled again first and nothing is skipped; if it fails again the error policy applies
+     * again. An exclusive subscription keeps its fenced lock.
+     * <p>
+     * Acts on the queried instance only: only the instance running the subscription - for an exclusive subscription, the
+     * one holding its fenced lock - can resume it.
+     *
+     * @param principal     the principal or identity requesting the resume, typically representing
+     *                      the authenticated user or system performing the action
+     * @param subscriberId  the id of the subscriber to resume
+     * @param aggregateType the aggregate type the subscriber subscribes to - a subscriber may subscribe to more than one
+     * @return true if the subscription was stopped by its error policy and has been resumed; false - a normal answer, not
+     * an error - if it is not running in this instance or is not stopped by its error policy, in which case nothing was done
+     * @throws dk.trustworks.essentials.shared.security.EssentialsSecurityException if the principal is not authorized to access
+     */
+    boolean resumeSubscriptionStoppedByErrorPolicy(Object principal,
+                                                   SubscriberId subscriberId,
+                                                   AggregateType aggregateType);
+
+    /**
      * The largest {@code maxDepth} {@link #findCausationChain(Object, EventId, int)} accepts
      */
     int MAX_CAUSATION_CHAIN_DEPTH = 100;

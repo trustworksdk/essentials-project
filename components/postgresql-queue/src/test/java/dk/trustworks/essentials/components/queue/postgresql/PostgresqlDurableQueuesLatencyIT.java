@@ -25,7 +25,7 @@ import dk.trustworks.essentials.reactive.LocalEventBus;
 import dk.trustworks.essentials.components.foundation.test.EssentialsTestContainers;
 import org.jdbi.v3.core.Jdbi;
 import org.junit.jupiter.api.Test;
-import org.testcontainers.containers.PostgreSQLContainer;
+import org.testcontainers.postgresql.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.*;
 
 import java.time.*;
@@ -74,7 +74,7 @@ public abstract class PostgresqlDurableQueuesLatencyIT extends DurableQueuesLoad
     protected abstract long targetQueriesToMeasurePerQueue();
 
     @Container
-    static final PostgreSQLContainer<?> postgreSQLContainer = EssentialsTestContainers.postgres("test", "test", "test");
+    static final PostgreSQLContainer postgreSQLContainer = EssentialsTestContainers.postgres("test", "test", "test");
 
     @Override
     protected PostgresqlDurableQueues createDurableQueues(JdbiUnitOfWorkFactory unitOfWorkFactory) {

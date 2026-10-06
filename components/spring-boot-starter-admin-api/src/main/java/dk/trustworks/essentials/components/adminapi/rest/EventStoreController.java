@@ -16,7 +16,7 @@
 
 package dk.trustworks.essentials.components.adminapi.rest;
 
-import dk.trustworks.essentials.components.adminapi.rest.dto.GlobalEventOrderResult;
+import dk.trustworks.essentials.components.adminapi.rest.dto.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.api.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.AggregateType;
 import dk.trustworks.essentials.components.foundation.types.*;
@@ -94,5 +94,14 @@ public class EventStoreController {
                             .orElseThrow(() -> new AdminApiResourceNotFoundException(
                                     "No statistics are collected in this instance for subscriber '" + subscriberId
                                             + "' and aggregate type '" + aggregateType + "'."));
+    }
+
+    @PostMapping("/event-store/subscriptions/{subscriberId}/aggregate-types/{aggregateType}/resume")
+    public ResumeResult resumeSubscriptionStoppedByErrorPolicy(@PathVariable String subscriberId,
+                                                               @PathVariable String aggregateType) {
+        var resumed = eventStoreApi.resumeSubscriptionStoppedByErrorPolicy(principalResolver.requireAuthenticatedPrincipal(),
+                                                                           SubscriberId.of(subscriberId),
+                                                                           AggregateType.of(aggregateType));
+        return new ResumeResult(resumed);
     }
 }

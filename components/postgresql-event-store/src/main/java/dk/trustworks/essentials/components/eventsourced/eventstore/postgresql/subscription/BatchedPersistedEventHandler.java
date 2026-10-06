@@ -21,7 +21,7 @@ import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.ty
 import dk.trustworks.essentials.components.foundation.causation.CausationContext;
 import dk.trustworks.essentials.components.foundation.transaction.UnitOfWork;
 
-import java.util.List;
+import java.util.*;
 
 /**
  * Handler for processing batches of {@link PersistedEvent}s. Implementations can
@@ -66,5 +66,19 @@ public interface BatchedPersistedEventHandler {
      */
     default void onResetFrom(EventStoreSubscription subscription, GlobalEventOrder subscribeFromAndIncludingGlobalOrder) {
         // Default is no-op
+    }
+
+    /**
+     * The {@link SubscriptionErrorPolicy} for the batched subscription this handler is subscribed with, in place of the
+     * policy of the {@link EventStoreSubscriptionManager}. See {@link SubscriptionErrorPolicy} for which setting wins.
+     * <p>
+     * Read each time the subscription subscribes its subscriber (start, {@code resetFrom},
+     * {@link EventStoreSubscription#resumeIfStoppedByErrorPolicy()}), so return the same policy every time.
+     *
+     * @return the policy for this handler's subscription, or {@link Optional#empty()} (the default) to use the
+     * {@link EventStoreSubscriptionManager}'s policy
+     */
+    default Optional<SubscriptionErrorPolicy> subscriptionErrorPolicy() {
+        return Optional.empty();
     }
 }

@@ -1,0 +1,578 @@
+{
+  "tool": "slice-source",
+  "format": 1,
+  "mode": "facts",
+  "root": "tests/slice-source/cases/java-lanes",
+  "manifestsRead": true,
+  "sourceFiles": 14,
+  "bcs": [
+    {
+      "name": "billing",
+      "path": "src/main/*/com/example/lanes/billing",
+      "dirs": [
+        "src/main/java/com/example/lanes/billing"
+      ],
+      "languages": [
+        "java"
+      ],
+      "slices": [
+        "billing.issue_invoice"
+      ],
+      "lane": {
+        "signals": {
+          "decider": [],
+          "aggregates": {
+            "dir": "src/main/*/com/example/lanes/billing/aggregates",
+            "files": 1
+          },
+          "entities": null,
+          "eventStore": []
+        },
+        "declared": [
+          {
+            "slice": "billing.issue_invoice",
+            "lane": "aggregate",
+            "file": "src/main/java/com/example/lanes/billing/use_cases/issue_invoice/slice.yaml"
+          }
+        ],
+        "detected": "aggregate"
+      }
+    },
+    {
+      "name": "catalog",
+      "path": "src/main/*/com/example/lanes/catalog",
+      "dirs": [
+        "src/main/java/com/example/lanes/catalog"
+      ],
+      "languages": [
+        "java"
+      ],
+      "slices": [
+        "catalog.reprice"
+      ],
+      "lane": {
+        "signals": {
+          "decider": [],
+          "aggregates": null,
+          "entities": {
+            "dir": "src/main/*/com/example/lanes/catalog/entities",
+            "files": 1
+          },
+          "eventStore": [
+            {
+              "file": "src/main/java/com/example/lanes/catalog/use_cases/reprice/RepriceHandler.java",
+              "line": 7,
+              "symbol": "EventStore"
+            }
+          ]
+        },
+        "declared": [
+          {
+            "slice": "catalog.reprice",
+            "lane": "service-entity",
+            "file": "src/main/java/com/example/lanes/catalog/use_cases/reprice/slice.yaml"
+          }
+        ],
+        "detected": "conflict"
+      }
+    },
+    {
+      "name": "drafts",
+      "path": "src/main/*/com/example/lanes/drafts",
+      "dirs": [
+        "src/main/java/com/example/lanes/drafts"
+      ],
+      "languages": [
+        "java"
+      ],
+      "slices": [
+        "drafts.draft_list"
+      ],
+      "lane": {
+        "signals": {
+          "decider": [],
+          "aggregates": null,
+          "entities": null,
+          "eventStore": []
+        },
+        "declared": [
+          {
+            "slice": "drafts.draft_list",
+            "lane": "decider",
+            "file": "src/main/java/com/example/lanes/drafts/views/draft_list/slice.yaml"
+          }
+        ],
+        "detected": "undetermined"
+      }
+    },
+    {
+      "name": "ledger",
+      "path": "src/main/*/com/example/lanes/ledger",
+      "dirs": [
+        "src/main/java/com/example/lanes/ledger"
+      ],
+      "languages": [
+        "java"
+      ],
+      "slices": [
+        "ledger.open_account",
+        "ledger.post_entry"
+      ],
+      "lane": {
+        "signals": {
+          "decider": [
+            {
+              "file": "src/main/java/com/example/lanes/ledger/use_cases/open_account/OpenAccountDecider.java",
+              "line": 8,
+              "symbol": "OpenAccountDecider",
+              "via": "EventStreamDecider"
+            }
+          ],
+          "aggregates": {
+            "dir": "src/main/*/com/example/lanes/ledger/aggregates",
+            "files": 1
+          },
+          "entities": null,
+          "eventStore": []
+        },
+        "declared": [
+          {
+            "slice": "ledger.open_account",
+            "lane": "decider",
+            "file": "src/main/java/com/example/lanes/ledger/use_cases/open_account/slice.yaml"
+          },
+          {
+            "slice": "ledger.post_entry",
+            "lane": "aggregate",
+            "file": "src/main/java/com/example/lanes/ledger/use_cases/post_entry/slice.yaml"
+          }
+        ],
+        "detected": "conflict"
+      }
+    },
+    {
+      "name": "payments",
+      "path": "src/main/*/com/example/lanes/payments",
+      "dirs": [
+        "src/main/java/com/example/lanes/payments"
+      ],
+      "languages": [
+        "kotlin"
+      ],
+      "slices": [
+        "payments.capture_payment",
+        "payments.request_payment"
+      ],
+      "lane": {
+        "signals": {
+          "decider": [
+            {
+              "file": "src/main/java/com/example/lanes/payments/use_cases/capture_payment/CapturePaymentDecider.kt",
+              "line": 5,
+              "symbol": "CapturePaymentDecider",
+              "via": "Decider"
+            },
+            {
+              "file": "src/main/java/com/example/lanes/payments/use_cases/request_payment/RequestPaymentDecider.kt",
+              "line": 5,
+              "symbol": "RequestPaymentDecider",
+              "via": "Decider"
+            }
+          ],
+          "aggregates": null,
+          "entities": null,
+          "eventStore": []
+        },
+        "declared": [
+          {
+            "slice": "payments.capture_payment",
+            "lane": "aggregate",
+            "file": "src/main/java/com/example/lanes/payments/use_cases/capture_payment/slice.yaml"
+          },
+          {
+            "slice": "payments.request_payment",
+            "lane": "decider",
+            "file": "src/main/java/com/example/lanes/payments/use_cases/request_payment/slice.yaml"
+          }
+        ],
+        "detected": "decider"
+      }
+    },
+    {
+      "name": "shipping",
+      "path": "src/main/*/com/example/lanes/shipping",
+      "dirs": [
+        "src/main/java/com/example/lanes/shipping"
+      ],
+      "languages": [
+        "java"
+      ],
+      "slices": [
+        "shipping.shipment_status"
+      ],
+      "lane": {
+        "signals": {
+          "decider": [],
+          "aggregates": null,
+          "entities": {
+            "dir": "src/main/*/com/example/lanes/shipping/entities",
+            "files": 1
+          },
+          "eventStore": []
+        },
+        "declared": [
+          {
+            "slice": "shipping.shipment_status",
+            "lane": "service-entity",
+            "file": "src/main/java/com/example/lanes/shipping/views/shipment_status/slice.yaml"
+          }
+        ],
+        "detected": "service-entity?"
+      }
+    }
+  ],
+  "slices": [
+    {
+      "id": "billing.issue_invoice",
+      "idSource": "manifest",
+      "bc": "billing",
+      "bcPath": "src/main/*/com/example/lanes/billing",
+      "dir": "src/main/java/com/example/lanes/billing/use_cases/issue_invoice",
+      "role": "use_cases",
+      "kind": "command",
+      "manifest": "src/main/java/com/example/lanes/billing/use_cases/issue_invoice/slice.yaml",
+      "language": "java",
+      "package": "com.example.lanes.billing.use_cases.issue_invoice",
+      "files": [
+        "IssueInvoice.java"
+      ],
+      "processors": [],
+      "handlers": [],
+      "handles": [],
+      "dispatches": [],
+      "publishes": [],
+      "subscriptions": [],
+      "mappings": [],
+      "schedules": [],
+      "notAnalysed": []
+    },
+    {
+      "id": "catalog.reprice",
+      "idSource": "manifest",
+      "bc": "catalog",
+      "bcPath": "src/main/*/com/example/lanes/catalog",
+      "dir": "src/main/java/com/example/lanes/catalog/use_cases/reprice",
+      "role": "use_cases",
+      "kind": "command",
+      "manifest": "src/main/java/com/example/lanes/catalog/use_cases/reprice/slice.yaml",
+      "language": "java",
+      "package": "com.example.lanes.catalog.use_cases.reprice",
+      "files": [
+        "RepriceHandler.java"
+      ],
+      "processors": [],
+      "handlers": [],
+      "handles": [],
+      "dispatches": [],
+      "publishes": [],
+      "subscriptions": [],
+      "mappings": [],
+      "schedules": [],
+      "notAnalysed": []
+    },
+    {
+      "id": "drafts.draft_list",
+      "idSource": "manifest",
+      "bc": "drafts",
+      "bcPath": "src/main/*/com/example/lanes/drafts",
+      "dir": "src/main/java/com/example/lanes/drafts/views/draft_list",
+      "role": "views",
+      "kind": "view",
+      "manifest": "src/main/java/com/example/lanes/drafts/views/draft_list/slice.yaml",
+      "language": "java",
+      "package": "com.example.lanes.drafts.views.draft_list",
+      "files": [
+        "DraftListView.java"
+      ],
+      "processors": [],
+      "handlers": [],
+      "handles": [],
+      "dispatches": [],
+      "publishes": [],
+      "subscriptions": [],
+      "mappings": [],
+      "schedules": [],
+      "notAnalysed": [],
+      "readModels": [
+        {
+          "name": "DraftListView",
+          "store": null,
+          "columns": [
+            {
+              "name": "draftId",
+              "type": "String",
+              "note": null
+            }
+          ],
+          "declaredIn": "src/main/java/com/example/lanes/drafts/views/draft_list/DraftListView.java",
+          "line": 3,
+          "matchedBy": [
+            "name"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "ledger.open_account",
+      "idSource": "manifest",
+      "bc": "ledger",
+      "bcPath": "src/main/*/com/example/lanes/ledger",
+      "dir": "src/main/java/com/example/lanes/ledger/use_cases/open_account",
+      "role": "use_cases",
+      "kind": "command",
+      "manifest": "src/main/java/com/example/lanes/ledger/use_cases/open_account/slice.yaml",
+      "language": "java",
+      "package": "com.example.lanes.ledger.use_cases.open_account",
+      "files": [
+        "OpenAccount.java",
+        "OpenAccountDecider.java"
+      ],
+      "processors": [],
+      "handlers": [],
+      "handles": [
+        {
+          "name": "OpenAccount",
+          "fqn": "com.example.lanes.ledger.use_cases.open_account.OpenAccount",
+          "resolvedBy": "same-package",
+          "via": "EventStreamDecider",
+          "file": "src/main/java/com/example/lanes/ledger/use_cases/open_account/OpenAccountDecider.java",
+          "line": 8
+        }
+      ],
+      "dispatches": [],
+      "publishes": [],
+      "subscriptions": [],
+      "mappings": [],
+      "schedules": [],
+      "notAnalysed": []
+    },
+    {
+      "id": "ledger.post_entry",
+      "idSource": "manifest",
+      "bc": "ledger",
+      "bcPath": "src/main/*/com/example/lanes/ledger",
+      "dir": "src/main/java/com/example/lanes/ledger/use_cases/post_entry",
+      "role": "use_cases",
+      "kind": "command",
+      "manifest": "src/main/java/com/example/lanes/ledger/use_cases/post_entry/slice.yaml",
+      "language": "java",
+      "package": "com.example.lanes.ledger.use_cases.post_entry",
+      "files": [
+        "PostEntry.java"
+      ],
+      "processors": [],
+      "handlers": [],
+      "handles": [],
+      "dispatches": [],
+      "publishes": [],
+      "subscriptions": [],
+      "mappings": [],
+      "schedules": [],
+      "notAnalysed": []
+    },
+    {
+      "id": "payments.capture_payment",
+      "idSource": "manifest",
+      "bc": "payments",
+      "bcPath": "src/main/*/com/example/lanes/payments",
+      "dir": "src/main/java/com/example/lanes/payments/use_cases/capture_payment",
+      "role": "use_cases",
+      "kind": "command",
+      "manifest": "src/main/java/com/example/lanes/payments/use_cases/capture_payment/slice.yaml",
+      "language": "kotlin",
+      "package": "com.example.lanes.payments.use_cases.capture_payment",
+      "files": [
+        "CapturePaymentDecider.kt"
+      ],
+      "processors": [],
+      "handlers": [],
+      "handles": [
+        {
+          "name": "CapturePayment",
+          "fqn": "com.example.lanes.payments.use_cases.capture_payment.CapturePayment",
+          "resolvedBy": "same-file",
+          "via": "Decider",
+          "file": "src/main/java/com/example/lanes/payments/use_cases/capture_payment/CapturePaymentDecider.kt",
+          "line": 5
+        }
+      ],
+      "dispatches": [],
+      "publishes": [],
+      "subscriptions": [],
+      "mappings": [],
+      "schedules": [],
+      "notAnalysed": []
+    },
+    {
+      "id": "payments.request_payment",
+      "idSource": "manifest",
+      "bc": "payments",
+      "bcPath": "src/main/*/com/example/lanes/payments",
+      "dir": "src/main/java/com/example/lanes/payments/use_cases/request_payment",
+      "role": "use_cases",
+      "kind": "command",
+      "manifest": "src/main/java/com/example/lanes/payments/use_cases/request_payment/slice.yaml",
+      "language": "kotlin",
+      "package": "com.example.lanes.payments.use_cases.request_payment",
+      "files": [
+        "RequestPaymentDecider.kt"
+      ],
+      "processors": [],
+      "handlers": [],
+      "handles": [
+        {
+          "name": "RequestPayment",
+          "fqn": "com.example.lanes.payments.use_cases.request_payment.RequestPayment",
+          "resolvedBy": "same-file",
+          "via": "Decider",
+          "file": "src/main/java/com/example/lanes/payments/use_cases/request_payment/RequestPaymentDecider.kt",
+          "line": 5
+        }
+      ],
+      "dispatches": [],
+      "publishes": [],
+      "subscriptions": [],
+      "mappings": [],
+      "schedules": [],
+      "notAnalysed": []
+    },
+    {
+      "id": "shipping.shipment_status",
+      "idSource": "manifest",
+      "bc": "shipping",
+      "bcPath": "src/main/*/com/example/lanes/shipping",
+      "dir": "src/main/java/com/example/lanes/shipping/views/shipment_status",
+      "role": "views",
+      "kind": "view",
+      "manifest": "src/main/java/com/example/lanes/shipping/views/shipment_status/slice.yaml",
+      "language": "java",
+      "package": "com.example.lanes.shipping.views.shipment_status",
+      "files": [
+        "ShipmentStatusView.java"
+      ],
+      "processors": [],
+      "handlers": [],
+      "handles": [],
+      "dispatches": [],
+      "publishes": [],
+      "subscriptions": [],
+      "mappings": [],
+      "schedules": [],
+      "notAnalysed": [],
+      "readModels": [
+        {
+          "name": "ShipmentStatusView",
+          "store": "projection",
+          "columns": [
+            {
+              "name": "id",
+              "type": null,
+              "note": null
+            },
+            {
+              "name": "delivered",
+              "type": null,
+              "note": null
+            }
+          ],
+          "declaredIn": "src/main/java/com/example/lanes/shipping/views/shipment_status/ShipmentStatusView.java",
+          "line": 3,
+          "matchedBy": [
+            "name"
+          ]
+        }
+      ]
+    }
+  ],
+  "messages": [
+    {
+      "name": "CapturePayment",
+      "type": "command",
+      "bc": "payments",
+      "found": true,
+      "identity": "paymentId: String",
+      "fields": [
+        "paymentId: String"
+      ],
+      "declaredIn": "src/main/java/com/example/lanes/payments/use_cases/capture_payment/CapturePaymentDecider.kt",
+      "line": 10,
+      "alsoDeclaredIn": []
+    },
+    {
+      "name": "IssueInvoice",
+      "type": "command",
+      "bc": "billing",
+      "found": true,
+      "identity": "invoiceId: String",
+      "fields": [
+        "invoiceId: String"
+      ],
+      "declaredIn": "src/main/java/com/example/lanes/billing/use_cases/issue_invoice/IssueInvoice.java",
+      "line": 3,
+      "alsoDeclaredIn": []
+    },
+    {
+      "name": "OpenAccount",
+      "type": "command",
+      "bc": "ledger",
+      "found": true,
+      "identity": "accountId: String",
+      "fields": [
+        "accountId: String"
+      ],
+      "declaredIn": "src/main/java/com/example/lanes/ledger/use_cases/open_account/OpenAccount.java",
+      "line": 3,
+      "alsoDeclaredIn": []
+    },
+    {
+      "name": "PostEntry",
+      "type": "command",
+      "bc": "ledger",
+      "found": true,
+      "identity": "accountId: String",
+      "fields": [
+        "accountId: String",
+        "amountMinor: long"
+      ],
+      "declaredIn": "src/main/java/com/example/lanes/ledger/use_cases/post_entry/PostEntry.java",
+      "line": 3,
+      "alsoDeclaredIn": []
+    },
+    {
+      "name": "Reprice",
+      "type": "command",
+      "bc": "catalog",
+      "found": false,
+      "identity": null,
+      "fields": [],
+      "declaredIn": null,
+      "line": null,
+      "alsoDeclaredIn": []
+    },
+    {
+      "name": "RequestPayment",
+      "type": "command",
+      "bc": "payments",
+      "found": true,
+      "identity": "paymentId: String",
+      "fields": [
+        "paymentId: String"
+      ],
+      "declaredIn": "src/main/java/com/example/lanes/payments/use_cases/request_payment/RequestPaymentDecider.kt",
+      "line": 10,
+      "alsoDeclaredIn": []
+    }
+  ],
+  "unparsed": [],
+  "unresolved": []
+}

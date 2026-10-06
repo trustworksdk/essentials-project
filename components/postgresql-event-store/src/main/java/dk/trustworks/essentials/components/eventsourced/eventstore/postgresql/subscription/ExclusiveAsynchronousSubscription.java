@@ -22,7 +22,6 @@ import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.ty
 import dk.trustworks.essentials.components.foundation.fencedlock.*;
 import dk.trustworks.essentials.components.foundation.types.*;
 import dk.trustworks.essentials.shared.time.StopWatch;
-import reactor.core.publisher.BaseSubscriber;
 import reactor.util.retry.RetryBackoffSpec;
 
 import java.util.Optional;
@@ -49,9 +48,14 @@ public class ExclusiveAsynchronousSubscription extends AbstractEventStoreSubscri
     private final EventStoreSubscriptionManagerSettings eventStoreSubscriptionManagerSettings;
 
     private SubscriptionResumePoint resumePoint;
-    private BaseSubscriber<PersistedEvent> subscription;
+    private volatile PersistedEventSubscriber subscription;
 
     private volatile boolean active;
+    /**
+     * Serializes the fenced-lock callbacks with {@link #resumeIfStoppedByErrorPolicy()}: a resume racing a lock release
+     * would otherwise subscribe a new subscriber after the release disposed the old one - delivering without the lock
+     */
+    private final Object     subscriberLifecycleLock = new Object();
 
     /**
      * @param context                   the arguments shared by every subscription — see {@link EventStoreSubscriptionContext#builder()}
@@ -108,6 +112,12 @@ public class ExclusiveAsynchronousSubscription extends AbstractEventStoreSubscri
     }
 
     private void onLockAcquired(FencedLock fencedLock) {
+        synchronized (subscriberLifecycleLock) {
+            subscribeOnLockAcquired(fencedLock);
+        }
+    }
+
+    private void subscribeOnLockAcquired(FencedLock fencedLock) {
         log.info("[{}-{}] 🎉 Acquired lock. Looking up subscription resumePoint",
                 subscriberId,
                 aggregateType);
@@ -134,11 +144,26 @@ public class ExclusiveAsynchronousSubscription extends AbstractEventStoreSubscri
             log.error(msg("FencedLockAwareSubscriber#onLockAcquired failed for lock {} and resumePoint {}", fencedLock.getName(), resumePoint), e);
         }
 
-        subscription = new PersistedEventSubscriber(eventHandler,
-                ExclusiveAsynchronousSubscription.this,
-                ExclusiveAsynchronousSubscription.this::onErrorHandlingEvent,
-                eventStoreSubscriptionManagerSettings.eventStorePollingBatchSize(),
-                eventStore);
+        subscribeFromResumePoint();
+    }
+
+    /**
+     * Subscribe a new {@link PersistedEventSubscriber} to the event store from {@link #resumePoint}. Called with the
+     * fenced lock held, under {@link #subscriberLifecycleLock}
+     */
+    private void subscribeFromResumePoint() {
+        // The subscriber reports what it handled, and the event store resolves a gap fill's gap only then
+        var acknowledgement = SubscriberAcknowledgement.create();
+        subscription = PersistedEventSubscriber.builder()
+                                               .setEventHandler(eventHandler)
+                                               .setEventStoreSubscription(ExclusiveAsynchronousSubscription.this)
+                                               .setOnErrorHandler(ExclusiveAsynchronousSubscription.this::onErrorHandlingEvent)
+                                               .setEventStorePollingBatchSize(eventStoreSubscriptionManagerSettings.eventStorePollingBatchSize())
+                                               .setEventStore(eventStore)
+                                               .setSubscriptionErrorPolicy(eventStoreSubscriptionManagerSettings.subscriptionErrorPolicyFor(eventHandler))
+                                               .setSubscriberAcknowledgement(acknowledgement)
+                                               .setAutoResumer(autoResumer)
+                                               .build();
 
         eventStore.pollEvents(aggregateType,
                         resumePoint.getResumeFromAndIncluding(),
@@ -146,12 +171,62 @@ public class ExclusiveAsynchronousSubscription extends AbstractEventStoreSubscri
                         Optional.of(eventStoreSubscriptionManagerSettings.eventStorePollingInterval()),
                         onlyIncludeEventsForTenant(),
                         Optional.of(subscriberId),
-                        Optional.of(eventStorePollingOptimizerFactory))
+                        Optional.of(eventStorePollingOptimizerFactory),
+                        acknowledgement)
                 .limitRate(eventStoreSubscriptionManagerSettings.eventStorePollingBatchSize())
                 .subscribe(subscription);
     }
 
     private void onLockReleased(FencedLock fencedLock) {
+        synchronized (subscriberLifecycleLock) {
+            unsubscribeOnLockReleased(fencedLock);
+        }
+    }
+
+    /**
+     * Resumes this subscription without letting go of its fenced lock: the stopped subscriber is disposed, the resume point
+     * the {@link SubscriptionErrorPolicy} held at the failed event is saved, and a new subscriber is subscribed from it -
+     * the same steps a lock release followed by a re-acquire would take, minus the release, so the subscription cannot flap
+     * to another node in between. On an instance that does not hold the lock this returns false: only the lock holder
+     * runs (and so can stop) the subscription. See {@link EventStoreSubscription#resumeIfStoppedByErrorPolicy()}
+     */
+    @Override
+    public boolean resumeIfStoppedByErrorPolicy() {
+        synchronized (subscriberLifecycleLock) {
+            var stoppedSubscriber = subscription;
+            if (!started || !active || stoppedSubscriber == null || !stoppedSubscriber.isStoppedByErrorPolicy()) {
+                log.debug("[{}-{}] Not resuming - the subscription is not stopped by its SubscriptionErrorPolicy in this instance (started: {}, active (is-lock-acquired): {})",
+                          subscriberId,
+                          aggregateType,
+                          started,
+                          active);
+                return false;
+            }
+            log.info("[{}-{}] Resuming the subscription stopped by its SubscriptionErrorPolicy from and including globalOrder {} - keeping the fenced lock",
+                     subscriberId,
+                     aggregateType,
+                     resumePoint.getResumeFromAndIncluding());
+            // A resume by hand replaces the pending automatic one, which would otherwise resume the next stop early and count as an attempt
+            autoResumer.cancel();
+            // Already disposed by the stop itself (asynchronously) - disposing again makes sure it is before we subscribe anew
+            stoppedSubscriber.dispose();
+            try {
+                // Allow the reactive components to complete, as on a lock release
+                if (!isShutdownCleanupAbandoned()) {
+                    Thread.sleep(500);
+                }
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+            persistResumePointUntilSettled(durableSubscriptionRepository, resumePoint);
+            subscribeFromResumePoint();
+            return true;
+        }
+    }
+
+    private void unsubscribeOnLockReleased(FencedLock fencedLock) {
+        // The subscription moves to the node that acquires the lock - it resumes at the held resume point there
+        autoResumer.subscriptionStopped();
         if (!active) {
             return;
         }
@@ -176,6 +251,10 @@ public class ExclusiveAsynchronousSubscription extends AbstractEventStoreSubscri
                     subscriberId,
                     aggregateType), e);
         }
+
+        // A fenced-lock hand-over loses the middles of wide gaps awaited in memory: whoever holds the lock next - another
+        // node, or this one later, after another node may have delivered them - starts afresh from the saved resume point
+        eventStore.forgetGapMiddlesAwaitedInMemory(subscriberId, aggregateType);
 
         try {
             fencedLockAwareSubscriber.onLockReleased(fencedLock);
@@ -218,7 +297,9 @@ public class ExclusiveAsynchronousSubscription extends AbstractEventStoreSubscri
                     n);
             return;
         }
-        if (subscription == null) {
+        // Read once: onLockReleased nulls the field from the fenced-lock thread while the delivery thread is in here
+        var subscriber = subscription;
+        if (subscriber == null) {
             log.info("[{}-{}] Cannot request {} event(s) as the subscriber is null - the exclusive subscription is shutting down",
                     subscriberId,
                     aggregateType,
@@ -231,7 +312,7 @@ public class ExclusiveAsynchronousSubscription extends AbstractEventStoreSubscri
                 aggregateType,
                 n);
         eventStoreSubscriptionObserver.requestingEvents(n, this);
-        subscription.request(n);
+        subscriber.request(n);
     }
 
     /**
@@ -270,6 +351,7 @@ public class ExclusiveAsynchronousSubscription extends AbstractEventStoreSubscri
 
     @Override
     public void stop() {
+        autoResumer.subscriptionStopped();
         if (started) {
             fencedLockManager.cancelAsyncLockAcquiring(lockName);
             started = false;
@@ -291,6 +373,8 @@ public class ExclusiveAsynchronousSubscription extends AbstractEventStoreSubscri
     public void resetFrom(GlobalEventOrder subscribeFromAndIncludingGlobalOrder, Consumer<GlobalEventOrder> resetProcessor) {
         requireNonNull(subscribeFromAndIncludingGlobalOrder, "subscribeFromAndIncludingGlobalOrder must not be null");
         requireNonNull(resetProcessor, "resetProcessor must not be null");
+        // The resume point moves, so the count of resumes at the event the subscription stopped at no longer applies
+        autoResumer.reset();
 
         eventStoreSubscriptionObserver.resettingFrom(subscribeFromAndIncludingGlobalOrder, this);
         if (isStarted() && isActive()) {
@@ -322,6 +406,8 @@ public class ExclusiveAsynchronousSubscription extends AbstractEventStoreSubscri
                 subscribeFromAndIncludingGlobalOrder);
         resumePoint.setResumeFromAndIncluding(subscribeFromAndIncludingGlobalOrder);
         durableSubscriptionRepository.saveResumePoint(resumePoint);
+        // The resume point moved deliberately: a middle of a wide gap awaited below it must not be delivered after the reset
+        eventStore.forgetGapMiddlesAwaitedInMemory(subscriberId, aggregateType);
         try {
             eventHandler.onResetFrom(this, subscribeFromAndIncludingGlobalOrder);
         } catch (Exception e) {
@@ -344,6 +430,15 @@ public class ExclusiveAsynchronousSubscription extends AbstractEventStoreSubscri
 
         }
         return Optional.ofNullable(resumePoint);
+    }
+
+    /**
+     * @return true if the {@link SubscriptionErrorPolicy} stopped the current subscriber - see {@link EventStoreSubscription#isStoppedByErrorPolicy()}
+     */
+    @Override
+    public boolean isStoppedByErrorPolicy() {
+        var subscriber = subscription;
+        return subscriber != null && subscriber.isStoppedByErrorPolicy();
     }
 
     @Override

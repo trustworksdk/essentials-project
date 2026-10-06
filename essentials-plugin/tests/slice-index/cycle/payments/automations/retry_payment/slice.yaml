@@ -1,0 +1,15 @@
+schemaVersion: "1.3"
+slice: payments.retry_payment
+kind: automation
+bc: payments
+owner: payments-team
+status: live
+summary: Retry a failed charge.
+language: java
+tier: cqrs-es
+lane: decider
+consumes: [PaymentFailed]
+dispatches: [ChargePayment]
+tests:
+  unit: { present: true }
+  integration: { present: false }

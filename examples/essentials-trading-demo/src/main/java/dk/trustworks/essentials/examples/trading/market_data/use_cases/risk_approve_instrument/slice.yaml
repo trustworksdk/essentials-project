@@ -8,7 +8,7 @@ summary: Send every newly registered instrument through an external risk assessm
 generator: essentials
 language: java
 
-handles: [InstrumentRegistered]
+consumes: [InstrumentRegistered]
 publishes: [InstrumentRiskApproved, InstrumentRiskRejected]
 writes: [Instrument]
 reads: []

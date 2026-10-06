@@ -16,6 +16,7 @@
 
 package dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.cdc;
 
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.SubscriberAcknowledgement;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.ConfigurableEventStore;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.EventStorePollingOptimizer;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.*;
@@ -69,7 +70,7 @@ class CdcEventStoreFallbackTest {
         when(liveEvent.globalEventOrder()).thenReturn(GlobalEventOrder.of(1));
         when(liveEvent.aggregateType()).thenReturn(AggregateType.of("orders"));
         when(liveEvent.tenant()).thenReturn(Optional.empty());
-        when(delegate.pollEvents(any(), anyLong(), any(), any(), any(), any(), any()))
+        when(delegate.pollEvents(any(), anyLong(), any(), any(), any(), any(), any(), any(SubscriberAcknowledgement.class)))
                 .thenReturn(Flux.just(liveEvent));
 
         var result = cdcEventStore.pollEvents(
@@ -89,7 +90,7 @@ class CdcEventStoreFallbackTest {
         // Delivery while inactive is served by the delegate poll (the adaptive source's fallback
         // branch), and the signal is recorded exactly once. CDC has never been active here, which is the
         // startup case, so it lands on the warm-up counter rather than being reported as a CDC regression.
-        verify(delegate, atLeastOnce()).pollEvents(any(), anyLong(), any(), any(), any(), any(), any());
+        verify(delegate, atLeastOnce()).pollEvents(any(), anyLong(), any(), any(), any(), any(), any(), any(SubscriberAcknowledgement.class));
         assertThat(availability.getWarmupPollCount()).isEqualTo(1);
         assertThat(availability.getFallbackCount()).isZero();
     }
@@ -122,7 +123,7 @@ class CdcEventStoreFallbackTest {
         when(liveEvent.globalEventOrder()).thenReturn(GlobalEventOrder.of(1));
         when(liveEvent.aggregateType()).thenReturn(AggregateType.of("orders"));
         when(liveEvent.tenant()).thenReturn(Optional.empty());
-        when(delegate.pollEvents(any(), anyLong(), any(), any(), any(), any(), any()))
+        when(delegate.pollEvents(any(), anyLong(), any(), any(), any(), any(), any(), any(SubscriberAcknowledgement.class)))
                 .thenReturn(Flux.just(liveEvent));
 
         var result = cdcEventStore.pollEvents(

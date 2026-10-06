@@ -1,0 +1,1025 @@
+{
+  "tool": "slice-source",
+  "format": 1,
+  "mode": "facts",
+  "root": "tests/fixtures/multi-lane",
+  "manifestsRead": true,
+  "sourceFiles": 48,
+  "bcs": [
+    {
+      "name": "catalog",
+      "path": "src/main/*/com/example/multi/catalog",
+      "dirs": [
+        "src/main/java/com/example/multi/catalog"
+      ],
+      "languages": [
+        "java"
+      ],
+      "slices": [
+        "catalog.list_product",
+        "catalog.reprice_product"
+      ],
+      "lane": {
+        "signals": {
+          "decider": [],
+          "aggregates": null,
+          "entities": {
+            "dir": "src/main/*/com/example/multi/catalog/entities",
+            "files": 2
+          },
+          "eventStore": [
+            {
+              "file": "src/main/java/com/example/multi/catalog/use_cases/reprice_product/RepriceProductHandler.java",
+              "line": 16,
+              "symbol": "AggregateType"
+            },
+            {
+              "file": "src/main/java/com/example/multi/catalog/use_cases/reprice_product/RepriceProductHandler.java",
+              "line": 20,
+              "symbol": "EventStore"
+            }
+          ]
+        },
+        "declared": [
+          {
+            "slice": "catalog.list_product",
+            "lane": "service-entity",
+            "file": "src/main/java/com/example/multi/catalog/use_cases/list_product/slice.yaml"
+          },
+          {
+            "slice": "catalog.reprice_product",
+            "lane": "service-entity",
+            "file": "src/main/java/com/example/multi/catalog/use_cases/reprice_product/slice.yaml"
+          }
+        ],
+        "detected": "conflict"
+      }
+    },
+    {
+      "name": "inventory",
+      "path": "src/main/*/com/example/multi/inventory",
+      "dirs": [
+        "src/main/java/com/example/multi/inventory"
+      ],
+      "languages": [
+        "java"
+      ],
+      "slices": [
+        "inventory.adjust_stock"
+      ],
+      "lane": {
+        "signals": {
+          "decider": [],
+          "aggregates": null,
+          "entities": {
+            "dir": "src/main/*/com/example/multi/inventory/entities",
+            "files": 2
+          },
+          "eventStore": []
+        },
+        "declared": [
+          {
+            "slice": "inventory.adjust_stock",
+            "lane": "service-entity",
+            "file": "src/main/java/com/example/multi/inventory/use_cases/adjust_stock/slice.yaml"
+          }
+        ],
+        "detected": "service-entity?"
+      }
+    },
+    {
+      "name": "ledger",
+      "path": "src/main/*/com/example/multi/ledger",
+      "dirs": [
+        "src/main/java/com/example/multi/ledger"
+      ],
+      "languages": [
+        "java"
+      ],
+      "slices": [
+        "ledger.open_account",
+        "ledger.post_entry"
+      ],
+      "lane": {
+        "signals": {
+          "decider": [
+            {
+              "file": "src/main/java/com/example/multi/ledger/use_cases/open_account/OpenAccountDecider.java",
+              "line": 10,
+              "symbol": "OpenAccountDecider",
+              "via": "EventStreamDecider"
+            }
+          ],
+          "aggregates": {
+            "dir": "src/main/*/com/example/multi/ledger/aggregates",
+            "files": 2
+          },
+          "entities": null,
+          "eventStore": [
+            {
+              "file": "src/main/java/com/example/multi/ledger/aggregates/Accounts.java",
+              "line": 15,
+              "symbol": "AggregateType"
+            },
+            {
+              "file": "src/main/java/com/example/multi/ledger/aggregates/Accounts.java",
+              "line": 19,
+              "symbol": "ConfigurableEventStore"
+            }
+          ]
+        },
+        "declared": [
+          {
+            "slice": "ledger.open_account",
+            "lane": "decider",
+            "file": "src/main/java/com/example/multi/ledger/use_cases/open_account/slice.yaml"
+          },
+          {
+            "slice": "ledger.post_entry",
+            "lane": "aggregate",
+            "file": "src/main/java/com/example/multi/ledger/use_cases/post_entry/slice.yaml"
+          }
+        ],
+        "detected": "conflict"
+      }
+    },
+    {
+      "name": "payments",
+      "path": "src/main/*/com/example/multi/payments",
+      "dirs": [
+        "src/main/java/com/example/multi/payments"
+      ],
+      "languages": [
+        "java"
+      ],
+      "slices": [
+        "payments.capture_payment",
+        "payments.request_payment"
+      ],
+      "lane": {
+        "signals": {
+          "decider": [
+            {
+              "file": "src/main/java/com/example/multi/payments/use_cases/capture_payment/CapturePaymentDecider.java",
+              "line": 11,
+              "symbol": "CapturePaymentDecider",
+              "via": "EventStreamDecider"
+            },
+            {
+              "file": "src/main/java/com/example/multi/payments/use_cases/request_payment/RequestPaymentDecider.java",
+              "line": 10,
+              "symbol": "RequestPaymentDecider",
+              "via": "EventStreamDecider"
+            }
+          ],
+          "aggregates": null,
+          "entities": null,
+          "eventStore": [
+            {
+              "file": "src/main/java/com/example/multi/payments/config/PaymentsConfiguration.java",
+              "line": 18,
+              "symbol": "AggregateType"
+            }
+          ]
+        },
+        "declared": [
+          {
+            "slice": "payments.capture_payment",
+            "lane": "aggregate",
+            "file": "src/main/java/com/example/multi/payments/use_cases/capture_payment/slice.yaml"
+          },
+          {
+            "slice": "payments.request_payment",
+            "lane": "decider",
+            "file": "src/main/java/com/example/multi/payments/use_cases/request_payment/slice.yaml"
+          }
+        ],
+        "detected": "decider"
+      }
+    }
+  ],
+  "slices": [
+    {
+      "id": "catalog.list_product",
+      "idSource": "manifest",
+      "bc": "catalog",
+      "bcPath": "src/main/*/com/example/multi/catalog",
+      "dir": "src/main/java/com/example/multi/catalog/use_cases/list_product",
+      "role": "use_cases",
+      "kind": "command",
+      "manifest": "src/main/java/com/example/multi/catalog/use_cases/list_product/slice.yaml",
+      "language": "java",
+      "package": "com.example.multi.catalog.use_cases.list_product",
+      "files": [
+        "ListProduct.java",
+        "ListProductAPI.java",
+        "ListProductHandler.java"
+      ],
+      "processors": [],
+      "handlers": [
+        {
+          "class": "ListProductHandler",
+          "method": "handle",
+          "annotation": "CmdHandler",
+          "annotationFqn": "dk.trustworks.essentials.reactive.command.CmdHandler",
+          "role": "command",
+          "file": "src/main/java/com/example/multi/catalog/use_cases/list_product/ListProductHandler.java",
+          "line": 23,
+          "annotationLine": 22,
+          "message": {
+            "written": "ListProduct",
+            "name": "ListProduct",
+            "fqn": "com.example.multi.catalog.use_cases.list_product.ListProduct",
+            "resolvedBy": "same-package"
+          },
+          "params": [
+            {
+              "name": "cmd",
+              "type": "ListProduct"
+            }
+          ],
+          "envelope": false
+        }
+      ],
+      "handles": [
+        {
+          "name": "ListProduct",
+          "fqn": "com.example.multi.catalog.use_cases.list_product.ListProduct",
+          "resolvedBy": "same-package",
+          "via": "CmdHandler",
+          "file": "src/main/java/com/example/multi/catalog/use_cases/list_product/ListProductHandler.java",
+          "line": 23
+        }
+      ],
+      "dispatches": [
+        {
+          "name": "ListProduct",
+          "fqn": "com.example.multi.catalog.use_cases.list_product.ListProduct",
+          "resolvedBy": "same-package",
+          "via": "send",
+          "file": "src/main/java/com/example/multi/catalog/use_cases/list_product/ListProductAPI.java",
+          "line": 21,
+          "own": true
+        }
+      ],
+      "publishes": [
+        {
+          "name": "ProductListed",
+          "fqn": "com.example.multi.catalog.events.ProductListed",
+          "resolvedBy": "import",
+          "via": "eventBus.publish",
+          "file": "src/main/java/com/example/multi/catalog/use_cases/list_product/ListProductHandler.java",
+          "line": 29
+        }
+      ],
+      "subscriptions": [],
+      "mappings": [
+        {
+          "class": "ListProductAPI",
+          "method": "listProduct",
+          "file": "src/main/java/com/example/multi/catalog/use_cases/list_product/ListProductAPI.java",
+          "line": 20,
+          "annotationLine": 18,
+          "annotation": "PostMapping",
+          "httpMethods": [
+            "POST"
+          ],
+          "routes": [
+            "/api/catalog/products"
+          ],
+          "params": [],
+          "requestParams": [],
+          "queryParams": [],
+          "requestBody": {
+            "name": "ListProduct",
+            "fqn": "com.example.multi.catalog.use_cases.list_product.ListProduct",
+            "resolvedBy": "same-package"
+          }
+        }
+      ],
+      "schedules": [],
+      "notAnalysed": []
+    },
+    {
+      "id": "catalog.reprice_product",
+      "idSource": "manifest",
+      "bc": "catalog",
+      "bcPath": "src/main/*/com/example/multi/catalog",
+      "dir": "src/main/java/com/example/multi/catalog/use_cases/reprice_product",
+      "role": "use_cases",
+      "kind": "command",
+      "manifest": "src/main/java/com/example/multi/catalog/use_cases/reprice_product/slice.yaml",
+      "language": "java",
+      "package": "com.example.multi.catalog.use_cases.reprice_product",
+      "files": [
+        "RepriceProduct.java",
+        "RepriceProductAPI.java",
+        "RepriceProductHandler.java"
+      ],
+      "processors": [],
+      "handlers": [
+        {
+          "class": "RepriceProductHandler",
+          "method": "handle",
+          "annotation": "CmdHandler",
+          "annotationFqn": "dk.trustworks.essentials.reactive.command.CmdHandler",
+          "role": "command",
+          "file": "src/main/java/com/example/multi/catalog/use_cases/reprice_product/RepriceProductHandler.java",
+          "line": 29,
+          "annotationLine": 28,
+          "message": {
+            "written": "RepriceProduct",
+            "name": "RepriceProduct",
+            "fqn": "com.example.multi.catalog.use_cases.reprice_product.RepriceProduct",
+            "resolvedBy": "same-package"
+          },
+          "params": [
+            {
+              "name": "cmd",
+              "type": "RepriceProduct"
+            }
+          ],
+          "envelope": false
+        }
+      ],
+      "handles": [
+        {
+          "name": "RepriceProduct",
+          "fqn": "com.example.multi.catalog.use_cases.reprice_product.RepriceProduct",
+          "resolvedBy": "same-package",
+          "via": "CmdHandler",
+          "file": "src/main/java/com/example/multi/catalog/use_cases/reprice_product/RepriceProductHandler.java",
+          "line": 29
+        }
+      ],
+      "dispatches": [
+        {
+          "name": "RepriceProduct",
+          "fqn": "com.example.multi.catalog.use_cases.reprice_product.RepriceProduct",
+          "resolvedBy": "same-package",
+          "via": "send",
+          "file": "src/main/java/com/example/multi/catalog/use_cases/reprice_product/RepriceProductAPI.java",
+          "line": 22,
+          "own": true
+        }
+      ],
+      "publishes": [
+        {
+          "name": "ProductRepriced",
+          "fqn": "com.example.multi.catalog.events.ProductRepriced",
+          "resolvedBy": "import",
+          "via": "eventBus.publish",
+          "file": "src/main/java/com/example/multi/catalog/use_cases/reprice_product/RepriceProductHandler.java",
+          "line": 35
+        }
+      ],
+      "subscriptions": [],
+      "mappings": [
+        {
+          "class": "RepriceProductAPI",
+          "method": "repriceProduct",
+          "file": "src/main/java/com/example/multi/catalog/use_cases/reprice_product/RepriceProductAPI.java",
+          "line": 21,
+          "annotationLine": 20,
+          "annotation": "PutMapping",
+          "httpMethods": [
+            "PUT"
+          ],
+          "routes": [
+            "/api/catalog/products/{productId}/price"
+          ],
+          "params": [],
+          "requestParams": [],
+          "queryParams": [],
+          "requestBody": {
+            "name": "RepriceProductRequest",
+            "fqn": "com.example.multi.catalog.use_cases.reprice_product.RepriceProductAPI.RepriceProductRequest",
+            "resolvedBy": "same-file"
+          }
+        }
+      ],
+      "schedules": [],
+      "notAnalysed": []
+    },
+    {
+      "id": "inventory.adjust_stock",
+      "idSource": "manifest",
+      "bc": "inventory",
+      "bcPath": "src/main/*/com/example/multi/inventory",
+      "dir": "src/main/java/com/example/multi/inventory/use_cases/adjust_stock",
+      "role": "use_cases",
+      "kind": "command",
+      "manifest": "src/main/java/com/example/multi/inventory/use_cases/adjust_stock/slice.yaml",
+      "language": "java",
+      "package": "com.example.multi.inventory.use_cases.adjust_stock",
+      "files": [
+        "AdjustStock.java",
+        "AdjustStockAPI.java",
+        "AdjustStockHandler.java"
+      ],
+      "processors": [],
+      "handlers": [
+        {
+          "class": "AdjustStockHandler",
+          "method": "handle",
+          "annotation": "CmdHandler",
+          "annotationFqn": "dk.trustworks.essentials.reactive.command.CmdHandler",
+          "role": "command",
+          "file": "src/main/java/com/example/multi/inventory/use_cases/adjust_stock/AdjustStockHandler.java",
+          "line": 23,
+          "annotationLine": 22,
+          "message": {
+            "written": "AdjustStock",
+            "name": "AdjustStock",
+            "fqn": "com.example.multi.inventory.use_cases.adjust_stock.AdjustStock",
+            "resolvedBy": "same-package"
+          },
+          "params": [
+            {
+              "name": "cmd",
+              "type": "AdjustStock"
+            }
+          ],
+          "envelope": false
+        }
+      ],
+      "handles": [
+        {
+          "name": "AdjustStock",
+          "fqn": "com.example.multi.inventory.use_cases.adjust_stock.AdjustStock",
+          "resolvedBy": "same-package",
+          "via": "CmdHandler",
+          "file": "src/main/java/com/example/multi/inventory/use_cases/adjust_stock/AdjustStockHandler.java",
+          "line": 23
+        }
+      ],
+      "dispatches": [
+        {
+          "name": "AdjustStock",
+          "fqn": "com.example.multi.inventory.use_cases.adjust_stock.AdjustStock",
+          "resolvedBy": "same-package",
+          "via": "send",
+          "file": "src/main/java/com/example/multi/inventory/use_cases/adjust_stock/AdjustStockAPI.java",
+          "line": 22,
+          "own": true
+        }
+      ],
+      "publishes": [
+        {
+          "name": "StockAdjusted",
+          "fqn": "com.example.multi.inventory.events.StockAdjusted",
+          "resolvedBy": "import",
+          "via": "eventBus.publish",
+          "file": "src/main/java/com/example/multi/inventory/use_cases/adjust_stock/AdjustStockHandler.java",
+          "line": 32
+        }
+      ],
+      "subscriptions": [],
+      "mappings": [
+        {
+          "class": "AdjustStockAPI",
+          "method": "adjustStock",
+          "file": "src/main/java/com/example/multi/inventory/use_cases/adjust_stock/AdjustStockAPI.java",
+          "line": 21,
+          "annotationLine": 20,
+          "annotation": "PostMapping",
+          "httpMethods": [
+            "POST"
+          ],
+          "routes": [
+            "/api/inventory/stock/{sku}/adjustments"
+          ],
+          "params": [],
+          "requestParams": [],
+          "queryParams": [],
+          "requestBody": {
+            "name": "AdjustStockRequest",
+            "fqn": "com.example.multi.inventory.use_cases.adjust_stock.AdjustStockAPI.AdjustStockRequest",
+            "resolvedBy": "same-file"
+          }
+        }
+      ],
+      "schedules": [],
+      "notAnalysed": []
+    },
+    {
+      "id": "ledger.open_account",
+      "idSource": "manifest",
+      "bc": "ledger",
+      "bcPath": "src/main/*/com/example/multi/ledger",
+      "dir": "src/main/java/com/example/multi/ledger/use_cases/open_account",
+      "role": "use_cases",
+      "kind": "command",
+      "manifest": "src/main/java/com/example/multi/ledger/use_cases/open_account/slice.yaml",
+      "language": "java",
+      "package": "com.example.multi.ledger.use_cases.open_account",
+      "files": [
+        "OpenAccount.java",
+        "OpenAccountAPI.java",
+        "OpenAccountDecider.java"
+      ],
+      "processors": [],
+      "handlers": [],
+      "handles": [
+        {
+          "name": "OpenAccount",
+          "fqn": "com.example.multi.ledger.use_cases.open_account.OpenAccount",
+          "resolvedBy": "same-package",
+          "via": "EventStreamDecider",
+          "file": "src/main/java/com/example/multi/ledger/use_cases/open_account/OpenAccountDecider.java",
+          "line": 10
+        }
+      ],
+      "dispatches": [
+        {
+          "name": "OpenAccount",
+          "fqn": "com.example.multi.ledger.use_cases.open_account.OpenAccount",
+          "resolvedBy": "same-package",
+          "via": "send",
+          "file": "src/main/java/com/example/multi/ledger/use_cases/open_account/OpenAccountAPI.java",
+          "line": 21,
+          "own": true
+        }
+      ],
+      "publishes": [
+        {
+          "name": "AccountOpened",
+          "fqn": "com.example.multi.ledger.events.AccountOpened",
+          "resolvedBy": "import",
+          "via": "decider",
+          "file": "src/main/java/com/example/multi/ledger/use_cases/open_account/OpenAccountDecider.java",
+          "line": 20
+        }
+      ],
+      "subscriptions": [],
+      "mappings": [
+        {
+          "class": "OpenAccountAPI",
+          "method": "openAccount",
+          "file": "src/main/java/com/example/multi/ledger/use_cases/open_account/OpenAccountAPI.java",
+          "line": 20,
+          "annotationLine": 18,
+          "annotation": "PostMapping",
+          "httpMethods": [
+            "POST"
+          ],
+          "routes": [
+            "/api/ledger/accounts"
+          ],
+          "params": [],
+          "requestParams": [],
+          "queryParams": [],
+          "requestBody": {
+            "name": "OpenAccount",
+            "fqn": "com.example.multi.ledger.use_cases.open_account.OpenAccount",
+            "resolvedBy": "same-package"
+          }
+        }
+      ],
+      "schedules": [],
+      "notAnalysed": []
+    },
+    {
+      "id": "ledger.post_entry",
+      "idSource": "manifest",
+      "bc": "ledger",
+      "bcPath": "src/main/*/com/example/multi/ledger",
+      "dir": "src/main/java/com/example/multi/ledger/use_cases/post_entry",
+      "role": "use_cases",
+      "kind": "command",
+      "manifest": "src/main/java/com/example/multi/ledger/use_cases/post_entry/slice.yaml",
+      "language": "java",
+      "package": "com.example.multi.ledger.use_cases.post_entry",
+      "files": [
+        "PostEntry.java",
+        "PostEntryAPI.java",
+        "PostEntryHandler.java"
+      ],
+      "processors": [],
+      "handlers": [
+        {
+          "class": "PostEntryHandler",
+          "method": "handle",
+          "annotation": "CmdHandler",
+          "annotationFqn": "dk.trustworks.essentials.reactive.command.CmdHandler",
+          "role": "command",
+          "file": "src/main/java/com/example/multi/ledger/use_cases/post_entry/PostEntryHandler.java",
+          "line": 15,
+          "annotationLine": 14,
+          "message": {
+            "written": "PostEntry",
+            "name": "PostEntry",
+            "fqn": "com.example.multi.ledger.use_cases.post_entry.PostEntry",
+            "resolvedBy": "same-package"
+          },
+          "params": [
+            {
+              "name": "cmd",
+              "type": "PostEntry"
+            }
+          ],
+          "envelope": false
+        }
+      ],
+      "handles": [
+        {
+          "name": "PostEntry",
+          "fqn": "com.example.multi.ledger.use_cases.post_entry.PostEntry",
+          "resolvedBy": "same-package",
+          "via": "CmdHandler",
+          "file": "src/main/java/com/example/multi/ledger/use_cases/post_entry/PostEntryHandler.java",
+          "line": 15
+        }
+      ],
+      "dispatches": [
+        {
+          "name": "PostEntry",
+          "fqn": "com.example.multi.ledger.use_cases.post_entry.PostEntry",
+          "resolvedBy": "same-package",
+          "via": "send",
+          "file": "src/main/java/com/example/multi/ledger/use_cases/post_entry/PostEntryAPI.java",
+          "line": 22,
+          "own": true
+        }
+      ],
+      "publishes": [],
+      "subscriptions": [],
+      "mappings": [
+        {
+          "class": "PostEntryAPI",
+          "method": "postEntry",
+          "file": "src/main/java/com/example/multi/ledger/use_cases/post_entry/PostEntryAPI.java",
+          "line": 21,
+          "annotationLine": 20,
+          "annotation": "PostMapping",
+          "httpMethods": [
+            "POST"
+          ],
+          "routes": [
+            "/api/ledger/accounts/{accountId}/entries"
+          ],
+          "params": [],
+          "requestParams": [],
+          "queryParams": [],
+          "requestBody": {
+            "name": "PostEntryRequest",
+            "fqn": "com.example.multi.ledger.use_cases.post_entry.PostEntryAPI.PostEntryRequest",
+            "resolvedBy": "same-file"
+          }
+        }
+      ],
+      "schedules": [],
+      "notAnalysed": []
+    },
+    {
+      "id": "payments.capture_payment",
+      "idSource": "manifest",
+      "bc": "payments",
+      "bcPath": "src/main/*/com/example/multi/payments",
+      "dir": "src/main/java/com/example/multi/payments/use_cases/capture_payment",
+      "role": "use_cases",
+      "kind": "command",
+      "manifest": "src/main/java/com/example/multi/payments/use_cases/capture_payment/slice.yaml",
+      "language": "java",
+      "package": "com.example.multi.payments.use_cases.capture_payment",
+      "files": [
+        "CapturePayment.java",
+        "CapturePaymentAPI.java",
+        "CapturePaymentDecider.java"
+      ],
+      "processors": [],
+      "handlers": [],
+      "handles": [
+        {
+          "name": "CapturePayment",
+          "fqn": "com.example.multi.payments.use_cases.capture_payment.CapturePayment",
+          "resolvedBy": "same-package",
+          "via": "EventStreamDecider",
+          "file": "src/main/java/com/example/multi/payments/use_cases/capture_payment/CapturePaymentDecider.java",
+          "line": 11
+        }
+      ],
+      "dispatches": [
+        {
+          "name": "CapturePayment",
+          "fqn": "com.example.multi.payments.use_cases.capture_payment.CapturePayment",
+          "resolvedBy": "same-package",
+          "via": "send",
+          "file": "src/main/java/com/example/multi/payments/use_cases/capture_payment/CapturePaymentAPI.java",
+          "line": 19,
+          "own": true
+        }
+      ],
+      "publishes": [
+        {
+          "name": "PaymentCaptured",
+          "fqn": "com.example.multi.payments.events.PaymentCaptured",
+          "resolvedBy": "import",
+          "via": "decider",
+          "file": "src/main/java/com/example/multi/payments/use_cases/capture_payment/CapturePaymentDecider.java",
+          "line": 21
+        }
+      ],
+      "subscriptions": [],
+      "mappings": [
+        {
+          "class": "CapturePaymentAPI",
+          "method": "capturePayment",
+          "file": "src/main/java/com/example/multi/payments/use_cases/capture_payment/CapturePaymentAPI.java",
+          "line": 18,
+          "annotationLine": 17,
+          "annotation": "PostMapping",
+          "httpMethods": [
+            "POST"
+          ],
+          "routes": [
+            "/api/payments/{paymentId}/capture"
+          ],
+          "params": [],
+          "requestParams": [],
+          "queryParams": [],
+          "requestBody": null
+        }
+      ],
+      "schedules": [],
+      "notAnalysed": []
+    },
+    {
+      "id": "payments.request_payment",
+      "idSource": "manifest",
+      "bc": "payments",
+      "bcPath": "src/main/*/com/example/multi/payments",
+      "dir": "src/main/java/com/example/multi/payments/use_cases/request_payment",
+      "role": "use_cases",
+      "kind": "command",
+      "manifest": "src/main/java/com/example/multi/payments/use_cases/request_payment/slice.yaml",
+      "language": "java",
+      "package": "com.example.multi.payments.use_cases.request_payment",
+      "files": [
+        "RequestPayment.java",
+        "RequestPaymentAPI.java",
+        "RequestPaymentDecider.java"
+      ],
+      "processors": [],
+      "handlers": [],
+      "handles": [
+        {
+          "name": "RequestPayment",
+          "fqn": "com.example.multi.payments.use_cases.request_payment.RequestPayment",
+          "resolvedBy": "same-package",
+          "via": "EventStreamDecider",
+          "file": "src/main/java/com/example/multi/payments/use_cases/request_payment/RequestPaymentDecider.java",
+          "line": 10
+        }
+      ],
+      "dispatches": [
+        {
+          "name": "RequestPayment",
+          "fqn": "com.example.multi.payments.use_cases.request_payment.RequestPayment",
+          "resolvedBy": "same-package",
+          "via": "send",
+          "file": "src/main/java/com/example/multi/payments/use_cases/request_payment/RequestPaymentAPI.java",
+          "line": 21,
+          "own": true
+        }
+      ],
+      "publishes": [
+        {
+          "name": "PaymentRequested",
+          "fqn": "com.example.multi.payments.events.PaymentRequested",
+          "resolvedBy": "import",
+          "via": "decider",
+          "file": "src/main/java/com/example/multi/payments/use_cases/request_payment/RequestPaymentDecider.java",
+          "line": 20
+        }
+      ],
+      "subscriptions": [],
+      "mappings": [
+        {
+          "class": "RequestPaymentAPI",
+          "method": "requestPayment",
+          "file": "src/main/java/com/example/multi/payments/use_cases/request_payment/RequestPaymentAPI.java",
+          "line": 20,
+          "annotationLine": 18,
+          "annotation": "PostMapping",
+          "httpMethods": [
+            "POST"
+          ],
+          "routes": [
+            "/api/payments"
+          ],
+          "params": [],
+          "requestParams": [],
+          "queryParams": [],
+          "requestBody": {
+            "name": "RequestPayment",
+            "fqn": "com.example.multi.payments.use_cases.request_payment.RequestPayment",
+            "resolvedBy": "same-package"
+          }
+        }
+      ],
+      "schedules": [],
+      "notAnalysed": []
+    }
+  ],
+  "messages": [
+    {
+      "name": "AccountOpened",
+      "type": "event",
+      "bc": "ledger",
+      "found": true,
+      "identity": "id: AccountId",
+      "fields": [
+        "id: AccountId",
+        "currency: String"
+      ],
+      "declaredIn": "src/main/java/com/example/multi/ledger/events/AccountOpened.java",
+      "line": 5,
+      "alsoDeclaredIn": []
+    },
+    {
+      "name": "AdjustStock",
+      "type": "command",
+      "bc": "inventory",
+      "found": true,
+      "identity": null,
+      "fields": [
+        "sku: Sku",
+        "delta: long"
+      ],
+      "declaredIn": "src/main/java/com/example/multi/inventory/use_cases/adjust_stock/AdjustStock.java",
+      "line": 5,
+      "alsoDeclaredIn": []
+    },
+    {
+      "name": "CapturePayment",
+      "type": "command",
+      "bc": "payments",
+      "found": true,
+      "identity": "id: PaymentId",
+      "fields": [
+        "id: PaymentId"
+      ],
+      "declaredIn": "src/main/java/com/example/multi/payments/use_cases/capture_payment/CapturePayment.java",
+      "line": 6,
+      "alsoDeclaredIn": []
+    },
+    {
+      "name": "EntryPosted",
+      "type": "event",
+      "bc": "ledger",
+      "found": true,
+      "identity": "id: AccountId",
+      "fields": [
+        "id: AccountId",
+        "amountMinor: long"
+      ],
+      "declaredIn": "src/main/java/com/example/multi/ledger/events/EntryPosted.java",
+      "line": 5,
+      "alsoDeclaredIn": []
+    },
+    {
+      "name": "ListProduct",
+      "type": "command",
+      "bc": "catalog",
+      "found": true,
+      "identity": "id: ProductId",
+      "fields": [
+        "id: ProductId",
+        "name: String",
+        "priceMinor: long"
+      ],
+      "declaredIn": "src/main/java/com/example/multi/catalog/use_cases/list_product/ListProduct.java",
+      "line": 5,
+      "alsoDeclaredIn": []
+    },
+    {
+      "name": "OpenAccount",
+      "type": "command",
+      "bc": "ledger",
+      "found": true,
+      "identity": "id: AccountId",
+      "fields": [
+        "id: AccountId",
+        "currency: String"
+      ],
+      "declaredIn": "src/main/java/com/example/multi/ledger/use_cases/open_account/OpenAccount.java",
+      "line": 6,
+      "alsoDeclaredIn": []
+    },
+    {
+      "name": "PaymentCaptured",
+      "type": "event",
+      "bc": "payments",
+      "found": true,
+      "identity": "id: PaymentId",
+      "fields": [
+        "id: PaymentId"
+      ],
+      "declaredIn": "src/main/java/com/example/multi/payments/events/PaymentCaptured.java",
+      "line": 5,
+      "alsoDeclaredIn": []
+    },
+    {
+      "name": "PaymentRequested",
+      "type": "event",
+      "bc": "payments",
+      "found": true,
+      "identity": "id: PaymentId",
+      "fields": [
+        "id: PaymentId",
+        "amountMinor: long"
+      ],
+      "declaredIn": "src/main/java/com/example/multi/payments/events/PaymentRequested.java",
+      "line": 5,
+      "alsoDeclaredIn": []
+    },
+    {
+      "name": "PostEntry",
+      "type": "command",
+      "bc": "ledger",
+      "found": true,
+      "identity": "id: AccountId",
+      "fields": [
+        "id: AccountId",
+        "amountMinor: long"
+      ],
+      "declaredIn": "src/main/java/com/example/multi/ledger/use_cases/post_entry/PostEntry.java",
+      "line": 5,
+      "alsoDeclaredIn": []
+    },
+    {
+      "name": "ProductListed",
+      "type": "event",
+      "bc": "catalog",
+      "found": true,
+      "identity": "id: ProductId",
+      "fields": [
+        "id: ProductId",
+        "name: String",
+        "priceMinor: long"
+      ],
+      "declaredIn": "src/main/java/com/example/multi/catalog/events/ProductListed.java",
+      "line": 5,
+      "alsoDeclaredIn": []
+    },
+    {
+      "name": "ProductRepriced",
+      "type": "event",
+      "bc": "catalog",
+      "found": true,
+      "identity": "id: ProductId",
+      "fields": [
+        "id: ProductId",
+        "priceMinor: long"
+      ],
+      "declaredIn": "src/main/java/com/example/multi/catalog/events/ProductRepriced.java",
+      "line": 5,
+      "alsoDeclaredIn": []
+    },
+    {
+      "name": "RepriceProduct",
+      "type": "command",
+      "bc": "catalog",
+      "found": true,
+      "identity": "id: ProductId",
+      "fields": [
+        "id: ProductId",
+        "priceMinor: long"
+      ],
+      "declaredIn": "src/main/java/com/example/multi/catalog/use_cases/reprice_product/RepriceProduct.java",
+      "line": 5,
+      "alsoDeclaredIn": []
+    },
+    {
+      "name": "RequestPayment",
+      "type": "command",
+      "bc": "payments",
+      "found": true,
+      "identity": "id: PaymentId",
+      "fields": [
+        "id: PaymentId",
+        "amountMinor: long"
+      ],
+      "declaredIn": "src/main/java/com/example/multi/payments/use_cases/request_payment/RequestPayment.java",
+      "line": 6,
+      "alsoDeclaredIn": []
+    },
+    {
+      "name": "StockAdjusted",
+      "type": "event",
+      "bc": "inventory",
+      "found": true,
+      "identity": null,
+      "fields": [
+        "sku: Sku",
+        "onHand: long"
+      ],
+      "declaredIn": "src/main/java/com/example/multi/inventory/events/StockAdjusted.java",
+      "line": 5,
+      "alsoDeclaredIn": []
+    }
+  ],
+  "unparsed": [],
+  "unresolved": []
+}

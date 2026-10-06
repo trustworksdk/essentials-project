@@ -19,7 +19,7 @@ package dk.trustworks.essentials.components.queue.shardowned;
 import com.zaxxer.hikari.*;
 import dk.trustworks.essentials.components.queue.shardowned.ShardOwnedStorage.OrderedPayload;
 import org.junit.jupiter.api.*;
-import org.testcontainers.containers.PostgreSQLContainer;
+import org.testcontainers.postgresql.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.*;
 
 import java.nio.charset.StandardCharsets;
@@ -44,7 +44,7 @@ class ShardOwnedBatchedReadIT {
     private static final int   BATCH_SIZE  = 500;
 
     @Container
-    static PostgreSQLContainer<?> postgres = LabPostgres.create();
+    static PostgreSQLContainer postgres = LabPostgres.create();
 
     private HikariDataSource  dataSource;
     private ShardOwnedStorage storage;

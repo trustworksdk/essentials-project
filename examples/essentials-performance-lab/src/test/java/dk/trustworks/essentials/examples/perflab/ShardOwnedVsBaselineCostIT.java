@@ -31,7 +31,7 @@ import org.jdbi.v3.postgres.PostgresPlugin;
 import org.junit.jupiter.api.*;
 import org.junit.jupiter.api.condition.EnabledIfSystemProperty;
 import org.slf4j.*;
-import org.testcontainers.containers.PostgreSQLContainer;
+import org.testcontainers.postgresql.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.*;
 
 import java.nio.charset.StandardCharsets;
@@ -99,7 +99,7 @@ class ShardOwnedVsBaselineCostIT {
     private int messageCount = MESSAGE_COUNT;
 
     @Container
-    static PostgreSQLContainer<?> postgres = LabPostgres.create();
+    static PostgreSQLContainer postgres = LabPostgres.create();
 
     private HikariDataSource dataSource;
 

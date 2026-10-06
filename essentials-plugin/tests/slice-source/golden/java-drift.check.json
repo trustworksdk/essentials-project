@@ -1,0 +1,215 @@
+{
+  "tool": "slice-source",
+  "format": 1,
+  "mode": "check",
+  "root": "tests/slice-source/cases/java-drift",
+  "manifests": 4,
+  "parsed": 4,
+  "skippedManifests": [],
+  "slicesWithoutManifest": [],
+  "lanes": [
+    {
+      "bc": "billing",
+      "path": "src/main/*/com/example/billing",
+      "detected": "aggregate",
+      "signals": {
+        "decider": 0,
+        "aggregates": true,
+        "entities": false,
+        "eventStore": 2
+      },
+      "declared": {
+        "aggregate": [
+          "billing.issue_invoice",
+          "billing.invoice_audit",
+          "billing.invoice_export",
+          "billing.invoice_list"
+        ]
+      }
+    }
+  ],
+  "endpoints": [
+    {
+      "slice": "billing.issue_invoice",
+      "method": "POST",
+      "path": "/api/billing/invoices",
+      "status": "ok",
+      "boundBy": [
+        "IssueInvoiceAPI.issue"
+      ]
+    },
+    {
+      "slice": "billing.invoice_export",
+      "method": "GET",
+      "path": "/api/billing/export",
+      "status": "unverified",
+      "boundBy": null
+    },
+    {
+      "slice": "billing.invoice_list",
+      "method": "GET",
+      "path": "/api/billing/invoices",
+      "status": "ok",
+      "boundBy": [
+        "InvoiceListAPI.list"
+      ]
+    },
+    {
+      "slice": "billing.invoice_list",
+      "method": "GET",
+      "path": "/api/billing/invoices?status=",
+      "status": "discriminator-unbound",
+      "boundBy": null
+    },
+    {
+      "slice": "billing.invoice_list",
+      "method": "GET",
+      "path": "/api/billing/invoices?paid=true",
+      "status": "discriminator-unbound",
+      "boundBy": null
+    },
+    {
+      "slice": "billing.invoice_list",
+      "method": "GET",
+      "path": "/api/billing/invoices?min=",
+      "status": "discriminator-unbound",
+      "boundBy": null
+    },
+    {
+      "slice": "billing.invoice_list",
+      "method": "GET",
+      "path": "/api/billing/invoices/{id}/pdf",
+      "status": "route-missing",
+      "boundBy": null
+    }
+  ],
+  "findings": [
+    {
+      "severity": "Blocking",
+      "gate": "6 command mappings",
+      "id": "ESS-G6",
+      "slice": "billing.issue_invoice",
+      "file": "src/main/java/com/example/billing/use_cases/issue_invoice/IssueInvoiceAPI.java",
+      "line": 27,
+      "message": "a command slice's API file carries 2 method-level request mappings (issue, reissue); a command slice exposes exactly one (\u00a7R2)",
+      "hint": "one command, one endpoint \u2014 a second mapping is a second command slice"
+    },
+    {
+      "severity": "Should-fix",
+      "gate": "6 undeclared mapping",
+      "id": "ESS-G6",
+      "slice": "billing.issue_invoice",
+      "file": "src/main/java/com/example/billing/use_cases/issue_invoice/IssueInvoiceAPI.java",
+      "line": 27,
+      "message": "PUT /api/billing/invoices/{invoiceId} (IssueInvoiceAPI.reissue) is not described by any endpoint in src/main/java/com/example/billing/use_cases/issue_invoice/slice.yaml",
+      "hint": "the code is right and the manifest is stale \u2014 `--fix-manifests` adds it"
+    },
+    {
+      "severity": "Should-fix",
+      "gate": "11(b) handled events",
+      "id": "ESS-G11b",
+      "slice": "billing.invoice_audit",
+      "file": "src/main/java/com/example/billing/views/invoice_audit/InvoiceAuditProjection.java",
+      "line": 12,
+      "message": "InvoiceAuditProjection.on(InvoiceEvent) handles the supertype InvoiceEvent; its subtypes InvoiceVoided are not declared in projections[].from",
+      "hint": "the code is right and the manifest is stale \u2014 `/essentials:slice-check --fix-manifests` (manifest-reconciliation.md \u00a72)"
+    },
+    {
+      "severity": "Should-fix",
+      "gate": "6 undeclared mapping",
+      "id": "ESS-G6",
+      "slice": "billing.invoice_list",
+      "file": "src/main/java/com/example/billing/views/invoice_list/InvoiceListAPI.java",
+      "line": 25,
+      "message": "GET /api/billing/invoices/by-status?status= (InvoiceListAPI.byStatus) is not described by any endpoint in src/main/java/com/example/billing/views/invoice_list/slice.yaml",
+      "hint": "the code is right and the manifest is stale \u2014 `--fix-manifests` adds it"
+    },
+    {
+      "severity": "Should-fix",
+      "gate": "6 undeclared mapping",
+      "id": "ESS-G6",
+      "slice": "billing.invoice_list",
+      "file": "src/main/java/com/example/billing/views/invoice_list/InvoiceListAPI.java",
+      "line": 31,
+      "message": "GET /api/billing/invoices?paid= (InvoiceListAPI.paid) is not described by any endpoint in src/main/java/com/example/billing/views/invoice_list/slice.yaml",
+      "hint": "the code is right and the manifest is stale \u2014 `--fix-manifests` adds it"
+    },
+    {
+      "severity": "Should-fix",
+      "gate": "6 undeclared mapping",
+      "id": "ESS-G6",
+      "slice": "billing.invoice_list",
+      "file": "src/main/java/com/example/billing/views/invoice_list/InvoiceListAPI.java",
+      "line": 37,
+      "message": "GET /api/billing/invoices?min=&max= (InvoiceListAPI.byAmount) is not described by any endpoint in src/main/java/com/example/billing/views/invoice_list/slice.yaml",
+      "hint": "the code is right and the manifest is stale \u2014 `--fix-manifests` adds it"
+    },
+    {
+      "severity": "Should-fix",
+      "gate": "11(b) handled events",
+      "id": "ESS-G11b",
+      "slice": "billing.invoice_list",
+      "file": "src/main/java/com/example/billing/views/invoice_list/InvoiceListProjection.java",
+      "line": 30,
+      "message": "InvoiceListProjection.on(InvoiceVoided) handles InvoiceVoided, which is not declared in projections[].from",
+      "hint": "the code is right and the manifest is stale \u2014 `/essentials:slice-check --fix-manifests` (manifest-reconciliation.md \u00a72)"
+    },
+    {
+      "severity": "Should-fix",
+      "gate": "6 discriminator",
+      "id": "ESS-G6",
+      "slice": "billing.invoice_list",
+      "file": "src/main/java/com/example/billing/views/invoice_list/slice.yaml",
+      "line": 15,
+      "message": "declared endpoint GET /api/billing/invoices?status=: no handler on /api/billing/invoices binds status",
+      "hint": "bound only in a handler on another route: InvoiceListAPI.byStatus \u2014 per-handler, not per-slice (manifest-guide.md \u00a73)"
+    },
+    {
+      "severity": "Should-fix",
+      "gate": "6 discriminator",
+      "id": "ESS-G6",
+      "slice": "billing.invoice_list",
+      "file": "src/main/java/com/example/billing/views/invoice_list/slice.yaml",
+      "line": 16,
+      "message": "declared endpoint GET /api/billing/invoices?paid=true: InvoiceListAPI.paid (src/main/java/com/example/billing/views/invoice_list/InvoiceListAPI.java:31) does not bind paid=true",
+      "hint": "each discriminator after `?` must be bound in the handler that serves the route (manifest-guide.md \u00a73)"
+    },
+    {
+      "severity": "Should-fix",
+      "gate": "6 discriminator",
+      "id": "ESS-G6",
+      "slice": "billing.invoice_list",
+      "file": "src/main/java/com/example/billing/views/invoice_list/slice.yaml",
+      "line": 17,
+      "message": "declared endpoint GET /api/billing/invoices?min=: InvoiceListAPI.byAmount (src/main/java/com/example/billing/views/invoice_list/InvoiceListAPI.java:37) requires params max the endpoint does not declare",
+      "hint": "each discriminator after `?` must be bound in the handler that serves the route (manifest-guide.md \u00a73)"
+    },
+    {
+      "severity": "Should-fix",
+      "gate": "6 endpoint route",
+      "id": "ESS-G6",
+      "slice": "billing.invoice_list",
+      "file": "src/main/java/com/example/billing/views/invoice_list/slice.yaml",
+      "line": 19,
+      "message": "declared endpoint GET /api/billing/invoices/{id}/pdf has no request mapping in the slice's source (route compared before any `?`, path variables by position)",
+      "hint": "a stale endpoint is removed by `--fix-manifests`; a missing handler is a source change"
+    }
+  ],
+  "unverified": [
+    {
+      "slice": "billing.invoice_export",
+      "gate": "6 endpoint route",
+      "id": "ESS-G6",
+      "file": "src/main/java/com/example/billing/views/invoice_export/slice.yaml",
+      "reason": "endpoints not checked: a request mapping's path is not a readable literal"
+    }
+  ],
+  "unparsed": [
+    {
+      "file": "src/main/java/com/example/billing/views/invoice_export/InvoiceExportAPI.java",
+      "line": 11,
+      "what": "@GetMapping path on export",
+      "reason": "not a readable string: Routes.EXPORT"
+    }
+  ]
+}

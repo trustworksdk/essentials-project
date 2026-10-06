@@ -24,7 +24,7 @@ import dk.trustworks.essentials.types.CharSequenceType;
 import org.jdbi.v3.core.Jdbi;
 import org.jdbi.v3.postgres.PostgresPlugin;
 import org.junit.jupiter.api.*;
-import org.testcontainers.containers.PostgreSQLContainer;
+import org.testcontainers.postgresql.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.*;
 
 import java.util.Optional;
@@ -42,7 +42,7 @@ class ClosingBooksSetupIT {
 
     /** Static, so the class starts one container rather than one per test method. */
     @Container
-    private static final PostgreSQLContainer<?> postgreSQLContainer = new PostgreSQLContainer<>("postgres:18.4").withDatabaseName("event-store")
+    private static final PostgreSQLContainer postgreSQLContainer = new PostgreSQLContainer("postgres:18.4").withDatabaseName("event-store")
                                                                                                                .withUsername("test-user")
                                                                                                                .withPassword("secret-password");
 

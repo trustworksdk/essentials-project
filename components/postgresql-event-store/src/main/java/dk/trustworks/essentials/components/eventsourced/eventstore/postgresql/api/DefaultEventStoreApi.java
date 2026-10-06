@@ -235,6 +235,17 @@ public class DefaultEventStoreApi implements EventStoreApi {
                                              .map(ApiSubscriptionStatistics::from);
     }
 
+    @Override
+    public boolean resumeSubscriptionStoppedByErrorPolicy(Object principal,
+                                                          SubscriberId subscriberId,
+                                                          AggregateType aggregateType) {
+        validateHasAnyEssentialsSecurityRoles(essentialsSecurityProvider, principal, SUBSCRIPTION_WRITER, ESSENTIALS_ADMIN);
+        requireNonNull(subscriberId, "No subscriberId provided");
+        requireNonNull(aggregateType, "No aggregateType provided");
+        return findSubscription(subscriberId, aggregateType).map(EventStoreSubscription::resumeIfStoppedByErrorPolicy)
+                                                            .orElse(false);
+    }
+
     private Optional<EventStoreSubscription> findSubscription(SubscriberId subscriberId, AggregateType aggregateType) {
         return eventStoreSubscriptionManager.flatMap(subscriptionManager -> subscriptionManager.getSubscription(subscriberId, aggregateType));
     }
@@ -261,7 +272,8 @@ public class DefaultEventStoreApi implements EventStoreApi {
                 eventStoreSubscription.map(EventStoreSubscription::isExclusive).orElse(null),
                 eventStoreSubscription.map(EventStoreSubscription::isInTransaction).orElse(null),
                 eventStoreSubscription.flatMap(subscription -> subscription.onlyIncludeEventsForTenant().map(Object::toString)).orElse(null),
-                inMemoryGlobalOrderOf(eventStoreSubscription.orElse(null)));
+                inMemoryGlobalOrderOf(eventStoreSubscription.orElse(null)),
+                eventStoreSubscription.map(EventStoreSubscription::isStoppedByErrorPolicy).orElse(null));
     }
 
     /**
@@ -283,7 +295,8 @@ public class DefaultEventStoreApi implements EventStoreApi {
                 eventStoreSubscription.isExclusive(),
                 eventStoreSubscription.isInTransaction(),
                 eventStoreSubscription.onlyIncludeEventsForTenant().map(Object::toString).orElse(null),
-                inMemoryGlobalOrderOf(eventStoreSubscription));
+                inMemoryGlobalOrderOf(eventStoreSubscription),
+                eventStoreSubscription.isStoppedByErrorPolicy());
     }
 
     private static Long inMemoryGlobalOrderOf(EventStoreSubscription eventStoreSubscription) {

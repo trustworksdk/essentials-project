@@ -27,7 +27,6 @@
 - [Configuration](#configuration)
 - [Usage Patterns](#usage-patterns)
 - [Spring Integration](#spring-integration)
-- [Common Use Cases](#common-use-cases)
 - [Integration with Other Components](#integration-with-other-components)
 - [Gotchas](#gotchas)
 - ⚠️ [Security](#security)

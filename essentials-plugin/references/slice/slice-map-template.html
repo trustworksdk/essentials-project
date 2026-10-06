@@ -1,0 +1,1005 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Slice map</title>
+<style>
+:root {
+  --bg: #f7f7f5; --panel: #ffffff; --panel-2: #fbfbfa; --ink: #1c1c1a; --ink-2: #5f5f58;
+  --ink-3: #8a8a80; --line: #e3e3de; --line-2: #d0d0c8; --accent: #4a5f8a;
+  --command: #b06a1f; --command-bg: #fdf3e6; --view: #2f6ba8; --view-bg: #eaf2fb;
+  --automation: #6b4fa8; --automation-bg: #f1ecfb; --translation: #1f7a70; --translation-bg: #e6f5f2;
+  --ok: #2f7a45; --warn: #a8781f; --err: #a83c32; --err-bg: #fbeceb;
+  --evt: #2f7a45; --evt-bg: #e9f4ed; --ext: #6b6b62; --ext-bg: #f0f0ec;
+  --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #16161a; --panel: #1e1e23; --panel-2: #24242a; --ink: #ececf0; --ink-2: #a8a8b2;
+    --ink-3: #75757f; --line: #2e2e36; --line-2: #3c3c46; --accent: #8fa6d4;
+    --command: #e0a05a; --command-bg: #2c2418; --view: #7cb0e8; --view-bg: #17242f;
+    --automation: #b39ae8; --automation-bg: #241d33; --translation: #5fc4b4; --translation-bg: #15292a;
+    --ok: #6cc98a; --warn: #d9b05e; --err: #e58a80; --err-bg: #2e1c1b;
+    --evt: #6cc98a; --evt-bg: #17281d; --ext: #9a9aa4; --ext-bg: #26262c;
+  }
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0; background: var(--bg); color: var(--ink);
+  font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+}
+.wrap { max-width: 1180px; margin: 0 auto; padding: 28px 20px 64px; }
+header { border-bottom: 1px solid var(--line); padding-bottom: 16px; margin-bottom: 18px; }
+h1 { font-size: 20px; margin: 0 0 6px; letter-spacing: -0.01em; }
+.prov { font-family: var(--mono); font-size: 12px; color: var(--ink-3); word-break: break-all; }
+.counts { margin-top: 8px; font-size: 12.5px; color: var(--ink-2); }
+.counts b { color: var(--ink); font-weight: 600; }
+.toolbar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 18px; }
+.tabs { display: flex; gap: 4px; flex-wrap: wrap; }
+button.tab {
+  font: inherit; font-size: 13px; padding: 6px 12px; border-radius: 6px; cursor: pointer;
+  border: 1px solid var(--line-2); background: var(--panel); color: var(--ink-2);
+}
+button.tab[aria-selected="true"] { background: var(--accent); border-color: var(--accent); color: #fff; }
+input[type=search] {
+  font: inherit; font-size: 13px; padding: 6px 10px; border-radius: 6px; margin-left: auto;
+  border: 1px solid var(--line-2); background: var(--panel); color: var(--ink); min-width: 220px;
+}
+section[hidden] { display: none; }
+h2 { font-size: 14px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--ink-3);
+     margin: 26px 0 10px; font-weight: 600; }
+h2:first-child { margin-top: 0; }
+.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(330px, 1fr)); gap: 14px; }
+.card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 14px 15px; }
+.card > h3 { margin: 0 0 4px; font-size: 15px; font-family: var(--mono); }
+.meta { font-size: 12px; color: var(--ink-3); margin-bottom: 10px; }
+.badge {
+  display: inline-block; font-size: 11px; font-family: var(--mono); padding: 1px 6px;
+  border-radius: 4px; border: 1px solid var(--line-2); color: var(--ink-2); margin-right: 4px;
+}
+.kindgroup { margin-top: 10px; }
+.kindgroup > .label { font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--ink-3); margin-bottom: 4px; }
+.slice {
+  display: block; width: 100%; text-align: left; font: inherit; cursor: pointer;
+  border: 1px solid var(--line); border-left: 3px solid var(--line-2); background: var(--panel-2);
+  border-radius: 6px; padding: 7px 9px; margin-bottom: 5px; color: var(--ink);
+}
+.slice:hover, .slice.hot { border-color: var(--accent); border-left-color: var(--accent); }
+.slice .n { font-family: var(--mono); font-size: 12.5px; }
+.slice .s { font-size: 12px; color: var(--ink-2); margin-top: 2px; }
+.k-command { border-left-color: var(--command); } .k-view { border-left-color: var(--view); }
+.k-automation { border-left-color: var(--automation); } .k-translation { border-left-color: var(--translation); }
+.pill { font-size: 10.5px; font-family: var(--mono); padding: 0 5px; border-radius: 999px; border: 1px solid currentColor; }
+.st-live { color: var(--ok); } .st-planned { color: var(--ink-3); }
+.st-deprecated { color: var(--err); } .st-shadowed { color: var(--warn); }
+.flag { display: inline-block; font-size: 11px; padding: 1px 6px; border-radius: 4px; margin: 3px 4px 0 0; }
+.flag.error { color: var(--err); background: var(--err-bg); } .flag.warn { color: var(--warn); border: 1px solid currentColor; }
+.flag.info { color: var(--ink-2); border: 1px solid var(--line-2); }
+.flow { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; margin-bottom: 8px;
+        display: grid; grid-template-columns: 1fr auto 1fr; gap: 12px; align-items: center; }
+.flow .ev { font-family: var(--mono); font-size: 12.5px; padding: 4px 10px; border-radius: 999px;
+            background: var(--command-bg); color: var(--command); white-space: nowrap; }
+.flow.cross .ev { background: var(--automation-bg); color: var(--automation); }
+.flow.dangling { border-color: var(--err); }
+.side { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.side.right { align-items: flex-end; text-align: right; }
+.ref { font-family: var(--mono); font-size: 12px; color: var(--ink-2); cursor: pointer;
+       border-bottom: 1px dotted var(--line-2); align-self: flex-start; }
+.side.right .ref { align-self: flex-end; }
+.ref.hot { color: var(--accent); border-bottom-color: var(--accent); }
+.none { color: var(--ink-3); font-size: 12px; font-style: italic; }
+table { width: 100%; border-collapse: collapse; background: var(--panel); border: 1px solid var(--line);
+        border-radius: 10px; overflow: hidden; font-size: 13px; }
+th { text-align: left; font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em;
+     color: var(--ink-3); padding: 8px 10px; border-bottom: 1px solid var(--line); font-weight: 600; }
+td { padding: 7px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
+tr:last-child td { border-bottom: 0; }
+tr.multi td:first-child { color: var(--err); font-weight: 600; }
+td.mono, .mono { font-family: var(--mono); font-size: 12px; }
+.m-GET { color: var(--view); } .m-POST { color: var(--ok); } .m-PUT, .m-PATCH { color: var(--warn); }
+.m-DELETE { color: var(--err); }
+.qparam { color: var(--ink-3); }
+.scroll { overflow-x: auto; }
+dialog {
+  border: 1px solid var(--line-2); border-radius: 12px; background: var(--panel); color: var(--ink);
+  max-width: 620px; width: calc(100% - 32px); padding: 0;
+}
+dialog::backdrop { background: rgba(0,0,0,.45); }
+dialog .head { padding: 14px 18px; border-bottom: 1px solid var(--line); }
+dialog .body { padding: 14px 18px 20px; }
+dialog h3 { margin: 0 0 4px; font-family: var(--mono); font-size: 15px; }
+dl { display: grid; grid-template-columns: 130px 1fr; gap: 6px 14px; margin: 0; font-size: 13px; }
+dt { color: var(--ink-3); font-size: 12px; }
+dd { margin: 0; font-family: var(--mono); font-size: 12px; word-break: break-word; }
+dialog button.close { position: absolute; top: 12px; right: 14px; background: none; border: 0;
+                      color: var(--ink-3); font-size: 20px; cursor: pointer; line-height: 1; }
+dialog .body { max-height: 72vh; overflow-y: auto; }
+.rm { margin-top: 16px; }
+.rm h4 { margin: 0 0 6px; font-family: var(--mono); font-size: 12.5px; color: var(--ink-2); }
+footer { margin-top: 34px; padding-top: 14px; border-top: 1px solid var(--line);
+         font-size: 12px; color: var(--ink-3); }
+.notes li { margin-bottom: 4px; }
+
+/* --- graph view --- */
+.gwrap { position: relative; background: var(--panel); border: 1px solid var(--line);
+         border-radius: 10px; overflow: hidden; }
+.gtools { position: absolute; top: 10px; right: 10px; display: flex; gap: 4px; z-index: 2; }
+.gtools button {
+  font: inherit; font-size: 12px; line-height: 1; min-width: 30px; padding: 7px 9px; cursor: pointer;
+  border: 1px solid var(--line-2); background: var(--panel); color: var(--ink-2); border-radius: 6px;
+}
+.gtools button:hover { border-color: var(--accent); color: var(--accent); }
+.ghint { position: absolute; left: 12px; bottom: 10px; z-index: 2; font-size: 11.5px; color: var(--ink-3); }
+svg.graph { display: block; width: 100%; height: 68vh; min-height: 400px; touch-action: none; cursor: grab; }
+svg.graph.dragging { cursor: grabbing; }
+.gn { cursor: pointer; }
+.gn rect.box { fill: var(--panel-2); stroke: var(--line-2); stroke-width: 1; }
+.gn text { font-family: var(--mono); font-size: 11px; fill: var(--ink); pointer-events: none; }
+.gn text.sub { font-size: 9px; fill: var(--ink-3); }
+.gn.t-command rect.box { fill: var(--command-bg); stroke: var(--command); }
+.gn.t-command text { fill: var(--command); }
+.gn.t-event rect.box { fill: var(--evt-bg); stroke: var(--evt); }
+.gn.t-event text { fill: var(--evt); }
+.gn.t-external rect.box { fill: var(--ext-bg); stroke: var(--ext); stroke-dasharray: 4 3; }
+.gn.t-external text { fill: var(--ext); }
+.gn rect.bar { stroke: none; }
+.gn.k-command rect.bar { fill: var(--command); } .gn.k-view rect.bar { fill: var(--view); }
+.gn.k-automation rect.bar { fill: var(--automation); } .gn.k-translation rect.bar { fill: var(--translation); }
+.gn.hot rect.box, .gn.sel rect.box { stroke: var(--accent); stroke-width: 2; }
+.gn.dim { opacity: 0.12; }
+path.ge { fill: none; stroke: var(--line-2); stroke-width: 1.3; }
+path.ge.k-command { stroke: var(--command); stroke-opacity: 0.65; }
+path.ge.k-event { stroke: var(--evt); stroke-opacity: 0.6; }
+path.ge.k-external { stroke: var(--ext); stroke-dasharray: 4 3; }
+path.ge.dim { opacity: 0.07; }
+path.ge.hi { stroke-width: 2.2; stroke-opacity: 1; }
+/* Direction relative to the hovered or focused node — "what feeds this" vs "what this feeds". */
+path.ge.hi-in { stroke: var(--accent); stroke-width: 2.6; stroke-opacity: 1; stroke-dasharray: none; }
+path.ge.hi-out { stroke: var(--warn); stroke-width: 2.6; stroke-opacity: 1; stroke-dasharray: none; }
+.m-command { fill: var(--command); } .m-event { fill: var(--evt); } .m-external { fill: var(--ext); }
+.legend { display: flex; gap: 16px; flex-wrap: wrap; font-size: 11.5px; color: var(--ink-2); margin-top: 10px; }
+.legend span { white-space: nowrap; }
+.legend i { width: 11px; height: 11px; border-radius: 3px; display: inline-block;
+            vertical-align: -1px; margin-right: 5px; border: 1px solid var(--line-2); }
+
+/* filter chips */
+.chips { display: flex; align-items: center; gap: 5px; flex-wrap: wrap; margin-bottom: 10px; }
+.chips .grp { font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em;
+              color: var(--ink-3); margin: 0 2px 0 6px; }
+.chips .grp:first-child { margin-left: 0; }
+button.chip {
+  font: inherit; font-size: 12px; padding: 4px 10px; border-radius: 999px; cursor: pointer;
+  border: 1px solid var(--line-2); background: var(--panel); color: var(--ink-3);
+}
+button.chip.on { color: var(--ink); border-color: var(--ink-3); }
+button.chip i { width: 8px; height: 8px; border-radius: 2px; display: inline-block;
+                margin-right: 6px; background: currentColor; opacity: 0.35; }
+button.chip.on i { opacity: 1; }
+button.chip.k-command.on { color: var(--command); border-color: var(--command); }
+button.chip.k-view.on { color: var(--view); border-color: var(--view); }
+button.chip.k-automation.on { color: var(--automation); border-color: var(--automation); }
+button.chip.k-translation.on { color: var(--translation); border-color: var(--translation); }
+button.chip.t-command.on { color: var(--command); border-color: var(--command); }
+button.chip.t-event.on { color: var(--evt); border-color: var(--evt); }
+button.chip.t-external.on { color: var(--ext); border-color: var(--ext); }
+
+.gn.off, path.ge.off { display: none; }
+
+/* maximise */
+.gwrap.max { position: fixed; inset: 0; z-index: 60; border-radius: 0; border: 0; }
+.gwrap.max svg.graph, .gwrap:fullscreen svg.graph { height: 100vh; }
+.gwrap:fullscreen { background: var(--bg); }
+
+/* hover card */
+.tip {
+  position: absolute; z-index: 70; pointer-events: none; max-width: 340px;
+  background: var(--panel); border: 1px solid var(--line-2); border-radius: 9px;
+  padding: 10px 12px; box-shadow: 0 6px 22px rgba(0,0,0,.18); font-size: 12px;
+}
+.tip[hidden] { display: none; }
+.tip h4 { margin: 0 0 2px; font-family: var(--mono); font-size: 12.5px; }
+.tip .badges { margin-bottom: 6px; }
+.tip .sum { color: var(--ink-2); margin-bottom: 7px; }
+.tip dl { grid-template-columns: 86px 1fr; gap: 3px 10px; }
+.tip dt { font-size: 11px; }
+.tip dd { font-size: 11px; white-space: pre-wrap; }
+.tip .more { color: var(--ink-3); font-size: 11px; margin-top: 6px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1 id="title">Slice map</h1>
+    <div class="prov" id="prov"></div>
+    <div class="counts" id="counts"></div>
+  </header>
+
+  <div class="toolbar">
+    <div class="tabs" role="tablist">
+      <button class="tab" role="tab" data-view="contexts" aria-selected="true">Contexts</button>
+      <button class="tab" role="tab" data-view="graph" aria-selected="false">Graph</button>
+      <button class="tab" role="tab" data-view="flow" aria-selected="false">Flow</button>
+      <button class="tab" role="tab" data-view="data" aria-selected="false">Data</button>
+      <button class="tab" role="tab" data-view="endpoints" aria-selected="false">Endpoints</button>
+    </div>
+    <input type="search" id="filter" placeholder="Filter slices, events, paths…" autocomplete="off">
+  </div>
+
+  <section id="v-contexts"></section>
+  <section id="v-graph" hidden></section>
+  <section id="v-flow" hidden></section>
+  <section id="v-data" hidden></section>
+  <section id="v-endpoints" hidden></section>
+
+  <footer id="footer"></footer>
+</div>
+
+<dialog id="detail"><button class="close" aria-label="Close">&times;</button>
+  <div class="head"><h3 id="d-title"></h3><div class="meta" id="d-sub"></div></div>
+  <div class="body"><dl id="d-body"></dl></div>
+</dialog>
+
+<script>
+const SLICE_MAP = /* __SLICE_MAP_DATA__ */ null;
+
+const KINDS = ['command', 'view', 'automation', 'translation'];
+const $ = (s) => document.querySelector(s);
+const el = (t, cls, txt) => { const n = document.createElement(t); if (cls) n.className = cls; if (txt != null) n.textContent = txt; return n; };
+const arr = (v) => Array.isArray(v) ? v : (v == null ? [] : [v]);
+const nameOf = (v) => (v && typeof v === 'object') ? (v.name ?? String(v)) : String(v);
+
+/** A table with a header row, wrapped in a horizontal scroller. Returns [wrapper, tbody]. */
+function table(headers) {
+  const wrap = el('div', 'scroll'), t = el('table'), thead = el('thead'), tr = el('tr');
+  headers.forEach(h => tr.append(el('th', null, h)));
+  thead.append(tr); t.append(thead);
+  const tb = el('tbody'); t.append(tb); wrap.append(t);
+  return [wrap, tb];
+}
+
+const M = SLICE_MAP;
+
+/* Bootstrap runs at the BOTTOM of this script, not here: the graph section below declares its
+   constants with `const`, and calling init() before that line is reached is a temporal-dead-zone
+   ReferenceError that blanks the whole page. Keep the call last. */
+function boot() {
+  if (!M) {
+    document.body.innerHTML = '<div class="wrap"><h1>Slice map</h1><p class="none">' +
+      'This template has not been rendered. /essentials:slice-map replaces the SLICE_MAP placeholder with real data.' +
+      '</p></div>';
+    return;
+  }
+  init();
+}
+
+function init() {
+  const meta = M.meta || {};
+  $('#title').textContent = 'Slice map' + (meta.project ? ' — ' + meta.project : '');
+  document.title = $('#title').textContent;
+  $('#prov').textContent = (meta.root || '.') + ' @ ' + (meta.sha || 'not-versioned') +
+    (meta.scope && meta.scope !== 'full' ? '   scope=' + meta.scope : '');
+
+  const slices = arr(M.slices);
+  const byKind = KINDS.map(k => k + ' ' + slices.filter(s => s.kind === k).length).join(' · ');
+  $('#counts').innerHTML = '<b>' + (meta.sliceCount ?? slices.length) + '</b> slices · <b>' +
+    (meta.bcCount ?? arr(M.contexts).length) + '</b> contexts &nbsp; ' + byKind;
+
+  renderContexts(); renderGraph(); renderFlow(); renderData(); renderEndpoints(); renderFooter();
+
+  document.querySelectorAll('.tab').forEach(b => b.addEventListener('click', () => {
+    document.querySelectorAll('.tab').forEach(x => x.setAttribute('aria-selected', String(x === b)));
+    ['contexts', 'graph', 'flow', 'data', 'endpoints'].forEach(v => { $('#v-' + v).hidden = v !== b.dataset.view; });
+    // the graph is laid out while hidden, so its viewBox is only meaningful once it is on screen
+    if (b.dataset.view === 'graph') fitGraph();
+  }));
+  $('#filter').addEventListener('input', applyFilter);
+  $('#detail .close').addEventListener('click', () => $('#detail').close());
+  document.addEventListener('mouseover', (e) => {
+    const n = e.target.closest ? e.target.closest('[data-id]') : null;
+    hot(n && n.dataset.id);
+  });
+  document.addEventListener('mouseout', () => hot(null));
+}
+
+function slice(id) { return arr(M.slices).find(s => s.id === id); }
+
+function hot(id) {
+  document.querySelectorAll('.hot').forEach(n => n.classList.remove('hot'));
+  if (!id) return;
+  document.querySelectorAll('[data-id="' + CSS.escape(id) + '"]').forEach(n => n.classList.add('hot'));
+}
+
+function sliceButton(s) {
+  const b = el('button', 'slice k-' + s.kind);
+  b.dataset.id = s.id;
+  b.dataset.hay = [s.id, s.summary, s.owner, (s.endpoints || []).map(e => e.path).join(' ')].join(' ').toLowerCase();
+  const n = el('div', 'n');
+  n.append(document.createTextNode(s.name || s.id));
+  const st = el('span', 'pill st-' + (s.status || 'live'), ' ' + (s.status || ''));
+  st.style.marginLeft = '6px'; n.append(st);
+  b.append(n);
+  if (s.summary) b.append(el('div', 's', s.summary));
+  arr(s.flags).forEach(f => b.append(el('span', 'flag ' + (f.level || 'info'), f.text)));
+  b.addEventListener('click', () => openDetail(s));
+  return b;
+}
+
+function renderContexts() {
+  const root = $('#v-contexts'), grid = el('div', 'grid');
+  arr(M.contexts).forEach(c => {
+    const card = el('div', 'card');
+    card.append(el('h3', null, c.id));
+    const meta = el('div', 'meta');
+    [c.lane && 'lane: ' + c.lane, c.language, c.tier, arr(c.owners).join(', ')].filter(Boolean)
+      .forEach(t => meta.append(el('span', 'badge', t)));
+    card.append(meta);
+    const mine = arr(M.slices).filter(s => s.bc === c.id);
+    KINDS.forEach(k => {
+      const ks = mine.filter(s => s.kind === k);
+      if (!ks.length) return;
+      const g = el('div', 'kindgroup');
+      g.append(el('div', 'label', k + (ks.length > 1 ? 's' : '')));
+      ks.forEach(s => g.append(sliceButton(s)));
+      card.append(g);
+    });
+    if (!mine.length) card.append(el('div', 'none', 'No slices declared in this context.'));
+    grid.append(card);
+  });
+  root.append(grid);
+  if (!arr(M.contexts).length) root.append(el('p', 'none', 'No bounded contexts found.'));
+}
+
+function refSpan(id) {
+  const s = slice(id), r = el('span', 'ref', s ? s.id : id);
+  r.dataset.id = id;
+  if (s) r.addEventListener('click', () => openDetail(s));
+  return r;
+}
+
+function renderFlow() {
+  const root = $('#v-flow');
+  const flows = arr(M.flows).slice().sort((a, b) =>
+    (b.crossContext === true) - (a.crossContext === true) || String(a.event).localeCompare(String(b.event)));
+  if (!flows.length) { root.append(el('p', 'none', 'No events declared. Command slices declare publishes:, reactors declare consumes:.')); return; }
+  root.append(el('h2', null, 'Event flow — publisher → event → consumer'));
+  flows.forEach(f => {
+    const row = el('div', 'flow' + (f.crossContext ? ' cross' : '') + (f.dangling ? ' dangling' : ''));
+    row.dataset.hay = [f.event, arr(f.from).join(' '), arr(f.to).join(' ')].join(' ').toLowerCase();
+    const left = el('div', 'side');
+    arr(f.from).forEach(id => left.append(refSpan(id)));
+    if (!arr(f.from).length) left.append(el('span', 'none', 'no publisher'));
+    const mid = el('div'); mid.append(el('span', 'ev', f.event));
+    const right = el('div', 'side right');
+    arr(f.to).forEach(id => right.append(refSpan(id)));
+    if (!arr(f.to).length) right.append(el('span', 'none', 'no consumer'));
+    row.append(left, mid, right);
+    root.append(row);
+  });
+}
+
+function renderData() {
+  const root = $('#v-data');
+  root.append(el('h2', null, 'Write targets'));
+  const w = arr(M.writers);
+  if (!w.length) root.append(el('p', 'none', 'No write targets declared.'));
+  else {
+    // `flag` is the only thing that sorts or colours a row. Several command slices writing one
+    // aggregate inside one context is the design on every lane — never flag it (slice-map.md §3).
+    const [wrap, tb] = table(['Target', 'Kind', 'Context', 'Written by']);
+    const bcsOf = x => arr(x.bcs).length ? arr(x.bcs) : (x.bc ? [x.bc] : []);
+    w.slice().sort((a, b) => (b.flag ? 1 : 0) - (a.flag ? 1 : 0)).forEach(x => {
+      const tr = el('tr', x.flag ? 'multi' : '');
+      const bcs = bcsOf(x);
+      tr.dataset.hay = [x.target, x.kind, bcs.join(' '), arr(x.slices).join(' ')].join(' ').toLowerCase();
+      tr.append(el('td', 'mono', x.target), el('td', null, x.kind || ''), el('td', 'mono', bcs.join(', ')));
+      const td = el('td'); arr(x.slices).forEach((id, i) => { if (i) td.append(document.createTextNode(' ')); td.append(refSpan(id)); });
+      if (x.flag === 'crossBc') td.append(el('span', 'flag error', 'written from ' + bcs.length + ' contexts'));
+      else if (x.flag === 'sharedReadModel') td.append(el('span', 'flag error', arr(x.slices).length + ' owners'));
+      tr.append(td); tb.append(tr);
+    });
+    root.append(wrap);
+  }
+
+  root.append(el('h2', null, 'Cross-context reads'));
+  const c = arr(M.crossReads);
+  if (!c.length) root.append(el('p', 'none', 'No slice reads across a bounded-context boundary.'));
+  else {
+    const [wrap, tb] = table(['Reader', 'Reads from', 'Model', 'via']);
+    c.forEach(x => {
+      const tr = el('tr');
+      tr.dataset.hay = [x.from, x.toBc, x.model, x.via].join(' ').toLowerCase();
+      const td = el('td'); td.append(refSpan(x.from));
+      tr.append(td, el('td', 'mono', x.toBc || ''), el('td', 'mono', x.model || ''));
+      const v = el('td', 'mono');
+      if (x.via) v.textContent = x.via; else v.append(el('span', 'flag error', 'no via: — R4 requires one'));
+      tr.append(v); tb.append(tr);
+    });
+    root.append(wrap);
+  }
+}
+
+function renderEndpoints() {
+  const root = $('#v-endpoints');
+  const rows = [];
+  arr(M.slices).forEach(s => arr(s.endpoints).forEach(e => rows.push({ s, e })));
+  if (!rows.length) { root.append(el('p', 'none', 'No endpoints declared. Automation and translation slices have no API by design.')); return; }
+  rows.sort((a, b) => String(a.e.path).localeCompare(String(b.e.path)) || String(a.e.method).localeCompare(String(b.e.method)));
+  root.append(el('h2', null, 'Endpoint → slice'));
+  const [wrap, tb] = table(['Method', 'Path', 'Slice', 'Kind', 'Auth', 'Directory']);
+  rows.forEach(({ s, e }) => {
+    const tr = el('tr');
+    tr.dataset.hay = [e.method, e.path, s.id, s.kind, s.path].join(' ').toLowerCase();
+    // A path may carry query discriminators after '?' (@GetMapping(params=…)) — show them as part of
+    // the endpoint's identity, but muted: the route is what you scan the column for.
+    const [route, query] = String(e.path).split(/\?(.*)/);
+    const pathCell = el('td', 'mono', route);
+    if (query) pathCell.append(el('span', 'qparam', '?' + query));
+    tr.append(el('td', 'mono m-' + e.method, e.method), pathCell);
+    const td = el('td'); td.append(refSpan(s.id)); tr.append(td);
+    tr.append(el('td', null, s.kind), el('td', 'mono', e.auth || ''), el('td', 'mono', s.path || ''));
+    tb.append(tr);
+  });
+  root.append(wrap);
+}
+
+function openDetail(s) {
+  // A <dialog> outside the fullscreen element renders nowhere while the graph is maximised, so the
+  // modal has to move into whatever is currently on screen before it opens.
+  const host = document.fullscreenElement || document.body;
+  const dlg = $('#detail');
+  if (dlg.parentNode !== host) host.appendChild(dlg);
+  $('#d-title').textContent = s.id;
+  const sub = $('#d-sub'); sub.textContent = '';
+  [s.kind, s.status, s.language, s.tier, s.owner].filter(Boolean).forEach(t => sub.append(el('span', 'badge', t)));
+  const dl = $('#d-body'); dl.textContent = '';
+  const row = (k, v) => {
+    const list = arr(v).map(x => typeof x === 'object' && x !== null
+      ? (x.method ? x.method + ' ' + x.path + (x.auth ? '  (' + x.auth + ')' : '')
+        : x.text ? x.text + (x.enforcedBy ? '  → ' + x.enforcedBy : '')
+                 : nameOf(x) + (x.via ? '  via ' + x.via : ''))
+      : String(x));
+    if (!list.length) return;
+    dl.append(el('dt', null, k), el('dd', null, list.join('\n')));
+  };
+  if (s.summary) { dl.append(el('dt', null, 'summary'), el('dd', null, s.summary)); }
+  row('package', s.package); row('types', s.files);
+  row('handles', s.handles); row('serves', s.serves); row('publishes', s.publishes);
+  row('consumes', s.consumes); row('dispatches', s.dispatches);
+  row('writes', s.writes); row('owns', s.owns);
+  row('reads', s.reads); row('projections', s.projections); row('endpoints', s.endpoints);
+  row('invariants', s.invariants);
+  row('external system', s.externalSystem); row('direction', s.direction);
+  row('supersedes', s.supersedes); row('tests', s.tests); row('path', s.path);
+  arr(s.flags).forEach(f => { dl.append(el('dt', null, f.level || 'flag'), el('dd', null, f.text)); });
+
+  // A view's read model is what the slice IS. Render its shape as a table rather than a field list —
+  // it is a table, and reading column types off a comma-joined string is the thing tables fix.
+  const body = dl.parentNode;
+  body.querySelectorAll('.rm').forEach(n => n.remove());
+  arr(s.readModels).forEach(rm => {
+    const box = el('div', 'rm');
+    box.append(el('h4', null, rm.name + (rm.store ? ' · ' + rm.store : '')));
+    if (!arr(rm.columns).length) { box.append(el('p', 'none', 'No columns recorded.')); body.append(box); return; }
+    const [wrap, tb] = table(['Column', 'Type', 'Note']);
+    arr(rm.columns).forEach(c => {
+      const col = (typeof c === 'string') ? { name: c } : c;
+      const tr = el('tr');
+      tr.append(el('td', 'mono', col.name), el('td', 'mono', col.type || ''), el('td', null, col.note || ''));
+      tb.append(tr);
+    });
+    box.append(wrap);
+    body.append(box);
+  });
+  dlg.showModal();
+}
+
+/* ---------- Graph: commands in → slice → events out → the slices that react ---------- */
+
+const SVGNS = 'http://www.w3.org/2000/svg';
+const svgEl = (t, attrs) => {
+  const n = document.createElementNS(SVGNS, t);
+  for (const k in attrs) n.setAttribute(k, attrs[k]);
+  return n;
+};
+const trunc = (s, n) => (s = String(s), s.length > n ? s.slice(0, n - 1) + '…' : s);
+
+const NW = 176, NH = 34, COLGAP = 80, ROWGAP = 16;
+const NODE_TYPES = [['command', 'command types'], ['event', 'events'], ['external', 'external systems']];
+const G = {
+  nodes: [], edges: [], byId: new Map(), adj: new Map(), els: new Map(),
+  svg: null, vb: null, focus: null,
+  kinds: new Set(KINDS), types: new Set(NODE_TYPES.map(t => t[0])), tip: null, wrap: null
+};
+
+/** Everything reachable from `id` over the undirected graph — the node's connected component.
+ *  Focus dims what is NOT connected, so a chain stays whole: a slice three hops downstream is still
+ *  part of what this node participates in, and hiding it answers a question nobody asked. */
+function component(id) {
+  const seen = new Set([id]), queue = [id];
+  while (queue.length) {
+    const cur = queue.shift();
+    (G.adj.get(cur) || []).forEach(next => {
+      if (!seen.has(next)) { seen.add(next); queue.push(next); }
+    });
+  }
+  return seen;
+}
+
+/** Message-flow graph. Every node and every edge comes from a manifest field — nothing is inferred. */
+function buildGraph() {
+  const nodes = new Map(), edges = [];
+  const add = (id, o) => { const n = nodes.get(id) || (nodes.set(id, Object.assign({ id }, o)), nodes.get(id)); return n; };
+  arr(M.slices).forEach(s => {
+    add('s:' + s.id, { type: 'slice', label: s.name || s.id, sub: s.bc, bc: s.bc, kind: s.kind, slice: s });
+    arr(s.handles).forEach(c => {                       // commands in
+      add('c:' + nameOf(c), { type: 'command', label: nameOf(c), sub: 'command', bc: s.bc });
+      edges.push({ from: 'c:' + nameOf(c), to: 's:' + s.id, kind: 'command' });
+    });
+    // Events in. A view declares them on `projections[].from` (what its EventProcessor projects), an
+    // automation and a translation on `consumes`. Reading only `consumes` makes every
+    // correctly-generated view look like it reacts to nothing.
+    const inbound = arr(s.consumes).map(nameOf)
+      .concat(arr(s.projections).flatMap(p => arr(p && p.from).map(nameOf)));
+    Array.from(new Set(inbound)).forEach(e => {
+      add('e:' + e, { type: 'event', label: e, sub: 'event', bc: s.bc });
+      edges.push({ from: 'e:' + e, to: 's:' + s.id, kind: 'event' });
+    });
+    arr(s.publishes).forEach(e => {                     // events out
+      const n = add('e:' + nameOf(e), { type: 'event', label: nameOf(e), sub: 'event', bc: s.bc });
+      n.bc = s.bc; n.sub = s.bc;                        // an event belongs to the context that emits it
+      edges.push({ from: 's:' + s.id, to: 'e:' + nameOf(e), kind: 'event' });
+    });
+    arr(s.dispatches).forEach(c => {                    // commands out — the automation's other half
+      add('c:' + nameOf(c), { type: 'command', label: nameOf(c), sub: 'command', bc: s.bc });
+      edges.push({ from: 's:' + s.id, to: 'c:' + nameOf(c), kind: 'command' });
+    });
+    if (s.externalSystem) {
+      add('x:' + s.externalSystem, { type: 'external', label: s.externalSystem, sub: 'external system', bc: s.bc });
+      const d = s.direction || 'both';
+      if (d === 'inbound' || d === 'both') edges.push({ from: 'x:' + s.externalSystem, to: 's:' + s.id, kind: 'external' });
+      if (d === 'outbound' || d === 'both') edges.push({ from: 's:' + s.id, to: 'x:' + s.externalSystem, kind: 'external' });
+    }
+  });
+  return { nodes: Array.from(nodes.values()), edges };
+}
+
+/** The column a node belongs in on message-flow grounds alone, used as a FLOOR under the computed
+ *  rank. Longest-path ranking on its own puts anything with no inbound edge in column 0 — so a view
+ *  that declares no `consumes` (legal, and normal on the service-entity lane), an automation whose
+ *  trigger has no declared publisher, and a dangling event all land left of the commands, which reads
+ *  as "this is an entry point" and makes the events feeding a reactor impossible to see. The floor
+ *  only ever lifts: max() with the computed rank leaves every real chain exactly where it was. */
+function floorRank(n) {
+  if (n.type === 'command') return 0;                       // a command type starts a chain
+  if (n.type === 'slice') return n.kind === 'command' ? 1 : 3;   // reactors sit right of the events
+  return 2;                                                 // events and external systems
+}
+
+/** Longest-path ranking, cycle-guarded — a saga that loops must not hang the layout. */
+function layoutGraph(g) {
+  const inc = new Map();
+  g.nodes.forEach(n => inc.set(n.id, []));
+  g.edges.forEach(e => { if (inc.has(e.to) && inc.has(e.from)) inc.get(e.to).push(e.from); });
+  const done = new Map(), path = new Set();
+  const byId = new Map(g.nodes.map(n => [n.id, n]));
+  const depth = (id) => {
+    if (done.has(id)) return done.get(id);
+    if (path.has(id)) return 0;
+    path.add(id);
+    let d = floorRank(byId.get(id));
+    inc.get(id).forEach(p => { d = Math.max(d, depth(p) + 1); });
+    path.delete(id); done.set(id, d);
+    return d;
+  };
+  g.nodes.forEach(n => { n.rank = depth(n.id); });
+
+  const cols = new Map();
+  g.nodes.forEach(n => {
+    if (!cols.has(n.rank)) cols.set(n.rank, []);
+    cols.get(n.rank).push(n);
+  });
+  const order = new Map();
+  Array.from(cols.keys()).sort((a, b) => a - b).forEach(r => {
+    const col = cols.get(r);
+    col.sort((a, b) => String(a.bc).localeCompare(String(b.bc)) || String(a.label).localeCompare(String(b.label)));
+    // two barycentre passes: pull each node towards the average row of what feeds it
+    for (let pass = 0; pass < 2; pass++) {
+      col.forEach(n => {
+        const ps = inc.get(n.id).map(p => order.get(p)).filter(v => v != null);
+        n._bc = ps.length ? ps.reduce((a, b) => a + b, 0) / ps.length : order.get(n.id) ?? 1e6;
+      });
+      col.sort((a, b) => a._bc - b._bc || String(a.label).localeCompare(String(b.label)));
+      col.forEach((n, i) => order.set(n.id, i));
+    }
+    col.forEach((n, i) => { n.x = r * (NW + COLGAP); n.y = i * (NH + ROWGAP); });
+  });
+  return g;
+}
+
+function renderGraph() {
+  const root = $('#v-graph');
+  const g = layoutGraph(buildGraph());
+  G.nodes = g.nodes; G.edges = g.edges;
+  G.byId = new Map(g.nodes.map(n => [n.id, n]));
+  G.adj = new Map(g.nodes.map(n => [n.id, new Set()]));
+  g.edges.forEach(e => { G.adj.get(e.from) && G.adj.get(e.from).add(e.to); G.adj.get(e.to) && G.adj.get(e.to).add(e.from); });
+
+  if (!g.nodes.length) {
+    root.append(el('p', 'none', 'Nothing to draw. Command slices declare handles: and publishes:, reactors declare consumes:.'));
+    return;
+  }
+
+  const wrap = el('div', 'gwrap');
+  const svg = svgEl('svg', { class: 'graph', xmlns: SVGNS });
+  const defs = svgEl('defs');
+  ['command', 'event', 'external'].forEach(k => {
+    const m = svgEl('marker', { id: 'arw-' + k, viewBox: '0 0 8 8', refX: '7', refY: '4',
+      markerWidth: '7', markerHeight: '7', orient: 'auto-start-reverse' });
+    m.append(svgEl('path', { d: 'M0,0 L8,4 L0,8 z', class: 'm-' + k }));
+    defs.append(m);
+  });
+  svg.append(defs);
+  const gEdges = svgEl('g', { class: 'edges' }), gNodes = svgEl('g', { class: 'nodes' });
+  svg.append(gEdges, gNodes);
+
+  g.edges.forEach((e, i) => {
+    const a = G.byId.get(e.from), b = G.byId.get(e.to);
+    if (!a || !b) return;
+    const x1 = a.x + NW, y1 = a.y + NH / 2, x2 = b.x, y2 = b.y + NH / 2;
+    const dx = Math.max(34, Math.abs(x2 - x1) / 2);
+    const p = svgEl('path', {
+      class: 'ge k-' + e.kind, 'marker-end': 'url(#arw-' + e.kind + ')',
+      d: `M${x1},${y1} C${x1 + dx},${y1} ${x2 - dx},${y2} ${x2},${y2}`
+    });
+    p.dataset.from = e.from; p.dataset.to = e.to; p.dataset.i = i;
+    gEdges.append(p);
+  });
+
+  g.nodes.forEach(n => {
+    const cls = ['gn', 't-' + n.type, n.kind ? 'k-' + n.kind : ''].filter(Boolean).join(' ');
+    const grp = svgEl('g', { class: cls, transform: `translate(${n.x},${n.y})` });
+    grp.dataset.node = n.id;
+    if (n.slice) grp.dataset.id = n.slice.id;   // links hover/highlight to the other three views
+    const round = n.type === 'slice' ? 6 : NH / 2;
+    grp.append(svgEl('rect', { class: 'box', width: NW, height: NH, rx: round, ry: round }));
+    if (n.type === 'slice') grp.append(svgEl('rect', { class: 'bar', x: 0, y: 0, width: 3, height: NH, rx: 1.5 }));
+    const t = svgEl('text', { x: 12, y: n.sub ? 15 : 21 });
+    t.textContent = trunc(n.label, 24);
+    grp.append(t);
+    if (n.sub) {
+      const s = svgEl('text', { class: 'sub', x: 12, y: 26 });
+      s.textContent = trunc((n.kind ? n.kind + ' · ' : '') + n.sub, 28);
+      grp.append(s);
+    }
+    grp.addEventListener('click', (ev) => {
+      ev.stopPropagation();
+      if (G.dragged) { G.dragged = false; return; }   // the click a pan emits is not a selection
+      G.focus = (G.focus === n.id) ? null : n.id;
+      applyGraphState();
+    });
+    // A real dblclick listener, not `ev.detail === 2` inside the click handler: detail counts only
+    // where the two clicks land on the same target, which panning and re-renders quietly break.
+    grp.addEventListener('dblclick', (ev) => {
+      ev.stopPropagation(); ev.preventDefault();
+      if (n.slice) { G.focus = n.id; applyGraphState(); openDetail(n.slice); }
+    });
+    grp.addEventListener('mouseover', (ev) => { showTip(n, ev); markEdges(n.id); });
+    grp.addEventListener('mousemove', (ev) => placeTip(ev));
+    grp.addEventListener('mouseout', () => { hideTip(); markEdges(G.focus); });
+    G.els.set(n.id, grp);   // resolved once; avoids escaping ids into attribute selectors on every pass
+    gNodes.append(grp);
+  });
+
+  const tools = el('div', 'gtools');
+  [['+', 'Zoom in', () => zoomBy(1 / 1.25)], ['−', 'Zoom out', () => zoomBy(1.25)],
+   ['⤢', 'Fit to window', () => fitGraph()],
+   ['⛶', 'Maximise (Esc to exit)', () => toggleMax()],
+   ['✕', 'Clear focus and query', () => { G.focus = null; $('#filter').value = ''; applyFilter(); }]
+  ].forEach(([label, title, fn]) => {
+    const b = el('button', null, label); b.title = title;
+    b.dataset.tool = title.split(' ')[0].toLowerCase();
+    b.addEventListener('click', fn); tools.append(b);
+  });
+
+  const tip = el('div', 'tip'); tip.hidden = true;
+  wrap.append(svg, tools, tip);
+  wrap.append(el('div', 'ghint', 'Drag to pan · scroll to zoom · hover for detail · click a node to dim everything not connected to it, click again to restore · double-click a slice for the full manifest'));
+  G.tip = tip; G.wrap = wrap;
+  root.append(renderChips(), wrap);
+
+  const legend = el('div', 'legend');
+  [['command', 'var(--command-bg)', 'var(--command)'], ['event', 'var(--evt-bg)', 'var(--evt)'],
+   ['external system', 'var(--ext-bg)', 'var(--ext)'], ['slice', 'var(--panel-2)', 'var(--line-2)']
+  ].forEach(([label, bg, br]) => {
+    const s = el('span'), i = el('i');
+    i.style.background = bg; i.style.borderColor = br;
+    s.append(i, document.createTextNode(label)); legend.append(s);
+  });
+  KINDS.forEach(k => {
+    const s = el('span'), i = el('i');
+    i.style.background = 'var(--' + k + ')'; i.style.borderColor = 'var(--' + k + ')';
+    s.append(i, document.createTextNode(k + ' slice')); legend.append(s);
+  });
+  [['into the hovered node', 'var(--accent)'], ['out of it', 'var(--warn)']].forEach(([label, c]) => {
+    const s = el('span'), i = el('i');
+    i.style.background = c; i.style.borderColor = c;
+    s.append(i, document.createTextNode(label)); legend.append(s);
+  });
+  root.append(legend);
+
+  G.svg = svg;
+  wireGraphControls(svg);
+  fitGraph();
+}
+
+/** Type filters: slice kinds, then the three message-node types. Structural — filtered-out nodes
+ *  leave the drawing entirely rather than dimming, so what is left is a graph you can actually read. */
+function renderChips() {
+  const bar = el('div', 'chips');
+  const chip = (cls, label, on, toggle) => {
+    const b = el('button', 'chip ' + cls + (on ? ' on' : ''));
+    b.append(el('i'), document.createTextNode(label));
+    b.addEventListener('click', () => {
+      toggle(!b.classList.contains('on'));
+      b.classList.toggle('on');
+      applyGraphState();
+    });
+    return b;
+  };
+  bar.append(el('span', 'grp', 'slices'));
+  KINDS.forEach(k => bar.append(chip('k-' + k, k, true, (on) => on ? G.kinds.add(k) : G.kinds.delete(k))));
+  bar.append(el('span', 'grp', 'messages'));
+  NODE_TYPES.forEach(([t, label]) =>
+    bar.append(chip('t-' + t, label, true, (on) => on ? G.types.add(t) : G.types.delete(t))));
+  return bar;
+}
+
+/** Everything the manifest knows about this node, on hover. Double-click still opens the full modal. */
+function showTip(n, ev) {
+  const tip = G.tip;
+  if (!tip) return;
+  tip.textContent = '';
+  const cap = (list, max) => {
+    const a = arr(list);
+    return a.length > max ? a.slice(0, max).concat(['+' + (a.length - max) + ' more']) : a;
+  };
+  const dl = el('dl');
+  const row = (k, v) => {
+    const lines = cap(v, 6).map(x => {
+      if (x == null) return '';
+      if (typeof x !== 'object') return String(x);
+      if (x.method) return x.method + ' ' + x.path + (x.auth ? '  [' + x.auth + ']' : '');
+      if (x.text) return x.text + (x.enforcedBy ? '  → ' + x.enforcedBy : '');
+      return nameOf(x) + (x.via ? '  via ' + x.via : '');
+    }).filter(s => s !== '');
+    if (lines.length) dl.append(el('dt', null, k), el('dd', null, lines.join('\n')));
+  };
+
+  tip.append(el('h4', null, n.type === 'slice' ? n.slice.id : n.label));
+  const badges = el('div', 'badges');
+  if (n.type === 'slice') {
+    const s = n.slice;
+    [s.kind, s.status, s.language, s.tier, s.owner].filter(Boolean).forEach(t => badges.append(el('span', 'badge', t)));
+    tip.append(badges);
+    if (s.summary) tip.append(el('div', 'sum', s.summary));
+    row('package', s.package);
+    row('directory', s.path);
+    row('types', s.files);
+    // A view's read model is its identity (§R2), so its shape belongs on the card, not two clicks away.
+    arr(s.readModels).forEach(rm => {
+      dl.append(el('dt', null, 'read model'), el('dd', null,
+        rm.name + (rm.store ? '  [' + rm.store + ']' : '') +
+        (arr(rm.columns).length ? '\n  ' + cap(rm.columns, 12).join('\n  ') : '')));
+    });
+    row('endpoints', s.endpoints);
+    row('handles', s.handles); row('serves', s.serves);
+    row('publishes', s.publishes); row('consumes', s.consumes); row('dispatches', s.dispatches);
+    // A view's inbound events live on projections[].from, so surface them under a name that answers
+    // "what feeds this" without the reader having to know which field a given kind uses.
+    row('projects', arr(s.projections).flatMap(p => arr(p && p.from)));
+    row('writes', s.writes); row('owns', s.owns); row('reads', s.reads);
+    row('projections', s.projections);
+    row('invariants', s.invariants);
+    row('tests', s.tests);
+    row('supersedes', s.supersedes);
+    arr(s.flags).forEach(f => { dl.append(el('dt', null, f.level || 'flag'), el('dd', null, f.text)); });
+  } else {
+    const label = { command: 'command type', event: 'event type', external: 'external system' }[n.type] || n.type;
+    badges.append(el('span', 'badge', label));
+    if (n.bc) badges.append(el('span', 'badge', n.bc));
+    const msg = (M.messages || []).find(m => m.name === n.label && m.type === n.type);
+    if (msg && msg.version != null) badges.append(el('span', 'badge', 'v' + msg.version));
+    tip.append(badges);
+    if (msg) {
+      if (msg.summary) tip.append(el('div', 'sum', msg.summary));
+      // The identity-carrying property first: on an event stream it is what the message is ABOUT,
+      // and on a command it is what makes a retry idempotent rather than a second write.
+      row('identity', msg.identity);
+      row('payload', msg.fields);
+      row('declared in', msg.declaredIn);
+      row('idempotency', msg.idempotencyKey);
+      row('schema', msg.schema);
+    }
+    const into = [], outOf = [];
+    G.edges.forEach(e => {
+      if (e.to === n.id) { const s = G.byId.get(e.from); if (s && s.slice) outOf.push(s.slice.id); }
+      if (e.from === n.id) { const s = G.byId.get(e.to); if (s && s.slice) into.push(s.slice.id); }
+    });
+    if (n.type === 'command') { row('dispatched by', outOf); row('handled by', into); }
+    else if (n.type === 'event') { row('published by', outOf); row('consumed by', into); }
+    else { row('outbound from', outOf); row('inbound to', into); }
+    if (!outOf.length && n.type === 'event') tip.append(el('div', 'sum', 'Consumed but never published — a dangling edge.'));
+  }
+  if (dl.childNodes.length) tip.append(dl);
+  if (n.type === 'slice') tip.append(el('div', 'more', 'Double-click for the full manifest'));
+  tip.hidden = false;
+  placeTip(ev);
+}
+
+function placeTip(ev) {
+  const tip = G.tip, wrap = G.wrap;
+  if (!tip || tip.hidden || !wrap) return;
+  const r = wrap.getBoundingClientRect ? wrap.getBoundingClientRect() : { left: 0, top: 0, width: 900, height: 600 };
+  let x = (ev.clientX || 0) - r.left + 16, y = (ev.clientY || 0) - r.top + 16;
+  const w = tip.offsetWidth || 300, h = tip.offsetHeight || 200;
+  if (x + w > r.width - 8) x = Math.max(8, x - w - 32);
+  if (y + h > r.height - 8) y = Math.max(8, y - h - 32);
+  tip.style.left = x + 'px';
+  tip.style.top = y + 'px';
+}
+
+function hideTip() { if (G.tip) G.tip.hidden = true; }
+
+/** Fullscreen where the browser allows it, a fixed-position fallback where it does not
+ *  (a page opened from file:// can have the request rejected). */
+function toggleMax() {
+  const wrap = G.wrap;
+  if (!wrap) return;
+  hideTip();
+  const doc = document;
+  if (doc.fullscreenElement === wrap) { doc.exitFullscreen && doc.exitFullscreen(); return; }
+  if (!wrap.classList.contains('max') && wrap.requestFullscreen) {
+    const p = wrap.requestFullscreen();
+    if (p && p.catch) { p.then(() => setTimeout(fitGraph, 60)).catch(() => { wrap.classList.add('max'); fitGraph(); }); return; }
+  }
+  wrap.classList.toggle('max');
+  fitGraph();
+}
+
+function fitGraph() {
+  if (!G.svg || !G.nodes.length) return;
+  const xs = G.nodes.map(n => n.x), ys = G.nodes.map(n => n.y);
+  const pad = 40;
+  const x = Math.min.apply(null, xs) - pad, y = Math.min.apply(null, ys) - pad;
+  const w = Math.max.apply(null, xs) + NW + pad - x, h = Math.max.apply(null, ys) + NH + pad - y;
+  setViewBox({ x, y, w, h });
+}
+
+function setViewBox(vb) {
+  G.vb = vb;
+  G.svg.setAttribute('viewBox', `${vb.x} ${vb.y} ${vb.w} ${vb.h}`);
+}
+
+function zoomBy(f, cx, cy) {
+  if (!G.vb) return;
+  const vb = G.vb, nw = vb.w * f, nh = vb.h * f;
+  const ax = cx == null ? 0.5 : cx, ay = cy == null ? 0.5 : cy;
+  setViewBox({ x: vb.x + (vb.w - nw) * ax, y: vb.y + (vb.h - nh) * ay, w: nw, h: nh });
+}
+
+function wireGraphControls(svg) {
+  svg.addEventListener('wheel', (e) => {
+    e.preventDefault();
+    const r = svg.getBoundingClientRect();
+    zoomBy(e.deltaY > 0 ? 1.12 : 1 / 1.12, (e.clientX - r.left) / r.width, (e.clientY - r.top) / r.height);
+  }, { passive: false });
+  /* Panning must not eat clicks on the nodes. Two rules make that work, and both are load-bearing:
+     never call setPointerCapture on the <svg> — capture retargets the subsequent pointerup, so the
+     browser resolves the click on the <svg> instead of the <g> the user pressed, and every node
+     handler silently stops firing — and only treat a press as a drag once it has moved far enough
+     that it cannot have been a click. */
+  let drag = null;
+  svg.addEventListener('pointerdown', (e) => {
+    drag = { x: e.clientX, y: e.clientY, vb: Object.assign({}, G.vb), moved: false };
+  });
+  svg.addEventListener('pointermove', (e) => {
+    if (!drag) return;
+    const dx = e.clientX - drag.x, dy = e.clientY - drag.y;
+    if (!drag.moved) {
+      if (Math.abs(dx) + Math.abs(dy) < 4) return;      // still a click, not a drag
+      drag.moved = true;
+      svg.classList.add('dragging');
+      hideTip();
+    }
+    const r = svg.getBoundingClientRect();
+    setViewBox({ x: drag.vb.x - dx * drag.vb.w / r.width,
+                 y: drag.vb.y - dy * drag.vb.h / r.height,
+                 w: drag.vb.w, h: drag.vb.h });
+  });
+  const end = () => {
+    G.dragged = !!(drag && drag.moved);                 // suppresses the click a drag would emit
+    drag = null; svg.classList.remove('dragging');
+  };
+  svg.addEventListener('pointerup', end);
+  svg.addEventListener('pointerleave', () => { end(); hideTip(); });
+  svg.addEventListener('click', (e) => { if (e.target === svg) { G.focus = null; applyGraphState(); } });
+  document.addEventListener('fullscreenchange', () => setTimeout(fitGraph, 60));
+  document.addEventListener('keydown', (e) => {
+    if (e.key !== 'Escape') return;
+    if (G.wrap && G.wrap.classList.contains('max')) { G.wrap.classList.remove('max'); fitGraph(); }
+  });
+}
+
+/** One place decides what is drawn. Two mechanisms, deliberately different:
+ *  a type filter REMOVES a node (it is not part of the graph you asked for), while the query and the
+ *  focus DIM it (it is still there, just not what you are looking at). */
+function applyGraphState() {
+  if (!G.svg) return;
+  const q = $('#filter').value.trim().toLowerCase();
+  const linked = G.focus ? component(G.focus) : null;
+  const off = new Set(), shown = new Set();
+  G.nodes.forEach(n => {
+    const typeOk = n.type === 'slice' ? G.kinds.has(n.kind) : G.types.has(n.type);
+    const hay = (n.label + ' ' + (n.sub || '') + ' ' + (n.kind || '') + ' ' +
+                 (n.slice ? n.slice.id + ' ' + (n.slice.summary || '') + ' ' + (n.slice.package || '') : '')).toLowerCase();
+    const ok = typeOk && (!q || hay.includes(q)) && (!linked || linked.has(n.id));
+    if (!typeOk) off.add(n.id); else if (ok) shown.add(n.id);
+    const g = G.els.get(n.id);
+    if (g) {
+      g.classList.toggle('off', !typeOk);
+      g.classList.toggle('dim', typeOk && !ok);
+      g.classList.toggle('sel', G.focus === n.id);
+    }
+  });
+  G.svg.querySelectorAll('path.ge').forEach(p => {
+    const gone = off.has(p.dataset.from) || off.has(p.dataset.to);
+    const live = shown.has(p.dataset.from) && shown.has(p.dataset.to);
+    p.classList.toggle('off', gone);
+    p.classList.toggle('dim', !gone && !live);
+    p.classList.toggle('hi', !!G.focus && live && (p.dataset.from === G.focus || p.dataset.to === G.focus));
+  });
+  markEdges(G.focus);
+  if (G.focus && off.has(G.focus)) { G.focus = null; applyGraphState(); }
+}
+
+/** Colour a node's own edges by direction — inbound is "what feeds this", outbound is "what this
+ *  feeds". Applied on hover as well as on focus: tracing a single view's inbound events by eye across
+ *  a wide graph is exactly what the plain edge colouring cannot do. Pass null to clear. */
+function markEdges(id) {
+  if (!G.svg) return;
+  G.svg.querySelectorAll('path.ge').forEach(p => {
+    p.classList.toggle('hi-in', !!id && p.dataset.to === id);
+    p.classList.toggle('hi-out', !!id && p.dataset.from === id);
+  });
+}
+
+function renderFooter() {
+  const f = $('#footer');
+  f.append(document.createTextNode(
+    'Rendered from slice.yaml manifests by /essentials:slice-map. This is declared structure, not audited structure — run /essentials:slice-check to verify code against the law.'));
+  const notes = arr(M.notes).concat(arr((M.meta || {}).skipped).map(s => 'skipped: ' + s));
+  if (notes.length) {
+    const ul = el('ul', 'notes');
+    notes.forEach(n => ul.append(el('li', null, n)));
+    f.append(ul);
+  }
+}
+
+function applyFilter() {
+  const q = $('#filter').value.trim().toLowerCase();
+  document.querySelectorAll('[data-hay]').forEach(n => {
+    n.style.display = (!q || n.dataset.hay.includes(q)) ? '' : 'none';
+  });
+  // A context card whose slices all filtered out is noise — hide the card too.
+  document.querySelectorAll('#v-contexts .card').forEach(card => {
+    const any = Array.from(card.querySelectorAll('[data-hay]')).some(n => n.style.display !== 'none');
+    card.style.display = (!q || any) ? '' : 'none';
+  });
+  applyGraphState();
+}
+
+boot();
+</script>
+</body>
+</html>

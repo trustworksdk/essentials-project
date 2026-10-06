@@ -29,7 +29,7 @@ import org.jdbi.v3.core.Jdbi;
 import org.jdbi.v3.postgres.PostgresPlugin;
 import org.junit.jupiter.api.*;
 import org.junit.jupiter.api.condition.EnabledIfSystemProperty;
-import org.testcontainers.containers.PostgreSQLContainer;
+import org.testcontainers.postgresql.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.*;
 
 import java.nio.charset.StandardCharsets;
@@ -83,7 +83,7 @@ class EngineResourceComparisonIT {
     private static final String BASELINE_TABLE = "baseline_durable_queue";
 
     @Container
-    static PostgreSQLContainer<?> postgres = LabPostgres.create();
+    static PostgreSQLContainer postgres = LabPostgres.create();
 
     private HikariDataSource dataSource;
 

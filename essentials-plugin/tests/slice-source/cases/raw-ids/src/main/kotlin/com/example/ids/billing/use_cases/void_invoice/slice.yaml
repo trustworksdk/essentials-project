@@ -1,0 +1,15 @@
+schemaVersion: "1.3"
+slice: billing.void_invoice
+kind: command
+bc: billing
+owner: billing-team
+status: live
+summary: Void an invoice.
+generator: essentials
+language: kotlin
+handles: [VoidInvoice]
+endpoints:
+  - { method: POST, path: "/api/billing/{id}/void", auth: user }
+writes: [Invoice]
+tests:
+  unit: { present: false }

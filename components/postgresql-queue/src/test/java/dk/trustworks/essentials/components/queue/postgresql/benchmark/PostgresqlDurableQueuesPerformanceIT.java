@@ -31,7 +31,7 @@ import dk.trustworks.essentials.components.foundation.test.EssentialsTestContain
 import org.jdbi.v3.core.Jdbi;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIfSystemProperty;
-import org.testcontainers.containers.PostgreSQLContainer;
+import org.testcontainers.postgresql.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.*;
 
 import java.time.*;
@@ -51,7 +51,7 @@ public abstract class PostgresqlDurableQueuesPerformanceIT extends DurableQueues
     public static final int BATCH_SIZE     = 500;
 
     @Container
-    static final PostgreSQLContainer<?> postgreSQLContainer = EssentialsTestContainers.postgres("test", "test", "test");
+    static final PostgreSQLContainer postgreSQLContainer = EssentialsTestContainers.postgres("test", "test", "test");
 
     /**
      * Determine whether to use the centralized message fetcher

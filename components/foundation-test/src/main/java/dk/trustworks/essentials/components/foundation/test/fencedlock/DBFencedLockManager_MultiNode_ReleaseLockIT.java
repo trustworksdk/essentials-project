@@ -139,7 +139,11 @@ public abstract class DBFencedLockManager_MultiNode_ReleaseLockIT<LOCK_MANAGER e
         lockNode2Callback.reset();
         restoreDatabaseConnection();
 
-        Thread.sleep(7000);
+        // Waited for, not slept: how soon a node can take the lock over after the outage depends on the database. On
+        // MongoDB a confirmation whose commit failed during the outage can leave a transaction holding the lock document
+        // until the server's transactionLifetimeLimitSeconds - see the MongoDB subclass
+        Awaitility.waitAtMost(Duration.ofSeconds(30))
+                  .until(() -> lockNode1Callback.lockAcquired != null || lockNode2Callback.lockAcquired != null);
         System.out.println("------ Checking which node has the lock ------");
         if (lockNode2Callback.lockAcquired != null) {
             System.out.println("====== Node 2 should have acquired the lock and node 1 should not have acquired it ======");
@@ -171,8 +175,9 @@ public abstract class DBFencedLockManager_MultiNode_ReleaseLockIT<LOCK_MANAGER e
     }
 
     private static class TestLockCallback implements LockCallback {
-        FencedLock lockReleased;
-        FencedLock lockAcquired;
+        // Written by the lock manager's threads, read by the test thread
+        volatile FencedLock lockReleased;
+        volatile FencedLock lockAcquired;
 
         @Override
         public void lockAcquired(FencedLock lock) {

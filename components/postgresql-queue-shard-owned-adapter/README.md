@@ -257,9 +257,15 @@ the partial shape is the delivery path only.
 **Retry is the engine's, not `DefaultDurableQueueConsumer`'s.** That class implements redelivery
 itself; this consumer does not use it. Running both would put two retry clocks on one message. The
 `RedeliveryPolicy` you pass to `consumeFromQueue` is translated once into the engine's
-`ConsumerOptions` at subscription time.
+`ConsumerOptions` at subscription time: `maximumNumberOfRedeliveries + 1` becomes `maxAttempts`, and
+the engine's `retryBackoff` delegates to the policy's own `calculateNextRedeliveryDelay`. So
+`exponentialBackoff`, `linearBackoff` and `fixedBackoff` wait exactly as long here as on
+`postgresql-queue`, `followupRedeliveryDelay` included. Before 0.60 the policy was mapped onto the
+engine's exponential formula instead, which ignored `followupRedeliveryDelay` and ran a linear policy
+as a constant delay.
 
-> Note the off-by-one: `RedeliveryPolicy` counts *re*deliveries, the engine counts attempts.
+> Note the off-by-one: `RedeliveryPolicy` counts *re*deliveries, the engine counts attempts. It applies
+> to both the limit and the backoff — the engine's first retry asks for `calculateNextRedeliveryDelay(0)`.
 
 **`markForRedeliveryIn(delay)` redelivers, but not after `delay`.** The adapter turns it into a throw,
 and the engine schedules from its own policy — there is no id to schedule against from inside a

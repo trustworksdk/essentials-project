@@ -1,0 +1,15 @@
+schemaVersion: "1.2"
+slice: drafts.draft_list
+kind: view
+bc: drafts
+owner: team
+status: live
+summary: Lane fixture slice.
+generator: essentials
+language: java
+tier: cqrs-es
+lane: decider
+serves: [DraftList]
+projections: []
+tests:
+  unit: { present: false }

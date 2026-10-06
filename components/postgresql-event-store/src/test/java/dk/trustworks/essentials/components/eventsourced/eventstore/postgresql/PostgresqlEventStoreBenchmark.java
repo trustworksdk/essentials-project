@@ -33,7 +33,7 @@ import dk.trustworks.essentials.components.foundation.types.*;
 import org.jdbi.v3.core.Jdbi;
 import org.jdbi.v3.postgres.PostgresPlugin;
 import org.openjdk.jmh.annotations.*;
-import org.testcontainers.containers.PostgreSQLContainer;
+import org.testcontainers.postgresql.PostgreSQLContainer;
 
 import java.time.OffsetDateTime;
 import java.util.ArrayList;
@@ -58,7 +58,7 @@ public class PostgresqlEventStoreBenchmark {
 
         @Param({"1", "5", "10", "20"})
         public  int                                                                     appendedEvents;
-        private PostgreSQLContainer<?>                                                  postgreSQLContainer;
+        private PostgreSQLContainer                                                     postgreSQLContainer;
         private HikariDataSource                                                        ds;
         public  AggregateType                                                           aggregateType;
         public  EventStoreManagedUnitOfWorkFactory                                      unitOfWorkFactory;
@@ -68,7 +68,7 @@ public class PostgresqlEventStoreBenchmark {
         @Setup(Level.Trial)
         public void trialSetUp() {
             System.out.println("Trial setup");
-            postgreSQLContainer = new PostgreSQLContainer<>("postgres:18.4")
+            postgreSQLContainer = new PostgreSQLContainer("postgres:18.4")
                     .withDatabaseName("event-store")
                     .withUsername("test-user")
                     .withPassword("secret-password");

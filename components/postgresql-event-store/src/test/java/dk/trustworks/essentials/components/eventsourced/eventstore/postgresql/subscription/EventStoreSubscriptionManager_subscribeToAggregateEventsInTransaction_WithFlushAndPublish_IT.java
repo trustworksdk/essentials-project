@@ -37,7 +37,7 @@ import dk.trustworks.essentials.reactive.EventHandler;
 import org.jdbi.v3.core.Jdbi;
 import org.jdbi.v3.postgres.PostgresPlugin;
 import org.junit.jupiter.api.*;
-import org.testcontainers.containers.PostgreSQLContainer;
+import org.testcontainers.postgresql.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.*;
 import org.testcontainers.shaded.org.awaitility.Awaitility;
 
@@ -63,7 +63,7 @@ class EventStoreSubscriptionManager_subscribeToAggregateEventsInTransaction_With
     private PostgresqlEventStore<SeparateTablePerAggregateEventStreamConfiguration> eventStore;
 
     @Container
-    private final PostgreSQLContainer<?>         postgreSQLContainer = new PostgreSQLContainer<>("postgres:18.4").withDatabaseName("event-store")
+    private final PostgreSQLContainer            postgreSQLContainer = new PostgreSQLContainer("postgres:18.4").withDatabaseName("event-store")
                                                                                                                    .withUsername("test-user")
                                                                                                                    .withPassword("secret-password");
     private       EventStoreSubscriptionManager  eventStoreSubscriptionManagerNode1;

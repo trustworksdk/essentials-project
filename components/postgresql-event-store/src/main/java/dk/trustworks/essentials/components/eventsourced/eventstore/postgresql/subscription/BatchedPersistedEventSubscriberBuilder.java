@@ -19,9 +19,11 @@ package dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.s
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.PersistedEvent;
 import dk.trustworks.essentials.components.foundation.IOExceptionUtil;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.AggregateType;
 import reactor.util.retry.RetryBackoffSpec;
 
 import java.time.Duration;
+import java.util.Optional;
 import java.util.function.BiConsumer;
 
 import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
@@ -42,6 +44,9 @@ public final class BatchedPersistedEventSubscriberBuilder {
     private EventStore                            eventStore;
     private int                                   maxBatchSize;
     private Duration                              maxLatency;
+    private SubscriptionErrorPolicy               subscriptionErrorPolicy               = SubscriptionErrorPolicy.skip();
+    private SubscriberAcknowledgement             subscriberAcknowledgement;
+    private SubscriptionAutoResumer               autoResumer;
 
     /**
      * @param eventHandler the handler that batches of {@link PersistedEvent}s are forwarded to. Required
@@ -117,18 +122,61 @@ public final class BatchedPersistedEventSubscriberBuilder {
     }
 
     /**
+     * @param subscriptionErrorPolicy what to do when handling a batch fails with an error the retry spec doesn't retry.
+     *                                Defaults to {@link SubscriptionErrorPolicy#skip()}: call the <code>onErrorHandler</code>.
+     *                                A stopping policy stops the subscriber for good unless the subscriber has an auto-resumer
+     *                                (only the subscriptions an {@link EventStoreSubscriptionManager} creates do)
+     * @return this builder instance for fluent chaining
+     */
+    public BatchedPersistedEventSubscriberBuilder setSubscriptionErrorPolicy(SubscriptionErrorPolicy subscriptionErrorPolicy) {
+        this.subscriptionErrorPolicy = subscriptionErrorPolicy;
+        return this;
+    }
+
+    /**
+     * @param subscriberAcknowledgement reports every batch the subscriber is done with - pass the same one to the
+     *                                  {@link EventStore#pollEvents(AggregateType, long, Optional, Optional, Optional, Optional, Optional, SubscriberAcknowledgement)}
+     *                                  the subscriber subscribes to, so the event store resolves a gap fill's transient gap
+     *                                  only once the batch holding it was handled (see {@link SubscriberAcknowledgement}).
+     *                                  Optional: defaults to a new acknowledgement no event store is told about, so the
+     *                                  subscriber behaves as with an event store that does not honour it
+     * @return this builder instance for fluent chaining
+     */
+    public BatchedPersistedEventSubscriberBuilder setSubscriberAcknowledgement(SubscriberAcknowledgement subscriberAcknowledgement) {
+        this.subscriberAcknowledgement = subscriberAcknowledgement;
+        return this;
+    }
+
+    /**
+     * Package-private: only the subscriptions an {@link EventStoreSubscriptionManager} creates resume by themselves
+     *
+     * @param autoResumer resumes the subscription when the {@link SubscriptionErrorPolicy} stopped the subscriber and resumes
+     *                    automatically, and decides when a stopping policy skips an event instead. Optional: without it a
+     *                    stopped subscriber stays stopped until its subscription is resumed by hand
+     * @return this builder instance for fluent chaining
+     */
+    BatchedPersistedEventSubscriberBuilder setAutoResumer(SubscriptionAutoResumer autoResumer) {
+        this.autoResumer = autoResumer;
+        return this;
+    }
+
+    /**
      * Builds the subscriber.
      *
      * @return the subscriber
      */
     public BatchedPersistedEventSubscriber build() {
-        return new BatchedPersistedEventSubscriber(requireNonNull(eventHandler, "eventHandler cannot be null"),
-                                                   requireNonNull(eventStoreSubscription, "eventStoreSubscription cannot be null"),
-                                                   requireNonNull(onErrorHandler, "onErrorHandler cannot be null"),
-                                                   requireNonNull(forwardToEventHandlerRetryBackoffSpec, "forwardToEventHandlerRetryBackoffSpec cannot be null"),
-                                                   eventStorePollingBatchSize,
-                                                   requireNonNull(eventStore, "eventStore cannot be null"),
-                                                   maxBatchSize,
-                                                   requireNonNull(maxLatency, "maxLatency cannot be null"));
+        var subscriber = new BatchedPersistedEventSubscriber(requireNonNull(eventHandler, "eventHandler cannot be null"),
+                                                             requireNonNull(eventStoreSubscription, "eventStoreSubscription cannot be null"),
+                                                             requireNonNull(onErrorHandler, "onErrorHandler cannot be null"),
+                                                             requireNonNull(forwardToEventHandlerRetryBackoffSpec, "forwardToEventHandlerRetryBackoffSpec cannot be null"),
+                                                             eventStorePollingBatchSize,
+                                                             requireNonNull(eventStore, "eventStore cannot be null"),
+                                                             maxBatchSize,
+                                                             requireNonNull(maxLatency, "maxLatency cannot be null"),
+                                                             requireNonNull(subscriptionErrorPolicy, "subscriptionErrorPolicy cannot be null"),
+                                                             subscriberAcknowledgement != null ? subscriberAcknowledgement : SubscriberAcknowledgement.create());
+        subscriber.autoResumer = autoResumer;
+        return subscriber;
     }
 }

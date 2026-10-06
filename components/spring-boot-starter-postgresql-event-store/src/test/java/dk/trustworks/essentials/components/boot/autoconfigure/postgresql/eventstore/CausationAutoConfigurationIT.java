@@ -35,7 +35,7 @@ import org.springframework.boot.jdbc.autoconfigure.*;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
 import org.springframework.boot.test.util.TestPropertyValues;
 import org.springframework.context.ApplicationContext;
-import org.testcontainers.containers.PostgreSQLContainer;
+import org.testcontainers.postgresql.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.*;
 
 import java.util.*;
@@ -51,7 +51,7 @@ class CausationAutoConfigurationIT {
     private static final EventId CAUSE = EventId.of("the-cause");
 
     @Container
-    private static final PostgreSQLContainer<?> postgreSQLContainer = new PostgreSQLContainer<>("postgres:18.4")
+    private static final PostgreSQLContainer postgreSQLContainer = new PostgreSQLContainer("postgres:18.4")
             .withDatabaseName("causation-autoconfig-it")
             .withUsername("test-user")
             .withPassword("secret-password");

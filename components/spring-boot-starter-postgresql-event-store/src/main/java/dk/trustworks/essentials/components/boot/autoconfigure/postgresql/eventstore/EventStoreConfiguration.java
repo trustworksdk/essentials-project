@@ -214,6 +214,7 @@ public class EventStoreConfiguration {
                                             .setSnapshotResumePointsAfterEvents(subscriptionManagerProps.getSnapshotResumePointsAfterEvents())
                                             .setStartLifeCycles(essentialsComponentsProperties.getLifeCycles().isStartLifeCycles())
                                             .setEventStorePollingOptimizerFactory(optimizerFactory)
+                                            .setSubscriptionErrorPolicy(subscriptionManagerProps.getErrorPolicy().toSubscriptionErrorPolicy())
                                             .build();
     }
 
@@ -669,6 +670,32 @@ public class EventStoreConfiguration {
     }
 
     /**
+     * The {@value SubscriptionStoppedMicrometerMonitor#SUBSCRIPTION_STOPPED_METRIC} gauge - {@code 1} while a subscription
+     * is stopped by its {@link SubscriptionErrorPolicy}, the signal to alert on for a halted projection.
+     * <p>
+     * Deliberately not gated by {@code management.tracing.enabled} like {@link SubscriberGlobalOrderMicrometerMonitor}:
+     * it is an incident signal, recorded whenever a {@link MeterRegistry} is present - the same rule as the
+     * {@value MeasurementEventStoreSubscriptionObserver#SUBSCRIPTION_STOPPED_BY_ERROR_POLICY_METRIC} counter it complements.
+     * It is run by the {@link EventStoreSubscriptionMonitorManager}, so {@code essentials.eventstore.subscription-monitor.enabled=false}
+     * switches it off together with every other monitor.
+     *
+     * @param eventStoreSubscriptionManager the {@link EventStoreSubscriptionManager} the subscriptions' state is read from
+     * @param meterRegistry                 the {@link MeterRegistry} to register the gauge in, if any
+     * @param properties                    {@link EssentialsComponentsProperties} configuration properties
+     * @return the {@link SubscriptionStoppedMicrometerMonitor}
+     */
+    @Bean
+    @ConditionalOnMissingBean
+    public SubscriptionStoppedMicrometerMonitor subscriptionStoppedMicrometerMonitor(EventStoreSubscriptionManager eventStoreSubscriptionManager,
+                                                                                     Optional<MeterRegistry> meterRegistry,
+                                                                                     EssentialsComponentsProperties properties) {
+        // Optional is idiomatic at the @Bean injection point and is unwrapped on the spot
+        return new SubscriptionStoppedMicrometerMonitor(eventStoreSubscriptionManager,
+                                                        meterRegistry.orElse(null),
+                                                        properties.getTracingProperties().getModuleTag());
+    }
+
+    /**
      * The registry holding the in-memory per-subscription runtime statistics that
      * {@link dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.api.EventStoreApi#findAllSubscriptionStatistics(Object)}
      * reports. Only registered when {@code essentials.eventstore.subscription-manager.statistics.enabled} is
@@ -695,6 +722,10 @@ public class EventStoreConfiguration {
      * An application that defines its own {@link EventStoreSubscriptionObserver} bean replaces both. To keep the admin
      * API's subscription statistics, wrap the custom observer in a
      * {@link StatisticsCollectingEventStoreSubscriptionObserver} the same way this method does.
+     * <p>
+     * The {@value MeasurementEventStoreSubscriptionObserver#HANDLE_EVENT_FAILED_METRIC} counter is recorded whenever a
+     * {@link MeterRegistry} is present - it is not gated by {@code essentials.eventstore.subscription-manager.metrics.enabled},
+     * which only controls execution-time measurements.
      *
      * @param properties                     {@link EssentialsEventStoreProperties} configuration properties
      * @param meterRegistry                  the {@link MeterRegistry} to record metrics into, if any
@@ -713,7 +744,9 @@ public class EventStoreConfiguration {
                                                                                   properties.getSubscriptionManager().getMetrics().isEnabled(),
                                                                                   properties.getSubscriptionManager().getMetrics().toLogThresholds(),
                                                                                   MeasurementEventStoreSubscriptionObserver.class),
-                                                             essentialsProperties.getTracingProperties().getModuleTag());
+                                                             essentialsProperties.getTracingProperties().getModuleTag(),
+                                                             // The failure counters are an incident signal, so they are not gated by the execution-time metrics toggle
+                                                             meterRegistry.orElse(null));
         return subscriptionStatisticsRegistry.<EventStoreSubscriptionObserver>map(registry -> new StatisticsCollectingEventStoreSubscriptionObserver(observer, registry))
                                              .orElse(observer);
     }

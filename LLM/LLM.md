@@ -31,6 +31,7 @@
 |-------|---------|------|
 | **Types & Components Index** | Alphabetical lookup of all types/interfaces by use case | [LLM-types-index.md](LLM-types-index.md) |
 | **Components Overview** | Consolidated view of all component modules | [LLM-components.md](LLM-components.md) |
+| **Traps & Gotchas Index** | Silent-failure traps (compile, look right, fail at runtime/replay/upgrade) — one line per symptom, linking to the module doc section that owns it | [LLM-traps.md](LLM-traps.md) |
 
 ### Core Modules (Zero Dependencies)
 
@@ -493,6 +494,7 @@ public void processOrder(OrderId orderId, long fenceToken) {
 
 - [LLM-types-index.md](LLM-types-index.md) - **Types & Components Index** (alphabetical lookup by use case)
 - [LLM-components.md](LLM-components.md) - **Components Overview** (consolidated component documentation)
+- [LLM-traps.md](LLM-traps.md) - **Traps & Gotchas Index** (silent-failure symptoms → owning module doc section; scan before editing code in a module)
 
 ### By Module Type
 
@@ -504,11 +506,12 @@ public void processOrder(OrderId orderId, long fenceToken) {
 
 **Type Integrations:**
 - [LLM-types-integrations.md](LLM-types-integrations.md) - Overview + all integrations
-- Individual: [LLM-types-jackson.md](LLM-types-jackson.md), [LLM-types-jdbi.md](LLM-types-jdbi.md), [LLM-types-avro.md](LLM-types-avro.md), [LLM-types-spring-web.md](LLM-types-spring-web.md), [LLM-types-springdata-mongo.md](LLM-types-springdata-mongo.md), [LLM-types-springdata-jpa.md](LLM-types-springdata-jpa.md)
+- Individual: [LLM-types-jackson.md](LLM-types-jackson.md), [LLM-types-jdbi.md](LLM-types-jdbi.md), [LLM-types-avro.md](LLM-types-avro.md), [LLM-types-spring-web.md](LLM-types-spring-web.md), [LLM-types-springdata-mongo.md](LLM-types-springdata-mongo.md), [LLM-types-springdata-jpa.md](LLM-types-springdata-jpa.md), [LLM-immutable-jackson.md](LLM-immutable-jackson.md)
 
 **Components:**
 - [LLM-foundation.md](LLM-foundation.md), [LLM-foundation-types.md](LLM-foundation-types.md), [LLM-foundation-test.md](LLM-foundation-test.md)
 - [LLM-postgresql-event-store.md](LLM-postgresql-event-store.md), [LLM-postgresql-queue.md](LLM-postgresql-queue.md), [LLM-postgresql-distributed-fenced-lock.md](LLM-postgresql-distributed-fenced-lock.md), [LLM-postgresql-document-db.md](LLM-postgresql-document-db.md)
+- [LLM-postgresql-queue-shard-owned.md](LLM-postgresql-queue-shard-owned.md) (experimental, not published)
 - [LLM-spring-postgresql-event-store.md](LLM-spring-postgresql-event-store.md)
 - [LLM-springdata-mongo-queue.md](LLM-springdata-mongo-queue.md), [LLM-springdata-mongo-distributed-fenced-lock.md](LLM-springdata-mongo-distributed-fenced-lock.md)
 - [LLM-eventsourced-aggregates.md](LLM-eventsourced-aggregates.md), [LLM-kotlin-eventsourcing.md](LLM-kotlin-eventsourcing.md)

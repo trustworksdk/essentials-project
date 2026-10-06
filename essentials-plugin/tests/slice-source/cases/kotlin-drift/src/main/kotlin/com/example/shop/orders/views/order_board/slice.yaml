@@ -1,0 +1,23 @@
+schemaVersion: "1.3"
+slice: orders.order_board
+kind: view
+bc: orders
+owner: orders-team
+status: live
+summary: Board of open orders.
+generator: essentials
+language: kotlin
+tier: cqrs-es
+lane: decider
+serves: [OrderBoard, OrderBoardByStatus, FilteredBoard, ClosedOrders, OrdersBetween]
+endpoints:
+  - { method: GET, path: "/api/orders/board", auth: user }
+  - { method: GET, path: "/api/orders/board?status=", auth: user }
+  - { method: GET, path: "/api/orders/board/filtered?status=", auth: user }
+  - { method: GET, path: "/api/orders/board?state=closed", auth: user }
+  - { method: GET, path: "/api/orders/board?from=&to=", auth: user }
+owns: [OrderBoard]
+projections:
+  - { name: OrderBoard, aggregateTypes: [Orders], from: [OrderPlaced], consistency: eventual }
+tests:
+  unit: { present: false }

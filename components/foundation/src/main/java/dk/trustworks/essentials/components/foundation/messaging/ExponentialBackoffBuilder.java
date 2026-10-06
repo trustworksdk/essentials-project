@@ -20,7 +20,13 @@ import java.time.Duration;
 
 /**
  * Builder for {@link RedeliveryPolicy} that allows for defining
- * an Exponential Backoff strategy - similar to {@link RedeliveryPolicyBuilder}
+ * an Exponential Backoff strategy - similar to {@link RedeliveryPolicyBuilder}.<br>
+ * The first redelivery waits {@code initialRedeliveryDelay}; redelivery {@code n >= 1} waits
+ * {@code followupRedeliveryDelay × followupRedeliveryDelayMultiplier^(n-1)}, capped at {@code maximumFollowupRedeliveryDelayThreshold}.
+ * {@code (500ms, 500ms, 2.0, 1min)} waits 500ms, 500ms, 1s, 2s, 4s … up to 1min.
+ * A multiplier left unset (or below {@code 1.0}) means no growth.
+ *
+ * @see RedeliveryPolicy#calculateNextRedeliveryDelay(int)
  * @see RedeliveryPolicy#builder()
  * @see RedeliveryPolicy#exponentialBackoff()
  * @see RedeliveryPolicy#linearBackoff()

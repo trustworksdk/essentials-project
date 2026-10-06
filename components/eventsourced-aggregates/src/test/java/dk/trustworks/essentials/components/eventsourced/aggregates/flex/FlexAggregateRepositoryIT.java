@@ -33,7 +33,7 @@ import dk.trustworks.essentials.components.foundation.transaction.*;
 import org.jdbi.v3.core.Jdbi;
 import org.jdbi.v3.postgres.PostgresPlugin;
 import org.junit.jupiter.api.*;
-import org.testcontainers.containers.PostgreSQLContainer;
+import org.testcontainers.postgresql.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.*;
 import org.testcontainers.shaded.org.awaitility.Awaitility;
 import reactor.core.Disposable;
@@ -56,7 +56,7 @@ public class FlexAggregateRepositoryIT {
     private PostgresqlEventStore<SeparateTablePerAggregateEventStreamConfiguration> eventStore;
 
     @Container
-    private final PostgreSQLContainer<?> postgreSQLContainer = new PostgreSQLContainer<>("postgres:18.4").withDatabaseName("event-store")
+    private final PostgreSQLContainer postgreSQLContainer = new PostgreSQLContainer("postgres:18.4").withDatabaseName("event-store")
                                                                                                            .withUsername("test-user")
                                                                                                            .withPassword("secret-password");
 
@@ -111,6 +111,25 @@ public class FlexAggregateRepositoryIT {
         if (persistedEventFlux != null) {
             persistedEventFlux.dispose();
         }
+    }
+
+    /**
+     * The repository's {@link dk.trustworks.essentials.components.foundation.transaction.UnitOfWorkLifecycleCallback}
+     * only reports {@link EventsToPersist} that contain events as pending changes
+     */
+    @Test
+    void only_events_to_persist_with_events_are_pending_changes_in_the_unit_of_work() {
+        var orderId    = OrderId.of("0784e5b6-9b27-4236-8797-480c117b0599");
+        var customerId = CustomerId.of("bc049499-f338-46a5-85fe-26d4da26faff");
+
+        unitOfWorkFactory.usingUnitOfWork(unitOfWork -> {
+            ordersRepository.persist(EventsToPersist.noEvents(orderId));
+            assertThat(unitOfWork.getAllUnitOfWorkLifecycleCallbackResources()).hasSize(1);
+            assertThat(unitOfWork.hasLifecycleCallbackResourcesWithPendingChanges()).isFalse();
+
+            ordersRepository.persist(Order.createNewOrder(orderId, customerId, 123));
+            assertThat(unitOfWork.hasLifecycleCallbackResourcesWithPendingChanges()).isTrue();
+        });
     }
 
     @DisplayName("Verify we can persist an Aggregate and load it again")

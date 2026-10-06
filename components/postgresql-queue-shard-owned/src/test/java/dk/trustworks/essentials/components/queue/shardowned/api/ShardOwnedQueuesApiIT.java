@@ -22,7 +22,7 @@ import dk.trustworks.essentials.components.queue.shardowned.spi.*;
 import dk.trustworks.essentials.components.queue.shardowned.LabPostgres;
 import dk.trustworks.essentials.shared.security.*;
 import org.junit.jupiter.api.*;
-import org.testcontainers.containers.PostgreSQLContainer;
+import org.testcontainers.postgresql.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.*;
 
 import java.nio.charset.StandardCharsets;
@@ -58,7 +58,7 @@ class ShardOwnedQueuesApiIT {
     private static final QueueName PAYMENTS = QueueName.of("api-payments");
 
     @Container
-    static PostgreSQLContainer<?> postgres = LabPostgres.create();
+    static PostgreSQLContainer postgres = LabPostgres.create();
 
     private HikariDataSource     dataSource;
     private TestMessageQueues    queues;

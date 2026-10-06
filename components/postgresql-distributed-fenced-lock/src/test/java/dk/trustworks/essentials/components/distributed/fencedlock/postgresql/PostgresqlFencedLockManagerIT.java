@@ -22,7 +22,7 @@ import dk.trustworks.essentials.components.foundation.transaction.jdbi.JdbiUnitO
 import org.jdbi.v3.core.Jdbi;
 import org.jdbi.v3.postgres.PostgresPlugin;
 import dk.trustworks.essentials.components.foundation.test.EssentialsTestContainers;
-import org.testcontainers.containers.PostgreSQLContainer;
+import org.testcontainers.postgresql.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.*;
 
 import java.time.Duration;
@@ -33,7 +33,7 @@ class PostgresqlFencedLockManagerIT extends DBFencedLockManagerIT<PostgresqlFenc
     private JdbiUnitOfWorkFactory unitOfWorkFactory;
 
     @Container
-    private static final PostgreSQLContainer<?> postgreSQLContainer = EssentialsTestContainers.postgres("lock-db");
+    private static final PostgreSQLContainer postgreSQLContainer = EssentialsTestContainers.postgres("lock-db");
 
     @Override
     protected PostgresqlFencedLockManager createLockManagerNode2() {

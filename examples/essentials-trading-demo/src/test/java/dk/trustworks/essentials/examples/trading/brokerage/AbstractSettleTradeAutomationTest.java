@@ -35,7 +35,7 @@ import dk.trustworks.essentials.types.Amount;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.test.context.*;
-import org.testcontainers.containers.PostgreSQLContainer;
+import org.testcontainers.postgresql.PostgreSQLContainer;
 
 import java.math.BigDecimal;
 import java.time.Duration;
@@ -54,14 +54,14 @@ import static org.awaitility.Awaitility.await;
 abstract class AbstractSettleTradeAutomationTest {
     private static final Duration SETTLEMENT_TIMEOUT = Duration.ofSeconds(60);
 
-    static PostgreSQLContainer<?> postgres(String databaseName) {
-        return new PostgreSQLContainer<>("postgres:18.4")
+    static PostgreSQLContainer postgres(String databaseName) {
+        return new PostgreSQLContainer("postgres:18.4")
                 .withDatabaseName(databaseName)
                 .withUsername("test")
                 .withPassword("test");
     }
 
-    static void registerDataSource(DynamicPropertyRegistry registry, PostgreSQLContainer<?> postgres) {
+    static void registerDataSource(DynamicPropertyRegistry registry, PostgreSQLContainer postgres) {
         registry.add("spring.datasource.url", postgres::getJdbcUrl);
         registry.add("spring.datasource.username", postgres::getUsername);
         registry.add("spring.datasource.password", postgres::getPassword);

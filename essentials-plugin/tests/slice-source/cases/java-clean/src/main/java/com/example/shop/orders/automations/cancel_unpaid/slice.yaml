@@ -1,0 +1,16 @@
+schemaVersion: "1.2"
+slice: orders.cancel_unpaid
+kind: automation
+bc: orders
+owner: orders-team
+status: live
+summary: Cancel orders nobody paid for.
+generator: essentials
+language: java
+tier: cqrs-es
+lane: decider
+consumes: [OrderPlaced]
+dispatches: [CancelOrder]
+schedule: { fixedDelay: PT15M, initialDelay: PT1M, note: "Sweep window." }
+tests:
+  unit: { present: false }

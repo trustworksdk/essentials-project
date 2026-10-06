@@ -59,4 +59,14 @@ public record GapReconciliation(int newTransientGaps, int resolvedTransientGaps,
     public boolean isEmpty() {
         return newTransientGaps == 0 && resolvedTransientGaps == 0 && promotedToPermanentGaps == 0;
     }
+
+    /**
+     * @param other another reconciliation of the same subscriber and aggregate type
+     * @return what this and {@code other} changed together
+     */
+    public GapReconciliation plus(GapReconciliation other) {
+        return new GapReconciliation(newTransientGaps + other.newTransientGaps,
+                                     resolvedTransientGaps + other.resolvedTransientGaps,
+                                     promotedToPermanentGaps + other.promotedToPermanentGaps);
+    }
 }

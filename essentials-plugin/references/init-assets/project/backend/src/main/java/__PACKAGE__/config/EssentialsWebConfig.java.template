@@ -1,0 +1,37 @@
+package {{packagePath}}.config;
+
+<!-- IF web=webflux -->
+import dk.trustworks.essentials.types.spring.web.EssentialsWebFluxConfigurer;
+<!-- END web -->
+<!-- IF web=webmvc -->
+import dk.trustworks.essentials.types.spring.web.EssentialsWebMvcConfigurer;
+<!-- END web -->
+import dk.trustworks.essentials.types.spring.web.SingleValueTypeModelConverter;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Configuration;
+import org.springframework.context.annotation.Import;
+
+/**
+ * S4: types-spring-web auto-configures nothing. This {@code @Import} is the registration of the converter that binds
+ * Essentials semantic types as path variables and request parameters; without it they fail with HTTP 500. A Java id
+ * extends CharSequenceType and cannot bind at all without it. Import exactly one configurer, matching the web stack.
+ */
+@Configuration
+<!-- IF web=webflux -->
+@Import(EssentialsWebFluxConfigurer.class)
+<!-- END web -->
+<!-- IF web=webmvc -->
+@Import(EssentialsWebMvcConfigurer.class)
+<!-- END web -->
+public class EssentialsWebConfig {
+
+    /**
+     * S7: makes springdoc describe semantic types as the JSON they are written as (a CharSequenceType id as a string,
+     * not as an object with bytes, empty and value), so the client generated from contracts/openapi.json types every
+     * id correctly. Not auto-configured either.
+     */
+    @Bean
+    SingleValueTypeModelConverter singleValueTypeModelConverter() {
+        return new SingleValueTypeModelConverter();
+    }
+}

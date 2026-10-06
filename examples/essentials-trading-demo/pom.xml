@@ -38,10 +38,14 @@
 
     <properties>
         <!-- Demo module: it builds and tests with the rest of the reactor, but it is not a published artifact.
-             `mvn deploy -P release` runs over the whole reactor, so the exclusion has to live here. This module
-             parents straight off the root POM rather than the examples aggregator, so it does not inherit the
-             aggregator's copy of this property. -->
+             maven.deploy.skip only stops a plain `mvn deploy`. The release profile's central-publishing-maven-plugin
+             never reads it; it reads skipPublishing, set here so the module carries its own exclusion. The release
+             is also kept clear of this module by that plugin's excludeArtifacts in the root POM and by the release
+             workflow's -pl. scripts/check-release-exclusions.py fails CI unless all three hold. This module parents
+             straight off the root POM rather than the examples aggregator, so it does not inherit the aggregator's
+             copy of these properties. -->
         <maven.deploy.skip>true</maven.deploy.skip>
+        <skipPublishing>true</skipPublishing>
         <loki-logback-appender.version>2.1.0</loki-logback-appender.version>
     </properties>
 

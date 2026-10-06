@@ -1,0 +1,183 @@
+# decider-lane.expected.yaml — the machine-readable expectations for /essentials:review on decider-lane.patch
+# (format 1, the fixtures' expected.yaml shape plus the review sections below). TEST-GUIDE.md beside it is
+# the human description of the same expectations; when they disagree, fix both.
+#
+# Paths are relative to the fixture root AFTER the patch is applied. `line` is 1-based on the patched
+# file and `anchor` is text that must appear on that line, so a stale line number is detectable
+# (check-patches.py checks every one). `gate` is the slice-check gate as written in commands/slice-check.md
+# ("8a", "10"), null for a trap; `ess` is the id the row must carry; `also_ids` are ids the row may name
+# beside it. Severities: Blocking | Should-fix | Advisory. `deterministic: true` = a script reports it and
+# the report takes it verbatim; otherwise it is judgement.
+#
+#   setup          how the sandbox is built: fixture, patch, commit message, prompt
+#   deterministic  exactly what each script reports for this change (checked by check-patches.py, no model)
+#   must_find      every entry must appear in the report as a finding row
+#   dismissed      candidates the report must list under "Dismissed candidates", each with a reason
+#   not_run        checks the report must name under "Not run" — never omitted, never reported as clean
+#   must_not_find  a finding under any of `not_gates` ("*" = any) or `not_ids` about that file/symbol fails
+#   tolerated      may appear or not; neither counts for or against the run
+#   fix            the --fix run: the rows offered, in order, the scripted answers and the files after
+
+format: 1
+case: decider-lane
+setup:
+  fixture: tests/fixtures/worked-example
+  exclude: [TEST-GUIDE.md, expected.yaml]
+  patch: tests/review/judgement/decider-lane.patch
+  commit_message: Expedite orders
+  prompt: /essentials:review HEAD~1
+
+deterministic:
+  review-scan:            # review-scan.py --diff decider-lane.patch --json
+    exit: 1
+    findings:
+    - {id: ESS-052, check: ess-052-hand-built-mapper, kind: candidate, severity: Should-fix,
+       file: orders/external_systems/warehouse/WarehouseHttpClient.kt, line: 21, mechanical: false}
+    - {id: ESS-050, check: ess-050-lock-confirmation, kind: confirmed, severity: Should-fix,
+       file: src/main/resources/application.yml, line: 7, mechanical: false}
+    - {id: ESS-103, check: ess-103-transactional-mode, kind: confirmed, severity: Should-fix,
+       file: src/main/resources/application.yml, line: 10, mechanical: true}
+    notRun: []
+  stack-lint:             # no pom.xml in the tree
+    exit: 2
+  slice-lint:             # head 7 manifests, base 5; nothing new
+    new: []
+  slice-source:           # --check, head minus base
+    new:
+    - {id: ESS-G11b, gate: 11(b) handled events, severity: Should-fix,
+       file: orders/views/order_list/OrderListProjection.kt, line: 54}
+
+must_find:
+- id: R1
+  gate: null
+  ess: ESS-050
+  severity: Should-fix
+  deterministic: true
+  file: src/main/resources/application.yml
+  line: 7
+  anchor: 'lock-time-out: 6s'
+  what: The fenced-lock confirmation interval (4s) is not at least twice as short as the lock timeout (6s), so one slow confirmation lets the lock expire.
+- id: R2
+  gate: null
+  ess: ESS-103
+  severity: Should-fix
+  deterministic: true
+  file: src/main/resources/application.yml
+  line: 10
+  anchor: 'transactional-mode: fully-transactional'
+  what: essentials.durable-queues.transactional-mode is retired and binds to nothing; the fix (delete the key) is mechanical.
+- id: R3
+  gate: 11b
+  ess: ESS-G11b
+  severity: Should-fix
+  deterministic: true
+  file: orders/views/order_list/OrderListProjection.kt
+  line: 54
+  anchor: 'fun on(event: OrderExpedited, message: OrderedMessage) {'
+  symbol: OrderListProjection.on(OrderExpedited)
+  what: The order_list projection now handles OrderExpedited, which its manifest's projections[].from does not declare; the repair is a manifest refresh.
+- id: R4
+  gate: 8a
+  ess: ESS-G8a
+  severity: Blocking
+  file: orders/use_cases/expedite_order/ExpediteOrderDecider.kt
+  line: 6
+  anchor: 'import {{packagePath}}.orders.use_cases.cancel_order.OrderState'
+  what: The expedite_order command slice imports cancel_order's OrderState and OrderStateEvolver — one slice reaching into another slice's internals (§R4).
+- id: R5
+  gate: '9'
+  ess: ESS-G9
+  severity: Blocking
+  file: orders/use_cases/expedite_order/ExpediteOrderDecider.kt
+  line: 12
+  anchor: 'class ExpediteOrderDecider : Decider<ExpediteOrder, OrderEvent> {'
+  also_names: [orders/config/OrdersConfiguration.kt]
+  what: The new ExpediteOrderDecider has no @Bean in the bounded context's config (OrdersConfiguration), so ExpediteOrder is routed to no decider.
+- id: R6
+  gate: '10'
+  ess: ESS-075
+  also_ids: [ESS-G10]
+  severity: Blocking
+  file: orders/views/expedited_orders/ExpeditedOrdersProjection.kt
+  line: 30
+  anchor: 'fun on(event: OrderExpedited) {'
+  symbol: ExpeditedOrdersProjection.on(OrderExpedited)
+  what: A single-argument @MessageHandler saves a versioned read model (a VersionedEntity through a DocumentDb repository) without taking OrderedMessage and passing its order, so a redelivered event is applied twice.
+
+dismissed:
+- id: D1
+  ess: ESS-052
+  file: orders/external_systems/warehouse/WarehouseHttpClient.kt
+  line: 21
+  anchor: 'private val json = jacksonObjectMapper()'
+  why: The mapper writes the warehouse's outbound HTTP request body; nothing it serializes is persisted by Essentials.
+
+not_run:
+- id: NR1
+  checks: the stack contract (ESS-S1 … ESS-S11)
+  why: The tree has no pom.xml, so stack-lint.py cannot run; the report must say so, and must neither invent an ESS-S row nor call the stack clean.
+
+must_not_find:
+- id: N1
+  not_gates: ['6']
+  file: orders/use_cases/expedite_order/ExpediteOrderAPI.kt
+  line: 20
+  anchor: '@PostMapping("/{orderId}/expedite")'
+  why: One method-level mapping; the class-level @RequestMapping is the base route, not a second mapping.
+- id: N2
+  not_gates: ['6']
+  file: orders/views/expedited_orders/ExpeditedOrdersAPI.kt
+  line: 11
+  anchor: '@RequestMapping("/api/orders/expedited")'
+  why: A view slice may serve several queries over its own read model; both are declared in endpoints.
+- id: N3
+  not_gates: ['10', '11b']
+  file: orders/views/expedited_orders/ExpeditedOrdersProjection.kt
+  line: 14
+  anchor: '@MessageHandler` whose parameter type matches it'
+  what: a handler inferred from the class comment
+  why: The comment names @MessageHandler; prose is not a handler. The one real handler is R6.
+- id: N4
+  not_gates: ['*']
+  not_ids: [ESS-052]
+  file: orders/external_systems/warehouse/WarehouseHttpClient.kt
+  line: 21
+  anchor: 'private val json = jacksonObjectMapper()'
+  why: The ESS-052 candidate must be dismissed, not reported.
+- id: N5
+  not_gates: ['4', 4a, 4b, 4c]
+  file: orders/use_cases/expedite_order/slice.yaml
+  line: 18
+  anchor: 'writes: [Order]'
+  why: Several command slices writing one aggregate is the decider lane's design.
+- id: N6
+  not_gates: ['17']
+  file: orders/use_cases/expedite_order/ExpediteOrder.kt
+  line: 10
+  anchor: ') : OrderCommand'
+  why: The command implements the bounded context's routing marker.
+- id: N7
+  not_gates: ['*']
+  file: orders/automations/screen_order/ScreenOrderProcessor.kt
+  why: Unchanged by the patch; its CancelOrder import is the sanctioned send-a-command case anyway.
+- id: N8
+  not_gates: ['*']
+  file: orders/external_systems/warehouse/WarehousePublisher.kt
+  why: Unchanged by the patch; a single-argument translation handler with no versioned state is not gate 10.
+- id: N9
+  not_gates: ['*']
+  file: orders/views/order_list/slice.yaml
+  what: the pre-existing "view slice with no test"
+  why: Pre-existing and not in the change; only R3 is new on this slice, and it is reported on the projection.
+
+tolerated:
+- id: T1
+  file: orders/views/expedited_orders/slice.yaml
+  what: a Should-fix that a new slice (expedite_order or expedited_orders) has no test
+- id: T2
+  file: orders/CLAUDE.md
+  what: an Advisory that the bounded context's CLAUDE.md slice index does not list the two new slices
+- id: T3
+  file: orders/use_cases/cancel_order/OrderStateEvolver.kt
+  what: the OrderExpedited branch added to cancel_order's evolver named as part of R4's coupling
+  may_merge_with: R4

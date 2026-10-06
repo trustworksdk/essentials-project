@@ -1,0 +1,681 @@
+{
+  "tool": "slice-source",
+  "format": 1,
+  "mode": "facts",
+  "root": "tests/fixtures/worked-example",
+  "manifestsRead": true,
+  "sourceFiles": 26,
+  "bcs": [
+    {
+      "name": "orders",
+      "path": "orders",
+      "dirs": [
+        "orders"
+      ],
+      "languages": [
+        "kotlin"
+      ],
+      "slices": [
+        "orders.screen_order",
+        "orders.warehouse",
+        "orders.cancel_order",
+        "orders.place_order",
+        "orders.order_list"
+      ],
+      "lane": {
+        "signals": {
+          "decider": [
+            {
+              "file": "orders/use_cases/cancel_order/CancelOrderDecider.kt",
+              "line": 21,
+              "symbol": "CancelOrderDecider",
+              "via": "Decider"
+            },
+            {
+              "file": "orders/use_cases/place_order/PlaceOrderDecider.kt",
+              "line": 16,
+              "symbol": "PlaceOrderDecider",
+              "via": "Decider"
+            }
+          ],
+          "aggregates": null,
+          "entities": null,
+          "eventStore": [
+            {
+              "file": "orders/automations/screen_order/ScreenOrderProcessor.kt",
+              "line": 33,
+              "symbol": "AggregateType"
+            },
+            {
+              "file": "orders/config/OrdersConfiguration.kt",
+              "line": 27,
+              "symbol": "AggregateType"
+            },
+            {
+              "file": "orders/external_systems/warehouse/WarehousePublisher.kt",
+              "line": 28,
+              "symbol": "AggregateType"
+            },
+            {
+              "file": "orders/views/order_list/OrderListProjection.kt",
+              "line": 31,
+              "symbol": "AggregateType"
+            },
+            {
+              "file": "orders/views/order_list/OrderListProjection.kt",
+              "line": 55,
+              "symbol": "GlobalEventOrder"
+            }
+          ]
+        },
+        "declared": [
+          {
+            "slice": "orders.screen_order",
+            "lane": "decider",
+            "file": "orders/automations/screen_order/slice.yaml"
+          },
+          {
+            "slice": "orders.warehouse",
+            "lane": "decider",
+            "file": "orders/external_systems/warehouse/slice.yaml"
+          },
+          {
+            "slice": "orders.cancel_order",
+            "lane": "decider",
+            "file": "orders/use_cases/cancel_order/slice.yaml"
+          },
+          {
+            "slice": "orders.place_order",
+            "lane": "decider",
+            "file": "orders/use_cases/place_order/slice.yaml"
+          },
+          {
+            "slice": "orders.order_list",
+            "lane": "decider",
+            "file": "orders/views/order_list/slice.yaml"
+          }
+        ],
+        "detected": "decider"
+      }
+    }
+  ],
+  "slices": [
+    {
+      "id": "orders.screen_order",
+      "idSource": "manifest",
+      "bc": "orders",
+      "bcPath": "orders",
+      "dir": "orders/automations/screen_order",
+      "role": "automations",
+      "kind": "automation",
+      "manifest": "orders/automations/screen_order/slice.yaml",
+      "language": "kotlin",
+      "package": "{{packagePath}}.orders.automations.screen_order",
+      "files": [
+        "ScreenOrderProcessor.kt",
+        "ScreenOrderRepository.kt",
+        "ScreenOrderTodo.kt"
+      ],
+      "processors": [
+        {
+          "class": "ScreenOrderProcessor",
+          "base": "EventProcessor",
+          "file": "orders/automations/screen_order/ScreenOrderProcessor.kt",
+          "line": 26
+        }
+      ],
+      "handlers": [
+        {
+          "class": "ScreenOrderProcessor",
+          "method": "on",
+          "annotation": "MessageHandler",
+          "annotationFqn": "dk.trustworks.essentials.components.foundation.messaging.MessageHandler",
+          "role": "event",
+          "file": "orders/automations/screen_order/ScreenOrderProcessor.kt",
+          "line": 37,
+          "annotationLine": 36,
+          "message": {
+            "written": "Placed",
+            "name": "OrderPlaced",
+            "fqn": "{{packagePath}}.orders.events.OrderPlaced",
+            "resolvedBy": "alias"
+          },
+          "params": [
+            {
+              "name": "event",
+              "type": "Placed"
+            },
+            {
+              "name": "message",
+              "type": "OrderedMessage"
+            }
+          ],
+          "envelope": false
+        },
+        {
+          "class": "ScreenOrderProcessor",
+          "method": "on",
+          "annotation": "MessageHandler",
+          "annotationFqn": "dk.trustworks.essentials.components.foundation.messaging.MessageHandler",
+          "role": "event",
+          "file": "orders/automations/screen_order/ScreenOrderProcessor.kt",
+          "line": 48,
+          "annotationLine": 47,
+          "message": {
+            "written": "OrderCancelled",
+            "name": "OrderCancelled",
+            "fqn": "{{packagePath}}.orders.events.OrderCancelled",
+            "resolvedBy": "import"
+          },
+          "params": [
+            {
+              "name": "event",
+              "type": "OrderCancelled"
+            },
+            {
+              "name": "message",
+              "type": "OrderedMessage"
+            }
+          ],
+          "envelope": false
+        }
+      ],
+      "handles": [],
+      "dispatches": [
+        {
+          "name": "CancelOrder",
+          "fqn": "{{packagePath}}.orders.use_cases.cancel_order.CancelOrder",
+          "resolvedBy": "import",
+          "via": "sendAndDontWait",
+          "file": "orders/automations/screen_order/ScreenOrderProcessor.kt",
+          "line": 41,
+          "own": false
+        }
+      ],
+      "publishes": [],
+      "subscriptions": [
+        {
+          "aggregateType": "Orders",
+          "written": "AggregateType.of(\"Orders\")",
+          "file": "orders/automations/screen_order/ScreenOrderProcessor.kt",
+          "line": 34
+        }
+      ],
+      "mappings": [],
+      "schedules": [],
+      "notAnalysed": []
+    },
+    {
+      "id": "orders.warehouse",
+      "idSource": "manifest",
+      "bc": "orders",
+      "bcPath": "orders",
+      "dir": "orders/external_systems/warehouse",
+      "role": "external_systems",
+      "kind": "translation",
+      "manifest": "orders/external_systems/warehouse/slice.yaml",
+      "language": "kotlin",
+      "package": "{{packagePath}}.orders.external_systems.warehouse",
+      "files": [
+        "WarehouseClient.kt",
+        "WarehousePublisher.kt",
+        "WarehouseTranslator.kt"
+      ],
+      "processors": [
+        {
+          "class": "WarehousePublisher",
+          "base": "EventProcessor",
+          "file": "orders/external_systems/warehouse/WarehousePublisher.kt",
+          "line": 19
+        }
+      ],
+      "handlers": [
+        {
+          "class": "WarehousePublisher",
+          "method": "on",
+          "annotation": "MessageHandler",
+          "annotationFqn": "dk.trustworks.essentials.components.foundation.messaging.MessageHandler",
+          "role": "event",
+          "file": "orders/external_systems/warehouse/WarehousePublisher.kt",
+          "line": 32,
+          "annotationLine": 31,
+          "message": {
+            "written": "{{packagePath}}.orders.events.OrderPlaced",
+            "name": "OrderPlaced",
+            "fqn": "{{packagePath}}.orders.events.OrderPlaced",
+            "resolvedBy": "fqn"
+          },
+          "params": [
+            {
+              "name": "event",
+              "type": "{{packagePath}}.orders.events.OrderPlaced"
+            }
+          ],
+          "envelope": false
+        }
+      ],
+      "handles": [],
+      "dispatches": [],
+      "publishes": [],
+      "subscriptions": [
+        {
+          "aggregateType": "Orders",
+          "written": "AggregateType.of(\"Orders\")",
+          "file": "orders/external_systems/warehouse/WarehousePublisher.kt",
+          "line": 29
+        }
+      ],
+      "mappings": [],
+      "schedules": [],
+      "notAnalysed": []
+    },
+    {
+      "id": "orders.cancel_order",
+      "idSource": "manifest",
+      "bc": "orders",
+      "bcPath": "orders",
+      "dir": "orders/use_cases/cancel_order",
+      "role": "use_cases",
+      "kind": "command",
+      "manifest": "orders/use_cases/cancel_order/slice.yaml",
+      "language": "kotlin",
+      "package": "{{packagePath}}.orders.use_cases.cancel_order",
+      "files": [
+        "CancelOrder.kt",
+        "CancelOrderAPI.kt",
+        "CancelOrderDecider.kt",
+        "OrderState.kt",
+        "OrderStateEvolver.kt"
+      ],
+      "processors": [],
+      "handlers": [],
+      "handles": [
+        {
+          "name": "CancelOrder",
+          "fqn": "{{packagePath}}.orders.use_cases.cancel_order.CancelOrder",
+          "resolvedBy": "same-package",
+          "via": "Decider",
+          "file": "orders/use_cases/cancel_order/CancelOrderDecider.kt",
+          "line": 21
+        }
+      ],
+      "dispatches": [
+        {
+          "name": "CancelOrder",
+          "fqn": "{{packagePath}}.orders.use_cases.cancel_order.CancelOrder",
+          "resolvedBy": "same-package",
+          "via": "send",
+          "file": "orders/use_cases/cancel_order/CancelOrderAPI.kt",
+          "line": 42,
+          "own": true
+        }
+      ],
+      "publishes": [
+        {
+          "name": "OrderCancelled",
+          "fqn": "{{packagePath}}.orders.events.OrderCancelled",
+          "resolvedBy": "import",
+          "via": "decider",
+          "file": "orders/use_cases/cancel_order/CancelOrderDecider.kt",
+          "line": 29
+        }
+      ],
+      "subscriptions": [],
+      "mappings": [
+        {
+          "class": "CancelOrderAPI",
+          "method": "cancelOrder",
+          "file": "orders/use_cases/cancel_order/CancelOrderAPI.kt",
+          "line": 41,
+          "annotationLine": 39,
+          "annotation": "PostMapping",
+          "httpMethods": [
+            "POST"
+          ],
+          "routes": [
+            "/api/orders/{orderId}/cancel"
+          ],
+          "params": [],
+          "requestParams": [],
+          "queryParams": [],
+          "requestBody": {
+            "name": "CancelOrderRequest",
+            "fqn": "{{packagePath}}.orders.use_cases.cancel_order.CancelOrderAPI.CancelOrderRequest",
+            "resolvedBy": "same-file"
+          }
+        }
+      ],
+      "schedules": [],
+      "notAnalysed": []
+    },
+    {
+      "id": "orders.place_order",
+      "idSource": "manifest",
+      "bc": "orders",
+      "bcPath": "orders",
+      "dir": "orders/use_cases/place_order",
+      "role": "use_cases",
+      "kind": "command",
+      "manifest": "orders/use_cases/place_order/slice.yaml",
+      "language": "kotlin",
+      "package": "{{packagePath}}.orders.use_cases.place_order",
+      "files": [
+        "PlaceOrder.kt",
+        "PlaceOrderAPI.kt",
+        "PlaceOrderDecider.kt"
+      ],
+      "processors": [],
+      "handlers": [],
+      "handles": [
+        {
+          "name": "PlaceOrder",
+          "fqn": "{{packagePath}}.orders.use_cases.place_order.PlaceOrder",
+          "resolvedBy": "same-package",
+          "via": "Decider",
+          "file": "orders/use_cases/place_order/PlaceOrderDecider.kt",
+          "line": 16
+        }
+      ],
+      "dispatches": [
+        {
+          "name": "PlaceOrder",
+          "fqn": "{{packagePath}}.orders.use_cases.place_order.PlaceOrder",
+          "resolvedBy": "same-package",
+          "via": "send",
+          "file": "orders/use_cases/place_order/PlaceOrderAPI.kt",
+          "line": 45,
+          "own": true
+        }
+      ],
+      "publishes": [
+        {
+          "name": "OrderPlaced",
+          "fqn": "{{packagePath}}.orders.events.OrderPlaced",
+          "resolvedBy": "import",
+          "via": "decider",
+          "file": "orders/use_cases/place_order/PlaceOrderDecider.kt",
+          "line": 20
+        }
+      ],
+      "subscriptions": [],
+      "mappings": [
+        {
+          "class": "PlaceOrderAPI",
+          "method": "placeOrder",
+          "file": "orders/use_cases/place_order/PlaceOrderAPI.kt",
+          "line": 44,
+          "annotationLine": 42,
+          "annotation": "PostMapping",
+          "httpMethods": [
+            "POST"
+          ],
+          "routes": [
+            "/api/orders"
+          ],
+          "params": [],
+          "requestParams": [],
+          "queryParams": [],
+          "requestBody": {
+            "name": "PlaceOrder",
+            "fqn": "{{packagePath}}.orders.use_cases.place_order.PlaceOrder",
+            "resolvedBy": "same-package"
+          }
+        }
+      ],
+      "schedules": [],
+      "notAnalysed": []
+    },
+    {
+      "id": "orders.order_list",
+      "idSource": "manifest",
+      "bc": "orders",
+      "bcPath": "orders",
+      "dir": "orders/views/order_list",
+      "role": "views",
+      "kind": "view",
+      "manifest": "orders/views/order_list/slice.yaml",
+      "language": "kotlin",
+      "package": "{{packagePath}}.orders.views.order_list",
+      "files": [
+        "OrderListAPI.kt",
+        "OrderListProjection.kt",
+        "OrderListRepository.kt",
+        "OrderListView.kt"
+      ],
+      "processors": [
+        {
+          "class": "OrderListProjection",
+          "base": "ViewEventProcessor",
+          "file": "orders/views/order_list/OrderListProjection.kt",
+          "line": 24
+        }
+      ],
+      "handlers": [
+        {
+          "class": "OrderListProjection",
+          "method": "on",
+          "annotation": "MessageHandler",
+          "annotationFqn": "dk.trustworks.essentials.components.foundation.messaging.MessageHandler",
+          "role": "event",
+          "file": "orders/views/order_list/OrderListProjection.kt",
+          "line": 35,
+          "annotationLine": 34,
+          "message": {
+            "written": "OrderPlaced",
+            "name": "OrderPlaced",
+            "fqn": "{{packagePath}}.orders.events.OrderPlaced",
+            "resolvedBy": "import"
+          },
+          "params": [
+            {
+              "name": "event",
+              "type": "OrderPlaced"
+            },
+            {
+              "name": "message",
+              "type": "OrderedMessage"
+            }
+          ],
+          "envelope": false
+        },
+        {
+          "class": "OrderListProjection",
+          "method": "on",
+          "annotation": "MessageHandler",
+          "annotationFqn": "dk.trustworks.essentials.components.foundation.messaging.MessageHandler",
+          "role": "event",
+          "file": "orders/views/order_list/OrderListProjection.kt",
+          "line": 44,
+          "annotationLine": 43,
+          "message": {
+            "written": "OrderCancelled",
+            "name": "OrderCancelled",
+            "fqn": "{{packagePath}}.orders.events.OrderCancelled",
+            "resolvedBy": "import"
+          },
+          "params": [
+            {
+              "name": "event",
+              "type": "OrderCancelled"
+            },
+            {
+              "name": "message",
+              "type": "OrderedMessage"
+            }
+          ],
+          "envelope": false
+        }
+      ],
+      "handles": [],
+      "dispatches": [],
+      "publishes": [],
+      "subscriptions": [
+        {
+          "aggregateType": "Orders",
+          "written": "AggregateType.of(\"Orders\")",
+          "file": "orders/views/order_list/OrderListProjection.kt",
+          "line": 32
+        }
+      ],
+      "mappings": [
+        {
+          "class": "OrderListAPI",
+          "method": "list",
+          "file": "orders/views/order_list/OrderListAPI.kt",
+          "line": 17,
+          "annotationLine": 16,
+          "annotation": "GetMapping",
+          "httpMethods": [
+            "GET"
+          ],
+          "routes": [
+            "/api/orders"
+          ],
+          "params": [],
+          "requestParams": [],
+          "queryParams": [],
+          "requestBody": null
+        },
+        {
+          "class": "OrderListAPI",
+          "method": "byStatus",
+          "file": "orders/views/order_list/OrderListAPI.kt",
+          "line": 20,
+          "annotationLine": 19,
+          "annotation": "GetMapping",
+          "httpMethods": [
+            "GET"
+          ],
+          "routes": [
+            "/api/orders"
+          ],
+          "params": [
+            "status"
+          ],
+          "requestParams": [
+            {
+              "name": "status",
+              "required": true
+            }
+          ],
+          "queryParams": [],
+          "requestBody": null
+        }
+      ],
+      "schedules": [],
+      "notAnalysed": [],
+      "readModels": [
+        {
+          "name": "OrderListView",
+          "store": "document-db",
+          "columns": [
+            {
+              "name": "orderId",
+              "type": "OrderId",
+              "note": "id"
+            },
+            {
+              "name": "sku",
+              "type": "String",
+              "note": null
+            },
+            {
+              "name": "quantity",
+              "type": "Int",
+              "note": null
+            },
+            {
+              "name": "status",
+              "type": "OrderStatus",
+              "note": "indexed"
+            },
+            {
+              "name": "cancelReason",
+              "type": "String?",
+              "note": null
+            },
+            {
+              "name": "version",
+              "type": "Version",
+              "note": null
+            },
+            {
+              "name": "lastUpdated",
+              "type": "OffsetDateTime",
+              "note": null
+            }
+          ],
+          "declaredIn": "orders/views/order_list/OrderListView.kt",
+          "line": 22,
+          "matchedBy": [
+            "annotation",
+            "name",
+            "manifest"
+          ]
+        }
+      ]
+    }
+  ],
+  "messages": [
+    {
+      "name": "CancelOrder",
+      "type": "command",
+      "bc": "orders",
+      "found": true,
+      "identity": "id: OrderId",
+      "fields": [
+        "id: OrderId",
+        "reason: String"
+      ],
+      "declaredIn": "orders/use_cases/cancel_order/CancelOrder.kt",
+      "line": 7,
+      "alsoDeclaredIn": []
+    },
+    {
+      "name": "OrderCancelled",
+      "type": "event",
+      "bc": "orders",
+      "found": true,
+      "identity": "id: OrderId",
+      "fields": [
+        "id: OrderId",
+        "reason: String"
+      ],
+      "declaredIn": "orders/events/OrderCancelled.kt",
+      "line": 8,
+      "alsoDeclaredIn": []
+    },
+    {
+      "name": "OrderPlaced",
+      "type": "event",
+      "bc": "orders",
+      "found": true,
+      "identity": "id: OrderId",
+      "fields": [
+        "id: OrderId",
+        "sku: String",
+        "quantity: Int"
+      ],
+      "declaredIn": "orders/events/OrderPlaced.kt",
+      "line": 8,
+      "alsoDeclaredIn": []
+    },
+    {
+      "name": "PlaceOrder",
+      "type": "command",
+      "bc": "orders",
+      "found": true,
+      "identity": "id: OrderId",
+      "fields": [
+        "id: OrderId",
+        "sku: String",
+        "quantity: Int"
+      ],
+      "declaredIn": "orders/use_cases/place_order/PlaceOrder.kt",
+      "line": 7,
+      "alsoDeclaredIn": []
+    }
+  ],
+  "unparsed": [],
+  "unresolved": []
+}

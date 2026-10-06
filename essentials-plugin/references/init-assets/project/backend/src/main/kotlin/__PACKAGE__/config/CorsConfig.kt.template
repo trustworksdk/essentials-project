@@ -1,0 +1,39 @@
+package {{packagePath}}.config
+
+import org.springframework.boot.context.properties.ConfigurationProperties
+import org.springframework.boot.context.properties.EnableConfigurationProperties
+import org.springframework.context.annotation.Bean
+import org.springframework.context.annotation.Configuration
+import org.springframework.web.cors.CorsConfiguration
+<!-- IF web=webflux -->
+import org.springframework.web.cors.reactive.CorsConfigurationSource
+import org.springframework.web.cors.reactive.UrlBasedCorsConfigurationSource
+<!-- END web -->
+<!-- IF web=webmvc -->
+import org.springframework.web.cors.CorsConfigurationSource
+import org.springframework.web.cors.UrlBasedCorsConfigurationSource
+<!-- END web -->
+
+/**
+ * Standalone frontend (S8, Mode B): real CORS, published as a CorsConfigurationSource so Spring Security applies it
+ * inside its filter chain. A standalone CORS filter would see the preflight only after Security has rejected it.
+ */
+@Configuration
+@EnableConfigurationProperties(CorsProperties::class)
+class CorsConfig {
+    @Bean
+    fun corsConfigurationSource(props: CorsProperties): CorsConfigurationSource {
+        val config = CorsConfiguration().apply {
+            allowedOrigins = props.allowedOrigins   // real origins, never "*" with credentials
+            allowedMethods = listOf("GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS")
+            allowedHeaders = listOf("Authorization", "Content-Type", "Accept")
+            allowCredentials = true
+            maxAge = 3600L
+        }
+        return UrlBasedCorsConfigurationSource().apply { registerCorsConfiguration("/api/**", config) }
+    }
+}
+
+/** Bound with @ConfigurationProperties: `@Value` cannot bind a YAML sequence to a List. */
+@ConfigurationProperties("app.cors")
+data class CorsProperties(val allowedOrigins: List<String> = emptyList())

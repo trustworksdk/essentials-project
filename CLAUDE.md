@@ -11,6 +11,8 @@ Multi-module Maven. GroupId: `dk.trustworks.essentials` / `dk.trustworks.essenti
 Consumer-facing module docs: `LLM/LLM.md` (entry point), `LLM/LLM-*.md` (per-module).
 Read before suggesting APIs — don't guess from class names.
 Each module has own `CLAUDE.md` with contributor/dev context.
+`LLM/LLM-traps.md` lines carry stable `ESS-NNN` ids — never renumber or reuse; retire under `## Retired ids`; `scripts/check-ess-ids.py` enforces it.
+Edit `LLM/` only: `essentials-plugin/references/llm/` is generated from it by `scripts/sync-plugin-llm.sh`, kept in step by the pre-commit hook (`scripts/install-git-hooks.sh`, once per clone) and enforced by CI. Any change under `essentials-plugin/` (an `LLM/` edit included) needs a new `plugin.json` `version`, or users never get it; CI enforces it, scheme in `essentials-plugin/CLAUDE.md`. Setup outside the devcontainer: README "Editing the LLM docs".
 
 ## Commands
 
@@ -23,6 +25,8 @@ mvn clean install                                     # full build
 mvn clean install -DskipDependencyCheck=true          # skip OWASP check
 mvn clean install -P test-release                     # simulated release
 ```
+
+Plugin/`LLM/` work: `scripts/plugin-check.sh changed` → what change needs; `quick` before commit (= CI `plugin-docs`); `--help` for rest.
 
 Integration-test speed knobs (ITs are ~99% of the build's wall clock):
 
@@ -46,6 +50,7 @@ scripts/test-timings.sh --csv > before.csv            # capture a baseline to di
 - **EventOrder vs GlobalEventOrder** — per-stream vs across all streams of an AggregateType; don't conflate
 - **No timestamp ordering** — event ordering via EventOrder/GlobalEventOrder, never timestamps
 - **`FailFast` inside a `@MessageHandler` dead-letters the message on first delivery** — the queue consumer applies a built-in permanent-error list *after* consulting the `RedeliveryPolicy`'s `MessageDeliveryErrorHandler`, and `IllegalArgumentException` is on it, as thrown by `requireNonNull`/`requireTrue` and Kotlin `require(...)`. Opt out per type with `alwaysRetryOn(...)`, which overrides the list for `IllegalArgumentException` and `ClassCastException` but not for the three that can never succeed on a retry. A match anywhere in the cause chain counts. Throw a retryable exception when the condition may become true later; details in `LLM/LLM-foundation.md`
+- **Every `examples/` module is excluded from the release in three places — keep all in step** on add/rename/remove: artifactId in release profile's `excludeArtifacts` (root `pom.xml`), in `-pl` exclusions in `.github/workflows/release-to-maven-central.yml`, and `<skipPublishing>true</skipPublishing>` in the module's own `<properties>` (or inherited from an in-repo parent). `maven.deploy.skip` alone does NOT keep it off Maven Central — `central-publishing-maven-plugin` never reads it; that is how 0.50.0 published every example. CI job `release-exclusions` (`scripts/check-release-exclusions.py`) fails until both lists match the reactor's `examples/` modules and each sets `skipPublishing`. Why: comment at `excludeArtifacts`
 - **Docker required for integration tests** — `mvn test` runs without Docker; `mvn verify` needs Docker (TestContainers)
 - **`target/` has more than one writer — suspect that before debugging the source.** The VS Code Java language server compiles into the very same `target/classes` Maven uses (the generated `.classpath` sets `output="target/classes"`), and a second concurrent `mvn` run — another terminal, or an agent session — `clean`s and repopulates those directories under the first one. Two symptoms, one cause, neither meaning what it says:
   - **`java.lang.Error: Unresolved compilation problem: …`** in a *test* failure. That text is Eclipse JDT output, never javac. Where ECJ's inference is weaker than javac's, it writes a class whose method bodies just throw; Maven's incremental compiler then sees the `.class` as newer than the `.java` and skips recompiling, so the broken bytecode runs. Known case: `shared`'s `ComparableTuple.toList()` — `List.of(_1, _2)` under `T extends Comparable<? super T>` bounds, which ECJ rejects and javac accepts.

@@ -498,7 +498,7 @@ See [README Security](../components/postgresql-queue/README.md#security) for ful
 
 ### Spring Boot Starter
 
-See [LLM-spring-boot-starter-modules.md](./LLM-spring-boot-starter-modules.md#spring-boot-starter-postgresql).
+See [LLM-spring-boot-starter-modules.md](./LLM-spring-boot-starter-modules.md#postgresql-starter).
 
 ```yaml
 essentials.postgresql:
@@ -531,12 +531,12 @@ essentials.postgresql:
 ## Test Utilities
 
 ```java
-import org.testcontainers.containers.PostgreSQLContainer;
+import org.testcontainers.postgresql.PostgreSQLContainer;
 import dk.trustworks.essentials.components.queue.postgresql.PostgresqlDurableQueues;
 import dk.trustworks.essentials.components.foundation.transaction.jdbi.JdbiUnitOfWorkFactory;
 
 @Container
-static PostgreSQLContainer<?> postgres = new PostgreSQLContainer<>("postgres:15");
+static PostgreSQLContainer postgres = new PostgreSQLContainer("postgres:15");
 
 @Bean
 public DurableQueues testDurableQueues(Jdbi jdbi) {

@@ -17,10 +17,13 @@
 package dk.trustworks.essentials.components.adminapi.rest;
 
 import dk.trustworks.essentials.components.adminapi.rest.dto.*;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.api.ApiSubscription;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.AggregateType;
 import dk.trustworks.essentials.components.foundation.fencedlock.LockName;
 import dk.trustworks.essentials.components.foundation.fencedlock.api.ApiDBFencedLock;
 import dk.trustworks.essentials.components.foundation.messaging.queue.*;
 import dk.trustworks.essentials.components.foundation.messaging.queue.api.ApiQueuedMessage;
+import dk.trustworks.essentials.components.foundation.types.SubscriberId;
 import org.junit.jupiter.api.*;
 import org.yaml.snakeyaml.Yaml;
 import tools.jackson.databind.json.JsonMapper;
@@ -98,10 +101,35 @@ class AdminApiSerializationTest {
         assertMatchesContractSchema("CountResult", new CountResult(42L));
         assertMatchesContractSchema("ReleaseResult", new ReleaseResult(true));
         assertMatchesContractSchema("DeleteResult", new DeleteResult(true));
+        assertMatchesContractSchema("ResumeResult", new ResumeResult(true));
         assertMatchesContractSchema("PurgeResult", new PurgeResult(7));
         assertMatchesContractSchema("QueueNameResult", new QueueNameResult("orders"));
         assertMatchesContractSchema("GlobalEventOrderResult", new GlobalEventOrderResult(99L));
         assertMatchesContractSchema("Error", new ApiError(403, "Forbidden", "nope"));
+    }
+
+    /**
+     * The SPI records are serialized as-is, so a component added to one - {@code stoppedByErrorPolicy} on
+     * {@code ApiSubscription} - reaches the wire whether or not the contract was regenerated.
+     */
+    @Test
+    void a_subscription_serializes_exactly_the_properties_the_contract_declares() {
+        var subscription = new ApiSubscription(SubscriberId.of("order-processor"),
+                                               AggregateType.of("Orders"),
+                                               100,
+                                               OffsetDateTime.parse("2026-07-31T10:15:30+02:00"),
+                                               true,
+                                               true,
+                                               true,
+                                               true,
+                                               false,
+                                               null,
+                                               105L,
+                                               true);
+
+        assertMatchesContractSchema("ApiSubscription", subscription);
+        assertThat(mapper.writeValueAsString(subscription)).contains("\"active\":true")
+                                                           .contains("\"stoppedByErrorPolicy\":true");
     }
 
     @Test

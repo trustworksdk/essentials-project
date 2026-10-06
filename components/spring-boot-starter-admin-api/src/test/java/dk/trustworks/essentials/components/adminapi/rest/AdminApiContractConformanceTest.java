@@ -74,9 +74,10 @@ class AdminApiContractConformanceTest {
         // 40 before the shard-owned queue engine was published; its operations bring it to 51 — ten,
         // plus resurrecting a whole ordered key at once, which is how a key stopped behind a dead
         // letter is recovered. The ranked slow-query and the table statistics operations bring it to 53,
-        // running a scheduler job on demand to 54, and the four event-causation lookups to 58.
-        assertThat(contractOperations()).hasSize(58);
-        assertThat(implementedOperations()).hasSize(58);
+        // running a scheduler job on demand to 54, the four event-causation lookups to 58, and resuming a
+        // subscription stopped by its error policy to 59.
+        assertThat(contractOperations()).hasSize(59);
+        assertThat(implementedOperations()).hasSize(59);
     }
 
     @Test

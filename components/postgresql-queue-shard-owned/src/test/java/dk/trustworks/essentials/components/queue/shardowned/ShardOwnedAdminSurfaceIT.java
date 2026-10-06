@@ -20,7 +20,7 @@ import com.zaxxer.hikari.*;
 import dk.trustworks.essentials.components.queue.shardowned.spi.*;
 import org.awaitility.Awaitility;
 import org.junit.jupiter.api.*;
-import org.testcontainers.containers.PostgreSQLContainer;
+import org.testcontainers.postgresql.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.*;
 
 import java.nio.charset.StandardCharsets;
@@ -41,7 +41,7 @@ class ShardOwnedAdminSurfaceIT {
     private static final int   SHARD_COUNT = 4;
 
     @Container
-    static PostgreSQLContainer<?> postgres = LabPostgres.create();
+    static PostgreSQLContainer postgres = LabPostgres.create();
 
     private HikariDataSource dataSource;
 
@@ -194,7 +194,7 @@ class ShardOwnedAdminSurfaceIT {
                     throw new IllegalStateException("always fails");
                 }
                 delivered.add(body);
-            }, new ConsumerOptions(8, Integer.MAX_VALUE, 2, Duration.ofMillis(20), 1.0d, Duration.ofMillis(20)));
+            }, new ConsumerOptions(8, Integer.MAX_VALUE, 2, RetryBackoff.fixed(Duration.ofMillis(20))));
             Awaitility.await().atMost(Duration.ofSeconds(20)).until(queue::isStarted);
 
             queue.enqueue(List.of(Message.ordered("poison".getBytes(StandardCharsets.UTF_8), 1, "k", 0L)));

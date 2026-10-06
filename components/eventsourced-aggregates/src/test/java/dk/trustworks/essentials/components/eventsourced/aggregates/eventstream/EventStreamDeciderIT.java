@@ -35,7 +35,7 @@ import dk.trustworks.essentials.types.CharSequenceType;
 import org.jdbi.v3.core.Jdbi;
 import org.jdbi.v3.postgres.PostgresPlugin;
 import org.junit.jupiter.api.*;
-import org.testcontainers.containers.PostgreSQLContainer;
+import org.testcontainers.postgresql.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.*;
 import reactor.core.Disposable;
 
@@ -71,7 +71,7 @@ class EventStreamDeciderIT {
     public static final AggregateType ORDERS = AggregateType.of("Orders");
 
     @Container
-    private final PostgreSQLContainer<?> postgreSQLContainer = new PostgreSQLContainer<>("postgres:18.4")
+    private final PostgreSQLContainer postgreSQLContainer = new PostgreSQLContainer("postgres:18.4")
             .withDatabaseName("eventstream-decider-test")
             .withUsername("test-user")
             .withPassword("secret-password");

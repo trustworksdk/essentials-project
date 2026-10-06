@@ -1,0 +1,14 @@
+graph — 10 nodes · 11 edges · 1 entry points · 1 cycle(s)
+
+PlaceOrder  (command)
+└─ orders.place_order  [command]
+   └─ OrderPlaced  (event)
+      ├─ orders.screen_order  [automation]
+      │  └─ CancelOrder  (command)
+      │     └─ orders.cancel_order  [command]
+      │        └─ OrderCancelled  (event)
+      │           ├─ orders.screen_order  [automation]  ↺ cycle
+      │           └─ orders.order_list  [view]
+      ├─ orders.warehouse  [translation]
+      │  └─ warehouse  (external system)
+      └─ orders.order_list  [view]

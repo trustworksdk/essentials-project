@@ -30,7 +30,7 @@ Foundation classes used but not owned here (in `foundation` module):
 ## Test Structure
 
 - All ITs under `src/test/java/.../queue/postgresql/`
-- Require real Postgres via **Testcontainers** (`@Testcontainers` + `PostgreSQLContainer<>`)
+- Require real Postgres via **Testcontainers** (`@Testcontainers` + `PostgreSQLContainer`)
 - Base class pattern: `PostgresqlDurableQueuesIT` extends `DurableQueuesIT` (from foundation test module); concrete subclasses flip `useCentralizedMessageFetcher()` → `true`/`false`
 - Naming convention: `Centralized*IT` = centralized fetcher, `Traditional*IT` = legacy per-consumer, `SingleOperationTransaction*IT` = explicit-ack mode
 - `*PerformanceIT` / `*LoadIT` / `*LatencyIT` — throughput/latency benchmarks, not part of normal CI

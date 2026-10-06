@@ -29,6 +29,7 @@ const CAN = {
     writeLocks: document.body.dataset.canWriteLocks === 'true',
     writeQueues: document.body.dataset.canWriteQueues === 'true',
     writeScheduler: document.body.dataset.canWriteScheduler === 'true',
+    writeSubscriptions: document.body.dataset.canWriteSubscriptions === 'true',
     readPayloads: document.body.dataset.canReadPayloads === 'true'
 };
 
@@ -321,9 +322,12 @@ views.queues = async () => {
    owned by another instance reads as "elsewhere" rather than as a stalled one. */
 const subscriptionKey = (subscriberId, aggregateType) => `${subscriberId} ${aggregateType}`;
 
+/* A subscription halted by its error policy (mode STOP) stays active - it keeps its lock and its resume point is still
+   checkpointed - so "Active" would read as healthy. stoppedByErrorPolicy replaces that badge until it is resumed or started again. */
 function subscriptionState(s) {
     if (!s.runningInThisInstance) return badge('neutral', 'Other instance');
-    const chips = [s.active ? badge('good', 'Active') : badge('warning', 'Inactive')];
+    const chips = [s.stoppedByErrorPolicy ? badge('critical', 'Stopped by error policy')
+                 : s.active ? badge('good', 'Active') : badge('warning', 'Inactive')];
     if (s.exclusive) chips.push(`<span class="chip">exclusive</span>`);
     if (s.inTransaction) chips.push(`<span class="chip">in-transaction</span>`);
     if (s.tenant) chips.push(`<span class="chip">${esc(s.tenant)}</span>`);
@@ -344,6 +348,7 @@ views.subscriptions = async () => {
     const byKey = new Map(stats.map((s) => [subscriptionKey(s.subscriberId, s.aggregateType), s]));
 
     const runningHere = subs.filter((s) => s.runningInThisInstance).length;
+    const stopped = subs.filter((s) => s.stoppedByErrorPolicy).length;
     const failures = stats.reduce((total, s) => total + s.eventHandling.failures, 0);
     const replays = stats.reduce((total, s) => total + s.reset.resets, 0);
 
@@ -362,7 +367,10 @@ views.subscriptions = async () => {
       <td>${ts(s.lastUpdated)}</td>
       <td class="actions"><button class="btn btn-sm" data-hi="${i}" data-agg="${esc(s.aggregateType)}">Load highest</button>
         <button class="btn btn-sm" data-sub="${esc(s.subscriberId)}" data-sub-agg="${esc(s.aggregateType)}"
-          ${stat ? '' : 'disabled title="No statistics are collected for this subscription in this instance"'}>Statistics</button></td>
+          ${stat ? '' : 'disabled title="No statistics are collected for this subscription in this instance"'}>Statistics</button>
+        ${s.stoppedByErrorPolicy ? `<button class="btn btn-sm" data-act="resumeSubscription" data-name="${esc(s.subscriberId)}"
+          data-aggregate-type="${esc(s.aggregateType)}"
+          ${CAN.writeSubscriptions ? '' : 'disabled title="Requires essentials_subscription_writer"'}>Resume</button>` : ''}</td>
     </tr>`;
     });
 
@@ -382,6 +390,7 @@ views.subscriptions = async () => {
     <div class="kpi-row">
       ${tile('Subscriptions', num(subs.length), 'across all instances')}
       ${tile('Running here', num(runningHere), 'registered in this instance')}
+      ${tile('Stopped', num(stopped), 'by their error policy here — handle nothing until resumed or restarted', stopped > 0)}
       ${tile('Handler failures', num(failures), 'since this instance started', failures > 0)}
       ${tile('Replays', num(replays), 'resume-point resets here')}
     </div>
@@ -1045,6 +1054,23 @@ const actions = {
         body: `<p>Deletes every message in <code class="mono">${esc(name)}</code> — both lanes and the dead-letter
            table. Not recoverable.</p>`,
         run: () => api(`/shard-owned-queues/${encodeURIComponent(name)}/messages`, { method: 'DELETE' })
+    }),
+    resumeSubscription: (subscriberId, data) => ({
+        title: 'Resume subscription?', danger: false, confirmLabel: 'Resume',
+        body: `<p>Resumes <code class="mono">${esc(subscriberId)}</code> on
+           <code class="mono">${esc(data.aggregateType)}</code>, which its error policy stopped. Delivery restarts at the
+           failed event, so nothing is skipped - fix the cause first: if the event fails again, the error policy applies
+           again and may stop the subscription at the same event.</p>
+           <p>Acts on this instance only. An exclusive subscription keeps its fenced lock.</p>`,
+        run: async () => {
+            const result = await api(`/event-store/subscriptions/${encodeURIComponent(subscriberId)}/aggregate-types/${encodeURIComponent(data.aggregateType)}/resume`, { method: 'POST' });
+            /* resumed=false is a 200, not an error: the request reached an instance where the subscription is not stopped
+               or not running - behind a load balancer, not necessarily the one that rendered this page. Say so, or the
+               page re-renders as if the resume had worked. */
+            if (!result?.resumed) {
+                throw { status: 409, message: 'Not resumed: the subscription is not stopped by its error policy on the instance that took this request. Reload, and retry against the instance running it.' };
+            }
+        }
     }),
     release: (name) => ({
         title: 'Release fenced lock?', danger: true, confirmLabel: 'Release lock',
@@ -1954,7 +1980,7 @@ document.addEventListener('click', async (e) => {
 
     const act = e.target.closest('[data-act]');
     if (act && !act.disabled) {
-        const spec = actions[act.dataset.act]?.(act.dataset.name);
+        const spec = actions[act.dataset.act]?.(act.dataset.name, act.dataset);
         if (spec) {
             openDialog({
                 ...spec,

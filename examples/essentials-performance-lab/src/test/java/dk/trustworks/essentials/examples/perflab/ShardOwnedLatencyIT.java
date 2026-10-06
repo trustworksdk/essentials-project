@@ -23,7 +23,7 @@ import org.awaitility.Awaitility;
 import org.junit.jupiter.api.*;
 import org.junit.jupiter.api.condition.EnabledIfSystemProperty;
 import org.slf4j.*;
-import org.testcontainers.containers.PostgreSQLContainer;
+import org.testcontainers.postgresql.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.*;
 
 import java.nio.ByteBuffer;
@@ -57,7 +57,7 @@ class ShardOwnedLatencyIT {
     private static final long  INTERVAL_MICROS = 2_000L; // 500/s, far below the measured capacity
 
     @Container
-    static PostgreSQLContainer<?> postgres = LabPostgres.create();
+    static PostgreSQLContainer postgres = LabPostgres.create();
 
     private HikariDataSource dataSource;
 

@@ -1,0 +1,19 @@
+# review-scan signature fixture: The same hunks with --root at the checked-out tree resolve to findings
+# # root: gives the tree whose file equals the diff's new side, so the whole file supplies the parents.
+# root: roots/yaml-resolved
+# expect-not: backend/src/main/resources/application.yml:6 ess-088-mongo-key
+# expect: backend/src/main/resources/application.yml:7 ess-088-mongo-key confirmed Blocking manual
+# expect: backend/src/main/resources/application.yml:21 ess-103-transactional-mode confirmed Should-fix mechanical
+diff --git a/backend/src/main/resources/application.yml b/backend/src/main/resources/application.yml
+--- a/backend/src/main/resources/application.yml
++++ b/backend/src/main/resources/application.yml
+@@ -5,4 +5,5 @@
+     mongodb:
+       database: orders
++      uri: mongodb://localhost/orders
+       # filler 0
+       # filler 1
+@@ -18,2 +19,3 @@
+   durable-queues:
+     max-polling-interval: 2s
++    transactional-mode: fully-transactional

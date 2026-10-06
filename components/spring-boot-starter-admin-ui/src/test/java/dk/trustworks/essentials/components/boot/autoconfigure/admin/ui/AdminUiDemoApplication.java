@@ -266,10 +266,13 @@ public class AdminUiDemoApplication {
         when(api.findAllSubscriptions(any())).thenReturn(List.of(
                 new ApiSubscription(orderProcessor,
                                     AggregateType.of("Orders"), 918204L, OffsetDateTime.parse("2026-07-31T12:04:29Z"),
-                                    true, true, true, true, false, null, 918211L),
+                                    true, true, true, true, false, null, 918211L, false),
                 new ApiSubscription(paymentProjection,
                                     AggregateType.of("Payments"), 45219L, OffsetDateTime.parse("2026-07-31T12:04:22Z"),
-                                    true, false, null, null, null, null, null)));
+                                    true, false, null, null, null, null, null, null),
+                new ApiSubscription(dk.trustworks.essentials.components.foundation.types.SubscriberId.of("InvoiceProjection"),
+                                    AggregateType.of("Orders"), 917640L, OffsetDateTime.parse("2026-07-31T11:58:13Z"),
+                                    true, true, true, false, false, null, 917640L, true)));
         when(api.findHighestGlobalEventOrderPersisted(any(), any())).thenReturn(Optional.of(GlobalEventOrder.of(918204L)));
         var orderProcessorStatistics = new ApiSubscriptionStatistics(
                 orderProcessor,
@@ -291,6 +294,8 @@ public class AdminUiDemoApplication {
                                                  OffsetDateTime.parse("2026-07-31T10:40:12Z")));
         when(api.findAllSubscriptionStatistics(any())).thenReturn(List.of(orderProcessorStatistics));
         when(api.findSubscriptionStatistics(any(), any(), any())).thenReturn(Optional.of(orderProcessorStatistics));
+        // InvoiceProjection above is stopped by its error policy, so the subscriptions view offers to resume it
+        when(api.resumeSubscriptionStoppedByErrorPolicy(any(), any(), any())).thenReturn(true);
 
         // A causation chain shaped like the webshop's capture flow: the order, the hold it led to, the capture request,
         // and the capture the gateway's webhook recorded. Start from 7c1e0f9a-0004-... to walk it back.

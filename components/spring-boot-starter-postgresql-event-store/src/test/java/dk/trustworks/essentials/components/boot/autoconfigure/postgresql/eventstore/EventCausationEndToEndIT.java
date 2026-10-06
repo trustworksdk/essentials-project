@@ -36,7 +36,7 @@ import org.springframework.boot.jdbc.autoconfigure.*;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
 import org.springframework.context.ApplicationContext;
 import org.springframework.context.annotation.*;
-import org.testcontainers.containers.PostgreSQLContainer;
+import org.testcontainers.postgresql.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.*;
 import org.testcontainers.shaded.org.awaitility.Awaitility;
 
@@ -71,7 +71,7 @@ class EventCausationEndToEndIT {
     static final AggregateType TALLIES  = AggregateType.of("Tallies");
 
     @Container
-    private static final PostgreSQLContainer<?> postgreSQLContainer = new PostgreSQLContainer<>("postgres:18.4")
+    private static final PostgreSQLContainer postgreSQLContainer = new PostgreSQLContainer("postgres:18.4")
             .withDatabaseName("event-causation-e2e")
             .withUsername("test-user")
             .withPassword("secret-password");

@@ -45,6 +45,7 @@ public final class LoadEventsByGlobalOrder {
      * accessor still returns {@code Optional}, so the API is unchanged.
      */
     private      Tenant                 onlyIncludeEventIfItBelongsToTenant;
+    private      Tenant                 onlyLoadPayloadIfEventBelongsToTenant;
 
     /**
      * Create a new builder that produces a new {@link LoadEventsByGlobalOrder} instance
@@ -128,6 +129,29 @@ public final class LoadEventsByGlobalOrder {
     }
 
     /**
+     * When present, <b>every</b> tenant's events are loaded (as long as {@link #getOnlyIncludeEventIfItBelongsToTenant()} is empty),
+     * but only the events belonging to this tenant - or to no tenant at all - carry their payload and metadata. The events of other
+     * tenants are returned with an empty JSON payload and metadata and are only fit for telling that their global order exists
+     * and which tenant they belong to. A polling subscription for one tenant uses it: the gap handler needs to see other tenants'
+     * global orders (to not mistake them for gaps), but not their payloads.<br>
+     * Persistence strategies that don't support it ignore it, and load every payload.
+     *
+     * @return the tenant whose events (and those without a tenant) carry their payload
+     */
+    public Optional<Tenant> getOnlyLoadPayloadIfEventBelongsToTenant() {
+        return Optional.ofNullable(onlyLoadPayloadIfEventBelongsToTenant);
+    }
+
+    /**
+     * @param onlyLoadPayloadIfEventBelongsToTenant see {@link #getOnlyLoadPayloadIfEventBelongsToTenant()}; may be null
+     * @return this operation
+     */
+    public LoadEventsByGlobalOrder setOnlyLoadPayloadIfEventBelongsToTenant(Tenant onlyLoadPayloadIfEventBelongsToTenant) {
+        this.onlyLoadPayloadIfEventBelongsToTenant = onlyLoadPayloadIfEventBelongsToTenant;
+        return this;
+    }
+
+    /**
      * @param onlyIncludeEventIfItBelongsToTenant if non-null then only include events that belong to the specified {@link Tenant}, otherwise all Events matching the criteria are returned
      */
     public LoadEventsByGlobalOrder setOnlyIncludeEventIfItBelongsToTenant(Tenant onlyIncludeEventIfItBelongsToTenant) {
@@ -142,6 +166,7 @@ public final class LoadEventsByGlobalOrder {
                 ", globalEventOrderRange=" + globalEventOrderRange +
                 ", includeAdditionalGlobalOrders=" + includeAdditionalGlobalOrders +
                 ", onlyIncludeEventIfItBelongsToTenant=" + onlyIncludeEventIfItBelongsToTenant +
+                ", onlyLoadPayloadIfEventBelongsToTenant=" + onlyLoadPayloadIfEventBelongsToTenant +
                 '}';
     }
 }

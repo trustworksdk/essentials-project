@@ -713,6 +713,13 @@ polling for its whole life. Now fixed for real deployments.
 
 ## P10 — Gap-tolerant live drain in `BackfillThenLiveOrdered` — Tier 1 ✅ DONE
 
+> **Superseded in 0.60.0.** The live drain no longer waits for a missing global order, so the stall detection and
+> recovery described below no longer run: past the head, `BackfillThenLiveOrdered` hands live events on as the CDC bus
+> delivers them, and each subscription's `CdcDeliveryTracker` delivers an event that commits after a higher global
+> order when it arrives. `liveDrainStallThreshold`, `CdcLiveDrainStalledException` and the
+> `essentials.cdc.backfill_live.stall_detected` counter are deprecated and have no effect. See
+> [cdc.md](cdc.md) for the current design. The section is kept as the record of the earlier approach.
+
 > **Status.** Tier 1 (stall-detect → subscription restart) is implemented — see the
 > "Tier 1" section below for the as-built notes. Tier 2 (in-drain probe + classify)
 > remains deferred; build it only if Tier 1's re-backfill cost is measured to matter.

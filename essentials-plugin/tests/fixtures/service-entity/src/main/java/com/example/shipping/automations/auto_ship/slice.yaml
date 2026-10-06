@@ -1,0 +1,19 @@
+schemaVersion: "1.2"
+slice: shipping.auto_ship
+kind: automation
+bc: shipping
+owner: shipping-team
+status: live
+summary: Ship an order automatically once it has been registered.
+generator: essentials
+language: java
+tier: service-entity
+lane: service-entity
+consumes: [ShippingOrderRegistered]
+dispatches: [ShipOrder]
+forbidden:
+  - cross-slice-internal:shipping
+tests:
+  unit: { present: false }
+  integration: { present: false }
+  contract: { present: false }

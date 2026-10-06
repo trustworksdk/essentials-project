@@ -32,7 +32,7 @@ import dk.trustworks.essentials.shared.security.EssentialsSecurityProvider;
 import org.jdbi.v3.core.Jdbi;
 import org.jdbi.v3.postgres.PostgresPlugin;
 import org.junit.jupiter.api.*;
-import org.testcontainers.containers.PostgreSQLContainer;
+import org.testcontainers.postgresql.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.*;
 
 import java.util.*;
@@ -55,7 +55,7 @@ class CausationLookupIT {
     private static final String        SHIPMENT_1 = "8d2e4b6a-3c1f-4e77-b0a2-5c9d7e1f4a22";
 
     @Container
-    private static final PostgreSQLContainer<?> postgreSQLContainer = new PostgreSQLContainer<>("postgres:18.4")
+    private static final PostgreSQLContainer postgreSQLContainer = new PostgreSQLContainer("postgres:18.4")
             .withDatabaseName("event-store")
             .withUsername("test-user")
             .withPassword("secret-password");

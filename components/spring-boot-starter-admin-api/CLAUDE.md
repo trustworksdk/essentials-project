@@ -12,7 +12,7 @@ Consumer-facing docs: `docs/openapi/README.md`.
 | Package | Contents |
 |---|---|
 | `dk.trustworks.essentials.components.adminapi.rest` | 11 controllers, principal resolver, exception handler, Jackson module, paths |
-| `.rest.dto` | Contract wrapper shapes — `CountResult`, `ReleaseResult`, `DeleteResult`, `PurgeResult`, `QueueNameResult`, `GlobalEventOrderResult`, `ApiError`, `ResurrectDeadLetterMessageRequest` |
+| `.rest.dto` | Contract wrapper shapes — `CountResult`, `ReleaseResult`, `ResumeResult`, `DeleteResult`, `PurgeResult`, `QueueNameResult`, `GlobalEventOrderResult`, `ApiError`, `ResurrectDeadLetterMessageRequest` |
 | `dk.trustworks.essentials.components.boot.autoconfigure.admin.api` | `@AutoConfiguration` + `@ConfigurationProperties` |
 
 ## Key Classes

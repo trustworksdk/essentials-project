@@ -63,7 +63,8 @@ final class PersistedEventRowMapper implements RowMapper<PersistedEvent> {
     }
 
     private EventJSON resolveEventJSON(ResultSet resultSet) throws SQLException {
-        var jsonPayload          = getString(resultSet, config.eventStreamTableColumnNames.eventPayloadColumn);
+        // NULL when a poll left the payload of another tenant's event out - see loadEventsByGlobalOrderOmittingOtherTenantsPayloads
+        var jsonPayload          = Optional.ofNullable(getString(resultSet, config.eventStreamTableColumnNames.eventPayloadColumn)).orElse("{}");
         var eventTypeOrNameValue = getString(resultSet, config.eventStreamTableColumnNames.eventTypeColumn);
 
         if (eventTypeOrNameValue == null || eventTypeOrNameValue.isBlank()) {
@@ -84,7 +85,7 @@ final class PersistedEventRowMapper implements RowMapper<PersistedEvent> {
     }
 
     private EventMetaDataJSON resolveEventMetaDataJSON(ResultSet resultSet) {
-        var jsonPayload = getString(resultSet, config.eventStreamTableColumnNames.eventMetaDataColumn);
+        var jsonPayload = Optional.ofNullable(getString(resultSet, config.eventStreamTableColumnNames.eventMetaDataColumn)).orElse("{}");
         return new EventMetaDataJSON(config.jsonSerializer,
                                      EventMetaData.class.getName(),
                                      jsonPayload);

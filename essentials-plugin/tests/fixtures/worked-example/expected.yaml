@@ -1,0 +1,341 @@
+# expected.yaml — the machine-readable expectations for this fixture (format 1). TEST-GUIDE.md is the
+# human description of the same expectations; when they disagree, fix both.
+#
+# Paths are relative to this fixture's directory. `line` is 1-based and `anchor` is text that must
+# appear on that line, so a stale line number is detectable. `gate` is the /essentials:slice-check
+# gate as written in commands/slice-check.md ("14", "8a", "6"); `ess` is the review id derived from
+# it (ESS-G<gate><clause>); both are null where the expectation is a law section rather than a numbered
+# gate. Severities: Blocking | Should-fix | Advisory.
+#
+#   runs          which command runs against this fixture, with which argument
+#   lanes         gate 14 per bounded context: code signals, declared lanes, verdict
+#   must_find     every entry must appear in the report (matched on file, plus symbol when given)
+#   must_not_find a finding under any listed gate at that file/symbol fails the run ("*" = any gate)
+#   skipped       gates the report must name as skipped or out of scope, never silently omit
+#   tolerated     findings that may appear or not; neither counts for or against the run
+#   reader        syntactic facts a source reader must extract (handlers, mappings, endpoint bindings)
+#   slice_map     what /essentials:slice-map must draw: slice count, event/command edges, cycles
+#   manifests     facts about the manifests themselves (service-entity)
+#   terrain, contexts, slices, ladder
+#                 /essentials:slice-discover's passes 0-4 (brownfield-layered); must_find there carries
+#                 `rank` (payoff order) and `kind` instead of a gate, and severity is null by design
+#
+# `tests/fixtures/check-expected.py` checks this file against the tree (paths, line anchors, ess ids)
+# and that no fixture source carries an answer hint.
+#
+# Entry fields beyond file/line/anchor: `symbol` narrows the match to a type or method; `also_names`
+# lists other files the same finding must cite; `may_merge_with` names a finding this one may be
+# reported inside of; `law` names the rules/slice-design.md section when `gate` is null.
+
+fixture: worked-example
+language: kotlin
+placeholders:
+  packagePath: rendered to com.example.shop only in a compile overlay; left as is here
+runs:
+- command: /essentials:slice-check
+  args: essentials-plugin/tests/fixtures/worked-example
+- command: /essentials:slice-map
+  args: essentials-plugin/tests/fixtures/worked-example
+- command: /essentials:slice-discover
+  args: essentials-plugin/tests/fixtures/worked-example
+  expect: redirect to /essentials:slice-check (manifests exist); no analysis
+lanes:
+  orders:
+    detected: decider
+    signals:
+    - kind: decider
+      file: orders/use_cases/place_order/PlaceOrderDecider.kt
+      line: 16
+      anchor: 'class PlaceOrderDecider : Decider<PlaceOrder, OrderEvent> {'
+    - kind: decider
+      file: orders/use_cases/cancel_order/CancelOrderDecider.kt
+      line: 21
+      anchor: 'class CancelOrderDecider : Decider<CancelOrder, OrderEvent> {'
+    declared:
+      orders.place_order: decider
+      orders.cancel_order: decider
+      orders.order_list: decider
+      orders.screen_order: decider
+      orders.warehouse: decider
+    verdict: fine
+must_find:
+- id: W1
+  gate: null
+  ess: null
+  severity: Should-fix
+  law: rules/slice-design.md § Reporting severities (a view slice with no test)
+  file: orders/views/order_list/slice.yaml
+  line: 32
+  anchor: 'integration: { present: false }'
+  what: A view slice with no test. The only finding this exemplary tree is expected to produce.
+must_not_find:
+- id: W-T1
+  not_gates:
+  - 11b
+  - '11'
+  file: orders/automations/screen_order/ScreenOrderProcessor.kt
+  line: 37
+  anchor: 'fun on(event: Placed, message: OrderedMessage) {'
+  why: >-
+    Placed is OrderPlaced imported under an alias (import …events.OrderPlaced as Placed). The handled event is OrderPlaced,
+    which consumes declares; 'Placed' is not an event and OrderPlaced is not declared-but-unhandled.
+- id: W-T2
+  not_gates:
+  - 11b
+  - '11'
+  file: orders/external_systems/warehouse/WarehousePublisher.kt
+  line: 32
+  anchor: 'fun on(event: {{packagePath}}.orders.events.OrderPlaced) {'
+  why: A fully-qualified parameter type resolves to OrderPlaced, which consumes declares.
+- id: W-T3
+  not_gates:
+  - '10'
+  file: orders/external_systems/warehouse/WarehousePublisher.kt
+  line: 32
+  anchor: 'fun on(event: {{packagePath}}.orders.events.OrderPlaced) {'
+  why: >-
+    A single-argument handler with no versioned state: gate 10 applies only where the handler mutates versioned
+    state.
+- id: W-T4
+  not_gates:
+  - '8'
+  - 8a
+  file: orders/automations/screen_order/ScreenOrderProcessor.kt
+  line: 5
+  anchor: import {{packagePath}}.orders.use_cases.cancel_order.CancelOrder
+  why: 'The §R4 carve-out: CancelOrder is only constructed for commandBus.sendAndDontWait(...).'
+- id: W-T5
+  not_gates:
+  - '6'
+  - 11a
+  file: orders/views/order_list/OrderListAPI.kt
+  line: 19
+  anchor: '@GetMapping(params = ["status"])'
+  why: >-
+    Kotlin array syntax for a discriminator: /api/orders?status= in the manifest, bound in that handler by params
+    = ["status"] and @RequestParam status.
+- id: W-T6
+  not_gates:
+  - '6'
+  file: orders/views/order_list/OrderListAPI.kt
+  line: 14
+  anchor: 'class OrderListAPI(private val repository: OrderListRepository) {'
+  why: >-
+    Two queries over the view's own read model in one API file is §R2 working; the read model is the response (no
+    adapter).
+- id: W-T7
+  not_gates:
+  - '1'
+  - '11'
+  file: orders/external_systems/warehouse/slice.yaml
+  line: 14
+  anchor: 'direction: outbound'
+  why: >-
+    An outbound translation still declares the internal event it handles in consumes (gate 11(b) requires it) and
+    its mapping in maps; the schema makes both optional for outbound, not forbidden.
+- id: W-T8
+  not_gates:
+  - '14'
+  file: orders/automations/screen_order/ScreenOrderProcessor.kt
+  line: 26
+  anchor: class ScreenOrderProcessor(
+  why: An EventProcessor is not a decider; orders stays single-lane.
+- id: W-T9
+  not_gates:
+  - '*'
+  file: orders/use_cases/place_order/PlaceOrderAPI.kt
+  line: 45
+  anchor: commandBus.send<Any?, PlaceOrder>(command)
+  why: >-
+    Explicit type arguments are required by Kotlin: CommandBus.send is <R, C> R send(C) and R has no expected type
+    here.
+- id: W-T10
+  not_gates:
+  - '17'
+  file: orders/routing/OrderCommand.kt
+  line: 13
+  anchor: interface OrderCommand {
+  why: Required on the decider lane; not sealed; declares only the id.
+- id: W-T11
+  not_gates:
+  - '10'
+  file: orders/views/order_list/OrderListProjection.kt
+  line: 24
+  anchor: class OrderListProjection(
+  why: Both handlers take OrderedMessage and write Version(message.order).
+- id: W-T13
+  not_gates:
+  - '9'
+  - '2'
+  file: DeciderWiring.kt
+  line: 17
+  anchor: class DeciderWiring {
+  why: >-
+    One DeciderAndAggregateTypeConfigurator per application, outside every BC; orders/config/ carries the AggregateTypeConfiguration
+    and one @Bean per decider, which is what gate 9 checks.
+- id: W-T12
+  not_gates:
+  - '4'
+  - 4a
+  file: orders/automations/screen_order/slice.yaml
+  line: 14
+  anchor: 'dispatches: [CancelOrder]'
+  why: Dispatching a command is not handling it; cancel_order stays its sole handler.
+skipped:
+- gate: '15'
+  why: Service-entity lane only.
+- gate: '16'
+  why: Service-entity lane only.
+- gate: '18'
+  why: No Spring Data repository in the project.
+tolerated:
+- id: TOL-tests
+  gates:
+  - '*'
+  what: >-
+    A 'no test' finding on any slice. Every manifest here says tests.*.present: false and the fixture has no test
+    tree; the law rates a view slice with no test Should-fix, so such a finding is correct but not what this fixture
+    grades.
+reader:
+  conventions: mapping lines are the method-name line
+  package_root: '{{packagePath}}.orders'
+  handlers:
+  - slice: orders.order_list
+    file: orders/views/order_list/OrderListProjection.kt
+    line: 35
+    anchor: 'fun on(event: OrderPlaced, message: OrderedMessage) {'
+    event: OrderPlaced
+    ordered_message: true
+  - slice: orders.order_list
+    file: orders/views/order_list/OrderListProjection.kt
+    line: 44
+    anchor: 'fun on(event: OrderCancelled, message: OrderedMessage) {'
+    event: OrderCancelled
+    ordered_message: true
+  - slice: orders.screen_order
+    file: orders/automations/screen_order/ScreenOrderProcessor.kt
+    line: 37
+    anchor: 'fun on(event: Placed, message: OrderedMessage) {'
+    event: OrderPlaced
+    written_as: Placed
+    resolved_via: import alias
+    ordered_message: true
+  - slice: orders.screen_order
+    file: orders/automations/screen_order/ScreenOrderProcessor.kt
+    line: 48
+    anchor: 'fun on(event: OrderCancelled, message: OrderedMessage) {'
+    event: OrderCancelled
+    ordered_message: true
+  - slice: orders.warehouse
+    file: orders/external_systems/warehouse/WarehousePublisher.kt
+    line: 32
+    anchor: 'fun on(event: {{packagePath}}.orders.events.OrderPlaced) {'
+    event: OrderPlaced
+    written_as: '{{packagePath}}.orders.events.OrderPlaced'
+    resolved_via: fully-qualified name
+    ordered_message: false
+  subscriptions:
+  - slice: orders.order_list
+    aggregate_type: Orders
+    via: AggregateType.of literal
+  - slice: orders.screen_order
+    aggregate_type: Orders
+    via: AggregateType.of literal
+  - slice: orders.warehouse
+    aggregate_type: Orders
+    via: AggregateType.of literal
+  dispatches:
+  - slice: orders.screen_order
+    command: CancelOrder
+    file: orders/automations/screen_order/ScreenOrderProcessor.kt
+    line: 41
+    anchor: commandBus.sendAndDontWait(CancelOrder(
+  mappings:
+  - slice: orders.order_list
+    method: GET
+    route: /api/orders
+    params: []
+    file: orders/views/order_list/OrderListAPI.kt
+    line: 17
+    anchor: 'fun list(): List<OrderListView>'
+  - slice: orders.order_list
+    method: GET
+    route: /api/orders
+    params:
+    - status
+    file: orders/views/order_list/OrderListAPI.kt
+    line: 20
+    anchor: fun byStatus(
+  - slice: orders.place_order
+    method: POST
+    route: /api/orders
+    params: []
+    file: orders/use_cases/place_order/PlaceOrderAPI.kt
+    line: 44
+    anchor: fun placeOrder(
+  - slice: orders.cancel_order
+    method: POST
+    route: /api/orders/{orderId}/cancel
+    params: []
+    file: orders/use_cases/cancel_order/CancelOrderAPI.kt
+    line: 41
+    anchor: fun cancelOrder(
+  records:
+  - type: OrderPlaced
+    identity: id
+    file: orders/events/OrderPlaced.kt
+    line: 8
+    anchor: data class OrderPlaced(
+  - type: OrderCancelled
+    identity: id
+    file: orders/events/OrderCancelled.kt
+    line: 8
+    anchor: data class OrderCancelled(
+  - type: OrderListView
+    read_model: orders.order_list
+    columns:
+    - orderId
+    - sku
+    - quantity
+    - status
+    - cancelReason
+    - version
+    - lastUpdated
+    file: orders/views/order_list/OrderListView.kt
+    line: 22
+    anchor: data class OrderListView(
+slice_map:
+  slices: 5
+  edges:
+  - - orders.place_order
+    - OrderPlaced
+    - orders.order_list
+  - - orders.place_order
+    - OrderPlaced
+    - orders.screen_order
+  - - orders.place_order
+    - OrderPlaced
+    - orders.warehouse
+  - - orders.cancel_order
+    - OrderCancelled
+    - orders.order_list
+  - - orders.cancel_order
+    - OrderCancelled
+    - orders.screen_order
+  - - orders.screen_order
+    - CancelOrder
+    - orders.cancel_order
+  cycles:
+  - - orders.screen_order
+    - orders.cancel_order
+    - orders.screen_order
+  writers:
+    Order:
+    - orders.place_order
+    - orders.cancel_order
+  endpoints:
+    POST /api/orders: orders.place_order
+    POST /api/orders/{orderId}/cancel: orders.cancel_order
+    GET /api/orders: orders.order_list
+    GET /api/orders?status=: orders.order_list
+  dangling: []

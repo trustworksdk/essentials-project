@@ -1,0 +1,5 @@
+expected: tests/fixtures/aggregate-lane/expected.yaml
+command: /essentials:slice-check
+sections: [lanes, must_find, must_not_find, skipped]
+read_only: true
+runs_scripts: [slice-lint.py, slice-source.py]

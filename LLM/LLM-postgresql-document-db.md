@@ -1,6 +1,6 @@
 # postgresql-document-db - LLM Reference
 
-> WORK-IN-PROGRESS - Kotlin document database using PostgreSQL JSONB with type-safe queries, optimistic locking, and automatic schema management. For detailed explanations, see [README](../components/postgresql-document-db/README.md).
+> WORK-IN-PROGRESS - Kotlin-first document database using PostgreSQL JSONB with type-safe queries, optimistic locking, and automatic schema management. A dedicated Java interop surface is available - see [Java Interop](#java-interop). For detailed explanations, see [README](../components/postgresql-document-db/README.md).
 
 Base package: `dk.trustworks.essentials.components.document_db`
 
@@ -12,6 +12,7 @@ Base package: `dk.trustworks.essentials.components.document_db`
 - [CRUD Operations](#crud-operations)
 - [Query API](#query-api)
 - [Indexing](#indexing)
+- [Java Interop](#java-interop)
 - [Custom Repositories](#custom-repositories)
 - [Database Schema](#database-schema)
 - [Optimistic Locking](#optimistic-locking)
@@ -22,7 +23,7 @@ Base package: `dk.trustworks.essentials.components.document_db`
 
 ## Quick Facts
 - **Package**: `dk.trustworks.essentials.components.document_db`
-- **Language**: Kotlin (data classes, value classes, property references)
+- **Language**: Kotlin-first (data classes, value classes, property references). **Java is supported** via `JavaVersionedEntity`, `Class<T>` factory overloads, `long` version overloads, and string-path query/index helpers - see [Java Interop](#java-interop)
 - **Storage**: PostgreSQL JSONB column with ACID guarantees
 - **Key deps**: PostgreSQL, JDBI, Jackson, Kotlin stdlib/reflect (all `provided` scope)
 - **Status**: WORK-IN-PROGRESS (experimental)
@@ -262,16 +263,26 @@ repo.saveAll(orders)  // More efficient than loop
 
 ### Event Projection Pattern
 
-⚠️ For event projections with `ViewEventProcessor`, use `update(entity, Version.of(message.order))` NOT `update(entity)`:
+⚠️ A `ViewEventProcessor` projection needs the event's order, so take `OrderedMessage` as the second
+parameter and store `message.order` (the event's `EventOrder`) as the row version:
 
 ```kotlin
 @MessageHandler
 fun on(event: ProductAddedToOrder, message: OrderedMessage) {
-    val view = repo.getById(event.orderId)
+    val view = repo.findById(event.orderId) ?: return
+    if (view.version.value >= message.order) return        // already applied — redelivery
     view.itemCount++
-    repo.update(view, Version.of(message.order))  // version = EventOrder, NOT auto-increment
+    repo.update(view, Version(message.order))              // version = EventOrder, NOT auto-increment
 }
 ```
+
+- The second parameter is optional to the dispatcher — `PatternMatchingMessageHandler` invokes a
+  single-argument `@MessageHandler` normally — so leaving it out compiles and runs. Without it the handler
+  has no `EventOrder`, and a redelivered event is applied twice.
+- `update(entity, nextVersion)` only rejects a *concurrent* writer (`WHERE version = <loaded version>`); it
+  does not reject an event that was already applied. The skip check above is what makes the projection
+  idempotent.
+- `Version` is a Kotlin value class with a constructor and no `of()` factory: `Version(message.order)`.
 
 ## Query API
 
@@ -287,6 +298,8 @@ fun on(event: ProductAddedToOrder, message: OrderedMessage) {
 | `like` | `LIKE` | `Order::name like "%John%"` |
 | `and` | `AND` | `(cond1).and(cond2)` |
 | `or` | `OR` | `(cond1).or(cond2)` |
+
+Each operator also has a **path-string overload** (`eq("address.city", value)`, optionally with a `DbType`) that needs no Kotlin property reference — see [Java Interop](#java-interop). Those overloads are callable from Kotlin too and are the right choice when the path is computed rather than statically known.
 
 ### Query Patterns
 
@@ -369,6 +382,130 @@ repo.addIndex(Index(
 // Remove index
 repo.removeIndex("city")
 ```
+
+### Path-Based (language-neutral)
+
+`addIndexByPaths` builds an `Index` from dot-notation JSON paths — no Kotlin property references, so it works identically from Java and Kotlin:
+
+```kotlin
+repo.addIndexByPaths("name_city", "name", "address.city")
+// equivalent to: repo.addIndex(Index.fromPaths("name_city", "name", "address.city"))
+```
+
+## Java Interop
+
+The module is written in Kotlin but ships a first-class Java surface. Java code never needs `KClass`, `KProperty1`, or the `Version` value class.
+
+### Entity: extend `JavaVersionedEntity<ID, SELF>`
+
+`JavaVersionedEntity` is an abstract bridge class that implements `VersionedEntity.version` in terms of two primitive `long` accessors. Java entities extend it instead of implementing `VersionedEntity` directly.
+
+```java
+import dk.trustworks.essentials.components.document_db.JavaVersionedEntity;
+import dk.trustworks.essentials.components.document_db.Version;
+import dk.trustworks.essentials.components.document_db.annotations.DocumentEntity;
+import dk.trustworks.essentials.components.document_db.annotations.Id;
+import dk.trustworks.essentials.components.document_db.annotations.Indexed;
+
+@DocumentEntity(tableName = "java_products")
+public class JavaProduct extends JavaVersionedEntity<String, JavaProduct> {
+    @Id
+    public String id;          // MUST be public — read by field access, see Java gotchas below
+    @Indexed
+    private String name;
+    private long version = Version.NOT_SAVED_YET_VALUE;
+    private OffsetDateTime lastUpdated = OffsetDateTime.now(ZoneOffset.UTC);
+
+    @Override public long getVersionValue()                 { return version; }
+    @Override public void setVersionValue(long version)     { this.version = version; }
+    @Override public OffsetDateTime getLastUpdated()        { return lastUpdated; }
+    @Override public void setLastUpdated(OffsetDateTime lu) { this.lastUpdated = lu; }
+
+    public String getId()   { return id; }
+    public String getName() { return name; }
+}
+```
+
+**Contract:** `JavaVersionedEntity` declares exactly two abstract members — `getVersionValue(): long` and `setVersionValue(long)`. It makes `version` a `final override`, so do **not** try to override `version` itself. `lastUpdated` is inherited from `VersionedEntity` as a Kotlin `var` of type `OffsetDateTime`, which Java must satisfy with the `getLastUpdated()`/`setLastUpdated(OffsetDateTime)` pair.
+
+`Version` constants for Java: `Version.NOT_SAVED_YET_VALUE` (`-1L`) and `Version.ZERO_VALUE` (`0L`); also `Version.notSavedYetValue()` / `Version.zeroValue()`.
+
+### Factory: `Class<T>` overloads
+
+Every factory method has a Java-friendly `Class<T>` overload beside its `KClass<T>` original:
+
+| Method | Use when the `@Id` property is |
+|---|---|
+| `createForStringId(Class<ENTITY>)` | a plain `String` |
+| `create(Class<ENTITY>)` | a Kotlin `StringValueType` (value class) |
+| `createForCompositeId(Class<ENTITY>, IdSerializer<ID>)` | anything else (incl. Java `CharSequenceType` IDs) |
+| `createForCompositeId(Class<ENTITY>, java.util.function.Function<ID, String>)` | anything else — lambda form, most idiomatic from Java |
+
+```java
+DocumentDbRepository<JavaProduct, String> repo = factory.createForStringId(JavaProduct.class);
+DocumentDbRepository<Patient, PatientId> patients =
+    factory.createForCompositeId(Patient.class, PatientId::toString);
+```
+
+### CRUD: `long` version overloads
+
+`save` and `update` each have a `long` overload so Java never constructs a `Version`:
+
+```java
+repo.save(product, Version.ZERO_VALUE);   // fun save(entity, initialVersionValue: Long)
+repo.update(product, 42L);                // fun update(entity, nextVersionValue: Long)
+```
+
+### Queries: string paths + explicit `DbType`
+
+`Condition` exposes non-infix, path-string overloads alongside the Kotlin property-reference infix forms. Dot notation addresses nested properties (`"address.city"`).
+
+| Method | Overloads |
+|---|---|
+| `eq` / `lt` / `lte` / `gt` / `gte` | `(String path, Any? value)` and `(String path, Any? value, DbType dbType)` |
+| `like` | `(String path, String value)` — always casts to `DbType.TEXT` |
+| `and` / `or` | `(Condition<T> other)` |
+
+Without a `DbType`, the JSON value is compared as text; pass a `DbType` to emit a `CAST(...)` so numeric and temporal comparisons order correctly.
+
+**`DbType` values (complete):** `TEXT`, `INTEGER`, `BIGINT`, `REAL`, `DOUBLE_PRECISION`, `NUMERIC`, `BOOLEAN`, `SMALLINT`, `DATE`, `TIME`, `TIMESTAMP`, `TIMESTAMPTZ`.
+
+```java
+var result = repository.queryBuilder()
+    .where(repository.condition()
+        .eq("category", "Electronics")
+        .lt("price", "1000.00", DbType.NUMERIC)
+        .gte("createdAt", OffsetDateTime.now().minusDays(7), DbType.TIMESTAMPTZ))
+    .orderBy("address.city", QueryBuilder.Order.ASC)
+    .orderBy("price", DbType.NUMERIC, QueryBuilder.Order.ASC)
+    .limit(100)
+    .offset(0)
+    .find();
+```
+
+Chained condition calls are combined with `AND`; use the explicit `and(Condition)` / `or(Condition)` methods only when you need to control grouping. `orderBy` has both `(String path, Order order)` and `(String path, DbType dbType, Order order)` forms — use the `DbType` form whenever the sort key is numeric or temporal, otherwise it sorts as text.
+
+### Indexes from Java
+
+```java
+repo.addIndexByPaths("idx_name_city", "name", "address.city");
+// or build one explicitly:
+Index<JavaProduct> index = Index.fromPaths("idx_name_city", "name", "address.city");
+```
+
+`JsonPathProperty<T>` is the underlying path type: `new JsonPathProperty<JavaProduct>("address.city")` yields `name() == "address_city"`, `toJSONValueArrowPath() == "data->'address'->>'city'"`, and `toJSONArrowPath() == "data->'address'->'city'"`.
+
+### Java gotchas
+
+- ⚠️ **The `@Id` field must be `public`.** `EntityConfiguration` resolves `@Id` through Kotlin reflection over `memberProperties`. For a Java class the property is synthesised from the **field**, so the repository reads it by direct field access — *not* by calling `getId()` — and does not make it accessible. A `private` `@Id` makes the first `save`/`update`/`delete` throw Kotlin's `IllegalCallableAccessException` (wrapping `IllegalAccessException`). Nothing fails at repository creation, so inside a message handler it surfaces only as a failing/dead-lettered message and a projection that never populates.
+
+  `version` and `lastUpdated` escape this because they are declared on `JavaVersionedEntity`/`VersionedEntity` as Kotlin properties with real getter methods, so their `KProperty1` getter is a method call, not a field read. The rule: **Kotlin-declared property → method call; Java-declared field → field read.**
+
+- ⚠️ **A pure-Java module must declare `kotlin-stdlib-jdk8` and `kotlin-reflect` itself.** This module declares both in `provided` scope, so they are **not** transitive. Java code needs them at *compile* time regardless: `createForStringId` and the `Condition` DSL expose `KClass`/`KProperty1` overloads that javac must resolve in order to select the `Class`-based one. Without them the build fails with `cannot access kotlin.reflect.KClass`.
+- ⚠️ **`@DocumentEntity` takes a named argument from Java**: `@DocumentEntity(tableName = "java_products")`, not the positional Kotlin form `@DocumentEntity("orders")`.
+- ⚠️ **Initialise the version field to `Version.NOT_SAVED_YET_VALUE`**, matching the Kotlin default `Version.NOT_SAVED_YET`, so an unsaved entity reads as unsaved. `save()` overwrites the version with its `initialVersion` argument, so this is a marker, not what `save()` checks.
+- ⚠️ **`@Indexed` only works on top-level properties** (see [Indexing](#indexing)). Nested paths need `addIndexByPaths` / `Index.fromPaths`.
+- ⚠️ **Path strings are concatenated into SQL.** Every path segment is validated with `PostgresqlUtil.checkIsValidTableOrColumnName`, the same defence as table and property names — and with the same limits. Never build a path from user input. See [Security](#security).
 
 ## Custom Repositories
 
@@ -534,6 +671,21 @@ class DocumentsRepository(factory: DocumentDbRepositoryFactory)
 - ⚠️ **Batch Performance**: Use `saveAll()`/`updateAll()` for multiple entities, not loops with `save()`/`update()`.
 - ⚠️ **Index Creation**: Call `addIndex()` in custom repository `init` block, not per-query.
 - ⚠️ **Composite Index**: Use `.asProperty()` for top-level properties: `Order::amount.asProperty()`.
+- ⚠️ **Java entities**: extend `JavaVersionedEntity<ID, SELF>` and implement `getVersionValue()` / `setVersionValue(long)` rather than implementing `VersionedEntity` directly (whose `version` is the Kotlin `Version` value class) — see [Java Interop](#java-interop) for the full Java surface.
+- ⚠️ **CharSequenceType IDs**: IDs extending Java's `CharSequenceType` (not Kotlin `StringValueType`) need `createForCompositeId()` with an ID serializer. `create()` is bounded to `StringValueType` IDs and will not compile for them:
+  ```kotlin
+  // ✅ Kotlin StringValueType ID
+  val repo = factory.create(Order::class)
+
+  // ✅ Java CharSequenceType ID (e.g., shared types)
+  val repo = factory.createForCompositeId(Patient::class) { id -> id.toString() }
+
+  // ❌ Java CharSequenceType ID with create() — does not compile (ID must be a StringValueType)
+  val repo = factory.create(Patient::class)
+  ```
+- ⚠️ **`Version` has no `of()`**: it is a Kotlin value class — construct it, `Version(message.order)`. From Java use the `long` overloads and `Version.NOT_SAVED_YET_VALUE` / `Version.ZERO_VALUE`.
+- ⚠️ **Path-string queries compare as text**: `lt("price", "1000.00")` compares the JSON value as text, so numeric and temporal ranges (and `orderBy(path, …)`) order wrongly. Pass a `DbType` — `lt("price", "1000.00", DbType.NUMERIC)`, `orderBy("price", DbType.NUMERIC, Order.ASC)` — to emit a `CAST`.
+- ⚠️ **findById vs getById**: `findById()` returns `null` when not found; `getById()` is `findById(id)!!` and throws `NullPointerException`. In a projector whose view may not exist yet (created by an event from another stream, or not yet created), use `findById()` and handle the `null`.
 
 ## Security
 

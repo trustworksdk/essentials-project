@@ -35,8 +35,10 @@ import org.springframework.web.reactive.config.WebFluxConfigurer;
  * <b>It deliberately only implements {@link #addFormatters(FormatterRegistry)}.</b> In particular it does <em>not</em>
  * override {@code configureHttpMessageCodecs}, so it cannot displace the codecs the application already has - which on
  * Spring Boot 4 are Jackson 3. Request and response <em>bodies</em> are a separate concern, handled by
- * {@code EssentialTypesJacksonModule} from {@code types-jackson}/{@code types-jackson3} registered on the codecs'
- * {@code ObjectMapper}.
+ * {@code EssentialTypesJacksonModule} from {@code types-jackson3} registered on the codecs' {@code JsonMapper}. Both
+ * Essentials Spring Boot starters publish that module as a {@code @Bean}, and Spring Boot adds {@code JacksonModule}
+ * beans to the auto-configured {@code JsonMapper} its codecs use; without a starter, declare the module as a bean
+ * yourself.
  *
  * @see EssentialsWebMvcConfigurer the WebMvc equivalent
  * @see SingleValueTypeConverter the Java {@link SingleValueType} hierarchy

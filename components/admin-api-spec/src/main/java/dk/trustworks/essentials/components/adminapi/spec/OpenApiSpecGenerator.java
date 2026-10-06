@@ -333,6 +333,12 @@ public final class OpenApiSpecGenerator {
                     .description("Outcome of a lock release.")
                     .addProperty("released", new BooleanSchema())
                     .addRequiredItem("released"));
+            schemas.put("ResumeResult", new ObjectSchema()
+                    .description("Outcome of resuming a subscription stopped by its error policy. False is a normal "
+                                 + "answer, not an error: the subscription is not stopped by its error policy, or "
+                                 + "does not run in the instance that received the request.")
+                    .addProperty("resumed", new BooleanSchema())
+                    .addRequiredItem("resumed"));
             schemas.put("DeleteResult", new ObjectSchema()
                     .description("Outcome of a message deletion.")
                     .addProperty("deleted", new BooleanSchema())
@@ -523,6 +529,10 @@ public final class OpenApiSpecGenerator {
 
         void responseReleased() {
             ok(owner.ref("ReleaseResult"), "Whether the lock was released.");
+        }
+
+        void responseResumed() {
+            ok(owner.ref("ResumeResult"), "Whether the subscription was resumed.");
         }
 
         void responseDeleted() {

@@ -1,0 +1,29 @@
+# {{projectName}} workspace
+
+The Trustworks Essentials project lives at **`./{{artifactId}}/`**. All implementation work — source files, tests, configurations, frontend assets, build scripts — belongs inside that subdirectory. Do **not** create new source files at this workspace root.
+
+When using any planner/implementer tooling at this workspace level: either `cd {{artifactId}}/` first, or scope every file path in design/implementation specs with the `{{artifactId}}/` prefix. A "Greenfield. All paths are new" design that omits this prefix is a contradiction with the existing scaffold and must be corrected, not followed literally.
+
+## Project pins (do not invent — these are fixed by /essentials:init)
+
+- **Package root**: `{{packagePath}}` (source `package` declarations and Maven coordinates derive from this)
+- **Maven groupId / artifactId**: `{{groupId}}` / `{{artifactId}}`
+- **Stack version pins** (Spring Boot, the language and Java levels, Trustworks Essentials, and every other dependency): authoritative in `{{artifactId}}/pom.xml`'s `<properties>`<!-- IF frontend!=none --> and `{{artifactId}}/frontend/package.json`<!-- END frontend -->. Read them before any planning step that names a dependency, version, or language level. Do **not** propose your own pins, do **not** "upgrade to latest", and do **not** invent versions that look plausible.
+
+## Code locations for new code
+
+<!-- PATHS -->
+- Backend (production): `{{artifactId}}/backend/src/main/{{sourceLang}}/{{packageDir}}/...`
+- Backend (tests): `{{artifactId}}/backend/src/test/{{sourceLang}}/{{packageDir}}/...`
+- Backend resources / config: `{{artifactId}}/backend/src/main/resources/`
+<!-- IF frontend!=none -->
+- Frontend (production): `{{artifactId}}/frontend/src/...`
+- Frontend (tests): co-located with the source they test (`*.test.ts` / `*.test.tsx`), run by vitest
+- Generated API client (do not hand-edit): `{{artifactId}}/frontend/src/shared/api/generated/`
+<!-- END frontend -->
+- OpenAPI contract (regenerated, not hand-edited): `{{artifactId}}/contracts/openapi.json`
+<!-- END PATHS -->
+
+## More
+
+For full project context, framework-knowledge auto-loading (the `essentials-docs` skill), conventions, and commands, see **`{{artifactId}}/CLAUDE.md`** — that file is the project-level source of truth.

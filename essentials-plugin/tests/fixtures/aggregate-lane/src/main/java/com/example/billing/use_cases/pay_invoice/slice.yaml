@@ -1,0 +1,26 @@
+schemaVersion: "1.2"
+slice: billing.pay_invoice
+kind: command
+bc: billing
+owner: billing-team
+status: live
+summary: Record payment of an invoice in full.
+generator: essentials
+language: java
+tier: cqrs-es
+lane: aggregate
+handles: [PayInvoice]
+publishes: [InvoicePaid]
+endpoints:
+  - { method: POST, path: "/api/billing/{invoiceId}/payment", auth: user }
+writes: [Invoice]
+reads:
+  - { name: Invoice }
+invariants:
+  - { id: INV-PI-1, text: "An invoice may only be paid once", enforcedBy: "PayInvoiceHandler" }
+forbidden:
+  - cross-slice-internal:billing
+tests:
+  unit: { present: false }
+  integration: { present: false }
+  contract: { present: false }

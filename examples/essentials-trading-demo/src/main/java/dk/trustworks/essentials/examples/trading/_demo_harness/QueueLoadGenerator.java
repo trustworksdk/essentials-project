@@ -261,9 +261,7 @@ public class QueueLoadGenerator {
         return new ConsumerOptions(properties.getParallelConsumers(),
                                    defaults.maxShards(),
                                    defaults.maxAttempts(),
-                                   defaults.retryDelay(),
-                                   defaults.retryMultiplier(),
-                                   defaults.maxRetryDelay());
+                                   defaults.retryBackoff());
     }
 
     public synchronized void stop() {

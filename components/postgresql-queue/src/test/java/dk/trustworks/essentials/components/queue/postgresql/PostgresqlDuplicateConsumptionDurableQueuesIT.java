@@ -28,7 +28,7 @@ import dk.trustworks.essentials.components.foundation.test.EssentialsTestContain
 import org.jdbi.v3.core.Jdbi;
 
 import java.util.*;
-import org.testcontainers.containers.PostgreSQLContainer;
+import org.testcontainers.postgresql.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.*;
 
 import java.time.Duration;
@@ -43,7 +43,7 @@ import java.time.Duration;
 abstract class PostgresqlDuplicateConsumptionDurableQueuesIT extends DuplicateConsumptionDurableQueuesIT<PostgresqlDurableQueues, GenericHandleAwareUnitOfWork, JdbiUnitOfWorkFactory> {
 
     @Container
-    protected static final PostgreSQLContainer<?> postgreSQLContainer = EssentialsTestContainers.postgres("queue-db");
+    protected static final PostgreSQLContainer postgreSQLContainer = EssentialsTestContainers.postgres("queue-db");
 
     // This suite creates TWO unit-of-work factories per test (it simulates two nodes), so a single field
     // would overwrite - and leak - the first pool. Track every pool created for the current test.

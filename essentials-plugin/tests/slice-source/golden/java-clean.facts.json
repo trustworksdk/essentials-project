@@ -1,0 +1,855 @@
+{
+  "tool": "slice-source",
+  "format": 1,
+  "mode": "facts",
+  "root": "tests/slice-source/cases/java-clean",
+  "manifestsRead": true,
+  "sourceFiles": 24,
+  "bcs": [
+    {
+      "name": "orders",
+      "path": "src/main/*/com/example/shop/orders",
+      "dirs": [
+        "src/main/java/com/example/shop/orders"
+      ],
+      "languages": [
+        "java"
+      ],
+      "slices": [
+        "orders.cancel_unpaid",
+        "orders.payment_gateway",
+        "orders.warehouse",
+        "orders.cancel_order",
+        "orders.place_order",
+        "orders.order_list"
+      ],
+      "lane": {
+        "signals": {
+          "decider": [
+            {
+              "file": "src/main/java/com/example/shop/orders/use_cases/cancel_order/CancelOrderDecider.java",
+              "line": 10,
+              "symbol": "CancelOrderDecider",
+              "via": "EventStreamDecider"
+            },
+            {
+              "file": "src/main/java/com/example/shop/orders/use_cases/place_order/PlaceOrderDecider.java",
+              "line": 11,
+              "symbol": "PlaceOrderDecider",
+              "via": "EventStreamDecider"
+            }
+          ],
+          "aggregates": null,
+          "entities": null,
+          "eventStore": [
+            {
+              "file": "src/main/java/com/example/shop/orders/automations/cancel_unpaid/CancelUnpaidProcessor.java",
+              "line": 30,
+              "symbol": "AggregateType"
+            },
+            {
+              "file": "src/main/java/com/example/shop/orders/config/OrderStreams.java",
+              "line": 6,
+              "symbol": "AggregateType"
+            },
+            {
+              "file": "src/main/java/com/example/shop/orders/config/OrdersConfiguration.java",
+              "line": 9,
+              "symbol": "AggregateType"
+            },
+            {
+              "file": "src/main/java/com/example/shop/orders/external_systems/warehouse/WarehousePublisher.java",
+              "line": 33,
+              "symbol": "AggregateType"
+            },
+            {
+              "file": "src/main/java/com/example/shop/orders/views/order_list/OrderListProjection.java",
+              "line": 38,
+              "symbol": "AggregateType"
+            }
+          ]
+        },
+        "declared": [
+          {
+            "slice": "orders.cancel_unpaid",
+            "lane": "decider",
+            "file": "src/main/java/com/example/shop/orders/automations/cancel_unpaid/slice.yaml"
+          },
+          {
+            "slice": "orders.payment_gateway",
+            "lane": "decider",
+            "file": "src/main/java/com/example/shop/orders/external_systems/payment_gateway/slice.yaml"
+          },
+          {
+            "slice": "orders.warehouse",
+            "lane": "decider",
+            "file": "src/main/java/com/example/shop/orders/external_systems/warehouse/slice.yaml"
+          },
+          {
+            "slice": "orders.cancel_order",
+            "lane": "decider",
+            "file": "src/main/java/com/example/shop/orders/use_cases/cancel_order/slice.yaml"
+          },
+          {
+            "slice": "orders.place_order",
+            "lane": "decider",
+            "file": "src/main/java/com/example/shop/orders/use_cases/place_order/slice.yaml"
+          },
+          {
+            "slice": "orders.order_list",
+            "lane": "decider",
+            "file": "src/main/java/com/example/shop/orders/views/order_list/slice.yaml"
+          }
+        ],
+        "detected": "decider"
+      }
+    }
+  ],
+  "slices": [
+    {
+      "id": "orders.cancel_unpaid",
+      "idSource": "manifest",
+      "bc": "orders",
+      "bcPath": "src/main/*/com/example/shop/orders",
+      "dir": "src/main/java/com/example/shop/orders/automations/cancel_unpaid",
+      "role": "automations",
+      "kind": "automation",
+      "manifest": "src/main/java/com/example/shop/orders/automations/cancel_unpaid/slice.yaml",
+      "language": "java",
+      "package": "com.example.shop.orders.automations.cancel_unpaid",
+      "files": [
+        "CancelUnpaidProcessor.java",
+        "CancelUnpaidRepository.java"
+      ],
+      "processors": [
+        {
+          "class": "CancelUnpaidProcessor",
+          "base": "EventProcessor",
+          "file": "src/main/java/com/example/shop/orders/automations/cancel_unpaid/CancelUnpaidProcessor.java",
+          "line": 15
+        }
+      ],
+      "handlers": [
+        {
+          "class": "CancelUnpaidProcessor",
+          "method": "on",
+          "annotation": "MessageHandler",
+          "annotationFqn": "dk.trustworks.essentials.components.foundation.messaging.MessageHandler",
+          "role": "event",
+          "file": "src/main/java/com/example/shop/orders/automations/cancel_unpaid/CancelUnpaidProcessor.java",
+          "line": 35,
+          "annotationLine": 34,
+          "message": {
+            "written": "OrderPlaced",
+            "name": "OrderPlaced",
+            "fqn": "com.example.shop.orders.events.OrderPlaced",
+            "resolvedBy": "import"
+          },
+          "params": [
+            {
+              "name": "event",
+              "type": "OrderPlaced"
+            }
+          ],
+          "envelope": false
+        }
+      ],
+      "handles": [],
+      "dispatches": [
+        {
+          "name": "CancelOrder",
+          "fqn": "com.example.shop.orders.use_cases.cancel_order.CancelOrder",
+          "resolvedBy": "import",
+          "via": "sendAndDontWait",
+          "file": "src/main/java/com/example/shop/orders/automations/cancel_unpaid/CancelUnpaidProcessor.java",
+          "line": 43,
+          "own": false
+        }
+      ],
+      "publishes": [],
+      "subscriptions": [
+        {
+          "aggregateType": "Orders",
+          "written": "AggregateType.of(\"Orders\")",
+          "file": "src/main/java/com/example/shop/orders/automations/cancel_unpaid/CancelUnpaidProcessor.java",
+          "line": 31
+        }
+      ],
+      "mappings": [],
+      "schedules": [
+        {
+          "class": "CancelUnpaidProcessor",
+          "method": "sweep",
+          "file": "src/main/java/com/example/shop/orders/automations/cancel_unpaid/CancelUnpaidProcessor.java",
+          "line": 41,
+          "cron": null,
+          "fixedDelay": "PT15M",
+          "fixedRate": null,
+          "initialDelay": "PT1M",
+          "raw": {
+            "fixedDelay": "900000",
+            "initialDelay": "60000"
+          }
+        }
+      ],
+      "notAnalysed": []
+    },
+    {
+      "id": "orders.payment_gateway",
+      "idSource": "manifest",
+      "bc": "orders",
+      "bcPath": "src/main/*/com/example/shop/orders",
+      "dir": "src/main/java/com/example/shop/orders/external_systems/payment_gateway",
+      "role": "external_systems",
+      "kind": "translation",
+      "manifest": "src/main/java/com/example/shop/orders/external_systems/payment_gateway/slice.yaml",
+      "language": "java",
+      "package": "com.example.shop.orders.external_systems.payment_gateway",
+      "files": [
+        "incoming/PaymentWebhook.java"
+      ],
+      "processors": [],
+      "handlers": [],
+      "handles": [],
+      "dispatches": [],
+      "publishes": [],
+      "subscriptions": [],
+      "mappings": [
+        {
+          "class": "PaymentWebhook",
+          "method": "on",
+          "file": "src/main/java/com/example/shop/orders/external_systems/payment_gateway/incoming/PaymentWebhook.java",
+          "line": 25,
+          "annotationLine": 24,
+          "annotation": "PostMapping",
+          "httpMethods": [
+            "POST"
+          ],
+          "routes": [
+            "/webhooks/payment-gateway"
+          ],
+          "params": [],
+          "requestParams": [],
+          "queryParams": [],
+          "requestBody": {
+            "name": "GatewayPaymentReceived",
+            "fqn": "com.example.shop.orders.external_systems.payment_gateway.incoming.PaymentWebhook.GatewayPaymentReceived",
+            "resolvedBy": "same-file"
+          }
+        }
+      ],
+      "schedules": [],
+      "notAnalysed": []
+    },
+    {
+      "id": "orders.warehouse",
+      "idSource": "manifest",
+      "bc": "orders",
+      "bcPath": "src/main/*/com/example/shop/orders",
+      "dir": "src/main/java/com/example/shop/orders/external_systems/warehouse",
+      "role": "external_systems",
+      "kind": "translation",
+      "manifest": "src/main/java/com/example/shop/orders/external_systems/warehouse/slice.yaml",
+      "language": "java",
+      "package": "com.example.shop.orders.external_systems.warehouse",
+      "files": [
+        "WarehousePublisher.java",
+        "outgoing/WarehouseClient.java"
+      ],
+      "processors": [
+        {
+          "class": "WarehousePublisher",
+          "base": "EventProcessor",
+          "file": "src/main/java/com/example/shop/orders/external_systems/warehouse/WarehousePublisher.java",
+          "line": 18
+        }
+      ],
+      "handlers": [
+        {
+          "class": "WarehousePublisher",
+          "method": "on",
+          "annotation": "MessageHandler",
+          "annotationFqn": "dk.trustworks.essentials.components.foundation.messaging.MessageHandler",
+          "role": "event",
+          "file": "src/main/java/com/example/shop/orders/external_systems/warehouse/WarehousePublisher.java",
+          "line": 39,
+          "annotationLine": 38,
+          "message": {
+            "written": "OrderEvent",
+            "name": "OrderEvent",
+            "fqn": "com.example.shop.orders.events.OrderEvent",
+            "resolvedBy": "import"
+          },
+          "params": [
+            {
+              "name": "event",
+              "type": "OrderEvent"
+            }
+          ],
+          "envelope": false
+        },
+        {
+          "class": "WarehousePublisher",
+          "method": "onReady",
+          "annotation": "EventListener",
+          "annotationFqn": "org.springframework.context.event.EventListener",
+          "role": "event",
+          "file": "src/main/java/com/example/shop/orders/external_systems/warehouse/WarehousePublisher.java",
+          "line": 45,
+          "annotationLine": 44,
+          "message": {
+            "written": "ApplicationReadyEvent",
+            "name": "ApplicationReadyEvent",
+            "fqn": "org.springframework.boot.context.event.ApplicationReadyEvent",
+            "resolvedBy": "import"
+          },
+          "params": [
+            {
+              "name": "ready",
+              "type": "ApplicationReadyEvent"
+            }
+          ],
+          "envelope": false
+        }
+      ],
+      "handles": [],
+      "dispatches": [],
+      "publishes": [],
+      "subscriptions": [
+        {
+          "aggregateType": "Orders",
+          "written": "AGGREGATE_TYPE",
+          "file": "src/main/java/com/example/shop/orders/external_systems/warehouse/WarehousePublisher.java",
+          "line": 34
+        }
+      ],
+      "mappings": [],
+      "schedules": [],
+      "notAnalysed": []
+    },
+    {
+      "id": "orders.cancel_order",
+      "idSource": "manifest",
+      "bc": "orders",
+      "bcPath": "src/main/*/com/example/shop/orders",
+      "dir": "src/main/java/com/example/shop/orders/use_cases/cancel_order",
+      "role": "use_cases",
+      "kind": "command",
+      "manifest": "src/main/java/com/example/shop/orders/use_cases/cancel_order/slice.yaml",
+      "language": "java",
+      "package": "com.example.shop.orders.use_cases.cancel_order",
+      "files": [
+        "CancelOrder.java",
+        "CancelOrderAPI.java",
+        "CancelOrderDecider.java"
+      ],
+      "processors": [],
+      "handlers": [],
+      "handles": [
+        {
+          "name": "CancelOrder",
+          "fqn": "com.example.shop.orders.use_cases.cancel_order.CancelOrder",
+          "resolvedBy": "same-package",
+          "via": "EventStreamDecider",
+          "file": "src/main/java/com/example/shop/orders/use_cases/cancel_order/CancelOrderDecider.java",
+          "line": 10
+        }
+      ],
+      "dispatches": [
+        {
+          "name": "CancelOrder",
+          "fqn": "com.example.shop.orders.use_cases.cancel_order.CancelOrder",
+          "resolvedBy": "same-package",
+          "via": "send",
+          "file": "src/main/java/com/example/shop/orders/use_cases/cancel_order/CancelOrderAPI.java",
+          "line": 27,
+          "own": true
+        }
+      ],
+      "publishes": [
+        {
+          "name": "OrderCancelled",
+          "fqn": "com.example.shop.orders.events.OrderCancelled",
+          "resolvedBy": "import",
+          "via": "decider",
+          "file": "src/main/java/com/example/shop/orders/use_cases/cancel_order/CancelOrderDecider.java",
+          "line": 14
+        }
+      ],
+      "subscriptions": [],
+      "mappings": [
+        {
+          "class": "CancelOrderAPI",
+          "method": "cancel",
+          "file": "src/main/java/com/example/shop/orders/use_cases/cancel_order/CancelOrderAPI.java",
+          "line": 25,
+          "annotationLine": 24,
+          "annotation": "PostMapping",
+          "httpMethods": [
+            "POST"
+          ],
+          "routes": [
+            "/api/orders/{orderId}/cancel"
+          ],
+          "params": [],
+          "requestParams": [],
+          "queryParams": [],
+          "requestBody": {
+            "name": "Body",
+            "fqn": "com.example.shop.orders.use_cases.cancel_order.CancelOrderAPI.Body",
+            "resolvedBy": "same-file"
+          }
+        }
+      ],
+      "schedules": [],
+      "notAnalysed": []
+    },
+    {
+      "id": "orders.place_order",
+      "idSource": "manifest",
+      "bc": "orders",
+      "bcPath": "src/main/*/com/example/shop/orders",
+      "dir": "src/main/java/com/example/shop/orders/use_cases/place_order",
+      "role": "use_cases",
+      "kind": "command",
+      "manifest": "src/main/java/com/example/shop/orders/use_cases/place_order/slice.yaml",
+      "language": "java",
+      "package": "com.example.shop.orders.use_cases.place_order",
+      "files": [
+        "PlaceOrder.java",
+        "PlaceOrderAPI.java",
+        "PlaceOrderDecider.java"
+      ],
+      "processors": [],
+      "handlers": [],
+      "handles": [
+        {
+          "name": "PlaceOrder",
+          "fqn": "com.example.shop.orders.use_cases.place_order.PlaceOrder",
+          "resolvedBy": "same-package",
+          "via": "EventStreamDecider",
+          "file": "src/main/java/com/example/shop/orders/use_cases/place_order/PlaceOrderDecider.java",
+          "line": 11
+        }
+      ],
+      "dispatches": [
+        {
+          "name": "PlaceOrder",
+          "fqn": "com.example.shop.orders.use_cases.place_order.PlaceOrder",
+          "resolvedBy": "same-package",
+          "via": "send",
+          "file": "src/main/java/com/example/shop/orders/use_cases/place_order/PlaceOrderAPI.java",
+          "line": 25,
+          "own": true
+        }
+      ],
+      "publishes": [
+        {
+          "name": "OrderPlaced",
+          "fqn": "com.example.shop.orders.events.OrderPlaced",
+          "resolvedBy": "import",
+          "via": "decider",
+          "file": "src/main/java/com/example/shop/orders/use_cases/place_order/PlaceOrderDecider.java",
+          "line": 18
+        }
+      ],
+      "subscriptions": [],
+      "mappings": [
+        {
+          "class": "PlaceOrderAPI",
+          "method": "placeOrder",
+          "file": "src/main/java/com/example/shop/orders/use_cases/place_order/PlaceOrderAPI.java",
+          "line": 24,
+          "annotationLine": 23,
+          "annotation": "PostMapping",
+          "httpMethods": [
+            "POST"
+          ],
+          "routes": [
+            "/api/orders"
+          ],
+          "params": [],
+          "requestParams": [],
+          "queryParams": [],
+          "requestBody": {
+            "name": "PlaceOrder",
+            "fqn": "com.example.shop.orders.use_cases.place_order.PlaceOrder",
+            "resolvedBy": "same-package"
+          }
+        }
+      ],
+      "schedules": [],
+      "notAnalysed": []
+    },
+    {
+      "id": "orders.order_list",
+      "idSource": "manifest",
+      "bc": "orders",
+      "bcPath": "src/main/*/com/example/shop/orders",
+      "dir": "src/main/java/com/example/shop/orders/views/order_list",
+      "role": "views",
+      "kind": "view",
+      "manifest": "src/main/java/com/example/shop/orders/views/order_list/slice.yaml",
+      "language": "java",
+      "package": "com.example.shop.orders.views.order_list",
+      "files": [
+        "OrderListAPI.java",
+        "OrderListProjection.java",
+        "OrderListView.java"
+      ],
+      "processors": [
+        {
+          "class": "OrderListProjection",
+          "base": "ViewEventProcessor",
+          "file": "src/main/java/com/example/shop/orders/views/order_list/OrderListProjection.java",
+          "line": 20
+        }
+      ],
+      "handlers": [
+        {
+          "class": "OrderListProjection",
+          "method": "on",
+          "annotation": "MessageHandler",
+          "annotationFqn": "dk.trustworks.essentials.components.foundation.messaging.MessageHandler",
+          "role": "event",
+          "file": "src/main/java/com/example/shop/orders/views/order_list/OrderListProjection.java",
+          "line": 43,
+          "annotationLine": 42,
+          "message": {
+            "written": "OrderPlaced",
+            "name": "OrderPlaced",
+            "fqn": "com.example.shop.orders.events.OrderPlaced",
+            "resolvedBy": "import"
+          },
+          "params": [
+            {
+              "name": "event",
+              "type": "OrderPlaced"
+            },
+            {
+              "name": "message",
+              "type": "OrderedMessage"
+            }
+          ],
+          "envelope": false
+        },
+        {
+          "class": "OrderListProjection",
+          "method": "on",
+          "annotation": "MessageHandler",
+          "annotationFqn": "dk.trustworks.essentials.components.foundation.messaging.MessageHandler",
+          "role": "event",
+          "file": "src/main/java/com/example/shop/orders/views/order_list/OrderListProjection.java",
+          "line": 49,
+          "annotationLine": 48,
+          "message": {
+            "written": "com.example.shop.orders.events.OrderCancelled",
+            "name": "OrderCancelled",
+            "fqn": "com.example.shop.orders.events.OrderCancelled",
+            "resolvedBy": "fqn"
+          },
+          "params": [
+            {
+              "name": "event",
+              "type": "com.example.shop.orders.events.OrderCancelled"
+            },
+            {
+              "name": "message",
+              "type": "OrderedMessage"
+            }
+          ],
+          "envelope": false
+        }
+      ],
+      "handles": [],
+      "dispatches": [],
+      "publishes": [],
+      "subscriptions": [
+        {
+          "aggregateType": "Orders",
+          "written": "OrdersConfiguration.AGGREGATE_TYPE",
+          "file": "src/main/java/com/example/shop/orders/views/order_list/OrderListProjection.java",
+          "line": 39
+        }
+      ],
+      "mappings": [
+        {
+          "class": "OrderListAPI",
+          "method": "list",
+          "file": "src/main/java/com/example/shop/orders/views/order_list/OrderListAPI.java",
+          "line": 21,
+          "annotationLine": 20,
+          "annotation": "GetMapping",
+          "httpMethods": [
+            "GET"
+          ],
+          "routes": [
+            "/api/orders/list"
+          ],
+          "params": [],
+          "requestParams": [
+            {
+              "name": "limit",
+              "required": false
+            },
+            {
+              "name": "cursor",
+              "required": false
+            },
+            {
+              "name": "sort",
+              "required": false
+            }
+          ],
+          "queryParams": [],
+          "requestBody": null
+        },
+        {
+          "class": "OrderListAPI",
+          "method": "byStatus",
+          "file": "src/main/java/com/example/shop/orders/views/order_list/OrderListAPI.java",
+          "line": 29,
+          "annotationLine": 28,
+          "annotation": "GetMapping",
+          "httpMethods": [
+            "GET"
+          ],
+          "routes": [
+            "/api/orders/list"
+          ],
+          "params": [
+            "status"
+          ],
+          "requestParams": [
+            {
+              "name": "status",
+              "required": true
+            }
+          ],
+          "queryParams": [],
+          "requestBody": null
+        },
+        {
+          "class": "OrderListAPI",
+          "method": "shipped",
+          "file": "src/main/java/com/example/shop/orders/views/order_list/OrderListAPI.java",
+          "line": 35,
+          "annotationLine": 34,
+          "annotation": "GetMapping",
+          "httpMethods": [
+            "GET"
+          ],
+          "routes": [
+            "/api/orders/list"
+          ],
+          "params": [
+            "status=shipped"
+          ],
+          "requestParams": [],
+          "queryParams": [],
+          "requestBody": null
+        },
+        {
+          "class": "OrderListAPI",
+          "method": "between",
+          "file": "src/main/java/com/example/shop/orders/views/order_list/OrderListAPI.java",
+          "line": 41,
+          "annotationLine": 40,
+          "annotation": "GetMapping",
+          "httpMethods": [
+            "GET"
+          ],
+          "routes": [
+            "/api/orders/list"
+          ],
+          "params": [
+            "from",
+            "to",
+            "!legacy"
+          ],
+          "requestParams": [
+            {
+              "name": "from",
+              "required": true
+            },
+            {
+              "name": "to",
+              "required": true
+            }
+          ],
+          "queryParams": [],
+          "requestBody": null
+        },
+        {
+          "class": "OrderListAPI",
+          "method": "search",
+          "file": "src/main/java/com/example/shop/orders/views/order_list/OrderListAPI.java",
+          "line": 47,
+          "annotationLine": 46,
+          "annotation": "GetMapping",
+          "httpMethods": [
+            "GET"
+          ],
+          "routes": [
+            "/api/orders/list/search"
+          ],
+          "params": [],
+          "requestParams": [
+            {
+              "name": "q",
+              "required": true
+            }
+          ],
+          "queryParams": [],
+          "requestBody": null
+        },
+        {
+          "class": "OrderListAPI",
+          "method": "get",
+          "file": "src/main/java/com/example/shop/orders/views/order_list/OrderListAPI.java",
+          "line": 52,
+          "annotationLine": 51,
+          "annotation": "GetMapping",
+          "httpMethods": [
+            "GET"
+          ],
+          "routes": [
+            "/api/orders/list/{orderId}"
+          ],
+          "params": [],
+          "requestParams": [],
+          "queryParams": [],
+          "requestBody": null
+        }
+      ],
+      "schedules": [],
+      "notAnalysed": [],
+      "readModels": [
+        {
+          "name": "OrderListView",
+          "store": "document-db",
+          "columns": [
+            {
+              "name": "orderId",
+              "type": "String",
+              "note": "id"
+            },
+            {
+              "name": "status",
+              "type": "String",
+              "note": "indexed"
+            },
+            {
+              "name": "version",
+              "type": "long",
+              "note": null
+            },
+            {
+              "name": "lastUpdated",
+              "type": "OffsetDateTime",
+              "note": null
+            }
+          ],
+          "declaredIn": "src/main/java/com/example/shop/orders/views/order_list/OrderListView.java",
+          "line": 12,
+          "matchedBy": [
+            "annotation",
+            "name",
+            "repository",
+            "manifest"
+          ]
+        }
+      ]
+    }
+  ],
+  "messages": [
+    {
+      "name": "CancelOrder",
+      "type": "command",
+      "bc": "orders",
+      "found": true,
+      "identity": "id: OrderId",
+      "fields": [
+        "id: OrderId",
+        "reason: String"
+      ],
+      "declaredIn": "src/main/java/com/example/shop/orders/use_cases/cancel_order/CancelOrder.java",
+      "line": 6,
+      "alsoDeclaredIn": []
+    },
+    {
+      "name": "GatewayPaymentReceived",
+      "type": "event",
+      "bc": "orders",
+      "found": true,
+      "identity": null,
+      "fields": [
+        "reference: String"
+      ],
+      "declaredIn": "src/main/java/com/example/shop/orders/external_systems/payment_gateway/incoming/PaymentWebhook.java",
+      "line": 21,
+      "alsoDeclaredIn": []
+    },
+    {
+      "name": "OrderCancelled",
+      "type": "event",
+      "bc": "orders",
+      "found": true,
+      "identity": "id: OrderId",
+      "fields": [
+        "id: OrderId",
+        "reason: String"
+      ],
+      "declaredIn": "src/main/java/com/example/shop/orders/events/OrderCancelled.java",
+      "line": 5,
+      "alsoDeclaredIn": []
+    },
+    {
+      "name": "OrderPlaced",
+      "type": "event",
+      "bc": "orders",
+      "found": true,
+      "identity": "id: OrderId",
+      "fields": [
+        "customerId: CustomerId",
+        "id: OrderId",
+        "sku: String",
+        "quantity: int"
+      ],
+      "declaredIn": "src/main/java/com/example/shop/orders/events/OrderPlaced.java",
+      "line": 7,
+      "alsoDeclaredIn": []
+    },
+    {
+      "name": "OrderShipped",
+      "type": "event",
+      "bc": "orders",
+      "found": true,
+      "identity": "id: OrderId",
+      "fields": [
+        "id: OrderId"
+      ],
+      "declaredIn": "src/main/java/com/example/shop/orders/events/OrderShipped.java",
+      "line": 5,
+      "alsoDeclaredIn": []
+    },
+    {
+      "name": "PlaceOrder",
+      "type": "command",
+      "bc": "orders",
+      "found": true,
+      "identity": "id: OrderId",
+      "fields": [
+        "id: OrderId",
+        "customerId: CustomerId",
+        "sku: String",
+        "quantity: int"
+      ],
+      "declaredIn": "src/main/java/com/example/shop/orders/use_cases/place_order/PlaceOrder.java",
+      "line": 7,
+      "alsoDeclaredIn": []
+    }
+  ],
+  "unparsed": [],
+  "unresolved": []
+}

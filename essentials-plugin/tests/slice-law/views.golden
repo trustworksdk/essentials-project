@@ -1,0 +1,692 @@
+## lane=decider kind=command store=spring-data
+  Slice Zero: detect the language and the bounded context before advising
+  The four slice kinds
+  Directory vocabulary
+  R1 — one decision component per command slice
+  R2 — one API file per slice, owned by that slice
+  The command and the view are the contract — no adapter layer
+  R3 — split event hierarchies
+  R4 — a slice never reaches into another slice's internals
+  R5 — use a standard Essentials design, per language
+  Decider style — the API differs per language
+  Spring Data repository surface
+  Repositories extend the bare Repository marker
+  The read shape is a closed interface projection
+  Never name a query method after a CRUD base method
+  Sanctioned sharing
+  The published read seam
+  The _shared/ promotion bar
+  Wiring is part of done
+  Red flags
+  Structural — every lane
+  Structural — decider lane
+  Structural — Spring Data repositories
+  Behavioural — every lane
+  Behavioural — event-sourced lanes
+  Behavioural — Spring Data repositories
+  Reporting severities
+  File cohesion (advisory)
+  Anti-Rationalisation
+  Rationalisations — every lane
+  Rationalisations — decider lane
+  Rationalisations — Spring Data repositories
+## lane=decider kind=command store=other
+  Slice Zero: detect the language and the bounded context before advising
+  The four slice kinds
+  Directory vocabulary
+  R1 — one decision component per command slice
+  R2 — one API file per slice, owned by that slice
+  The command and the view are the contract — no adapter layer
+  R3 — split event hierarchies
+  R4 — a slice never reaches into another slice's internals
+  R5 — use a standard Essentials design, per language
+  Decider style — the API differs per language
+  Sanctioned sharing
+  The published read seam
+  The _shared/ promotion bar
+  Wiring is part of done
+  Red flags
+  Structural — every lane
+  Structural — decider lane
+  Behavioural — every lane
+  Behavioural — event-sourced lanes
+  Reporting severities
+  File cohesion (advisory)
+  Anti-Rationalisation
+  Rationalisations — every lane
+  Rationalisations — decider lane
+## lane=decider kind=view store=spring-data
+  Slice Zero: detect the language and the bounded context before advising
+  The four slice kinds
+  Directory vocabulary
+  R1 — one decision component per command slice
+  R2 — one API file per slice, owned by that slice
+  The command and the view are the contract — no adapter layer
+  Evolving a view slice
+  R3 — split event hierarchies
+  R4 — a slice never reaches into another slice's internals
+  R5 — use a standard Essentials design, per language
+  Decider style — the API differs per language
+  Spring Data repository surface
+  Repositories extend the bare Repository marker
+  The read shape is a closed interface projection
+  Never name a query method after a CRUD base method
+  Sanctioned sharing
+  The published read seam
+  The _shared/ promotion bar
+  Wiring is part of done
+  Red flags
+  Structural — every lane
+  Structural — event-sourced view slices
+  Structural — decider lane
+  Structural — Spring Data repositories
+  Behavioural — every lane
+  Behavioural — event-sourced lanes
+  Behavioural — Spring Data repositories
+  Reporting severities
+  File cohesion (advisory)
+  Anti-Rationalisation
+  Rationalisations — every lane
+  Rationalisations — event-sourced view slices
+  Rationalisations — decider lane
+  Rationalisations — Spring Data repositories
+## lane=decider kind=view store=other
+  Slice Zero: detect the language and the bounded context before advising
+  The four slice kinds
+  Directory vocabulary
+  R1 — one decision component per command slice
+  R2 — one API file per slice, owned by that slice
+  The command and the view are the contract — no adapter layer
+  Evolving a view slice
+  R3 — split event hierarchies
+  R4 — a slice never reaches into another slice's internals
+  R5 — use a standard Essentials design, per language
+  Decider style — the API differs per language
+  Sanctioned sharing
+  The published read seam
+  The _shared/ promotion bar
+  Wiring is part of done
+  Red flags
+  Structural — every lane
+  Structural — event-sourced view slices
+  Structural — decider lane
+  Behavioural — every lane
+  Behavioural — event-sourced lanes
+  Reporting severities
+  File cohesion (advisory)
+  Anti-Rationalisation
+  Rationalisations — every lane
+  Rationalisations — event-sourced view slices
+  Rationalisations — decider lane
+## lane=decider kind=automation store=spring-data
+  Slice Zero: detect the language and the bounded context before advising
+  The four slice kinds
+  Directory vocabulary
+  R1 — one decision component per command slice
+  R2 — one API file per slice, owned by that slice
+  R3 — split event hierarchies
+  R4 — a slice never reaches into another slice's internals
+  R5 — use a standard Essentials design, per language
+  Decider style — the API differs per language
+  Spring Data repository surface
+  Repositories extend the bare Repository marker
+  The read shape is a closed interface projection
+  Never name a query method after a CRUD base method
+  Sanctioned sharing
+  The published read seam
+  The _shared/ promotion bar
+  Wiring is part of done
+  Red flags
+  Structural — every lane
+  Structural — decider lane
+  Structural — Spring Data repositories
+  Behavioural — every lane
+  Behavioural — event-sourced lanes
+  Behavioural — Spring Data repositories
+  Reporting severities
+  File cohesion (advisory)
+  Anti-Rationalisation
+  Rationalisations — every lane
+  Rationalisations — decider lane
+  Rationalisations — Spring Data repositories
+## lane=decider kind=automation store=other
+  Slice Zero: detect the language and the bounded context before advising
+  The four slice kinds
+  Directory vocabulary
+  R1 — one decision component per command slice
+  R2 — one API file per slice, owned by that slice
+  R3 — split event hierarchies
+  R4 — a slice never reaches into another slice's internals
+  R5 — use a standard Essentials design, per language
+  Decider style — the API differs per language
+  Sanctioned sharing
+  The published read seam
+  The _shared/ promotion bar
+  Wiring is part of done
+  Red flags
+  Structural — every lane
+  Structural — decider lane
+  Behavioural — every lane
+  Behavioural — event-sourced lanes
+  Reporting severities
+  File cohesion (advisory)
+  Anti-Rationalisation
+  Rationalisations — every lane
+  Rationalisations — decider lane
+## lane=decider kind=translation store=spring-data
+  Slice Zero: detect the language and the bounded context before advising
+  The four slice kinds
+  Directory vocabulary
+  R1 — one decision component per command slice
+  R2 — one API file per slice, owned by that slice
+  R3 — split event hierarchies
+  R4 — a slice never reaches into another slice's internals
+  R5 — use a standard Essentials design, per language
+  Decider style — the API differs per language
+  Spring Data repository surface
+  Repositories extend the bare Repository marker
+  The read shape is a closed interface projection
+  Never name a query method after a CRUD base method
+  Sanctioned sharing
+  The published read seam
+  The _shared/ promotion bar
+  Wiring is part of done
+  Red flags
+  Structural — every lane
+  Structural — decider lane
+  Structural — Spring Data repositories
+  Behavioural — every lane
+  Behavioural — event-sourced lanes
+  Behavioural — Spring Data repositories
+  Reporting severities
+  File cohesion (advisory)
+  Anti-Rationalisation
+  Rationalisations — every lane
+  Rationalisations — decider lane
+  Rationalisations — Spring Data repositories
+## lane=decider kind=translation store=other
+  Slice Zero: detect the language and the bounded context before advising
+  The four slice kinds
+  Directory vocabulary
+  R1 — one decision component per command slice
+  R2 — one API file per slice, owned by that slice
+  R3 — split event hierarchies
+  R4 — a slice never reaches into another slice's internals
+  R5 — use a standard Essentials design, per language
+  Decider style — the API differs per language
+  Sanctioned sharing
+  The published read seam
+  The _shared/ promotion bar
+  Wiring is part of done
+  Red flags
+  Structural — every lane
+  Structural — decider lane
+  Behavioural — every lane
+  Behavioural — event-sourced lanes
+  Reporting severities
+  File cohesion (advisory)
+  Anti-Rationalisation
+  Rationalisations — every lane
+  Rationalisations — decider lane
+## lane=aggregate kind=command store=spring-data
+  Slice Zero: detect the language and the bounded context before advising
+  The four slice kinds
+  Directory vocabulary
+  R1 — one decision component per command slice
+  R2 — one API file per slice, owned by that slice
+  The command and the view are the contract — no adapter layer
+  R3 — split event hierarchies
+  R4 — a slice never reaches into another slice's internals
+  R5 — use a standard Essentials design, per language
+  Aggregate style — the aggregate is the consistency boundary
+  The aggregate's own bar
+  Spring Data repository surface
+  Repositories extend the bare Repository marker
+  The read shape is a closed interface projection
+  Never name a query method after a CRUD base method
+  Sanctioned sharing
+  The published read seam
+  Wiring is part of done
+  Red flags
+  Structural — every lane
+  Structural — aggregate lane
+  Structural — Spring Data repositories
+  Behavioural — every lane
+  Behavioural — event-sourced lanes
+  Behavioural — Spring Data repositories
+  Reporting severities
+  File cohesion (advisory)
+  Anti-Rationalisation
+  Rationalisations — every lane
+  Rationalisations — aggregate lane
+  Rationalisations — Spring Data repositories
+## lane=aggregate kind=command store=other
+  Slice Zero: detect the language and the bounded context before advising
+  The four slice kinds
+  Directory vocabulary
+  R1 — one decision component per command slice
+  R2 — one API file per slice, owned by that slice
+  The command and the view are the contract — no adapter layer
+  R3 — split event hierarchies
+  R4 — a slice never reaches into another slice's internals
+  R5 — use a standard Essentials design, per language
+  Aggregate style — the aggregate is the consistency boundary
+  The aggregate's own bar
+  Sanctioned sharing
+  The published read seam
+  Wiring is part of done
+  Red flags
+  Structural — every lane
+  Structural — aggregate lane
+  Behavioural — every lane
+  Behavioural — event-sourced lanes
+  Reporting severities
+  File cohesion (advisory)
+  Anti-Rationalisation
+  Rationalisations — every lane
+  Rationalisations — aggregate lane
+## lane=aggregate kind=view store=spring-data
+  Slice Zero: detect the language and the bounded context before advising
+  The four slice kinds
+  Directory vocabulary
+  R1 — one decision component per command slice
+  R2 — one API file per slice, owned by that slice
+  The command and the view are the contract — no adapter layer
+  Evolving a view slice
+  R3 — split event hierarchies
+  R4 — a slice never reaches into another slice's internals
+  R5 — use a standard Essentials design, per language
+  Aggregate style — the aggregate is the consistency boundary
+  The aggregate's own bar
+  Spring Data repository surface
+  Repositories extend the bare Repository marker
+  The read shape is a closed interface projection
+  Never name a query method after a CRUD base method
+  Sanctioned sharing
+  The published read seam
+  Wiring is part of done
+  Red flags
+  Structural — every lane
+  Structural — event-sourced view slices
+  Structural — aggregate lane
+  Structural — Spring Data repositories
+  Behavioural — every lane
+  Behavioural — event-sourced lanes
+  Behavioural — Spring Data repositories
+  Reporting severities
+  File cohesion (advisory)
+  Anti-Rationalisation
+  Rationalisations — every lane
+  Rationalisations — event-sourced view slices
+  Rationalisations — aggregate lane
+  Rationalisations — Spring Data repositories
+## lane=aggregate kind=view store=other
+  Slice Zero: detect the language and the bounded context before advising
+  The four slice kinds
+  Directory vocabulary
+  R1 — one decision component per command slice
+  R2 — one API file per slice, owned by that slice
+  The command and the view are the contract — no adapter layer
+  Evolving a view slice
+  R3 — split event hierarchies
+  R4 — a slice never reaches into another slice's internals
+  R5 — use a standard Essentials design, per language
+  Aggregate style — the aggregate is the consistency boundary
+  The aggregate's own bar
+  Sanctioned sharing
+  The published read seam
+  Wiring is part of done
+  Red flags
+  Structural — every lane
+  Structural — event-sourced view slices
+  Structural — aggregate lane
+  Behavioural — every lane
+  Behavioural — event-sourced lanes
+  Reporting severities
+  File cohesion (advisory)
+  Anti-Rationalisation
+  Rationalisations — every lane
+  Rationalisations — event-sourced view slices
+  Rationalisations — aggregate lane
+## lane=aggregate kind=automation store=spring-data
+  Slice Zero: detect the language and the bounded context before advising
+  The four slice kinds
+  Directory vocabulary
+  R1 — one decision component per command slice
+  R2 — one API file per slice, owned by that slice
+  R3 — split event hierarchies
+  R4 — a slice never reaches into another slice's internals
+  R5 — use a standard Essentials design, per language
+  Aggregate style — the aggregate is the consistency boundary
+  The aggregate's own bar
+  Spring Data repository surface
+  Repositories extend the bare Repository marker
+  The read shape is a closed interface projection
+  Never name a query method after a CRUD base method
+  Sanctioned sharing
+  The published read seam
+  Wiring is part of done
+  Red flags
+  Structural — every lane
+  Structural — aggregate lane
+  Structural — Spring Data repositories
+  Behavioural — every lane
+  Behavioural — event-sourced lanes
+  Behavioural — Spring Data repositories
+  Reporting severities
+  File cohesion (advisory)
+  Anti-Rationalisation
+  Rationalisations — every lane
+  Rationalisations — aggregate lane
+  Rationalisations — Spring Data repositories
+## lane=aggregate kind=automation store=other
+  Slice Zero: detect the language and the bounded context before advising
+  The four slice kinds
+  Directory vocabulary
+  R1 — one decision component per command slice
+  R2 — one API file per slice, owned by that slice
+  R3 — split event hierarchies
+  R4 — a slice never reaches into another slice's internals
+  R5 — use a standard Essentials design, per language
+  Aggregate style — the aggregate is the consistency boundary
+  The aggregate's own bar
+  Sanctioned sharing
+  The published read seam
+  Wiring is part of done
+  Red flags
+  Structural — every lane
+  Structural — aggregate lane
+  Behavioural — every lane
+  Behavioural — event-sourced lanes
+  Reporting severities
+  File cohesion (advisory)
+  Anti-Rationalisation
+  Rationalisations — every lane
+  Rationalisations — aggregate lane
+## lane=aggregate kind=translation store=spring-data
+  Slice Zero: detect the language and the bounded context before advising
+  The four slice kinds
+  Directory vocabulary
+  R1 — one decision component per command slice
+  R2 — one API file per slice, owned by that slice
+  R3 — split event hierarchies
+  R4 — a slice never reaches into another slice's internals
+  R5 — use a standard Essentials design, per language
+  Aggregate style — the aggregate is the consistency boundary
+  The aggregate's own bar
+  Spring Data repository surface
+  Repositories extend the bare Repository marker
+  The read shape is a closed interface projection
+  Never name a query method after a CRUD base method
+  Sanctioned sharing
+  The published read seam
+  Wiring is part of done
+  Red flags
+  Structural — every lane
+  Structural — aggregate lane
+  Structural — Spring Data repositories
+  Behavioural — every lane
+  Behavioural — event-sourced lanes
+  Behavioural — Spring Data repositories
+  Reporting severities
+  File cohesion (advisory)
+  Anti-Rationalisation
+  Rationalisations — every lane
+  Rationalisations — aggregate lane
+  Rationalisations — Spring Data repositories
+## lane=aggregate kind=translation store=other
+  Slice Zero: detect the language and the bounded context before advising
+  The four slice kinds
+  Directory vocabulary
+  R1 — one decision component per command slice
+  R2 — one API file per slice, owned by that slice
+  R3 — split event hierarchies
+  R4 — a slice never reaches into another slice's internals
+  R5 — use a standard Essentials design, per language
+  Aggregate style — the aggregate is the consistency boundary
+  The aggregate's own bar
+  Sanctioned sharing
+  The published read seam
+  Wiring is part of done
+  Red flags
+  Structural — every lane
+  Structural — aggregate lane
+  Behavioural — every lane
+  Behavioural — event-sourced lanes
+  Reporting severities
+  File cohesion (advisory)
+  Anti-Rationalisation
+  Rationalisations — every lane
+  Rationalisations — aggregate lane
+## lane=service-entity kind=command store=spring-data
+  Slice Zero: detect the language and the bounded context before advising
+  The four slice kinds
+  Directory vocabulary
+  R1 — one decision component per command slice
+  R2 — one API file per slice, owned by that slice
+  The command and the view are the contract — no adapter layer
+  R3 — split event hierarchies
+  R4 — a slice never reaches into another slice's internals
+  R5 — use a standard Essentials design, per language
+  Service-entity style — the decision lives on a state-stored entity
+  The read side on this lane
+  The entity's own bar
+  Spring Data repository surface
+  Repositories extend the bare Repository marker
+  The read shape is a closed interface projection
+  Never name a query method after a CRUD base method
+  Sanctioned sharing
+  The published read seam
+  Wiring is part of done
+  Red flags
+  Structural — every lane
+  Structural — service-entity lane
+  Structural — Spring Data repositories
+  Behavioural — every lane
+  Behavioural — service-entity lane
+  Behavioural — Spring Data repositories
+  Reporting severities
+  File cohesion (advisory)
+  Anti-Rationalisation
+  Rationalisations — every lane
+  Rationalisations — service-entity lane
+  Rationalisations — Spring Data repositories
+## lane=service-entity kind=command store=other
+  Slice Zero: detect the language and the bounded context before advising
+  The four slice kinds
+  Directory vocabulary
+  R1 — one decision component per command slice
+  R2 — one API file per slice, owned by that slice
+  The command and the view are the contract — no adapter layer
+  R3 — split event hierarchies
+  R4 — a slice never reaches into another slice's internals
+  R5 — use a standard Essentials design, per language
+  Service-entity style — the decision lives on a state-stored entity
+  The read side on this lane
+  The entity's own bar
+  Sanctioned sharing
+  The published read seam
+  Wiring is part of done
+  Red flags
+  Structural — every lane
+  Structural — service-entity lane
+  Behavioural — every lane
+  Behavioural — service-entity lane
+  Reporting severities
+  File cohesion (advisory)
+  Anti-Rationalisation
+  Rationalisations — every lane
+  Rationalisations — service-entity lane
+## lane=service-entity kind=view store=spring-data
+  Slice Zero: detect the language and the bounded context before advising
+  The four slice kinds
+  Directory vocabulary
+  R1 — one decision component per command slice
+  R2 — one API file per slice, owned by that slice
+  The command and the view are the contract — no adapter layer
+  R3 — split event hierarchies
+  R4 — a slice never reaches into another slice's internals
+  R5 — use a standard Essentials design, per language
+  Service-entity style — the decision lives on a state-stored entity
+  The read side on this lane
+  The entity's own bar
+  Spring Data repository surface
+  Repositories extend the bare Repository marker
+  The read shape is a closed interface projection
+  Never name a query method after a CRUD base method
+  Sanctioned sharing
+  The published read seam
+  Wiring is part of done
+  Red flags
+  Structural — every lane
+  Structural — service-entity lane
+  Structural — Spring Data repositories
+  Behavioural — every lane
+  Behavioural — service-entity lane
+  Behavioural — Spring Data repositories
+  Reporting severities
+  File cohesion (advisory)
+  Anti-Rationalisation
+  Rationalisations — every lane
+  Rationalisations — service-entity lane
+  Rationalisations — Spring Data repositories
+## lane=service-entity kind=view store=other
+  Slice Zero: detect the language and the bounded context before advising
+  The four slice kinds
+  Directory vocabulary
+  R1 — one decision component per command slice
+  R2 — one API file per slice, owned by that slice
+  The command and the view are the contract — no adapter layer
+  R3 — split event hierarchies
+  R4 — a slice never reaches into another slice's internals
+  R5 — use a standard Essentials design, per language
+  Service-entity style — the decision lives on a state-stored entity
+  The read side on this lane
+  The entity's own bar
+  Sanctioned sharing
+  The published read seam
+  Wiring is part of done
+  Red flags
+  Structural — every lane
+  Structural — service-entity lane
+  Behavioural — every lane
+  Behavioural — service-entity lane
+  Reporting severities
+  File cohesion (advisory)
+  Anti-Rationalisation
+  Rationalisations — every lane
+  Rationalisations — service-entity lane
+## lane=service-entity kind=automation store=spring-data
+  Slice Zero: detect the language and the bounded context before advising
+  The four slice kinds
+  Directory vocabulary
+  R1 — one decision component per command slice
+  R2 — one API file per slice, owned by that slice
+  R3 — split event hierarchies
+  R4 — a slice never reaches into another slice's internals
+  R5 — use a standard Essentials design, per language
+  Service-entity style — the decision lives on a state-stored entity
+  The read side on this lane
+  The entity's own bar
+  Spring Data repository surface
+  Repositories extend the bare Repository marker
+  The read shape is a closed interface projection
+  Never name a query method after a CRUD base method
+  Sanctioned sharing
+  The published read seam
+  Wiring is part of done
+  Red flags
+  Structural — every lane
+  Structural — service-entity lane
+  Structural — Spring Data repositories
+  Behavioural — every lane
+  Behavioural — service-entity lane
+  Behavioural — Spring Data repositories
+  Reporting severities
+  File cohesion (advisory)
+  Anti-Rationalisation
+  Rationalisations — every lane
+  Rationalisations — service-entity lane
+  Rationalisations — Spring Data repositories
+## lane=service-entity kind=automation store=other
+  Slice Zero: detect the language and the bounded context before advising
+  The four slice kinds
+  Directory vocabulary
+  R1 — one decision component per command slice
+  R2 — one API file per slice, owned by that slice
+  R3 — split event hierarchies
+  R4 — a slice never reaches into another slice's internals
+  R5 — use a standard Essentials design, per language
+  Service-entity style — the decision lives on a state-stored entity
+  The read side on this lane
+  The entity's own bar
+  Sanctioned sharing
+  The published read seam
+  Wiring is part of done
+  Red flags
+  Structural — every lane
+  Structural — service-entity lane
+  Behavioural — every lane
+  Behavioural — service-entity lane
+  Reporting severities
+  File cohesion (advisory)
+  Anti-Rationalisation
+  Rationalisations — every lane
+  Rationalisations — service-entity lane
+## lane=service-entity kind=translation store=spring-data
+  Slice Zero: detect the language and the bounded context before advising
+  The four slice kinds
+  Directory vocabulary
+  R1 — one decision component per command slice
+  R2 — one API file per slice, owned by that slice
+  R3 — split event hierarchies
+  R4 — a slice never reaches into another slice's internals
+  R5 — use a standard Essentials design, per language
+  Service-entity style — the decision lives on a state-stored entity
+  The read side on this lane
+  The entity's own bar
+  Spring Data repository surface
+  Repositories extend the bare Repository marker
+  The read shape is a closed interface projection
+  Never name a query method after a CRUD base method
+  Sanctioned sharing
+  The published read seam
+  Wiring is part of done
+  Red flags
+  Structural — every lane
+  Structural — service-entity lane
+  Structural — Spring Data repositories
+  Behavioural — every lane
+  Behavioural — service-entity lane
+  Behavioural — Spring Data repositories
+  Reporting severities
+  File cohesion (advisory)
+  Anti-Rationalisation
+  Rationalisations — every lane
+  Rationalisations — service-entity lane
+  Rationalisations — Spring Data repositories
+## lane=service-entity kind=translation store=other
+  Slice Zero: detect the language and the bounded context before advising
+  The four slice kinds
+  Directory vocabulary
+  R1 — one decision component per command slice
+  R2 — one API file per slice, owned by that slice
+  R3 — split event hierarchies
+  R4 — a slice never reaches into another slice's internals
+  R5 — use a standard Essentials design, per language
+  Service-entity style — the decision lives on a state-stored entity
+  The read side on this lane
+  The entity's own bar
+  Sanctioned sharing
+  The published read seam
+  Wiring is part of done
+  Red flags
+  Structural — every lane
+  Structural — service-entity lane
+  Behavioural — every lane
+  Behavioural — service-entity lane
+  Reporting severities
+  File cohesion (advisory)
+  Anti-Rationalisation
+  Rationalisations — every lane
+  Rationalisations — service-entity lane

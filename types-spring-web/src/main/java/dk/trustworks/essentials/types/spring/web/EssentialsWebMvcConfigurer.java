@@ -38,10 +38,11 @@ import org.springframework.web.servlet.config.annotation.WebMvcConfigurer;
  * }</pre>
  * <p>
  * <b>It deliberately only implements {@link #addFormatters(FormatterRegistry)}.</b> Nothing here touches the HTTP
- * message converters, so it cannot interfere with whichever Jackson major the application serialises request and
- * response <em>bodies</em> with. Bodies are a separate concern handled by {@code EssentialTypesJacksonModule} from
- * {@code types-jackson}/{@code types-jackson3} - registered on the <em>web</em> {@code ObjectMapper}, which no
- * Essentials starter does for you.
+ * message converters, so it cannot interfere with how the application serialises request and response
+ * <em>bodies</em>. Bodies are a separate concern handled by {@code EssentialTypesJacksonModule} from
+ * {@code types-jackson3} registered on the <em>web</em> {@code JsonMapper}. Both Essentials Spring Boot starters
+ * publish that module as a {@code @Bean}, and Spring Boot adds {@code JacksonModule} beans to its auto-configured
+ * {@code JsonMapper}; without a starter, declare the module as a bean yourself.
  *
  * @see EssentialsWebFluxConfigurer the WebFlux equivalent
  * @see SingleValueTypeConverter the Java {@link SingleValueType} hierarchy

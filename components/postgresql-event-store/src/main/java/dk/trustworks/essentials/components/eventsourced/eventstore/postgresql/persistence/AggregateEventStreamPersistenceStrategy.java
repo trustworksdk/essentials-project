@@ -274,6 +274,25 @@ public interface AggregateEventStreamPersistenceStrategy<CONFIG extends Aggregat
     Stream<PersistedEvent> loadEventsByGlobalOrder(EventStoreUnitOfWork unitOfWork, AggregateType aggregateType, LongRange globalOrderRange, List<GlobalEventOrder> includeAdditionalGlobalOrders, Optional<Tenant> onlyIncludeEventsIfTheyBelongToTenant);
 
     /**
+     * Like {@link #loadEventsByGlobalOrder(EventStoreUnitOfWork, AggregateType, LongRange, List, Optional)} for <b>every</b> tenant's events,
+     * but only the events belonging to <code>onlyLoadPayloadIfEventBelongsToTenant</code> - or to no tenant at all - need carry their payload
+     * and metadata. The other tenants' events must still be returned, as a polling subscription needs their global orders to tell them from gaps,
+     * but their payload and metadata may be left out (an empty JSON object), sparing the database from reading and the connection from transferring them.<br>
+     * The default implementation loads every payload, which is always correct, only not as cheap.
+     *
+     * @param unitOfWork                              the current unit of work
+     * @param aggregateType                           the aggregate type that the underlying {@link AggregateEventStream} is associated with
+     * @param globalOrderRange                        the range of {@link PersistedEvent#globalEventOrder()}'s we want Events for
+     * @param includeAdditionalGlobalOrders           a list of additional global orders (typically outside the <code>globalOrderRange</code>) that you want to include additionally<br>
+     *                                                May be null or empty if no additional events should be loaded outside the <code>globalOrderRange</code>
+     * @param onlyLoadPayloadIfEventBelongsToTenant   the tenant whose events (and those without a tenant) must carry their payload and metadata
+     * @return the {@link PersistedEvent}'s of every tenant
+     */
+    default Stream<PersistedEvent> loadEventsByGlobalOrderOmittingOtherTenantsPayloads(EventStoreUnitOfWork unitOfWork, AggregateType aggregateType, LongRange globalOrderRange, List<GlobalEventOrder> includeAdditionalGlobalOrders, Tenant onlyLoadPayloadIfEventBelongsToTenant) {
+        return loadEventsByGlobalOrder(unitOfWork, aggregateType, globalOrderRange, includeAdditionalGlobalOrders, Optional.empty());
+    }
+
+    /**
      * Load the event belonging to the given <code>configuration</code> and having the specified <code>eventId</code>
      *
      * @param unitOfWork    the current unit of work
@@ -314,6 +333,28 @@ public interface AggregateEventStreamPersistenceStrategy<CONFIG extends Aggregat
      * @return an {@link Optional} with the lowest {@link GlobalEventOrder} persisted or {@link Optional#empty()} if no events have been persisted
      */
     Optional<GlobalEventOrder> findLowestGlobalEventOrderPersisted(EventStoreUnitOfWork unitOfWork, AggregateType aggregateType);
+
+    /**
+     * Find the lowest {@link GlobalEventOrder} persisted within {@code globalOrderRange}, for every tenant.
+     * <p>
+     * The polling event store asks this - one lookup, never a scan of the range - to step over a hole in the global order
+     * at once (a sequence moved forward with {@code setval}, a restore) instead of widening its query range poll by poll,
+     * and to find an event that commits late in the middle of a wide gap it awaits in memory.
+     * <p>
+     * The default implementation loads the events of the range in global order and takes the first:
+     * correct for any strategy, but a strategy whose store can answer it with an index lookup should override it - as
+     * {@code SeparateTablePerAggregateTypePersistenceStrategy} does with a {@code MIN} over the global order primary key.
+     *
+     * @param unitOfWork       the current unit of work
+     * @param aggregateType    the aggregate type that the underlying {@link AggregateEventStream} is associated with
+     * @param globalOrderRange the range to look in - closed, or open-ended upwards
+     * @return the lowest {@link GlobalEventOrder} persisted within the range, or {@link Optional#empty()} if there is none
+     */
+    default Optional<GlobalEventOrder> findLowestGlobalEventOrderPersisted(EventStoreUnitOfWork unitOfWork, AggregateType aggregateType, LongRange globalOrderRange) {
+        try (var events = loadEventsByGlobalOrder(unitOfWork, aggregateType, globalOrderRange, List.of(), Optional.empty())) {
+            return events.findFirst().map(PersistedEvent::globalEventOrder);
+        }
+    }
 
     /**
      * Load all the <code>eventIds</code> related to the specified <code>aggregateType</code>

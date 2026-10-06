@@ -19,7 +19,7 @@ package dk.trustworks.essentials.examples.trading.brokerage;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.test.annotation.DirtiesContext;
 import org.springframework.test.context.*;
-import org.testcontainers.containers.PostgreSQLContainer;
+import org.testcontainers.postgresql.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.*;
 
 /**
@@ -44,7 +44,7 @@ import org.testcontainers.junit.jupiter.*;
 @DirtiesContext // close while this class's container is still up; a cached context outlives it and stalls the next context switch
 class SettleTradeAutomationOnShardOwnedQueuesTest extends AbstractSettleTradeAutomationTest {
     @Container
-    static final PostgreSQLContainer<?> postgres = postgres("trading-demo-settle-shard-owned-test-db");
+    static final PostgreSQLContainer postgres = postgres("trading-demo-settle-shard-owned-test-db");
 
     @DynamicPropertySource
     static void registerProperties(DynamicPropertyRegistry registry) {

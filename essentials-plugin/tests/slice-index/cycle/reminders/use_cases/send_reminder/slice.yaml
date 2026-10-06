@@ -1,0 +1,16 @@
+schemaVersion: "1.3"
+slice: reminders.send_reminder
+kind: command
+bc: reminders
+owner: reminders-team
+status: live
+summary: Send a payment reminder.
+language: kotlin
+tier: cqrs-es
+lane: decider
+handles: [SendReminder]
+publishes: [ReminderSent]
+writes: [Reminder]
+tests:
+  unit: { present: true }
+  integration: { present: false }

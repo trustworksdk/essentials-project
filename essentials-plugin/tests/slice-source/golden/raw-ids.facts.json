@@ -1,0 +1,581 @@
+{
+  "tool": "slice-source",
+  "format": 1,
+  "mode": "facts",
+  "root": "tests/slice-source/cases/raw-ids",
+  "manifestsRead": true,
+  "sourceFiles": 14,
+  "bcs": [
+    {
+      "name": "billing",
+      "path": "src/main/*/com/example/ids/billing",
+      "dirs": [
+        "src/main/kotlin/com/example/ids/billing"
+      ],
+      "languages": [
+        "kotlin"
+      ],
+      "slices": [
+        "billing.void_invoice",
+        "billing.invoice_lookup"
+      ],
+      "lane": {
+        "signals": {
+          "decider": [],
+          "aggregates": null,
+          "entities": null,
+          "eventStore": []
+        },
+        "declared": [],
+        "detected": "undetermined"
+      }
+    },
+    {
+      "name": "orders",
+      "path": "src/main/*/com/example/ids/orders",
+      "dirs": [
+        "src/main/java/com/example/ids/orders"
+      ],
+      "languages": [
+        "java"
+      ],
+      "slices": [
+        "orders.payment_gateway",
+        "orders.cancel_order",
+        "orders.ship_order",
+        "orders.order_lookup"
+      ],
+      "lane": {
+        "signals": {
+          "decider": [],
+          "aggregates": null,
+          "entities": null,
+          "eventStore": []
+        },
+        "declared": [],
+        "detected": "undetermined"
+      }
+    }
+  ],
+  "slices": [
+    {
+      "id": "orders.payment_gateway",
+      "idSource": "manifest",
+      "bc": "orders",
+      "bcPath": "src/main/*/com/example/ids/orders",
+      "dir": "src/main/java/com/example/ids/orders/external_systems/payment_gateway",
+      "role": "external_systems",
+      "kind": "translation",
+      "manifest": "src/main/java/com/example/ids/orders/external_systems/payment_gateway/slice.yaml",
+      "language": "java",
+      "package": "com.example.ids.orders.external_systems.payment_gateway",
+      "files": [
+        "PaymentWebhook.java"
+      ],
+      "processors": [],
+      "handlers": [],
+      "handles": [],
+      "dispatches": [],
+      "publishes": [],
+      "subscriptions": [],
+      "mappings": [
+        {
+          "class": "PaymentWebhook",
+          "method": "onPaymentReceived",
+          "file": "src/main/java/com/example/ids/orders/external_systems/payment_gateway/PaymentWebhook.java",
+          "line": 12,
+          "annotationLine": 11,
+          "annotation": "PostMapping",
+          "httpMethods": [
+            "POST"
+          ],
+          "routes": [
+            "/webhooks/payment-gateway/{externalId}"
+          ],
+          "params": [],
+          "requestParams": [],
+          "queryParams": [],
+          "requestBody": null
+        }
+      ],
+      "schedules": [],
+      "notAnalysed": []
+    },
+    {
+      "id": "orders.cancel_order",
+      "idSource": "manifest",
+      "bc": "orders",
+      "bcPath": "src/main/*/com/example/ids/orders",
+      "dir": "src/main/java/com/example/ids/orders/use_cases/cancel_order",
+      "role": "use_cases",
+      "kind": "command",
+      "manifest": "src/main/java/com/example/ids/orders/use_cases/cancel_order/slice.yaml",
+      "language": "java",
+      "package": "com.example.ids.orders.use_cases.cancel_order",
+      "files": [
+        "CancelOrder.java",
+        "CancelOrderAPI.java"
+      ],
+      "processors": [],
+      "handlers": [],
+      "handles": [],
+      "dispatches": [],
+      "publishes": [],
+      "subscriptions": [],
+      "mappings": [
+        {
+          "class": "CancelOrderAPI",
+          "method": "cancel",
+          "file": "src/main/java/com/example/ids/orders/use_cases/cancel_order/CancelOrderAPI.java",
+          "line": 15,
+          "annotationLine": 14,
+          "annotation": "PostMapping",
+          "httpMethods": [
+            "POST"
+          ],
+          "routes": [
+            "/api/orders/{orderId}/cancel"
+          ],
+          "params": [],
+          "requestParams": [],
+          "queryParams": [],
+          "requestBody": null
+        }
+      ],
+      "schedules": [],
+      "notAnalysed": []
+    },
+    {
+      "id": "orders.ship_order",
+      "idSource": "manifest",
+      "bc": "orders",
+      "bcPath": "src/main/*/com/example/ids/orders",
+      "dir": "src/main/java/com/example/ids/orders/use_cases/ship_order",
+      "role": "use_cases",
+      "kind": "command",
+      "manifest": "src/main/java/com/example/ids/orders/use_cases/ship_order/slice.yaml",
+      "language": "java",
+      "package": "com.example.ids.orders.use_cases.ship_order",
+      "files": [
+        "ShipOrder.java",
+        "ShipOrderAPI.java"
+      ],
+      "processors": [],
+      "handlers": [],
+      "handles": [],
+      "dispatches": [],
+      "publishes": [],
+      "subscriptions": [],
+      "mappings": [
+        {
+          "class": "ShipOrderAPI",
+          "method": "ship",
+          "file": "src/main/java/com/example/ids/orders/use_cases/ship_order/ShipOrderAPI.java",
+          "line": 18,
+          "annotationLine": 17,
+          "annotation": "PostMapping",
+          "httpMethods": [
+            "POST"
+          ],
+          "routes": [
+            "/api/orders/{id}/ship"
+          ],
+          "params": [],
+          "requestParams": [],
+          "queryParams": [],
+          "requestBody": null
+        }
+      ],
+      "schedules": [],
+      "notAnalysed": []
+    },
+    {
+      "id": "orders.order_lookup",
+      "idSource": "manifest",
+      "bc": "orders",
+      "bcPath": "src/main/*/com/example/ids/orders",
+      "dir": "src/main/java/com/example/ids/orders/views/order_lookup",
+      "role": "views",
+      "kind": "view",
+      "manifest": "src/main/java/com/example/ids/orders/views/order_lookup/slice.yaml",
+      "language": "java",
+      "package": "com.example.ids.orders.views.order_lookup",
+      "files": [
+        "OrderLookupAPI.java",
+        "OrderLookupView.java"
+      ],
+      "processors": [],
+      "handlers": [],
+      "handles": [],
+      "dispatches": [],
+      "publishes": [],
+      "subscriptions": [],
+      "mappings": [
+        {
+          "class": "OrderLookupAPI",
+          "method": "get",
+          "file": "src/main/java/com/example/ids/orders/views/order_lookup/OrderLookupAPI.java",
+          "line": 20,
+          "annotationLine": 19,
+          "annotation": "GetMapping",
+          "httpMethods": [
+            "GET"
+          ],
+          "routes": [
+            "/api/orders/lookup/{orderId}"
+          ],
+          "params": [],
+          "requestParams": [],
+          "queryParams": [],
+          "requestBody": null
+        },
+        {
+          "class": "OrderLookupAPI",
+          "method": "legacy",
+          "file": "src/main/java/com/example/ids/orders/views/order_lookup/OrderLookupAPI.java",
+          "line": 26,
+          "annotationLine": 25,
+          "annotation": "GetMapping",
+          "httpMethods": [
+            "GET"
+          ],
+          "routes": [
+            "/api/orders/lookup/legacy/{id}"
+          ],
+          "params": [],
+          "requestParams": [],
+          "queryParams": [],
+          "requestBody": null
+        },
+        {
+          "class": "OrderLookupAPI",
+          "method": "byCustomer",
+          "file": "src/main/java/com/example/ids/orders/views/order_lookup/OrderLookupAPI.java",
+          "line": 32,
+          "annotationLine": 31,
+          "annotation": "GetMapping",
+          "httpMethods": [
+            "GET"
+          ],
+          "routes": [
+            "/api/orders/lookup"
+          ],
+          "params": [
+            "customerId"
+          ],
+          "requestParams": [
+            {
+              "name": "customerId",
+              "required": false
+            },
+            {
+              "name": "batchId",
+              "required": false
+            }
+          ],
+          "queryParams": [],
+          "requestBody": null
+        },
+        {
+          "class": "OrderLookupAPI",
+          "method": "bySku",
+          "file": "src/main/java/com/example/ids/orders/views/order_lookup/OrderLookupAPI.java",
+          "line": 39,
+          "annotationLine": 38,
+          "annotation": "GetMapping",
+          "httpMethods": [
+            "GET"
+          ],
+          "routes": [
+            "/api/orders/lookup/by-sku/{sku}"
+          ],
+          "params": [],
+          "requestParams": [
+            {
+              "name": "status",
+              "required": false
+            },
+            {
+              "name": "paid",
+              "required": false
+            },
+            {
+              "name": "valid",
+              "required": false
+            },
+            {
+              "name": "q",
+              "required": false
+            }
+          ],
+          "queryParams": [],
+          "requestBody": null
+        }
+      ],
+      "schedules": [],
+      "notAnalysed": [],
+      "readModels": [
+        {
+          "name": "OrderLookupView",
+          "store": null,
+          "columns": [
+            {
+              "name": "orderId",
+              "type": "String",
+              "note": null
+            },
+            {
+              "name": "status",
+              "type": "String",
+              "note": null
+            }
+          ],
+          "declaredIn": "src/main/java/com/example/ids/orders/views/order_lookup/OrderLookupView.java",
+          "line": 3,
+          "matchedBy": [
+            "name",
+            "manifest"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "billing.void_invoice",
+      "idSource": "manifest",
+      "bc": "billing",
+      "bcPath": "src/main/*/com/example/ids/billing",
+      "dir": "src/main/kotlin/com/example/ids/billing/use_cases/void_invoice",
+      "role": "use_cases",
+      "kind": "command",
+      "manifest": "src/main/kotlin/com/example/ids/billing/use_cases/void_invoice/slice.yaml",
+      "language": "kotlin",
+      "package": "com.example.ids.billing.use_cases.void_invoice",
+      "files": [
+        "VoidInvoice.kt",
+        "VoidInvoiceAPI.kt"
+      ],
+      "processors": [],
+      "handlers": [],
+      "handles": [],
+      "dispatches": [],
+      "publishes": [],
+      "subscriptions": [],
+      "mappings": [
+        {
+          "class": "VoidInvoiceAPI",
+          "method": "voidInvoice",
+          "file": "src/main/kotlin/com/example/ids/billing/use_cases/void_invoice/VoidInvoiceAPI.kt",
+          "line": 17,
+          "annotationLine": 16,
+          "annotation": "PostMapping",
+          "httpMethods": [
+            "POST"
+          ],
+          "routes": [
+            "/api/billing/{invoiceId}/void"
+          ],
+          "params": [],
+          "requestParams": [],
+          "queryParams": [],
+          "requestBody": null
+        }
+      ],
+      "schedules": [],
+      "notAnalysed": []
+    },
+    {
+      "id": "billing.invoice_lookup",
+      "idSource": "manifest",
+      "bc": "billing",
+      "bcPath": "src/main/*/com/example/ids/billing",
+      "dir": "src/main/kotlin/com/example/ids/billing/views/invoice_lookup",
+      "role": "views",
+      "kind": "view",
+      "manifest": "src/main/kotlin/com/example/ids/billing/views/invoice_lookup/slice.yaml",
+      "language": "kotlin",
+      "package": "com.example.ids.billing.views.invoice_lookup",
+      "files": [
+        "InvoiceLookupAPI.kt",
+        "InvoiceLookupView.kt"
+      ],
+      "processors": [],
+      "handlers": [],
+      "handles": [],
+      "dispatches": [],
+      "publishes": [],
+      "subscriptions": [],
+      "mappings": [
+        {
+          "class": "InvoiceLookupAPI",
+          "method": "get",
+          "file": "src/main/kotlin/com/example/ids/billing/views/invoice_lookup/InvoiceLookupAPI.kt",
+          "line": 19,
+          "annotationLine": 18,
+          "annotation": "GetMapping",
+          "httpMethods": [
+            "GET"
+          ],
+          "routes": [
+            "/api/billing/lookup/{invoiceId}"
+          ],
+          "params": [],
+          "requestParams": [],
+          "queryParams": [],
+          "requestBody": null
+        },
+        {
+          "class": "InvoiceLookupAPI",
+          "method": "raw",
+          "file": "src/main/kotlin/com/example/ids/billing/views/invoice_lookup/InvoiceLookupAPI.kt",
+          "line": 23,
+          "annotationLine": 22,
+          "annotation": "GetMapping",
+          "httpMethods": [
+            "GET"
+          ],
+          "routes": [
+            "/api/billing/lookup/raw/{invoiceId}"
+          ],
+          "params": [],
+          "requestParams": [],
+          "queryParams": [],
+          "requestBody": null
+        },
+        {
+          "class": "InvoiceLookupAPI",
+          "method": "byCustomer",
+          "file": "src/main/kotlin/com/example/ids/billing/views/invoice_lookup/InvoiceLookupAPI.kt",
+          "line": 27,
+          "annotationLine": 26,
+          "annotation": "GetMapping",
+          "httpMethods": [
+            "GET"
+          ],
+          "routes": [
+            "/api/billing/lookup"
+          ],
+          "params": [
+            "customerId"
+          ],
+          "requestParams": [
+            {
+              "name": "customerId",
+              "required": false
+            },
+            {
+              "name": "legacyId",
+              "required": false
+            }
+          ],
+          "queryParams": [],
+          "requestBody": null
+        },
+        {
+          "class": "InvoiceLookupAPI",
+          "method": "byStatus",
+          "file": "src/main/kotlin/com/example/ids/billing/views/invoice_lookup/InvoiceLookupAPI.kt",
+          "line": 32,
+          "annotationLine": 31,
+          "annotation": "GetMapping",
+          "httpMethods": [
+            "GET"
+          ],
+          "routes": [
+            "/api/billing/lookup"
+          ],
+          "params": [
+            "status"
+          ],
+          "requestParams": [
+            {
+              "name": "status",
+              "required": true
+            }
+          ],
+          "queryParams": [],
+          "requestBody": null
+        }
+      ],
+      "schedules": [],
+      "notAnalysed": [],
+      "readModels": [
+        {
+          "name": "InvoiceLookupView",
+          "store": null,
+          "columns": [
+            {
+              "name": "invoiceId",
+              "type": "String",
+              "note": null
+            },
+            {
+              "name": "status",
+              "type": "String",
+              "note": null
+            }
+          ],
+          "declaredIn": "src/main/kotlin/com/example/ids/billing/views/invoice_lookup/InvoiceLookupView.kt",
+          "line": 3,
+          "matchedBy": [
+            "name",
+            "manifest"
+          ]
+        }
+      ]
+    }
+  ],
+  "messages": [
+    {
+      "name": "CancelOrder",
+      "type": "command",
+      "bc": "orders",
+      "found": true,
+      "identity": "id: OrderId",
+      "fields": [
+        "id: OrderId"
+      ],
+      "declaredIn": "src/main/java/com/example/ids/orders/use_cases/cancel_order/CancelOrder.java",
+      "line": 5,
+      "alsoDeclaredIn": []
+    },
+    {
+      "name": "GatewayPaymentReceived",
+      "type": "event",
+      "bc": "orders",
+      "found": false,
+      "identity": null,
+      "fields": [],
+      "declaredIn": null,
+      "line": null,
+      "alsoDeclaredIn": []
+    },
+    {
+      "name": "ShipOrder",
+      "type": "command",
+      "bc": "orders",
+      "found": true,
+      "identity": "id: OrderId",
+      "fields": [
+        "id: OrderId"
+      ],
+      "declaredIn": "src/main/java/com/example/ids/orders/use_cases/ship_order/ShipOrder.java",
+      "line": 5,
+      "alsoDeclaredIn": []
+    },
+    {
+      "name": "VoidInvoice",
+      "type": "command",
+      "bc": "billing",
+      "found": true,
+      "identity": "id: InvoiceId",
+      "fields": [
+        "id: InvoiceId"
+      ],
+      "declaredIn": "src/main/kotlin/com/example/ids/billing/use_cases/void_invoice/VoidInvoice.kt",
+      "line": 5,
+      "alsoDeclaredIn": []
+    }
+  ],
+  "unparsed": [],
+  "unresolved": []
+}

@@ -1,0 +1,532 @@
+{
+  "meta": {
+    "root": "tests/slice-index/cycle",
+    "sha": "fixture",
+    "project": "cycle",
+    "scope": "full",
+    "sliceCount": 7,
+    "bcCount": 3,
+    "skipped": []
+  },
+  "contexts": [
+    {
+      "id": "orders",
+      "lane": "decider",
+      "language": "java",
+      "tier": "cqrs-es",
+      "owners": [
+        "orders-team"
+      ],
+      "sliceIds": [
+        "orders.place_order"
+      ]
+    },
+    {
+      "id": "payments",
+      "lane": "decider",
+      "language": "java",
+      "tier": "cqrs-es",
+      "owners": [
+        "payments-team"
+      ],
+      "sliceIds": [
+        "payments.charge_payment",
+        "payments.payment_list",
+        "payments.retry_payment",
+        "payments.start_payment"
+      ]
+    },
+    {
+      "id": "reminders",
+      "lane": "decider",
+      "language": "kotlin",
+      "tier": "cqrs-es",
+      "owners": [
+        "reminders-team"
+      ],
+      "sliceIds": [
+        "reminders.schedule_next",
+        "reminders.send_reminder"
+      ]
+    }
+  ],
+  "slices": [
+    {
+      "id": "orders.place_order",
+      "bc": "orders",
+      "name": "place_order",
+      "kind": "command",
+      "status": "live",
+      "owner": "orders-team",
+      "summary": "Accept a new order.",
+      "language": "java",
+      "tier": "cqrs-es",
+      "lane": "decider",
+      "path": "orders/use_cases/place_order",
+      "package": null,
+      "files": [],
+      "handles": [
+        "PlaceOrder"
+      ],
+      "serves": [],
+      "publishes": [
+        "OrderPlaced"
+      ],
+      "consumes": [],
+      "dispatches": [],
+      "writes": [
+        "Order"
+      ],
+      "owns": [],
+      "projections": [],
+      "reads": [],
+      "endpoints": [
+        {
+          "method": "POST",
+          "path": "/api/orders",
+          "auth": "user"
+        }
+      ],
+      "invariants": [],
+      "externalSystem": null,
+      "direction": null,
+      "supersedes": null,
+      "dependsOn": [],
+      "tests": [
+        "unit"
+      ],
+      "flags": []
+    },
+    {
+      "id": "payments.retry_payment",
+      "bc": "payments",
+      "name": "retry_payment",
+      "kind": "automation",
+      "status": "live",
+      "owner": "payments-team",
+      "summary": "Retry a failed charge.",
+      "language": "java",
+      "tier": "cqrs-es",
+      "lane": "decider",
+      "path": "payments/automations/retry_payment",
+      "package": null,
+      "files": [],
+      "handles": [],
+      "serves": [],
+      "publishes": [],
+      "consumes": [
+        "PaymentFailed"
+      ],
+      "dispatches": [
+        "ChargePayment"
+      ],
+      "writes": [],
+      "owns": [],
+      "projections": [],
+      "reads": [],
+      "endpoints": [],
+      "invariants": [],
+      "externalSystem": null,
+      "direction": null,
+      "supersedes": null,
+      "dependsOn": [],
+      "tests": [
+        "unit"
+      ],
+      "flags": []
+    },
+    {
+      "id": "payments.start_payment",
+      "bc": "payments",
+      "name": "start_payment",
+      "kind": "automation",
+      "status": "live",
+      "owner": "payments-team",
+      "summary": "Charge the customer once an order is placed.",
+      "language": "java",
+      "tier": "cqrs-es",
+      "lane": "decider",
+      "path": "payments/automations/start_payment",
+      "package": null,
+      "files": [],
+      "handles": [],
+      "serves": [],
+      "publishes": [],
+      "consumes": [
+        "OrderPlaced"
+      ],
+      "dispatches": [
+        "ChargePayment"
+      ],
+      "writes": [],
+      "owns": [],
+      "projections": [],
+      "reads": [],
+      "endpoints": [],
+      "invariants": [],
+      "externalSystem": null,
+      "direction": null,
+      "supersedes": null,
+      "dependsOn": [],
+      "tests": [
+        "unit"
+      ],
+      "flags": []
+    },
+    {
+      "id": "payments.charge_payment",
+      "bc": "payments",
+      "name": "charge_payment",
+      "kind": "command",
+      "status": "live",
+      "owner": "payments-team",
+      "summary": "Charge a payment; a declined charge publishes PaymentFailed.",
+      "language": "java",
+      "tier": "cqrs-es",
+      "lane": "decider",
+      "path": "payments/use_cases/charge_payment",
+      "package": null,
+      "files": [],
+      "handles": [
+        "ChargePayment"
+      ],
+      "serves": [],
+      "publishes": [
+        "PaymentCharged",
+        "PaymentFailed"
+      ],
+      "consumes": [],
+      "dispatches": [],
+      "writes": [
+        "Payment"
+      ],
+      "owns": [],
+      "projections": [],
+      "reads": [],
+      "endpoints": [],
+      "invariants": [],
+      "externalSystem": null,
+      "direction": null,
+      "supersedes": null,
+      "dependsOn": [],
+      "tests": [
+        "unit"
+      ],
+      "flags": []
+    },
+    {
+      "id": "payments.payment_list",
+      "bc": "payments",
+      "name": "payment_list",
+      "kind": "view",
+      "status": "live",
+      "owner": "payments-team",
+      "summary": "Payments with their latest outcome.",
+      "language": "java",
+      "tier": "cqrs-es",
+      "lane": "decider",
+      "path": "payments/views/payment_list",
+      "package": null,
+      "files": [],
+      "handles": [],
+      "serves": [
+        "ListPayments"
+      ],
+      "publishes": [],
+      "consumes": [],
+      "dispatches": [],
+      "writes": [],
+      "owns": [
+        "payment_list_view"
+      ],
+      "projections": [
+        {
+          "name": "PaymentListProjection",
+          "from": [
+            "PaymentCharged",
+            "PaymentFailed"
+          ],
+          "aggregateTypes": [
+            "Payments"
+          ]
+        }
+      ],
+      "reads": [],
+      "endpoints": [
+        {
+          "method": "GET",
+          "path": "/api/payments",
+          "auth": "user"
+        }
+      ],
+      "invariants": [],
+      "externalSystem": null,
+      "direction": null,
+      "supersedes": null,
+      "dependsOn": [],
+      "tests": [
+        "unit"
+      ],
+      "flags": [],
+      "readModels": []
+    },
+    {
+      "id": "reminders.schedule_next",
+      "bc": "reminders",
+      "name": "schedule_next",
+      "kind": "automation",
+      "status": "live",
+      "owner": "reminders-team",
+      "summary": "Schedule the next reminder after one is sent.",
+      "language": "kotlin",
+      "tier": "cqrs-es",
+      "lane": "decider",
+      "path": "reminders/automations/schedule_next",
+      "package": null,
+      "files": [],
+      "handles": [],
+      "serves": [],
+      "publishes": [],
+      "consumes": [
+        "ReminderSent"
+      ],
+      "dispatches": [
+        "SendReminder"
+      ],
+      "writes": [],
+      "owns": [],
+      "projections": [],
+      "reads": [],
+      "endpoints": [],
+      "invariants": [],
+      "externalSystem": null,
+      "direction": null,
+      "supersedes": null,
+      "dependsOn": [],
+      "tests": [
+        "unit"
+      ],
+      "flags": []
+    },
+    {
+      "id": "reminders.send_reminder",
+      "bc": "reminders",
+      "name": "send_reminder",
+      "kind": "command",
+      "status": "live",
+      "owner": "reminders-team",
+      "summary": "Send a payment reminder.",
+      "language": "kotlin",
+      "tier": "cqrs-es",
+      "lane": "decider",
+      "path": "reminders/use_cases/send_reminder",
+      "package": null,
+      "files": [],
+      "handles": [
+        "SendReminder"
+      ],
+      "serves": [],
+      "publishes": [
+        "ReminderSent"
+      ],
+      "consumes": [],
+      "dispatches": [],
+      "writes": [
+        "Reminder"
+      ],
+      "owns": [],
+      "projections": [],
+      "reads": [],
+      "endpoints": [],
+      "invariants": [],
+      "externalSystem": null,
+      "direction": null,
+      "supersedes": null,
+      "dependsOn": [],
+      "tests": [
+        "unit"
+      ],
+      "flags": []
+    }
+  ],
+  "messages": [
+    {
+      "name": "ChargePayment",
+      "type": "command",
+      "identity": null,
+      "fields": [],
+      "declaredIn": null,
+      "version": null,
+      "schema": null,
+      "idempotencyKey": null,
+      "summary": null
+    },
+    {
+      "name": "PlaceOrder",
+      "type": "command",
+      "identity": null,
+      "fields": [],
+      "declaredIn": null,
+      "version": null,
+      "schema": null,
+      "idempotencyKey": null,
+      "summary": null
+    },
+    {
+      "name": "SendReminder",
+      "type": "command",
+      "identity": null,
+      "fields": [],
+      "declaredIn": null,
+      "version": null,
+      "schema": null,
+      "idempotencyKey": null,
+      "summary": null
+    },
+    {
+      "name": "OrderPlaced",
+      "type": "event",
+      "identity": null,
+      "fields": [],
+      "declaredIn": null,
+      "version": null,
+      "schema": null,
+      "idempotencyKey": null,
+      "summary": null
+    },
+    {
+      "name": "PaymentCharged",
+      "type": "event",
+      "identity": null,
+      "fields": [],
+      "declaredIn": null,
+      "version": null,
+      "schema": null,
+      "idempotencyKey": null,
+      "summary": null
+    },
+    {
+      "name": "PaymentFailed",
+      "type": "event",
+      "identity": null,
+      "fields": [],
+      "declaredIn": null,
+      "version": null,
+      "schema": null,
+      "idempotencyKey": null,
+      "summary": null
+    },
+    {
+      "name": "ReminderSent",
+      "type": "event",
+      "identity": null,
+      "fields": [],
+      "declaredIn": null,
+      "version": null,
+      "schema": null,
+      "idempotencyKey": null,
+      "summary": null
+    }
+  ],
+  "flows": [
+    {
+      "event": "OrderPlaced",
+      "bc": "orders",
+      "from": [
+        "orders.place_order"
+      ],
+      "to": [
+        "payments.start_payment"
+      ],
+      "crossContext": true,
+      "dangling": false
+    },
+    {
+      "event": "PaymentCharged",
+      "bc": "payments",
+      "from": [
+        "payments.charge_payment"
+      ],
+      "to": [
+        "payments.payment_list"
+      ],
+      "crossContext": false,
+      "dangling": false
+    },
+    {
+      "event": "PaymentFailed",
+      "bc": "payments",
+      "from": [
+        "payments.charge_payment"
+      ],
+      "to": [
+        "payments.payment_list",
+        "payments.retry_payment"
+      ],
+      "crossContext": false,
+      "dangling": false
+    },
+    {
+      "event": "ReminderSent",
+      "bc": "reminders",
+      "from": [
+        "reminders.send_reminder"
+      ],
+      "to": [
+        "reminders.schedule_next"
+      ],
+      "crossContext": false,
+      "dangling": false
+    }
+  ],
+  "writers": [
+    {
+      "target": "Order",
+      "kind": "aggregate",
+      "bcs": [
+        "orders"
+      ],
+      "slices": [
+        "orders.place_order"
+      ],
+      "flag": null
+    },
+    {
+      "target": "Payment",
+      "kind": "aggregate",
+      "bcs": [
+        "payments"
+      ],
+      "slices": [
+        "payments.charge_payment"
+      ],
+      "flag": null
+    },
+    {
+      "target": "Reminder",
+      "kind": "aggregate",
+      "bcs": [
+        "reminders"
+      ],
+      "slices": [
+        "reminders.send_reminder"
+      ],
+      "flag": null
+    },
+    {
+      "target": "payment_list_view",
+      "kind": "read-model",
+      "bcs": [
+        "payments"
+      ],
+      "slices": [
+        "payments.payment_list"
+      ],
+      "flag": null
+    }
+  ],
+  "crossReads": [],
+  "notes": [
+    "package, files, message payloads and read-model columns come from source and were not read (no --source-facts)"
+  ]
+}

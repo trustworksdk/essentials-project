@@ -319,20 +319,6 @@
     </suppress>
     <suppress>
         <notes><![CDATA[
-   file name: kotlin-test-*.jar, kotlin-stdlib-*.jar, kotlin-reflect-*.jar, kotlin-stdlib-jdk8-*.jar
-   CVE-2026-53914 is a build-time deserialization flaw in the Kotlin compiler / KAPT build-cache
-   metadata (CWE-502), fixed in Kotlin 2.4.20. It is exploitable only by an attacker who can poison
-   the local build cache (JetBrains rates it 6.7/medium: local, high privileges). The scanner matches
-   it here via the broad cpe:2.3:a:jetbrains:kotlin CPE against any org.jetbrains.kotlin runtime
-   artifact at the flagged version - none of which contain the vulnerable build-cache/KAPT code, and
-   kotlin-test is test-scoped and not shipped to consumers. Remove this suppression once kotlin.version
-   is bumped to 2.4.20+ (stable expected ~Sept 2026; 2.4.0 does NOT contain the fix).
-   ]]></notes>
-        <packageUrl regex="true">^pkg:maven/org\.jetbrains\.kotlin/.*$</packageUrl>
-        <vulnerabilityName>CVE-2026-53914</vulnerabilityName>
-    </suppress>
-    <suppress>
-        <notes><![CDATA[
    file name: spring-boot-starter-mongodb-?.?.?.jar
    Same class as the springdata-mongo-* suppressions above: one of our own artifacts matched against
    cpe:/a:mongodb:mongodb purely on the name. Already covered for springdata-mongo-queue and
@@ -434,5 +420,15 @@
    ]]></notes>
         <filePath regex="true">.*docker-java-transport-zerodep-.*\.jar.*(httpclient5|httpcore5).*</filePath>
         <cpe>cpe:/a:apache:httpcomponents_core</cpe>
+    </suppress>
+    <suppress>
+        <notes><![CDATA[
+   False positive: CVE-2026-54285 is the unbounded inbound W3C baggage parse in opentelemetry-js
+   (@opentelemetry/core before 2.8.0); its CPE carries target_sw=node.js. The matcher still pairs it with the
+   Java io.opentelemetry artifacts by vendor/product name, and since the Java line is 1.x every Java release
+   sits "below 2.8.0", so no Java version bump can clear it. Only the examples pull OpenTelemetry in.
+   ]]></notes>
+        <packageUrl regex="true">^pkg:maven/io\.opentelemetry/.*$</packageUrl>
+        <cve>CVE-2026-54285</cve>
     </suppress>
 </suppressions>

@@ -1,0 +1,16 @@
+schemaVersion: "1.2"
+slice: payments.capture_payment
+kind: command
+bc: payments
+owner: team
+status: live
+summary: Lane fixture slice.
+generator: essentials
+language: java
+tier: cqrs-es
+lane: aggregate
+handles: [CapturePayment]
+
+writes: [Payments]
+tests:
+  unit: { present: false }

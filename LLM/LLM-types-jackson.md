@@ -32,6 +32,14 @@ mapper — fail with an `IllegalStateException`.
 `dk.trustworks.essentials.kotlin.types` — Kotlin semantic types need `jackson-module-kotlin`'s
 `KotlinModule` registered alongside it. See [Kotlin semantic types](#kotlin-semantic-types).
 
+⚠️ **Two mappers, registered independently.** With `spring-boot-starter-postgresql` or `spring-boot-starter-mongodb`,
+`EssentialTypesJacksonModule` is a `@Bean`, so Spring Boot adds it to its auto-configured **web** `JsonMapper`
+(`@RequestBody`/`@ResponseBody`). Two ways to silently lose that: no Essentials starter on the classpath (then expose the
+bean yourself — see [Spring Boot 4 (web mapper)](#spring-boot-4-web-mapper)), or replacing Boot's `JsonMapper` with your
+own bean. The **persistence** mapper (`JSONSerializer`/`JSONEventSerializer`) is built by `EssentialsObjectMappers` and
+deliberately ignores `JacksonModule` beans, so a module added for the web layer never changes the persisted format;
+extra persistence modules need your own `JSONSerializer` bean, which the starter backs off from.
+
 ## TOC
 - [Core API](#core-api)
 - [Serialization Behavior](#serialization-behavior)
@@ -368,6 +376,40 @@ JSON. Asserted by `KotlinJacksonBodyJackson3Test` in `types-spring-web`.
 
 For an application that persists Kotlin documents, `components/postgresql-document-db`'s
 `TestObjectMappers.kt` is the worked example of assembling the mapper with `KotlinModule`.
+
+### A value-class property named `is…` loses its name on the web mapper
+
+On Spring Boot's web `JsonMapper` (Boot registers `KotlinModule` itself, next to `EssentialTypesJacksonModule`), a
+Kotlin property whose name starts with `is` **and** whose type is a value class is written under the compiler's
+mangling hash alone, and cannot be read back:
+
+```kotlin
+@JvmInline value class Expedited(override val value: Boolean) : BooleanValueType<Expedited>
+data class OrderFlagged(val isExpedited: Expedited, val isRush: Boolean, val expedited: Expedited)
+// Boot web mapper writes: {"isRush":true,"expedited":false,"vOB4Bnc":true}
+// and reading that back fails: KotlinInvalidNullException … missing value for creator parameter isExpedited
+```
+
+- Any value class does it (`StringValueType`, `BooleanValueType`, one that implements nothing). A plain
+  `Boolean isRush` and a value-class property without the prefix are unaffected.
+- The web mapper reads getters. The Kotlin getter of `isExpedited` is `isExpedited-vOB4Bnc`, and stripping both
+  the `is` prefix and the mangling suffix leaves the hash. A response carries a key no client expects, and a
+  request body with `"isExpedited"` fails.
+- **The persistence mapper is not affected** when it is built as ESS-024 requires,
+  `EssentialsObjectMappers.createJackson3ObjectMapper(KotlinModule.Builder().build())`: it reads fields, writes
+  `"isExpedited":true` and round-trips.
+
+Fix, per property or per mapper:
+- Drop the `is` prefix from value-class properties (`expedited`).
+- Or annotate the getter: `@get:JsonProperty("isExpedited") val isExpedited: Expedited`. It writes
+  `"isExpedited"` and round-trips.
+- Or build the web mapper's `KotlinModule` with `KotlinFeature.KotlinPropertyNameAsImplicitName` enabled. That
+  names every property after its Kotlin name, which fixes it for every class but changes naming everywhere.
+
+This is jackson-module-kotlin behaviour (3.1.5), not Essentials. Upstream tracks Kotlin names that differ from
+Jackson's, for both value-class getters and `is` properties, in
+[FasterXML/jackson-module-kotlin#630](https://github.com/FasterXML/jackson-module-kotlin/issues/630).
+No issue was found for this exact combination.
 
 ---
 

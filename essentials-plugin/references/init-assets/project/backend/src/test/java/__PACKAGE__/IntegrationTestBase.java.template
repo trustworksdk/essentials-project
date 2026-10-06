@@ -1,0 +1,105 @@
+package {{packagePath}};
+
+<!-- IF db!=mongo -->
+import org.jdbi.v3.core.Jdbi;
+<!-- END db -->
+<!-- IF db=mongo -->
+import org.bson.Document;
+<!-- END db -->
+import org.junit.jupiter.api.BeforeEach;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.boot.test.web.server.LocalServerPort;
+import org.springframework.boot.testcontainers.service.connection.ServiceConnection;
+<!-- IF db=mongo -->
+import org.springframework.data.mongodb.core.MongoTemplate;
+import org.testcontainers.mongodb.MongoDBContainer;
+<!-- END db -->
+<!-- IF db!=mongo -->
+import org.testcontainers.postgresql.PostgreSQLContainer;
+<!-- END db -->
+
+import java.util.List;
+<!-- IF db!=mongo -->
+import java.util.Map;
+<!-- END db -->
+
+/**
+ * The base for this project's integration tests: one database container per test JVM, shared by every test class,
+ * and one cached Spring context. The recipe and what keeps it safe with Essentials (never truncate an *_events table,
+ * rebuild read models through their subscriptions) are in the essentials-docs skill: LLM-foundation-test.md,
+ * "Fast integration tests".
+ * <p>
+ * Container reuse across builds is opt-in: {@code -Dit.containers.reuse=true} with a single Failsafe fork, plus
+ * {@code testcontainers.reuse.enable=true} in {@code ~/.testcontainers.properties}.
+ */
+@SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
+public abstract class IntegrationTestBase {
+
+<!-- IF db!=mongo -->
+    @ServiceConnection
+    static final PostgreSQLContainer postgres = new PostgreSQLContainer("{{pin:PostgreSQL image}}")
+            .withReuse(Boolean.getBoolean("it.containers.reuse"))
+            .withTmpFs(Map.of("/var/lib/postgresql", "rw"))   // data in RAM; PGDATA sits inside this mount from Postgres 18
+            .withCommand("postgres",
+                         "-c", "fsync=off",                     // replaces Testcontainers' default command, so repeat it
+                         "-c", "synchronous_commit=off",
+                         "-c", "full_page_writes=off");
+
+    static {
+        postgres.start();
+    }
+<!-- END db -->
+<!-- IF db=mongo -->
+    @ServiceConnection
+    static final MongoDBContainer mongo = new MongoDBContainer("{{pin:MongoDB image}}")
+            .withReplicaSet()   // Essentials' Mongo transactions need a replica set; this container is standalone without it
+            .withReuse(Boolean.getBoolean("it.containers.reuse"));
+
+    static {
+        mongo.start();
+    }
+<!-- END db -->
+
+    @LocalServerPort
+    protected int port;
+
+<!-- IF db!=mongo -->
+    @Autowired
+    protected Jdbi jdbi;
+
+    /**
+     * Read-model tables only. Never an *_events table: truncating one with RESTART IDENTITY rewinds the global order
+     * while every subscription keeps its resume point, and the next test hangs instead of failing.
+     */
+    protected List<String> readModelTablesToTruncate() {
+        return List.of();
+    }
+
+    @BeforeEach
+    void truncateReadModels() {
+        var tables = readModelTablesToTruncate();
+        if (!tables.isEmpty()) {
+            jdbi.useHandle(handle -> handle.execute("TRUNCATE TABLE " + String.join(", ", tables)));
+        }
+    }
+<!-- END db -->
+<!-- IF db=mongo -->
+    @Autowired
+    protected MongoTemplate mongoTemplate;
+
+    /** Read-model collections only; never the collections Essentials' queues and locks keep their state in. */
+    protected List<String> readModelCollectionsToClear() {
+        return List.of();
+    }
+
+    @BeforeEach
+    void clearReadModels() {
+        readModelCollectionsToClear().forEach(collection -> mongoTemplate.getCollection(collection).deleteMany(new Document()));
+    }
+<!-- END db -->
+
+    protected String baseUrl() {
+        return "http://localhost:" + port;
+    }
+}

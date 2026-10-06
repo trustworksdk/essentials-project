@@ -1,0 +1,78 @@
+#!/bin/sh
+#
+# Copyright 2021-2026 the original author or authors.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#      https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+# Keeps essentials-plugin/references/llm/ the generated copy of LLM/ in every commit: each file is its LLM/ counterpart
+# passed through `scripts/sync-plugin-llm.sh --filter` (links out of LLM/ rewritten to GitHub URLs at the release tag,
+# taken from the `essentials.version` pin in the staged stack-pins.md).
+#
+# - A commit that changes LLM/ or that pin gets the regenerated copy staged with it.
+# - A commit that edits the copy in a way LLM/ does not reflect is refused, naming the file. So is an unstaged
+#   edit in the copy, which regenerating would otherwise overwrite without a word.
+#
+# Works on the index rather than the working tree, so a partly staged LLM/ edit yields the copy of what is
+# actually committed. The CI drift gate in .github/workflows/maven.yml is the guarantee; this is the convenience.
+# Installed per clone by scripts/install-git-hooks.sh.
+
+set -eu
+
+cd "$(git rev-parse --show-toplevel)"
+src=LLM
+dst=essentials-plugin/references/llm
+pins=essentials-plugin/references/stack/stack-pins.md
+
+# The filter runs inside pipelines below, where its failure would be hashed as an empty file; let it fail here instead.
+sh scripts/sync-plugin-llm.sh --filter < /dev/null > /dev/null
+
+# Blob id the copy of index path $1 (under LLM/) must have; empty when LLM/ has no such path. With $2 = -w the
+# filtered blob is also written to the object store, ready to stage.
+expected_blob() {
+    llm_blob=$(git rev-parse -q --verify ":$1" || true)
+    [ -n "$llm_blob" ] || return 0
+    git cat-file blob "$llm_blob" | sh scripts/sync-plugin-llm.sh --filter | git hash-object ${2:-} --stdin
+}
+
+refuse() {
+    echo "pre-commit: $1" >&2
+    echo "pre-commit: LLM/ is the only place the framework docs are edited; $dst/ is generated from it." >&2
+    echo "pre-commit: move the edit to LLM/, then restore the copy with: git checkout HEAD -- $dst" >&2
+    exit 1
+}
+
+# A staged path in the copy must hold exactly the generated form of the same path in LLM/ (both absent counts).
+bad=$(git diff --cached --name-only --no-renames -- "$dst" | while IFS= read -r copy; do
+    if [ "$(git rev-parse -q --verify ":$copy" || true)" != "$(expected_blob "$src/${copy#"$dst"/}")" ]; then
+        echo "$copy"
+    fi
+done)
+[ -z "$bad" ] || refuse "these files in the plugin's copy were edited directly:
+$bad"
+
+git diff --cached --quiet --no-renames -- "$src" "$pins" && exit 0
+
+unstaged=$(git diff --name-only -- "$dst")
+[ -z "$unstaged" ] || refuse "regenerating the copy would overwrite these unstaged edits:
+$unstaged"
+
+git ls-files -s -- "$src" | while read -r mode blob stage path; do
+    git update-index --add --cacheinfo "$mode,$(expected_blob "$path" -w),$dst/${path#"$src"/}"
+done
+git ls-files -- "$dst" | while IFS= read -r copy; do
+    if [ -z "$(git ls-files -- "$src/${copy#"$dst"/}")" ]; then
+        git update-index --force-remove -- "$copy"
+        rm -f "$copy"
+    fi
+done
+git ls-files -z -- "$dst" | xargs -0 git checkout-index -f --

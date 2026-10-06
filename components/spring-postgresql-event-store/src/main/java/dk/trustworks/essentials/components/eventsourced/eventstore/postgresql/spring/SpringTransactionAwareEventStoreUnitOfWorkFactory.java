@@ -104,6 +104,7 @@ public class SpringTransactionAwareEventStoreUnitOfWorkFactory
         private              Handle handle;
         List<PersistedEvent> beforeCommitEventsPersisted = new ArrayList<>();
         List<PersistedEvent> afterCommitEventsPersisted = new ArrayList<>();
+        private long         numberOfEventsPersisted;
 
         public SpringTransactionAwareEventStoreUnitOfWork(SpringTransactionAwareUnitOfWorkFactory<PlatformTransactionManager, SpringTransactionAwareEventStoreUnitOfWork> unitOfWorkFactory) {
             super(unitOfWorkFactory);
@@ -145,6 +146,7 @@ public class SpringTransactionAwareEventStoreUnitOfWorkFactory
         public void registerEventsPersisted(List<PersistedEvent> eventsPersistedInThisUnitOfWork) {
             requireNonNull(eventsPersistedInThisUnitOfWork, "No eventsPersistedInThisUnitOfWork provided");
             this.beforeCommitEventsPersisted.addAll(eventsPersistedInThisUnitOfWork);
+            numberOfEventsPersisted += eventsPersistedInThisUnitOfWork.size();
         }
 
         @Override
@@ -157,6 +159,11 @@ public class SpringTransactionAwareEventStoreUnitOfWorkFactory
         public void removeFlushedEventPersisted(PersistedEvent eventPersistedToRemoveFromThisUnitOfWork) {
             requireNonNull(eventPersistedToRemoveFromThisUnitOfWork, "No eventPersistedToRemoveFromThisUnitOfWork provided");
             this.beforeCommitEventsPersisted.remove(eventPersistedToRemoveFromThisUnitOfWork);
+        }
+
+        @Override
+        public long getNumberOfEventsPersisted() {
+            return numberOfEventsPersisted;
         }
     }
 }

@@ -27,7 +27,7 @@ import org.awaitility.Awaitility;
 import org.jdbi.v3.core.Jdbi;
 import org.junit.jupiter.api.*;
 import org.junit.jupiter.api.condition.EnabledIfSystemProperty;
-import org.testcontainers.containers.PostgreSQLContainer;
+import org.testcontainers.postgresql.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.*;
 
 import java.time.Duration;
@@ -56,7 +56,7 @@ class QueueIndexScanCountIT {
     private static final int    MESSAGES    = 200;
 
     @Container
-    private static final PostgreSQLContainer<?> postgreSQLContainer = EssentialsTestContainers.postgres("index-scan-db");
+    private static final PostgreSQLContainer postgreSQLContainer = EssentialsTestContainers.postgres("index-scan-db");
 
     private JdbiUnitOfWorkFactory   unitOfWorkFactory;
     private PostgresqlDurableQueues durableQueues;

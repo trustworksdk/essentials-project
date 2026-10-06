@@ -253,8 +253,8 @@ Default `Tenant` implementation for tenant isolation.
 TenantId.of(CharSequence value)
 
 // Usage
-TenantId tenantId = TenantId.of("acme-corp");
-String value = tenantId.toString();  // "acme-corp"
+TenantId tenantId = TenantId.of("example-corp");
+String value = tenantId.toString();  // "example-corp"
 
 // Use in multi-tenant queries
 List<Order> orders = repository.findByTenantId(tenantId);
@@ -772,7 +772,7 @@ public class MultiTenantPersistableEventMapper implements PersistableEventMapper
 }
 
 // Append events - tenant is embedded via mapper
-TenantId tenant = TenantId.of("acme-corp");
+TenantId tenant = TenantId.of("example-corp");
 eventStore.appendToStream(
     ORDER_TYPE,
     orderId,

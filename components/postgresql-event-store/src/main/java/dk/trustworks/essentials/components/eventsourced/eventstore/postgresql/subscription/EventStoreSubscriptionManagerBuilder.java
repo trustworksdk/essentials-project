@@ -32,6 +32,7 @@ public final class EventStoreSubscriptionManagerBuilder {
     private DurableSubscriptionRepository                durableSubscriptionRepository;
     private boolean                                      startLifeCycles                   = true;
     private Function<String, EventStorePollingOptimizer> eventStorePollingOptimizerFactory = null;
+    private SubscriptionErrorPolicy                      subscriptionErrorPolicy           = SubscriptionErrorPolicy.defaultPolicy();
 
     /**
      * @param eventStore the event store that the created {@link EventStoreSubscriptionManager} can manage event subscriptions against
@@ -135,6 +136,23 @@ public final class EventStoreSubscriptionManagerBuilder {
         return this;
     }
 
+    /**
+     * What the asynchronous subscriptions created by the {@link EventStoreSubscriptionManager} do when their
+     * {@link PersistedEventHandler} / {@link BatchedPersistedEventHandler} throws an exception that isn't an I/O error
+     * (I/O errors are always retried). Default: {@link SubscriptionErrorPolicy#defaultPolicy()} - retry the event, then
+     * stop at it and resume by itself until it succeeds, so no event is skipped and no subscription stays halted. A
+     * handler whose {@code subscriptionErrorPolicy()}
+     * returns a policy of its own ({@link PersistedEventHandler#subscriptionErrorPolicy()},
+     * {@link BatchedPersistedEventHandler#subscriptionErrorPolicy()}) overrides this one for its subscription.
+     *
+     * @param subscriptionErrorPolicy the policy - see {@link SubscriptionErrorPolicy}
+     * @return this builder
+     */
+    public EventStoreSubscriptionManagerBuilder setSubscriptionErrorPolicy(SubscriptionErrorPolicy subscriptionErrorPolicy) {
+        this.subscriptionErrorPolicy = subscriptionErrorPolicy;
+        return this;
+    }
+
     public DefaultEventStoreSubscriptionManager build() {
         return new DefaultEventStoreSubscriptionManager(eventStore,
                                                         eventStorePollingBatchSize,
@@ -144,6 +162,7 @@ public final class EventStoreSubscriptionManagerBuilder {
                                                         durableSubscriptionRepository,
                                                         startLifeCycles,
                                                         eventStorePollingOptimizerFactory,
-                                                        snapshotResumePointsAfterEvents);
+                                                        snapshotResumePointsAfterEvents,
+                                                        subscriptionErrorPolicy);
     }
 }

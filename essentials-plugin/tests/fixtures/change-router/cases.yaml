@@ -1,0 +1,292 @@
+# cases.yaml — the machine-readable expectations for the essentials-change skill (format 1). TEST-GUIDE.md in
+# this directory is the human description of the same cases; when they disagree, fix both.
+#
+# Each case is one prose change request, run in a copy of `fixture` (a path from the plugin root). The
+# eval suite (`evals/build.py`) turns every case into an `evals/change-<id>/` directory; graders are
+# generated from the fields below, so edit this file and regenerate rather than editing the graders.
+#
+#   id               kebab-case, unique; the eval case is `change-<id>`
+#   fixture          staged into the eval workspace without TEST-GUIDE.md / expected.yaml / cases.yaml
+#   set              placeholder values substituted into the staged sources ({{name}} -> value)
+#   request          the user's words, sent as the prompt
+#   class            A | B | C | D | E (change-procedure.md §2), a list when two readings are both correct,
+#                    `ask` (A and B both arguable: the law's question goes to the user),
+#                    `silent` (not this plugin's business: §1 last row), `not-on-law` (§1 Essentials row),
+#                    or null when the case grades behaviour, not a class
+#   slices           slice ids the reply must name as the owner(s) of the change
+#   lane             the §R5 lane the reply must name, when the case is about the lane
+#   writes           none: the skill must confirm before touching a file (§9, SKILL.md Step 3), so the run
+#                    may not call Write or Edit at all | allowed
+#   must             behaviours the reply (the agent's final message) must show, one grader each
+#   must_not         behaviours the reply must not show, one grader each
+#   no_edits         path regexes: no Write/Edit call may target a matching file
+#   no_creates       globs: no file matching may be created during the run
+#   no_bash          regexes: no Bash command may match
+#   reply_regex      [{pattern, match: contains|not_contains, flags?}] over the final message
+#   file_regex       [{path, pattern, match: contains|not_contains, flags?}] over a workspace file after the run
+#                    (the file's content, not the tool used: a model may edit with Edit, Write or sed)
+
+cases:
+- id: b-filter-by-sku
+  fixture: tests/fixtures/worked-example
+  set: {packagePath: com.example.shop}
+  request: I also need to list the orders for one SKU.
+  class: B
+  slices: [orders.order_list]
+  writes: none
+  must:
+  - >-
+    Plans the filter as one more query over the existing order_list read model (change-procedure §5.2): a mapping
+    in OrderListAPI with its repository finder, a new endpoints entry spelled "/api/orders?sku=" and a serves
+    name in orders.order_list's slice.yaml.
+  must_not:
+  - Creating a new view slice, a second read model or a second projection for the SKU filter.
+  no_creates: ['**/slice.yaml']
+
+- id: ask-support-cancel
+  fixture: tests/fixtures/worked-example
+  set: {packagePath: com.example.shop}
+  request: Let support staff cancel an order.
+  class: ask
+  slices: [orders.cancel_order]
+  writes: none
+  must:
+  - >-
+    Notices that orders.cancel_order already handles CancelOrder and asks the user the §R1 question in the law's
+    terms: is a support cancellation the same intent (extend cancel_order, for example its auth) or a second
+    command type (a new slice)?
+  must_not:
+  - Settling A versus B silently, for example by adding a second command type or a second decide method to cancel_order.
+
+- id: a-amend-quantity
+  fixture: tests/fixtures/worked-example
+  set: {packagePath: com.example.shop}
+  request: Customers should be able to change the quantity of an order until it is cancelled.
+  class: A
+  slices: []
+  lane: decider
+  writes: none
+  must:
+  - >-
+    Plans a new command slice in the orders bounded context with its own command, event and decider
+    (§R1, change-procedure §5.1), entered through the command kind skill, and asks for confirmation before
+    creating files.
+  must_not:
+  - Adding the new command to PlaceOrderDecider, CancelOrderDecider or any other existing slice.
+
+- id: a-sku-totals-view
+  fixture: tests/fixtures/worked-example
+  set: {packagePath: com.example.shop}
+  request: Add a screen showing the total ordered quantity per SKU.
+  class: A
+  slices: []
+  writes: none
+  must:
+  - >-
+    Plans a new view slice with its own read model keyed by SKU, because it serves a different purpose with a
+    different read-model shape (§R2 test 1), projecting OrderPlaced (and OrderCancelled to subtract), and asks
+    for confirmation before creating files.
+  must_not:
+  - Adding the per-SKU totals query to the existing order_list view or OrderListAPI.
+
+- id: c-rename-sku
+  fixture: tests/fixtures/worked-example
+  set: {packagePath: com.example.shop}
+  request: Rename the order's `sku` field to `productCode` everywhere.
+  class: C
+  slices: [orders.place_order, orders.order_list, orders.warehouse]
+  writes: none
+  must:
+  - >-
+    Decomposes the rename into per-slice changes in a stated order: the producer first (PlaceOrder and OrderPlaced
+    in place_order), then the reactors (the order_list read model and projection, the warehouse translator), then
+    the API surface (change-procedure §5.9).
+  - >-
+    Flags that OrderPlaced is persisted: renaming a field of a stored event changes the JSON that existing events
+    were written with, so old events need handling (for example keeping the old JSON name or migrating) rather
+    than a blind rename.
+  must_not:
+  - Introducing a shared helper, mapper or abstraction to carry the rename across the slices.
+
+- id: d-cancelled-at
+  fixture: tests/fixtures/worked-example
+  set: {packagePath: com.example.shop}
+  request: The order list should also show when each order was cancelled.
+  class: [D, C]
+  slices: [orders.order_list]
+  writes: none
+  must:
+  - >-
+    Treats it as evolving the existing order_list view (change-procedure §5.3): extend its read model and its
+    OrderCancelled handler in place, with an in-place rebuild (reset the subscription and replay) as the rollout
+    default.
+  must_not:
+  - Proposing a versioned twin (order_list_v2 with supersedes) or a new view slice as the default way to add the column.
+
+- id: e-debug-logging
+  fixture: tests/fixtures/worked-example
+  set: {packagePath: com.example.shop}
+  request: Turn on DEBUG logging for the orders package in the application config.
+  class: E
+  slices: []
+  writes: allowed
+  must:
+  - >-
+    Handles it as a plain configuration change: creates or edits the application configuration (for example
+    application.yml or application.properties) so the orders package logs at DEBUG.
+  must_not:
+  - Treating it as a slice change, or proposing any slice.yaml, slice CLAUDE.md or manifest edit.
+  no_edits: ['slice\.yaml$', 'CLAUDE\.md$']
+
+- id: b-screening-inclusive
+  fixture: tests/fixtures/worked-example
+  set: {packagePath: com.example.shop}
+  request: >-
+    Bug: an order of exactly 100 units gets through screening, but the limit is meant to be inclusive — 100 or
+    more must be cancelled.
+  class: B
+  slices: [orders.screen_order]
+  writes: allowed
+  must:
+  - >-
+    Fixes the comparison inside the screen_order automation and reports the change by slice id and file, without
+    a confirmation round (a one-line fix that changes no structure, SKILL.md Step 3).
+  no_creates: ['**/slice.yaml']
+  file_regex:
+  - path: orders/automations/screen_order/ScreenOrderProcessor.kt
+    pattern: 'quantity\s*>=\s*SCREENING_LIMIT|SCREENING_LIMIT\s*<=\s*event\.quantity|SCREENING_LIMIT\s*=\s*99\b'
+    match: contains
+
+- id: retire-screening
+  fixture: tests/fixtures/worked-example
+  set: {packagePath: com.example.shop}
+  request: We don't need order screening any more — get rid of it.
+  class: null
+  slices: [orders.screen_order]
+  writes: none
+  must:
+  - >-
+    Treats it as retiring orders.screen_order (change-procedure §5.10): the slice's directory, manifest, tests and
+    its wiring go together in one change that names the deletion, and it asks for confirmation before deleting.
+  no_bash: ['\brm\s', 'git\s+rm']
+
+- id: c-rejected-event
+  fixture: tests/fixtures/worked-example
+  set: {packagePath: com.example.shop}
+  request: When screening cancels an order, record it as its own OrderRejected event instead of OrderCancelled.
+  class: [C, A]
+  slices: [orders.screen_order]
+  writes: none
+  must:
+  - Puts OrderRejected in its own file under orders/events/ (one variant per file, §R3).
+  - >-
+    Checks the event's consumers before finishing: orders.order_list projects cancellations, so reacting to
+    OrderRejected is a declared change to that view (projections[].from), not something left to discover later.
+  - States an order for the pieces — the producer of the new event first, then the reactors (change-procedure §5.9).
+
+- id: b-warehouse-cancel
+  fixture: tests/fixtures/worked-example
+  set: {packagePath: com.example.shop}
+  request: Tell the warehouse when an order is cancelled.
+  class: B
+  slices: [orders.warehouse]
+  writes: none
+  must:
+  - >-
+    Extends the existing warehouse translation slice (one more event to the same external system) and adds
+    OrderCancelled to its manifest's consumes.
+  must_not:
+  - Creating a second translation slice under external_systems/ for cancellations.
+
+- id: helper-pushback
+  fixture: tests/fixtures/worked-example
+  set: {packagePath: com.example.shop}
+  request: place_order and cancel_order both check the order id — pull that into a shared OrderValidationHelper.
+  class: null
+  slices: []
+  writes: none
+  must:
+  - >-
+    Declines the shared helper, citing the law's sanctioned-sharing rule (change-procedure §5.5): duplicating the
+    check in both slices is fine, and only State + Evolver may be promoted to use_cases/_shared/, at three or more
+    consumers.
+  must_not:
+  - Creating or offering as the recommended option any helper, utility, service or base class shared by both slices.
+  no_creates: ['**/*Helper.kt', '**/*Util*.kt', '**/_shared/**']
+
+- id: dto-pushback
+  fixture: tests/fixtures/worked-example
+  set: {packagePath: com.example.shop}
+  request: >-
+    Add a PlaceOrderRequest DTO and a mapper for the place-order endpoint, so the API does not expose the command
+    type.
+  class: null
+  slices: [orders.place_order]
+  writes: none
+  must:
+  - >-
+    Pushes back: the command type is the slice's API contract, so a …Request/…Mapper adapter layer is not grown
+    under a change request (rules § The command and the view are the contract, change-procedure §5.7).
+  no_creates: ['**/*Request.kt', '**/*Mapper.kt']
+
+- id: b-order-by-id
+  fixture: tests/fixtures/worked-example
+  set: {packagePath: com.example.shop}
+  request: Add an endpoint that returns a single order from the order list by its id.
+  class: B
+  slices: [orders.order_list]
+  writes: none
+  must:
+  - >-
+    Plans it inside the existing order_list view (another query over the same read model, change-procedure
+    §5.2): a mapping in OrderListAPI plus an endpoints entry whose path is quoted, "/api/orders/{orderId}", and a
+    serves name.
+  must_not:
+  - Creating a new view slice for the single-order lookup.
+
+- id: gate-not-essentials
+  fixture: tests/fixtures/brownfield-layered
+  request: Add an endpoint that lists unpaid invoices older than 30 days.
+  class: silent
+  slices: []
+  writes: allowed
+  must:
+  - >-
+    Does the work as ordinary Spring code, and the reply says nothing about the slice law, slices, slice.yaml
+    manifests, write-style lanes or any /essentials: command.
+  no_creates: ['**/slice.yaml', '**/use_cases/**']
+  reply_regex:
+  - {pattern: 'slice\.yaml|/essentials:|slice[- ]law|slice-design', match: not_contains, flags: i}
+
+- id: gate-essentials-not-on-law
+  fixture: tests/fixtures/change-router/essentials-not-on-law
+  request: Add an endpoint to rename a customer.
+  class: not-on-law
+  slices: []
+  writes: allowed
+  must:
+  - >-
+    Makes the change the way the surrounding code is written — a CustomerController mapping calling a
+    CustomerService method that updates Customer — and not as a slice.
+  no_creates: ['**/slice.yaml', '**/use_cases/**']
+  file_regex:
+  - path: src/main/java/com/example/crm/controller/CustomerController.java
+    pattern: '@(?:Put|Patch|Post)Mapping\([^)]*name'
+    match: contains
+    flags: i
+  reply_regex:
+  - {pattern: 'slice-discover', match: contains}
+
+- id: gate-service-entity
+  fixture: tests/fixtures/service-entity
+  request: Let a registered shipping order be cancelled as long as it has not shipped.
+  class: A
+  slices: []
+  lane: service-entity
+  writes: none
+  must:
+  - >-
+    Plans a new command slice in the shipping bounded context on the service-entity lane (the context holds its
+    state in entities/ and has no event store), and asks for confirmation before creating files.
+  must_not:
+  - Adding a cancel method or a second command type to the ship_order slice's handler (§R1).

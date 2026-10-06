@@ -1140,6 +1140,31 @@ public final class SeparateTablePerAggregateTypePersistenceStrategy implements A
                                                           LongRange globalOrderRange,
                                                           List<GlobalEventOrder> includeAdditionalGlobalOrders,
                                                           Optional<Tenant> onlyIncludeEventsIfTheyBelongToTenant) {
+        requireNonNull(onlyIncludeEventsIfTheyBelongToTenant, "No onlyIncludeEventsIfTheyBelongToTenant provided");
+        return loadEventsByGlobalOrder(unitOfWork, aggregateType, globalOrderRange, includeAdditionalGlobalOrders, onlyIncludeEventsIfTheyBelongToTenant, Optional.empty());
+    }
+
+    /**
+     * Every tenant's events, but the payload and metadata columns are only selected for the rows of the given tenant (and rows
+     * without a tenant): for the others the database returns NULL for them without detoasting the (potentially large) values, so they are neither read
+     * nor transferred. The row mapper turns that NULL into an empty JSON object.
+     */
+    @Override
+    public Stream<PersistedEvent> loadEventsByGlobalOrderOmittingOtherTenantsPayloads(EventStoreUnitOfWork unitOfWork,
+                                                                                      AggregateType aggregateType,
+                                                                                      LongRange globalOrderRange,
+                                                                                      List<GlobalEventOrder> includeAdditionalGlobalOrders,
+                                                                                      Tenant onlyLoadPayloadIfEventBelongsToTenant) {
+        requireNonNull(onlyLoadPayloadIfEventBelongsToTenant, "No onlyLoadPayloadIfEventBelongsToTenant provided");
+        return loadEventsByGlobalOrder(unitOfWork, aggregateType, globalOrderRange, includeAdditionalGlobalOrders, Optional.empty(), Optional.of(onlyLoadPayloadIfEventBelongsToTenant));
+    }
+
+    private Stream<PersistedEvent> loadEventsByGlobalOrder(EventStoreUnitOfWork unitOfWork,
+                                                           AggregateType aggregateType,
+                                                           LongRange globalOrderRange,
+                                                           List<GlobalEventOrder> includeAdditionalGlobalOrders,
+                                                           Optional<Tenant> onlyIncludeEventsIfTheyBelongToTenant,
+                                                           Optional<Tenant> onlyLoadPayloadIfEventBelongsToTenant) {
         requireNonNull(unitOfWork, "No unitOfWork provided");
         requireNonNull(aggregateType, "No aggregateType provided");
         requireNonNull(globalOrderRange, "No aggregateId provided");
@@ -1150,7 +1175,8 @@ public final class SeparateTablePerAggregateTypePersistenceStrategy implements A
                               .createQuery(loadEventsByGlobalOrderQuerySql(configuration,
                                                                            globalOrderRange,
                                                                            includeAdditionalGlobalOrders,
-                                                                           onlyIncludeEventsIfTheyBelongToTenant));
+                                                                           onlyIncludeEventsIfTheyBelongToTenant,
+                                                                           onlyLoadPayloadIfEventBelongsToTenant.isPresent()));
 
         query.bind("globalOrderRangeFrom", globalOrderRange.fromInclusive);
         if (globalOrderRange.isClosedRange()) {
@@ -1161,6 +1187,7 @@ public final class SeparateTablePerAggregateTypePersistenceStrategy implements A
             query.bindList("includeAdditionalGlobalOrders", includeAdditionalGlobalOrders);
         }
         onlyIncludeEventsIfTheyBelongToTenant.ifPresent(tenant -> query.bind("tenant", configuration.tenantSerializer.serialize(tenant)));
+        onlyLoadPayloadIfEventBelongsToTenant.ifPresent(tenant -> query.bind("payloadTenant", configuration.tenantSerializer.serialize(tenant)));
         query.setFetchSize(configuration.queryFetchSize);
         return query.map(new PersistedEventRowMapper(this, configuration))
                     .stream();
@@ -1296,6 +1323,31 @@ public final class SeparateTablePerAggregateTypePersistenceStrategy implements A
         }
     }
 
+    /**
+     * One {@code MIN} over the global order column, the table's primary key: an index lookup, whatever the width of the range
+     */
+    @Override
+    public Optional<GlobalEventOrder> findLowestGlobalEventOrderPersisted(EventStoreUnitOfWork unitOfWork, AggregateType aggregateType, LongRange globalOrderRange) {
+        requireNonNull(unitOfWork, "No unitOfWork provided");
+        requireNonNull(aggregateType, "No aggregateType provided");
+        requireNonNull(globalOrderRange, "No globalOrderRange provided");
+
+        var configuration = getAggregateEventStreamConfiguration(aggregateType);
+        var sql = globalOrderRange.isClosedRange()
+                  ? "SELECT MIN({:globalOrderColumnName}) FROM {:tableName} WHERE {:globalOrderColumnName} BETWEEN :fromInclusive AND :toInclusive"
+                  : "SELECT MIN({:globalOrderColumnName}) FROM {:tableName} WHERE {:globalOrderColumnName} >= :fromInclusive";
+        var query = unitOfWork.handle()
+                              .createQuery(bind(sql,
+                                                arg("globalOrderColumnName", configuration.eventStreamTableColumnNames.globalOrderColumn),
+                                                arg("tableName", configuration.eventStreamTableName)))
+                              .bind("fromInclusive", globalOrderRange.fromInclusive);
+        if (globalOrderRange.isClosedRange()) {
+            query.bind("toInclusive", globalOrderRange.getToInclusive());
+        }
+        // As Long: the GlobalEventOrder mapper does not map the NULL of an empty range to null
+        return Optional.ofNullable(query.mapTo(Long.class).one()).map(GlobalEventOrder::of);
+    }
+
     private String loadEventQuerySql(SeparateTablePerAggregateEventStreamConfiguration configuration) {
         String sql = "SELECT * FROM {:tableName} WHERE \n" +
                 "   {:eventIdColumn} = :eventId";
@@ -1321,8 +1373,20 @@ public final class SeparateTablePerAggregateTypePersistenceStrategy implements A
     private String loadEventsByGlobalOrderQuerySql(SeparateTablePerAggregateEventStreamConfiguration configuration,
                                                    LongRange globalOrderRange,
                                                    List<GlobalEventOrder> includeAdditionalGlobalOrders,
-                                                   Optional<Tenant> onlyIncludeEventsIfTheyBelongToTenant) {
-        String sql = "SELECT * FROM {:tableName} WHERE \n";
+                                                   Optional<Tenant> onlyIncludeEventsIfTheyBelongToTenant,
+                                                   boolean omitPayloadOfOtherTenantsEvents) {
+        String sql;
+        if (omitPayloadOfOtherTenantsEvents) {
+            // The payload and metadata are only selected for our tenant's rows and rows without a tenant. A CASE that doesn't take
+            // the branch doesn't evaluate the column, so the other tenants' (TOASTed) values are not read. Each is aliased to its own column name
+            sql = "SELECT {:aggregateIdColumn}, {:eventOrderColumn}, {:eventIdColumn}, {:causedByEventIdColumn}, {:correlationIdColumn},\n" +
+                    "   {:eventTypeColumn}, {:eventRevisionColumn}, {:timestampColumn}, {:tenantColumn}, {:globalOrderColumn},\n" +
+                    "   CASE WHEN {:tenantColumn} IS NULL OR {:tenantColumn} = :payloadTenant THEN {:eventPayloadColumn} END AS {:eventPayloadColumn},\n" +
+                    "   CASE WHEN {:tenantColumn} IS NULL OR {:tenantColumn} = :payloadTenant THEN {:eventMetaDataColumn} END AS {:eventMetaDataColumn}\n" +
+                    " FROM {:tableName} WHERE \n";
+        } else {
+            sql = "SELECT * FROM {:tableName} WHERE \n";
+        }
 
         if (includeAdditionalGlobalOrders != null && !includeAdditionalGlobalOrders.isEmpty()) {
             sql += "(";
@@ -1344,7 +1408,17 @@ public final class SeparateTablePerAggregateTypePersistenceStrategy implements A
                     // Column names
                     arg("tableName", configuration.eventStreamTableName),
                     arg("globalOrderColumn", configuration.eventStreamTableColumnNames.globalOrderColumn),
-                    arg("tenantColumn", configuration.eventStreamTableColumnNames.tenantColumn));
+                    arg("tenantColumn", configuration.eventStreamTableColumnNames.tenantColumn),
+                    arg("aggregateIdColumn", configuration.eventStreamTableColumnNames.aggregateIdColumn),
+                    arg("eventOrderColumn", configuration.eventStreamTableColumnNames.eventOrderColumn),
+                    arg("eventIdColumn", configuration.eventStreamTableColumnNames.eventIdColumn),
+                    arg("causedByEventIdColumn", configuration.eventStreamTableColumnNames.causedByEventIdColumn),
+                    arg("correlationIdColumn", configuration.eventStreamTableColumnNames.correlationIdColumn),
+                    arg("eventTypeColumn", configuration.eventStreamTableColumnNames.eventTypeColumn),
+                    arg("eventRevisionColumn", configuration.eventStreamTableColumnNames.eventRevisionColumn),
+                    arg("timestampColumn", configuration.eventStreamTableColumnNames.timestampColumn),
+                    arg("eventPayloadColumn", configuration.eventStreamTableColumnNames.eventPayloadColumn),
+                    arg("eventMetaDataColumn", configuration.eventStreamTableColumnNames.eventMetaDataColumn));
     }
 
     private String getInsertSql(SeparateTablePerAggregateEventStreamConfiguration config) {

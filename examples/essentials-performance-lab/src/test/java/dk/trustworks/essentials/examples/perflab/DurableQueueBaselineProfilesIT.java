@@ -23,7 +23,7 @@ import dk.trustworks.essentials.examples.perflab.scenario.DurableQueueBenchmarkS
 import org.junit.jupiter.api.*;
 import org.junit.jupiter.api.condition.EnabledIfSystemProperty;
 import org.slf4j.*;
-import org.testcontainers.containers.PostgreSQLContainer;
+import org.testcontainers.postgresql.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.*;
 
 import java.nio.file.*;
@@ -54,7 +54,7 @@ class DurableQueueBaselineProfilesIT {
     private static final Logger log = LoggerFactory.getLogger(DurableQueueBaselineProfilesIT.class);
 
     @Container
-    static PostgreSQLContainer<?> postgres = LabPostgres.create();
+    static PostgreSQLContainer postgres = LabPostgres.create();
 
     private HikariDataSource dataSource;
 

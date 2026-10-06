@@ -57,6 +57,13 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
  * @param inMemoryGlobalOrder       The in-memory resume point of the running subscription, which can be ahead of
  *                                  {@link #currentGlobalOrder()}. Null when the subscription does not run in this
  *                                  instance or has no resume point.
+ * @param stoppedByErrorPolicy      Whether the subscription's {@code SubscriptionErrorPolicy} halted it after a handler
+ *                                  failure (mode {@code STOP} or {@code RETRY_N_THEN_STOP}): it handles no further events
+ *                                  until it is resumed ({@link EventStoreApi#resumeSubscriptionStoppedByErrorPolicy}) or
+ *                                  started again.
+ *                                  {@link #active()} stays true for such a subscription, so this is the property that tells
+ *                                  a halted subscription apart from a healthy one with no new events. Always false for an
+ *                                  in-transaction subscription. Null when the subscription does not run in this instance.
  */
 public record ApiSubscription(
         SubscriberId subscriberId,
@@ -69,7 +76,8 @@ public record ApiSubscription(
         Boolean exclusive,
         Boolean inTransaction,
         String tenant,
-        Long inMemoryGlobalOrder
+        Long inMemoryGlobalOrder,
+        Boolean stoppedByErrorPolicy
 ) {
 
     /**
@@ -95,6 +103,7 @@ public record ApiSubscription(
                 null,
                 null,
                 null,
+                null,
                 null);
     }
 
@@ -112,6 +121,7 @@ public record ApiSubscription(
                 ", inTransaction=" + inTransaction +
                 ", tenant=" + tenant +
                 ", inMemoryGlobalOrder=" + inMemoryGlobalOrder +
+                ", stoppedByErrorPolicy=" + stoppedByErrorPolicy +
                 '}';
     }
 }

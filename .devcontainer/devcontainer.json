@@ -66,7 +66,7 @@
         },
         // Node.js via DevContainer feature.
         "ghcr.io/devcontainers/features/node:1": {
-            "version": "25",
+            "version": "26",
             "nodeGypDependencies": true
         },
         // Python via DevContainer feature
@@ -80,6 +80,12 @@
     // User Configuration
     // ==========================================================================
     "remoteUser": "vscode",
+    // Start the container (PID 1) as root; lifecycle commands, terminals and the
+    // IDE still run as remoteUser. Do not remove it: the Docker-in-Docker
+    // entrypoint starts dockerd with `sudo` unless it runs as root, and vscode
+    // has no sudo (see the Dockerfile's sudo block). It also keeps vscode
+    // processes from reading or writing PID 1's memory (/proc/1/mem).
+    "containerUser": "root",
 
     // ==========================================================================
     // Environment Variables
@@ -229,7 +235,32 @@
         // If Claude Code behaves unexpectedly, try removing these first.
         "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS": "1",
         "CLAUDE_CODE_ENABLE_TASKS": "true",
-        "CLAUDE_CODE_FORK_SUBAGENT": "1"
+        "CLAUDE_CODE_FORK_SUBAGENT": "1",
+        // Claude Code telemetry beyond DO_NOT_TRACK. DO_NOT_TRACK=1 (above) already
+        // turns off usage metrics, error reports and session surveys; these say so
+        // explicitly, so the opt-out survives a session launched without
+        // DO_NOT_TRACK. Neither affects feature flags, so Remote Control keeps
+        // working. DISABLE_ERROR_REPORTING reads only "set or not".
+        "DISABLE_ERROR_REPORTING": "1",
+        "CLAUDE_CODE_DISABLE_FEEDBACK_SURVEY": "1",
+        // Kotlin LSP (intellij-server) polls www.jetbrains.com for updates about a
+        // minute after start; data sharing already defaults to "none" and is pinned
+        // so a changed default does not flip it on.
+        "INTELLIJ_UPDATES_ENABLED": "false",
+        "INTELLIJ_DATA_SHARING": "none",
+        // Status line (scripts/statusline.sh), registered in USER settings by
+        // post-create.sh, never over an existing statusLine:
+        //   <model>[:effort] [⚡fast] │ <used>/<window> (<pct>%) │ ⎇ <branch> │ <dir>
+        "CLAUDE_STATUSLINE": "true"
+    },
+
+    // Environment for remoteUser's processes only (lifecycle commands, terminals,
+    // the IDE), not for the container's root processes. UV_CACHE_DIR must stay
+    // here, never in containerEnv or a Dockerfile ENV: a root-context `uv` run
+    // would otherwise write root-owned entries into the cache volume and break
+    // every `uv` command for vscode, across rebuilds.
+    "remoteEnv": {
+        "UV_CACHE_DIR": "/home/vscode/.uv-cache"
     },
 
     // ==========================================================================
@@ -244,7 +275,7 @@
         // Node.js/NPM
         "source=devcontainer-npm-cache-${devcontainerId},target=/home/vscode/.npm,type=volume",
         // Python/UV/pip
-        "source=devcontainer-uv-cache-${devcontainerId},target=/home/vscode/.cache/uv,type=volume",
+        "source=devcontainer-uv-cache-v2-${devcontainerId},target=/home/vscode/.uv-cache,type=volume",
         "source=devcontainer-pip-cache-${devcontainerId},target=/home/vscode/.cache/pip,type=volume",
 
         // Claude Code config and cache (named volumes — NOT bind-mounted to avoid host-path conflicts)
@@ -264,6 +295,14 @@
         // The host directory is populated on the host with host git credentials,
         // so no credentials enter the container. readonly: the container only reads it.
         "source=${localWorkspaceFolder}/.devcontainer/.plugin-marketplace,target=/opt/claude-seed/marketplaces,type=bind,readonly",
+        // .devcontainer/ is READ-ONLY inside the container. The workspace mount is
+        // writable, and this directory holds what runs outside the container's
+        // control: initializeCommand runs scripts/local-init.sh ON THE HOST at every
+        // start, devcontainer.json decides mounts and runArgs, and
+        // .plugin-marketplace/ is the clone behind the read-only seed above (a
+        // write through /workspace reached /opt/claude-seed). Edit these files on
+        // the host. Keep the target in step with workspaceMount's target.
+        "source=${localWorkspaceFolder}/.devcontainer,target=/workspace/.devcontainer,type=bind,readonly",
 
         // JetBrains caches
         "source=devcontainer-jetbrains-remote-${devcontainerId},target=/home/vscode/.cache/JetBrains/RemoteDev,type=volume",
@@ -345,7 +384,7 @@
                 "java.saveActions.organizeImports": true,
                 "maven.executable.preferMavenWrapper": false,
                 // Python settings
-                "python.defaultInterpreterPath": "/usr/local/bin/python",
+                "python.defaultInterpreterPath": "/usr/local/python/current/bin/python",
                 "[python]": {
                     "editor.defaultFormatter": "charliermarsh.ruff"
                 },

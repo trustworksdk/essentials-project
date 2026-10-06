@@ -21,7 +21,7 @@ import dk.trustworks.essentials.components.queue.shardowned.*;
 import dk.trustworks.essentials.components.queue.shardowned.spi.*;
 import org.awaitility.Awaitility;
 import org.junit.jupiter.api.*;
-import org.testcontainers.containers.PostgreSQLContainer;
+import org.testcontainers.postgresql.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.*;
 
 import java.nio.charset.StandardCharsets;
@@ -48,7 +48,7 @@ class ShardOwnedSpiIT {
     private static final int   SHARD_COUNT = 4;
 
     @Container
-    static PostgreSQLContainer<?> postgres = LabPostgres.create();
+    static PostgreSQLContainer postgres = LabPostgres.create();
 
     private HikariDataSource dataSource;
 
@@ -125,7 +125,7 @@ class ShardOwnedSpiIT {
     @Test
     void depth_dead_letters_resurrect_and_purge_are_usable_through_the_contract() throws Exception {
         try (var queue = queue("spi-2")) {
-            var alwaysFails = new ConsumerOptions(8, SHARD_COUNT, 2, Duration.ofMillis(10), 1.0d, Duration.ofMillis(10));
+            var alwaysFails = new ConsumerOptions(8, SHARD_COUNT, 2, RetryBackoff.fixed(Duration.ofMillis(10)));
             queue.consume((messageId, key, payload, payloadType) -> {
                 throw new IllegalStateException("nope");
             }, alwaysFails);
@@ -252,7 +252,7 @@ class ShardOwnedSpiIT {
             });
             queue.consume((messageId, key, payload, payloadType) -> {
                 throw new IllegalStateException("boom");
-            }, new ConsumerOptions(8, SHARD_COUNT, 2, Duration.ofMillis(10), 1.0d, Duration.ofMillis(10)));
+            }, new ConsumerOptions(8, SHARD_COUNT, 2, RetryBackoff.fixed(Duration.ofMillis(10))));
 
             queue.enqueue(Message.of("bad".getBytes(StandardCharsets.UTF_8), 1));
 

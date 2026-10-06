@@ -27,7 +27,7 @@ import dk.trustworks.essentials.shared.interceptor.InterceptorChain;
 import org.awaitility.Awaitility;
 import org.jdbi.v3.core.Jdbi;
 import org.junit.jupiter.api.*;
-import org.testcontainers.containers.PostgreSQLContainer;
+import org.testcontainers.postgresql.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.*;
 
 import java.time.Duration;
@@ -53,7 +53,7 @@ class InterceptorsOnShardOwnedIT {
     private static final QueueName QUEUE = QueueName.of("orders");
 
     @Container
-    static PostgreSQLContainer<?> postgres = new PostgreSQLContainer<>("postgres:17.5-bookworm");
+    static PostgreSQLContainer postgres = new PostgreSQLContainer("postgres:17.5-bookworm");
 
     private HikariDataSource        dataSource;
     private JdbiUnitOfWorkFactory   unitOfWorkFactory;

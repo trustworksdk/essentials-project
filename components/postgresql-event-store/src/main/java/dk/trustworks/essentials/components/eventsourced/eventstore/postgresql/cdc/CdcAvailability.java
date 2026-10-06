@@ -250,7 +250,10 @@ public final class CdcAvailability {
         );
     }
 
-    private void set(State newState, String slot, String reason) {
+    // Synchronized: set is called from the tailer, its heartbeat and stop concurrently, and the state sink rejects
+    // concurrent emission (FAIL_NON_SERIALIZED) - which dropped a transition, leaving the replayed state stale - and
+    // the transitions must reach it in the order they were made
+    private synchronized void set(State newState, String slot, String reason) {
         State previous = this.state.getAndSet(newState);
         this.slotName.set(slot);
         this.reason.set(reason);

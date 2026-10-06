@@ -82,6 +82,29 @@ public interface UnitOfWork {
     void markAsRollbackOnly();
     void markAsRollbackOnly(Exception cause);
     UnitOfWorkStatus status();
+
+    // Every resource registered via registerLifecycleCallbackForResource(...), across all callbacks - in-memory
+    // state the UnitOfWork may act on at commit, which rolling back to a savepoint does not undo.
+    // The default throws UnsupportedOperationException. All Essentials implementations override it.
+    List<Object> getAllUnitOfWorkLifecycleCallbackResources();
+
+    // Would committing persist or publish something for any registered resource? Asks each resource's
+    // UnitOfWorkLifecycleCallback.hasPendingChanges(resource): an aggregate that had an event applied has pending
+    // changes, one that was only loaded has none. False when nothing is registered. The default throws
+    // UnsupportedOperationException - callers must read that as "pending changes". All Essentials implementations
+    // override it. ViewEventProcessor uses it to decide whether a failed direct handler can be queued.
+    boolean hasLifecycleCallbackResourcesWithPendingChanges();
+}
+
+// dk.trustworks.essentials.components.foundation.transaction.UnitOfWorkLifecycleCallback<RESOURCE_TYPE>
+public interface UnitOfWorkLifecycleCallback<RESOURCE_TYPE> {
+    // ... beforeCommit / afterCommit / beforeRollback / afterRollback ...
+
+    // Would committing make this callback persist/publish something for the resource? Default true (the safe
+    // answer). Override it in a custom callback whose registered resources can be unchanged - otherwise every
+    // resource registered with it counts as pending, and e.g. a failed ViewEventProcessor handler rolls the whole UnitOfWork back before it is queued.
+    // The stateful, flex and decider repository callbacks answer true only while there are uncommitted events.
+    default boolean hasPendingChanges(RESOURCE_TYPE resource) { return true; }
 }
 ```
 
@@ -212,17 +235,26 @@ var consumer = durableQueues.consumeFromQueue(
 
 **Class**: `dk.trustworks.essentials.components.foundation.messaging.RedeliveryPolicy`
 
-| Strategy | Formula | Use Case |
+`n` is the message's redelivery-attempt count, 0 when its first delivery failed.
+
+| Strategy | Delay before redelivery `n` | Use Case |
 |----------|---------|----------|
-| `fixedBackoff()` | Same delay every retry | Simple retries |
-| `linearBackoff()` | Delay increases linearly | Gradual backoff |
-| `exponentialBackoff()` | Delay doubles each retry | External service recovery |
+| `fixedBackoff(delay, …)` | `delay`, every time | Simple retries |
+| `linearBackoff(delay, max, …)` | `delay × (n+1)`, capped at `max` | Gradual backoff |
+| `exponentialBackoff(initial, followup, multiplier, max, …)` | `n = 0`: `initial`; `n ≥ 1`: `followup × multiplier^(n-1)`, capped at `max` | External service recovery |
+
+Before 0.60 neither `linearBackoff` nor `exponentialBackoff` grew: every redelivery after the first waited
+`initial + followup × multiplier`. A `multiplier` of `1.0` (or less, including an unset builder value) gives a constant
+`followup` delay.
 
 ```java
 // Fixed: 500ms delay, max 5 retries
 RedeliveryPolicy.fixedBackoff(Duration.ofMillis(500), 5)
 
-// Exponential: starts 500ms, doubles, max 1min delay, max 8 retries
+// Linear: 1s, 2s, 3s, … capped at 30s, max 10 retries
+RedeliveryPolicy.linearBackoff(Duration.ofSeconds(1), Duration.ofSeconds(30), 10)
+
+// Exponential: 500ms, 500ms, 1s, 2s, 4s, 8s, 16s, 32s (cap 1min never reached), then dead letter
 RedeliveryPolicy.exponentialBackoff(
     Duration.ofMillis(500),  // initialRedeliveryDelay
     Duration.ofMillis(500),  // followupRedeliveryDelay
@@ -850,6 +882,15 @@ commandBus.sendAndDontWait(new SendReminderCommand(customerId), Duration.ofHours
 OrderId result = commandBus.send(new CreateOrderCommand(...));
 ```
 
+### Commands are persisted
+
+A command sent with `sendAndDontWait` is stored as JSON in the durable-queue table (the command object is the queued
+message's payload) and deserialized again when a consumer picks it up — possibly after a deploy. The command type is
+therefore a persisted contract, exactly like an event or an Inbox message: the Jackson 3 rules apply to it —
+constructor parameter names ([JSONSerializer](#jsonserializer)) and value types in it registered with the
+persistence mapper. A renamed constructor parameter breaks the commands already queued, not the ones sent after the
+rename. `send(...)` does not persist the command.
+
 ## Event Causation
 
 `CausationContext` (package `dk.trustworks.essentials.components.foundation.causation`) carries "the event that
@@ -947,7 +988,9 @@ As a Spring bean it is applied with the Essentials ones. Rules that hold everywh
 Jackson 3 (`tools.jackson`) only. Build persistence serializers through `EssentialsObjectMappers`, which carries the
 canonical configuration the persisted wire format depends on (field access, ISO-8601 dates, final-field mutation
 re-enabled, Essentials value-type modules registered). That format is byte-identical to what the Jackson 2 mapper of
-0.50 wrote, so data persisted before 0.60 stays readable.
+0.50 wrote, so data persisted before 0.60 stays readable. A hand-assembled `ObjectMapper` used for persistence drifts
+from that format (for example, value types written as `{"value":"…"}`, or a `Duration` as `"PT30S"`), and the drift
+shows on replay, not on write.
 
 ```java
 // Canonical serializer (Jackson3JSONSerializer over the canonical mapper)
@@ -967,10 +1010,20 @@ Object event = serializer.deserialize(json, "com.example.OrderCreatedEvent");
 0.50-era Jackson 2 `types-jackson` / `immutable-jackson` jar is on the classpath (same FQCNs, wrong Jackson major) —
 depend on `types-jackson3` / `immutable-jackson3`.
 
-⚠️ Under Jackson 3 a constructor parameter **name** is part of the JSON contract: Jackson 3 binds a class's constructor
-by parameter names read from the bytecode, so a parameter named differently from the JSON property receives `null`.
-Rename the parameter or annotate it with `@JsonProperty("…")` (`com.fasterxml.jackson.annotation`, shared by both
-Jackson majors).
+⚠️ Under Jackson 3 a constructor parameter **name** is part of the JSON contract. Jackson 3 reads parameter names from
+the bytecode (classes compiled with `-parameters`, and Kotlin) and uses a class's constructor as a properties-based
+creator — even when a no-arg constructor exists. The 0.50 Jackson 2 mapper registered no parameter-names module and
+populated fields instead, so types that worked then can break now. A parameter whose name does not match the JSON
+property it receives gets `null`, and the object fails its own `requireNonNull` or comes back half-populated. Two
+shapes bite:
+- a parameter named differently from the field it assigns (`priceValidity` → field `priceValidityPeriod`);
+- a parameter that is not a property at all because the value is routed elsewhere — the classic `Event<ID>`
+  subclass taking `orderId` and calling `aggregateId(orderId)`, which persists as `aggregateId`.
+
+Nothing fails on write: a service can append events for days and then fail on replay. Fix it on the type — rename
+the parameter, or annotate it `@JsonProperty("…")` (`com.fasterxml.jackson.annotation`, shared by both Jackson
+majors). `ConstructorDetector.EXPLICIT_ONLY` does **not** help: with no other way to construct the type, Jackson 3
+uses the sole constructor regardless.
 
 ⚠️ Upgrading from 0.50: `JacksonJSONSerializer` (Jackson 2) was removed — use `Jackson3JSONSerializer` or
 `EssentialsObjectMappers.createJSONSerializer()`.

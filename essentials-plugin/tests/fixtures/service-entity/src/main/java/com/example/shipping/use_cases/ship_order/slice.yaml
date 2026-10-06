@@ -1,0 +1,25 @@
+schemaVersion: "1.2"
+slice: shipping.ship_order
+kind: command
+bc: shipping
+owner: shipping-team
+status: live
+summary: Mark a registered shipping order as shipped, once.
+generator: essentials
+language: java
+tier: service-entity
+lane: service-entity
+handles: [ShipOrder]
+publishes: [OrderShipped]
+writes:
+  - { name: ShippingOrder }
+endpoints:
+  - { method: POST, path: "/api/shipping/orders/{orderId}/ship", auth: user }
+invariants:
+  - { id: ship-once, text: "Shipping an already-shipped order is a no-op, not an error.", enforcedBy: "ShippingOrder.markOrderAsShipped" }
+forbidden:
+  - cross-slice-internal:shipping
+tests:
+  unit: { present: true }
+  integration: { present: false }
+  contract: { present: false }

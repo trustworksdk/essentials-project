@@ -1,0 +1,24 @@
+schemaVersion: "1.3"
+slice: catalog.reprice_product
+kind: command
+bc: catalog
+owner: catalog-team
+status: live
+summary: Change a listed product's price.
+generator: essentials
+language: java
+tier: service-entity
+lane: service-entity
+handles: [RepriceProduct]
+publishes: [ProductRepriced]
+endpoints:
+  - { method: PUT, path: "/api/catalog/products/{productId}/price", auth: user }
+writes: [Product]
+invariants:
+  - { id: INV-RP-1, text: "A price must be positive", enforcedBy: Product.reprice }
+forbidden:
+  - cross-slice-internal:catalog
+tests:
+  unit: { present: false }
+  integration: { present: false }
+  contract: { present: false }

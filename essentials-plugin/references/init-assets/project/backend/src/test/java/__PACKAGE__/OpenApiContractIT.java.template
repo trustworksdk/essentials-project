@@ -1,0 +1,44 @@
+package {{packagePath}};
+
+import org.junit.jupiter.api.Test;
+import tools.jackson.databind.SerializationFeature;
+import tools.jackson.databind.json.JsonMapper;
+import tools.jackson.databind.node.ObjectNode;
+
+import java.net.URI;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
+import java.nio.file.Files;
+import java.nio.file.Path;
+
+import static org.assertj.core.api.Assertions.assertThat;
+
+/**
+ * S7: regenerates contracts/openapi.json from the running application on every `mvn verify`. The contract is
+ * generated from the code, never hand-written; commit the regenerated file together with the endpoint change.
+ * <p>
+ * It runs against the integration-test context and its database, because the beans an endpoint needs are
+ * the ones that reach the database as they are created.
+ */
+class OpenApiContractIT extends IntegrationTestBase {
+
+    @Test
+    void writes_the_openapi_contract() throws Exception {
+        String body;
+        try (var client = HttpClient.newHttpClient()) {
+            var response = client.send(HttpRequest.newBuilder(URI.create(baseUrl() + "/v3/api-docs")).build(),
+                                       HttpResponse.BodyHandlers.ofString());
+            assertThat(response.statusCode()).as("GET /v3/api-docs").isEqualTo(200);
+            body = response.body();
+        }
+
+        var mapper = JsonMapper.builder().enable(SerializationFeature.INDENT_OUTPUT).build();
+        var contract = (ObjectNode) mapper.readTree(body);
+        contract.remove("servers");   // the random test port is not part of the contract
+
+        var target = Path.of(System.getProperty("contracts.dir", "../contracts"), "openapi.json");
+        Files.createDirectories(target.getParent());
+        Files.writeString(target, mapper.writeValueAsString(contract) + "\n");
+    }
+}

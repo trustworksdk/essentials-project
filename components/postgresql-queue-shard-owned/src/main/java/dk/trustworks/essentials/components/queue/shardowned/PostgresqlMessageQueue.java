@@ -489,8 +489,7 @@ public final class PostgresqlMessageQueue implements MessageQueue {
         requireNonNull(handler, "No handler provided");
         requireNonNull(options, "No options provided");
 
-        var policy = new RedeliveryPolicy(options.maxAttempts(), options.retryDelay(),
-                                          options.retryMultiplier(), options.maxRetryDelay());
+        var policy = RedeliveryPolicy.from(options);
 
         // ONE instance identity for both lanes of this subscription.
         //

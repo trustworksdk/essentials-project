@@ -1,0 +1,12 @@
+/// <reference types="vite/client" />
+<!-- IF frontend=standalone -->
+
+interface ImportMetaEnv {
+  /** The backend's origin, e.g. https://api.example.com. Read by src/shared/api/custom-fetch.ts. */
+  readonly VITE_API_BASE_URL?: string
+}
+
+interface ImportMeta {
+  readonly env: ImportMetaEnv
+}
+<!-- END frontend -->

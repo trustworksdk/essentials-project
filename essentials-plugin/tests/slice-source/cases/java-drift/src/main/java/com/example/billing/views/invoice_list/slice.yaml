@@ -1,0 +1,24 @@
+schemaVersion: "1.3"
+slice: billing.invoice_list
+kind: view
+bc: billing
+owner: billing-team
+status: live
+summary: List invoices.
+generator: essentials
+language: java
+tier: cqrs-es
+lane: aggregate
+serves: [ListInvoices, InvoicesByStatus, PaidInvoices, InvoicesAbove, InvoicePdf]
+endpoints:
+  - { method: GET, path: "/api/billing/invoices", auth: user }
+  - { method: GET, path: "/api/billing/invoices?status=", auth: user }
+  - { method: GET, path: "/api/billing/invoices?paid=true", auth: user }
+  - { method: GET, path: "/api/billing/invoices?min=", auth: user }
+  # FINDING (6 endpoint route): no mapping serves this route.
+  - { method: GET, path: "/api/billing/invoices/{id}/pdf", auth: user }
+owns: [InvoiceListView]
+projections:
+  - { name: InvoiceListView, aggregateTypes: [Invoices], from: [InvoiceIssued, InvoicePaid], consistency: strong }
+tests:
+  unit: { present: false }

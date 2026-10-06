@@ -1,0 +1,50 @@
+package {{packagePath}}.config
+
+<!-- IF web=webflux -->
+import org.springframework.stereotype.Component
+import org.springframework.web.server.ServerWebExchange
+import org.springframework.web.server.WebFilter
+import org.springframework.web.server.WebFilterChain
+import reactor.core.publisher.Mono
+<!-- END web -->
+<!-- IF web=webmvc -->
+import jakarta.servlet.FilterChain
+import jakarta.servlet.http.HttpServletRequest
+import jakarta.servlet.http.HttpServletResponse
+import org.springframework.stereotype.Component
+import org.springframework.web.filter.OncePerRequestFilter
+<!-- END web -->
+
+/**
+ * Embedded frontend (S8, Mode A): deep links such as /orders/42 reach index.html so the client-side router can
+ * handle them. API and infrastructure prefixes, and any path ending in a file extension, pass through.
+ */
+@Component
+<!-- IF web=webflux -->
+class SpaWebFilter : WebFilter {
+    private val apiPrefixes = listOf("/api/", "/v3/", "/swagger-ui", "/actuator")
+    private val extensionPattern = Regex("\\.[a-zA-Z0-9]+$")
+
+    override fun filter(exchange: ServerWebExchange, chain: WebFilterChain): Mono<Void> {
+        val path = exchange.request.uri.path
+        if (apiPrefixes.any { path.startsWith(it) }) return chain.filter(exchange)
+        if (extensionPattern.containsMatchIn(path.substringAfterLast("/"))) return chain.filter(exchange)
+        return chain.filter(exchange.mutate().request(exchange.request.mutate().path("/index.html").build()).build())
+    }
+}
+<!-- END web -->
+<!-- IF web=webmvc -->
+class SpaWebFilter : OncePerRequestFilter() {
+    private val apiPrefixes = listOf("/api/", "/v3/", "/swagger-ui", "/actuator")
+    private val extensionPattern = Regex("\\.[a-zA-Z0-9]+$")
+
+    override fun doFilterInternal(request: HttpServletRequest, response: HttpServletResponse, chain: FilterChain) {
+        val path = request.requestURI.removePrefix(request.contextPath)
+        if (apiPrefixes.any { path.startsWith(it) } || extensionPattern.containsMatchIn(path.substringAfterLast("/"))) {
+            chain.doFilter(request, response)
+            return
+        }
+        request.getRequestDispatcher("/index.html").forward(request, response)
+    }
+}
+<!-- END web -->

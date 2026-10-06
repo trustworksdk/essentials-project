@@ -28,7 +28,7 @@ import dk.trustworks.essentials.components.foundation.types.SubscriberId;
 import org.jdbi.v3.core.Jdbi;
 import org.jdbi.v3.postgres.PostgresPlugin;
 import org.junit.jupiter.api.*;
-import org.testcontainers.containers.PostgreSQLContainer;
+import org.testcontainers.postgresql.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.*;
 
 import static dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.subscription.PostgresqlDurableSubscriptionRepository.DEFAULT_DURABLE_SUBSCRIPTIONS_TABLE_NAME;
@@ -45,7 +45,7 @@ class PostgresqlDurableSubscriptionRepositoryIT {
     private static final SubscriberId  SUBSCRIBER_ID = SubscriberId.of("OrdersSub1");
 
     @Container
-    private static final PostgreSQLContainer<?> postgreSQLContainer = new PostgreSQLContainer<>("postgres:18.4").withDatabaseName("event-store")
+    private static final PostgreSQLContainer postgreSQLContainer = new PostgreSQLContainer("postgres:18.4").withDatabaseName("event-store")
                                                                                                                  .withUsername("test-user")
                                                                                                                  .withPassword("secret-password");
 

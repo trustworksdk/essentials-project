@@ -21,7 +21,7 @@ import dk.trustworks.essentials.components.foundation.transaction.jdbi.JdbiUnitO
 import dk.trustworks.essentials.shared.security.*;
 import org.jdbi.v3.core.Jdbi;
 import org.junit.jupiter.api.Test;
-import org.testcontainers.containers.PostgreSQLContainer;
+import org.testcontainers.postgresql.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.*;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -39,12 +39,12 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 class DefaultPostgresqlQueryStatisticsApiIT {
 
     @Container
-    static final PostgreSQLContainer<?> preloaded = new PostgreSQLContainer<>("postgres:17.5")
+    static final PostgreSQLContainer preloaded = new PostgreSQLContainer("postgres:17.5")
             .withDatabaseName("test-db")
             .withCommand("postgres", "-c", "shared_preload_libraries=pg_stat_statements");
 
     @Container
-    static final PostgreSQLContainer<?> notPreloaded = new PostgreSQLContainer<>("postgres:17.5")
+    static final PostgreSQLContainer notPreloaded = new PostgreSQLContainer("postgres:17.5")
             .withDatabaseName("test-db");
 
     private static final EssentialsSecurityProvider ALL_ACCESS = new EssentialsSecurityProvider.AllAccessSecurityProvider();
@@ -163,7 +163,7 @@ class DefaultPostgresqlQueryStatisticsApiIT {
         assertThatThrownBy(() -> api.getSlowestQueries("principal", QueryStatisticsOrder.MEAN_TIME, 5)).isInstanceOf(EssentialsSecurityException.class);
     }
 
-    private static Jdbi jdbi(PostgreSQLContainer<?> container, String user, String password) {
+    private static Jdbi jdbi(PostgreSQLContainer container, String user, String password) {
         return Jdbi.create(container.getJdbcUrl(), user, password);
     }
 

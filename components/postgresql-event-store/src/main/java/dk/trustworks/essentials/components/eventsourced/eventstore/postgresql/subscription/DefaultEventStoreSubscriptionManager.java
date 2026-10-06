@@ -175,6 +175,35 @@ public class DefaultEventStoreSubscriptionManager implements EventStoreSubscript
                                                 boolean startLifeCycles,
                                                 Function<String, EventStorePollingOptimizer> eventStorePollingOptimizerFactory,
                                                 int snapshotResumePointsAfterEvents) {
+        this(eventStore,
+             eventStorePollingBatchSize,
+             eventStorePollingInterval,
+             fencedLockManager,
+             snapshotResumePointsEvery,
+             durableSubscriptionRepository,
+             startLifeCycles,
+             eventStorePollingOptimizerFactory,
+             snapshotResumePointsAfterEvents,
+             SubscriptionErrorPolicy.defaultPolicy());
+    }
+
+    /**
+     * Target of {@link EventStoreSubscriptionManagerBuilder#build()}. The other parameters are described on
+     * {@link #DefaultEventStoreSubscriptionManager(EventStore, int, Duration, FencedLockManager, Duration, DurableSubscriptionRepository, boolean, Function, int)}
+     *
+     * @param subscriptionErrorPolicy what the asynchronous subscriptions do when their handler throws a non-I/O exception; must not be {@code null}
+     */
+    DefaultEventStoreSubscriptionManager(EventStore eventStore,
+                                         int eventStorePollingBatchSize,
+                                         Duration eventStorePollingInterval,
+                                         FencedLockManager fencedLockManager,
+                                         Duration snapshotResumePointsEvery,
+                                         DurableSubscriptionRepository durableSubscriptionRepository,
+                                         boolean startLifeCycles,
+                                         Function<String, EventStorePollingOptimizer> eventStorePollingOptimizerFactory,
+                                         int snapshotResumePointsAfterEvents,
+                                         SubscriptionErrorPolicy subscriptionErrorPolicy) {
+        requireNonNull(subscriptionErrorPolicy, "No subscriptionErrorPolicy provided");
         requireTrue(eventStorePollingBatchSize >= 1, "eventStorePollingBatchSize must be >= 1");
         requireTrue(snapshotResumePointsAfterEvents >= 0, "snapshotResumePointsAfterEvents must be >= 0");
         this.eventStore = requireNonNull(eventStore, "No eventStore provided");
@@ -187,11 +216,12 @@ public class DefaultEventStoreSubscriptionManager implements EventStoreSubscript
         this.startLifeCycles = startLifeCycles;
         this.eventStoreSubscriptionManagerSettings = new EventStoreSubscriptionManagerSettings(eventStorePollingBatchSize,
                                                                                                eventStorePollingInterval,
-                                                                                               snapshotResumePointsEvery);
+                                                                                               snapshotResumePointsEvery,
+                                                                                               subscriptionErrorPolicy);
         this.eventStorePollingOptimizerFactory = eventStorePollingOptimizerFactory != null ? eventStorePollingOptimizerFactory : this::createEventStorePollingOptimizer;
 
         log.info("[{}] Using {} using {} with snapshotResumePointsEvery: {}, snapshotResumePointsAfterEvents: {}, eventStorePollingBatchSize: {}, eventStorePollingInterval: {}, " +
-                         "eventStoreSubscriptionObserver: {}, startLifeCycles: {}",
+                         "eventStoreSubscriptionObserver: {}, startLifeCycles: {}, subscriptionErrorPolicy: {}",
                  fencedLockManager.getLockManagerInstanceId(),
                  fencedLockManager,
                  durableSubscriptionRepository.getClass().getSimpleName(),
@@ -200,7 +230,8 @@ public class DefaultEventStoreSubscriptionManager implements EventStoreSubscript
                  eventStorePollingBatchSize,
                  eventStorePollingInterval,
                  eventStoreSubscriptionObserver,
-                 startLifeCycles
+                 startLifeCycles,
+                 subscriptionErrorPolicy
                 );
     }
 
@@ -333,6 +364,14 @@ public class DefaultEventStoreSubscriptionManager implements EventStoreSubscript
     @Override
     public EventStore getEventStore() {
         return eventStore;
+    }
+
+    /**
+     * @return what the asynchronous subscriptions created by this manager do when their handler throws a non-I/O exception
+     * @see EventStoreSubscriptionManagerBuilder#setSubscriptionErrorPolicy(SubscriptionErrorPolicy)
+     */
+    public SubscriptionErrorPolicy getSubscriptionErrorPolicy() {
+        return eventStoreSubscriptionManagerSettings.subscriptionErrorPolicy();
     }
 
     @Override
@@ -554,6 +593,8 @@ public class DefaultEventStoreSubscriptionManager implements EventStoreSubscript
         if (removedSubscription != null) {
             log.info("[{}-{}] Unsubscribing", removedSubscription.subscriberId(), removedSubscription.aggregateType());
             stopEventStoreSubscriber(eventStoreSubscription);
+            // Nothing is owed to a subscription that is gone - see EventStore#forgetGapMiddlesAwaitedInMemory
+            eventStore.forgetGapMiddlesAwaitedInMemory(removedSubscription.subscriberId(), removedSubscription.aggregateType());
         }
     }
 

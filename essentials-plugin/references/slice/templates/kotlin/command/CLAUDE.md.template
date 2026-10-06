@@ -1,0 +1,34 @@
+# Slice: {{bc}}.{{slice}}
+
+**Kind:** command
+**Status:** live
+**Owner:** {{owner}}
+**Purpose:** TODO one sentence, present tense.
+
+## Invariants
+- TODO the rule this slice enforces (enforced by `{{Slice}}Decider`).
+- Re-issuing {{Command}} once {{Event}} exists is a no-op (idempotent).
+
+## Boundaries
+**Reacts to / reads:** `{{Command}}` (via `POST {{apiPath}}` → CommandBus)
+**Publishes:** `{{Event}}` (owned by this slice; defined in `{{bc}}/events/{{Event}}.kt`)
+**Forbidden:**
+  - Never import another slice's internals — only `{{bc}}/events/` and `{{bc}}/types/`. Use the
+    this slice's own Evolver for state; never reach into another slice's Decider or Evolver.
+  - Never add this command to a shared Decider, controller, or event file — this slice owns
+    `{{Slice}}Decider`, `{{Slice}}API`, and the `{{Event}}` variant.
+
+## Data
+**Owns (writes):** {{Aggregate}} event stream (this slice writes `{{Event}}`)
+**Reads:** {{Aggregate}} event stream via the shared Evolver
+
+## Files
+- `{{Command}}.kt` — command (implements `{{Aggregate}}Command`)
+- `{{Slice}}Decider.kt` — `Decider<{{Command}}, {{Aggregate}}Event>` (this slice's decision logic)
+- `{{Slice}}API.kt` — single-method `POST {{apiPath}}`
+- event: `{{bc}}/events/{{Event}}.kt`
+- test: `{{Slice}}Test.kt` (GivenWhenThenScenario)
+
+## Wiring
+Registered as a `@Bean` in `{{bc}}/config/{{Bc}}Configuration.kt`. An unregistered Decider passes
+every unit test and fails every `@SpringBootTest`.

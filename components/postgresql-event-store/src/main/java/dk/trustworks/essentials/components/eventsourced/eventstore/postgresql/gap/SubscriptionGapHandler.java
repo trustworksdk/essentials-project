@@ -22,13 +22,39 @@ import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.ty
 import dk.trustworks.essentials.components.foundation.types.*;
 import dk.trustworks.essentials.types.LongRange;
 
-import java.util.List;
+import java.time.Duration;
+import java.util.*;
 import java.util.stream.Stream;
 
 /**
  * Handle event stream gaps handling for a specific {@link SubscriberId}
  */
 public interface SubscriptionGapHandler {
+    /**
+     * How many orders at each end of a newly discovered gap a subscription records as transient gaps, at most. A gap no
+     * wider than twice this is recorded in full.
+     * <p>
+     * Only an order a transaction still in flight holds can still be delivered, and the global order sequence hands such
+     * orders out next to the orders around them: right above the highest order the subscription had seen - taken before
+     * whatever moved the sequence forward (a {@code setval}, a restore) - or right below the event that revealed the gap -
+     * taken by a concurrent writer after any such move. Those two ends are recorded, durably. The middle of a wider gap is
+     * not: it gets no transient gap and so never a permanent gap either, it costs no rows whatever its width, and the
+     * subscription's resume point moves past it with the event that revealed it. Without that bound a gap of a million
+     * orders cost a million transient-gap rows, every later poll sorted and filtered them, and they were promoted to a
+     * million permanent-gap rows.
+     * <p>
+     * The middle is held by a transaction still in flight only when a single one appended more than twice this many
+     * events and a concurrent commit overtook it. Both event stores therefore await the middle <b>in memory only</b>,
+     * until {@link #transientGapGiveUpThreshold()} (120 seconds when that is empty) has passed: the CDC event store is
+     * handed every commit, and a polling subscription re-queries the middle by range on every poll. An event that commits
+     * there within that window is delivered like any gap fill; afterwards the middle is dropped without writing anything.
+     * It survives a re-subscribe of the subscriber on the same event store instance (a resume after a
+     * {@code SubscriptionErrorPolicy} stop, a stop and start); a restart, a crash, a {@code resetFrom}, an unsubscribe or a
+     * fenced-lock release inside the window loses it - the resume point moved past it with the event that revealed it. The
+     * {@link PostgresqlEventStreamGapHandler} applies this bound when it reconciles, a poll or a CDC back-fill page alike.
+     */
+    int MAX_AWAITED_ORDERS_PER_GAP_END = 5_000;
+
     /**
      * The id of the subscriber that we're handling gaps on behalf of
      *
@@ -81,6 +107,142 @@ public interface SubscriptionGapHandler {
                                                      List<GlobalEventOrder> transientGapsIncludedInQuery) {
         reconcileGaps(aggregateType, globalOrderQueryRange, persistedEvents, transientGapsIncludedInQuery);
         return GapReconciliation.NONE;
+    }
+
+    /**
+     * Resolve the transient gaps that the given <b>gap fills</b> fill - and change nothing else: no new gaps are recorded
+     * and no gap is promoted to a permanent one.
+     * <p>
+     * A gap fill is an event whose global order this subscriber recorded as a transient gap - it committed after events
+     * with a higher global order had been delivered. The event store leaves such a gap open while it delivers the fill,
+     * and resolves it through this method once the subscriber is done with the event: when it acknowledged it (see
+     * {@link dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.SubscriberAcknowledgement}), or, for
+     * a subscriber that does not acknowledge, once the event was handed on. An acknowledged fill is resolved in the
+     * subscriber's unit of work, atomically with its handling, so this method runs inside whatever unit of work is
+     * current - possibly on the subscriber's thread while the poll that delivered the fill reconciles on its own. The
+     * event store serializes its calls to one {@link SubscriptionGapHandler}.
+     * <p>
+     * The default implementation reconciles as a query over the highest of the fills, that asked for exactly their gaps,
+     * would: {@link #reconcileGapsAndReport(AggregateType, LongRange, List, List)} with {@link LongRange#only(long)} of the
+     * highest fill, the fills, and their global orders - which, as every reconciliation, may also promote gaps.
+     * The {@link PostgresqlEventStreamGapHandler}'s handlers override it to only delete the fills' transient gaps.
+     *
+     * @param aggregateType the aggregate type the fills belong to
+     * @param gapFills      the gap fills the subscriber is done with - events whose global order is (or was) a transient gap
+     *                      of this subscriber
+     * @return what the resolution changed for this subscriber - the number of transient gaps it resolved
+     */
+    default GapReconciliation resolveFilledGaps(AggregateType aggregateType, List<PersistedEvent> gapFills) {
+        if (gapFills.isEmpty()) {
+            return GapReconciliation.NONE;
+        }
+        var filledGaps = gapFills.stream().map(PersistedEvent::globalEventOrder).toList();
+        var highest    = filledGaps.stream().mapToLong(GlobalEventOrder::longValue).max().getAsLong();
+        return reconcileGapsAndReport(aggregateType, LongRange.only(highest), gapFills, filledGaps);
+    }
+
+    /**
+     * Record that the subscription gave up waiting for these transient gaps' events: each of them that is still a
+     * transient gap of this subscriber is promoted to a <b>permanent gap of the aggregate type</b>, as a gap that
+     * {@link #reconcileGapsAndReport(AggregateType, LongRange, List, List)} promotes is.
+     * <p>
+     * A permanent gap is not this subscriber's alone. Every subscriber of the aggregate type skips it: from then on a
+     * reconciliation, whichever subscriber's, leaves it out of the transient gaps it discovers, so a subscriber that has
+     * not already recorded it as a transient gap of its own never asks for it, and an event that commits late with that
+     * global order is not delivered to a subscriber that has already polled past it. The next subscription of this
+     * subscriber does not wait for it again either, and drops such an event as the subscription that gave up does.
+     * <p>
+     * The caller must therefore have waited at least {@link #transientGapGiveUpThreshold()} for <i>each</i> of these gaps
+     * without its event arriving, from the CDC bus or a poll - or, when that is empty, the default it waits instead. That
+     * wait is its proof that the event is missing, standing in for the query that asked for the gap and did not get it,
+     * which is what {@link #reconcileGapsAndReport(AggregateType, LongRange, List, List)} promotes on. A gap the caller
+     * stops tracking for any other reason - e.g. to bound how many gaps it tracks at once - must not be passed here: it
+     * stays a transient gap, for the handler's own promotion to decide on. An implementation may promote what it is given
+     * without checking how long each gap was waited for.
+     * <p>
+     * Called by a subscription that tracks gaps itself - the CDC event store's delivery tracker, through
+     * {@link #giveUpTransientGapRanges(AggregateType, List)} unless a handler overrides that. The event store calls it
+     * inside a unit of work of its own, holding this handler's monitor, never across the commit.
+     * <p>
+     * The default implementation reconciles as a query that asked for exactly these gaps and found none of their events
+     * would: {@link #reconcileGapsAndReport(AggregateType, LongRange, List, List)} with no events - promoting the ones the
+     * handler's own rule considers ready. The {@link PostgresqlEventStreamGapHandler}'s handlers override it to promote
+     * each of them that is still a transient gap at once when their promotion strategy states its threshold - relying on
+     * the caller having waited it - and otherwise only those the strategy considers ready.
+     *
+     * @param aggregateType the aggregate type the gaps belong to
+     * @param transientGaps the global orders given up on, each waited for at least {@link #transientGapGiveUpThreshold()} -
+     *                      transient gaps of this subscriber, unless something else resolved or promoted them meanwhile
+     * @return what recording the give-up changed - the number of this subscriber's transient gaps promoted to permanent
+     * gaps of the aggregate type
+     */
+    default GapReconciliation giveUpTransientGaps(AggregateType aggregateType, List<GlobalEventOrder> transientGaps) {
+        if (transientGaps.isEmpty()) {
+            return GapReconciliation.NONE;
+        }
+        var highest = transientGaps.stream().mapToLong(GlobalEventOrder::longValue).max().getAsLong();
+        return reconcileGapsAndReport(aggregateType, LongRange.only(highest), List.of(), transientGaps);
+    }
+
+    /**
+     * {@link #giveUpTransientGaps(AggregateType, List)} for every global order in {@code transientGapRanges} - the same
+     * contract, each order of each range waited for at least {@link #transientGapGiveUpThreshold()} - passed as ranges, so
+     * a subscription that gives up a gap of many orders does not have to list them one by one.
+     * <p>
+     * The CDC event store's delivery tracker calls this one, with one range per gap it gave up.
+     * <p>
+     * The default implementation lists the orders and calls {@link #giveUpTransientGaps(AggregateType, List)} with them,
+     * so a gap handler that overrides only that one keeps receiving every order. The
+     * {@link PostgresqlEventStreamGapHandler}'s handlers override it to promote all of them in one statement, whatever
+     * the width of the ranges, without binding an order per parameter.
+     *
+     * @param aggregateType      the aggregate type the gaps belong to
+     * @param transientGapRanges closed ranges of the global orders given up on
+     * @return what recording the give-up changed - the number of this subscriber's transient gaps promoted to permanent
+     * gaps of the aggregate type
+     * @see #giveUpTransientGaps(AggregateType, List)
+     */
+    default GapReconciliation giveUpTransientGapRanges(AggregateType aggregateType, List<LongRange> transientGapRanges) {
+        if (transientGapRanges.isEmpty()) {
+            return GapReconciliation.NONE;
+        }
+        return giveUpTransientGaps(aggregateType, transientGapRanges.stream()
+                                                                    .flatMap(range -> range.stream().mapToObj(GlobalEventOrder::of))
+                                                                    .toList());
+    }
+
+    /**
+     * Record every global order in {@code gaps} as a transient gap of this subscriber - except those already permanent
+     * gaps of the aggregate type - and change nothing else: no gap is resolved or promoted.
+     * <p>
+     * Called by a subscription that tracks gaps itself - the CDC event store - for a gap no event marks the upper end of:
+     * the lower end of a gap so wide that the subscription records only its two ends (the upper end is recorded through
+     * {@link #reconcileGapsAndReport(AggregateType, LongRange, List, List)} with the event that opened the gap). The event
+     * store calls it inside a unit of work of its own, holding this handler's monitor, never across the commit.
+     * <p>
+     * The default implementation records nothing and reports {@link GapReconciliation#NONE}: there is no way to do it
+     * through the other methods of this interface. The subscription still waits for those gaps while it runs; a later
+     * subscription of the subscriber does not. The {@link PostgresqlEventStreamGapHandler}'s handlers override it.
+     *
+     * @param aggregateType the aggregate type the gaps belong to
+     * @param gaps          a closed range of global orders no event has been seen for
+     * @return what recording them changed - the number of new transient gaps
+     */
+    default GapReconciliation addTransientGaps(AggregateType aggregateType, LongRange gaps) {
+        return GapReconciliation.NONE;
+    }
+
+    /**
+     * How long this handler keeps waiting for a transient gap's event before it gives up on it (promotes it to a permanent
+     * gap), when that is a fixed duration it can state. A subscription that tracks gaps itself - the CDC event store's
+     * delivery tracker - waits for a gap that long too, so it follows a customised promotion strategy rather than
+     * assuming the default. The default implementation returns {@link Optional#empty()}: unknown (or no gap handling at
+     * all), and the caller falls back to the default of 120 seconds.
+     *
+     * @return the time after which a transient gap is given up, or empty if this handler does not state one
+     */
+    default Optional<Duration> transientGapGiveUpThreshold() {
+        return Optional.empty();
     }
 
     /**

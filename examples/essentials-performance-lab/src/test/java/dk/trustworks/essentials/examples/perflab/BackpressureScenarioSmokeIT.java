@@ -22,7 +22,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
-import org.testcontainers.containers.PostgreSQLContainer;
+import org.testcontainers.postgresql.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Testcontainers;
 
 import java.nio.file.Files;
@@ -69,7 +69,7 @@ class BackpressureScenarioSmokeIT {
     // its locks and blocks on Hikari's connectionTimeout. Starting the container manually (see
     // registerProperties) leaves it running for the life of the JVM, so it outlives the context;
     // Testcontainers' Ryuk sidecar reaps it after the JVM exits.
-    static PostgreSQLContainer<?> postgres = new PostgreSQLContainer<>("postgres:17.5-bookworm")
+    static PostgreSQLContainer postgres = new PostgreSQLContainer("postgres:17.5-bookworm")
             .withDatabaseName("essentials_lab")
             .withUsername("essentials")
             .withPassword("essentials")

@@ -890,6 +890,22 @@ public class CdcProperties {
         private CdcOverflowPolicy overflowPolicy          = CdcOverflowPolicy.FAIL_FAST;
         private Duration          liveDrainStallThreshold = Duration.ofSeconds(180);
 
+        /**
+         * Capacity of two buffers, default {@code 8192}:
+         * <ul>
+         *     <li>the {@code CdcEventBus}'s per-aggregate-type multicast sink. A subscription served by
+         *     {@code CdcEventStore} never back-pressures it - it requests unbounded demand and buffers on its own side
+         *     (one polling page: the subscription manager's {@code eventStorePollingBatchSize}); when that overflows it
+         *     leaves the bus, catches up from the event store and rejoins it - so this buffer only fills while an
+         *     aggregate type has no subscriber yet.</li>
+         *     <li>per subscription, {@code CdcEventStore.BackfillThenLiveOrdered}'s live events: those it holds while
+         *     the subscription back-fills, those in its ordered hand-over queue after that, and those it has asked the
+         *     live source for, together. It asks for more only as its subscriber takes them, so a subscriber that is
+         *     not asking holds the live source back rather than overflowing that queue.</li>
+         * </ul>
+         * Not the per-subscription CDC hand-over buffer: that is one polling page, so memory no longer grows with
+         * subscriptions × this value.
+         */
         public int getBackpressureBufferSize() {
             return backpressureBufferSize;
         }
@@ -926,6 +942,18 @@ public class CdcProperties {
             this.queuedTaskCapFactor = queuedTaskCapFactor;
         }
 
+        /**
+         * What the {@code CdcEventBus} does with an event it cannot emit once {@link #getOverflowMaxRetries()} /
+         * {@link #getNonSerializedMaxRetries()} are spent: {@link CdcOverflowPolicy#FAIL_FAST} (default) throws, so
+         * the dispatcher retries the inbox row later; {@link CdcOverflowPolicy#LOG_AND_DROP} logs and drops it.
+         * <p>
+         * A slow or stalled subscription does <b>not</b> lead here: it overflows its own hand-over buffer, leaves the
+         * bus, catches up from the event store and rejoins the bus on its own, without holding up the bus, the
+         * dispatcher or the other subscriptions of its aggregate type (see
+         * {@code CdcEventStore#buildAdaptiveLiveSource}). {@code CdcEventStore.BackfillThenLiveOrdered}'s ordered
+         * hand-over takes from the bus only what its subscriber has taken, so it does not overflow; should it, it fails
+         * fast whatever this is set to.
+         */
         public CdcOverflowPolicy getOverflowPolicy() {
             return overflowPolicy;
         }
@@ -935,27 +963,33 @@ public class CdcProperties {
         }
 
         /**
-         * How long {@code CdcEventStore.BackfillThenLiveOrdered}'s live-tail drain may stay parked on a
-         * missing {@code global_event_order} before it is treated as a stall and the subscription is
-         * recovered (see {@link CdcLiveDrainStalledException} and {@code cdc/cdc-improvements.md} §P10).
+         * <b>No longer has any effect</b> - kept so existing configuration still binds. Must not be negative, as before.
          * <p>
-         * The drain advances {@code expectedNext} strictly by {@code +1}; a permanent hole in the live
-         * tail (e.g. a rolled-back {@code IDENTITY} value that never reaches the WAL) would otherwise
-         * stall the affected subscriber forever. On expiry the pipeline re-subscribes and resumes the
-         * gap-handler-aware backfill from the hole, which classifies it (transient → wait/recover,
-         * permanent → skip).
+         * It bounded how long {@code CdcEventStore.BackfillThenLiveOrdered}'s live-tail drain - for a subscription started
+         * while CDC is ACTIVE - could stay parked on a missing {@code global_event_order}, such as an {@code IDENTITY}
+         * value a rolled-back transaction took, which never reaches the CDC bus. The drain advanced strictly by
+         * {@code +1} past the head, so it waited for every such hole - holding back every later event - until this
+         * threshold (default {@code 180s}) raised a {@link CdcLiveDrainStalledException} and re-subscribed the
+         * subscription through its gap-handler-aware backfill; {@link Duration#ZERO} disabled that recovery.
          * <p>
-         * <b>Must exceed the gap-promotion window</b> (the {@code PostgresqlEventStreamGapHandler}
-         * transient→permanent promotion timeout, default 120s) so a genuinely transient gap — an event
-         * merely committing late — has had its full chance to commit and arrive on the bus before a
-         * restart is triggered; otherwise the recovery would fire on gaps that were about to resolve on
-         * their own. Default {@code 180s}. Set to {@link Duration#ZERO} to disable stall detection
-         * (restores the strict-contiguity-only behaviour).
+         * The drain no longer waits for a missing global order: past the head it hands live events on as the CDC bus
+         * delivers them, and an event whose transaction commits after a higher global order is delivered when it
+         * arrives, out of global order, as on every other CDC path and on the polling path. There is nothing left to
+         * stall on, so nothing reads this value, no {@link CdcLiveDrainStalledException} is raised, and the
+         * {@code essentials.cdc.backfill_live.stall_detected} counter stays at {@code 0}.
+         *
+         * @deprecated has no effect; remove it from your configuration. Planned for removal in the next major release
          */
+        @Deprecated(forRemoval = true)
         public Duration getLiveDrainStallThreshold() {
             return liveDrainStallThreshold;
         }
 
+        /**
+         * @param liveDrainStallThreshold ignored, see {@link #getLiveDrainStallThreshold()}
+         * @deprecated has no effect; remove it from your configuration. Planned for removal in the next major release
+         */
+        @Deprecated(forRemoval = true)
         public void setLiveDrainStallThreshold(Duration liveDrainStallThreshold) {
             this.liveDrainStallThreshold = liveDrainStallThreshold;
         }
@@ -1146,6 +1180,9 @@ public class CdcProperties {
          * the underlying CDC pipeline oscillates (e.g. pgoutput stalls causing repeat
          * availability flips); each short ACTIVE blip would otherwise tear down polling and
          * resubscribe to a bus that's about to stop emitting again.
+         * <p>
+         * Nothing published during the window is lost: polling keeps delivering until the cutback, and the cutback
+         * attaches to the bus first and then catches up from the event store on whatever polling had not fetched.
          * <p>
          * Default = {@link #interval}, matching the natural rhythm of the effectiveness monitor:
          * we wait one full monitor window of steady ACTIVE before trusting that CDC has

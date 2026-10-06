@@ -93,6 +93,11 @@ public final class NotifyAwareEventStorePollingOptimizer implements EventStorePo
     }
 
     @Override
+    public boolean mayRepollImmediatelyAfterAnEmptyPoll() {
+        return true;
+    }
+
+    @Override
     public void eventStorePollingReturnedNoEvents() {
         // Ramp toward the cap. Multiply-then-floor avoids ever ramping below initialDelay
         // (e.g. after a wake-up that sent us to 0 — the next no-events poll should still

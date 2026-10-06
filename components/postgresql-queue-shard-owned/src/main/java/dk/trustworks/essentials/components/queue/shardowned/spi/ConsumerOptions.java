@@ -18,15 +18,16 @@ package dk.trustworks.essentials.components.queue.shardowned.spi;
 
 import java.time.Duration;
 
+import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
+
 /**
  * Consumption settings.
  *
  * @param maxShards         upper bound on shards this consumer holds; rebalancing keeps instances
  *                          within a fair share of each other regardless
  * @param maxAttempts       deliveries before a message is dead-lettered, counting the first
- * @param retryDelay        first backoff
- * @param retryMultiplier   1.0 for fixed backoff, above 1.0 for exponential
- * @param maxRetryDelay     backoff ceiling
+ * @param retryBackoff      the wait before each retry — {@link RetryBackoff#exponential} or {@link RetryBackoff#fixed},
+ *                          or any function of the attempts so far
  * @param parallelConsumers how many handler invocations THIS consumer may have in flight.
  *                          <p>
  *                          Per consumer, deliberately, and named as in {@code ConsumeFromQueue} where
@@ -63,11 +64,13 @@ import java.time.Duration;
 public record ConsumerOptions(int parallelConsumers,
                               int maxShards,
                               int maxAttempts,
-                              Duration retryDelay,
-                              double retryMultiplier,
-                              Duration maxRetryDelay) {
+                              RetryBackoff retryBackoff) {
+
+    public ConsumerOptions {
+        requireNonNull(retryBackoff, "No retryBackoff provided");
+    }
 
     public static ConsumerOptions defaults() {
-        return new ConsumerOptions(8, Integer.MAX_VALUE, 3, Duration.ofMillis(100), 2.0d, Duration.ofSeconds(30));
+        return new ConsumerOptions(8, Integer.MAX_VALUE, 3, RetryBackoff.exponential(Duration.ofMillis(100), 2.0d, Duration.ofSeconds(30)));
     }
 }

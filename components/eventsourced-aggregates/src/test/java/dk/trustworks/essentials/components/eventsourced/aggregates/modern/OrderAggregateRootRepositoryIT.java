@@ -34,7 +34,7 @@ import dk.trustworks.essentials.components.foundation.transaction.UnitOfWork;
 import org.jdbi.v3.core.Jdbi;
 import org.jdbi.v3.postgres.PostgresPlugin;
 import org.junit.jupiter.api.*;
-import org.testcontainers.containers.PostgreSQLContainer;
+import org.testcontainers.postgresql.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.*;
 import org.testcontainers.shaded.org.awaitility.Awaitility;
 import reactor.core.Disposable;
@@ -59,7 +59,7 @@ class OrderAggregateRootRepositoryIT {
     private PostgresqlEventStore<SeparateTablePerAggregateEventStreamConfiguration> eventStore;
 
     @Container
-    private final PostgreSQLContainer<?> postgreSQLContainer = new PostgreSQLContainer<>("postgres:18.4").withDatabaseName("event-store")
+    private final PostgreSQLContainer postgreSQLContainer = new PostgreSQLContainer("postgres:18.4").withDatabaseName("event-store")
                                                                                                            .withUsername("test-user")
                                                                                                            .withPassword("secret-password");
 
@@ -198,6 +198,32 @@ class OrderAggregateRootRepositoryIT {
         assertThat((CharSequence) loadedOrder.aggregateId()).isEqualTo(orderId);
         assertThat(loadedOrder.productAndQuantity.get(productId)).isEqualTo(productQuantity);
         assertThat(loadedOrder.accepted).isFalse();
+    }
+
+    /**
+     * The repository's {@link dk.trustworks.essentials.components.foundation.transaction.UnitOfWorkLifecycleCallback}
+     * reports a loaded aggregate as having pending changes only once an event has been applied to it - which e.g. lets
+     * a ViewEventProcessor queue a failed event whose handler only read an aggregate
+     */
+    @Test
+    void a_loaded_Order_has_pending_changes_in_the_unit_of_work_only_after_an_event_is_applied() {
+        var orderId = OrderId.of("beed77fb-d911-1111-9c48-03ed5bfe8f89");
+        unitOfWorkFactory.usingUnitOfWork(unitOfWork -> ordersRepository.save(new Order(orderId, CustomerId.of("Test-Customer-Id-10"), 1234)));
+
+        unitOfWorkFactory.usingUnitOfWork(unitOfWork -> {
+            var loadedOrder = ordersRepository.load(orderId);
+            assertThat(unitOfWork.getAllUnitOfWorkLifecycleCallbackResources()).containsExactly(loadedOrder);
+            assertThat(unitOfWork.hasLifecycleCallbackResourcesWithPendingChanges()).isFalse();
+
+            loadedOrder.accept();
+
+            assertThat(unitOfWork.hasLifecycleCallbackResourcesWithPendingChanges()).isTrue();
+        });
+        // Once committed, the Order's changes are no longer pending
+        unitOfWorkFactory.usingUnitOfWork(unitOfWork -> {
+            ordersRepository.load(orderId);
+            assertThat(unitOfWork.hasLifecycleCallbackResourcesWithPendingChanges()).isFalse();
+        });
     }
 
     @Test

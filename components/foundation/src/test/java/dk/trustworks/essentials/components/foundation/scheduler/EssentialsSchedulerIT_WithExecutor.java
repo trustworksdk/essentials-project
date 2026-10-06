@@ -20,7 +20,7 @@ import dk.trustworks.essentials.components.foundation.fencedlock.*;
 import dk.trustworks.essentials.components.foundation.scheduler.executor.*;
 import dk.trustworks.essentials.components.foundation.transaction.jdbi.JdbiUnitOfWorkFactory;
 import org.junit.jupiter.api.Test;
-import org.testcontainers.containers.PostgreSQLContainer;
+import org.testcontainers.postgresql.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.*;
 
 import java.time.Duration;
@@ -35,13 +35,13 @@ import static org.awaitility.Awaitility.waitAtMost;
 public class EssentialsSchedulerIT_WithExecutor extends AbstractEssentialsSchedulerTest {
 
     @Container
-    static final PostgreSQLContainer<?> postgreSQLContainer = new PostgreSQLContainer<>("postgres:18.4")
+    static final PostgreSQLContainer postgreSQLContainer = new PostgreSQLContainer("postgres:18.4")
             .withDatabaseName("test-db")
             .withUsername("postgres")
             .withPassword("postgres");
 
     @Override
-    protected PostgreSQLContainer<?> getPostgreSQLContainer() {
+    protected PostgreSQLContainer getPostgreSQLContainer() {
         return postgreSQLContainer;
     }
 

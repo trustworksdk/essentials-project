@@ -1,0 +1,53 @@
+package {{packagePath}};
+
+import {{packagePath}}.config.CorsProperties;
+import org.junit.jupiter.api.Test;
+import org.springframework.beans.factory.annotation.Autowired;
+
+import java.net.URI;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
+
+import static org.assertj.core.api.Assertions.assertThat;
+
+/**
+ * The standalone frontend's backend half (S8, Mode B): a browser preflight from a configured origin gets through the
+ * security chain with an allow header. The Vite dev proxy hides this path, so nothing else exercises it before a
+ * deployment does.
+ */
+class CorsPreflightIT extends IntegrationTestBase {
+
+    @Autowired
+    CorsProperties corsProperties;
+
+    @Test
+    void preflight_from_a_configured_origin_is_allowed() throws Exception {
+        assertThat(corsProperties.allowedOrigins()).as("app.cors.allowed-origins").isNotEmpty();
+        var origin = corsProperties.allowedOrigins().getFirst();
+
+        var response = preflight(origin);
+
+        assertThat(response.statusCode()).isEqualTo(200);
+        assertThat(response.headers().firstValue("Access-Control-Allow-Origin")).contains(origin);
+    }
+
+    @Test
+    void preflight_from_an_unknown_origin_is_refused() throws Exception {
+        var response = preflight("https://not-a-configured-origin.example");
+
+        assertThat(response.statusCode()).isEqualTo(403);
+        assertThat(response.headers().firstValue("Access-Control-Allow-Origin")).isEmpty();
+    }
+
+    private HttpResponse<String> preflight(String origin) throws Exception {
+        try (var client = HttpClient.newHttpClient()) {
+            var request = HttpRequest.newBuilder(URI.create(baseUrl() + "/api/cors-probe"))
+                                     .method("OPTIONS", HttpRequest.BodyPublishers.noBody())
+                                     .header("Origin", origin)
+                                     .header("Access-Control-Request-Method", "POST")
+                                     .build();
+            return client.send(request, HttpResponse.BodyHandlers.ofString());
+        }
+    }
+}

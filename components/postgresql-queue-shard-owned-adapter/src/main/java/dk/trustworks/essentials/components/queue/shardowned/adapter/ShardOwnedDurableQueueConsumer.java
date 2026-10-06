@@ -44,7 +44,9 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
  * two independent retry clocks over one message.
  * <p>
  * So the policy is translated once, at subscription time, into the engine's {@link ConsumerOptions},
- * and the engine owns the outcome from there.
+ * and the engine owns the outcome from there. The attempt limit is copied; the wait before each retry is
+ * not, it is the policy's own {@link RedeliveryPolicy#calculateNextRedeliveryDelay(int)}, so every
+ * strategy produces the same waits here as on the other engines.
  */
 class ShardOwnedDurableQueueConsumer implements DurableQueueConsumer {
     private static final Logger log = LoggerFactory.getLogger(ShardOwnedDurableQueueConsumer.class);
@@ -176,18 +178,20 @@ class ShardOwnedDurableQueueConsumer implements DurableQueueConsumer {
         }
     }
 
-    private static ConsumerOptions toConsumerOptions(ConsumeFromQueue operation) {
+    static ConsumerOptions toConsumerOptions(ConsumeFromQueue operation) {
         var policy   = operation.getRedeliveryPolicy();
         var defaults = ConsumerOptions.defaults();
+        // A DurableQueues policy counts REdeliveries; the engine counts attempts. Off by one on both
+        // counts below: missed in the limit it is one whole extra delivery of every failing message,
+        // missed in the backoff every wait is shifted one step along the policy's sequence.
         return new ConsumerOptions(operation.getParallelConsumers(),
                                    defaults.maxShards(),
-                                   // A DurableQueues policy counts REdeliveries; the engine counts
-                                   // attempts. Off by one, and the difference is one whole extra
-                                   // delivery of every failing message.
                                    policy.maximumNumberOfRedeliveries + 1,
-                                   policy.initialRedeliveryDelay,
-                                   policy.followupRedeliveryDelayMultiplier,
-                                   policy.maximumFollowupRedeliveryThreshold);
+                                   // Delegated rather than mapped onto the engine's own formula, which
+                                   // has one delay where a policy has an initial and a follow-up, and
+                                   // cannot express a linear policy at all. Mapping it used to run every
+                                   // retry from initialRedeliveryDelay and ignore followupRedeliveryDelay.
+                                   attemptsSoFar -> policy.calculateNextRedeliveryDelay(Math.max(0, attemptsSoFar - 1)));
     }
 
     /**

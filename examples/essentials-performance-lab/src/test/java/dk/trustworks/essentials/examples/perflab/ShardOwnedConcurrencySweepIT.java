@@ -23,7 +23,7 @@ import org.awaitility.Awaitility;
 import org.junit.jupiter.api.*;
 import org.junit.jupiter.api.condition.EnabledIfSystemProperty;
 import org.slf4j.*;
-import org.testcontainers.containers.PostgreSQLContainer;
+import org.testcontainers.postgresql.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.*;
 
 import java.time.*;
@@ -64,7 +64,7 @@ class ShardOwnedConcurrencySweepIT {
     private static final int[] ARMS          = {1, 2, 4, 8, 16, 32, 64, 128};
 
     @Container
-    static PostgreSQLContainer<?> postgres = LabPostgres.create("max_connections=200");
+    static PostgreSQLContainer postgres = LabPostgres.create("max_connections=200");
 
     private HikariDataSource dataSource;
 

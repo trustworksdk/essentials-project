@@ -19,7 +19,10 @@ package dk.trustworks.essentials.components.foundation.messaging;
 import java.time.Duration;
 
 /**
- * A builder for defining a {@link RedeliveryPolicy} with a Linear Backoff strategy
+ * A builder for defining a {@link RedeliveryPolicy} with a Linear Backoff strategy: redelivery {@code n} (counting from 0)
+ * waits {@code redeliveryDelay × (n+1)}, capped at {@code maximumFollowupRedeliveryDelayThreshold}
+ *
+ * @see RedeliveryPolicy#calculateNextRedeliveryDelay(int)
  * @see RedeliveryPolicy#builder()
  * @see RedeliveryPolicy#exponentialBackoff()
  * @see RedeliveryPolicy#linearBackoff()
@@ -53,13 +56,9 @@ public final class LinearBackoffBuilder {
     }
 
     public RedeliveryPolicy build() {
-        return RedeliveryPolicy.builder().setInitialRedeliveryDelay(redeliveryDelay)
-                               .setFollowupRedeliveryDelay(redeliveryDelay)
-                               .setFollowupRedeliveryDelayMultiplier(1.0d)
-                               .setMaximumFollowupRedeliveryDelayThreshold(maximumFollowupRedeliveryDelayThreshold)
-                               .setMaximumNumberOfRedeliveries(maximumNumberOfRedeliveries)
-                               .setDeliveryErrorHandler(deliveryErrorHandler)
-                               .build();
-
+        return RedeliveryPolicy.linear(redeliveryDelay,
+                                       maximumFollowupRedeliveryDelayThreshold,
+                                       maximumNumberOfRedeliveries,
+                                       deliveryErrorHandler);
     }
 }

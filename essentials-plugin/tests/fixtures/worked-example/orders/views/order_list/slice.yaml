@@ -1,0 +1,33 @@
+schemaVersion: "1.3"
+slice: orders.order_list
+kind: view
+bc: orders
+owner: orders-team
+status: live
+summary: List orders with their current status, all of them or by status.
+generator: essentials
+language: kotlin
+tier: cqrs-es
+lane: decider
+
+serves: [ListOrders, ListOrdersByStatus]
+endpoints:
+  - { method: GET, path: "/api/orders", auth: user }
+  - { method: GET, path: "/api/orders?status=", auth: user }   # @GetMapping(params = ["status"])
+
+reads:
+  - { name: OrderListView }
+projections:
+  - name: OrderListProjection
+    aggregateTypes: [Orders]
+    from: [OrderPlaced, OrderCancelled]
+    consistency: eventual
+    store: document-db
+
+forbidden:
+  - cross-slice-internal:orders
+
+tests:
+  unit: { present: false }
+  integration: { present: false }
+  contract: { present: false }

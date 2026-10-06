@@ -22,7 +22,7 @@ import dk.trustworks.essentials.components.foundation.transaction.jdbi.JdbiUnitO
 import dk.trustworks.essentials.shared.security.*;
 import org.jdbi.v3.core.Jdbi;
 import org.junit.jupiter.api.*;
-import org.testcontainers.containers.PostgreSQLContainer;
+import org.testcontainers.postgresql.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.*;
 
 import java.time.Duration;
@@ -36,7 +36,7 @@ import static org.awaitility.Awaitility.await;
 class DefaultPostgresqlTableStatisticsApiIT {
 
     @Container
-    static final PostgreSQLContainer<?> postgres = new PostgreSQLContainer<>("postgres:17.5")
+    static final PostgreSQLContainer postgres = new PostgreSQLContainer("postgres:17.5")
             .withDatabaseName("test-db");
 
     private static final EssentialsSecurityProvider ALL_ACCESS = new EssentialsSecurityProvider.AllAccessSecurityProvider();

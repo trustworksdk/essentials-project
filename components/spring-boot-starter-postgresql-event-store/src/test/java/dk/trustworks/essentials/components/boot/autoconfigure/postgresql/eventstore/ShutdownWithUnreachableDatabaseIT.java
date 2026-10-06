@@ -29,7 +29,7 @@ import org.springframework.boot.autoconfigure.AutoConfigurations;
 import org.springframework.boot.jdbc.autoconfigure.*;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
 import org.springframework.context.annotation.*;
-import org.testcontainers.containers.PostgreSQLContainer;
+import org.testcontainers.postgresql.PostgreSQLContainer;
 import org.testcontainers.shaded.org.awaitility.Awaitility;
 
 import java.sql.DriverManager;
@@ -65,7 +65,7 @@ class ShutdownWithUnreachableDatabaseIT {
     }
 
     private void assertStopsWithin(Duration limit, String shutdownTimeoutProperty) {
-        try (var postgres = new PostgreSQLContainer<>("postgres:18.4")
+        try (var postgres = new PostgreSQLContainer("postgres:18.4")
                 .withDatabaseName("shutdown-unreachable")
                 .withUsername("test-user")
                 .withPassword("secret-password")) {
@@ -102,7 +102,7 @@ class ShutdownWithUnreachableDatabaseIT {
         }
     }
 
-    private static long heldFencedLocks(PostgreSQLContainer<?> postgres) throws Exception {
+    private static long heldFencedLocks(PostgreSQLContainer postgres) throws Exception {
         try (var connection = DriverManager.getConnection(postgres.getJdbcUrl(), postgres.getUsername(), postgres.getPassword());
              var statement = connection.createStatement();
              var result = statement.executeQuery("select count(*) from fenced_locks where locked_by_lockmanager_instance_id is not null")) {

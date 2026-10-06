@@ -19,7 +19,7 @@ package dk.trustworks.essentials.examples.perflab;
 import com.zaxxer.hikari.*;
 import dk.trustworks.essentials.examples.perflab.scenario.SequenceGapScenario;
 import org.junit.jupiter.api.*;
-import org.testcontainers.containers.PostgreSQLContainer;
+import org.testcontainers.postgresql.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.*;
 
 import java.time.Duration;
@@ -43,7 +43,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 class SequenceGapScenarioSmokeIT {
 
     @Container
-    static PostgreSQLContainer<?> postgres = new PostgreSQLContainer<>("postgres:17.5-bookworm")
+    static PostgreSQLContainer postgres = new PostgreSQLContainer("postgres:17.5-bookworm")
             .withDatabaseName("essentials_lab")
             .withUsername("essentials")
             .withPassword("essentials");

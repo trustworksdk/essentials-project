@@ -1,0 +1,42 @@
+# Per-slice manifest. Schema: essentials references/slice/slice-yaml.schema.json
+# Field guide: references/slice/manifest-guide.md · Law: rules/slice-design.md
+schemaVersion: "1.3"
+slice: orders.billing
+kind: translation
+bc: orders
+owner: orders-team
+status: live
+summary: Anti-corruption boundary to the Billing system.
+generator: essentials
+language: java
+tier: cqrs-es                        # architectureTier vocabulary (cqrs-es | service-entity | …)
+lane: aggregate                        # the §R5 write style: decider | aggregate | service-entity
+
+# --- Contracts ---
+# A translation slice has NO external API of its own — the webhook ingress is the external
+# system's, not the bounded context's.
+externalSystem: billing
+direction: both                       # inbound | outbound | both — delete the half you do not use
+# `consumes` lists every message that triggers this slice: the external message its ingress
+# receives (inbound) AND every internal event its publisher's @MessageHandler methods handle
+# (outbound). slice-check gate 11(b) reads those handlers' parameter types against this list.
+# On `direction: outbound` drop the external message and its `maps` entry, but KEEP the internal
+# events the publisher handles. Delete `consumes` (and `maps`) only for a port-style ACL with no
+# publisher — nothing in the slice handles an event, other code calls the client — where the
+# schema stops requiring them and `consumes: []` would record nothing.
+consumes: [InvoiceIssued, OrderPlaced]
+maps:
+  - { from: InvoiceIssued, to: TODOInternalCommand }
+  - { from: OrderPlaced, to: BillingRequest }
+
+# --- Boundaries (rules/slice-design.md §R4) ---
+forbidden:
+  - cross-slice-internal:orders
+
+# --- Testing ---
+# Contract testing is the floor for a translation slice. This plugin bundles no contract-testing
+# tooling — the shipped test is a plain round-trip; add Pact/Specmatic yourself and flip this.
+tests:
+  unit: { present: true }
+  integration: { present: false }
+  contract: { present: false }

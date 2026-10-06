@@ -1,0 +1,37 @@
+# Per-slice manifest. Schema: essentials references/slice/slice-yaml.schema.json
+# Field guide: references/slice/manifest-guide.md · Law: rules/slice-design.md
+schemaVersion: "1.3"
+slice: {{bc}}.{{slice}}
+kind: automation
+bc: {{bc}}
+owner: {{owner}}
+status: live
+summary: TODO one sentence, present tense.
+generator: essentials
+language: java
+tier: {{tier}}                        # architectureTier vocabulary (cqrs-es | service-entity | …)
+lane: {{lane}}                        # the §R5 write style: decider | aggregate | service-entity
+
+# --- Contracts ---
+# An automation has NO external API — no `endpoints`, no `serves`.
+consumes: [{{Event}}]                 # TODO every event that advances this process
+dispatches: []                        # TODO the commands this automation issues
+# A schedule-triggered automation declares `schedule` INSTEAD of `consumes` (either satisfies
+# the schema; both together are legal where a process is driven by each). Delete whichever
+# does not apply — an empty `consumes: []` records nothing.
+# schedule: { cron: "0 0 3 * * *", note: "TODO why this cadence" }
+# schedule: { fixedDelay: PT15M, initialDelay: PT1M, note: "TODO why this cadence" }
+
+# --- Rules ---
+invariants:
+  - { id: INV-1, text: "TODO the process rule, e.g. at most three payment attempts", enforcedBy: {{Slice}}Processor }
+
+# --- Boundaries (rules/slice-design.md §R4) ---
+forbidden:
+  - cross-slice-internal:{{bc}}
+
+# --- Testing ---
+tests:
+  unit: { present: false }
+  integration: { present: true }
+  contract: { present: false }

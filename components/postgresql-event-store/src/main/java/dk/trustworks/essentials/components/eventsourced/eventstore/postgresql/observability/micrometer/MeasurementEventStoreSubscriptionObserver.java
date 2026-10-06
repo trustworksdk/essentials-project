@@ -26,6 +26,8 @@ import dk.trustworks.essentials.components.foundation.types.*;
 import dk.trustworks.essentials.shared.measurement.*;
 import dk.trustworks.essentials.shared.reflection.FunctionalInterfaceLoggingNameResolver;
 import dk.trustworks.essentials.types.LongRange;
+import io.micrometer.core.instrument.Counter;
+import io.micrometer.core.instrument.MeterRegistry;
 import org.slf4j.*;
 
 import java.time.Duration;
@@ -45,12 +47,49 @@ public class MeasurementEventStoreSubscriptionObserver implements EventStoreSubs
 
     private static final Logger           log             = LoggerFactory.getLogger(MeasurementEventStoreSubscriptionObserver.class);
     public static final  String           MODULE_TAG_NAME = "Module";
-    private final        MeasurementTaker measurementTaker;
-    private final        boolean          recordExecutionTimeEnabled;
-    private final        String           moduleTag;
+    /**
+     * Counter of events whose asynchronous handling failed for good - the subscription's {@link SubscriptionErrorPolicy}
+     * gave up and the event was skipped, or the subscription stopped at it. A batch that fails counts once per event in it.
+     * Tags: {@code subscriber_id}, {@code aggregate_type}, {@code event_handler}, {@code event_type} and the optional
+     * {@value #MODULE_TAG_NAME}
+     */
+    public static final  String           HANDLE_EVENT_FAILED_METRIC               = "essentials.eventstore.subscription.handle_event_failed";
+    /**
+     * Counter of events an in-transaction subscription's handler failed to handle - the failure rolled back the
+     * {@code UnitOfWork} that appended the event. Same tags as {@link #HANDLE_EVENT_FAILED_METRIC}
+     */
+    public static final  String           HANDLE_EVENT_TRANSACTIONAL_FAILED_METRIC = "essentials.eventstore.subscription.handle_event_transactional_failed";
+    /**
+     * Counter of asynchronous subscriptions that stopped handling events because their {@link SubscriptionErrorPolicy} is
+     * {@link SubscriptionErrorPolicy.Mode#STOP} - one per stop. Tags: {@code subscriber_id}, {@code aggregate_type} and the
+     * optional {@value #MODULE_TAG_NAME}.
+     * <p>
+     * Not the signal to alert on: a counter records that a stop happened, not that a subscription is stopped now -
+     * {@code increase(...) > 0} resolves while the subscription is still stopped, and {@code > 0} keeps firing after it has
+     * been started again. Whether a subscription is stopped right now is {@link EventStoreSubscription#isStoppedByErrorPolicy()},
+     * exported as the level-triggered gauge
+     * {@value dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.subscription.monitoring.SubscriptionStoppedMicrometerMonitor#SUBSCRIPTION_STOPPED_METRIC}
+     * by {@link dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.subscription.monitoring.SubscriptionStoppedMicrometerMonitor}
+     */
+    public static final  String           SUBSCRIPTION_STOPPED_BY_ERROR_POLICY_METRIC = "essentials.eventstore.subscription.stopped_by_error_policy";
+    /**
+     * Counter of events (or batches) asynchronous subscriptions skipped after their stopping {@code SubscriptionErrorPolicy}
+     * had resumed them {@code AutoResume#maxAttempts()} times at the event, tagged {@code subscriber_id} and
+     * {@code aggregate_type}. Every increment is an event the subscription gave up on and will not redeliver - alert on
+     * {@code increase(...) > 0}
+     */
+    public static final  String           SUBSCRIPTION_SKIPPED_EVENT_AFTER_AUTO_RESUMES_METRIC = "essentials.eventstore.subscription.skipped_after_auto_resumes";
+
+    private final MeasurementTaker measurementTaker;
+    private final boolean          recordExecutionTimeEnabled;
+    private final String           moduleTag;
+    /**
+     * Nullable: without it no failure counters are recorded
+     */
+    private final MeterRegistry    meterRegistry;
 
     /**
-     * Constructs a new observer recording to the supplied {@link MeasurementTaker}.
+     * Constructs a new observer recording to the supplied {@link MeasurementTaker}, without failure counters.
      * <p>
      * There is no separate "enabled" flag: pass {@link MeasurementTaker#none()} to switch recording off. The observer
      * branches on {@link MeasurementTaker#isRecording()}, so a disabled observer still skips assembling the
@@ -58,12 +97,33 @@ public class MeasurementEventStoreSubscriptionObserver implements EventStoreSubs
      *
      * @param measurementTaker where subscription timings are recorded. {@link MeasurementTaker#none()} disables recording
      * @param moduleTag        Optional {@value #MODULE_TAG_NAME} Tag value. May be {@code null}, in which case the tag is omitted
+     * @see #MeasurementEventStoreSubscriptionObserver(MeasurementTaker, String, MeterRegistry)
      */
     public MeasurementEventStoreSubscriptionObserver(MeasurementTaker measurementTaker,
                                                      String moduleTag) {
+        this(measurementTaker, moduleTag, null);
+    }
+
+    /**
+     * Constructs a new observer recording timings to the supplied {@link MeasurementTaker} and the
+     * {@value #HANDLE_EVENT_FAILED_METRIC} / {@value #HANDLE_EVENT_TRANSACTIONAL_FAILED_METRIC} /
+     * {@value #SUBSCRIPTION_STOPPED_BY_ERROR_POLICY_METRIC} / {@value #SUBSCRIPTION_SKIPPED_EVENT_AFTER_AUTO_RESUMES_METRIC}
+     * counters to the supplied {@link MeterRegistry}.
+     * <p>
+     * The counters do not depend on the {@link MeasurementTaker} recording: a failed event is an incident, not a
+     * timing, so switching execution-time metrics off must not switch the alertable signal off with them.
+     *
+     * @param measurementTaker where subscription timings are recorded. {@link MeasurementTaker#none()} disables timing recording
+     * @param moduleTag        Optional {@value #MODULE_TAG_NAME} Tag value. May be {@code null}, in which case the tag is omitted
+     * @param meterRegistry    where the failure counters are recorded. May be {@code null}, in which case no counters are recorded
+     */
+    public MeasurementEventStoreSubscriptionObserver(MeasurementTaker measurementTaker,
+                                                     String moduleTag,
+                                                     MeterRegistry meterRegistry) {
         this.measurementTaker = requireNonNull(measurementTaker, "No measurementTaker provided - use MeasurementTaker.none() to disable recording");
         this.recordExecutionTimeEnabled = measurementTaker.isRecording();
         this.moduleTag = moduleTag;
+        this.meterRegistry = meterRegistry;
     }
 
 
@@ -269,11 +329,107 @@ public class MeasurementEventStoreSubscriptionObserver implements EventStoreSubs
     @Override
     public void handleEventFailed(PersistedEvent event, TransactionalPersistedEventHandler eventHandler,
                                   Throwable cause, EventStoreSubscription eventStoreSubscription) {
+        countFailedEvent(HANDLE_EVENT_TRANSACTIONAL_FAILED_METRIC,
+                         "Events an in-transaction subscription's handler failed to handle",
+                         event,
+                         eventHandler,
+                         eventStoreSubscription);
     }
 
     @Override
     public void handleEventFailed(PersistedEvent event, PersistedEventHandler eventHandler,
                                   Throwable cause, EventStoreSubscription eventStoreSubscription) {
+        countFailedEvent(HANDLE_EVENT_FAILED_METRIC,
+                         HANDLE_EVENT_FAILED_DESCRIPTION,
+                         event,
+                         eventHandler,
+                         eventStoreSubscription);
+    }
+
+    @Override
+    public void handleEventBatchFailed(List<PersistedEvent> events, BatchedPersistedEventHandler eventHandler,
+                                       Throwable cause, EventStoreSubscription eventStoreSubscription) {
+        events.forEach(event -> countFailedEvent(HANDLE_EVENT_FAILED_METRIC,
+                                                 HANDLE_EVENT_FAILED_DESCRIPTION,
+                                                 event,
+                                                 eventHandler,
+                                                 eventStoreSubscription));
+    }
+
+    private static final String HANDLE_EVENT_FAILED_DESCRIPTION = "Events an asynchronous subscription gave up handling - skipped, or the subscription stopped at them";
+
+    @Override
+    public void subscriptionStoppedByErrorPolicy(GlobalEventOrder stoppedAtGlobalEventOrder,
+                                                 Throwable cause,
+                                                 EventStoreSubscription eventStoreSubscription) {
+        if (meterRegistry == null) {
+            return;
+        }
+        // Never throws: this runs on the subscription's delivery thread, in its error path
+        try {
+            var builder = Counter.builder(SUBSCRIPTION_STOPPED_BY_ERROR_POLICY_METRIC)
+                                 .description("Asynchronous subscriptions that stopped handling events at a failed event, as their SubscriptionErrorPolicy prescribes")
+                                 .tag("subscriber_id", eventStoreSubscription.subscriberId().toString())
+                                 .tag("aggregate_type", eventStoreSubscription.aggregateType().toString());
+            if (moduleTag != null) {
+                builder.tag(MODULE_TAG_NAME, moduleTag);
+            }
+            builder.register(meterRegistry).increment();
+        } catch (RuntimeException e) {
+            log.warn(msg("Failed to count the stop of subscription '{}' at {} event #{} in '{}'",
+                         eventStoreSubscription.subscriberId(), eventStoreSubscription.aggregateType(), stoppedAtGlobalEventOrder, SUBSCRIPTION_STOPPED_BY_ERROR_POLICY_METRIC), e);
+        }
+    }
+
+    @Override
+    public void subscriptionSkippedEventAfterAutoResumes(GlobalEventOrder skippedGlobalEventOrder,
+                                                         int autoResumes,
+                                                         Throwable cause,
+                                                         EventStoreSubscription eventStoreSubscription) {
+        if (meterRegistry == null) {
+            return;
+        }
+        // Never throws: this runs on the subscription's delivery thread, in its error path
+        try {
+            var builder = Counter.builder(SUBSCRIPTION_SKIPPED_EVENT_AFTER_AUTO_RESUMES_METRIC)
+                                 .description("Events asynchronous subscriptions skipped after their SubscriptionErrorPolicy had resumed them at the event its maximum number of times")
+                                 .tag("subscriber_id", eventStoreSubscription.subscriberId().toString())
+                                 .tag("aggregate_type", eventStoreSubscription.aggregateType().toString());
+            if (moduleTag != null) {
+                builder.tag(MODULE_TAG_NAME, moduleTag);
+            }
+            builder.register(meterRegistry).increment();
+        } catch (RuntimeException e) {
+            log.warn(msg("Failed to count the skip of subscription '{}' at {} event #{} in '{}'",
+                         eventStoreSubscription.subscriberId(), eventStoreSubscription.aggregateType(), skippedGlobalEventOrder, SUBSCRIPTION_SKIPPED_EVENT_AFTER_AUTO_RESUMES_METRIC), e);
+        }
+    }
+
+    /**
+     * Never throws: this runs on the subscription's delivery thread, in its error path
+     */
+    private void countFailedEvent(String metricName,
+                                  String description,
+                                  PersistedEvent event,
+                                  Object eventHandler,
+                                  EventStoreSubscription eventStoreSubscription) {
+        if (meterRegistry == null) {
+            return;
+        }
+        try {
+            var builder = Counter.builder(metricName)
+                                 .description(description)
+                                 .tag("subscriber_id", eventStoreSubscription.subscriberId().toString())
+                                 .tag("aggregate_type", eventStoreSubscription.aggregateType().toString())
+                                 .tag("event_handler", FunctionalInterfaceLoggingNameResolver.resolveLoggingName(eventHandler))
+                                 .tag("event_type", event.event().getEventTypeOrNamePersistenceValue());
+            if (moduleTag != null) {
+                builder.tag(MODULE_TAG_NAME, moduleTag);
+            }
+            builder.register(meterRegistry).increment();
+        } catch (RuntimeException e) {
+            log.warn(msg("Failed to count the failed {} event #{} in '{}'", eventStoreSubscription.aggregateType(), event.globalEventOrder(), metricName), e);
+        }
     }
 
     @Override

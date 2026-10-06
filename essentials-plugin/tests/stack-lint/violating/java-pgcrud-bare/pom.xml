@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0">
+    <modelVersion>4.0.0</modelVersion>
+    <groupId>com.example.bare</groupId>
+    <artifactId>bare-worker</artifactId>
+    <version>0.0.1-SNAPSHOT</version>
+    <properties>
+        <maven.compiler.release>26</maven.compiler.release>
+        <essentials.version>DEV-SNAPSHOT</essentials.version>
+    </properties>
+    <dependencies>
+        <!-- The starter alone: every S2.1 row is `provided` upstream, so none of them arrives. -->
+        <dependency>
+            <groupId>dk.trustworks.essentials.components</groupId>
+            <artifactId>spring-boot-starter-postgresql</artifactId>
+            <version>${essentials.version}</version>
+        </dependency>
+        <!-- The Kotlin Decider DSL on a Java project: the Java decider family is in eventsourced-aggregates. -->
+        <dependency>
+            <groupId>dk.trustworks.essentials.components</groupId>
+            <artifactId>kotlin-eventsourcing</artifactId>
+            <version>${essentials.version}</version>
+        </dependency>
+    </dependencies>
+</project>

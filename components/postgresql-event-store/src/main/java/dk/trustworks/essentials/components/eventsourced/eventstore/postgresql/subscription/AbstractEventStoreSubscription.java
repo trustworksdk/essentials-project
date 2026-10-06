@@ -54,6 +54,11 @@ public abstract class AbstractEventStoreSubscription implements EventStoreSubscr
      * subscriptions these are. From then on the resume point save on stop is one bounded attempt
      */
     private volatile ShutdownContext                             shutdown;
+    /**
+     * Resumes this subscription when its {@link SubscriptionErrorPolicy} stopped it and the policy resumes automatically -
+     * handed to every subscriber the subscription creates. Never resumes once the application is shutting down
+     */
+    protected final SubscriptionAutoResumer                      autoResumer = new SubscriptionAutoResumer(this, () -> shutdown != null);
 
     protected volatile boolean started;
 
@@ -127,8 +132,22 @@ public abstract class AbstractEventStoreSubscription implements EventStoreSubscr
     }
 
     @Override
+    public boolean isRecoveringFromErrorPolicyStop() {
+        return autoResumer.isAwaitingRecovery() && !isStoppedByErrorPolicy();
+    }
+
+    @Override
+    public boolean isStoppedOrRecoveringFromErrorPolicyStop() {
+        // Reads the stopped flag once. Awaiting recovery holds from each stop through every resume until the subscription
+        // gets past the failed event, so a resumed subscriber stopping again between the two reads cannot make this false -
+        // which isStoppedByErrorPolicy() || isRecoveringFromErrorPolicyStop(), reading the flag twice, can
+        return isStoppedByErrorPolicy() || autoResumer.isAwaitingRecovery();
+    }
+
+    @Override
     public void shutdownStarting(ShutdownContext shutdown) {
         this.shutdown = requireNonNull(shutdown, "No shutdown provided");
+        autoResumer.subscriptionStopped();
     }
 
     /**

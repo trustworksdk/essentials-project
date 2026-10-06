@@ -525,7 +525,7 @@ The unordered lane *chases* each unresolved value with a query, so `holeExpiry` 
 | `parallelConsumers` | 8 | Handlers in flight **for this consumer**. Same meaning as `ConsumeFromQueue.parallelConsumers` |
 | `maxShards` | unbounded | Cap on shards this instance holds |
 | `maxAttempts` | 3 | Redelivery budget |
-| `retryDelay` / `retryMultiplier` / `maxRetryDelay` | 100 ms / 2.0 / 30 s | Backoff |
+| `retryBackoff` | `RetryBackoff.exponential(100 ms, 2.0, 30 s)` | Wait before each retry, `delayAfter(attemptsSoFar)` with the first retry passing 1. `RetryBackoff.fixed(delay)`, or any function of the attempts so far |
 
 ### Instance identity
 

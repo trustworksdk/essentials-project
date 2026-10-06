@@ -1,0 +1,18 @@
+schemaVersion: "1.2"
+slice: orders.cancel_order
+kind: command
+bc: orders
+owner: orders-team
+status: live
+summary: Cancel an order.
+generator: essentials
+language: java
+tier: cqrs-es
+lane: decider
+handles: [CancelOrder]
+publishes: [OrderCancelled]
+endpoints:
+  - { method: POST, path: "/api/orders/{id}/cancel", auth: user }
+writes: [Order]
+tests:
+  unit: { present: false }

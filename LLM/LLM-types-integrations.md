@@ -39,7 +39,7 @@
 | **Jackson** | `types-jackson3` (Jackson 3 only) | JSON ser/deser | `JsonMapper.builder().addModule()` / Spring `@Bean` | ✅ All **Java** types; Kotlin needs `jackson-module-kotlin` |
 | **JDBI** | `types-jdbi` | SQL persistence | `Jdbi.registerArgument/Mapper()` | Per-type |
 | **Avro** | `types-avro` | Binary ser/deser | Maven plugin config | Per-type |
-| **Spring Web** | `types-spring-web` | `@PathVariable`/`@RequestParam` | `@Import(EssentialsWebMvcConfigurer.class)` | ✅ All **Java** types; Kotlin partly — see [LLM-types-spring-web.md](LLM-types-spring-web.md#kotlin-semantic-types) |
+| **Spring Web** | `types-spring-web` | `@PathVariable`/`@RequestParam` | `@Import(EssentialsWebMvcConfigurer\|EssentialsWebFluxConfigurer)` — **no auto-configuration** | ✅ All **Java** types; a Kotlin `@JvmInline value class` binds without this module — see [LLM-types-spring-web.md](LLM-types-spring-web.md#kotlin-semantic-types). OpenAPI: `SingleValueTypeModelConverter` as a `@Bean` — see [§ OpenAPI with springdoc](LLM-types-spring-web.md#openapi-with-springdoc) |
 | **Spring Data Mongo** | `types-springdata-mongo` | MongoDB persistence | `MongoCustomConversions` | ✅ Most types |
 | **Spring Data JPA** | `types-springdata-jpa` | JPA entities | `@Converter(autoApply=true)` | Per-type |
 
@@ -305,7 +305,9 @@ public class SingleValueTypeConverter implements GenericConverter {
 
 ### Setup
 
-Import the shipped configurer - the dependency alone registers nothing, there is no auto-configuration:
+Import the shipped configurer — the dependency alone registers nothing, there is no auto-configuration.
+Import exactly **one**, the one for your web stack: each implements that stack's `WebMvcConfigurer` /
+`WebFluxConfigurer`, and only one of `spring-webmvc` / `spring-webflux` is on a consumer's classpath.
 
 **WebMVC:**
 ```java

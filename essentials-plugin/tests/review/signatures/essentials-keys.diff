@@ -1,0 +1,49 @@
+# review-scan signature fixture: ESS-089 / ESS-103 / ESS-097 essentials.* keys that bind to nothing or unwire handlers
+# reactive-bean-post-processor-enabled=false, the retired transactional-mode and queue-statistics keys fire;
+# their live neighbours and the default value do not.
+# expect: backend/src/main/resources/application.yml:2 ess-089-reactive-bpp-disabled confirmed Blocking mechanical
+# expect: backend/src/main/resources/application.yml:4 ess-103-transactional-mode confirmed Should-fix mechanical
+# expect-not: backend/src/main/resources/application.yml:5 ess-097-queue-statistics
+# expect-not: backend/src/main/resources/application.yml:6 ess-103-transactional-mode
+# expect-not: backend/src/main/resources/application-legacy.properties:1 ess-089-reactive-bpp-disabled
+# expect: backend/src/main/resources/application-legacy.properties:2 ess-103-transactional-mode confirmed Advisory mechanical
+# expect: backend/src/main/resources/application-legacy.properties:3 ess-097-queue-statistics confirmed Should-fix mechanical
+# expect: backend/src/main/resources/application-legacy.properties:4 ess-097-queue-statistics confirmed Advisory mechanical
+# expect-not: backend/src/main/resources/application-legacy.properties:5 ess-097-queue-statistics
+# expect: backend/src/test/kotlin/com/example/shop/NoHandlersIT.kt:5 ess-089-reactive-bpp-disabled confirmed Blocking manual
+# expect-not: backend/src/test/kotlin/com/example/shop/NoHandlersIT.kt:8 ess-089-reactive-bpp-disabled
+diff --git a/backend/src/main/resources/application.yml b/backend/src/main/resources/application.yml
+new file mode 100644
+--- /dev/null
++++ b/backend/src/main/resources/application.yml
+@@ -0,0 +1,6 @@
++essentials:
++  reactive-bean-post-processor-enabled: false
++  durable-queues:
++    transactional-mode: fully-transactional
++    polling-delay-interval-increment-factor: 0.5
++    max-polling-interval: 2s
+diff --git a/backend/src/main/resources/application-legacy.properties b/backend/src/main/resources/application-legacy.properties
+new file mode 100644
+--- /dev/null
++++ b/backend/src/main/resources/application-legacy.properties
+@@ -0,0 +1,5 @@
++essentials.reactive-bean-post-processor-enabled=true
++essentials.durableQueues.transactionalMode=SingleOperationTransaction
++essentials.durable-queues.enable-queue-statistics=true
++essentials.durable-queues.queue-statistics-ttl-duration=7d
++essentials.durable-queues.shared-queue-table-name=durable_queues
+diff --git a/backend/src/test/kotlin/com/example/shop/NoHandlersIT.kt b/backend/src/test/kotlin/com/example/shop/NoHandlersIT.kt
+new file mode 100644
+--- /dev/null
++++ b/backend/src/test/kotlin/com/example/shop/NoHandlersIT.kt
+@@ -0,0 +1,9 @@
++package com.example.shop
++
++import org.springframework.boot.test.context.SpringBootTest
++
++@SpringBootTest(properties = ["essentials.reactive-bean-post-processor-enabled=false"])
++class NoHandlersIT
++
++@SpringBootTest(properties = ["essentials.reactive-bean-post-processor-enabled=true"])
++class HandlersIT

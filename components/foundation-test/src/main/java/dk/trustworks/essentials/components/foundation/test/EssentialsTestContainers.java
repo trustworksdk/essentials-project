@@ -16,7 +16,7 @@
 
 package dk.trustworks.essentials.components.foundation.test;
 
-import org.testcontainers.containers.PostgreSQLContainer;
+import org.testcontainers.postgresql.PostgreSQLContainer;
 import org.testcontainers.utility.DockerImageName;
 
 import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
@@ -46,8 +46,10 @@ public final class EssentialsTestContainers {
      * Pinned MongoDB image. Matches the version that {@code mongo:latest} resolved to when the images were pinned.
      * <p>
      * Exposed as a plain image name rather than a container factory because {@code foundation-test} deliberately does not
-     * depend on {@code testcontainers-mongodb} — the Mongo modules build their own {@code MongoDBContainer} (they need a
-     * replica set) and only need the version to agree.
+     * depend on {@code testcontainers-mongodb} — the Mongo modules build their own {@code org.testcontainers.mongodb.MongoDBContainer}
+     * and only need the version to agree. They must call {@code withReplicaSet()} on it: Mongo transactions need a replica set,
+     * and unlike the deprecated {@code org.testcontainers.containers.MongoDBContainer} the Testcontainers 2 class starts a
+     * standalone node unless asked.
      */
     public static final DockerImageName MONGO_IMAGE = DockerImageName.parse("mongo:8.2");
 
@@ -74,12 +76,12 @@ public final class EssentialsTestContainers {
      * Assign it to a {@code static} {@code @Container} field so the container is started once per test class:
      * <pre>{@code
      * @Container
-     * static final PostgreSQLContainer<?> POSTGRES = EssentialsTestContainers.postgres();
+     * static final PostgreSQLContainer POSTGRES = EssentialsTestContainers.postgres();
      * }</pre>
      *
      * @return a non-started container
      */
-    public static PostgreSQLContainer<?> postgres() {
+    public static PostgreSQLContainer postgres() {
         return postgres(DEFAULT_DATABASE_NAME);
     }
 
@@ -91,7 +93,7 @@ public final class EssentialsTestContainers {
      * @param databaseName the initial database to create
      * @return a non-started container
      */
-    public static PostgreSQLContainer<?> postgres(String databaseName) {
+    public static PostgreSQLContainer postgres(String databaseName) {
         return postgres(databaseName, DEFAULT_USERNAME, DEFAULT_PASSWORD);
     }
 
@@ -103,11 +105,11 @@ public final class EssentialsTestContainers {
      * @param password     the database password
      * @return a non-started container
      */
-    public static PostgreSQLContainer<?> postgres(String databaseName, String username, String password) {
+    public static PostgreSQLContainer postgres(String databaseName, String username, String password) {
         requireNonNull(databaseName, "No databaseName provided");
         requireNonNull(username, "No username provided");
         requireNonNull(password, "No password provided");
-        return new PostgreSQLContainer<>(POSTGRES_IMAGE)
+        return new PostgreSQLContainer(POSTGRES_IMAGE)
                 .withDatabaseName(databaseName)
                 .withUsername(username)
                 .withPassword(password)
