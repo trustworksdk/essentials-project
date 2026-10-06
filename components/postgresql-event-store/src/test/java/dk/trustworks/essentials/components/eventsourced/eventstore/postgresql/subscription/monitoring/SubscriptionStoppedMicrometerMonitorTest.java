@@ -60,21 +60,41 @@ class SubscriptionStoppedMicrometerMonitorTest {
         monitor.monitor(SUBSCRIBER_ID, AGGREGATE_TYPE);
         assertThat(gaugeValue()).isEqualTo(0.0);
 
-        when(subscription.isStoppedByErrorPolicy()).thenReturn(true);
+        when(subscription.isStoppedOrRecoveringFromErrorPolicyStop()).thenReturn(true);
         assertThat(gaugeValue()).isEqualTo(1.0);
 
         // Stays 1 for as long as the subscription is stopped - unlike the counter, nothing ages it out
         assertThat(gaugeValue()).isEqualTo(1.0);
 
         // Started again (resetFrom, fenced-lock hand-over, restart) - read on sampling, no monitoring round needed
+        when(subscription.isStoppedOrRecoveringFromErrorPolicyStop()).thenReturn(false);
+        assertThat(gaugeValue()).isEqualTo(0.0);
+    }
+
+    @Test
+    void a_subscription_without_its_own_answer_reports_1_while_stopped_and_while_recovering() {
+        // A mocked interface answers false for a default method, so the default's combination of the two is opted into here
+        when(subscription.isStoppedOrRecoveringFromErrorPolicyStop()).thenCallRealMethod();
+        var monitor = new SubscriptionStoppedMicrometerMonitor(subscriptionManager, meterRegistry, null);
+        monitor.monitor(SUBSCRIBER_ID, AGGREGATE_TYPE);
+        assertThat(gaugeValue()).isEqualTo(0.0);
+
+        when(subscription.isStoppedByErrorPolicy()).thenReturn(true);
+        assertThat(gaugeValue()).isEqualTo(1.0);
+
+        // Resumed but not yet past the failed event
         when(subscription.isStoppedByErrorPolicy()).thenReturn(false);
+        when(subscription.isRecoveringFromErrorPolicyStop()).thenReturn(true);
+        assertThat(gaugeValue()).isEqualTo(1.0);
+
+        when(subscription.isRecoveringFromErrorPolicyStop()).thenReturn(false);
         assertThat(gaugeValue()).isEqualTo(0.0);
     }
 
     @Test
     void unsubscribed_subscription_reports_0() {
         var monitor = new SubscriptionStoppedMicrometerMonitor(subscriptionManager, meterRegistry, null);
-        when(subscription.isStoppedByErrorPolicy()).thenReturn(true);
+        when(subscription.isStoppedOrRecoveringFromErrorPolicyStop()).thenReturn(true);
         monitor.monitor(SUBSCRIBER_ID, AGGREGATE_TYPE);
         assertThat(gaugeValue()).isEqualTo(1.0);
 
@@ -86,7 +106,7 @@ class SubscriptionStoppedMicrometerMonitorTest {
     @Test
     void resubscribed_subscription_is_read_from_the_manager_not_from_the_instance_first_seen() {
         var monitor = new SubscriptionStoppedMicrometerMonitor(subscriptionManager, meterRegistry, null);
-        when(subscription.isStoppedByErrorPolicy()).thenReturn(true);
+        when(subscription.isStoppedOrRecoveringFromErrorPolicyStop()).thenReturn(true);
         monitor.monitor(SUBSCRIBER_ID, AGGREGATE_TYPE);
 
         var resubscribed = mock(EventStoreSubscription.class);
