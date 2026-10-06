@@ -39,10 +39,13 @@
 
     <properties>
         <!-- Demo modules: they build and test with the rest of the reactor, but they are not published artifacts.
-             This property only stops a plain `mvn deploy`, and is inherited by the three example modules. The
-             release profile's central-publishing-maven-plugin never reads it; the release is kept clear of these
-             modules by that plugin's excludeArtifacts in the root POM and by the release workflow's -pl. -->
+             Both properties are inherited by the three example modules. maven.deploy.skip only stops a plain
+             `mvn deploy`. The release profile's central-publishing-maven-plugin never reads it; it reads
+             skipPublishing, set here so the modules carry their own exclusion. The release is also kept clear of
+             these modules by that plugin's excludeArtifacts in the root POM and by the release workflow's -pl.
+             scripts/check-release-exclusions.py fails CI unless all three hold. -->
         <maven.deploy.skip>true</maven.deploy.skip>
+        <skipPublishing>true</skipPublishing>
 
         <!-- Versions for libraries only used by the examples and therefore not managed by the Essentials parent POM
              nor by the Spring Boot BOM it imports. -->

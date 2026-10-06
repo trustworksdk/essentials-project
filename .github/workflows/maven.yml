@@ -142,14 +142,15 @@ jobs:
         run: scripts/plugin-check.sh step render-check
 
   # The example modules must never reach Maven Central, and maven.deploy.skip does not stop the release plugin. Each
-  # one is excluded by artifactId in the release profile's excludeArtifacts and in the release workflow's -pl; this
-  # fails a change that adds, renames or removes an example module without updating both. Stdlib Python, seconds.
+  # one is excluded by artifactId in the release profile's excludeArtifacts and in the release workflow's -pl, and
+  # sets skipPublishing=true in its own POM (or inherits it); this fails a change that adds, renames or removes an
+  # example module without updating all three. Stdlib Python, seconds.
   release-exclusions:
     name: examples excluded from the release
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: Every example module is in both release exclusion lists
+      - name: Every example module is excluded from the release
         run: python3 scripts/check-release-exclusions.py
 
   # Full build including Testcontainers-backed integration tests.

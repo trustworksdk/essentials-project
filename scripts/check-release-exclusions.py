@@ -20,15 +20,21 @@ Why this exists
 ---------------
 The release profile publishes through central-publishing-maven-plugin, which replaces maven-deploy-plugin and never
 reads `maven.deploy.skip`. The property the example POMs set kept nothing out, and 0.50.0 published every example
-module. They are now kept out twice, and each list has to name every example module:
+module. They are now kept out three times:
 
-- the release profile's `excludeArtifacts` in the root pom.xml (matched on artifactId alone), and
-- the `-pl '!:<artifactId>,…'` exclusions on the deploy in .github/workflows/release-to-maven-central.yml.
+- the release profile's `excludeArtifacts` in the root pom.xml (matched on artifactId alone),
+- the `-pl '!:<artifactId>,…'` exclusions on the deploy in .github/workflows/release-to-maven-central.yml, and
+- `skipPublishing` = true in each example module's own properties, or inherited from a parent POM in this
+  repository. It is the property central-publishing-maven-plugin does read; unlike the two lists, it travels with
+  the module.
 
 Nothing fails when a new example module is added to the reactor and to neither list: the next release just publishes
 it, and a Maven Central release cannot be taken back. This script fails instead. It walks the reactor from the root
 pom.xml's <modules> (profiles included), takes every module whose directory is under examples/, and requires both
-lists to equal that set - so a stale entry for a removed or renamed module fails too.
+lists to equal that set - so a stale entry for a removed or renamed module fails too - and every one of those modules
+to resolve `skipPublishing` to true. The property is resolved as Maven inherits it: the module's own <properties>
+first, then each parent POM in turn, following <relativePath> (default ../pom.xml) while it stays in this
+repository; the nearest declaration wins, so a module that sets it to false fails.
 
 Standard library only. Usage: scripts/check-release-exclusions.py [--repo DIR]
 """
@@ -43,6 +49,7 @@ from pathlib import Path
 NS = {"m": "http://maven.apache.org/POM/4.0.0"}
 WORKFLOW = Path(".github/workflows/release-to-maven-central.yml")
 CENTRAL_PLUGIN = "central-publishing-maven-plugin"
+SKIP_PROPERTY = "skipPublishing"
 
 
 def error(message: str, file: Path | None = None) -> None:
@@ -64,6 +71,33 @@ def module_names(project: ET.Element) -> list[str]:
     names = [text(m) for m in project.findall("m:modules/m:module", NS)]
     names += [text(m) for m in project.findall("m:profiles/m:profile/m:modules/m:module", NS)]
     return names
+
+
+def inherited_property(repo: Path, directory: Path, name: str) -> tuple[str | None, Path | None]:
+    """The value of property `name` as `directory`'s POM inherits it, and the POM that declares it.
+
+    Walks the module's own <properties>, then each parent POM via <relativePath> (default ../pom.xml), and stops at
+    the first declaration, or at a parent that is not in this repository. Profile properties are not considered.
+    """
+    pom = (repo / directory / "pom.xml").resolve()
+    root = repo.resolve()
+    seen: set[Path] = set()
+    while pom.is_relative_to(root) and pom.is_file() and pom not in seen:
+        seen.add(pom)
+        project = parse_pom(pom)
+        value = project.find(f"m:properties/m:{name}", NS)
+        if value is not None:
+            return text(value), pom.relative_to(root)
+        parent = project.find("m:parent", NS)
+        if parent is None:
+            break
+        relative = parent.find("m:relativePath", NS)
+        relative_path = "../pom.xml" if relative is None else text(relative)
+        if not relative_path:
+            break  # <relativePath/>: the parent comes from a repository, not from this checkout
+        target = (pom.parent / relative_path).resolve()
+        pom = target / "pom.xml" if target.is_dir() else target
+    return None, None
 
 
 def reactor_modules(repo: Path) -> dict[Path, str]:
@@ -139,7 +173,8 @@ def main() -> int:
         error(str(e))
         return 2
 
-    examples = {artifact for directory, artifact in modules.items() if directory.parts[:1] == ("examples",)}
+    example_dirs = {directory: artifact for directory, artifact in modules.items() if directory.parts[:1] == ("examples",)}
+    examples = set(example_dirs.values())
     if not examples:
         error("found no reactor module under examples/ - the reactor walk is broken, not the exclusions")
         return 2
@@ -152,8 +187,20 @@ def main() -> int:
 
     ok = compare("release profile <excludeArtifacts>", Path("pom.xml"), in_pom, examples)
     ok &= compare("release workflow -pl", WORKFLOW, in_workflow, examples)
+    for directory, artifact in sorted(example_dirs.items()):
+        try:
+            value, declared_in = inherited_property(repo, directory, SKIP_PROPERTY)
+        except (OSError, ET.ParseError) as e:
+            error(str(e))
+            return 2
+        if value != "true":
+            found = f"it resolves to '{value}' (declared in {declared_in})" if declared_in else "it is not set"
+            error(f"example module {artifact} must set <{SKIP_PROPERTY}>true</{SKIP_PROPERTY}> in its <properties>, or "
+                  f"inherit it from its parent POM - {found}", directory / "pom.xml")
+            ok = False
     if ok:
-        print(f"release exclusions OK: both lists name exactly the {len(examples)} example modules {sorted(examples)}")
+        print(f"release exclusions OK: both lists name exactly the {len(examples)} example modules {sorted(examples)}, "
+              f"and each of them sets {SKIP_PROPERTY}=true")
     return 0 if ok else 1
 
 

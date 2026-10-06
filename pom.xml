@@ -918,8 +918,9 @@
                                  maven-deploy-plugin and never reads maven.deploy.skip, so the property the example
                                  POMs set did not keep them out: 0.50.0 published all six to Maven Central. Matched
                                  on artifactId alone. The release workflow also leaves them out of the reactor with
-                                 -pl; a new example module has to be added to both, and
-                                 scripts/check-release-exclusions.py fails CI until it is. -->
+                                 -pl, and each example module sets skipPublishing=true, the property this plugin does
+                                 read. A new example module needs all three, and scripts/check-release-exclusions.py
+                                 fails CI until it has them. -->
                             <excludeArtifacts>
                                 <artifact>essentials-trading-demo</artifact>
                                 <artifact>essentials-performance-lab</artifact>
