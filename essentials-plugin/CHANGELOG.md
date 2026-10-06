@@ -45,6 +45,9 @@ targets, with a `-N` suffix for plugin-only releases.
   transient-gap row per order; a poll after an empty one steps straight over such a gap instead of
   widening its range for hours; and the new persistence-strategy lookup behind both,
   `findLowestGlobalEventOrderPersisted(uow, aggregateType, LongRange)`, a custom strategy should override.
+- **Bundled docs** — on MongoDB, a FencedLock hand-over after an outage can take up to the server's
+  `transactionLifetimeLimitSeconds` (60 s by default) instead of `lockTimeOut`, when the lock confirmation's commit failed
+  during the outage (`LLM-springdata-mongo-distributed-fenced-lock.md`).
 
 ## 0.60.0-2 — targets Essentials 0.60.0
 - **Slice law, loaded by lane** — `rules/slice-design.md` stays one file, but each lane-, kind- or
