@@ -1080,7 +1080,10 @@ The following are deprecated in 0.60 and planned for removal in the next major:
 | `immutable-jackson` | `immutable-jackson3` (same class names) |
 
 36 modules in the reactor: 33 published plus three examples. `components/foundation-test` remains an internal
-test utility, and the `examples/` modules are not released.
+test utility, and the `examples/` modules are not released. 0.50.0 published them to Maven Central by mistake
+(`essentials-trading-demo`, `essentials-performance-lab`, `essentials-spring-examples`, `postgresql-cqrs`,
+`postgresql-inbox-outbox`, `mongodb-inbox-outbox`): the release plugin ignored the `maven.deploy.skip` they set.
+0.60.0 leaves them out, and nothing should depend on those 0.50.0 artifacts.
 
 ---
 

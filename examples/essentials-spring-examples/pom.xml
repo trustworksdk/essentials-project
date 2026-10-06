@@ -39,8 +39,9 @@
 
     <properties>
         <!-- Demo modules: they build and test with the rest of the reactor, but they are not published artifacts.
-             `mvn deploy -P release` runs over the whole reactor, so the exclusion has to live here. Inherited by
-             the three example modules. -->
+             This property only stops a plain `mvn deploy`, and is inherited by the three example modules. The
+             release profile's central-publishing-maven-plugin never reads it; the release is kept clear of these
+             modules by that plugin's excludeArtifacts in the root POM and by the release workflow's -pl. -->
         <maven.deploy.skip>true</maven.deploy.skip>
 
         <!-- Versions for libraries only used by the examples and therefore not managed by the Essentials parent POM

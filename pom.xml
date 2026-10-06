@@ -914,6 +914,19 @@
                         <configuration>
                             <publishingServerId>central</publishingServerId>
                             <autoPublish>true</autoPublish>
+                            <!-- The example modules are not published artifacts. This plugin replaces
+                                 maven-deploy-plugin and never reads maven.deploy.skip, so the property the example
+                                 POMs set did not keep them out: 0.50.0 published all six to Maven Central. Matched
+                                 on artifactId alone. The release workflow also leaves them out of the reactor with
+                                 -pl; a new example module has to be added to both. -->
+                            <excludeArtifacts>
+                                <artifact>essentials-trading-demo</artifact>
+                                <artifact>essentials-performance-lab</artifact>
+                                <artifact>essentials-spring-examples</artifact>
+                                <artifact>postgresql-cqrs</artifact>
+                                <artifact>postgresql-inbox-outbox</artifact>
+                                <artifact>mongodb-inbox-outbox</artifact>
+                            </excludeArtifacts>
                         </configuration>
                     </plugin>
 

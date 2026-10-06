@@ -33,7 +33,9 @@
 
     <properties>
         <!-- Demo module: it builds and tests with the rest of the reactor, but it is not a published artifact.
-             `mvn deploy -P release` runs over the whole reactor, so the exclusion has to live here. -->
+             This property only stops a plain `mvn deploy`. The release profile's central-publishing-maven-plugin
+             never reads it; the release is kept clear of this module by that plugin's excludeArtifacts in the
+             root POM and by the release workflow's -pl. -->
         <maven.deploy.skip>true</maven.deploy.skip>
     </properties>
 

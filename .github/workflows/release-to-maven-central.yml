@@ -27,7 +27,12 @@ jobs:
         run: mvn -B versions:set -DnewVersion=${{ github.event.release.tag_name }} -DgenerateBackupPoms=false
 
       - name: Release to Maven Central
-        run: mvn -B clean deploy -P release -DskipTests -DskipDependencyCheck=true
+        # The example modules are not published artifacts. They are left out of the reactor here, and the release
+        # profile's excludeArtifacts in the root pom.xml also leaves them out of the bundle; a new example module
+        # goes in both. maven.deploy.skip does not do it - central-publishing-maven-plugin never reads it
+        run: >-
+          mvn -B clean deploy -P release -DskipTests -DskipDependencyCheck=true
+          -pl '!:essentials-trading-demo,!:essentials-performance-lab,!:essentials-spring-examples,!:postgresql-cqrs,!:postgresql-inbox-outbox,!:mongodb-inbox-outbox'
         env:
           MAVEN_USERNAME: ${{ secrets.CENTRAL_TOKEN_USERNAME }}
           MAVEN_PASSWORD: ${{ secrets.CENTRAL_TOKEN_PASSWORD }}
