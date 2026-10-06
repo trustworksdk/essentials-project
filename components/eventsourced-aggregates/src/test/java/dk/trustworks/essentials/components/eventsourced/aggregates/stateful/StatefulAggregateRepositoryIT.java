@@ -16,11 +16,8 @@
 
 package dk.trustworks.essentials.components.eventsourced.aggregates.stateful;
 
-import com.fasterxml.jackson.annotation.JsonAutoDetect;
-import com.fasterxml.jackson.databind.*;
-import com.fasterxml.jackson.databind.json.JsonMapper;
-import com.fasterxml.jackson.datatype.jdk8.Jdk8Module;
-import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
+import dk.trustworks.essentials.components.foundation.json.EssentialsObjectMappers;
+import tools.jackson.databind.*;
 import dk.trustworks.essentials.components.eventsourced.aggregates.*;
 import dk.trustworks.essentials.components.eventsourced.aggregates.modern.*;
 import dk.trustworks.essentials.components.eventsourced.aggregates.modern.Order;
@@ -37,7 +34,7 @@ import org.jdbi.v3.core.Jdbi;
 import org.jdbi.v3.postgres.PostgresPlugin;
 import org.junit.jupiter.api.*;
 import org.mockito.Mockito;
-import org.testcontainers.containers.PostgreSQLContainer;
+import org.testcontainers.postgresql.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.*;
 
 import java.util.Optional;
@@ -51,7 +48,7 @@ class StatefulAggregateRepositoryIT {
     public static final AggregateType ORDERS = AggregateType.of("Orders");
 
     @Container
-    private final PostgreSQLContainer<?> postgreSQLContainer = new PostgreSQLContainer<>("postgres:18.4").withDatabaseName("event-store")
+    private final PostgreSQLContainer postgreSQLContainer = new PostgreSQLContainer("postgres:18.4").withDatabaseName("event-store")
                                                                                                            .withUsername("test-user")
                                                                                                            .withPassword("secret-password");
 
@@ -75,7 +72,7 @@ class StatefulAggregateRepositoryIT {
 
         aggregateType = ORDERS;
         unitOfWorkFactory = new EventStoreManagedUnitOfWorkFactory(jdbi);
-        var aggregateEventStreamConfigurationFactory = SeparateTablePerAggregateTypeEventStreamConfigurationFactory.standardSingleTenantConfiguration(EssentialsJSONEventSerializers.createForActiveJacksonFlavor(),
+        var aggregateEventStreamConfigurationFactory = SeparateTablePerAggregateTypeEventStreamConfigurationFactory.standardSingleTenantConfiguration(EssentialsJSONEventSerializers.create(),
                                                                                                                                                       IdentifierColumnType.UUID,
                                                                                                                                                       JSONColumnType.JSONB);
         eventStore = new PostgresqlEventStore<>(unitOfWorkFactory,
@@ -89,10 +86,12 @@ class StatefulAggregateRepositoryIT {
                                                                        aggregateEventStreamConfigurationFactory.jsonSerializer,
                                                                        AddNewAggregateSnapshotStrategy.updateWhenBehindByNumberOfEvents(2),
                                                                        AggregateSnapshotDeletionStrategy.keepALimitedNumberOfHistoricSnapshots(3));
-        snapshotStore = new PostgresqlAggregateSnapshotStore(eventStore,
-                                                             unitOfWorkFactory,
-                                                             Optional.empty(),
-                                                             aggregateEventStreamConfigurationFactory.jsonSerializer);
+        snapshotStore = PostgresqlAggregateSnapshotStore.builder()
+                                                        .setEventStore(eventStore)
+                                                        .setUnitOfWorkFactory(unitOfWorkFactory)
+                                                        .setJsonSerializer(aggregateEventStreamConfigurationFactory.jsonSerializer)
+                                                        .setMeterRegistry(Optional.empty())
+                                                        .build();
         snapshotRepositorySpy = Mockito.spy(snapshotRepository);
         ordersRepository = StatefulAggregateRepository.from(eventStore,
                                                             ORDERS,
@@ -195,28 +194,7 @@ class StatefulAggregateRepositoryIT {
     }
 
     static ObjectMapper createObjectMapper() {
-        var objectMapper = JsonMapper.builder()
-                                     .disable(MapperFeature.AUTO_DETECT_GETTERS)
-                                     .disable(MapperFeature.AUTO_DETECT_IS_GETTERS)
-                                     .disable(MapperFeature.AUTO_DETECT_SETTERS)
-                                     .disable(MapperFeature.DEFAULT_VIEW_INCLUSION)
-                                     .disable(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS)
-                                     .disable(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES)
-                                     .disable(SerializationFeature.FAIL_ON_EMPTY_BEANS)
-                                     .enable(MapperFeature.AUTO_DETECT_CREATORS)
-                                     .enable(MapperFeature.AUTO_DETECT_FIELDS)
-                                     .enable(MapperFeature.PROPAGATE_TRANSIENT_MARKER)
-                                     .addModule(new Jdk8Module())
-                                     .addModule(new JavaTimeModule())
-                                     .addModules(dk.trustworks.essentials.components.eventsourced.aggregates.TestFasterxmlObjectMapperFactory.optionalEssentialsModules())
-                                     .build();
-
-        objectMapper.setVisibility(objectMapper.getSerializationConfig().getDefaultVisibilityChecker()
-                                               .withGetterVisibility(JsonAutoDetect.Visibility.NONE)
-                                               .withSetterVisibility(JsonAutoDetect.Visibility.NONE)
-                                               .withFieldVisibility(JsonAutoDetect.Visibility.ANY)
-                                               .withCreatorVisibility(JsonAutoDetect.Visibility.ANY));
-        return objectMapper;
+        return EssentialsObjectMappers.createJackson3ObjectMapper();
     }
 
 }

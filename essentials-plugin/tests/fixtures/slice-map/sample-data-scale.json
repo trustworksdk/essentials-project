@@ -1,0 +1,3764 @@
+{
+  "meta": {
+    "root": "gen-scale.py --bcs 12",
+    "sha": "fixture",
+    "project": "scale",
+    "scope": "full",
+    "sliceCount": 53,
+    "bcCount": 12,
+    "skipped": []
+  },
+  "contexts": [
+    {
+      "id": "bc01",
+      "lane": "decider",
+      "language": "java",
+      "tier": "cqrs-es",
+      "owners": [
+        "bc01-team"
+      ],
+      "sliceIds": [
+        "bc01.close_on_create",
+        "bc01.close_thing",
+        "bc01.create_thing",
+        "bc01.thing_list"
+      ]
+    },
+    {
+      "id": "bc02",
+      "lane": "decider",
+      "language": "java",
+      "tier": "cqrs-es",
+      "owners": [
+        "bc02-team"
+      ],
+      "sliceIds": [
+        "bc02.close_thing",
+        "bc02.create_thing",
+        "bc02.follow_upstream",
+        "bc02.thing_list"
+      ]
+    },
+    {
+      "id": "bc03",
+      "lane": "decider",
+      "language": "java",
+      "tier": "cqrs-es",
+      "owners": [
+        "bc03-team"
+      ],
+      "sliceIds": [
+        "bc03.close_thing",
+        "bc03.create_thing",
+        "bc03.follow_upstream",
+        "bc03.thing_list"
+      ]
+    },
+    {
+      "id": "bc04",
+      "lane": "decider",
+      "language": "java",
+      "tier": "cqrs-es",
+      "owners": [
+        "bc04-team"
+      ],
+      "sliceIds": [
+        "bc04.close_thing",
+        "bc04.create_thing",
+        "bc04.follow_upstream",
+        "bc04.partner_feed",
+        "bc04.thing_list"
+      ]
+    },
+    {
+      "id": "bc05",
+      "lane": "decider",
+      "language": "java",
+      "tier": "cqrs-es",
+      "owners": [
+        "bc05-team"
+      ],
+      "sliceIds": [
+        "bc05.close_thing",
+        "bc05.create_thing",
+        "bc05.follow_upstream",
+        "bc05.thing_list"
+      ]
+    },
+    {
+      "id": "bc06",
+      "lane": "decider",
+      "language": "java",
+      "tier": "cqrs-es",
+      "owners": [
+        "bc06-team"
+      ],
+      "sliceIds": [
+        "bc06.close_on_create",
+        "bc06.close_thing",
+        "bc06.create_thing",
+        "bc06.thing_list",
+        "bc06.thing_report"
+      ]
+    },
+    {
+      "id": "bc07",
+      "lane": "decider",
+      "language": "java",
+      "tier": "cqrs-es",
+      "owners": [
+        "bc07-team"
+      ],
+      "sliceIds": [
+        "bc07.close_thing",
+        "bc07.create_thing",
+        "bc07.follow_upstream",
+        "bc07.thing_list"
+      ]
+    },
+    {
+      "id": "bc08",
+      "lane": "decider",
+      "language": "java",
+      "tier": "cqrs-es",
+      "owners": [
+        "bc08-team"
+      ],
+      "sliceIds": [
+        "bc08.close_thing",
+        "bc08.create_thing",
+        "bc08.follow_upstream",
+        "bc08.partner_feed",
+        "bc08.thing_list"
+      ]
+    },
+    {
+      "id": "bc09",
+      "lane": "decider",
+      "language": "java",
+      "tier": "cqrs-es",
+      "owners": [
+        "bc09-team"
+      ],
+      "sliceIds": [
+        "bc09.close_thing",
+        "bc09.create_thing",
+        "bc09.follow_upstream",
+        "bc09.thing_list"
+      ]
+    },
+    {
+      "id": "bc10",
+      "lane": "decider",
+      "language": "java",
+      "tier": "cqrs-es",
+      "owners": [
+        "bc10-team"
+      ],
+      "sliceIds": [
+        "bc10.close_thing",
+        "bc10.create_thing",
+        "bc10.follow_upstream",
+        "bc10.thing_list"
+      ]
+    },
+    {
+      "id": "bc11",
+      "lane": "decider",
+      "language": "java",
+      "tier": "cqrs-es",
+      "owners": [
+        "bc11-team"
+      ],
+      "sliceIds": [
+        "bc11.close_on_create",
+        "bc11.close_thing",
+        "bc11.create_thing",
+        "bc11.thing_list"
+      ]
+    },
+    {
+      "id": "bc12",
+      "lane": "decider",
+      "language": "java",
+      "tier": "cqrs-es",
+      "owners": [
+        "bc12-team"
+      ],
+      "sliceIds": [
+        "bc12.close_thing",
+        "bc12.create_thing",
+        "bc12.follow_upstream",
+        "bc12.partner_feed",
+        "bc12.thing_list",
+        "bc12.thing_report"
+      ]
+    }
+  ],
+  "slices": [
+    {
+      "id": "bc01.close_on_create",
+      "bc": "bc01",
+      "name": "close_on_create",
+      "kind": "automation",
+      "status": "live",
+      "owner": "bc01-team",
+      "summary": "Close a bc01 thing once it is created.",
+      "language": "java",
+      "tier": "cqrs-es",
+      "lane": "decider",
+      "path": "bc01/automations/close_on_create",
+      "package": null,
+      "files": [],
+      "handles": [],
+      "serves": [],
+      "publishes": [],
+      "consumes": [
+        "ThingCreated01"
+      ],
+      "dispatches": [
+        "CloseThing01"
+      ],
+      "writes": [],
+      "owns": [],
+      "projections": [],
+      "reads": [],
+      "endpoints": [],
+      "invariants": [],
+      "externalSystem": null,
+      "direction": null,
+      "supersedes": null,
+      "dependsOn": [],
+      "tests": [
+        "unit"
+      ],
+      "flags": []
+    },
+    {
+      "id": "bc01.close_thing",
+      "bc": "bc01",
+      "name": "close_thing",
+      "kind": "command",
+      "status": "live",
+      "owner": "bc01-team",
+      "summary": "Close a thing in bc01.",
+      "language": "java",
+      "tier": "cqrs-es",
+      "lane": "decider",
+      "path": "bc01/use_cases/close_thing",
+      "package": null,
+      "files": [],
+      "handles": [
+        "CloseThing01"
+      ],
+      "serves": [],
+      "publishes": [
+        "ThingClosed01"
+      ],
+      "consumes": [],
+      "dispatches": [],
+      "writes": [
+        "Thing01"
+      ],
+      "owns": [],
+      "projections": [],
+      "reads": [],
+      "endpoints": [],
+      "invariants": [],
+      "externalSystem": null,
+      "direction": null,
+      "supersedes": null,
+      "dependsOn": [],
+      "tests": [
+        "unit"
+      ],
+      "flags": []
+    },
+    {
+      "id": "bc01.create_thing",
+      "bc": "bc01",
+      "name": "create_thing",
+      "kind": "command",
+      "status": "live",
+      "owner": "bc01-team",
+      "summary": "Create a thing in bc01.",
+      "language": "java",
+      "tier": "cqrs-es",
+      "lane": "decider",
+      "path": "bc01/use_cases/create_thing",
+      "package": null,
+      "files": [],
+      "handles": [
+        "CreateThing01"
+      ],
+      "serves": [],
+      "publishes": [
+        "ThingCreated01"
+      ],
+      "consumes": [],
+      "dispatches": [],
+      "writes": [
+        "Thing01"
+      ],
+      "owns": [],
+      "projections": [],
+      "reads": [],
+      "endpoints": [
+        {
+          "method": "POST",
+          "path": "/api/bc01/things",
+          "auth": "user"
+        }
+      ],
+      "invariants": [],
+      "externalSystem": null,
+      "direction": null,
+      "supersedes": null,
+      "dependsOn": [],
+      "tests": [
+        "unit"
+      ],
+      "flags": []
+    },
+    {
+      "id": "bc01.thing_list",
+      "bc": "bc01",
+      "name": "thing_list",
+      "kind": "view",
+      "status": "live",
+      "owner": "bc01-team",
+      "summary": "Things in bc01.",
+      "language": "java",
+      "tier": "cqrs-es",
+      "lane": "decider",
+      "path": "bc01/views/thing_list",
+      "package": null,
+      "files": [],
+      "handles": [],
+      "serves": [
+        "ListThings01"
+      ],
+      "publishes": [],
+      "consumes": [],
+      "dispatches": [],
+      "writes": [],
+      "owns": [
+        "thing_list_01"
+      ],
+      "projections": [
+        {
+          "name": "ThingList01",
+          "from": [
+            "ThingCreated01",
+            "ThingClosed01"
+          ],
+          "aggregateTypes": [
+            "Things01"
+          ]
+        }
+      ],
+      "reads": [],
+      "endpoints": [
+        {
+          "method": "GET",
+          "path": "/api/bc01/things",
+          "auth": "user"
+        }
+      ],
+      "invariants": [],
+      "externalSystem": null,
+      "direction": null,
+      "supersedes": null,
+      "dependsOn": [],
+      "tests": [
+        "unit"
+      ],
+      "flags": [],
+      "readModels": []
+    },
+    {
+      "id": "bc02.follow_upstream",
+      "bc": "bc02",
+      "name": "follow_upstream",
+      "kind": "automation",
+      "status": "live",
+      "owner": "bc02-team",
+      "summary": "Create a bc02 thing when bc01 creates one.",
+      "language": "java",
+      "tier": "cqrs-es",
+      "lane": "decider",
+      "path": "bc02/automations/follow_upstream",
+      "package": null,
+      "files": [],
+      "handles": [],
+      "serves": [],
+      "publishes": [],
+      "consumes": [
+        "ThingCreated01"
+      ],
+      "dispatches": [
+        "CreateThing02"
+      ],
+      "writes": [],
+      "owns": [],
+      "projections": [],
+      "reads": [],
+      "endpoints": [],
+      "invariants": [],
+      "externalSystem": null,
+      "direction": null,
+      "supersedes": null,
+      "dependsOn": [],
+      "tests": [
+        "unit"
+      ],
+      "flags": []
+    },
+    {
+      "id": "bc02.close_thing",
+      "bc": "bc02",
+      "name": "close_thing",
+      "kind": "command",
+      "status": "live",
+      "owner": "bc02-team",
+      "summary": "Close a thing in bc02.",
+      "language": "java",
+      "tier": "cqrs-es",
+      "lane": "decider",
+      "path": "bc02/use_cases/close_thing",
+      "package": null,
+      "files": [],
+      "handles": [
+        "CloseThing02"
+      ],
+      "serves": [],
+      "publishes": [
+        "ThingClosed02"
+      ],
+      "consumes": [],
+      "dispatches": [],
+      "writes": [
+        "Thing02"
+      ],
+      "owns": [],
+      "projections": [],
+      "reads": [],
+      "endpoints": [],
+      "invariants": [],
+      "externalSystem": null,
+      "direction": null,
+      "supersedes": null,
+      "dependsOn": [],
+      "tests": [
+        "unit"
+      ],
+      "flags": []
+    },
+    {
+      "id": "bc02.create_thing",
+      "bc": "bc02",
+      "name": "create_thing",
+      "kind": "command",
+      "status": "live",
+      "owner": "bc02-team",
+      "summary": "Create a thing in bc02.",
+      "language": "java",
+      "tier": "cqrs-es",
+      "lane": "decider",
+      "path": "bc02/use_cases/create_thing",
+      "package": null,
+      "files": [],
+      "handles": [
+        "CreateThing02"
+      ],
+      "serves": [],
+      "publishes": [
+        "ThingCreated02"
+      ],
+      "consumes": [],
+      "dispatches": [],
+      "writes": [
+        "Thing02"
+      ],
+      "owns": [],
+      "projections": [],
+      "reads": [],
+      "endpoints": [
+        {
+          "method": "POST",
+          "path": "/api/bc02/things",
+          "auth": "user"
+        }
+      ],
+      "invariants": [],
+      "externalSystem": null,
+      "direction": null,
+      "supersedes": null,
+      "dependsOn": [],
+      "tests": [
+        "unit"
+      ],
+      "flags": []
+    },
+    {
+      "id": "bc02.thing_list",
+      "bc": "bc02",
+      "name": "thing_list",
+      "kind": "view",
+      "status": "live",
+      "owner": "bc02-team",
+      "summary": "Things in bc02.",
+      "language": "java",
+      "tier": "cqrs-es",
+      "lane": "decider",
+      "path": "bc02/views/thing_list",
+      "package": null,
+      "files": [],
+      "handles": [],
+      "serves": [
+        "ListThings02"
+      ],
+      "publishes": [],
+      "consumes": [],
+      "dispatches": [],
+      "writes": [],
+      "owns": [
+        "thing_list_02"
+      ],
+      "projections": [
+        {
+          "name": "ThingList02",
+          "from": [
+            "ThingCreated02",
+            "ThingClosed02"
+          ],
+          "aggregateTypes": [
+            "Things02"
+          ]
+        }
+      ],
+      "reads": [],
+      "endpoints": [
+        {
+          "method": "GET",
+          "path": "/api/bc02/things",
+          "auth": "user"
+        }
+      ],
+      "invariants": [],
+      "externalSystem": null,
+      "direction": null,
+      "supersedes": null,
+      "dependsOn": [],
+      "tests": [
+        "unit"
+      ],
+      "flags": [],
+      "readModels": []
+    },
+    {
+      "id": "bc03.follow_upstream",
+      "bc": "bc03",
+      "name": "follow_upstream",
+      "kind": "automation",
+      "status": "live",
+      "owner": "bc03-team",
+      "summary": "Create a bc03 thing when bc02 creates one.",
+      "language": "java",
+      "tier": "cqrs-es",
+      "lane": "decider",
+      "path": "bc03/automations/follow_upstream",
+      "package": null,
+      "files": [],
+      "handles": [],
+      "serves": [],
+      "publishes": [],
+      "consumes": [
+        "ThingCreated02"
+      ],
+      "dispatches": [
+        "CreateThing03"
+      ],
+      "writes": [],
+      "owns": [],
+      "projections": [],
+      "reads": [],
+      "endpoints": [],
+      "invariants": [],
+      "externalSystem": null,
+      "direction": null,
+      "supersedes": null,
+      "dependsOn": [],
+      "tests": [
+        "unit"
+      ],
+      "flags": []
+    },
+    {
+      "id": "bc03.close_thing",
+      "bc": "bc03",
+      "name": "close_thing",
+      "kind": "command",
+      "status": "live",
+      "owner": "bc03-team",
+      "summary": "Close a thing in bc03.",
+      "language": "java",
+      "tier": "cqrs-es",
+      "lane": "decider",
+      "path": "bc03/use_cases/close_thing",
+      "package": null,
+      "files": [],
+      "handles": [
+        "CloseThing03"
+      ],
+      "serves": [],
+      "publishes": [
+        "ThingClosed03"
+      ],
+      "consumes": [],
+      "dispatches": [],
+      "writes": [
+        "Thing03"
+      ],
+      "owns": [],
+      "projections": [],
+      "reads": [],
+      "endpoints": [],
+      "invariants": [],
+      "externalSystem": null,
+      "direction": null,
+      "supersedes": null,
+      "dependsOn": [],
+      "tests": [
+        "unit"
+      ],
+      "flags": []
+    },
+    {
+      "id": "bc03.create_thing",
+      "bc": "bc03",
+      "name": "create_thing",
+      "kind": "command",
+      "status": "live",
+      "owner": "bc03-team",
+      "summary": "Create a thing in bc03.",
+      "language": "java",
+      "tier": "cqrs-es",
+      "lane": "decider",
+      "path": "bc03/use_cases/create_thing",
+      "package": null,
+      "files": [],
+      "handles": [
+        "CreateThing03"
+      ],
+      "serves": [],
+      "publishes": [
+        "ThingCreated03"
+      ],
+      "consumes": [],
+      "dispatches": [],
+      "writes": [
+        "Thing03"
+      ],
+      "owns": [],
+      "projections": [],
+      "reads": [],
+      "endpoints": [
+        {
+          "method": "POST",
+          "path": "/api/bc03/things",
+          "auth": "user"
+        }
+      ],
+      "invariants": [],
+      "externalSystem": null,
+      "direction": null,
+      "supersedes": null,
+      "dependsOn": [],
+      "tests": [
+        "unit"
+      ],
+      "flags": []
+    },
+    {
+      "id": "bc03.thing_list",
+      "bc": "bc03",
+      "name": "thing_list",
+      "kind": "view",
+      "status": "live",
+      "owner": "bc03-team",
+      "summary": "Things in bc03.",
+      "language": "java",
+      "tier": "cqrs-es",
+      "lane": "decider",
+      "path": "bc03/views/thing_list",
+      "package": null,
+      "files": [],
+      "handles": [],
+      "serves": [
+        "ListThings03"
+      ],
+      "publishes": [],
+      "consumes": [],
+      "dispatches": [],
+      "writes": [],
+      "owns": [
+        "thing_list_03"
+      ],
+      "projections": [
+        {
+          "name": "ThingList03",
+          "from": [
+            "ThingCreated03",
+            "ThingClosed03"
+          ],
+          "aggregateTypes": [
+            "Things03"
+          ]
+        }
+      ],
+      "reads": [],
+      "endpoints": [
+        {
+          "method": "GET",
+          "path": "/api/bc03/things",
+          "auth": "user"
+        }
+      ],
+      "invariants": [],
+      "externalSystem": null,
+      "direction": null,
+      "supersedes": null,
+      "dependsOn": [],
+      "tests": [
+        "unit"
+      ],
+      "flags": [],
+      "readModels": []
+    },
+    {
+      "id": "bc04.follow_upstream",
+      "bc": "bc04",
+      "name": "follow_upstream",
+      "kind": "automation",
+      "status": "live",
+      "owner": "bc04-team",
+      "summary": "Create a bc04 thing when bc03 creates one.",
+      "language": "java",
+      "tier": "cqrs-es",
+      "lane": "decider",
+      "path": "bc04/automations/follow_upstream",
+      "package": null,
+      "files": [],
+      "handles": [],
+      "serves": [],
+      "publishes": [],
+      "consumes": [
+        "ThingCreated03"
+      ],
+      "dispatches": [
+        "CreateThing04"
+      ],
+      "writes": [],
+      "owns": [],
+      "projections": [],
+      "reads": [],
+      "endpoints": [],
+      "invariants": [],
+      "externalSystem": null,
+      "direction": null,
+      "supersedes": null,
+      "dependsOn": [],
+      "tests": [
+        "unit"
+      ],
+      "flags": []
+    },
+    {
+      "id": "bc04.partner_feed",
+      "bc": "bc04",
+      "name": "partner_feed",
+      "kind": "translation",
+      "status": "live",
+      "owner": "bc04-team",
+      "summary": "Things arriving from partner 04.",
+      "language": "java",
+      "tier": "cqrs-es",
+      "lane": "decider",
+      "path": "bc04/external_systems/partner_feed",
+      "package": null,
+      "files": [],
+      "handles": [],
+      "serves": [],
+      "publishes": [],
+      "consumes": [
+        "PartnerThing04"
+      ],
+      "dispatches": [
+        "CreateThing04"
+      ],
+      "writes": [],
+      "owns": [],
+      "projections": [],
+      "reads": [],
+      "endpoints": [],
+      "invariants": [],
+      "externalSystem": "partner_04",
+      "direction": "inbound",
+      "supersedes": null,
+      "dependsOn": [],
+      "tests": [
+        "unit"
+      ],
+      "flags": [
+        {
+          "level": "warn",
+          "text": "consumes PartnerThing04, which no slice in scope publishes (dangling edge)"
+        }
+      ]
+    },
+    {
+      "id": "bc04.close_thing",
+      "bc": "bc04",
+      "name": "close_thing",
+      "kind": "command",
+      "status": "live",
+      "owner": "bc04-team",
+      "summary": "Close a thing in bc04.",
+      "language": "java",
+      "tier": "cqrs-es",
+      "lane": "decider",
+      "path": "bc04/use_cases/close_thing",
+      "package": null,
+      "files": [],
+      "handles": [
+        "CloseThing04"
+      ],
+      "serves": [],
+      "publishes": [
+        "ThingClosed04"
+      ],
+      "consumes": [],
+      "dispatches": [],
+      "writes": [
+        "Thing04"
+      ],
+      "owns": [],
+      "projections": [],
+      "reads": [],
+      "endpoints": [],
+      "invariants": [],
+      "externalSystem": null,
+      "direction": null,
+      "supersedes": null,
+      "dependsOn": [],
+      "tests": [
+        "unit"
+      ],
+      "flags": []
+    },
+    {
+      "id": "bc04.create_thing",
+      "bc": "bc04",
+      "name": "create_thing",
+      "kind": "command",
+      "status": "live",
+      "owner": "bc04-team",
+      "summary": "Create a thing in bc04.",
+      "language": "java",
+      "tier": "cqrs-es",
+      "lane": "decider",
+      "path": "bc04/use_cases/create_thing",
+      "package": null,
+      "files": [],
+      "handles": [
+        "CreateThing04"
+      ],
+      "serves": [],
+      "publishes": [
+        "ThingCreated04"
+      ],
+      "consumes": [],
+      "dispatches": [],
+      "writes": [
+        "Thing04"
+      ],
+      "owns": [],
+      "projections": [],
+      "reads": [],
+      "endpoints": [
+        {
+          "method": "POST",
+          "path": "/api/bc04/things",
+          "auth": "user"
+        }
+      ],
+      "invariants": [],
+      "externalSystem": null,
+      "direction": null,
+      "supersedes": null,
+      "dependsOn": [],
+      "tests": [
+        "unit"
+      ],
+      "flags": []
+    },
+    {
+      "id": "bc04.thing_list",
+      "bc": "bc04",
+      "name": "thing_list",
+      "kind": "view",
+      "status": "live",
+      "owner": "bc04-team",
+      "summary": "Things in bc04.",
+      "language": "java",
+      "tier": "cqrs-es",
+      "lane": "decider",
+      "path": "bc04/views/thing_list",
+      "package": null,
+      "files": [],
+      "handles": [],
+      "serves": [
+        "ListThings04"
+      ],
+      "publishes": [],
+      "consumes": [],
+      "dispatches": [],
+      "writes": [],
+      "owns": [
+        "thing_list_04"
+      ],
+      "projections": [
+        {
+          "name": "ThingList04",
+          "from": [
+            "ThingCreated04",
+            "ThingClosed04"
+          ],
+          "aggregateTypes": [
+            "Things04"
+          ]
+        }
+      ],
+      "reads": [],
+      "endpoints": [
+        {
+          "method": "GET",
+          "path": "/api/bc04/things",
+          "auth": "user"
+        }
+      ],
+      "invariants": [],
+      "externalSystem": null,
+      "direction": null,
+      "supersedes": null,
+      "dependsOn": [],
+      "tests": [
+        "unit"
+      ],
+      "flags": [],
+      "readModels": []
+    },
+    {
+      "id": "bc05.follow_upstream",
+      "bc": "bc05",
+      "name": "follow_upstream",
+      "kind": "automation",
+      "status": "live",
+      "owner": "bc05-team",
+      "summary": "Create a bc05 thing when bc04 creates one.",
+      "language": "java",
+      "tier": "cqrs-es",
+      "lane": "decider",
+      "path": "bc05/automations/follow_upstream",
+      "package": null,
+      "files": [],
+      "handles": [],
+      "serves": [],
+      "publishes": [],
+      "consumes": [
+        "ThingCreated04"
+      ],
+      "dispatches": [
+        "CreateThing05"
+      ],
+      "writes": [],
+      "owns": [],
+      "projections": [],
+      "reads": [],
+      "endpoints": [],
+      "invariants": [],
+      "externalSystem": null,
+      "direction": null,
+      "supersedes": null,
+      "dependsOn": [],
+      "tests": [
+        "unit"
+      ],
+      "flags": []
+    },
+    {
+      "id": "bc05.close_thing",
+      "bc": "bc05",
+      "name": "close_thing",
+      "kind": "command",
+      "status": "live",
+      "owner": "bc05-team",
+      "summary": "Close a thing in bc05.",
+      "language": "java",
+      "tier": "cqrs-es",
+      "lane": "decider",
+      "path": "bc05/use_cases/close_thing",
+      "package": null,
+      "files": [],
+      "handles": [
+        "CloseThing05"
+      ],
+      "serves": [],
+      "publishes": [
+        "ThingClosed05"
+      ],
+      "consumes": [],
+      "dispatches": [],
+      "writes": [
+        "Thing05"
+      ],
+      "owns": [],
+      "projections": [],
+      "reads": [],
+      "endpoints": [],
+      "invariants": [],
+      "externalSystem": null,
+      "direction": null,
+      "supersedes": null,
+      "dependsOn": [],
+      "tests": [
+        "unit"
+      ],
+      "flags": []
+    },
+    {
+      "id": "bc05.create_thing",
+      "bc": "bc05",
+      "name": "create_thing",
+      "kind": "command",
+      "status": "live",
+      "owner": "bc05-team",
+      "summary": "Create a thing in bc05.",
+      "language": "java",
+      "tier": "cqrs-es",
+      "lane": "decider",
+      "path": "bc05/use_cases/create_thing",
+      "package": null,
+      "files": [],
+      "handles": [
+        "CreateThing05"
+      ],
+      "serves": [],
+      "publishes": [
+        "ThingCreated05"
+      ],
+      "consumes": [],
+      "dispatches": [],
+      "writes": [
+        "Thing05"
+      ],
+      "owns": [],
+      "projections": [],
+      "reads": [],
+      "endpoints": [
+        {
+          "method": "POST",
+          "path": "/api/bc05/things",
+          "auth": "user"
+        }
+      ],
+      "invariants": [],
+      "externalSystem": null,
+      "direction": null,
+      "supersedes": null,
+      "dependsOn": [],
+      "tests": [
+        "unit"
+      ],
+      "flags": []
+    },
+    {
+      "id": "bc05.thing_list",
+      "bc": "bc05",
+      "name": "thing_list",
+      "kind": "view",
+      "status": "live",
+      "owner": "bc05-team",
+      "summary": "Things in bc05.",
+      "language": "java",
+      "tier": "cqrs-es",
+      "lane": "decider",
+      "path": "bc05/views/thing_list",
+      "package": null,
+      "files": [],
+      "handles": [],
+      "serves": [
+        "ListThings05"
+      ],
+      "publishes": [],
+      "consumes": [],
+      "dispatches": [],
+      "writes": [],
+      "owns": [
+        "thing_list_05"
+      ],
+      "projections": [
+        {
+          "name": "ThingList05",
+          "from": [
+            "ThingCreated05",
+            "ThingClosed05"
+          ],
+          "aggregateTypes": [
+            "Things05"
+          ]
+        }
+      ],
+      "reads": [],
+      "endpoints": [
+        {
+          "method": "GET",
+          "path": "/api/bc05/things",
+          "auth": "user"
+        }
+      ],
+      "invariants": [],
+      "externalSystem": null,
+      "direction": null,
+      "supersedes": null,
+      "dependsOn": [],
+      "tests": [
+        "unit"
+      ],
+      "flags": [],
+      "readModels": []
+    },
+    {
+      "id": "bc06.close_on_create",
+      "bc": "bc06",
+      "name": "close_on_create",
+      "kind": "automation",
+      "status": "live",
+      "owner": "bc06-team",
+      "summary": "Close a bc06 thing once it is created.",
+      "language": "java",
+      "tier": "cqrs-es",
+      "lane": "decider",
+      "path": "bc06/automations/close_on_create",
+      "package": null,
+      "files": [],
+      "handles": [],
+      "serves": [],
+      "publishes": [],
+      "consumes": [
+        "ThingCreated06"
+      ],
+      "dispatches": [
+        "CloseThing06"
+      ],
+      "writes": [],
+      "owns": [],
+      "projections": [],
+      "reads": [],
+      "endpoints": [],
+      "invariants": [],
+      "externalSystem": null,
+      "direction": null,
+      "supersedes": null,
+      "dependsOn": [],
+      "tests": [
+        "unit"
+      ],
+      "flags": []
+    },
+    {
+      "id": "bc06.close_thing",
+      "bc": "bc06",
+      "name": "close_thing",
+      "kind": "command",
+      "status": "live",
+      "owner": "bc06-team",
+      "summary": "Close a thing in bc06.",
+      "language": "java",
+      "tier": "cqrs-es",
+      "lane": "decider",
+      "path": "bc06/use_cases/close_thing",
+      "package": null,
+      "files": [],
+      "handles": [
+        "CloseThing06"
+      ],
+      "serves": [],
+      "publishes": [
+        "ThingClosed06"
+      ],
+      "consumes": [],
+      "dispatches": [],
+      "writes": [
+        "Thing06"
+      ],
+      "owns": [],
+      "projections": [],
+      "reads": [],
+      "endpoints": [],
+      "invariants": [],
+      "externalSystem": null,
+      "direction": null,
+      "supersedes": null,
+      "dependsOn": [],
+      "tests": [
+        "unit"
+      ],
+      "flags": []
+    },
+    {
+      "id": "bc06.create_thing",
+      "bc": "bc06",
+      "name": "create_thing",
+      "kind": "command",
+      "status": "live",
+      "owner": "bc06-team",
+      "summary": "Create a thing in bc06.",
+      "language": "java",
+      "tier": "cqrs-es",
+      "lane": "decider",
+      "path": "bc06/use_cases/create_thing",
+      "package": null,
+      "files": [],
+      "handles": [
+        "CreateThing06"
+      ],
+      "serves": [],
+      "publishes": [
+        "ThingCreated06"
+      ],
+      "consumes": [],
+      "dispatches": [],
+      "writes": [
+        "Thing06"
+      ],
+      "owns": [],
+      "projections": [],
+      "reads": [],
+      "endpoints": [
+        {
+          "method": "POST",
+          "path": "/api/bc06/things",
+          "auth": "user"
+        }
+      ],
+      "invariants": [],
+      "externalSystem": null,
+      "direction": null,
+      "supersedes": null,
+      "dependsOn": [],
+      "tests": [
+        "unit"
+      ],
+      "flags": []
+    },
+    {
+      "id": "bc06.thing_list",
+      "bc": "bc06",
+      "name": "thing_list",
+      "kind": "view",
+      "status": "live",
+      "owner": "bc06-team",
+      "summary": "Things in bc06.",
+      "language": "java",
+      "tier": "cqrs-es",
+      "lane": "decider",
+      "path": "bc06/views/thing_list",
+      "package": null,
+      "files": [],
+      "handles": [],
+      "serves": [
+        "ListThings06"
+      ],
+      "publishes": [],
+      "consumes": [],
+      "dispatches": [],
+      "writes": [],
+      "owns": [
+        "thing_list_06"
+      ],
+      "projections": [
+        {
+          "name": "ThingList06",
+          "from": [
+            "ThingCreated06",
+            "ThingClosed06"
+          ],
+          "aggregateTypes": [
+            "Things06"
+          ]
+        }
+      ],
+      "reads": [],
+      "endpoints": [
+        {
+          "method": "GET",
+          "path": "/api/bc06/things",
+          "auth": "user"
+        }
+      ],
+      "invariants": [],
+      "externalSystem": null,
+      "direction": null,
+      "supersedes": null,
+      "dependsOn": [],
+      "tests": [
+        "unit"
+      ],
+      "flags": [],
+      "readModels": []
+    },
+    {
+      "id": "bc06.thing_report",
+      "bc": "bc06",
+      "name": "thing_report",
+      "kind": "view",
+      "status": "live",
+      "owner": "bc06-team",
+      "summary": "Report over bc06 things.",
+      "language": "java",
+      "tier": "cqrs-es",
+      "lane": "decider",
+      "path": "bc06/views/thing_report",
+      "package": null,
+      "files": [],
+      "handles": [],
+      "serves": [
+        "ThingReport06"
+      ],
+      "publishes": [],
+      "consumes": [],
+      "dispatches": [],
+      "writes": [],
+      "owns": [],
+      "projections": [],
+      "reads": [
+        {
+          "name": "thing_list_06",
+          "via": null,
+          "external": false
+        }
+      ],
+      "endpoints": [
+        {
+          "method": "GET",
+          "path": "/api/bc06/report",
+          "auth": "user"
+        }
+      ],
+      "invariants": [],
+      "externalSystem": null,
+      "direction": null,
+      "supersedes": null,
+      "dependsOn": [],
+      "tests": [
+        "unit"
+      ],
+      "flags": [],
+      "readModels": []
+    },
+    {
+      "id": "bc07.follow_upstream",
+      "bc": "bc07",
+      "name": "follow_upstream",
+      "kind": "automation",
+      "status": "live",
+      "owner": "bc07-team",
+      "summary": "Create a bc07 thing when bc06 creates one.",
+      "language": "java",
+      "tier": "cqrs-es",
+      "lane": "decider",
+      "path": "bc07/automations/follow_upstream",
+      "package": null,
+      "files": [],
+      "handles": [],
+      "serves": [],
+      "publishes": [],
+      "consumes": [
+        "ThingCreated06"
+      ],
+      "dispatches": [
+        "CreateThing07"
+      ],
+      "writes": [],
+      "owns": [],
+      "projections": [],
+      "reads": [],
+      "endpoints": [],
+      "invariants": [],
+      "externalSystem": null,
+      "direction": null,
+      "supersedes": null,
+      "dependsOn": [],
+      "tests": [
+        "unit"
+      ],
+      "flags": []
+    },
+    {
+      "id": "bc07.close_thing",
+      "bc": "bc07",
+      "name": "close_thing",
+      "kind": "command",
+      "status": "live",
+      "owner": "bc07-team",
+      "summary": "Close a thing in bc07.",
+      "language": "java",
+      "tier": "cqrs-es",
+      "lane": "decider",
+      "path": "bc07/use_cases/close_thing",
+      "package": null,
+      "files": [],
+      "handles": [
+        "CloseThing07"
+      ],
+      "serves": [],
+      "publishes": [
+        "ThingClosed07"
+      ],
+      "consumes": [],
+      "dispatches": [],
+      "writes": [
+        "Thing07"
+      ],
+      "owns": [],
+      "projections": [],
+      "reads": [],
+      "endpoints": [],
+      "invariants": [],
+      "externalSystem": null,
+      "direction": null,
+      "supersedes": null,
+      "dependsOn": [],
+      "tests": [
+        "unit"
+      ],
+      "flags": []
+    },
+    {
+      "id": "bc07.create_thing",
+      "bc": "bc07",
+      "name": "create_thing",
+      "kind": "command",
+      "status": "live",
+      "owner": "bc07-team",
+      "summary": "Create a thing in bc07.",
+      "language": "java",
+      "tier": "cqrs-es",
+      "lane": "decider",
+      "path": "bc07/use_cases/create_thing",
+      "package": null,
+      "files": [],
+      "handles": [
+        "CreateThing07"
+      ],
+      "serves": [],
+      "publishes": [
+        "ThingCreated07"
+      ],
+      "consumes": [],
+      "dispatches": [],
+      "writes": [
+        "Thing07"
+      ],
+      "owns": [],
+      "projections": [],
+      "reads": [],
+      "endpoints": [
+        {
+          "method": "POST",
+          "path": "/api/bc07/things",
+          "auth": "user"
+        }
+      ],
+      "invariants": [],
+      "externalSystem": null,
+      "direction": null,
+      "supersedes": null,
+      "dependsOn": [],
+      "tests": [
+        "unit"
+      ],
+      "flags": []
+    },
+    {
+      "id": "bc07.thing_list",
+      "bc": "bc07",
+      "name": "thing_list",
+      "kind": "view",
+      "status": "live",
+      "owner": "bc07-team",
+      "summary": "Things in bc07.",
+      "language": "java",
+      "tier": "cqrs-es",
+      "lane": "decider",
+      "path": "bc07/views/thing_list",
+      "package": null,
+      "files": [],
+      "handles": [],
+      "serves": [
+        "ListThings07"
+      ],
+      "publishes": [],
+      "consumes": [],
+      "dispatches": [],
+      "writes": [],
+      "owns": [
+        "thing_list_07"
+      ],
+      "projections": [
+        {
+          "name": "ThingList07",
+          "from": [
+            "ThingCreated07",
+            "ThingClosed07"
+          ],
+          "aggregateTypes": [
+            "Things07"
+          ]
+        }
+      ],
+      "reads": [],
+      "endpoints": [
+        {
+          "method": "GET",
+          "path": "/api/bc07/things",
+          "auth": "user"
+        }
+      ],
+      "invariants": [],
+      "externalSystem": null,
+      "direction": null,
+      "supersedes": null,
+      "dependsOn": [],
+      "tests": [
+        "unit"
+      ],
+      "flags": [],
+      "readModels": []
+    },
+    {
+      "id": "bc08.follow_upstream",
+      "bc": "bc08",
+      "name": "follow_upstream",
+      "kind": "automation",
+      "status": "live",
+      "owner": "bc08-team",
+      "summary": "Create a bc08 thing when bc07 creates one.",
+      "language": "java",
+      "tier": "cqrs-es",
+      "lane": "decider",
+      "path": "bc08/automations/follow_upstream",
+      "package": null,
+      "files": [],
+      "handles": [],
+      "serves": [],
+      "publishes": [],
+      "consumes": [
+        "ThingCreated07"
+      ],
+      "dispatches": [
+        "CreateThing08"
+      ],
+      "writes": [],
+      "owns": [],
+      "projections": [],
+      "reads": [],
+      "endpoints": [],
+      "invariants": [],
+      "externalSystem": null,
+      "direction": null,
+      "supersedes": null,
+      "dependsOn": [],
+      "tests": [
+        "unit"
+      ],
+      "flags": []
+    },
+    {
+      "id": "bc08.partner_feed",
+      "bc": "bc08",
+      "name": "partner_feed",
+      "kind": "translation",
+      "status": "live",
+      "owner": "bc08-team",
+      "summary": "Things arriving from partner 08.",
+      "language": "java",
+      "tier": "cqrs-es",
+      "lane": "decider",
+      "path": "bc08/external_systems/partner_feed",
+      "package": null,
+      "files": [],
+      "handles": [],
+      "serves": [],
+      "publishes": [],
+      "consumes": [
+        "PartnerThing08"
+      ],
+      "dispatches": [
+        "CreateThing08"
+      ],
+      "writes": [],
+      "owns": [],
+      "projections": [],
+      "reads": [],
+      "endpoints": [],
+      "invariants": [],
+      "externalSystem": "partner_08",
+      "direction": "inbound",
+      "supersedes": null,
+      "dependsOn": [],
+      "tests": [
+        "unit"
+      ],
+      "flags": [
+        {
+          "level": "warn",
+          "text": "consumes PartnerThing08, which no slice in scope publishes (dangling edge)"
+        }
+      ]
+    },
+    {
+      "id": "bc08.close_thing",
+      "bc": "bc08",
+      "name": "close_thing",
+      "kind": "command",
+      "status": "live",
+      "owner": "bc08-team",
+      "summary": "Close a thing in bc08.",
+      "language": "java",
+      "tier": "cqrs-es",
+      "lane": "decider",
+      "path": "bc08/use_cases/close_thing",
+      "package": null,
+      "files": [],
+      "handles": [
+        "CloseThing08"
+      ],
+      "serves": [],
+      "publishes": [
+        "ThingClosed08"
+      ],
+      "consumes": [],
+      "dispatches": [],
+      "writes": [
+        "Thing08"
+      ],
+      "owns": [],
+      "projections": [],
+      "reads": [],
+      "endpoints": [],
+      "invariants": [],
+      "externalSystem": null,
+      "direction": null,
+      "supersedes": null,
+      "dependsOn": [],
+      "tests": [
+        "unit"
+      ],
+      "flags": []
+    },
+    {
+      "id": "bc08.create_thing",
+      "bc": "bc08",
+      "name": "create_thing",
+      "kind": "command",
+      "status": "live",
+      "owner": "bc08-team",
+      "summary": "Create a thing in bc08.",
+      "language": "java",
+      "tier": "cqrs-es",
+      "lane": "decider",
+      "path": "bc08/use_cases/create_thing",
+      "package": null,
+      "files": [],
+      "handles": [
+        "CreateThing08"
+      ],
+      "serves": [],
+      "publishes": [
+        "ThingCreated08"
+      ],
+      "consumes": [],
+      "dispatches": [],
+      "writes": [
+        "Thing08"
+      ],
+      "owns": [],
+      "projections": [],
+      "reads": [],
+      "endpoints": [
+        {
+          "method": "POST",
+          "path": "/api/bc08/things",
+          "auth": "user"
+        }
+      ],
+      "invariants": [],
+      "externalSystem": null,
+      "direction": null,
+      "supersedes": null,
+      "dependsOn": [],
+      "tests": [
+        "unit"
+      ],
+      "flags": []
+    },
+    {
+      "id": "bc08.thing_list",
+      "bc": "bc08",
+      "name": "thing_list",
+      "kind": "view",
+      "status": "live",
+      "owner": "bc08-team",
+      "summary": "Things in bc08.",
+      "language": "java",
+      "tier": "cqrs-es",
+      "lane": "decider",
+      "path": "bc08/views/thing_list",
+      "package": null,
+      "files": [],
+      "handles": [],
+      "serves": [
+        "ListThings08"
+      ],
+      "publishes": [],
+      "consumes": [],
+      "dispatches": [],
+      "writes": [],
+      "owns": [
+        "thing_list_08"
+      ],
+      "projections": [
+        {
+          "name": "ThingList08",
+          "from": [
+            "ThingCreated08",
+            "ThingClosed08"
+          ],
+          "aggregateTypes": [
+            "Things08"
+          ]
+        }
+      ],
+      "reads": [],
+      "endpoints": [
+        {
+          "method": "GET",
+          "path": "/api/bc08/things",
+          "auth": "user"
+        }
+      ],
+      "invariants": [],
+      "externalSystem": null,
+      "direction": null,
+      "supersedes": null,
+      "dependsOn": [],
+      "tests": [
+        "unit"
+      ],
+      "flags": [],
+      "readModels": []
+    },
+    {
+      "id": "bc09.follow_upstream",
+      "bc": "bc09",
+      "name": "follow_upstream",
+      "kind": "automation",
+      "status": "live",
+      "owner": "bc09-team",
+      "summary": "Create a bc09 thing when bc08 creates one.",
+      "language": "java",
+      "tier": "cqrs-es",
+      "lane": "decider",
+      "path": "bc09/automations/follow_upstream",
+      "package": null,
+      "files": [],
+      "handles": [],
+      "serves": [],
+      "publishes": [],
+      "consumes": [
+        "ThingCreated08"
+      ],
+      "dispatches": [
+        "CreateThing09"
+      ],
+      "writes": [],
+      "owns": [],
+      "projections": [],
+      "reads": [],
+      "endpoints": [],
+      "invariants": [],
+      "externalSystem": null,
+      "direction": null,
+      "supersedes": null,
+      "dependsOn": [],
+      "tests": [
+        "unit"
+      ],
+      "flags": []
+    },
+    {
+      "id": "bc09.close_thing",
+      "bc": "bc09",
+      "name": "close_thing",
+      "kind": "command",
+      "status": "live",
+      "owner": "bc09-team",
+      "summary": "Close a thing in bc09.",
+      "language": "java",
+      "tier": "cqrs-es",
+      "lane": "decider",
+      "path": "bc09/use_cases/close_thing",
+      "package": null,
+      "files": [],
+      "handles": [
+        "CloseThing09"
+      ],
+      "serves": [],
+      "publishes": [
+        "ThingClosed09"
+      ],
+      "consumes": [],
+      "dispatches": [],
+      "writes": [
+        "Thing09"
+      ],
+      "owns": [],
+      "projections": [],
+      "reads": [],
+      "endpoints": [],
+      "invariants": [],
+      "externalSystem": null,
+      "direction": null,
+      "supersedes": null,
+      "dependsOn": [],
+      "tests": [
+        "unit"
+      ],
+      "flags": []
+    },
+    {
+      "id": "bc09.create_thing",
+      "bc": "bc09",
+      "name": "create_thing",
+      "kind": "command",
+      "status": "live",
+      "owner": "bc09-team",
+      "summary": "Create a thing in bc09.",
+      "language": "java",
+      "tier": "cqrs-es",
+      "lane": "decider",
+      "path": "bc09/use_cases/create_thing",
+      "package": null,
+      "files": [],
+      "handles": [
+        "CreateThing09"
+      ],
+      "serves": [],
+      "publishes": [
+        "ThingCreated09"
+      ],
+      "consumes": [],
+      "dispatches": [],
+      "writes": [
+        "Thing09"
+      ],
+      "owns": [],
+      "projections": [],
+      "reads": [],
+      "endpoints": [
+        {
+          "method": "POST",
+          "path": "/api/bc09/things",
+          "auth": "user"
+        }
+      ],
+      "invariants": [],
+      "externalSystem": null,
+      "direction": null,
+      "supersedes": null,
+      "dependsOn": [],
+      "tests": [
+        "unit"
+      ],
+      "flags": []
+    },
+    {
+      "id": "bc09.thing_list",
+      "bc": "bc09",
+      "name": "thing_list",
+      "kind": "view",
+      "status": "live",
+      "owner": "bc09-team",
+      "summary": "Things in bc09.",
+      "language": "java",
+      "tier": "cqrs-es",
+      "lane": "decider",
+      "path": "bc09/views/thing_list",
+      "package": null,
+      "files": [],
+      "handles": [],
+      "serves": [
+        "ListThings09"
+      ],
+      "publishes": [],
+      "consumes": [],
+      "dispatches": [],
+      "writes": [],
+      "owns": [
+        "thing_list_09"
+      ],
+      "projections": [
+        {
+          "name": "ThingList09",
+          "from": [
+            "ThingCreated09",
+            "ThingClosed09"
+          ],
+          "aggregateTypes": [
+            "Things09"
+          ]
+        }
+      ],
+      "reads": [],
+      "endpoints": [
+        {
+          "method": "GET",
+          "path": "/api/bc09/things",
+          "auth": "user"
+        }
+      ],
+      "invariants": [],
+      "externalSystem": null,
+      "direction": null,
+      "supersedes": null,
+      "dependsOn": [],
+      "tests": [
+        "unit"
+      ],
+      "flags": [],
+      "readModels": []
+    },
+    {
+      "id": "bc10.follow_upstream",
+      "bc": "bc10",
+      "name": "follow_upstream",
+      "kind": "automation",
+      "status": "live",
+      "owner": "bc10-team",
+      "summary": "Create a bc10 thing when bc09 creates one.",
+      "language": "java",
+      "tier": "cqrs-es",
+      "lane": "decider",
+      "path": "bc10/automations/follow_upstream",
+      "package": null,
+      "files": [],
+      "handles": [],
+      "serves": [],
+      "publishes": [],
+      "consumes": [
+        "ThingCreated09"
+      ],
+      "dispatches": [
+        "CreateThing10"
+      ],
+      "writes": [],
+      "owns": [],
+      "projections": [],
+      "reads": [],
+      "endpoints": [],
+      "invariants": [],
+      "externalSystem": null,
+      "direction": null,
+      "supersedes": null,
+      "dependsOn": [],
+      "tests": [
+        "unit"
+      ],
+      "flags": []
+    },
+    {
+      "id": "bc10.close_thing",
+      "bc": "bc10",
+      "name": "close_thing",
+      "kind": "command",
+      "status": "live",
+      "owner": "bc10-team",
+      "summary": "Close a thing in bc10.",
+      "language": "java",
+      "tier": "cqrs-es",
+      "lane": "decider",
+      "path": "bc10/use_cases/close_thing",
+      "package": null,
+      "files": [],
+      "handles": [
+        "CloseThing10"
+      ],
+      "serves": [],
+      "publishes": [
+        "ThingClosed10"
+      ],
+      "consumes": [],
+      "dispatches": [],
+      "writes": [
+        "Thing10"
+      ],
+      "owns": [],
+      "projections": [],
+      "reads": [],
+      "endpoints": [],
+      "invariants": [],
+      "externalSystem": null,
+      "direction": null,
+      "supersedes": null,
+      "dependsOn": [],
+      "tests": [
+        "unit"
+      ],
+      "flags": []
+    },
+    {
+      "id": "bc10.create_thing",
+      "bc": "bc10",
+      "name": "create_thing",
+      "kind": "command",
+      "status": "live",
+      "owner": "bc10-team",
+      "summary": "Create a thing in bc10.",
+      "language": "java",
+      "tier": "cqrs-es",
+      "lane": "decider",
+      "path": "bc10/use_cases/create_thing",
+      "package": null,
+      "files": [],
+      "handles": [
+        "CreateThing10"
+      ],
+      "serves": [],
+      "publishes": [
+        "ThingCreated10"
+      ],
+      "consumes": [],
+      "dispatches": [],
+      "writes": [
+        "Thing10"
+      ],
+      "owns": [],
+      "projections": [],
+      "reads": [],
+      "endpoints": [
+        {
+          "method": "POST",
+          "path": "/api/bc10/things",
+          "auth": "user"
+        }
+      ],
+      "invariants": [],
+      "externalSystem": null,
+      "direction": null,
+      "supersedes": null,
+      "dependsOn": [],
+      "tests": [
+        "unit"
+      ],
+      "flags": []
+    },
+    {
+      "id": "bc10.thing_list",
+      "bc": "bc10",
+      "name": "thing_list",
+      "kind": "view",
+      "status": "live",
+      "owner": "bc10-team",
+      "summary": "Things in bc10.",
+      "language": "java",
+      "tier": "cqrs-es",
+      "lane": "decider",
+      "path": "bc10/views/thing_list",
+      "package": null,
+      "files": [],
+      "handles": [],
+      "serves": [
+        "ListThings10"
+      ],
+      "publishes": [],
+      "consumes": [],
+      "dispatches": [],
+      "writes": [],
+      "owns": [
+        "thing_list_10"
+      ],
+      "projections": [
+        {
+          "name": "ThingList10",
+          "from": [
+            "ThingCreated10",
+            "ThingClosed10"
+          ],
+          "aggregateTypes": [
+            "Things10"
+          ]
+        }
+      ],
+      "reads": [],
+      "endpoints": [
+        {
+          "method": "GET",
+          "path": "/api/bc10/things",
+          "auth": "user"
+        }
+      ],
+      "invariants": [],
+      "externalSystem": null,
+      "direction": null,
+      "supersedes": null,
+      "dependsOn": [],
+      "tests": [
+        "unit"
+      ],
+      "flags": [],
+      "readModels": []
+    },
+    {
+      "id": "bc11.close_on_create",
+      "bc": "bc11",
+      "name": "close_on_create",
+      "kind": "automation",
+      "status": "live",
+      "owner": "bc11-team",
+      "summary": "Close a bc11 thing once it is created.",
+      "language": "java",
+      "tier": "cqrs-es",
+      "lane": "decider",
+      "path": "bc11/automations/close_on_create",
+      "package": null,
+      "files": [],
+      "handles": [],
+      "serves": [],
+      "publishes": [],
+      "consumes": [
+        "ThingCreated11"
+      ],
+      "dispatches": [
+        "CloseThing11"
+      ],
+      "writes": [],
+      "owns": [],
+      "projections": [],
+      "reads": [],
+      "endpoints": [],
+      "invariants": [],
+      "externalSystem": null,
+      "direction": null,
+      "supersedes": null,
+      "dependsOn": [],
+      "tests": [
+        "unit"
+      ],
+      "flags": []
+    },
+    {
+      "id": "bc11.close_thing",
+      "bc": "bc11",
+      "name": "close_thing",
+      "kind": "command",
+      "status": "live",
+      "owner": "bc11-team",
+      "summary": "Close a thing in bc11.",
+      "language": "java",
+      "tier": "cqrs-es",
+      "lane": "decider",
+      "path": "bc11/use_cases/close_thing",
+      "package": null,
+      "files": [],
+      "handles": [
+        "CloseThing11"
+      ],
+      "serves": [],
+      "publishes": [
+        "ThingClosed11"
+      ],
+      "consumes": [],
+      "dispatches": [],
+      "writes": [
+        "Thing11"
+      ],
+      "owns": [],
+      "projections": [],
+      "reads": [],
+      "endpoints": [],
+      "invariants": [],
+      "externalSystem": null,
+      "direction": null,
+      "supersedes": null,
+      "dependsOn": [],
+      "tests": [
+        "unit"
+      ],
+      "flags": []
+    },
+    {
+      "id": "bc11.create_thing",
+      "bc": "bc11",
+      "name": "create_thing",
+      "kind": "command",
+      "status": "live",
+      "owner": "bc11-team",
+      "summary": "Create a thing in bc11.",
+      "language": "java",
+      "tier": "cqrs-es",
+      "lane": "decider",
+      "path": "bc11/use_cases/create_thing",
+      "package": null,
+      "files": [],
+      "handles": [
+        "CreateThing11"
+      ],
+      "serves": [],
+      "publishes": [
+        "ThingCreated11"
+      ],
+      "consumes": [],
+      "dispatches": [],
+      "writes": [
+        "Thing11"
+      ],
+      "owns": [],
+      "projections": [],
+      "reads": [],
+      "endpoints": [
+        {
+          "method": "POST",
+          "path": "/api/bc11/things",
+          "auth": "user"
+        }
+      ],
+      "invariants": [],
+      "externalSystem": null,
+      "direction": null,
+      "supersedes": null,
+      "dependsOn": [],
+      "tests": [
+        "unit"
+      ],
+      "flags": []
+    },
+    {
+      "id": "bc11.thing_list",
+      "bc": "bc11",
+      "name": "thing_list",
+      "kind": "view",
+      "status": "live",
+      "owner": "bc11-team",
+      "summary": "Things in bc11.",
+      "language": "java",
+      "tier": "cqrs-es",
+      "lane": "decider",
+      "path": "bc11/views/thing_list",
+      "package": null,
+      "files": [],
+      "handles": [],
+      "serves": [
+        "ListThings11"
+      ],
+      "publishes": [],
+      "consumes": [],
+      "dispatches": [],
+      "writes": [],
+      "owns": [
+        "thing_list_11"
+      ],
+      "projections": [
+        {
+          "name": "ThingList11",
+          "from": [
+            "ThingCreated11",
+            "ThingClosed11"
+          ],
+          "aggregateTypes": [
+            "Things11"
+          ]
+        }
+      ],
+      "reads": [],
+      "endpoints": [
+        {
+          "method": "GET",
+          "path": "/api/bc11/things",
+          "auth": "user"
+        }
+      ],
+      "invariants": [],
+      "externalSystem": null,
+      "direction": null,
+      "supersedes": null,
+      "dependsOn": [],
+      "tests": [
+        "unit"
+      ],
+      "flags": [],
+      "readModels": []
+    },
+    {
+      "id": "bc12.follow_upstream",
+      "bc": "bc12",
+      "name": "follow_upstream",
+      "kind": "automation",
+      "status": "live",
+      "owner": "bc12-team",
+      "summary": "Create a bc12 thing when bc11 creates one.",
+      "language": "java",
+      "tier": "cqrs-es",
+      "lane": "decider",
+      "path": "bc12/automations/follow_upstream",
+      "package": null,
+      "files": [],
+      "handles": [],
+      "serves": [],
+      "publishes": [],
+      "consumes": [
+        "ThingCreated11"
+      ],
+      "dispatches": [
+        "CreateThing12"
+      ],
+      "writes": [],
+      "owns": [],
+      "projections": [],
+      "reads": [],
+      "endpoints": [],
+      "invariants": [],
+      "externalSystem": null,
+      "direction": null,
+      "supersedes": null,
+      "dependsOn": [],
+      "tests": [
+        "unit"
+      ],
+      "flags": []
+    },
+    {
+      "id": "bc12.partner_feed",
+      "bc": "bc12",
+      "name": "partner_feed",
+      "kind": "translation",
+      "status": "live",
+      "owner": "bc12-team",
+      "summary": "Things arriving from partner 12.",
+      "language": "java",
+      "tier": "cqrs-es",
+      "lane": "decider",
+      "path": "bc12/external_systems/partner_feed",
+      "package": null,
+      "files": [],
+      "handles": [],
+      "serves": [],
+      "publishes": [],
+      "consumes": [
+        "PartnerThing12"
+      ],
+      "dispatches": [
+        "CreateThing12"
+      ],
+      "writes": [],
+      "owns": [],
+      "projections": [],
+      "reads": [],
+      "endpoints": [],
+      "invariants": [],
+      "externalSystem": "partner_12",
+      "direction": "inbound",
+      "supersedes": null,
+      "dependsOn": [],
+      "tests": [
+        "unit"
+      ],
+      "flags": [
+        {
+          "level": "warn",
+          "text": "consumes PartnerThing12, which no slice in scope publishes (dangling edge)"
+        }
+      ]
+    },
+    {
+      "id": "bc12.close_thing",
+      "bc": "bc12",
+      "name": "close_thing",
+      "kind": "command",
+      "status": "live",
+      "owner": "bc12-team",
+      "summary": "Close a thing in bc12.",
+      "language": "java",
+      "tier": "cqrs-es",
+      "lane": "decider",
+      "path": "bc12/use_cases/close_thing",
+      "package": null,
+      "files": [],
+      "handles": [
+        "CloseThing12"
+      ],
+      "serves": [],
+      "publishes": [
+        "ThingClosed12"
+      ],
+      "consumes": [],
+      "dispatches": [],
+      "writes": [
+        "Thing12"
+      ],
+      "owns": [],
+      "projections": [],
+      "reads": [],
+      "endpoints": [],
+      "invariants": [],
+      "externalSystem": null,
+      "direction": null,
+      "supersedes": null,
+      "dependsOn": [],
+      "tests": [
+        "unit"
+      ],
+      "flags": []
+    },
+    {
+      "id": "bc12.create_thing",
+      "bc": "bc12",
+      "name": "create_thing",
+      "kind": "command",
+      "status": "live",
+      "owner": "bc12-team",
+      "summary": "Create a thing in bc12.",
+      "language": "java",
+      "tier": "cqrs-es",
+      "lane": "decider",
+      "path": "bc12/use_cases/create_thing",
+      "package": null,
+      "files": [],
+      "handles": [
+        "CreateThing12"
+      ],
+      "serves": [],
+      "publishes": [
+        "ThingCreated12"
+      ],
+      "consumes": [],
+      "dispatches": [],
+      "writes": [
+        "Thing12"
+      ],
+      "owns": [],
+      "projections": [],
+      "reads": [],
+      "endpoints": [
+        {
+          "method": "POST",
+          "path": "/api/bc12/things",
+          "auth": "user"
+        }
+      ],
+      "invariants": [],
+      "externalSystem": null,
+      "direction": null,
+      "supersedes": null,
+      "dependsOn": [],
+      "tests": [
+        "unit"
+      ],
+      "flags": []
+    },
+    {
+      "id": "bc12.thing_list",
+      "bc": "bc12",
+      "name": "thing_list",
+      "kind": "view",
+      "status": "live",
+      "owner": "bc12-team",
+      "summary": "Things in bc12.",
+      "language": "java",
+      "tier": "cqrs-es",
+      "lane": "decider",
+      "path": "bc12/views/thing_list",
+      "package": null,
+      "files": [],
+      "handles": [],
+      "serves": [
+        "ListThings12"
+      ],
+      "publishes": [],
+      "consumes": [],
+      "dispatches": [],
+      "writes": [],
+      "owns": [
+        "thing_list_12"
+      ],
+      "projections": [
+        {
+          "name": "ThingList12",
+          "from": [
+            "ThingCreated12",
+            "ThingClosed12"
+          ],
+          "aggregateTypes": [
+            "Things12"
+          ]
+        }
+      ],
+      "reads": [],
+      "endpoints": [
+        {
+          "method": "GET",
+          "path": "/api/bc12/things",
+          "auth": "user"
+        }
+      ],
+      "invariants": [],
+      "externalSystem": null,
+      "direction": null,
+      "supersedes": null,
+      "dependsOn": [],
+      "tests": [
+        "unit"
+      ],
+      "flags": [],
+      "readModels": []
+    },
+    {
+      "id": "bc12.thing_report",
+      "bc": "bc12",
+      "name": "thing_report",
+      "kind": "view",
+      "status": "live",
+      "owner": "bc12-team",
+      "summary": "Report over bc12 things.",
+      "language": "java",
+      "tier": "cqrs-es",
+      "lane": "decider",
+      "path": "bc12/views/thing_report",
+      "package": null,
+      "files": [],
+      "handles": [],
+      "serves": [
+        "ThingReport12"
+      ],
+      "publishes": [],
+      "consumes": [],
+      "dispatches": [],
+      "writes": [],
+      "owns": [],
+      "projections": [],
+      "reads": [
+        {
+          "name": "thing_list_12",
+          "via": null,
+          "external": false
+        }
+      ],
+      "endpoints": [
+        {
+          "method": "GET",
+          "path": "/api/bc12/report",
+          "auth": "user"
+        }
+      ],
+      "invariants": [],
+      "externalSystem": null,
+      "direction": null,
+      "supersedes": null,
+      "dependsOn": [],
+      "tests": [
+        "unit"
+      ],
+      "flags": [],
+      "readModels": []
+    }
+  ],
+  "messages": [
+    {
+      "name": "CloseThing01",
+      "type": "command",
+      "identity": null,
+      "fields": [],
+      "declaredIn": null,
+      "version": null,
+      "schema": null,
+      "idempotencyKey": null,
+      "summary": null
+    },
+    {
+      "name": "CloseThing02",
+      "type": "command",
+      "identity": null,
+      "fields": [],
+      "declaredIn": null,
+      "version": null,
+      "schema": null,
+      "idempotencyKey": null,
+      "summary": null
+    },
+    {
+      "name": "CloseThing03",
+      "type": "command",
+      "identity": null,
+      "fields": [],
+      "declaredIn": null,
+      "version": null,
+      "schema": null,
+      "idempotencyKey": null,
+      "summary": null
+    },
+    {
+      "name": "CloseThing04",
+      "type": "command",
+      "identity": null,
+      "fields": [],
+      "declaredIn": null,
+      "version": null,
+      "schema": null,
+      "idempotencyKey": null,
+      "summary": null
+    },
+    {
+      "name": "CloseThing05",
+      "type": "command",
+      "identity": null,
+      "fields": [],
+      "declaredIn": null,
+      "version": null,
+      "schema": null,
+      "idempotencyKey": null,
+      "summary": null
+    },
+    {
+      "name": "CloseThing06",
+      "type": "command",
+      "identity": null,
+      "fields": [],
+      "declaredIn": null,
+      "version": null,
+      "schema": null,
+      "idempotencyKey": null,
+      "summary": null
+    },
+    {
+      "name": "CloseThing07",
+      "type": "command",
+      "identity": null,
+      "fields": [],
+      "declaredIn": null,
+      "version": null,
+      "schema": null,
+      "idempotencyKey": null,
+      "summary": null
+    },
+    {
+      "name": "CloseThing08",
+      "type": "command",
+      "identity": null,
+      "fields": [],
+      "declaredIn": null,
+      "version": null,
+      "schema": null,
+      "idempotencyKey": null,
+      "summary": null
+    },
+    {
+      "name": "CloseThing09",
+      "type": "command",
+      "identity": null,
+      "fields": [],
+      "declaredIn": null,
+      "version": null,
+      "schema": null,
+      "idempotencyKey": null,
+      "summary": null
+    },
+    {
+      "name": "CloseThing10",
+      "type": "command",
+      "identity": null,
+      "fields": [],
+      "declaredIn": null,
+      "version": null,
+      "schema": null,
+      "idempotencyKey": null,
+      "summary": null
+    },
+    {
+      "name": "CloseThing11",
+      "type": "command",
+      "identity": null,
+      "fields": [],
+      "declaredIn": null,
+      "version": null,
+      "schema": null,
+      "idempotencyKey": null,
+      "summary": null
+    },
+    {
+      "name": "CloseThing12",
+      "type": "command",
+      "identity": null,
+      "fields": [],
+      "declaredIn": null,
+      "version": null,
+      "schema": null,
+      "idempotencyKey": null,
+      "summary": null
+    },
+    {
+      "name": "CreateThing01",
+      "type": "command",
+      "identity": null,
+      "fields": [],
+      "declaredIn": null,
+      "version": null,
+      "schema": null,
+      "idempotencyKey": null,
+      "summary": null
+    },
+    {
+      "name": "CreateThing02",
+      "type": "command",
+      "identity": null,
+      "fields": [],
+      "declaredIn": null,
+      "version": null,
+      "schema": null,
+      "idempotencyKey": null,
+      "summary": null
+    },
+    {
+      "name": "CreateThing03",
+      "type": "command",
+      "identity": null,
+      "fields": [],
+      "declaredIn": null,
+      "version": null,
+      "schema": null,
+      "idempotencyKey": null,
+      "summary": null
+    },
+    {
+      "name": "CreateThing04",
+      "type": "command",
+      "identity": null,
+      "fields": [],
+      "declaredIn": null,
+      "version": null,
+      "schema": null,
+      "idempotencyKey": null,
+      "summary": null
+    },
+    {
+      "name": "CreateThing05",
+      "type": "command",
+      "identity": null,
+      "fields": [],
+      "declaredIn": null,
+      "version": null,
+      "schema": null,
+      "idempotencyKey": null,
+      "summary": null
+    },
+    {
+      "name": "CreateThing06",
+      "type": "command",
+      "identity": null,
+      "fields": [],
+      "declaredIn": null,
+      "version": null,
+      "schema": null,
+      "idempotencyKey": null,
+      "summary": null
+    },
+    {
+      "name": "CreateThing07",
+      "type": "command",
+      "identity": null,
+      "fields": [],
+      "declaredIn": null,
+      "version": null,
+      "schema": null,
+      "idempotencyKey": null,
+      "summary": null
+    },
+    {
+      "name": "CreateThing08",
+      "type": "command",
+      "identity": null,
+      "fields": [],
+      "declaredIn": null,
+      "version": null,
+      "schema": null,
+      "idempotencyKey": null,
+      "summary": null
+    },
+    {
+      "name": "CreateThing09",
+      "type": "command",
+      "identity": null,
+      "fields": [],
+      "declaredIn": null,
+      "version": null,
+      "schema": null,
+      "idempotencyKey": null,
+      "summary": null
+    },
+    {
+      "name": "CreateThing10",
+      "type": "command",
+      "identity": null,
+      "fields": [],
+      "declaredIn": null,
+      "version": null,
+      "schema": null,
+      "idempotencyKey": null,
+      "summary": null
+    },
+    {
+      "name": "CreateThing11",
+      "type": "command",
+      "identity": null,
+      "fields": [],
+      "declaredIn": null,
+      "version": null,
+      "schema": null,
+      "idempotencyKey": null,
+      "summary": null
+    },
+    {
+      "name": "CreateThing12",
+      "type": "command",
+      "identity": null,
+      "fields": [],
+      "declaredIn": null,
+      "version": null,
+      "schema": null,
+      "idempotencyKey": null,
+      "summary": null
+    },
+    {
+      "name": "PartnerThing04",
+      "type": "event",
+      "identity": null,
+      "fields": [],
+      "declaredIn": null,
+      "version": null,
+      "schema": null,
+      "idempotencyKey": null,
+      "summary": null
+    },
+    {
+      "name": "PartnerThing08",
+      "type": "event",
+      "identity": null,
+      "fields": [],
+      "declaredIn": null,
+      "version": null,
+      "schema": null,
+      "idempotencyKey": null,
+      "summary": null
+    },
+    {
+      "name": "PartnerThing12",
+      "type": "event",
+      "identity": null,
+      "fields": [],
+      "declaredIn": null,
+      "version": null,
+      "schema": null,
+      "idempotencyKey": null,
+      "summary": null
+    },
+    {
+      "name": "ThingClosed01",
+      "type": "event",
+      "identity": null,
+      "fields": [],
+      "declaredIn": null,
+      "version": null,
+      "schema": null,
+      "idempotencyKey": null,
+      "summary": null
+    },
+    {
+      "name": "ThingClosed02",
+      "type": "event",
+      "identity": null,
+      "fields": [],
+      "declaredIn": null,
+      "version": null,
+      "schema": null,
+      "idempotencyKey": null,
+      "summary": null
+    },
+    {
+      "name": "ThingClosed03",
+      "type": "event",
+      "identity": null,
+      "fields": [],
+      "declaredIn": null,
+      "version": null,
+      "schema": null,
+      "idempotencyKey": null,
+      "summary": null
+    },
+    {
+      "name": "ThingClosed04",
+      "type": "event",
+      "identity": null,
+      "fields": [],
+      "declaredIn": null,
+      "version": null,
+      "schema": null,
+      "idempotencyKey": null,
+      "summary": null
+    },
+    {
+      "name": "ThingClosed05",
+      "type": "event",
+      "identity": null,
+      "fields": [],
+      "declaredIn": null,
+      "version": null,
+      "schema": null,
+      "idempotencyKey": null,
+      "summary": null
+    },
+    {
+      "name": "ThingClosed06",
+      "type": "event",
+      "identity": null,
+      "fields": [],
+      "declaredIn": null,
+      "version": null,
+      "schema": null,
+      "idempotencyKey": null,
+      "summary": null
+    },
+    {
+      "name": "ThingClosed07",
+      "type": "event",
+      "identity": null,
+      "fields": [],
+      "declaredIn": null,
+      "version": null,
+      "schema": null,
+      "idempotencyKey": null,
+      "summary": null
+    },
+    {
+      "name": "ThingClosed08",
+      "type": "event",
+      "identity": null,
+      "fields": [],
+      "declaredIn": null,
+      "version": null,
+      "schema": null,
+      "idempotencyKey": null,
+      "summary": null
+    },
+    {
+      "name": "ThingClosed09",
+      "type": "event",
+      "identity": null,
+      "fields": [],
+      "declaredIn": null,
+      "version": null,
+      "schema": null,
+      "idempotencyKey": null,
+      "summary": null
+    },
+    {
+      "name": "ThingClosed10",
+      "type": "event",
+      "identity": null,
+      "fields": [],
+      "declaredIn": null,
+      "version": null,
+      "schema": null,
+      "idempotencyKey": null,
+      "summary": null
+    },
+    {
+      "name": "ThingClosed11",
+      "type": "event",
+      "identity": null,
+      "fields": [],
+      "declaredIn": null,
+      "version": null,
+      "schema": null,
+      "idempotencyKey": null,
+      "summary": null
+    },
+    {
+      "name": "ThingClosed12",
+      "type": "event",
+      "identity": null,
+      "fields": [],
+      "declaredIn": null,
+      "version": null,
+      "schema": null,
+      "idempotencyKey": null,
+      "summary": null
+    },
+    {
+      "name": "ThingCreated01",
+      "type": "event",
+      "identity": null,
+      "fields": [],
+      "declaredIn": null,
+      "version": null,
+      "schema": null,
+      "idempotencyKey": null,
+      "summary": null
+    },
+    {
+      "name": "ThingCreated02",
+      "type": "event",
+      "identity": null,
+      "fields": [],
+      "declaredIn": null,
+      "version": null,
+      "schema": null,
+      "idempotencyKey": null,
+      "summary": null
+    },
+    {
+      "name": "ThingCreated03",
+      "type": "event",
+      "identity": null,
+      "fields": [],
+      "declaredIn": null,
+      "version": null,
+      "schema": null,
+      "idempotencyKey": null,
+      "summary": null
+    },
+    {
+      "name": "ThingCreated04",
+      "type": "event",
+      "identity": null,
+      "fields": [],
+      "declaredIn": null,
+      "version": null,
+      "schema": null,
+      "idempotencyKey": null,
+      "summary": null
+    },
+    {
+      "name": "ThingCreated05",
+      "type": "event",
+      "identity": null,
+      "fields": [],
+      "declaredIn": null,
+      "version": null,
+      "schema": null,
+      "idempotencyKey": null,
+      "summary": null
+    },
+    {
+      "name": "ThingCreated06",
+      "type": "event",
+      "identity": null,
+      "fields": [],
+      "declaredIn": null,
+      "version": null,
+      "schema": null,
+      "idempotencyKey": null,
+      "summary": null
+    },
+    {
+      "name": "ThingCreated07",
+      "type": "event",
+      "identity": null,
+      "fields": [],
+      "declaredIn": null,
+      "version": null,
+      "schema": null,
+      "idempotencyKey": null,
+      "summary": null
+    },
+    {
+      "name": "ThingCreated08",
+      "type": "event",
+      "identity": null,
+      "fields": [],
+      "declaredIn": null,
+      "version": null,
+      "schema": null,
+      "idempotencyKey": null,
+      "summary": null
+    },
+    {
+      "name": "ThingCreated09",
+      "type": "event",
+      "identity": null,
+      "fields": [],
+      "declaredIn": null,
+      "version": null,
+      "schema": null,
+      "idempotencyKey": null,
+      "summary": null
+    },
+    {
+      "name": "ThingCreated10",
+      "type": "event",
+      "identity": null,
+      "fields": [],
+      "declaredIn": null,
+      "version": null,
+      "schema": null,
+      "idempotencyKey": null,
+      "summary": null
+    },
+    {
+      "name": "ThingCreated11",
+      "type": "event",
+      "identity": null,
+      "fields": [],
+      "declaredIn": null,
+      "version": null,
+      "schema": null,
+      "idempotencyKey": null,
+      "summary": null
+    },
+    {
+      "name": "ThingCreated12",
+      "type": "event",
+      "identity": null,
+      "fields": [],
+      "declaredIn": null,
+      "version": null,
+      "schema": null,
+      "idempotencyKey": null,
+      "summary": null
+    }
+  ],
+  "flows": [
+    {
+      "event": "ThingCreated01",
+      "bc": "bc01",
+      "from": [
+        "bc01.create_thing"
+      ],
+      "to": [
+        "bc01.close_on_create",
+        "bc01.thing_list",
+        "bc02.follow_upstream"
+      ],
+      "crossContext": true,
+      "dangling": false
+    },
+    {
+      "event": "ThingCreated02",
+      "bc": "bc02",
+      "from": [
+        "bc02.create_thing"
+      ],
+      "to": [
+        "bc02.thing_list",
+        "bc03.follow_upstream"
+      ],
+      "crossContext": true,
+      "dangling": false
+    },
+    {
+      "event": "ThingCreated03",
+      "bc": "bc03",
+      "from": [
+        "bc03.create_thing"
+      ],
+      "to": [
+        "bc03.thing_list",
+        "bc04.follow_upstream"
+      ],
+      "crossContext": true,
+      "dangling": false
+    },
+    {
+      "event": "ThingCreated04",
+      "bc": "bc04",
+      "from": [
+        "bc04.create_thing"
+      ],
+      "to": [
+        "bc04.thing_list",
+        "bc05.follow_upstream"
+      ],
+      "crossContext": true,
+      "dangling": false
+    },
+    {
+      "event": "ThingCreated06",
+      "bc": "bc06",
+      "from": [
+        "bc06.create_thing"
+      ],
+      "to": [
+        "bc06.close_on_create",
+        "bc06.thing_list",
+        "bc07.follow_upstream"
+      ],
+      "crossContext": true,
+      "dangling": false
+    },
+    {
+      "event": "ThingCreated07",
+      "bc": "bc07",
+      "from": [
+        "bc07.create_thing"
+      ],
+      "to": [
+        "bc07.thing_list",
+        "bc08.follow_upstream"
+      ],
+      "crossContext": true,
+      "dangling": false
+    },
+    {
+      "event": "ThingCreated08",
+      "bc": "bc08",
+      "from": [
+        "bc08.create_thing"
+      ],
+      "to": [
+        "bc08.thing_list",
+        "bc09.follow_upstream"
+      ],
+      "crossContext": true,
+      "dangling": false
+    },
+    {
+      "event": "ThingCreated09",
+      "bc": "bc09",
+      "from": [
+        "bc09.create_thing"
+      ],
+      "to": [
+        "bc09.thing_list",
+        "bc10.follow_upstream"
+      ],
+      "crossContext": true,
+      "dangling": false
+    },
+    {
+      "event": "ThingCreated11",
+      "bc": "bc11",
+      "from": [
+        "bc11.create_thing"
+      ],
+      "to": [
+        "bc11.close_on_create",
+        "bc11.thing_list",
+        "bc12.follow_upstream"
+      ],
+      "crossContext": true,
+      "dangling": false
+    },
+    {
+      "event": "PartnerThing04",
+      "bc": "bc04",
+      "from": [],
+      "to": [
+        "bc04.partner_feed"
+      ],
+      "crossContext": false,
+      "dangling": true
+    },
+    {
+      "event": "PartnerThing08",
+      "bc": "bc08",
+      "from": [],
+      "to": [
+        "bc08.partner_feed"
+      ],
+      "crossContext": false,
+      "dangling": true
+    },
+    {
+      "event": "PartnerThing12",
+      "bc": "bc12",
+      "from": [],
+      "to": [
+        "bc12.partner_feed"
+      ],
+      "crossContext": false,
+      "dangling": true
+    },
+    {
+      "event": "ThingClosed01",
+      "bc": "bc01",
+      "from": [
+        "bc01.close_thing"
+      ],
+      "to": [
+        "bc01.thing_list"
+      ],
+      "crossContext": false,
+      "dangling": false
+    },
+    {
+      "event": "ThingClosed02",
+      "bc": "bc02",
+      "from": [
+        "bc02.close_thing"
+      ],
+      "to": [
+        "bc02.thing_list"
+      ],
+      "crossContext": false,
+      "dangling": false
+    },
+    {
+      "event": "ThingClosed03",
+      "bc": "bc03",
+      "from": [
+        "bc03.close_thing"
+      ],
+      "to": [
+        "bc03.thing_list"
+      ],
+      "crossContext": false,
+      "dangling": false
+    },
+    {
+      "event": "ThingClosed04",
+      "bc": "bc04",
+      "from": [
+        "bc04.close_thing"
+      ],
+      "to": [
+        "bc04.thing_list"
+      ],
+      "crossContext": false,
+      "dangling": false
+    },
+    {
+      "event": "ThingClosed05",
+      "bc": "bc05",
+      "from": [
+        "bc05.close_thing"
+      ],
+      "to": [
+        "bc05.thing_list"
+      ],
+      "crossContext": false,
+      "dangling": false
+    },
+    {
+      "event": "ThingClosed06",
+      "bc": "bc06",
+      "from": [
+        "bc06.close_thing"
+      ],
+      "to": [
+        "bc06.thing_list"
+      ],
+      "crossContext": false,
+      "dangling": false
+    },
+    {
+      "event": "ThingClosed07",
+      "bc": "bc07",
+      "from": [
+        "bc07.close_thing"
+      ],
+      "to": [
+        "bc07.thing_list"
+      ],
+      "crossContext": false,
+      "dangling": false
+    },
+    {
+      "event": "ThingClosed08",
+      "bc": "bc08",
+      "from": [
+        "bc08.close_thing"
+      ],
+      "to": [
+        "bc08.thing_list"
+      ],
+      "crossContext": false,
+      "dangling": false
+    },
+    {
+      "event": "ThingClosed09",
+      "bc": "bc09",
+      "from": [
+        "bc09.close_thing"
+      ],
+      "to": [
+        "bc09.thing_list"
+      ],
+      "crossContext": false,
+      "dangling": false
+    },
+    {
+      "event": "ThingClosed10",
+      "bc": "bc10",
+      "from": [
+        "bc10.close_thing"
+      ],
+      "to": [
+        "bc10.thing_list"
+      ],
+      "crossContext": false,
+      "dangling": false
+    },
+    {
+      "event": "ThingClosed11",
+      "bc": "bc11",
+      "from": [
+        "bc11.close_thing"
+      ],
+      "to": [
+        "bc11.thing_list"
+      ],
+      "crossContext": false,
+      "dangling": false
+    },
+    {
+      "event": "ThingClosed12",
+      "bc": "bc12",
+      "from": [
+        "bc12.close_thing"
+      ],
+      "to": [
+        "bc12.thing_list"
+      ],
+      "crossContext": false,
+      "dangling": false
+    },
+    {
+      "event": "ThingCreated05",
+      "bc": "bc05",
+      "from": [
+        "bc05.create_thing"
+      ],
+      "to": [
+        "bc05.thing_list"
+      ],
+      "crossContext": false,
+      "dangling": false
+    },
+    {
+      "event": "ThingCreated10",
+      "bc": "bc10",
+      "from": [
+        "bc10.create_thing"
+      ],
+      "to": [
+        "bc10.thing_list"
+      ],
+      "crossContext": false,
+      "dangling": false
+    },
+    {
+      "event": "ThingCreated12",
+      "bc": "bc12",
+      "from": [
+        "bc12.create_thing"
+      ],
+      "to": [
+        "bc12.thing_list"
+      ],
+      "crossContext": false,
+      "dangling": false
+    }
+  ],
+  "writers": [
+    {
+      "target": "Thing01",
+      "kind": "aggregate",
+      "bcs": [
+        "bc01"
+      ],
+      "slices": [
+        "bc01.close_thing",
+        "bc01.create_thing"
+      ],
+      "flag": null
+    },
+    {
+      "target": "Thing02",
+      "kind": "aggregate",
+      "bcs": [
+        "bc02"
+      ],
+      "slices": [
+        "bc02.close_thing",
+        "bc02.create_thing"
+      ],
+      "flag": null
+    },
+    {
+      "target": "Thing03",
+      "kind": "aggregate",
+      "bcs": [
+        "bc03"
+      ],
+      "slices": [
+        "bc03.close_thing",
+        "bc03.create_thing"
+      ],
+      "flag": null
+    },
+    {
+      "target": "Thing04",
+      "kind": "aggregate",
+      "bcs": [
+        "bc04"
+      ],
+      "slices": [
+        "bc04.close_thing",
+        "bc04.create_thing"
+      ],
+      "flag": null
+    },
+    {
+      "target": "Thing05",
+      "kind": "aggregate",
+      "bcs": [
+        "bc05"
+      ],
+      "slices": [
+        "bc05.close_thing",
+        "bc05.create_thing"
+      ],
+      "flag": null
+    },
+    {
+      "target": "Thing06",
+      "kind": "aggregate",
+      "bcs": [
+        "bc06"
+      ],
+      "slices": [
+        "bc06.close_thing",
+        "bc06.create_thing"
+      ],
+      "flag": null
+    },
+    {
+      "target": "Thing07",
+      "kind": "aggregate",
+      "bcs": [
+        "bc07"
+      ],
+      "slices": [
+        "bc07.close_thing",
+        "bc07.create_thing"
+      ],
+      "flag": null
+    },
+    {
+      "target": "Thing08",
+      "kind": "aggregate",
+      "bcs": [
+        "bc08"
+      ],
+      "slices": [
+        "bc08.close_thing",
+        "bc08.create_thing"
+      ],
+      "flag": null
+    },
+    {
+      "target": "Thing09",
+      "kind": "aggregate",
+      "bcs": [
+        "bc09"
+      ],
+      "slices": [
+        "bc09.close_thing",
+        "bc09.create_thing"
+      ],
+      "flag": null
+    },
+    {
+      "target": "Thing10",
+      "kind": "aggregate",
+      "bcs": [
+        "bc10"
+      ],
+      "slices": [
+        "bc10.close_thing",
+        "bc10.create_thing"
+      ],
+      "flag": null
+    },
+    {
+      "target": "Thing11",
+      "kind": "aggregate",
+      "bcs": [
+        "bc11"
+      ],
+      "slices": [
+        "bc11.close_thing",
+        "bc11.create_thing"
+      ],
+      "flag": null
+    },
+    {
+      "target": "Thing12",
+      "kind": "aggregate",
+      "bcs": [
+        "bc12"
+      ],
+      "slices": [
+        "bc12.close_thing",
+        "bc12.create_thing"
+      ],
+      "flag": null
+    },
+    {
+      "target": "thing_list_01",
+      "kind": "read-model",
+      "bcs": [
+        "bc01"
+      ],
+      "slices": [
+        "bc01.thing_list"
+      ],
+      "flag": null
+    },
+    {
+      "target": "thing_list_02",
+      "kind": "read-model",
+      "bcs": [
+        "bc02"
+      ],
+      "slices": [
+        "bc02.thing_list"
+      ],
+      "flag": null
+    },
+    {
+      "target": "thing_list_03",
+      "kind": "read-model",
+      "bcs": [
+        "bc03"
+      ],
+      "slices": [
+        "bc03.thing_list"
+      ],
+      "flag": null
+    },
+    {
+      "target": "thing_list_04",
+      "kind": "read-model",
+      "bcs": [
+        "bc04"
+      ],
+      "slices": [
+        "bc04.thing_list"
+      ],
+      "flag": null
+    },
+    {
+      "target": "thing_list_05",
+      "kind": "read-model",
+      "bcs": [
+        "bc05"
+      ],
+      "slices": [
+        "bc05.thing_list"
+      ],
+      "flag": null
+    },
+    {
+      "target": "thing_list_06",
+      "kind": "read-model",
+      "bcs": [
+        "bc06"
+      ],
+      "slices": [
+        "bc06.thing_list"
+      ],
+      "flag": null
+    },
+    {
+      "target": "thing_list_07",
+      "kind": "read-model",
+      "bcs": [
+        "bc07"
+      ],
+      "slices": [
+        "bc07.thing_list"
+      ],
+      "flag": null
+    },
+    {
+      "target": "thing_list_08",
+      "kind": "read-model",
+      "bcs": [
+        "bc08"
+      ],
+      "slices": [
+        "bc08.thing_list"
+      ],
+      "flag": null
+    },
+    {
+      "target": "thing_list_09",
+      "kind": "read-model",
+      "bcs": [
+        "bc09"
+      ],
+      "slices": [
+        "bc09.thing_list"
+      ],
+      "flag": null
+    },
+    {
+      "target": "thing_list_10",
+      "kind": "read-model",
+      "bcs": [
+        "bc10"
+      ],
+      "slices": [
+        "bc10.thing_list"
+      ],
+      "flag": null
+    },
+    {
+      "target": "thing_list_11",
+      "kind": "read-model",
+      "bcs": [
+        "bc11"
+      ],
+      "slices": [
+        "bc11.thing_list"
+      ],
+      "flag": null
+    },
+    {
+      "target": "thing_list_12",
+      "kind": "read-model",
+      "bcs": [
+        "bc12"
+      ],
+      "slices": [
+        "bc12.thing_list"
+      ],
+      "flag": null
+    }
+  ],
+  "crossReads": [],
+  "notes": [
+    "package, files, message payloads and read-model columns come from source and were not read (no --source-facts)"
+  ]
+}

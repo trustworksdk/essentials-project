@@ -16,41 +16,24 @@
 
 package dk.trustworks.essentials.types.spring.web;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.datatype.jdk8.Jdk8Module;
-import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
+import dk.trustworks.essentials.jackson.types.EssentialTypesJacksonModule;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Import;
 
 /**
- * Jackson <b>2</b> test application. {@link WebMvcConfig} and {@link WebFluxConfig} supply the Jackson 2 body
- * converters/codecs; the semantic-type conversion for {@code @PathVariable}/{@code @RequestParam} comes from the
- * shipped {@link EssentialsWebMvcConfigurer}, imported explicitly the way a consumer would.
+ * Test application wired the way a consumer is told to wire one: the shipped {@link EssentialsWebMvcConfigurer} for
+ * {@code @PathVariable}/{@code @RequestParam} conversion, and {@link EssentialTypesJacksonModule} as a bean so Spring
+ * Boot registers it on the auto-configured Jackson 3 {@code JsonMapper} for request and response bodies.
+ * <p>
+ * Contrast {@link WebMvcJackson3SpringWebApplication}, which deliberately omits the module to pin what Boot's default
+ * mapper does without it.
  */
 @SpringBootApplication
 @Import(EssentialsWebMvcConfigurer.class)
 class WebMvcSpringWebApplication {
-
     @Bean
-    public ObjectMapper objectMapper() {
-        try {
-            var moduleClass = Class.forName("dk.trustworks.essentials.jackson.types.EssentialTypesJacksonModule");
-            var factoryMethod = moduleClass.getMethod("createObjectMapper", com.fasterxml.jackson.databind.Module[].class);
-            var mapper = factoryMethod.invoke(null, (Object) new com.fasterxml.jackson.databind.Module[]{
-                    new Jdk8Module(),
-                    new JavaTimeModule()
-            });
-            if (mapper instanceof ObjectMapper objectMapper) {
-                return objectMapper;
-            }
-
-            return new ObjectMapper()
-                    .registerModule(new Jdk8Module())
-                    .registerModule(new JavaTimeModule());
-        } catch (ReflectiveOperationException e) {
-            throw new IllegalStateException("Couldn't instantiate Essentials Jackson ObjectMapper", e);
-        }
+    EssentialTypesJacksonModule essentialTypesJacksonModule() {
+        return new EssentialTypesJacksonModule();
     }
-
 }

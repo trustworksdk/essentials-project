@@ -1,0 +1,15 @@
+target/
+.idea/
+*.iml
+.vscode/
+.DS_Store
+<!-- IF frontend!=none -->
+
+# Frontend: dependencies, the Node the build installs, build output, and the generated API client (never committed)
+frontend/node_modules/
+frontend/node/
+frontend/dist/
+frontend/src/shared/api/generated/
+frontend/src/shared/api/model/
+frontend/.env.local
+<!-- END frontend -->

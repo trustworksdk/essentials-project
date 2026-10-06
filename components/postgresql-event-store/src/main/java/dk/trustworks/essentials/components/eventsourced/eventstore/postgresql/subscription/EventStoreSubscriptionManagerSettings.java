@@ -18,6 +18,10 @@ package dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.s
 
 
 import java.time.Duration;
+import java.util.Optional;
+
+import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
+import static dk.trustworks.essentials.shared.MessageFormatter.msg;
 
 /**
  * Represents settings for managing EventStore subscriptions.
@@ -28,8 +32,60 @@ import java.time.Duration;
  * @param eventStorePollingInterval Determines the interval between successive polling attempts to fetch events from the EventStore.
  * @param snapshotResumePointsEvery Specifies the duration after which the subscription's resume points are periodically saved to ensure that
  *                                  a subscription can resume from the last processed event in case of interruptions.
+ * @param subscriptionErrorPolicy   What the asynchronous subscriptions do when their handler throws a non-I/O exception - see {@link SubscriptionErrorPolicy}
  */
 public record EventStoreSubscriptionManagerSettings(int eventStorePollingBatchSize,
                                                     Duration eventStorePollingInterval,
-                                                    Duration snapshotResumePointsEvery) {
+                                                    Duration snapshotResumePointsEvery,
+                                                    SubscriptionErrorPolicy subscriptionErrorPolicy) {
+
+    public EventStoreSubscriptionManagerSettings {
+        requireNonNull(subscriptionErrorPolicy, "No subscriptionErrorPolicy provided");
+    }
+
+    /**
+     * Settings with the {@link SubscriptionErrorPolicy#defaultPolicy()} - the shape these settings had before the policy
+     * was added
+     *
+     * @param eventStorePollingBatchSize Specifies the number of events to retrieve in each batch when polling the EventStore.
+     * @param eventStorePollingInterval  Determines the interval between successive polling attempts to fetch events from the EventStore.
+     * @param snapshotResumePointsEvery  Specifies the duration after which the subscription's resume points are periodically saved
+     */
+    public EventStoreSubscriptionManagerSettings(int eventStorePollingBatchSize,
+                                                 Duration eventStorePollingInterval,
+                                                 Duration snapshotResumePointsEvery) {
+        this(eventStorePollingBatchSize, eventStorePollingInterval, snapshotResumePointsEvery, SubscriptionErrorPolicy.defaultPolicy());
+    }
+
+    /**
+     * The {@link SubscriptionErrorPolicy} an asynchronous subscription of <code>eventHandler</code> applies: the handler's
+     * own {@link PersistedEventHandler#subscriptionErrorPolicy()} if it returns one, otherwise {@link #subscriptionErrorPolicy()}
+     *
+     * @param eventHandler the subscription's event handler
+     * @return the policy the subscription applies
+     */
+    public SubscriptionErrorPolicy subscriptionErrorPolicyFor(PersistedEventHandler eventHandler) {
+        requireNonNull(eventHandler, "No eventHandler provided");
+        return effectivePolicy(eventHandler.subscriptionErrorPolicy(), eventHandler);
+    }
+
+    /**
+     * The {@link SubscriptionErrorPolicy} a batched subscription of <code>eventHandler</code> applies: the handler's own
+     * {@link BatchedPersistedEventHandler#subscriptionErrorPolicy()} if it returns one, otherwise {@link #subscriptionErrorPolicy()}
+     *
+     * @param eventHandler the subscription's event handler
+     * @return the policy the subscription applies
+     */
+    public SubscriptionErrorPolicy subscriptionErrorPolicyFor(BatchedPersistedEventHandler eventHandler) {
+        requireNonNull(eventHandler, "No eventHandler provided");
+        return effectivePolicy(eventHandler.subscriptionErrorPolicy(), eventHandler);
+    }
+
+    @SuppressWarnings("OptionalUsedAsFieldOrParameterType")
+    private SubscriptionErrorPolicy effectivePolicy(Optional<SubscriptionErrorPolicy> handlerPolicy, Object eventHandler) {
+        return requireNonNull(handlerPolicy,
+                              msg("subscriptionErrorPolicy() of event handler '{}' returned null - return Optional.empty() to use the EventStoreSubscriptionManager's policy",
+                                  eventHandler))
+                .orElse(subscriptionErrorPolicy);
+    }
 }

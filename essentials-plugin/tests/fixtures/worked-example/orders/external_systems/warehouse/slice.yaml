@@ -1,0 +1,25 @@
+schemaVersion: "1.3"
+slice: orders.warehouse
+kind: translation
+bc: orders
+owner: orders-team
+status: live
+summary: Reserve stock in the warehouse system for every placed order.
+generator: essentials
+language: kotlin
+tier: cqrs-es
+lane: decider
+
+externalSystem: warehouse
+direction: outbound
+consumes: [OrderPlaced]
+maps:
+  - { from: OrderPlaced, to: WarehouseReservationRequest }
+
+forbidden:
+  - cross-slice-internal:orders
+
+tests:
+  unit: { present: false }
+  integration: { present: false }
+  contract: { present: false }

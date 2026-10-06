@@ -16,7 +16,8 @@
 
 package dk.trustworks.essentials.components.eventsourced.aggregates.decider;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
+import dk.trustworks.essentials.components.foundation.json.EssentialsObjectMappers;
+import tools.jackson.databind.ObjectMapper;
 import dk.trustworks.essentials.components.eventsourced.aggregates.*;
 import dk.trustworks.essentials.components.eventsourced.aggregates.decider.DeciderTest.GuessingGameEvent;
 import dk.trustworks.essentials.components.eventsourced.aggregates.snapshot.AggregateSnapshotRepository;
@@ -32,7 +33,7 @@ import dk.trustworks.essentials.components.foundation.transaction.UnitOfWork;
 import org.jdbi.v3.core.Jdbi;
 import org.jdbi.v3.postgres.PostgresPlugin;
 import org.junit.jupiter.api.*;
-import org.testcontainers.containers.PostgreSQLContainer;
+import org.testcontainers.postgresql.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.*;
 import org.testcontainers.shaded.org.awaitility.Awaitility;
 import reactor.core.Disposable;
@@ -42,7 +43,6 @@ import java.util.*;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.stream.*;
 
-import static dk.trustworks.essentials.components.eventsourced.aggregates.TestFasterxmlObjectMapperFactory.createObjectMapper;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
@@ -103,7 +103,7 @@ class DeciderBasedCommandHandlerIT {
     private             PostgresqlEventStore<SeparateTablePerAggregateEventStreamConfiguration> eventStore;
 
     @Container
-    private final PostgreSQLContainer<?> postgreSQLContainer = new PostgreSQLContainer<>("postgres:18.4")
+    private final PostgreSQLContainer postgreSQLContainer = new PostgreSQLContainer("postgres:18.4")
             .withDatabaseName("event-store")
             .withUsername("test-user")
             .withPassword("secret-password");
@@ -130,13 +130,13 @@ class DeciderBasedCommandHandlerIT {
         jdbi.setSqlLogger(new SqlExecutionTimeLogger());
 
         unitOfWorkFactory = new EventStoreManagedUnitOfWorkFactory(jdbi);
-        objectMapper = createObjectMapper();
+        objectMapper = EssentialsObjectMappers.createJackson3ObjectMapper();
         eventMapper = new TestPersistableEventMapper();
         eventStore = new PostgresqlEventStore<>(unitOfWorkFactory,
                                                 new SeparateTablePerAggregateTypePersistenceStrategy(jdbi,
                                                                                                      unitOfWorkFactory,
                                                                                                      eventMapper,
-                                                                                                     SeparateTablePerAggregateTypeEventStreamConfigurationFactory.standardSingleTenantConfiguration(EssentialsJSONEventSerializers.createForActiveJacksonFlavor(),
+                                                                                                     SeparateTablePerAggregateTypeEventStreamConfigurationFactory.standardSingleTenantConfiguration(EssentialsJSONEventSerializers.create(),
                                                                                                                                                                                                     IdentifierColumnType.TEXT,
                                                                                                                                                                                                     JSONColumnType.JSONB)));
         recordingLocalEventBusConsumer = new RecordingLocalEventBusConsumer();

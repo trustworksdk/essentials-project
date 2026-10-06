@@ -647,3 +647,69 @@ Testcontainers IT covering:
   harmless duplicate into a loss), so it needs careful handling of the active/in-flight case — the
   open question the inline note at `saveResumePointsForAllSubscribers()` flags. Build it only if a
   user is sensitive to duplicate-on-crash-recovery and idempotency isn't sufficient.
+- **S5 — Count-bounded resume-point save. Shipped in 0.60, opt-in.**
+  `snapshotResumePointsAfterEvents` (builder) / `essentials.eventstore.subscription-manager.snapshot-resume-points-after-events`
+  (Spring). A second task on the resume-point scheduler thread checks every active subscriber in memory and saves
+  only those whose resume point advanced at least that many `GlobalEventOrder` positions since the last confirmed
+  write (`SubscriptionResumePoint.unpersistedAdvance()`). It runs every tenth of `snapshotResumePointsEvery`, kept
+  between 50 ms and 1 s. The upper bound keeps a long periodic interval from making the threshold slow to act.
+  Because it shares the periodic save's single thread, the manager never runs two saves at once.
+
+  Alongside it, the Spring default for `snapshot-resume-points-every` dropped from `10s` to `1s`, matching the
+  builder. That is cheap because `PostgresqlDurableSubscriptionRepository.saveResumePoints` drops unchanged resume
+  points before opening a transaction. An idle system issues no statement, and a busy one at most one batched
+  `UPDATE` per interval.
+
+  Rejected: a no-rewind guard in the `UPDATE` (`AND resume_from_and_including_global_eventorder < :new`). Resets
+  rewind a resume point on purpose and persist through the same `saveResumePoints`, so the guard would silently
+  drop every reset.
+
+- **S6 — RESOLVED in 0.60: a save in flight could overwrite a concurrent reset.** S5 did not introduce this, but by
+  making saves more frequent it made the race more likely to hit.
+
+  **The sequence.**
+  1. The manager's save thread (periodic or S5) selects an *active* subscription and binds its current resume
+     point, X.
+  2. On another thread, the subscription is reset to Y < X. `resetFrom` calls `stop()`, then `overrideResumePoint`,
+     which sets Y, writes it, and marks Y persisted.
+  3. The save from step 1 commits after step 2, so the row holds X again.
+  4. The next save wrote Y back, so the row was wrong for at most one save interval. **If the node died inside that
+     window, the reset was lost.** The subscription resumed from X and never re-processed Y..X-1.
+
+  **Fix: a reposition epoch, compared and set in SQL.** `durable_subscriptions.reposition_epoch BIGINT NOT NULL
+  DEFAULT 0` (added by the contributor's repeatable `ADD COLUMN IF NOT EXISTS`). `SubscriptionResumePoint`
+  increments its epoch on every deliberate reposition (`setResumeFromAndIncluding`) and never on progress
+  (`advanceResumeFromAndIncluding`). A save binds `snapshot()`, i.e. value and epoch captured together, and runs
+  `UPDATE … SET …, reposition_epoch = :e WHERE … AND reposition_epoch <= :e`.
+  - Stale save commits after the reset: the stored epoch is newer, so 0 rows are updated and the reset stays.
+  - Stale save commits before the reset: the reset's epoch is newer, so it overwrites.
+  - A reset to the value already stored still needs saving, because `isChanged()` compares value *and* epoch, so
+    the store learns the new epoch.
+  - The in-memory bookkeeping follows the same rule. `markAsPersisted(Snapshot, …)` ignores a snapshot from an older
+    epoch than the one last recorded, so a stale save that finishes after the reset cannot mark the resume point
+    clean at the stale value.
+  - A refused save is recorded with `markAsSuperseded(Snapshot)`, so it is not retried on every tick. If this
+    instance's own reset overtook it, that is logged at DEBUG. Otherwise another writer moved the row (a stale
+    instance, or non-exclusive subscriptions on several nodes sharing a row), and that is a WARN once per resume
+    point.
+
+  **Why a counter and not a timestamp.** Ordering must not depend on clocks: nodes' clocks differ, two writes can land
+  in the same millisecond, and a clock stepping backwards would let a stale write through. `last_updated` stays
+  informational.
+
+  **Rejected alternatives.**
+  - *Plain optimistic locking* (`version = version + 1 WHERE version = :expected`) makes the *second* writer lose,
+    so a stale save that commits first would turn the reset into the refused write.
+  - *Holding the resume point's monitor across bind → commit.* This blocks event-handler threads, which advance
+    under the same monitor, for every save round-trip.
+  - *An in-JVM self-heal* (re-save on epoch change). It narrows the window without closing it.
+
+  Pinned by `SubscriptionResumePointTest` (both commit orders in memory) and `PostgresqlDurableSubscriptionRepositoryIT`
+  (both orders against the database, a reset to the same value, and upgrading a 0.50 table).
+
+  **Related dead code, removed.** `SubscriptionResetOnPoisonNotifier`'s reset callback claimed to force durable
+  persistence. It built a fresh `SubscriptionResumePoint`, which starts with its persisted value equal to its current
+  value, so `isChanged()` was false and `saveResumePoints` filtered it out without writing. That was already true of
+  the flag-based `isChanged()` it was written against. The reset was always persisted by `overrideResumePoint` inside
+  `resetFrom`, before the callback runs. The callback is now a no-op. Making it write would only have added a second
+  writer, from a second resume-point object, to the race described above.

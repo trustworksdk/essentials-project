@@ -46,7 +46,8 @@ import java.util.stream.*;
  * mapping makes {@link #buildOpenApi()} throw, which fails the drift test and forces the contract to be
  * regenerated when the SPIs change.
  *
- * @see OpenApiSpecGenerationTest
+ * <p>
+ * The drift guard that keeps the committed file in step with the SPIs is {@code OpenApiSpecGenerationTest}.
  */
 public final class OpenApiSpecGenerator {
 
@@ -63,7 +64,7 @@ public final class OpenApiSpecGenerator {
 
     /**
      * Regenerates the committed spec file. Intended to be invoked by the build (or manually) when the
-     * SPIs change. See {@link OpenApiSpecGenerationTest} for the drift guard run in CI.
+     * SPIs change. See {@code OpenApiSpecGenerationTest} for the drift guard run in CI.
      */
     public static void main(String[] args) throws IOException {
         Path target = SPEC_FILE;
@@ -332,6 +333,12 @@ public final class OpenApiSpecGenerator {
                     .description("Outcome of a lock release.")
                     .addProperty("released", new BooleanSchema())
                     .addRequiredItem("released"));
+            schemas.put("ResumeResult", new ObjectSchema()
+                    .description("Outcome of resuming a subscription stopped by its error policy. False is a normal "
+                                 + "answer, not an error: the subscription is not stopped by its error policy, or "
+                                 + "does not run in the instance that received the request.")
+                    .addProperty("resumed", new BooleanSchema())
+                    .addRequiredItem("resumed"));
             schemas.put("DeleteResult", new ObjectSchema()
                     .description("Outcome of a message deletion.")
                     .addProperty("deleted", new BooleanSchema())
@@ -340,6 +347,22 @@ public final class OpenApiSpecGenerator {
                     .description("Number of messages removed by a purge.")
                     .addProperty("purgedCount", new IntegerSchema().format("int32"))
                     .addRequiredItem("purgedCount"));
+            schemas.put("MessageOperationResult", new ObjectSchema()
+                    .description("Whether a shard-owned queue message operation took effect. False is a "
+                                 + "normal answer, not an error: the message may already have been "
+                                 + "delivered, deleted or moved by its owner.")
+                    .addProperty("applied", new BooleanSchema())
+                    .addRequiredItem("applied"));
+            schemas.put("ShardOwnedPurgeResult", new ObjectSchema()
+                    .description("Rows removed by a shard-owned queue purge, across both lanes and the "
+                                 + "dead-letter table. Distinct from PurgeResult, which is int32.")
+                    .addProperty("purgedCount", new IntegerSchema().format("int64"))
+                    .addRequiredItem("purgedCount"));
+            schemas.put("ShardOwnedResurrectKeyResult", new ObjectSchema()
+                    .description("Messages returned to the ordered lane by resurrecting a whole key. Zero "
+                                 + "is a normal answer: the key had no dead letters.")
+                    .addProperty("resurrectedCount", new IntegerSchema().format("int32"))
+                    .addRequiredItem("resurrectedCount"));
             schemas.put("QueueNameResult", new ObjectSchema()
                     .description("A resolved queue name.")
                     .addProperty("queueName", new StringSchema())
@@ -467,6 +490,17 @@ public final class OpenApiSpecGenerator {
             return this;
         }
 
+        /**
+         * Declares a {@code 409}: the request is valid but cannot be carried out in the server's current state, or on
+         * the instance it reached. Opt-in, as only a few operations can answer it.
+         */
+        OperationSpec conflict(String description) {
+            this.conflictDescription = description;
+            return this;
+        }
+
+        private String conflictDescription;
+
         // ---- terminal response builders (register the operation) ----
 
         void responseArray(String schemaName) {
@@ -497,12 +531,24 @@ public final class OpenApiSpecGenerator {
             ok(owner.ref("ReleaseResult"), "Whether the lock was released.");
         }
 
+        void responseResumed() {
+            ok(owner.ref("ResumeResult"), "Whether the subscription was resumed.");
+        }
+
         void responseDeleted() {
             ok(owner.ref("DeleteResult"), "Whether the message was deleted.");
         }
 
         void responsePurged() {
             ok(owner.ref("PurgeResult"), "Number of messages purged.");
+        }
+
+        void responseMessageOperation() {
+            ok(owner.ref("MessageOperationResult"), "Whether the operation took effect.");
+        }
+
+        void responseShardOwnedPurge() {
+            ok(owner.ref("ShardOwnedPurgeResult"), "Number of messages removed.");
         }
 
         void responseQueueNameOptional() {
@@ -537,6 +583,9 @@ public final class OpenApiSpecGenerator {
             if (notFound) {
                 responses.addApiResponse("404", error("No value exists for the given identifier."));
             }
+            if (conflictDescription != null) {
+                responses.addApiResponse("409", error(conflictDescription));
+            }
             return responses.addApiResponse("500", error("Unexpected server error."));
         }
 
@@ -551,9 +600,24 @@ public final class OpenApiSpecGenerator {
 
         private ApiResponses builtResponses;
 
+        /**
+         * Overrides the operationId, which defaults to the SPI method name.
+         * <p>
+         * OpenAPI requires operationIds to be unique across the whole document, and two SPIs may
+         * legitimately name a method the same thing — {@code getQueueNames} and {@code deleteMessage}
+         * exist on both the durable-queues and the shard-owned-queues contracts. The default stays
+         * the method name so existing ids never move; a colliding operation names itself instead.
+         */
+        OperationSpec operationId(String operationId) {
+            this.operationId = operationId;
+            return this;
+        }
+
+        private String operationId;
+
         private Operation toOperation() {
             var operation = new Operation()
-                    .operationId(methodName)
+                    .operationId(operationId != null ? operationId : methodName)
                     .summary(summary)
                     .addTagsItem(tag)
                     .responses(builtResponses);

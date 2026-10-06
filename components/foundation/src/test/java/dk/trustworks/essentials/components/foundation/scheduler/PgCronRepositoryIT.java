@@ -23,7 +23,7 @@ import dk.trustworks.essentials.shared.network.Network;
 import org.jdbi.v3.core.Jdbi;
 import org.junit.jupiter.api.*;
 import org.slf4j.LoggerFactory;
-import org.testcontainers.containers.PostgreSQLContainer;
+import org.testcontainers.postgresql.PostgreSQLContainer;
 import org.testcontainers.containers.output.Slf4jLogConsumer;
 import org.testcontainers.junit.jupiter.*;
 import org.testcontainers.utility.DockerImageName;
@@ -43,7 +43,7 @@ public class PgCronRepositoryIT {
     protected static     DockerImageName pgCronImage = DockerImageName.parse(IMAGE_PROP).asCompatibleSubstituteFor("postgres");
 
     @Container
-    private static PostgreSQLContainer<?> postgreSQLContainer = new PostgreSQLContainer<>(pgCronImage)
+    private static PostgreSQLContainer postgreSQLContainer = new PostgreSQLContainer(pgCronImage)
             .withCommand("postgres", "-c", "shared_preload_libraries=pg_cron", "-c", "cron.database_name=test-db")
             .withDatabaseName("test-db")
             .withUsername("postgres")

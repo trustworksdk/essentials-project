@@ -25,7 +25,8 @@ import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.se
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.subscription.notify.NotifyTriggerInstaller;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.transaction.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.types.*;
-import dk.trustworks.essentials.components.foundation.postgresql.PostgresqlUtil;
+import dk.trustworks.essentials.components.foundation.postgresql.*;
+import dk.trustworks.essentials.components.foundation.schema.*;
 import dk.trustworks.essentials.components.foundation.types.*;
 import dk.trustworks.essentials.shared.Exceptions;
 import dk.trustworks.essentials.shared.collections.Streams;
@@ -39,8 +40,10 @@ import org.slf4j.*;
 import java.time.*;
 import java.util.*;
 import java.util.concurrent.*;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Consumer;
 import java.util.stream.*;
 
 import static dk.trustworks.essentials.shared.FailFast.*;
@@ -100,8 +103,12 @@ import static dk.trustworks.essentials.shared.MessageFormatter.*;
  * vulnerabilities, compromising the security and integrity of the database.</b>
  */
 @SuppressWarnings("OptionalUsedAsFieldOrParameterType")
-public final class SeparateTablePerAggregateTypePersistenceStrategy implements AggregateEventStreamPersistenceStrategy<SeparateTablePerAggregateEventStreamConfiguration> {
+public final class SeparateTablePerAggregateTypePersistenceStrategy implements AggregateEventStreamPersistenceStrategy<SeparateTablePerAggregateEventStreamConfiguration>, DynamicSchemaContributor {
     private static final Logger log = LoggerFactory.getLogger(SeparateTablePerAggregateTypePersistenceStrategy.class);
+    /**
+     * The {@link #moduleId()} the event-stream tables are recorded under
+     */
+    public static final String MODULE_ID = "postgresql-event-store";
 
     /**
      * Key: {@link AggregateType}<br>
@@ -135,6 +142,23 @@ public final class SeparateTablePerAggregateTypePersistenceStrategy implements A
      * </ul>
      */
     private final AtomicReference<NotifyTriggerInstaller>                                                     notifyTriggerInstaller             = new AtomicReference<>();
+    /**
+     * Set by {@link #enableNotifyTriggers(Consumer)}: every event-stream table's contribution then includes its
+     * {@code pg_notify} trigger, and the listener is told about each table once its schema has been handed on.
+     */
+    private final AtomicReference<Consumer<String>>                                                           notifyTriggerListener              = new AtomicReference<>();
+    /**
+     * Set by {@link #enableCausationIndex()}: every event-stream table's contribution then includes a partial index on
+     * its caused-by-event-id column, which {@link #loadEventsCausedBy(EventStoreUnitOfWork, EventId)} requires
+     */
+    private final AtomicBoolean                                                                               causationIndexEnabled              = new AtomicBoolean();
+    /**
+     * Where the schema of a newly registered event-stream table goes: this strategy's own create applier in
+     * {@link SchemaOwnership#COMPONENT} mode, the harness' applier once one {@link #attach(SchemaChangeSink) attached}.
+     * {@code null} in {@link SchemaOwnership#HARNESS} mode until then - the harness' sweep covers what is registered
+     * before it runs.
+     */
+    private final AtomicReference<SchemaChangeSink>                                                           schemaSink                         = new AtomicReference<>();
     private final EventStoreUnitOfWorkFactory<EventStoreUnitOfWork>                                           unitOfWorkFactory;
     private final PersistableEventMapper                                                                      eventMapper;
     private final AggregateEventStreamConfigurationFactory<SeparateTablePerAggregateEventStreamConfiguration> aggregateEventStreamConfigurationFactory;
@@ -165,22 +189,21 @@ public final class SeparateTablePerAggregateTypePersistenceStrategy implements A
      * @param persistableEventEnrichers                {@link PersistableEventEnricher}'s - which are called in sequence by the {@link SeparateTablePerAggregateTypePersistenceStrategy#persist(EventStoreUnitOfWork, AggregateType, Object, Optional, List)} after
      *                                                 {@link PersistableEventMapper#map(Object, AggregateEventStreamConfiguration, Object, EventOrder)}
      *                                                 has been called
-     * @deprecated Use {@link #builder()}. This constructor declares an {@code Optional} parameter and/or more than five parameters; the builder names every argument and accepts both plain values and {@code Optional}s. It is unchanged and remains the implementation the builder delegates to.
      */
-    @Deprecated(forRemoval = true, since = "0.40.x")
-    public SeparateTablePerAggregateTypePersistenceStrategy(Jdbi jdbi,
-                                                            EventStoreUnitOfWorkFactory unitOfWorkFactory,
-                                                            PersistableEventMapper eventMapper,
-                                                            AggregateEventStreamConfigurationFactory<SeparateTablePerAggregateEventStreamConfiguration> aggregateEventStreamConfigurationFactory,
-                                                            List<SeparateTablePerAggregateEventStreamConfiguration> aggregateTypeConfigurations,
-                                                            List<PersistableEventEnricher> persistableEventEnrichers) {
+    SeparateTablePerAggregateTypePersistenceStrategy(Jdbi jdbi,
+                                              EventStoreUnitOfWorkFactory unitOfWorkFactory,
+                                              PersistableEventMapper eventMapper,
+                                              AggregateEventStreamConfigurationFactory<SeparateTablePerAggregateEventStreamConfiguration> aggregateEventStreamConfigurationFactory,
+                                              List<SeparateTablePerAggregateEventStreamConfiguration> aggregateTypeConfigurations,
+                                              List<PersistableEventEnricher> persistableEventEnrichers) {
         this(jdbi,
              unitOfWorkFactory,
              eventMapper,
              aggregateEventStreamConfigurationFactory,
              aggregateTypeConfigurations,
              null,
-             persistableEventEnrichers);
+             persistableEventEnrichers,
+             SchemaOwnership.COMPONENT);
     }
 
     /**
@@ -206,7 +229,8 @@ public final class SeparateTablePerAggregateTypePersistenceStrategy implements A
              aggregateEventStreamConfigurationFactory,
              aggregateTypeConfigurations,
              null,
-             List.of());
+             List.of(),
+             SchemaOwnership.COMPONENT);
     }
 
     /**
@@ -223,10 +247,8 @@ public final class SeparateTablePerAggregateTypePersistenceStrategy implements A
      *                                                 {@link PersistableEventMapper#map(Object, AggregateEventStreamConfiguration, Object, EventOrder)}
      *                                                 has been called
      * @param aggregateTypeConfigurations              {@link AggregateEventStreamConfiguration}'s that should be added immediately
-     * @deprecated Use {@link #builder()}. This constructor declares an {@code Optional} parameter and/or more than five parameters; the builder names every argument and accepts both plain values and {@code Optional}s. It is unchanged and remains the implementation the builder delegates to.
      */
-    @Deprecated(forRemoval = true, since = "0.40.x")
-    public SeparateTablePerAggregateTypePersistenceStrategy(Jdbi jdbi,
+    SeparateTablePerAggregateTypePersistenceStrategy(Jdbi jdbi,
                                                             EventStoreUnitOfWorkFactory unitOfWorkFactory,
                                                             PersistableEventMapper eventMapper,
                                                             AggregateEventStreamConfigurationFactory<SeparateTablePerAggregateEventStreamConfiguration> aggregateEventStreamConfigurationFactory,
@@ -238,7 +260,8 @@ public final class SeparateTablePerAggregateTypePersistenceStrategy implements A
              aggregateEventStreamConfigurationFactory,
              List.of(aggregateTypeConfigurations),
              null,
-             persistableEventEnrichers);
+             persistableEventEnrichers,
+             SchemaOwnership.COMPONENT);
     }
 
     /**
@@ -264,7 +287,8 @@ public final class SeparateTablePerAggregateTypePersistenceStrategy implements A
              aggregateEventStreamConfigurationFactory,
              List.of(aggregateTypeConfigurations),
              null,
-             List.of());
+             List.of(),
+             SchemaOwnership.COMPONENT);
     }
 
     /**
@@ -289,7 +313,8 @@ public final class SeparateTablePerAggregateTypePersistenceStrategy implements A
                                                              AggregateEventStreamConfigurationFactory<SeparateTablePerAggregateEventStreamConfiguration> aggregateEventStreamConfigurationFactory,
                                                              List<SeparateTablePerAggregateEventStreamConfiguration> aggregateTypeConfigurations,
                                                              PostgresqlEventStreamListener postgresqlEventStreamListener,
-                                                             List<PersistableEventEnricher> persistableEventEnrichers) {
+                                                             List<PersistableEventEnricher> persistableEventEnrichers,
+                                                             SchemaOwnership schemaOwnership) {
         this.jdbi = requireNonNull(jdbi, "No jdbi instance provided");
         this.unitOfWorkFactory = requireNonNull(unitOfWorkFactory);
         this.eventMapper = requireNonNull(eventMapper, "No event mapper provided");
@@ -310,10 +335,38 @@ public final class SeparateTablePerAggregateTypePersistenceStrategy implements A
         jdbi.registerArgument(new EventRevisionArgumentFactory());
         jdbi.registerColumnMapper(new EventRevisionColumnMapper());
 
+        if (requireNonNull(schemaOwnership, "No schemaOwnership provided") == SchemaOwnership.COMPONENT) {
+            schemaSink.set(new PostgresqlCreateSchemaApplier(unitOfWorkFactory).sinkFor(this));
+        }
+
         requireNonNull(aggregateTypeConfigurations, "No aggregateTypeConfigurations provided");
         aggregateTypeConfigurations.forEach(this::addAggregateEventStreamConfiguration);
     }
 
+
+    /**
+     * The {@link SeparateTablePerAggregateTypePersistenceStrategyBuilder}'s constructor.
+     *
+     * @param schemaOwnership {@link SchemaOwnership#COMPONENT} creates each event-stream table as its
+     *                        {@link AggregateType} is registered; {@link SchemaOwnership#HARNESS} leaves them to an
+     *                        {@link EssentialsSchemaHarness}
+     */
+    SeparateTablePerAggregateTypePersistenceStrategy(Jdbi jdbi,
+                                                     EventStoreUnitOfWorkFactory unitOfWorkFactory,
+                                                     PersistableEventMapper eventMapper,
+                                                     AggregateEventStreamConfigurationFactory<SeparateTablePerAggregateEventStreamConfiguration> aggregateEventStreamConfigurationFactory,
+                                                     List<SeparateTablePerAggregateEventStreamConfiguration> aggregateTypeConfigurations,
+                                                     List<PersistableEventEnricher> persistableEventEnrichers,
+                                                     SchemaOwnership schemaOwnership) {
+        this(jdbi,
+             unitOfWorkFactory,
+             eventMapper,
+             aggregateEventStreamConfigurationFactory,
+             aggregateTypeConfigurations,
+             null,
+             persistableEventEnrichers,
+             schemaOwnership);
+    }
 
     @Override
     public final SeparateTablePerAggregateTypePersistenceStrategy addAggregateEventStreamConfiguration(SeparateTablePerAggregateEventStreamConfiguration aggregateTypeConfiguration) {
@@ -324,6 +377,10 @@ public final class SeparateTablePerAggregateTypePersistenceStrategy implements A
         if (!aggregateTypeConfigurations.containsKey(aggregateTypeConfiguration.aggregateType)) {
             aggregateTypeConfigurations.put(aggregateTypeConfiguration.aggregateType, aggregateTypeConfiguration);
             initializeEventStorageFor(aggregateTypeConfiguration);
+            var listener = notifyTriggerListener.get();
+            if (listener != null) {
+                listener.accept(aggregateTypeConfiguration.eventStreamTableName);
+            }
             // S1: install the NOTIFY trigger + register with the change listener, if the
             // autoconfig enabled it. If the installer is set between the read and the
             // call (or after this method returns), the start-of-day sweep in
@@ -355,9 +412,17 @@ public final class SeparateTablePerAggregateTypePersistenceStrategy implements A
      *
      * @throws IllegalStateException if {@code enableNotifyTriggerInstallation} has
      *                               already been called on this instance.
+     * @deprecated the installer executes the trigger DDL itself, outside the schema harness, so a harness in validate
+     * or emit mode never sees the trigger. Use {@link #enableNotifyTriggers(Consumer)}, which describes it as part of
+     * each table's schema
      */
+    @Deprecated
     public final void enableNotifyTriggerInstallation(NotifyTriggerInstaller installer) {
         requireNonNull(installer, "installer cannot be null");
+        if (notifyTriggerListener.get() != null) {
+            throw new IllegalStateException("Notify triggers are already enabled on this persistence strategy through enableNotifyTriggers - "
+                                                    + "enableNotifyTriggerInstallation must not be used as well");
+        }
         if (!notifyTriggerInstaller.compareAndSet(null, installer)) {
             throw new IllegalStateException(
                     "Notify trigger installer is already configured on this persistence strategy; "
@@ -371,6 +436,129 @@ public final class SeparateTablePerAggregateTypePersistenceStrategy implements A
         for (var cfg : aggregateTypeConfigurations.values()) {
             installer.installFor(cfg.eventStreamTableName);
         }
+    }
+
+    /**
+     * Enable NOTIFY-driven polling wake-up (S1) for this persistence strategy, with the {@code pg_notify} trigger of
+     * every event-stream table described as part of that table's schema - so it is created, validated or emitted
+     * like the table itself, by whichever applier owns this strategy's schema.
+     * <p>
+     * The triggers of the tables registered so far are handed on at once. {@code afterTriggerDescribed} is then called
+     * with each table name - now for those, later for each newly registered one - to register it with a change
+     * listener. {@code LISTEN} does not need the trigger to exist, so this is safe while the harness has yet to run.
+     * <p>
+     * One-shot, like {@link #enableNotifyTriggerInstallation(NotifyTriggerInstaller)}, and exclusive with it.
+     *
+     * @param afterTriggerDescribed called once per event-stream table; must be idempotent, because a table registered
+     *                              concurrently with this call may be reported twice
+     * @throws IllegalStateException if notify triggers are already enabled on this instance, through either method
+     */
+    public final void enableNotifyTriggers(Consumer<String> afterTriggerDescribed) {
+        requireNonNull(afterTriggerDescribed, "afterTriggerDescribed cannot be null");
+        if (notifyTriggerInstaller.get() != null) {
+            throw new IllegalStateException("Notify triggers are already enabled on this persistence strategy through enableNotifyTriggerInstallation - "
+                                                    + "enableNotifyTriggers must not be used as well");
+        }
+        if (!notifyTriggerListener.compareAndSet(null, afterTriggerDescribed)) {
+            throw new IllegalStateException("Notify triggers are already enabled on this persistence strategy; enableNotifyTriggers must only be called once. "
+                                                    + "Check for duplicate autoconfig wiring (e.g. multiple bootstrap beans).");
+        }
+        for (var cfg : aggregateTypeConfigurations.values()) {
+            initializeEventStorageFor(cfg);
+            afterTriggerDescribed.accept(cfg.eventStreamTableName);
+        }
+    }
+
+    /**
+     * Add a partial index on the caused-by-event-id column of every event-stream table - those registered so far, and
+     * every one registered later - so {@link #loadEventsCausedBy(EventStoreUnitOfWork, EventId)} ("what did this event
+     * cause?") is an index lookup rather than a sequential scan of every table.
+     * <p>
+     * The index is partial ({@code WHERE caused_by_event_id IS NOT NULL}), so events without a cause - all historical
+     * ones, and anything started by a request, a scheduler or a person - stay out of it. It is created like the rest of
+     * the table's schema, by whichever applier owns this strategy's schema, and with {@code IF NOT EXISTS}: on a large
+     * existing table, build the same index by hand with {@code CREATE INDEX CONCURRENTLY} first - see
+     * {@link #causationIndexStatement(SeparateTablePerAggregateEventStreamConfiguration)} for its exact name and
+     * predicate - and this then finds it in place.
+     * <p>
+     * Idempotent. Off by default: the backward lookup ("what caused this event?") uses the existing event-id index and
+     * needs none of this.
+     */
+    public final void enableCausationIndex() {
+        if (causationIndexEnabled.compareAndSet(false, true)) {
+            for (var cfg : aggregateTypeConfigurations.values()) {
+                initializeEventStorageFor(cfg);
+            }
+        }
+    }
+
+    /**
+     * @return whether {@link #enableCausationIndex()} has been called
+     */
+    public final boolean isCausationIndexEnabled() {
+        return causationIndexEnabled.get();
+    }
+
+    /**
+     * The statement that creates the caused-by-event-id index of an event-stream table. Public so the exact statement can
+     * be pre-built by hand, concurrently, on a large table before {@link #enableCausationIndex()} is switched on.
+     *
+     * @param eventStreamConfiguration the event-stream table's configuration
+     * @return the {@code CREATE INDEX IF NOT EXISTS} statement
+     */
+    public static String causationIndexStatement(SeparateTablePerAggregateEventStreamConfiguration eventStreamConfiguration) {
+        requireNonNull(eventStreamConfiguration, "No eventStreamConfiguration provided");
+        return bind("CREATE INDEX IF NOT EXISTS {:tableName}_{:causedByColumn} ON {:tableName} ({:causedByColumn}) WHERE {:causedByColumn} IS NOT NULL",
+                    arg("tableName", eventStreamConfiguration.eventStreamTableName),
+                    arg("causedByColumn", eventStreamConfiguration.eventStreamTableColumnNames.causedByEventIdColumn));
+    }
+
+    @Override
+    public String moduleId() {
+        return MODULE_ID;
+    }
+
+    @Override
+    public int order() {
+        return SchemaOrder.ORDER_EVENT_STORE;
+    }
+
+    /**
+     * The event-stream table of every {@link AggregateType} registered so far, each with its tenant index and - when
+     * {@link #enableNotifyTriggers(Consumer)} was called - its notify trigger.
+     */
+    @Override
+    public List<SchemaChange> contribute(SchemaContext context) {
+        return aggregateTypeConfigurations.values()
+                                          .stream()
+                                          .sorted(Comparator.comparing(cfg -> cfg.eventStreamTableName))
+                                          .flatMap(cfg -> schemaChangesFor(cfg).stream())
+                                          .toList();
+    }
+
+    @Override
+    public void attach(SchemaChangeSink sink) {
+        schemaSink.set(requireNonNull(sink, "No sink provided"));
+    }
+
+    private List<SchemaChange> schemaChangesFor(SeparateTablePerAggregateEventStreamConfiguration eventStreamConfiguration) {
+        PostgresqlUtil.checkIsValidTableOrColumnName(eventStreamConfiguration.eventStreamTableName);
+        eventStreamConfiguration.eventStreamTableColumnNames.validate();
+
+        var eventStreamTableName = eventStreamConfiguration.eventStreamTableName;
+        var changes = new ArrayList<SchemaChange>(3);
+        changes.add(SchemaChange.repeatable("event-stream-table", eventStreamTableName, createEventStreamTableStatement(eventStreamConfiguration)));
+        changes.add(SchemaChange.repeatable("event-stream-tenant-index", eventStreamTableName, createTenantIndexStatement(eventStreamConfiguration)));
+        if (causationIndexEnabled.get()) {
+            changes.add(SchemaChange.repeatable("event-stream-caused-by-index", eventStreamTableName, causationIndexStatement(eventStreamConfiguration)));
+        }
+        if (notifyTriggerListener.get() != null) {
+            changes.add(SchemaChange.repeatable("change-notification-trigger",
+                                                eventStreamTableName,
+                                                ListenNotify.changeNotificationTriggerStatements(eventStreamTableName, List.of(ListenNotify.SqlOperation.INSERT))
+                                                            .toArray(String[]::new)));
+        }
+        return changes;
     }
 
     @Override
@@ -404,20 +592,12 @@ public final class SeparateTablePerAggregateTypePersistenceStrategy implements A
         requireNonNull(eventStreamConfiguration, "No eventStreamConfiguration provided");
 
         log.info("Checking and Initializing EventStream storage for aggregate-type '{}' using event-stream table name '{}'", eventStreamConfiguration.aggregateType, eventStreamConfiguration.eventStreamTableName);
-        PostgresqlUtil.checkIsValidTableOrColumnName(eventStreamConfiguration.eventStreamTableName);
-        eventStreamConfiguration.eventStreamTableColumnNames.validate();
-
-        unitOfWorkFactory.usingUnitOfWork(unitOfWork -> {
-            PostgresqlUtil.acquireBootstrapLock(unitOfWork.handle());
-            Optional<String> eventTable = unitOfWork.handle().createQuery("SELECT to_regclass(:tableName)")
-                                                    .bind("tableName", eventStreamConfiguration.eventStreamTableName)
-                                                    .mapTo(String.class)
-                                                    .findOne();
-            if (eventTable.isEmpty()) {
-                createEventStreamTable(unitOfWork.handle(), eventStreamConfiguration);
-            }
-            ensureIndexes(unitOfWork.handle(), eventStreamConfiguration);
-        });
+        var sink = schemaSink.get();
+        if (sink != null) {
+            sink.apply(schemaChangesFor(eventStreamConfiguration));
+        } else {
+            log.info("[{}] Leaving event-stream table '{}' to the schema harness", eventStreamConfiguration.aggregateType, eventStreamConfiguration.eventStreamTableName);
+        }
     }
 
 
@@ -436,75 +616,55 @@ public final class SeparateTablePerAggregateTypePersistenceStrategy implements A
             unitOfWork.handle().execute("DROP TABLE IF EXISTS " + configuration.eventStreamTableName);
             log.debug("Dropped table '{}'", configuration.eventStreamTableName);
         });
-        initializeEventStorageFor(configuration);
+        // Re-created here even when the schema harness owns it: a reset is an explicit request to start over
+        var sink = schemaSink.get();
+        (sink != null ? sink : new PostgresqlCreateSchemaApplier(unitOfWorkFactory).sinkFor(this)).apply(schemaChangesFor(configuration));
     }
 
-    private void ensureIndexes(Handle handle, SeparateTablePerAggregateEventStreamConfiguration eventStreamConfiguration) {
-        PostgresqlUtil.checkIsValidTableOrColumnName(eventStreamConfiguration.eventStreamTableName);
-        eventStreamConfiguration.eventStreamTableColumnNames.validate();
-
-        var eventStreamTableName = eventStreamConfiguration.eventStreamTableName;
-        var columnNames          = eventStreamConfiguration.eventStreamTableColumnNames;
-        handle.createUpdate(bind("CREATE INDEX IF NOT EXISTS {:tableName}_{:tenantColumn} ON {:tableName} ({:tenantColumn})",
-                                 arg("tableName", eventStreamTableName),
-                                 arg("tenantColumn", columnNames.tenantColumn)
-                                )
-                           )
-              .execute();
-
-        log.info("[{}] '{}' index on '{}' created",
-                 eventStreamConfiguration.aggregateType,
-                 eventStreamConfiguration.eventStreamTableName,
-                 columnNames.tenantColumn);
+    private static String createTenantIndexStatement(SeparateTablePerAggregateEventStreamConfiguration eventStreamConfiguration) {
+        return bind("CREATE INDEX IF NOT EXISTS {:tableName}_{:tenantColumn} ON {:tableName} ({:tenantColumn})",
+                    arg("tableName", eventStreamConfiguration.eventStreamTableName),
+                    arg("tenantColumn", eventStreamConfiguration.eventStreamTableColumnNames.tenantColumn));
     }
 
-    private void createEventStreamTable(Handle handle, SeparateTablePerAggregateEventStreamConfiguration eventStreamConfiguration) {
-        PostgresqlUtil.checkIsValidTableOrColumnName(eventStreamConfiguration.eventStreamTableName);
-        eventStreamConfiguration.eventStreamTableColumnNames.validate();
-
+    private static String createEventStreamTableStatement(SeparateTablePerAggregateEventStreamConfiguration eventStreamConfiguration) {
         var eventStreamTableName = eventStreamConfiguration.eventStreamTableName;
         var columnNames          = eventStreamConfiguration.eventStreamTableColumnNames;
-        Update update = handle.createUpdate(bind("CREATE TABLE {:tableName} (\n" +
-                                                         "            {:globalOrderColumn} bigint GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,\n" +
-                                                         "            {:aggregateIdColumn} {:aggregateIdColumnType} NOT NULL,\n" +
-                                                         "            {:eventOrderColumn} bigint NOT NULL,\n" +
-                                                         "            {:eventIdColumn} {:eventIdColumnType} NOT NULL,\n" +
-                                                         "            {:causedByEventIdColumn} {:eventIdColumnType},\n" +
-                                                         "            {:correlationIdColumn} {:correlationIdColumnType},\n" +
-                                                         "            {:eventTypeColumn} text NOT NULL,\n" +
-                                                         "            {:eventRevisionColumn} text NOT NULL,\n" +
-                                                         "            {:timestampColumn} TIMESTAMP WITH TIME ZONE NOT NULL,\n" +
-                                                         "            {:eventPayloadColumn} {:eventPayloadType} NOT NULL,\n" +
-                                                         "            {:eventMetaDataColumn} {:eventMetaDataType} NOT NULL,\n" +
-                                                         "            {:tenantColumn} text,\n" +
-                                                         "          UNIQUE ({:aggregateIdColumn}, {:eventOrderColumn}),\n" +
-                                                         "          UNIQUE ({:eventIdColumn})\n" +
-                                                         "        )",
-                                                 arg("tableName", eventStreamTableName),
-                                                 arg("globalOrderColumn", columnNames.globalOrderColumn),
-                                                 arg("aggregateIdColumn", columnNames.aggregateIdColumn),
-                                                 arg("aggregateIdColumnType", eventStreamConfiguration.aggregateIdColumnType),
-                                                 arg("eventOrderColumn", columnNames.eventOrderColumn),
-                                                 arg("eventIdColumn", columnNames.eventIdColumn),
-                                                 arg("eventIdColumnType", eventStreamConfiguration.eventIdColumnType),
-                                                 arg("causedByEventIdColumn", columnNames.causedByEventIdColumn),
-                                                 arg("correlationIdColumn", columnNames.correlationIdColumn),
-                                                 arg("correlationIdColumnType", eventStreamConfiguration.correlationIdColumnType),
-                                                 arg("eventTypeColumn", columnNames.eventTypeColumn),
-                                                 arg("eventRevisionColumn", columnNames.eventRevisionColumn),
-                                                 arg("timestampColumn", columnNames.timestampColumn),
-                                                 arg("eventPayloadColumn", columnNames.eventPayloadColumn),
-                                                 arg("eventPayloadType", eventStreamConfiguration.eventJsonColumnType),
-                                                 arg("eventMetaDataColumn", columnNames.eventMetaDataColumn),
-                                                 arg("eventMetaDataType", eventStreamConfiguration.eventMetadataJsonColumnType),
-                                                 arg("tenantColumn", columnNames.tenantColumn)
-                                                )
-                                           );
-
-//        beforeCreateEventStreamTableCreation(update, handle);
-        log.info("[{}] Creating event-stream table '{}'", eventStreamConfiguration.aggregateType, eventStreamConfiguration.eventStreamTableName);
-        update.execute();
-//        afterCreateEventStreamTableCreation(numberOfChanges, update, handle);
+        return bind("CREATE TABLE IF NOT EXISTS {:tableName} (\n" +
+                            "            {:globalOrderColumn} bigint GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,\n" +
+                            "            {:aggregateIdColumn} {:aggregateIdColumnType} NOT NULL,\n" +
+                            "            {:eventOrderColumn} bigint NOT NULL,\n" +
+                            "            {:eventIdColumn} {:eventIdColumnType} NOT NULL,\n" +
+                            "            {:causedByEventIdColumn} {:eventIdColumnType},\n" +
+                            "            {:correlationIdColumn} {:correlationIdColumnType},\n" +
+                            "            {:eventTypeColumn} text NOT NULL,\n" +
+                            "            {:eventRevisionColumn} text NOT NULL,\n" +
+                            "            {:timestampColumn} TIMESTAMP WITH TIME ZONE NOT NULL,\n" +
+                            "            {:eventPayloadColumn} {:eventPayloadType} NOT NULL,\n" +
+                            "            {:eventMetaDataColumn} {:eventMetaDataType} NOT NULL,\n" +
+                            "            {:tenantColumn} text,\n" +
+                            "          UNIQUE ({:aggregateIdColumn}, {:eventOrderColumn}),\n" +
+                            "          UNIQUE ({:eventIdColumn})\n" +
+                            "        )",
+                    arg("tableName", eventStreamTableName),
+                    arg("globalOrderColumn", columnNames.globalOrderColumn),
+                    arg("aggregateIdColumn", columnNames.aggregateIdColumn),
+                    arg("aggregateIdColumnType", eventStreamConfiguration.aggregateIdColumnType),
+                    arg("eventOrderColumn", columnNames.eventOrderColumn),
+                    arg("eventIdColumn", columnNames.eventIdColumn),
+                    arg("eventIdColumnType", eventStreamConfiguration.eventIdColumnType),
+                    arg("causedByEventIdColumn", columnNames.causedByEventIdColumn),
+                    arg("correlationIdColumn", columnNames.correlationIdColumn),
+                    arg("correlationIdColumnType", eventStreamConfiguration.correlationIdColumnType),
+                    arg("eventTypeColumn", columnNames.eventTypeColumn),
+                    arg("eventRevisionColumn", columnNames.eventRevisionColumn),
+                    arg("timestampColumn", columnNames.timestampColumn),
+                    arg("eventPayloadColumn", columnNames.eventPayloadColumn),
+                    arg("eventPayloadType", eventStreamConfiguration.eventJsonColumnType),
+                    arg("eventMetaDataColumn", columnNames.eventMetaDataColumn),
+                    arg("eventMetaDataType", eventStreamConfiguration.eventMetadataJsonColumnType),
+                    arg("tenantColumn", columnNames.tenantColumn)
+                   );
     }
 
     private void addEventStreamPostgresqlNotification(Handle handle, SeparateTablePerAggregateEventStreamConfiguration eventStreamConfiguration) {
@@ -836,9 +996,16 @@ public final class SeparateTablePerAggregateTypePersistenceStrategy implements A
         if (persistableEvent.causedByEventId()
                             .isPresent()) {
             if (configuration.eventIdColumnType == IdentifierColumnType.UUID) {
-                causedByEventId = UUID.fromString(persistableEvent.causedByEventId()
-                                                                  .get()
-                                                                  .toString());
+                // A cause is diagnostic metadata and must never fail the append it is attached to. One that cannot be
+                // stored in a UUID column - bound explicitly, or carried over from a TEXT-typed event stream with custom
+                // event ids - is dropped with a warning instead
+                var cause = persistableEvent.causedByEventId().get().toString();
+                try {
+                    causedByEventId = UUID.fromString(cause);
+                } catch (IllegalArgumentException e) {
+                    log.warn("[{}] Not recording causedByEventId '{}' for event '{}': the event-stream table's event-id column type is UUID and the cause is not a UUID",
+                             configuration.aggregateType, cause, persistableEvent.eventId());
+                }
             } else {
                 causedByEventId = persistableEvent.causedByEventId()
                                                   .get();
@@ -973,6 +1140,31 @@ public final class SeparateTablePerAggregateTypePersistenceStrategy implements A
                                                           LongRange globalOrderRange,
                                                           List<GlobalEventOrder> includeAdditionalGlobalOrders,
                                                           Optional<Tenant> onlyIncludeEventsIfTheyBelongToTenant) {
+        requireNonNull(onlyIncludeEventsIfTheyBelongToTenant, "No onlyIncludeEventsIfTheyBelongToTenant provided");
+        return loadEventsByGlobalOrder(unitOfWork, aggregateType, globalOrderRange, includeAdditionalGlobalOrders, onlyIncludeEventsIfTheyBelongToTenant, Optional.empty());
+    }
+
+    /**
+     * Every tenant's events, but the payload and metadata columns are only selected for the rows of the given tenant (and rows
+     * without a tenant): for the others the database returns NULL for them without detoasting the (potentially large) values, so they are neither read
+     * nor transferred. The row mapper turns that NULL into an empty JSON object.
+     */
+    @Override
+    public Stream<PersistedEvent> loadEventsByGlobalOrderOmittingOtherTenantsPayloads(EventStoreUnitOfWork unitOfWork,
+                                                                                      AggregateType aggregateType,
+                                                                                      LongRange globalOrderRange,
+                                                                                      List<GlobalEventOrder> includeAdditionalGlobalOrders,
+                                                                                      Tenant onlyLoadPayloadIfEventBelongsToTenant) {
+        requireNonNull(onlyLoadPayloadIfEventBelongsToTenant, "No onlyLoadPayloadIfEventBelongsToTenant provided");
+        return loadEventsByGlobalOrder(unitOfWork, aggregateType, globalOrderRange, includeAdditionalGlobalOrders, Optional.empty(), Optional.of(onlyLoadPayloadIfEventBelongsToTenant));
+    }
+
+    private Stream<PersistedEvent> loadEventsByGlobalOrder(EventStoreUnitOfWork unitOfWork,
+                                                           AggregateType aggregateType,
+                                                           LongRange globalOrderRange,
+                                                           List<GlobalEventOrder> includeAdditionalGlobalOrders,
+                                                           Optional<Tenant> onlyIncludeEventsIfTheyBelongToTenant,
+                                                           Optional<Tenant> onlyLoadPayloadIfEventBelongsToTenant) {
         requireNonNull(unitOfWork, "No unitOfWork provided");
         requireNonNull(aggregateType, "No aggregateType provided");
         requireNonNull(globalOrderRange, "No aggregateId provided");
@@ -983,7 +1175,8 @@ public final class SeparateTablePerAggregateTypePersistenceStrategy implements A
                               .createQuery(loadEventsByGlobalOrderQuerySql(configuration,
                                                                            globalOrderRange,
                                                                            includeAdditionalGlobalOrders,
-                                                                           onlyIncludeEventsIfTheyBelongToTenant));
+                                                                           onlyIncludeEventsIfTheyBelongToTenant,
+                                                                           onlyLoadPayloadIfEventBelongsToTenant.isPresent()));
 
         query.bind("globalOrderRangeFrom", globalOrderRange.fromInclusive);
         if (globalOrderRange.isClosedRange()) {
@@ -994,6 +1187,7 @@ public final class SeparateTablePerAggregateTypePersistenceStrategy implements A
             query.bindList("includeAdditionalGlobalOrders", includeAdditionalGlobalOrders);
         }
         onlyIncludeEventsIfTheyBelongToTenant.ifPresent(tenant -> query.bind("tenant", configuration.tenantSerializer.serialize(tenant)));
+        onlyLoadPayloadIfEventBelongsToTenant.ifPresent(tenant -> query.bind("payloadTenant", configuration.tenantSerializer.serialize(tenant)));
         query.setFetchSize(configuration.queryFetchSize);
         return query.map(new PersistedEventRowMapper(this, configuration))
                     .stream();
@@ -1012,6 +1206,53 @@ public final class SeparateTablePerAggregateTypePersistenceStrategy implements A
                          .setFetchSize(1)
                          .map(new PersistedEventRowMapper(this, configuration))
                          .findOne();
+    }
+
+    /**
+     * {@inheritDoc}
+     * <p>
+     * One indexed query per registered event-stream table, in table-name order; within a table the events come in
+     * global-event-order. There is no order across tables - a global event order is per table.
+     *
+     * @throws IllegalStateException if {@link #enableCausationIndex()} has not been called - the lookup would otherwise be
+     *                               a sequential scan of every event-stream table
+     */
+    @Override
+    public List<PersistedEvent> loadEventsCausedBy(EventStoreUnitOfWork unitOfWork, EventId causedByEventId) {
+        requireNonNull(unitOfWork, "No unitOfWork provided");
+        requireNonNull(causedByEventId, "No causedByEventId provided");
+        if (!causationIndexEnabled.get()) {
+            throw new CausationIndexNotEnabledException("Looking up the events caused by an event needs the caused-by-event-id index, which is not enabled. "
+                                                    + "Set essentials.eventstore.causation.index-enabled=true, or call enableCausationIndex() on the "
+                                                    + SeparateTablePerAggregateTypePersistenceStrategy.class.getSimpleName()
+                                                    + ". On large existing tables build the index concurrently first - see docs/event-causation.md");
+        }
+        var events = new ArrayList<PersistedEvent>();
+        aggregateTypeConfigurations.values()
+                                   .stream()
+                                   .sorted(Comparator.comparing(cfg -> cfg.eventStreamTableName))
+                                   .forEach(configuration -> {
+                                       Object cause;
+                                       if (configuration.eventIdColumnType == IdentifierColumnType.UUID) {
+                                           try {
+                                               cause = UUID.fromString(causedByEventId.toString());
+                                           } catch (IllegalArgumentException e) {
+                                               // Not a UUID, so no event in a UUID-typed table can have been caused by it
+                                               return;
+                                           }
+                                       } else {
+                                           cause = causedByEventId;
+                                       }
+                                       events.addAll(unitOfWork.handle()
+                                                               .createQuery(bind("SELECT * FROM {:tableName} WHERE {:causedByColumn} = :causedBy ORDER BY {:globalOrderColumn}",
+                                                                                 arg("tableName", configuration.eventStreamTableName),
+                                                                                 arg("causedByColumn", configuration.eventStreamTableColumnNames.causedByEventIdColumn),
+                                                                                 arg("globalOrderColumn", configuration.eventStreamTableColumnNames.globalOrderColumn)))
+                                                               .bind("causedBy", cause)
+                                                               .map(new PersistedEventRowMapper(this, configuration))
+                                                               .list());
+                                   });
+        return events;
     }
 
     @Override
@@ -1082,6 +1323,31 @@ public final class SeparateTablePerAggregateTypePersistenceStrategy implements A
         }
     }
 
+    /**
+     * One {@code MIN} over the global order column, the table's primary key: an index lookup, whatever the width of the range
+     */
+    @Override
+    public Optional<GlobalEventOrder> findLowestGlobalEventOrderPersisted(EventStoreUnitOfWork unitOfWork, AggregateType aggregateType, LongRange globalOrderRange) {
+        requireNonNull(unitOfWork, "No unitOfWork provided");
+        requireNonNull(aggregateType, "No aggregateType provided");
+        requireNonNull(globalOrderRange, "No globalOrderRange provided");
+
+        var configuration = getAggregateEventStreamConfiguration(aggregateType);
+        var sql = globalOrderRange.isClosedRange()
+                  ? "SELECT MIN({:globalOrderColumnName}) FROM {:tableName} WHERE {:globalOrderColumnName} BETWEEN :fromInclusive AND :toInclusive"
+                  : "SELECT MIN({:globalOrderColumnName}) FROM {:tableName} WHERE {:globalOrderColumnName} >= :fromInclusive";
+        var query = unitOfWork.handle()
+                              .createQuery(bind(sql,
+                                                arg("globalOrderColumnName", configuration.eventStreamTableColumnNames.globalOrderColumn),
+                                                arg("tableName", configuration.eventStreamTableName)))
+                              .bind("fromInclusive", globalOrderRange.fromInclusive);
+        if (globalOrderRange.isClosedRange()) {
+            query.bind("toInclusive", globalOrderRange.getToInclusive());
+        }
+        // As Long: the GlobalEventOrder mapper does not map the NULL of an empty range to null
+        return Optional.ofNullable(query.mapTo(Long.class).one()).map(GlobalEventOrder::of);
+    }
+
     private String loadEventQuerySql(SeparateTablePerAggregateEventStreamConfiguration configuration) {
         String sql = "SELECT * FROM {:tableName} WHERE \n" +
                 "   {:eventIdColumn} = :eventId";
@@ -1107,8 +1373,20 @@ public final class SeparateTablePerAggregateTypePersistenceStrategy implements A
     private String loadEventsByGlobalOrderQuerySql(SeparateTablePerAggregateEventStreamConfiguration configuration,
                                                    LongRange globalOrderRange,
                                                    List<GlobalEventOrder> includeAdditionalGlobalOrders,
-                                                   Optional<Tenant> onlyIncludeEventsIfTheyBelongToTenant) {
-        String sql = "SELECT * FROM {:tableName} WHERE \n";
+                                                   Optional<Tenant> onlyIncludeEventsIfTheyBelongToTenant,
+                                                   boolean omitPayloadOfOtherTenantsEvents) {
+        String sql;
+        if (omitPayloadOfOtherTenantsEvents) {
+            // The payload and metadata are only selected for our tenant's rows and rows without a tenant. A CASE that doesn't take
+            // the branch doesn't evaluate the column, so the other tenants' (TOASTed) values are not read. Each is aliased to its own column name
+            sql = "SELECT {:aggregateIdColumn}, {:eventOrderColumn}, {:eventIdColumn}, {:causedByEventIdColumn}, {:correlationIdColumn},\n" +
+                    "   {:eventTypeColumn}, {:eventRevisionColumn}, {:timestampColumn}, {:tenantColumn}, {:globalOrderColumn},\n" +
+                    "   CASE WHEN {:tenantColumn} IS NULL OR {:tenantColumn} = :payloadTenant THEN {:eventPayloadColumn} END AS {:eventPayloadColumn},\n" +
+                    "   CASE WHEN {:tenantColumn} IS NULL OR {:tenantColumn} = :payloadTenant THEN {:eventMetaDataColumn} END AS {:eventMetaDataColumn}\n" +
+                    " FROM {:tableName} WHERE \n";
+        } else {
+            sql = "SELECT * FROM {:tableName} WHERE \n";
+        }
 
         if (includeAdditionalGlobalOrders != null && !includeAdditionalGlobalOrders.isEmpty()) {
             sql += "(";
@@ -1130,7 +1408,17 @@ public final class SeparateTablePerAggregateTypePersistenceStrategy implements A
                     // Column names
                     arg("tableName", configuration.eventStreamTableName),
                     arg("globalOrderColumn", configuration.eventStreamTableColumnNames.globalOrderColumn),
-                    arg("tenantColumn", configuration.eventStreamTableColumnNames.tenantColumn));
+                    arg("tenantColumn", configuration.eventStreamTableColumnNames.tenantColumn),
+                    arg("aggregateIdColumn", configuration.eventStreamTableColumnNames.aggregateIdColumn),
+                    arg("eventOrderColumn", configuration.eventStreamTableColumnNames.eventOrderColumn),
+                    arg("eventIdColumn", configuration.eventStreamTableColumnNames.eventIdColumn),
+                    arg("causedByEventIdColumn", configuration.eventStreamTableColumnNames.causedByEventIdColumn),
+                    arg("correlationIdColumn", configuration.eventStreamTableColumnNames.correlationIdColumn),
+                    arg("eventTypeColumn", configuration.eventStreamTableColumnNames.eventTypeColumn),
+                    arg("eventRevisionColumn", configuration.eventStreamTableColumnNames.eventRevisionColumn),
+                    arg("timestampColumn", configuration.eventStreamTableColumnNames.timestampColumn),
+                    arg("eventPayloadColumn", configuration.eventStreamTableColumnNames.eventPayloadColumn),
+                    arg("eventMetaDataColumn", configuration.eventStreamTableColumnNames.eventMetaDataColumn));
     }
 
     private String getInsertSql(SeparateTablePerAggregateEventStreamConfiguration config) {

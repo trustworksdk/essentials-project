@@ -1,0 +1,5 @@
+expected: tests/fixtures/brownfield-layered/expected.yaml
+command: /essentials:slice-discover
+sections: [terrain, contexts, slices, must_find, ladder, must_not_find]
+read_only: true
+runs_scripts: []

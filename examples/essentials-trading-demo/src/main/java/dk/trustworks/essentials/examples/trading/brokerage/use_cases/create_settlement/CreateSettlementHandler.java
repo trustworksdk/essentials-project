@@ -48,6 +48,11 @@ public class CreateSettlementHandler extends AnnotatedCommandHandler {
     @CmdHandler
     public void handle(CreateSettlement cmd) {
         requireNonNull(cmd, "No cmd provided");
+        if (settlements.findSettlement(cmd.settlementId()).isPresent()) {
+            // A repeated command - a redelivered message in the automated trade lifecycle - creates nothing
+            log.debug("===> Settlement '{}' already exists - ignoring the repeated CreateSettlement", cmd.settlementId());
+            return;
+        }
         log.debug("===> Creating Settlement '{}' for Trade '{}'", cmd.settlementId(), cmd.tradeId());
         settlements.createNewSettlement(new Settlement(cmd.settlementId(),
                                                        cmd.tradeId(),

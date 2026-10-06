@@ -1,0 +1,73 @@
+{
+  "tool": "slice-source",
+  "format": 1,
+  "mode": "check",
+  "root": "tests/fixtures/worked-example",
+  "manifests": 5,
+  "parsed": 5,
+  "skippedManifests": [],
+  "slicesWithoutManifest": [],
+  "lanes": [
+    {
+      "bc": "orders",
+      "path": "orders",
+      "detected": "decider",
+      "signals": {
+        "decider": 2,
+        "aggregates": false,
+        "entities": false,
+        "eventStore": 5
+      },
+      "declared": {
+        "decider": [
+          "orders.screen_order",
+          "orders.warehouse",
+          "orders.cancel_order",
+          "orders.place_order",
+          "orders.order_list"
+        ]
+      }
+    }
+  ],
+  "endpoints": [
+    {
+      "slice": "orders.cancel_order",
+      "method": "POST",
+      "path": "/api/orders/{orderId}/cancel",
+      "status": "ok",
+      "boundBy": [
+        "CancelOrderAPI.cancelOrder"
+      ]
+    },
+    {
+      "slice": "orders.place_order",
+      "method": "POST",
+      "path": "/api/orders",
+      "status": "ok",
+      "boundBy": [
+        "PlaceOrderAPI.placeOrder"
+      ]
+    },
+    {
+      "slice": "orders.order_list",
+      "method": "GET",
+      "path": "/api/orders",
+      "status": "ok",
+      "boundBy": [
+        "OrderListAPI.list"
+      ]
+    },
+    {
+      "slice": "orders.order_list",
+      "method": "GET",
+      "path": "/api/orders?status=",
+      "status": "ok",
+      "boundBy": [
+        "OrderListAPI.byStatus"
+      ]
+    }
+  ],
+  "findings": [],
+  "unverified": [],
+  "unparsed": []
+}

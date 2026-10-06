@@ -158,22 +158,16 @@ public class AggregateEventStreamConfiguration {
         return new AggregateEventStreamConfigurationBuilder();
     }
 
-    /**
-     * @deprecated Use {@link #builder()}. Ten positional arguments, five of them consecutive column-type enums of only
-     *         two distinct types, cannot be checked by the compiler and cannot be read at the call site. This
-     *         constructor is unchanged and remains the implementation the builder delegates to.
-     */
-    @Deprecated(forRemoval = true, since = "0.40.x")
-    public AggregateEventStreamConfiguration(AggregateType aggregateType,
-                                             int queryFetchSize,
-                                             JSONEventSerializer jsonSerializer,
-                                             AggregateIdSerializer aggregateIdSerializer,
-                                             IdentifierColumnType aggregateIdColumnType,
-                                             IdentifierColumnType eventIdColumnType,
-                                             IdentifierColumnType correlationIdColumnType,
-                                             JSONColumnType eventJsonColumnType,
-                                             JSONColumnType eventMetadataJsonColumnType,
-                                             TenantSerializer tenantSerializer) {
+    AggregateEventStreamConfiguration(AggregateType aggregateType,
+                                      int queryFetchSize,
+                                      JSONEventSerializer jsonSerializer,
+                                      AggregateIdSerializer aggregateIdSerializer,
+                                      IdentifierColumnType aggregateIdColumnType,
+                                      IdentifierColumnType eventIdColumnType,
+                                      IdentifierColumnType correlationIdColumnType,
+                                      JSONColumnType eventJsonColumnType,
+                                      JSONColumnType eventMetadataJsonColumnType,
+                                      TenantSerializer tenantSerializer) {
         this.aggregateType = requireNonNull(aggregateType, "No aggregateType provided");
         this.queryFetchSize = queryFetchSize;
         this.jsonSerializer = requireNonNull(jsonSerializer, "No jsonSerializer provided");
@@ -184,6 +178,25 @@ public class AggregateEventStreamConfiguration {
         this.eventJsonColumnType = requireNonNull(eventJsonColumnType, "No eventJsonColumnType provided");
         this.eventMetadataJsonColumnType = requireNonNull(eventMetadataJsonColumnType, "No eventMetadataJsonColumnType provided");
         this.tenantSerializer = requireNonNull(tenantSerializer, "No tenantSerializer provided");
+    }
+
+    /**
+     * For subclasses: take every base setting from {@code base}, typically built with {@link #builder()}. This is how a
+     * subclass in another package supplies the base configuration without a ten-parameter constructor.
+     *
+     * @param base the base configuration whose settings this configuration takes over
+     */
+    protected AggregateEventStreamConfiguration(AggregateEventStreamConfiguration base) {
+        this(requireNonNull(base, "No base configuration provided").aggregateType,
+             base.queryFetchSize,
+             base.jsonSerializer,
+             base.aggregateIdSerializer,
+             base.aggregateIdColumnType,
+             base.eventIdColumnType,
+             base.correlationIdColumnType,
+             base.eventJsonColumnType,
+             base.eventMetadataJsonColumnType,
+             base.tenantSerializer);
     }
 
     @Override

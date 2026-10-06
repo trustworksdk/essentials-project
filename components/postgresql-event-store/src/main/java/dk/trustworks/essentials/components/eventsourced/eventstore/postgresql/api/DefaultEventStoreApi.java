@@ -20,14 +20,18 @@ import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.AggregateType;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.observability.SubscriptionStatisticsRegistry;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.observability.SubscriptionStatisticsRegistry.SubscriptionKey;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.persistence.CausationIndexNotEnabledException;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.subscription.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.types.GlobalEventOrder;
-import dk.trustworks.essentials.components.foundation.types.SubscriberId;
+import dk.trustworks.essentials.components.foundation.transaction.UnitOfWorkException;
+import dk.trustworks.essentials.components.foundation.types.*;
 import dk.trustworks.essentials.shared.security.EssentialsSecurityProvider;
+import dk.trustworks.essentials.types.LongRange;
 
 import java.util.*;
 
-import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
+import static dk.trustworks.essentials.shared.FailFast.*;
+import static dk.trustworks.essentials.shared.MessageFormatter.msg;
 import static dk.trustworks.essentials.shared.security.EssentialsSecurityRoles.*;
 import static dk.trustworks.essentials.shared.security.EssentialsSecurityValidator.validateHasAnyEssentialsSecurityRoles;
 
@@ -77,15 +81,13 @@ public class DefaultEventStoreApi implements EventStoreApi {
      *                                       runs no subscription manager
      * @param subscriptionStatisticsRegistry the registry holding the statistics collected in this instance.
      *                                       {@link Optional#empty()} when statistics collection is disabled
-     * @deprecated Use {@link #builder()}. This constructor declares an {@code Optional} parameter and/or more than five parameters; the builder names every argument and accepts both plain values and {@code Optional}s. It is unchanged and remains the implementation the builder delegates to.
      */
     @SuppressWarnings("OptionalUsedAsFieldOrParameterType")
-    @Deprecated(forRemoval = true, since = "0.40.x")
-    public DefaultEventStoreApi(EssentialsSecurityProvider essentialsSecurityProvider,
-                                EventStore eventStore,
-                                DurableSubscriptionRepository durableSubscriptionRepository,
-                                Optional<EventStoreSubscriptionManager> eventStoreSubscriptionManager,
-                                Optional<SubscriptionStatisticsRegistry> subscriptionStatisticsRegistry) {
+    DefaultEventStoreApi(EssentialsSecurityProvider essentialsSecurityProvider,
+                         EventStore eventStore,
+                         DurableSubscriptionRepository durableSubscriptionRepository,
+                         Optional<EventStoreSubscriptionManager> eventStoreSubscriptionManager,
+                         Optional<SubscriptionStatisticsRegistry> subscriptionStatisticsRegistry) {
         this.essentialsSecurityProvider = requireNonNull(essentialsSecurityProvider, "EssentialsSecurityProvider must not be null");
         this.eventStore = requireNonNull(eventStore, "EventStore must not be null");
         this.durableSubscriptionRepository = requireNonNull(durableSubscriptionRepository, "DurableSubscriptionRepository must not be null");
@@ -95,6 +97,82 @@ public class DefaultEventStoreApi implements EventStoreApi {
 
     private void validateSubscriptionReaderRoles(Object principal) {
         validateHasAnyEssentialsSecurityRoles(essentialsSecurityProvider, principal, SUBSCRIPTION_READER, ESSENTIALS_ADMIN);
+    }
+
+    @Override
+    public Optional<ApiCausationEvent> findEvent(Object principal, EventId eventId) {
+        validateSubscriptionReaderRoles(principal);
+        requireNonNull(eventId, "No eventId provided");
+        return eventStore.getUnitOfWorkFactory().withUnitOfWork(uow -> eventStore.findEvent(eventId).map(ApiCausationEvent::from));
+    }
+
+    @Override
+    public List<ApiCausationEvent> findAggregateEvents(Object principal, AggregateType aggregateType, String aggregateId, int limit) {
+        validateSubscriptionReaderRoles(principal);
+        requireNonNull(aggregateType, "No aggregateType provided");
+        requireNonNull(aggregateId, "No aggregateId provided");
+        requireTrue(limit >= 1 && limit <= MAX_AGGREGATE_EVENTS,
+                    msg("limit must be between 1 and {}, was {}", MAX_AGGREGATE_EVENTS, limit));
+        if (!(eventStore instanceof ConfigurableEventStore<?> configurableEventStore)) {
+            throw new UnsupportedOperationException("Listing an aggregate's events needs a ConfigurableEventStore, to convert the aggregate id");
+        }
+        var configuration = configurableEventStore.findAggregateEventStreamConfiguration(aggregateType);
+        if (configuration.isEmpty()) {
+            return List.of();
+        }
+        var typedAggregateId = configuration.get().aggregateIdSerializer.deserialize(aggregateId);
+        return eventStore.getUnitOfWorkFactory().withUnitOfWork(uow -> {
+            var lastEvent = eventStore.loadLastPersistedEventRelatedTo(aggregateType, typedAggregateId);
+            if (lastEvent.isEmpty()) {
+                return List.<ApiCausationEvent>of();
+            }
+            var lastEventOrder = lastEvent.get().eventOrder().longValue();
+            return eventStore.fetchStream(aggregateType,
+                                          typedAggregateId,
+                                          LongRange.between(Math.max(0, lastEventOrder - limit + 1), lastEventOrder))
+                             .map(stream -> stream.eventList().stream().map(ApiCausationEvent::from).toList())
+                             .orElse(List.of());
+        });
+    }
+
+    @Override
+    public List<ApiCausationEvent> findCausationChain(Object principal, EventId eventId, int maxDepth) {
+        validateSubscriptionReaderRoles(principal);
+        requireNonNull(eventId, "No eventId provided");
+        requireTrue(maxDepth >= 1 && maxDepth <= MAX_CAUSATION_CHAIN_DEPTH,
+                    msg("maxDepth must be between 1 and {}, was {}", MAX_CAUSATION_CHAIN_DEPTH, maxDepth));
+        return eventStore.getUnitOfWorkFactory().withUnitOfWork(uow -> {
+            var chain   = new ArrayList<ApiCausationEvent>();
+            var visited = new HashSet<EventId>();
+            var next    = Optional.of(eventId);
+            while (next.isPresent() && chain.size() < maxDepth && visited.add(next.get())) {
+                var event = eventStore.findEvent(next.get());
+                if (event.isEmpty()) {
+                    break;
+                }
+                chain.add(ApiCausationEvent.from(event.get()));
+                next = event.get().causedByEventId();
+            }
+            return chain;
+        });
+    }
+
+    @Override
+    public List<ApiCausationEvent> findEventsCausedBy(Object principal, EventId eventId) {
+        validateSubscriptionReaderRoles(principal);
+        requireNonNull(eventId, "No eventId provided");
+        try {
+            return eventStore.getUnitOfWorkFactory().withUnitOfWork(uow -> eventStore.loadEventsCausedBy(eventId)
+                                                                                     .stream()
+                                                                                     .map(ApiCausationEvent::from)
+                                                                                     .toList());
+        } catch (UnitOfWorkException e) {
+            // Surface the missing index as itself, so callers - the admin API's 409 in particular - can recognise it
+            if (e.getCause() instanceof CausationIndexNotEnabledException indexNotEnabled) {
+                throw indexNotEnabled;
+            }
+            throw e;
+        }
     }
 
     @Override
@@ -157,6 +235,17 @@ public class DefaultEventStoreApi implements EventStoreApi {
                                              .map(ApiSubscriptionStatistics::from);
     }
 
+    @Override
+    public boolean resumeSubscriptionStoppedByErrorPolicy(Object principal,
+                                                          SubscriberId subscriberId,
+                                                          AggregateType aggregateType) {
+        validateHasAnyEssentialsSecurityRoles(essentialsSecurityProvider, principal, SUBSCRIPTION_WRITER, ESSENTIALS_ADMIN);
+        requireNonNull(subscriberId, "No subscriberId provided");
+        requireNonNull(aggregateType, "No aggregateType provided");
+        return findSubscription(subscriberId, aggregateType).map(EventStoreSubscription::resumeIfStoppedByErrorPolicy)
+                                                            .orElse(false);
+    }
+
     private Optional<EventStoreSubscription> findSubscription(SubscriberId subscriberId, AggregateType aggregateType) {
         return eventStoreSubscriptionManager.flatMap(subscriptionManager -> subscriptionManager.getSubscription(subscriberId, aggregateType));
     }
@@ -183,7 +272,8 @@ public class DefaultEventStoreApi implements EventStoreApi {
                 eventStoreSubscription.map(EventStoreSubscription::isExclusive).orElse(null),
                 eventStoreSubscription.map(EventStoreSubscription::isInTransaction).orElse(null),
                 eventStoreSubscription.flatMap(subscription -> subscription.onlyIncludeEventsForTenant().map(Object::toString)).orElse(null),
-                inMemoryGlobalOrderOf(eventStoreSubscription.orElse(null)));
+                inMemoryGlobalOrderOf(eventStoreSubscription.orElse(null)),
+                eventStoreSubscription.map(EventStoreSubscription::isStoppedByErrorPolicy).orElse(null));
     }
 
     /**
@@ -205,7 +295,8 @@ public class DefaultEventStoreApi implements EventStoreApi {
                 eventStoreSubscription.isExclusive(),
                 eventStoreSubscription.isInTransaction(),
                 eventStoreSubscription.onlyIncludeEventsForTenant().map(Object::toString).orElse(null),
-                inMemoryGlobalOrderOf(eventStoreSubscription));
+                inMemoryGlobalOrderOf(eventStoreSubscription),
+                eventStoreSubscription.isStoppedByErrorPolicy());
     }
 
     private static Long inMemoryGlobalOrderOf(EventStoreSubscription eventStoreSubscription) {
@@ -310,7 +401,6 @@ public class DefaultEventStoreApi implements EventStoreApi {
         /**
          * @return the new {@link DefaultEventStoreApi}
          */
-        @SuppressWarnings("removal")
         public DefaultEventStoreApi build() {
             return new DefaultEventStoreApi(essentialsSecurityProvider,
                                             eventStore,

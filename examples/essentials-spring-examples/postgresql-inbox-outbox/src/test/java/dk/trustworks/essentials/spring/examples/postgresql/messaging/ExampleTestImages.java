@@ -38,6 +38,22 @@ public final class ExampleTestImages {
      */
     public static final String KAFKA_IMAGE = "apache/kafka-native:4.3.1";
 
+    /**
+     * A Kafka container for one test class. Every IT class starts its own, which keeps each class's broker state -
+     * topics, committed consumer-group offsets - to itself; sharing one broker across classes would let a class's
+     * listeners consume what an earlier class produced and never handled.
+     * <p>
+     * The cost is a dozen broker startups per build, and each is a chance to fail: with two attempts, a class failed
+     * with {@code RetryCountExceededException} about one build in three or four, locally and on CI. Three attempts,
+     * each allowed two minutes rather than the wait strategy's default 60 s, make that rarer without changing what any
+     * test sees. If it still happens, the {@code Caused by} at the bottom of the trace says why the attempts failed.
+     */
+    public static org.testcontainers.kafka.KafkaContainer newKafkaContainer() {
+        return new org.testcontainers.kafka.KafkaContainer(KAFKA_IMAGE)
+                .withStartupAttempts(3)
+                .withStartupTimeout(java.time.Duration.ofMinutes(2));
+    }
+
     private ExampleTestImages() {
     }
 }

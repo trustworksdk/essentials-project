@@ -16,7 +16,7 @@
 
 package dk.trustworks.essentials.components.eventsourced.aggregates.archive;
 
-import com.fasterxml.jackson.databind.json.JsonMapper;
+import tools.jackson.databind.json.JsonMapper;
 import dk.trustworks.essentials.components.eventsourced.aggregates.closingbooks.AggregateGeneration;
 import dk.trustworks.essentials.components.eventsourced.aggregates.closingbooks.GenerationState;
 import dk.trustworks.essentials.components.eventsourced.aggregates.closingbooks.LogicalAggregateId;
@@ -24,7 +24,7 @@ import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.ev
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.PersistedEvent;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.serializer.json.EventJSON;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.serializer.json.EventMetaDataJSON;
-import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.serializer.json.JacksonJSONEventSerializer;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.serializer.json.Jackson3JSONEventSerializer;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.types.*;
 import dk.trustworks.essentials.components.foundation.types.EventId;
 import org.junit.jupiter.api.Test;
@@ -42,7 +42,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 class JacksonJsonLinesAggregateArchiveExporterTest {
     @Test
     void it_streams_persisted_events_as_json_lines() throws IOException {
-        var jsonSerializer = new JacksonJSONEventSerializer(JsonMapper.builder().findAndAddModules().build());
+        var jsonSerializer = new Jackson3JSONEventSerializer(JsonMapper.builder().findAndAddModules().build());
         var request = new AggregateArchiveExportRequest(AggregateType.of("Orders"),
                                                         "order-1",
                                                         new AggregateGeneration<>(AggregateType.of("Orders"),
@@ -71,7 +71,7 @@ class JacksonJsonLinesAggregateArchiveExporterTest {
         assertThat(lines[0]).contains("\\\"quantity\\\":10");
     }
 
-    private PersistedEvent createPersistedEvent(JacksonJSONEventSerializer jsonSerializer,
+    private PersistedEvent createPersistedEvent(Jackson3JSONEventSerializer jsonSerializer,
                                                 long eventOrder,
                                                 long globalEventOrder) {
         return PersistedEvent.from(EventId.random(),

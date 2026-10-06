@@ -1,0 +1,12 @@
+schemaVersion: "1.2"
+slice: inbox.relay
+kind: automation
+bc: inbox
+owner: inbox-team
+status: live
+summary: Relay received messages.
+generator: essentials
+language: kotlin
+consumes: [MessageReceived]
+tests:
+  unit: { present: false }

@@ -46,10 +46,6 @@ public class CustomerId extends CharSequenceType<CustomerId> implements Identifi
     public CustomerId(CharSequence value) {
         super(value);
     }
-    // Required for Jackson 2.18+
-    public CustomerId(String value) {
-        super(value);
-    }
     
     public static CustomerId of(CharSequence value) {
         return new CustomerId(value);
@@ -270,4 +266,4 @@ public class OrderRepository {
 
 - [LLM-types-jdbi.md](../LLM/LLM-types-jdbi.md) - API reference for LLM assistance
 - [types](../types) - Core types module (`SingleValueType`, `CharSequenceType`, etc.)
-- [types-jackson](../types-jackson) - Jackson serialization for types
+- [types-jackson3](../types-jackson3) - Jackson serialization for types

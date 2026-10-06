@@ -136,8 +136,8 @@ Default `Tenant` implementation.
 TenantId.of(CharSequence value)
 
 // Usage
-TenantId tenantId = TenantId.of("acme-corp");
-String value = tenantId.toString();  // "acme-corp"
+TenantId tenantId = TenantId.of("example-corp");
+String value = tenantId.toString();  // "example-corp"
 ```
 
 **Pattern**: Pass to queries/commands for tenant-scoped operations.
@@ -504,7 +504,7 @@ EventRevision extends IntegerType<EventRevision>
 ```
 
 **Benefit**: Inherits all `SingleValueType` features:
-- Jackson serialization ([types-jackson](./LLM-types-jackson.md))
+- Jackson serialization ([types-jackson3](./LLM-types-jackson.md))
 - Spring Data MongoDB ([types-springdata-mongo](./LLM-types-springdata-mongo.md))
 - JDBI arguments ([types-jdbi](./LLM-types-jdbi.md))
 - Spring Web converters ([types-spring-web](./LLM-types-spring-web.md))

@@ -1,0 +1,146 @@
+graph — 107 nodes · 105 edges · 18 entry points
+
+CreateThing01  (command)
+└─ bc01.create_thing  [command]
+   └─ ThingCreated01  (event)
+      ├─ bc02.follow_upstream  [automation]  ⇢ crosses bc01 → bc02
+      │  └─ CreateThing02  (command)
+      │     └─ bc02.create_thing  [command]
+      │        └─ ThingCreated02  (event)
+      │           ├─ bc03.follow_upstream  [automation]  ⇢ crosses bc02 → bc03
+      │           │  └─ CreateThing03  (command)
+      │           │     └─ bc03.create_thing  [command]
+      │           │        └─ ThingCreated03  (event)
+      │           │           ├─ bc04.follow_upstream  [automation]  ⇢ crosses bc03 → bc04
+      │           │           │  └─ CreateThing04  (command)
+      │           │           │     └─ bc04.create_thing  [command]
+      │           │           │        └─ ThingCreated04  (event)
+      │           │           │           ├─ bc05.follow_upstream  [automation]  ⇢ crosses bc04 → bc05
+      │           │           │           │  └─ CreateThing05  (command)
+      │           │           │           │     └─ bc05.create_thing  [command]
+      │           │           │           │        └─ ThingCreated05  (event)
+      │           │           │           │           └─ bc05.thing_list  [view]
+      │           │           │           └─ bc04.thing_list  [view]
+      │           │           └─ bc03.thing_list  [view]
+      │           └─ bc02.thing_list  [view]
+      ├─ bc01.close_on_create  [automation]
+      │  └─ CloseThing01  (command)
+      │     └─ bc01.close_thing  [command]
+      │        └─ ThingClosed01  (event)
+      │           └─ bc01.thing_list  [view]
+      └─ bc01.thing_list  [view]
+
+CreateThing06  (command)
+└─ bc06.create_thing  [command]
+   └─ ThingCreated06  (event)
+      ├─ bc07.follow_upstream  [automation]  ⇢ crosses bc06 → bc07
+      │  └─ CreateThing07  (command)
+      │     └─ bc07.create_thing  [command]
+      │        └─ ThingCreated07  (event)
+      │           ├─ bc08.follow_upstream  [automation]  ⇢ crosses bc07 → bc08
+      │           │  └─ CreateThing08  (command)
+      │           │     └─ bc08.create_thing  [command]
+      │           │        └─ ThingCreated08  (event)
+      │           │           ├─ bc09.follow_upstream  [automation]  ⇢ crosses bc08 → bc09
+      │           │           │  └─ CreateThing09  (command)
+      │           │           │     └─ bc09.create_thing  [command]
+      │           │           │        └─ ThingCreated09  (event)
+      │           │           │           ├─ bc10.follow_upstream  [automation]  ⇢ crosses bc09 → bc10
+      │           │           │           │  └─ CreateThing10  (command)
+      │           │           │           │     └─ bc10.create_thing  [command]
+      │           │           │           │        └─ ThingCreated10  (event)
+      │           │           │           │           └─ bc10.thing_list  [view]
+      │           │           │           └─ bc09.thing_list  [view]
+      │           │           └─ bc08.thing_list  [view]
+      │           └─ bc07.thing_list  [view]
+      ├─ bc06.close_on_create  [automation]
+      │  └─ CloseThing06  (command)
+      │     └─ bc06.close_thing  [command]
+      │        └─ ThingClosed06  (event)
+      │           └─ bc06.thing_list  [view]
+      └─ bc06.thing_list  [view]
+
+PartnerThing08  (event)
+└─ bc08.partner_feed  [translation]
+   └─ CreateThing08  (command)  ↑ continued under CreateThing06
+
+partner_08  (external system)
+└─ bc08.partner_feed  [translation]  ↑ continued under PartnerThing08
+
+PartnerThing04  (event)
+└─ bc04.partner_feed  [translation]
+   └─ CreateThing04  (command)  ↑ continued under CreateThing01
+
+partner_04  (external system)
+└─ bc04.partner_feed  [translation]  ↑ continued under PartnerThing04
+
+CreateThing11  (command)
+└─ bc11.create_thing  [command]
+   └─ ThingCreated11  (event)
+      ├─ bc11.close_on_create  [automation]
+      │  └─ CloseThing11  (command)
+      │     └─ bc11.close_thing  [command]
+      │        └─ ThingClosed11  (event)
+      │           └─ bc11.thing_list  [view]
+      ├─ bc12.follow_upstream  [automation]  ⇢ crosses bc11 → bc12
+      │  └─ CreateThing12  (command)
+      │     └─ bc12.create_thing  [command]
+      │        └─ ThingCreated12  (event)
+      │           └─ bc12.thing_list  [view]
+      └─ bc11.thing_list  [view]
+
+PartnerThing12  (event)
+└─ bc12.partner_feed  [translation]
+   └─ CreateThing12  (command)  ↑ continued under CreateThing11
+
+partner_12  (external system)
+└─ bc12.partner_feed  [translation]  ↑ continued under PartnerThing12
+
+CloseThing02  (command)
+└─ bc02.close_thing  [command]
+   └─ ThingClosed02  (event)
+      └─ bc02.thing_list  [view]
+
+CloseThing03  (command)
+└─ bc03.close_thing  [command]
+   └─ ThingClosed03  (event)
+      └─ bc03.thing_list  [view]
+
+CloseThing04  (command)
+└─ bc04.close_thing  [command]
+   └─ ThingClosed04  (event)
+      └─ bc04.thing_list  [view]
+
+CloseThing05  (command)
+└─ bc05.close_thing  [command]
+   └─ ThingClosed05  (event)
+      └─ bc05.thing_list  [view]
+
+CloseThing07  (command)
+└─ bc07.close_thing  [command]
+   └─ ThingClosed07  (event)
+      └─ bc07.thing_list  [view]
+
+CloseThing08  (command)
+└─ bc08.close_thing  [command]
+   └─ ThingClosed08  (event)
+      └─ bc08.thing_list  [view]
+
+CloseThing09  (command)
+└─ bc09.close_thing  [command]
+   └─ ThingClosed09  (event)
+      └─ bc09.thing_list  [view]
+
+CloseThing10  (command)
+└─ bc10.close_thing  [command]
+   └─ ThingClosed10  (event)
+      └─ bc10.thing_list  [view]
+
+CloseThing12  (command)
+└─ bc12.close_thing  [command]
+   └─ ThingClosed12  (event)
+      └─ bc12.thing_list  [view]
+
+In no chain — a view served only over HTTP, or a slice nothing reaches:
+  bc06.thing_report  [view]
+  bc12.thing_report  [view]

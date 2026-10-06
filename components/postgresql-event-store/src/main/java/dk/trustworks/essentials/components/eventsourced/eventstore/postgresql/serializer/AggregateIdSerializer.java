@@ -35,7 +35,9 @@ import static dk.trustworks.essentials.shared.MessageFormatter.msg;
  * concept of storing aggregate id's as single column that contains a String value.<br>
  * The actual Postgresql column type is determined by {@link AggregateEventStreamConfiguration#aggregateIdColumnType}<br>
  * <br>
- * If your aggregate id is a {@link String}, {@link UUID} or a subtype of {@link CharSequenceType} then you
+ * If your aggregate id is a {@link String}, {@link UUID}, a subtype of {@link CharSequenceType} or a Kotlin
+ * {@code dk.trustworks.essentials.kotlin.types.StringValueType} (served by the Kotlin
+ * {@code StringValueTypeAggregateIdSerializer}) then you
  * can use {@link #serializerFor(Class)} to look up an {@link AggregateIdSerializer} for your aggregate id.
  *
  * @see StringIdSerializer
@@ -49,6 +51,7 @@ public interface AggregateIdSerializer {
      *
      * @param aggregateIdType the aggregate id type
      * @return the best fitting standard {@link AggregateIdSerializer} based on the type
+     * (a {@code StringValueTypeAggregateIdSerializer} for a Kotlin {@code StringValueType})
      * @throws EventStoreException in case a matching {@link AggregateIdSerializer} cannot be found
      */
     @SuppressWarnings("unchecked")
@@ -63,9 +66,33 @@ public interface AggregateIdSerializer {
         if (UUID.class.isAssignableFrom(aggregateIdType)) {
             return new UUIDIdSerializer();
         }
-        throw new EventStoreException(msg("Couldn't find a matching {} for {}",
+        if (isKotlinStringValueType(aggregateIdType)) {
+            return StringValueTypeAggregateIdSerializer.forType(aggregateIdType);
+        }
+        throw new EventStoreException(msg("Couldn't find a matching {} for {}. serializerFor supports String, UUID, " +
+                                                  "subtypes of {} and, for Kotlin, subtypes of " +
+                                                  "dk.trustworks.essentials.kotlin.types.StringValueType (served by " +
+                                                  "dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.serializer.StringValueTypeAggregateIdSerializer, " +
+                                                  "which can also be constructed explicitly); for any other id type provide your own {} implementation",
                                           AggregateIdSerializer.class.getName(),
-                                          aggregateIdType.getName()));
+                                          aggregateIdType.getName(),
+                                          CharSequenceType.class.getName(),
+                                          AggregateIdSerializer.class.getSimpleName()));
+    }
+
+    /**
+     * Matches the Kotlin {@code StringValueType} by name, and only once every Java id type has been ruled out: the
+     * serializer it maps to needs the Kotlin standard library and kotlin-reflect, which are {@code provided}, so a
+     * Java-only classpath must never load it. That is also why the check and the error message name the Kotlin types
+     * as strings rather than class literals.
+     */
+    private static boolean isKotlinStringValueType(Class<?> aggregateIdType) {
+        try {
+            return Class.forName("dk.trustworks.essentials.kotlin.types.StringValueType", false, aggregateIdType.getClassLoader())
+                        .isAssignableFrom(aggregateIdType);
+        } catch (ClassNotFoundException | LinkageError e) {
+            return false;
+        }
     }
 
     /**

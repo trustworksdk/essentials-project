@@ -1,0 +1,9 @@
+spring:
+  application:
+    name: golden
+  # Trap: a comment naming spring.data.mongodb.uri is not a key.
+server:
+  port: 8080
+springdoc:
+  api-docs:
+    path: /v3/api-docs

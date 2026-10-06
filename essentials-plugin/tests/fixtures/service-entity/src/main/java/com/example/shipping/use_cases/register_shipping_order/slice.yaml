@@ -1,0 +1,23 @@
+schemaVersion: "1.2"
+slice: shipping.register_shipping_order
+kind: command
+bc: shipping
+owner: shipping-team
+status: live
+summary: Register a shipping order for a destination.
+generator: essentials
+language: java
+tier: service-entity
+lane: service-entity
+handles: [RegisterShippingOrder]
+publishes: [ShippingOrderRegistered]
+writes:
+  - { name: ShippingOrder }
+endpoints:
+  - { method: POST, path: "/api/shipping/orders", auth: user }
+forbidden:
+  - cross-slice-internal:shipping
+tests:
+  unit: { present: true }
+  integration: { present: false }
+  contract: { present: false }

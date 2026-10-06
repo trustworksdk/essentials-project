@@ -19,21 +19,18 @@ import dk.trustworks.essentials.components.foundation.test.classpath.Jackson3Onl
 import org.junit.jupiter.api.*;
 
 import static org.assertj.core.api.Assertions.*;
-import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 /**
  * An application whose only Jackson is Jackson 3 must be able to use this starter. Up to 0.50.0 introspecting the
  * auto-configuration failed with {@code NoClassDefFoundError: com/fasterxml/jackson/databind/Module}, because the
  * serializer bean method named Jackson 2's {@code Module}. The scenario runs through {@link Jackson3OnlyClassLoader},
- * as the test classpath itself has both Jackson majors.
+ * as the test classpath can still carry Jackson 2 transitively.
  */
 class Jackson3OnlyClasspathTest {
     private static Jackson3OnlyClassLoader jackson3Only;
 
     @BeforeAll
     static void createClassLoaderWithoutJackson2() {
-        assumeTrue(Jackson3OnlyClassLoader.isJackson3FlavorOnTestClasspath(),
-                   "A Jackson 3-only application needs the Jackson 3 flavor; this build uses -Pjackson2");
         jackson3Only = Jackson3OnlyClassLoader.fromTestClasspath();
     }
 

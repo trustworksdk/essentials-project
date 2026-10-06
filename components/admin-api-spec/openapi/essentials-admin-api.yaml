@@ -18,13 +18,18 @@ tags:
 - name: fenced-locks
   description: Inspect and release distributed fenced locks.
 - name: scheduler
-  description: "Inspect pg_cron jobs, their run history, and executor jobs."
+  description: "Inspect pg_cron jobs, their run history, and executor jobs, and run\
+    \ a job on demand."
 - name: postgresql-query-statistics
   description: Inspect slow-query statistics from pg_stat_statements.
+- name: postgresql-table-statistics
+  description: "Inspect size, activity, and cache-hit statistics for every table the\
+    \ Essentials components own."
 - name: durable-queues
   description: Inspect and manage durable queue and dead-letter messages.
 - name: event-store
-  description: Inspect event-store subscriptions and persisted event order.
+  description: "Inspect event-store subscriptions and persisted event order, resume\
+    \ a subscription stopped by its error policy, and walk event causation."
 - name: cdc
   description: Inspect Change Data Capture runtime state and effective configuration.
 - name: event-store-statistics
@@ -422,6 +427,70 @@ paths:
       x-required-roles:
       - essentials_scheduler_reader
       - essentials_admin
+  /scheduler/jobs/{jobName}/run:
+    post:
+      tags:
+      - scheduler
+      summary: "Run a job registered with the scheduler once, now, and return the\
+        \ outcome. Its schedule is not changed. A pg_cron job's run is not recorded\
+        \ in pg_cron's run history; a manual run is not coordinated with a scheduled\
+        \ run of the same job."
+      operationId: runJobNow
+      parameters:
+      - name: jobName
+        in: path
+        description: "The job name, as listed by the executor or pg_cron job operations."
+        required: true
+        schema:
+          type: string
+      responses:
+        "200":
+          description: 200 — The outcome of the run.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiScheduledJobRun"
+        "400":
+          description: "Malformed or out-of-range parameter, or invalid request body."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: Unauthenticated.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Caller lacks one of the required roles.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: No value exists for the given identifier.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "409":
+          description: "An executor job runs only on the instance holding the scheduler\
+            \ lock, and this request reached another instance. The message names the\
+            \ instance holding the lock, when one does."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "500":
+          description: Unexpected server error.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+      x-required-roles:
+      - essentials_scheduler_writer
+      - essentials_admin
   /postgresql/query-statistics/top-ten-slowest:
     get:
       tags:
@@ -437,6 +506,113 @@ paths:
                 type: array
                 items:
                   $ref: "#/components/schemas/ApiQueryStatistics"
+        "401":
+          description: Unauthenticated.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Caller lacks one of the required roles.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "500":
+          description: Unexpected server error.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+      x-required-roles:
+      - essentials_postgresql_stats_reader
+      - essentials_admin
+  /postgresql/query-statistics/slowest:
+    get:
+      tags:
+      - postgresql-query-statistics
+      summary: "Return the statements recorded by pg_stat_statements for the current\
+        \ database, ranked by the chosen order."
+      operationId: getSlowestQueries
+      parameters:
+      - name: orderBy
+        in: query
+        description: What to rank by. TOTAL_TIME favours cheap statements that run
+          constantly; MEAN_TIME and MAX_TIME surface statements that are slow per
+          call.
+        required: false
+        schema:
+          type: string
+          default: TOTAL_TIME
+          enum:
+          - TOTAL_TIME
+          - MEAN_TIME
+          - MAX_TIME
+          - CALLS
+          - BLOCKS_READ
+      - name: limit
+        in: query
+        description: Maximum number of statements to return. A value above the maximum
+          is capped.
+        required: false
+        schema:
+          maximum: 100
+          minimum: 1
+          type: integer
+          format: int32
+          default: 10
+      responses:
+        "200":
+          description: 200 — The matching items.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/ApiQueryStatistics"
+        "400":
+          description: "Malformed or out-of-range parameter, or invalid request body."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: Unauthenticated.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Caller lacks one of the required roles.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "500":
+          description: Unexpected server error.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+      x-required-roles:
+      - essentials_postgresql_stats_reader
+      - essentials_admin
+  /postgresql/table-statistics:
+    get:
+      tags:
+      - postgresql-table-statistics
+      summary: "Return size, activity, and cache-hit statistics per Essentials table,\
+        \ grouped by section."
+      operationId: fetchTableStatistics
+      responses:
+        "200":
+          description: 200 — The matching items.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/ApiTableStatistics"
         "401":
           description: Unauthenticated.
           content:
@@ -1053,8 +1229,9 @@ paths:
     get:
       tags:
       - durable-queues
-      summary: Get delivery statistics for a queue.
-      operationId: getQueuedStatistics
+      summary: Get cluster-wide depth and this instance's delivery statistics for
+        a queue.
+      operationId: getQueueStatistics
       parameters:
       - name: queueName
         in: path
@@ -1068,7 +1245,91 @@ paths:
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/ApiQueuedStatistics"
+                $ref: "#/components/schemas/ApiQueueStatistics"
+        "400":
+          description: "Malformed or out-of-range parameter, or invalid request body."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: Unauthenticated.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Caller lacks one of the required roles.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "500":
+          description: Unexpected server error.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+      x-required-roles:
+      - essentials_queue_reader
+      - essentials_admin
+  /shard-owned-queues:
+    get:
+      tags:
+      - shard-owned-queues
+      summary: List the names of all accessible shard-owned queues.
+      operationId: shardOwnedGetQueueNames
+      responses:
+        "200":
+          description: 200 — The accessible queue names.
+          content:
+            application/json:
+              schema:
+                uniqueItems: true
+                type: array
+                items:
+                  type: string
+        "401":
+          description: Unauthenticated.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Caller lacks one of the required roles.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "500":
+          description: Unexpected server error.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+      x-required-roles:
+      - essentials_queue_reader
+      - essentials_admin
+  /shard-owned-queues/{queueName}/status:
+    get:
+      tags:
+      - shard-owned-queues
+      summary: "Depth and ownership for a queue, per lane."
+      operationId: shardOwnedGetQueueStatus
+      parameters:
+      - name: queueName
+        in: path
+        description: The queue name.
+        required: true
+        schema:
+          type: string
+      responses:
+        "200":
+          description: 200 — The queue's depth and ownership.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiShardOwnedQueueStatus"
         "400":
           description: "Malformed or out-of-range parameter, or invalid request body."
           content:
@@ -1101,6 +1362,491 @@ paths:
                 $ref: "#/components/schemas/Error"
       x-required-roles:
       - essentials_queue_reader
+      - essentials_admin
+  /shard-owned-queues/{queueName}/statistics:
+    get:
+      tags:
+      - shard-owned-queues
+      summary: "Delivery counters for a queue, as recorded by the instance answering\
+        \ the request."
+      operationId: shardOwnedGetQueueStatistics
+      parameters:
+      - name: queueName
+        in: path
+        description: The queue name.
+        required: true
+        schema:
+          type: string
+      responses:
+        "200":
+          description: 200 — This instance's counters for the queue.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiShardOwnedQueueStatistics"
+        "400":
+          description: "Malformed or out-of-range parameter, or invalid request body."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: Unauthenticated.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Caller lacks one of the required roles.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "500":
+          description: Unexpected server error.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+      x-required-roles:
+      - essentials_queue_reader
+      - essentials_admin
+  /shard-owned-queues/{queueName}/messages/{messageId}:
+    get:
+      tags:
+      - shard-owned-queues
+      summary: Get a single message by its id within a queue.
+      operationId: shardOwnedGetMessage
+      parameters:
+      - name: queueName
+        in: path
+        description: The queue name.
+        required: true
+        schema:
+          type: string
+      - name: messageId
+        in: path
+        description: "The message id, as lane-shard-sequence (for example u-3-1042)."
+        required: true
+        schema:
+          type: string
+      responses:
+        "200":
+          description: 200 — The message.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiShardOwnedMessage"
+        "400":
+          description: "Malformed or out-of-range parameter, or invalid request body."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: Unauthenticated.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Caller lacks one of the required roles.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: No value exists for the given identifier.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "500":
+          description: Unexpected server error.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+      x-required-roles:
+      - essentials_queue_reader
+      - essentials_admin
+    delete:
+      tags:
+      - shard-owned-queues
+      summary: Delete a message from its queue.
+      operationId: shardOwnedDeleteMessage
+      parameters:
+      - name: queueName
+        in: path
+        description: The queue name.
+        required: true
+        schema:
+          type: string
+      - name: messageId
+        in: path
+        description: The message id.
+        required: true
+        schema:
+          type: string
+      responses:
+        "200":
+          description: 200 — Whether the message was deleted.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DeleteResult"
+        "400":
+          description: "Malformed or out-of-range parameter, or invalid request body."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: Unauthenticated.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Caller lacks one of the required roles.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "500":
+          description: Unexpected server error.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+      x-required-roles:
+      - essentials_queue_writer
+      - essentials_admin
+  /shard-owned-queues/{queueName}/dead-letter-messages:
+    get:
+      tags:
+      - shard-owned-queues
+      summary: Page the dead letters of a queue.
+      operationId: shardOwnedGetDeadLetterMessages
+      parameters:
+      - name: queueName
+        in: path
+        description: The queue name.
+        required: true
+        schema:
+          type: string
+      - name: offset
+        in: query
+        description: Rows to skip.
+        required: false
+        schema:
+          type: integer
+          format: int32
+          default: 0
+      - name: limit
+        in: query
+        description: Maximum rows to return.
+        required: false
+        schema:
+          type: integer
+          format: int32
+          default: 100
+      responses:
+        "200":
+          description: 200 — The matching items.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/ApiShardOwnedMessage"
+        "400":
+          description: "Malformed or out-of-range parameter, or invalid request body."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: Unauthenticated.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Caller lacks one of the required roles.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "500":
+          description: Unexpected server error.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+      x-required-roles:
+      - essentials_queue_reader
+      - essentials_admin
+  /shard-owned-queues/{queueName}/messages/{messageId}/retry:
+    post:
+      tags:
+      - shard-owned-queues
+      summary: Make a message visible again after an optional delay.
+      operationId: shardOwnedRetryMessage
+      parameters:
+      - name: queueName
+        in: path
+        description: The queue name.
+        required: true
+        schema:
+          type: string
+      - name: messageId
+        in: path
+        description: The message id.
+        required: true
+        schema:
+          type: string
+      responses:
+        "200":
+          description: 200 — Whether the operation took effect.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MessageOperationResult"
+        "400":
+          description: "Malformed or out-of-range parameter, or invalid request body."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: Unauthenticated.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Caller lacks one of the required roles.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "500":
+          description: Unexpected server error.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+      x-required-roles:
+      - essentials_queue_writer
+      - essentials_admin
+  /shard-owned-queues/{queueName}/messages/{messageId}/mark-as-dead-letter:
+    post:
+      tags:
+      - shard-owned-queues
+      summary: Park a message as a dead letter.
+      operationId: shardOwnedMarkAsDeadLetterMessage
+      parameters:
+      - name: queueName
+        in: path
+        description: The queue name.
+        required: true
+        schema:
+          type: string
+      - name: messageId
+        in: path
+        description: The message id.
+        required: true
+        schema:
+          type: string
+      responses:
+        "200":
+          description: 200 — Whether the operation took effect.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MessageOperationResult"
+        "400":
+          description: "Malformed or out-of-range parameter, or invalid request body."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: Unauthenticated.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Caller lacks one of the required roles.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "500":
+          description: Unexpected server error.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+      x-required-roles:
+      - essentials_queue_writer
+      - essentials_admin
+  /shard-owned-queues/{queueName}/messages/{messageId}/resurrect:
+    post:
+      tags:
+      - shard-owned-queues
+      summary: "Return a dead letter to its lane. It re-enters at a fresh sequence,\
+        \ so its id changes."
+      operationId: shardOwnedResurrectDeadLetterMessage
+      parameters:
+      - name: queueName
+        in: path
+        description: The queue name.
+        required: true
+        schema:
+          type: string
+      - name: messageId
+        in: path
+        description: The dead-letter message id.
+        required: true
+        schema:
+          type: string
+      responses:
+        "200":
+          description: 200 — Whether the operation took effect.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MessageOperationResult"
+        "400":
+          description: "Malformed or out-of-range parameter, or invalid request body."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: Unauthenticated.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Caller lacks one of the required roles.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "500":
+          description: Unexpected server error.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+      x-required-roles:
+      - essentials_queue_writer
+      - essentials_admin
+  /shard-owned-queues/{queueName}/ordered-keys/{key}/resurrect:
+    post:
+      tags:
+      - shard-owned-queues
+      summary: "Return every dead letter of one ordered key to its lane, in key_order.\
+        \ The recovery operation for a key stopped behind a dead letter."
+      operationId: shardOwnedResurrectDeadLettersForKey
+      parameters:
+      - name: queueName
+        in: path
+        description: The queue name.
+        required: true
+        schema:
+          type: string
+      - name: key
+        in: path
+        description: The ordering key.
+        required: true
+        schema:
+          type: string
+      responses:
+        "200":
+          description: 200 — How many messages were put back.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ShardOwnedResurrectKeyResult"
+        "400":
+          description: "Malformed or out-of-range parameter, or invalid request body."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: Unauthenticated.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Caller lacks one of the required roles.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "500":
+          description: Unexpected server error.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+      x-required-roles:
+      - essentials_queue_writer
+      - essentials_admin
+  /shard-owned-queues/{queueName}/messages:
+    delete:
+      tags:
+      - shard-owned-queues
+      summary: "Delete every message in a queue, both lanes."
+      operationId: shardOwnedPurgeQueue
+      parameters:
+      - name: queueName
+        in: path
+        description: The queue name.
+        required: true
+        schema:
+          type: string
+      responses:
+        "200":
+          description: 200 — Number of messages removed.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ShardOwnedPurgeResult"
+        "400":
+          description: "Malformed or out-of-range parameter, or invalid request body."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: Unauthenticated.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Caller lacks one of the required roles.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "500":
+          description: Unexpected server error.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+      x-required-roles:
+      - essentials_queue_writer
       - essentials_admin
   /event-store/aggregate-types/{aggregateType}/highest-global-event-order:
     get:
@@ -1228,6 +1974,248 @@ paths:
       x-required-roles:
       - essentials_subscription_reader
       - essentials_admin
+  /event-store/events/{eventId}:
+    get:
+      tags:
+      - event-store
+      summary: "Find an event by its id alone, in whichever registered aggregate type's\
+        \ event stream holds it. Returns the event's identity and recorded cause,\
+        \ not its payload."
+      operationId: findEvent
+      parameters:
+      - name: eventId
+        in: path
+        description: The event id.
+        required: true
+        schema:
+          type: string
+      responses:
+        "200":
+          description: 200 — The event.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiCausationEvent"
+        "400":
+          description: "Malformed or out-of-range parameter, or invalid request body."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: Unauthenticated.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Caller lacks one of the required roles.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: No value exists for the given identifier.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "500":
+          description: Unexpected server error.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+      x-required-roles:
+      - essentials_subscription_reader
+      - essentials_admin
+  /event-store/aggregate-types/{aggregateType}/aggregates/{aggregateId}/events:
+    get:
+      tags:
+      - event-store
+      summary: "The most recent events of one aggregate, oldest first - the starting\
+        \ point for walking causation. Returns each event's identity and recorded\
+        \ cause, not its payload. Empty when the aggregate type is not registered\
+        \ or the aggregate has no events."
+      operationId: findAggregateEvents
+      parameters:
+      - name: aggregateType
+        in: path
+        description: The aggregate type.
+        required: true
+        schema:
+          type: string
+      - name: aggregateId
+        in: path
+        description: "The aggregate id, as text."
+        required: true
+        schema:
+          type: string
+      - name: limit
+        in: query
+        description: How many of the most recent events to return.
+        required: false
+        schema:
+          maximum: 1000
+          minimum: 1
+          type: integer
+          format: int32
+          default: 100
+      responses:
+        "200":
+          description: 200 — The matching items.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/ApiCausationEvent"
+        "400":
+          description: "Malformed or out-of-range parameter, or invalid request body."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: Unauthenticated.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Caller lacks one of the required roles.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "500":
+          description: Unexpected server error.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+      x-required-roles:
+      - essentials_subscription_reader
+      - essentials_admin
+  /event-store/events/{eventId}/causation-chain:
+    get:
+      tags:
+      - event-store
+      summary: "Why did this event happen: the event, then the event that caused it,\
+        \ then that event's cause, and so on. Stops at an event without a recorded\
+        \ cause, at a cause no registered event stream holds, or after maxDepth events."
+      operationId: findCausationChain
+      parameters:
+      - name: eventId
+        in: path
+        description: The id of the event to start from.
+        required: true
+        schema:
+          type: string
+      - name: maxDepth
+        in: query
+        description: "The most events to return, starting with the event itself."
+        required: false
+        schema:
+          maximum: 100
+          minimum: 1
+          type: integer
+          format: int32
+          default: 20
+      responses:
+        "200":
+          description: 200 — The matching items.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/ApiCausationEvent"
+        "400":
+          description: "Malformed or out-of-range parameter, or invalid request body."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: Unauthenticated.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Caller lacks one of the required roles.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "500":
+          description: Unexpected server error.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+      x-required-roles:
+      - essentials_subscription_reader
+      - essentials_admin
+  /event-store/events/{eventId}/caused-events:
+    get:
+      tags:
+      - event-store
+      summary: "What did this event cause: every event whose recorded cause is this\
+        \ event, across all registered aggregate types. Direct effects only. Requires\
+        \ the opt-in caused-by-event-id index."
+      operationId: findEventsCausedBy
+      parameters:
+      - name: eventId
+        in: path
+        description: The id of the causing event.
+        required: true
+        schema:
+          type: string
+      responses:
+        "200":
+          description: 200 — The matching items.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/ApiCausationEvent"
+        "400":
+          description: "Malformed or out-of-range parameter, or invalid request body."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: Unauthenticated.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Caller lacks one of the required roles.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "409":
+          description: "The caused-by-event-id index is not enabled (essentials.eventstore.causation.index-enabled),\
+            \ and the lookup refuses to scan every event-stream table without it."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "500":
+          description: Unexpected server error.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+      x-required-roles:
+      - essentials_subscription_reader
+      - essentials_admin
   /event-store/subscriptions/{subscriberId}/aggregate-types/{aggregateType}/statistics:
     get:
       tags:
@@ -1287,6 +2275,64 @@ paths:
                 $ref: "#/components/schemas/Error"
       x-required-roles:
       - essentials_subscription_reader
+      - essentials_admin
+  /event-store/subscriptions/{subscriberId}/aggregate-types/{aggregateType}/resume:
+    post:
+      tags:
+      - event-store
+      summary: "Resume a subscription that its error policy stopped (stoppedByErrorPolicy)\
+        \ without a restart. Delivery restarts at the failed event, so nothing is\
+        \ skipped; if it fails again the error policy applies again. An exclusive\
+        \ subscription keeps its fenced lock. Acts on this instance only, which must\
+        \ be running the subscription - for an exclusive subscription, holding its\
+        \ lock."
+      operationId: resumeSubscriptionStoppedByErrorPolicy
+      parameters:
+      - name: subscriberId
+        in: path
+        description: The subscriber id.
+        required: true
+        schema:
+          type: string
+      - name: aggregateType
+        in: path
+        description: The aggregate type the subscriber subscribes to.
+        required: true
+        schema:
+          type: string
+      responses:
+        "200":
+          description: 200 — Whether the subscription was resumed.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ResumeResult"
+        "400":
+          description: "Malformed or out-of-range parameter, or invalid request body."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: Unauthenticated.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Caller lacks one of the required roles.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "500":
+          description: Unexpected server error.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+      x-required-roles:
+      - essentials_subscription_writer
       - essentials_admin
   /event-store/cdc/status:
     get:
@@ -2165,6 +3211,40 @@ components:
           format: date-time
         archiveError:
           type: string
+    ApiCausationEvent:
+      required:
+      - aggregateId
+      - aggregateType
+      - eventId
+      - eventOrder
+      - eventType
+      - globalEventOrder
+      - timestamp
+      type: object
+      properties:
+        eventId:
+          type: string
+        aggregateType:
+          type: string
+        aggregateId:
+          type: string
+        eventType:
+          type: string
+        eventOrder:
+          type: integer
+          format: int64
+        globalEventOrder:
+          type: integer
+          format: int64
+        timestamp:
+          type: string
+          format: date-time
+        causedByEventId:
+          type: string
+          description: The id of the event that caused this one. Null when no cause
+            was recorded. Events started by a request or a person have none. Neither
+            do events persisted before causation was recorded.
+          nullable: true
     ApiCdcAvailability:
       required:
       - everActive
@@ -2285,6 +3365,25 @@ components:
         lastTickEpochMs:
           type: integer
           format: int64
+    ApiCdcInterruptions:
+      required:
+      - count
+      - ongoing
+      type: object
+      properties:
+        count:
+          type: integer
+          format: int64
+        ongoing:
+          type: boolean
+        lastInterruptedAt:
+          type: string
+          format: date-time
+        lastReason:
+          type: string
+        lastRecoveredAt:
+          type: string
+          format: date-time
     ApiCdcSlotStatus:
       required:
       - active
@@ -2360,6 +3459,8 @@ components:
           nullable: true
           allOf:
           - $ref: "#/components/schemas/ApiCdcDispatcherStatus"
+        interruptions:
+          $ref: "#/components/schemas/ApiCdcInterruptions"
     ApiCdcTailerStatus:
       required:
       - handlerFailures
@@ -2502,6 +3603,48 @@ components:
         scheduledAt:
           type: string
           format: date-time
+    ApiIndexStatistics:
+      required:
+      - idxScan
+      - idxTupFetch
+      - idxTupRead
+      - indexName
+      - primary
+      - size
+      - sizeBytes
+      - unique
+      - valid
+      type: object
+      properties:
+        indexName:
+          type: string
+        sizeBytes:
+          type: integer
+          format: int64
+        size:
+          type: string
+        idxScan:
+          type: integer
+          format: int64
+        idxTupRead:
+          type: integer
+          format: int64
+        idxTupFetch:
+          type: integer
+          format: int64
+        unique:
+          type: boolean
+        primary:
+          type: boolean
+        valid:
+          type: boolean
+        cacheHitRatio:
+          type: number
+          description: Shared-buffer hits as a percentage 0-100 of the index's block
+            requests. Null while there has been no block access since the statistics
+            were reset.
+          format: double
+          nullable: true
     ApiPersistedEvent:
       type: object
       properties:
@@ -2587,7 +3730,13 @@ components:
     ApiQueryStatistics:
       required:
       - calls
+      - maxTime
       - meanTime
+      - minTime
+      - rows
+      - sharedBlksHit
+      - sharedBlksRead
+      - stddevTime
       - totalTime
       type: object
       properties:
@@ -2602,6 +3751,42 @@ components:
         meanTime:
           type: number
           format: double
+        rows:
+          type: integer
+          format: int64
+        minTime:
+          type: number
+          format: double
+        maxTime:
+          type: number
+          format: double
+        stddevTime:
+          type: number
+          format: double
+        sharedBlksHit:
+          type: integer
+          format: int64
+        sharedBlksRead:
+          type: integer
+          format: int64
+        cacheHitRatio:
+          type: number
+          description: Shared-buffer hits as a percentage 0-100 of all shared blocks
+            the statement accessed. Null when it accessed no shared blocks.
+          format: double
+          nullable: true
+    ApiQueueStatistics:
+      required:
+      - depth
+      - queueName
+      type: object
+      properties:
+        queueName:
+          type: string
+        depth:
+          $ref: "#/components/schemas/Depth"
+        instance:
+          $ref: "#/components/schemas/InstanceDelivery"
     ApiQueuedMessage:
       required:
       - id
@@ -2642,30 +3827,208 @@ components:
           type: boolean
         isBeingDelivered:
           type: boolean
-    ApiQueuedStatistics:
+        orderedMessageKey:
+          type: string
+          description: The key of an ordered message. Null for an unordered message.
+          nullable: true
+        orderedMessageOrder:
+          type: integer
+          description: The order of an ordered message. Null for an unordered message.
+          format: int64
+          nullable: true
+        referencedAggregateType:
+          type: string
+          description: Set when the message refers to a persisted event as the inbox
+            messages of an EventProcessor do. It is the aggregate type and orderedMessageKey
+            is the aggregate id. Null for every other message.
+          nullable: true
+    ApiScheduledJobRun:
       required:
-      - avgDeliveryLatencyMs
-      - queueName
-      - totalMessagesDelivered
+      - durationMs
+      - jobName
+      - jobType
+      - startedAt
+      - succeeded
+      type: object
+      properties:
+        jobName:
+          type: string
+        jobType:
+          type: string
+        startedAt:
+          type: string
+          format: date-time
+        durationMs:
+          type: integer
+          format: int64
+        succeeded:
+          type: boolean
+        error:
+          type: string
+          description: The exception type and message. Null when the run succeeded.
+          nullable: true
+    ApiShardOwnedMessage:
+      required:
+      - attempts
+      - isDeadLetter
+      - payloadType
+      - sequence
+      - shard
+      type: object
+      properties:
+        id:
+          type: string
+        queueName:
+          $ref: "#/components/schemas/QueueName"
+        lane:
+          type: string
+        shard:
+          type: integer
+          format: int32
+        sequence:
+          type: integer
+          format: int64
+        key:
+          type: string
+        payload:
+          type: string
+        payloadType:
+          type: integer
+          format: int32
+        attempts:
+          type: integer
+          format: int32
+        enqueuedAt:
+          type: string
+          format: date-time
+        visibleAt:
+          type: string
+          format: date-time
+        isDeadLetter:
+          type: boolean
+        lastError:
+          type: string
+        blockedByKeyOrder:
+          type: integer
+          format: int64
+    ApiShardOwnedQueueStatistics:
+      required:
+      - deadLettered
+      - delivered
+      - handlerFailures
+      - keysBlockedByDeadLetter
+      - leasesLost
+      - messagesPoisonedBehindDeadLetter
+      - orderViolations
+      - retriesDispatched
+      - retriesScheduled
+      - runningInThisInstance
+      - shardsAcquired
+      - shardsReleased
+      - sweepRecoveries
+      - watermarkCapped
       type: object
       properties:
         queueName:
-          type: string
-        fromTimestamp:
-          type: string
-          format: date-time
-        totalMessagesDelivered:
+          $ref: "#/components/schemas/QueueName"
+        runningInThisInstance:
+          type: boolean
+        delivered:
           type: integer
           format: int64
-        avgDeliveryLatencyMs:
+        handlerFailures:
+          type: integer
+          format: int64
+        retriesScheduled:
+          type: integer
+          format: int64
+        retriesDispatched:
+          type: integer
+          format: int64
+        deadLettered:
+          type: integer
+          format: int64
+        orderViolations:
+          type: integer
+          format: int64
+        sweepRecoveries:
+          type: integer
+          format: int64
+        shardsAcquired:
+          type: integer
+          format: int64
+        shardsReleased:
+          type: integer
+          format: int64
+        leasesLost:
+          type: integer
+          format: int64
+        watermarkCapped:
+          type: integer
+          format: int64
+        keysBlockedByDeadLetter:
+          type: integer
+          format: int64
+        messagesPoisonedBehindDeadLetter:
+          type: integer
+          format: int64
+    ApiShardOwnedQueueStatus:
+      required:
+      - blockedKeys
+      - deadLetteredDepth
+      - fullyOwned
+      - liveInstances
+      - maxInstances
+      - orderedDepth
+      - orderedShardsOwned
+      - orderedUnits
+      - parkedBehindDeadLetterDepth
+      - shardCount
+      - unorderedDepth
+      - unorderedShardsOwned
+      - unownedShards
+      type: object
+      properties:
+        queueName:
+          $ref: "#/components/schemas/QueueName"
+        shardCount:
           type: integer
           format: int32
-        firstDelivery:
-          type: string
-          format: date-time
-        lastDelivery:
-          type: string
-          format: date-time
+        orderedUnits:
+          type: integer
+          format: int32
+        unorderedDepth:
+          type: integer
+          format: int64
+        orderedDepth:
+          type: integer
+          format: int64
+        deadLetteredDepth:
+          type: integer
+          format: int64
+        unorderedShardsOwned:
+          type: integer
+          format: int32
+        orderedShardsOwned:
+          type: integer
+          format: int32
+        unownedShards:
+          type: integer
+          format: int32
+        fullyOwned:
+          type: boolean
+        liveInstances:
+          type: integer
+          format: int32
+        maxInstances:
+          type: integer
+          format: int32
+        parkedBehindDeadLetterDepth:
+          type: integer
+          format: int64
+        blockedKeys:
+          type: integer
+          format: int64
     ApiSubscription:
       required:
       - aggregateType
@@ -2719,6 +4082,14 @@ components:
             running in this instance.
           format: int64
           nullable: true
+        stoppedByErrorPolicy:
+          type: boolean
+          description: Whether the error policy of the subscription halted it after
+            a handler failure (mode STOP or RETRY_N_THEN_STOP). It then handles no
+            further events until it is resumed or started again. active stays true
+            for such a subscription. Always false for an in-transaction subscription.
+            Null when the subscription is not running in this instance.
+          nullable: true
     ApiSubscriptionEventHandlingStatistics:
       required:
       - eventsHandled
@@ -2756,6 +4127,28 @@ components:
         lastNumberOfEventsRequested:
           type: integer
           format: int64
+    ApiSubscriptionGapStatistics:
+      required:
+      - newTransientGaps
+      - promotedToPermanentGaps
+      - resolvedTransientGaps
+      type: object
+      properties:
+        newTransientGaps:
+          type: integer
+          format: int64
+        resolvedTransientGaps:
+          type: integer
+          format: int64
+        promotedToPermanentGaps:
+          type: integer
+          format: int64
+        lastNewTransientGapAt:
+          type: string
+          format: date-time
+        lastPromotedToPermanentGapAt:
+          type: string
+          format: date-time
     ApiSubscriptionLifecycleStatistics:
       required:
       - starts
@@ -2868,6 +4261,8 @@ components:
           $ref: "#/components/schemas/ApiSubscriptionLockStatistics"
         reset:
           $ref: "#/components/schemas/ApiSubscriptionResetStatistics"
+        gaps:
+          $ref: "#/components/schemas/ApiSubscriptionGapStatistics"
     ApiTableActivityStatistics:
       required:
       - idx_scan
@@ -2917,6 +4312,101 @@ components:
           type: string
         indexSize:
           type: string
+    ApiTableStatistics:
+      required:
+      - deadRows
+      - idxScan
+      - idxTupFetch
+      - indexSize
+      - indexSizeBytes
+      - indexes
+      - liveRows
+      - rowsDeleted
+      - rowsHotUpdated
+      - rowsInserted
+      - rowsUpdated
+      - section
+      - seqScan
+      - seqTupRead
+      - tableName
+      - tableSize
+      - tableSizeBytes
+      - totalSize
+      - totalSizeBytes
+      type: object
+      properties:
+        section:
+          type: string
+        tableName:
+          type: string
+        totalSizeBytes:
+          type: integer
+          format: int64
+        tableSizeBytes:
+          type: integer
+          format: int64
+        indexSizeBytes:
+          type: integer
+          format: int64
+        totalSize:
+          type: string
+        tableSize:
+          type: string
+        indexSize:
+          type: string
+        liveRows:
+          type: integer
+          format: int64
+        deadRows:
+          type: integer
+          format: int64
+        seqScan:
+          type: integer
+          format: int64
+        seqTupRead:
+          type: integer
+          format: int64
+        idxScan:
+          type: integer
+          format: int64
+        idxTupFetch:
+          type: integer
+          format: int64
+        rowsInserted:
+          type: integer
+          format: int64
+        rowsUpdated:
+          type: integer
+          format: int64
+        rowsHotUpdated:
+          type: integer
+          format: int64
+        rowsDeleted:
+          type: integer
+          format: int64
+        cacheHitRatio:
+          type: number
+          description: Shared-buffer hits as a percentage 0-100 of the table's and
+            its indexes' block requests. Null while there has been no block access
+            since the statistics were reset.
+          format: double
+          nullable: true
+        lastVacuum:
+          type: string
+          description: The most recent manual or automatic vacuum. Null if the table
+            was never vacuumed.
+          format: date-time
+          nullable: true
+        lastAnalyze:
+          type: string
+          description: The most recent manual or automatic analyze. Null if the table
+            was never analyzed.
+          format: date-time
+          nullable: true
+        indexes:
+          type: array
+          items:
+            $ref: "#/components/schemas/ApiIndexStatistics"
     ApiTimedMetricStatistics:
       type: object
       properties:
@@ -2946,6 +4436,24 @@ components:
         deleted:
           type: boolean
       description: Outcome of a message deletion.
+    Depth:
+      required:
+      - deadLetterMessages
+      - queuedMessages
+      type: object
+      properties:
+        queuedMessages:
+          type: integer
+          format: int64
+        deadLetterMessages:
+          type: integer
+          format: int64
+        messagesBeingDelivered:
+          type: integer
+          format: int64
+        oldestReadyMessageAgeMillis:
+          type: integer
+          format: int64
     Error:
       required:
       - error
@@ -2974,6 +4482,53 @@ components:
           type: integer
           format: int64
       description: A persisted global event order value.
+    InstanceDelivery:
+      required:
+      - messagesDeadLettered
+      - messagesHandled
+      - messagesRetried
+      - redeliveryRequests
+      type: object
+      properties:
+        statisticsSince:
+          type: string
+          format: date-time
+        messagesHandled:
+          type: integer
+          format: int64
+        messagesRetried:
+          type: integer
+          format: int64
+        messagesDeadLettered:
+          type: integer
+          format: int64
+        redeliveryRequests:
+          type: integer
+          format: int64
+        averageHandlerDurationMillis:
+          type: integer
+          format: int64
+        maxHandlerDurationMillis:
+          type: integer
+          format: int64
+        lastHandledAt:
+          type: string
+          format: date-time
+        lastFailureAt:
+          type: string
+          format: date-time
+        lastFailureReason:
+          type: string
+    MessageOperationResult:
+      required:
+      - applied
+      type: object
+      properties:
+        applied:
+          type: boolean
+      description: "Whether a shard-owned queue message operation took effect. False\
+        \ is a normal answer, not an error: the message may already have been delivered,\
+        \ deleted or moved by its owner."
     PurgeResult:
       required:
       - purgedCount
@@ -2983,6 +4538,11 @@ components:
           type: integer
           format: int32
       description: Number of messages removed by a purge.
+    QueueName:
+      type: object
+      properties:
+        value:
+          type: string
     QueueNameResult:
       required:
       - queueName
@@ -2999,6 +4559,16 @@ components:
         released:
           type: boolean
       description: Outcome of a lock release.
+    ResumeResult:
+      required:
+      - resumed
+      type: object
+      properties:
+        resumed:
+          type: boolean
+      description: "Outcome of resuming a subscription stopped by its error policy.\
+        \ False is a normal answer, not an error: the subscription is not stopped\
+        \ by its error policy, or does not run in the instance that received the request."
     ResurrectDeadLetterMessageRequest:
       required:
       - deliveryDelay
@@ -3010,3 +4580,23 @@ components:
           format: duration
           example: PT0S
       description: Re-queue parameters for resurrecting a dead-letter message.
+    ShardOwnedPurgeResult:
+      required:
+      - purgedCount
+      type: object
+      properties:
+        purgedCount:
+          type: integer
+          format: int64
+      description: "Rows removed by a shard-owned queue purge, across both lanes and\
+        \ the dead-letter table. Distinct from PurgeResult, which is int32."
+    ShardOwnedResurrectKeyResult:
+      required:
+      - resurrectedCount
+      type: object
+      properties:
+        resurrectedCount:
+          type: integer
+          format: int32
+      description: "Messages returned to the ordered lane by resurrecting a whole\
+        \ key. Zero is a normal answer: the key had no dead letters."

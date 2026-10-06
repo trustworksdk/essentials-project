@@ -1,0 +1,15 @@
+spring:
+  application:
+    name: shop
+  mongodb:
+    uri: mongodb://localhost:27017/shop
+  # Trap: these spring.data.mongodb keys are still bound by Boot 4 and must not be reported.
+  data:
+    mongodb:
+      auto-index-creation: true
+      gridfs:
+        bucket: files
+app:
+  cors:
+    allowed-origins:
+      - https://shop.example.com

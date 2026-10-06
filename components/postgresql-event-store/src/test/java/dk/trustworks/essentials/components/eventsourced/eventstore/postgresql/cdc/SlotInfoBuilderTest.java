@@ -52,7 +52,6 @@ class SlotInfoBuilderTest {
     private static final Boolean FAILOVER            = Boolean.FALSE;
     private static final Boolean SYNCED              = null;
 
-    @SuppressWarnings("removal")
     private static SlotInfo viaConstructor() {
         return new SlotInfo(SLOT_NAME,
                             SLOT_TYPE,

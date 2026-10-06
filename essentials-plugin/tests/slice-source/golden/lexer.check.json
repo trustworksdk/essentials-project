@@ -1,0 +1,31 @@
+{
+  "tool": "slice-source",
+  "format": 1,
+  "mode": "check",
+  "root": "tests/slice-source/cases/lexer",
+  "manifests": 0,
+  "parsed": 0,
+  "skippedManifests": [],
+  "slicesWithoutManifest": [
+    "edge.java_edge",
+    "edge.kotlin_edge"
+  ],
+  "lanes": [
+    {
+      "bc": "edge",
+      "path": "src/main/*/com/example/edge",
+      "detected": "undetermined",
+      "signals": {
+        "decider": 0,
+        "aggregates": false,
+        "entities": false,
+        "eventStore": 0
+      },
+      "declared": {}
+    }
+  ],
+  "endpoints": [],
+  "findings": [],
+  "unverified": [],
+  "unparsed": []
+}

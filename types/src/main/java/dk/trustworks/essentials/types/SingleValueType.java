@@ -185,7 +185,7 @@ public interface SingleValueType<VALUE_TYPE, CONCRETE_TYPE extends SingleValueTy
     /**
      * Create an instance of a concrete {@link SingleValueType} based on an VALUE_TYPE value<br>
      * It will initially try a constructor that accepts a single argument.<br>
-     * If the type doesn't provide such a constructor it will fall back to calling a static <b>to</b> method that takes a single argument
+     * If the type doesn't provide such a constructor it will fall back to calling a static <b>of</b> method, and then a static <b>from</b> method, that takes a single argument
      *
      * @param value           the non-null value that will be used as value for the <code>concreteType</code>
      * @param concreteType    the concrete {@link SingleValueType}
@@ -203,7 +203,7 @@ public interface SingleValueType<VALUE_TYPE, CONCRETE_TYPE extends SingleValueTy
     /**
      * Create an instance of a concrete {@link SingleValueType} based on an Object value - useful for generic code where the types aren't present in the code<br>
      * It will initially try a constructor that accepts a single argument.<br>
-     * If the type doesn't provide such a constructor it will look for a static <b>to</b> method that takes a single argument matching the argument-type.<br>
+     * If the type doesn't provide such a constructor it will look for a static <b>of</b> method that takes a single argument matching the argument-type.<br>
      * If it cannot find such a method it will look for a static <b>from</b> method that takes a single argument matching the argument-type.
      *
      * @param value        the non-null value that will be used as value for the <code>concreteType</code>
@@ -228,8 +228,8 @@ public interface SingleValueType<VALUE_TYPE, CONCRETE_TYPE extends SingleValueTy
                 if (matchingOfMethod.isPresent()) {
                     return reflector.invokeStatic(matchingOfMethod.get(), value);
                 }
-                throw new ReflectionException(MessageFormatter.bind("Failed to create instance of '{:singleValueType}' from value of type '{:valueTypeName}'." +
-                                                                            "Didn't find a {:singleValueTypeSimpleName}(:valueTypeName) constructor, " +
+                throw new ReflectionException(MessageFormatter.bind("Failed to create instance of '{:singleValueTypeName}' from value of type '{:valueTypeName}'. " +
+                                                                            "Didn't find a {:singleValueTypeSimpleName}({:valueTypeName}) constructor, " +
                                                                             "static {:singleValueTypeSimpleName} of({:valueTypeName}), " +
                                                                             "static {:singleValueTypeSimpleName} from({:valueTypeName})",
                                                                     Map.of("singleValueTypeName", concreteType.getName(),

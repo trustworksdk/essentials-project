@@ -27,7 +27,7 @@ import org.springframework.data.mongodb.*;
 import org.springframework.data.mongodb.core.MongoTemplate;
 import org.springframework.test.annotation.DirtiesContext;
 import org.springframework.test.context.*;
-import org.testcontainers.containers.MongoDBContainer;
+import org.testcontainers.mongodb.MongoDBContainer;
 import org.testcontainers.junit.jupiter.*;
 
 
@@ -36,7 +36,7 @@ import org.testcontainers.junit.jupiter.*;
 @DirtiesContext(classMode = DirtiesContext.ClassMode.AFTER_EACH_TEST_METHOD)
 class MongoDurableQueuesIT extends DurableQueuesIT<MongoDurableQueues, SpringMongoTransactionAwareUnitOfWork, SpringMongoTransactionAwareUnitOfWorkFactory> {
     @Container
-    static MongoDBContainer mongoDBContainer = new MongoDBContainer(EssentialsTestContainers.MONGO_IMAGE);
+    static MongoDBContainer mongoDBContainer = new MongoDBContainer(EssentialsTestContainers.MONGO_IMAGE).withReplicaSet();
 
     @DynamicPropertySource
     static void setProperties(DynamicPropertyRegistry registry) {
@@ -60,9 +60,11 @@ class MongoDurableQueuesIT extends DurableQueuesIT<MongoDurableQueues, SpringMon
     @Override
     protected MongoDurableQueues createDurableQueues(SpringMongoTransactionAwareUnitOfWorkFactory unitOfWorkFactory,
                                                      JSONSerializer jsonSerializer) {
-        return new MongoDurableQueues(mongoTemplate,
-                                      unitOfWorkFactory,
-                                      jsonSerializer);
+        return MongoDurableQueues.builder()
+                                  .setMongoTemplate(mongoTemplate)
+                                  .setUnitOfWorkFactory(unitOfWorkFactory)
+                                  .setJsonSerializer(jsonSerializer)
+                                  .build();
     }
 
     @Override

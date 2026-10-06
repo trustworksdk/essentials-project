@@ -1,0 +1,416 @@
+{
+  "files": [
+    {
+      "src": "pom.xml.template",
+      "dst": "pom.xml"
+    },
+    {
+      "src": "gitignore.template",
+      "dst": ".gitignore"
+    },
+    {
+      "src": "CLAUDE.md.template",
+      "dst": "CLAUDE.md"
+    },
+    {
+      "src": "README.md.template",
+      "dst": "README.md"
+    },
+    {
+      "src": "dev.sh.template",
+      "dst": "dev.sh",
+      "mode": "755"
+    },
+    {
+      "src": "contracts/openapi.json.template",
+      "dst": "contracts/openapi.json"
+    },
+    {
+      "copy": "references/slice/project-rules-pointer.md.template",
+      "dst": ".claude/rules/essentials-slices.md"
+    },
+    {
+      "copy": "scripts/slice-lint.py",
+      "dst": "scripts/slice-lint.py",
+      "when": {
+        "lintGate": [
+          "hook",
+          "script"
+        ]
+      },
+      "mode": "755"
+    },
+    {
+      "copy": "references/slice/slice-yaml.schema.json",
+      "dst": "scripts/slice-yaml.schema.json",
+      "when": {
+        "lintGate": [
+          "hook",
+          "script"
+        ]
+      }
+    },
+    {
+      "src": ".githooks/pre-commit.template",
+      "dst": ".githooks/pre-commit",
+      "when": {
+        "lintGate": "hook"
+      },
+      "mode": "755"
+    },
+    {
+      "src": "WORKSPACE-CLAUDE.md.template",
+      "dst": "CLAUDE.md",
+      "root": "workspace"
+    },
+    {
+      "src": "backend/pom.xml.template",
+      "dst": "backend/pom.xml"
+    },
+    {
+      "src": "backend/compose.yml.template",
+      "dst": "backend/compose.yml",
+      "when": {
+        "compose": true
+      }
+    },
+    {
+      "src": "backend/src/main/resources/application.yml.template",
+      "dst": "backend/src/main/resources/application.yml"
+    },
+    {
+      "src": "backend/src/main/kotlin/__PACKAGE__/Application.kt.template",
+      "dst": "backend/src/main/kotlin/__PACKAGE__/Application.kt",
+      "when": {
+        "language": "kotlin"
+      }
+    },
+    {
+      "src": "backend/src/main/kotlin/__PACKAGE__/config/EssentialsWebConfig.kt.template",
+      "dst": "backend/src/main/kotlin/__PACKAGE__/config/EssentialsWebConfig.kt",
+      "when": {
+        "language": "kotlin"
+      }
+    },
+    {
+      "src": "backend/src/main/kotlin/__PACKAGE__/config/PersistenceSerializerConfiguration.kt.template",
+      "dst": "backend/src/main/kotlin/__PACKAGE__/config/PersistenceSerializerConfiguration.kt",
+      "when": {
+        "language": "kotlin"
+      }
+    },
+    {
+      "src": "backend/src/main/kotlin/__PACKAGE__/config/DocumentDbConfig.kt.template",
+      "dst": "backend/src/main/kotlin/__PACKAGE__/config/DocumentDbConfig.kt",
+      "when": {
+        "language": "kotlin",
+        "db": [
+          "pg-event-sourced",
+          "pg-crud"
+        ]
+      }
+    },
+    {
+      "src": "backend/src/main/kotlin/__PACKAGE__/config/SecurityConfig.kt.template",
+      "dst": "backend/src/main/kotlin/__PACKAGE__/config/SecurityConfig.kt",
+      "when": {
+        "language": "kotlin"
+      }
+    },
+    {
+      "src": "backend/src/main/kotlin/__PACKAGE__/config/CorsConfig.kt.template",
+      "dst": "backend/src/main/kotlin/__PACKAGE__/config/CorsConfig.kt",
+      "when": {
+        "language": "kotlin",
+        "frontend": "standalone"
+      }
+    },
+    {
+      "src": "backend/src/main/kotlin/__PACKAGE__/config/SpaWebFilter.kt.template",
+      "dst": "backend/src/main/kotlin/__PACKAGE__/config/SpaWebFilter.kt",
+      "when": {
+        "language": "kotlin",
+        "frontend": "embedded"
+      }
+    },
+    {
+      "src": "backend/src/test/kotlin/__PACKAGE__/IntegrationTestBase.kt.template",
+      "dst": "backend/src/test/kotlin/__PACKAGE__/IntegrationTestBase.kt",
+      "when": {
+        "language": "kotlin"
+      }
+    },
+    {
+      "src": "backend/src/test/kotlin/__PACKAGE__/ApplicationContextIT.kt.template",
+      "dst": "backend/src/test/kotlin/__PACKAGE__/ApplicationContextIT.kt",
+      "when": {
+        "language": "kotlin"
+      }
+    },
+    {
+      "src": "backend/src/test/kotlin/__PACKAGE__/OpenApiContractIT.kt.template",
+      "dst": "backend/src/test/kotlin/__PACKAGE__/OpenApiContractIT.kt",
+      "when": {
+        "language": "kotlin"
+      }
+    },
+    {
+      "src": "backend/src/test/kotlin/__PACKAGE__/CorsPreflightIT.kt.template",
+      "dst": "backend/src/test/kotlin/__PACKAGE__/CorsPreflightIT.kt",
+      "when": {
+        "language": "kotlin",
+        "frontend": "standalone"
+      }
+    },
+    {
+      "src": "backend/src/main/java/__PACKAGE__/Application.java.template",
+      "dst": "backend/src/main/java/__PACKAGE__/Application.java",
+      "when": {
+        "language": "java"
+      }
+    },
+    {
+      "src": "backend/src/main/java/__PACKAGE__/config/EssentialsWebConfig.java.template",
+      "dst": "backend/src/main/java/__PACKAGE__/config/EssentialsWebConfig.java",
+      "when": {
+        "language": "java"
+      }
+    },
+    {
+      "src": "backend/src/main/java/__PACKAGE__/config/DocumentDbConfig.java.template",
+      "dst": "backend/src/main/java/__PACKAGE__/config/DocumentDbConfig.java",
+      "when": {
+        "language": "java",
+        "db": [
+          "pg-event-sourced",
+          "pg-crud"
+        ]
+      }
+    },
+    {
+      "src": "backend/src/main/java/__PACKAGE__/config/SecurityConfig.java.template",
+      "dst": "backend/src/main/java/__PACKAGE__/config/SecurityConfig.java",
+      "when": {
+        "language": "java"
+      }
+    },
+    {
+      "src": "backend/src/main/java/__PACKAGE__/config/CorsConfig.java.template",
+      "dst": "backend/src/main/java/__PACKAGE__/config/CorsConfig.java",
+      "when": {
+        "language": "java",
+        "frontend": "standalone"
+      }
+    },
+    {
+      "src": "backend/src/main/java/__PACKAGE__/config/CorsProperties.java.template",
+      "dst": "backend/src/main/java/__PACKAGE__/config/CorsProperties.java",
+      "when": {
+        "language": "java",
+        "frontend": "standalone"
+      }
+    },
+    {
+      "src": "backend/src/main/java/__PACKAGE__/config/SpaWebFilter.java.template",
+      "dst": "backend/src/main/java/__PACKAGE__/config/SpaWebFilter.java",
+      "when": {
+        "language": "java",
+        "frontend": "embedded"
+      }
+    },
+    {
+      "src": "backend/src/test/java/__PACKAGE__/IntegrationTestBase.java.template",
+      "dst": "backend/src/test/java/__PACKAGE__/IntegrationTestBase.java",
+      "when": {
+        "language": "java"
+      }
+    },
+    {
+      "src": "backend/src/test/java/__PACKAGE__/ApplicationContextIT.java.template",
+      "dst": "backend/src/test/java/__PACKAGE__/ApplicationContextIT.java",
+      "when": {
+        "language": "java"
+      }
+    },
+    {
+      "src": "backend/src/test/java/__PACKAGE__/OpenApiContractIT.java.template",
+      "dst": "backend/src/test/java/__PACKAGE__/OpenApiContractIT.java",
+      "when": {
+        "language": "java"
+      }
+    },
+    {
+      "src": "backend/src/test/java/__PACKAGE__/CorsPreflightIT.java.template",
+      "dst": "backend/src/test/java/__PACKAGE__/CorsPreflightIT.java",
+      "when": {
+        "language": "java",
+        "frontend": "standalone"
+      }
+    },
+    {
+      "src": "frontend/package.json.template",
+      "dst": "frontend/package.json",
+      "when": {
+        "frontend": [
+          "embedded",
+          "standalone"
+        ]
+      }
+    },
+    {
+      "src": "frontend/index.html.template",
+      "dst": "frontend/index.html",
+      "when": {
+        "frontend": [
+          "embedded",
+          "standalone"
+        ]
+      }
+    },
+    {
+      "src": "frontend/vite.config.ts.template",
+      "dst": "frontend/vite.config.ts",
+      "when": {
+        "frontend": [
+          "embedded",
+          "standalone"
+        ]
+      }
+    },
+    {
+      "src": "frontend/tsconfig.json.template",
+      "dst": "frontend/tsconfig.json",
+      "when": {
+        "frontend": [
+          "embedded",
+          "standalone"
+        ]
+      }
+    },
+    {
+      "src": "frontend/orval.config.ts.template",
+      "dst": "frontend/orval.config.ts",
+      "when": {
+        "frontend": [
+          "embedded",
+          "standalone"
+        ]
+      }
+    },
+    {
+      "src": "frontend/eslint.config.js.template",
+      "dst": "frontend/eslint.config.js",
+      "when": {
+        "frontend": [
+          "embedded",
+          "standalone"
+        ]
+      }
+    },
+    {
+      "src": "frontend/postcss.config.mjs.template",
+      "dst": "frontend/postcss.config.mjs",
+      "when": {
+        "frontend": [
+          "embedded",
+          "standalone"
+        ]
+      }
+    },
+    {
+      "src": "frontend/src/index.css.template",
+      "dst": "frontend/src/index.css",
+      "when": {
+        "frontend": [
+          "embedded",
+          "standalone"
+        ]
+      }
+    },
+    {
+      "src": "frontend/src/main.tsx.template",
+      "dst": "frontend/src/main.tsx",
+      "when": {
+        "frontend": [
+          "embedded",
+          "standalone"
+        ]
+      }
+    },
+    {
+      "src": "frontend/src/app/App.tsx.template",
+      "dst": "frontend/src/app/App.tsx",
+      "when": {
+        "frontend": [
+          "embedded",
+          "standalone"
+        ]
+      }
+    },
+    {
+      "src": "frontend/src/vite-env.d.ts.template",
+      "dst": "frontend/src/vite-env.d.ts",
+      "when": {
+        "frontend": [
+          "embedded",
+          "standalone"
+        ]
+      }
+    },
+    {
+      "src": "frontend/src/shared/api/custom-fetch.ts.template",
+      "dst": "frontend/src/shared/api/custom-fetch.ts",
+      "when": {
+        "frontend": [
+          "embedded",
+          "standalone"
+        ]
+      }
+    },
+    {
+      "src": "frontend/src/shared/api/custom-fetch.test.ts.template",
+      "dst": "frontend/src/shared/api/custom-fetch.test.ts",
+      "when": {
+        "frontend": [
+          "embedded",
+          "standalone"
+        ]
+      }
+    },
+    {
+      "src": "frontend/.env.example.template",
+      "dst": "frontend/.env.example",
+      "when": {
+        "frontend": "standalone"
+      }
+    }
+  ],
+  "generatedPaths": [
+    "mvnw",
+    "mvnw.cmd",
+    ".mvn/wrapper/maven-wrapper.properties",
+    "frontend/package-lock.json",
+    "frontend/src/shared/api/generated",
+    "frontend/src/shared/api/model"
+  ],
+  "hooks": [
+    {
+      "id": "maven-wrapper",
+      "cwd": ".",
+      "run": "mvn -N -B -q org.apache.maven.plugins:maven-wrapper-plugin:{{pin:maven-wrapper-plugin}}:wrapper -Dmaven={{pin:Maven}} -Dtype=only-script",
+      "why": "Writes mvnw, mvnw.cmd and .mvn/wrapper/maven-wrapper.properties pinned to the stack pins. Needs a local mvn; without one the project builds with mvn once installed, and dev.sh falls back to it."
+    },
+    {
+      "id": "frontend-lockfile",
+      "cwd": "frontend",
+      "when": {
+        "frontend": [
+          "embedded",
+          "standalone"
+        ]
+      },
+      "run": "npm install --package-lock-only --no-audit --no-fund",
+      "why": "Creates package-lock.json, which the embedded build's `npm ci` requires. Needs npm and the registry; a lockfile cannot be rendered."
+    }
+  ]
+}

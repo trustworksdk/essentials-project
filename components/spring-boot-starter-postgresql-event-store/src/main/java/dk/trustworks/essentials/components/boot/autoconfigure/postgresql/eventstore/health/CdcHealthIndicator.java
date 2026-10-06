@@ -45,13 +45,11 @@ public class CdcHealthIndicator implements HealthIndicator {
      * @param tailer       the WAL replication tailer, when one is configured
      * @param dispatcher   the CDC dispatcher, when INBOX delivery is configured
      * @param properties   the event-store properties, read for the configured {@link CdcMode}
-     * @deprecated Use {@link #builder()}. This constructor declares an {@code Optional} parameter and/or more than five parameters; the builder names every argument and accepts both plain values and {@code Optional}s. It is unchanged and remains the implementation the builder delegates to.
      */
-    @Deprecated(forRemoval = true, since = "0.40.x")
-    public CdcHealthIndicator(CdcAvailability availability,
-                              Optional<WalReplicationTailer> tailer,
-                              Optional<CdcDispatcher> dispatcher,
-                              EssentialsEventStoreProperties properties) {
+    CdcHealthIndicator(CdcAvailability availability,
+                       Optional<WalReplicationTailer> tailer,
+                       Optional<CdcDispatcher> dispatcher,
+                       EssentialsEventStoreProperties properties) {
         this.availability = availability;
         this.tailer = tailer;
         this.dispatcher = dispatcher;
@@ -83,6 +81,15 @@ public class CdcHealthIndicator implements HealthIndicator {
                                                      ? ""
                                                      : Instant.ofEpochMilli(snapshot.lastChangedEpochMs()).toString());
 
+        // Kept after CDC recovers: "reason" above describes the current state only, so without these a dropped
+        // replication connection that reconnected on its own left no trace here.
+        var interruptions = availability.interruptions();
+        builder.withDetail("interruptions.count", interruptions.count())
+               .withDetail("interruptions.ongoing", interruptions.ongoing())
+               .withDetail("interruptions.lastInterruptedAt", epochMsOrEmpty(interruptions.lastInterruptedAtEpochMs()))
+               .withDetail("interruptions.lastReason", interruptions.lastReason() == null ? "" : interruptions.lastReason())
+               .withDetail("interruptions.lastRecoveredAt", epochMsOrEmpty(interruptions.lastRecoveredAtEpochMs()));
+
         tailer.ifPresent(t -> {
             var s = t.getStatus();
             builder.withDetail("tailer.started", s.started())
@@ -97,5 +104,9 @@ public class CdcHealthIndicator implements HealthIndicator {
         );
 
         return builder.build();
+    }
+
+    private static String epochMsOrEmpty(long epochMs) {
+        return epochMs == 0 ? "" : Instant.ofEpochMilli(epochMs).toString();
     }
 }

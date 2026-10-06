@@ -35,6 +35,8 @@
 <body th:attr="data-api=${apiBasePath},
                data-can-write-locks=${canWriteLocks},
                data-can-write-queues=${canWriteQueues},
+               data-can-write-scheduler=${canWriteScheduler},
+               data-can-write-subscriptions=${canWriteSubscriptions},
                data-can-read-payloads=${canReadPayloads}">
 
 <aside class="sidebar">
@@ -57,6 +59,10 @@
         <button class="nav-item" data-view="queues" th:disabled="${!canReadQueues}"
                 th:title="${canReadQueues} ? null : 'Requires essentials_queue_reader'">
             <span class="ic">≡</span> Durable queues
+        </button>
+        <button class="nav-item" data-view="shardOwnedQueues" th:disabled="${!canReadQueues}"
+                th:title="${canReadQueues} ? null : 'Requires essentials_queue_reader'">
+            <span class="ic">⛁</span> Shard-owned queues
         </button>
         <button class="nav-item" data-view="scheduler" th:disabled="${!canReadScheduler}"
                 th:title="${canReadScheduler} ? null : 'Requires essentials_scheduler_reader'">
@@ -86,6 +92,10 @@
                 th:title="${canReadSubscriptions} ? null : 'Requires essentials_subscription_reader'">
             <span class="ic">⌕</span> Aggregate lookup
         </button>
+        <button class="nav-item" data-view="causation" th:disabled="${!canReadSubscriptions}"
+                th:title="${canReadSubscriptions} ? null : 'Requires essentials_subscription_reader'">
+            <span class="ic">⤺</span> Event causation
+        </button>
     </nav>
 
     <div class="sidebar-footer">
@@ -110,12 +120,14 @@
     <section class="section is-active" data-section="overview"></section>
     <section class="section" data-section="locks"></section>
     <section class="section" data-section="queues"></section>
+    <section class="section" data-section="shardOwnedQueues"></section>
     <section class="section" data-section="scheduler"></section>
     <section class="section" data-section="subscriptions"></section>
     <section class="section" data-section="cdc"></section>
     <section class="section" data-section="postgresql"></section>
     <section class="section" data-section="aggregates"></section>
     <section class="section" data-section="aggregateLookup"></section>
+    <section class="section" data-section="causation"></section>
 </main>
 
 <div class="scrim" id="scrim"></div>

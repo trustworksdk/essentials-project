@@ -17,12 +17,11 @@
 package dk.trustworks.essentials.components.queue.postgresql;
 
 import com.zaxxer.hikari.HikariDataSource;
-import dk.trustworks.essentials.components.foundation.messaging.queue.TransactionalMode;
 import dk.trustworks.essentials.components.foundation.test.messaging.queue.DistributedCompetingConsumersDurableQueuesIT;
 import dk.trustworks.essentials.components.foundation.transaction.jdbi.*;
 import dk.trustworks.essentials.components.foundation.test.EssentialsTestContainers;
 import org.jdbi.v3.core.Jdbi;
-import org.testcontainers.containers.PostgreSQLContainer;
+import org.testcontainers.postgresql.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.*;
 
 import java.time.Duration;
@@ -33,7 +32,7 @@ import java.time.Duration;
 @Testcontainers
 abstract class SingleOperationTransactionPostgresqlDistributedCompetingConsumersDurableQueuesIT extends DistributedCompetingConsumersDurableQueuesIT<PostgresqlDurableQueues, GenericHandleAwareUnitOfWorkFactory.GenericHandleAwareUnitOfWork, JdbiUnitOfWorkFactory> {
     @Container
-    protected static final PostgreSQLContainer<?> postgreSQLContainer = EssentialsTestContainers.postgres("queue-db");
+    protected static final PostgreSQLContainer postgreSQLContainer = EssentialsTestContainers.postgres("queue-db");
 
     private HikariDataSource dataSource;
 
@@ -60,7 +59,6 @@ abstract class SingleOperationTransactionPostgresqlDistributedCompetingConsumers
         return PostgresqlDurableQueues.builder()
                                       .setUnitOfWorkFactory(unitOfWorkFactory)
                                       .setMessageHandlingTimeout(Duration.ofSeconds(5))
-                                      .setTransactionalMode(TransactionalMode.SingleOperationTransaction)
                                       .setUseCentralizedMessageFetcher(useCentralizedMessageFetcher())
                                       .build();
     }

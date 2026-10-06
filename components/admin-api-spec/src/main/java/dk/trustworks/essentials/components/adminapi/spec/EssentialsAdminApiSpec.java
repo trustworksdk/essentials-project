@@ -19,6 +19,7 @@ package dk.trustworks.essentials.components.adminapi.spec;
 import dk.trustworks.essentials.components.adminapi.spec.OpenApiSpecGenerator.SpecBuilder;
 import dk.trustworks.essentials.components.eventsourced.aggregates.api.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.api.*;
+import dk.trustworks.essentials.components.queue.shardowned.api.*;
 import dk.trustworks.essentials.components.foundation.fencedlock.api.*;
 import dk.trustworks.essentials.components.foundation.messaging.queue.DurableQueues.QueueingSortOrder;
 import dk.trustworks.essentials.components.foundation.messaging.queue.api.*;
@@ -26,6 +27,7 @@ import dk.trustworks.essentials.components.foundation.postgresql.api.*;
 import dk.trustworks.essentials.components.foundation.scheduler.api.*;
 import io.swagger.v3.oas.models.media.*;
 
+import java.math.BigDecimal;
 import java.util.*;
 
 import static dk.trustworks.essentials.shared.security.EssentialsSecurityRoles.*;
@@ -53,6 +55,7 @@ final class EssentialsAdminApiSpec {
             DBFencedLockApi.class,
             SchedulerApi.class,
             PostgresqlQueryStatisticsApi.class,
+            PostgresqlTableStatisticsApi.class,
             DurableQueuesApi.class,
             EventStoreApi.class,
             CdcApi.class,
@@ -60,7 +63,8 @@ final class EssentialsAdminApiSpec {
             AggregateLifecycleApi.class,
             AggregateLifecycleStatisticsApi.class,
             AggregateArchiveApi.class,
-            AggregateArchiveStatisticsApi.class);
+            AggregateArchiveStatisticsApi.class,
+            ShardOwnedQueuesApi.class);
 
     /** DTO record types reflected into {@code components.schemas} (nested types are resolved transitively). */
     static final List<Class<?>> DTO_CLASSES = List.of(
@@ -68,14 +72,21 @@ final class EssentialsAdminApiSpec {
             ApiPgCronJob.class,
             ApiPgCronJobRunDetails.class,
             ApiExecutorJob.class,
+            ApiScheduledJobRun.class,
             ApiQueryStatistics.class,
             ApiTableSizeStatistics.class,
             ApiTableActivityStatistics.class,
             ApiTableCacheHitRatio.class,
+            ApiTableStatistics.class,
+            ApiIndexStatistics.class,
             ApiQueuedMessage.class,
-            ApiQueuedStatistics.class,
+            ApiShardOwnedMessage.class,
+            ApiShardOwnedQueueStatus.class,
+            ApiShardOwnedQueueStatistics.class,
+            ApiQueueStatistics.class,
             ApiSubscription.class,
             ApiSubscriptionStatistics.class,
+            ApiCausationEvent.class,
             ApiCdcStatus.class,
             ApiAggregateSnapshotPolicy.class,
             ApiAggregateClosingBooksPolicy.class,
@@ -98,11 +109,15 @@ final class EssentialsAdminApiSpec {
     static final Map<String, Set<String>> ALWAYS_PRESENT_PROPERTIES = Map.of(
             "ApiDBFencedLock", Set.of("lockName"),
             "ApiQueuedMessage", Set.of("id", "queueName"),
-            "ApiQueuedStatistics", Set.of("queueName"),
+            "ApiQueueStatistics", Set.of("queueName", "depth"),
             "ApiSubscription", Set.of("subscriberId", "aggregateType"),
             "ApiSubscriptionStatistics", Set.of("subscriberId", "aggregateType", "statisticsSince",
                                                 "lifecycle", "eventHandling", "polling", "lock", "reset"),
-            "ApiCdcStatus", Set.of("availability", "configuration", "slot"));
+            "ApiCdcStatus", Set.of("availability", "configuration", "slot"),
+            "ApiTableStatistics", Set.of("section", "tableName", "totalSize", "tableSize", "indexSize", "indexes"),
+            "ApiIndexStatistics", Set.of("indexName", "size"),
+            "ApiScheduledJobRun", Set.of("jobName", "jobType", "startedAt"),
+            "ApiCausationEvent", Set.of("eventId", "aggregateType", "aggregateId", "eventType", "timestamp"));
 
     /**
      * DTO properties that are {@code null} by design, with the reason surfaced as the property description.
@@ -110,9 +125,27 @@ final class EssentialsAdminApiSpec {
      * in the queried instance.
      */
     static final Map<String, Map<String, String>> NULLABLE_PROPERTIES = Map.of(
+            "ApiQueryStatistics", Map.of(
+                    "cacheHitRatio", "Shared-buffer hits as a percentage 0-100 of all shared blocks the statement "
+                            + "accessed. Null when it accessed no shared blocks."),
+            "ApiTableStatistics", Map.of(
+                    "cacheHitRatio", "Shared-buffer hits as a percentage 0-100 of the table's and its indexes' block "
+                            + "requests. Null while there has been no block access since the statistics were reset.",
+                    "lastVacuum", "The most recent manual or automatic vacuum. Null if the table was never vacuumed.",
+                    "lastAnalyze", "The most recent manual or automatic analyze. Null if the table was never analyzed."),
+            "ApiScheduledJobRun", Map.of(
+                    "error", "The exception type and message. Null when the run succeeded."),
+            "ApiIndexStatistics", Map.of(
+                    "cacheHitRatio", "Shared-buffer hits as a percentage 0-100 of the index's block requests. Null while "
+                            + "there has been no block access since the statistics were reset."),
             "ApiQueuedMessage", Map.of(
                     "payload", "The raw message payload. Null unless the caller holds the QUEUE_PAYLOAD_READER "
-                            + "or ESSENTIALS_ADMIN role."),
+                            + "or ESSENTIALS_ADMIN role.",
+                    "orderedMessageKey", "The key of an ordered message. Null for an unordered message.",
+                    "orderedMessageOrder", "The order of an ordered message. Null for an unordered message.",
+                    "referencedAggregateType", "Set when the message refers to a persisted event as the inbox messages "
+                            + "of an EventProcessor do. It is the aggregate type and orderedMessageKey is the aggregate id. "
+                            + "Null for every other message."),
             "ApiCdcStatus", Map.of(
                     "tailer", "Null when no WAL replication tailer is running in this instance.",
                     "dispatcher", "Null when no CDC dispatcher is running in this instance."),
@@ -128,15 +161,25 @@ final class EssentialsAdminApiSpec {
                     "tenant", "The tenant the subscription is restricted to. Null when the subscription is not "
                             + "restricted to a tenant or is not running in this instance.",
                     "inMemoryGlobalOrder", "The in-memory resume point of the running subscription. It can be ahead of "
-                            + "currentGlobalOrder. Null when the subscription is not running in this instance."));
+                            + "currentGlobalOrder. Null when the subscription is not running in this instance.",
+                    "stoppedByErrorPolicy", "Whether the error policy of the subscription halted it after a handler "
+                            + "failure (mode STOP or RETRY_N_THEN_STOP). It then handles no further events until it is resumed or "
+                            + "started again. active stays true for "
+                            + "such a subscription. Always false for an in-transaction subscription. Null when the "
+                            + "subscription is not running in this instance."),
+            "ApiCausationEvent", Map.of(
+                    "causedByEventId", "The id of the event that caused this one. Null when no cause was recorded. Events "
+                            + "started by a request or a person have none. Neither do events persisted before causation "
+                            + "was recorded."));
 
     /** Tag name &rarr; description, in display order. */
     static final Map<String, String> TAGS = new LinkedHashMap<>() {{
         put("fenced-locks", "Inspect and release distributed fenced locks.");
-        put("scheduler", "Inspect pg_cron jobs, their run history, and executor jobs.");
+        put("scheduler", "Inspect pg_cron jobs, their run history, and executor jobs, and run a job on demand.");
         put("postgresql-query-statistics", "Inspect slow-query statistics from pg_stat_statements.");
+        put("postgresql-table-statistics", "Inspect size, activity, and cache-hit statistics for every table the Essentials components own.");
         put("durable-queues", "Inspect and manage durable queue and dead-letter messages.");
-        put("event-store", "Inspect event-store subscriptions and persisted event order.");
+        put("event-store", "Inspect event-store subscriptions and persisted event order, resume a subscription stopped by its error policy, and walk event causation.");
         put("cdc", "Inspect Change Data Capture runtime state and effective configuration.");
         put("event-store-statistics", "Inspect event-store table size, activity, and cache-hit statistics.");
         put("aggregate-lifecycle", "Inspect aggregate snapshot and closing-books policies, generations, and snapshots.");
@@ -150,10 +193,12 @@ final class EssentialsAdminApiSpec {
     private static final String LOCK_R         = LOCK_READER.getRoleName();
     private static final String LOCK_W         = LOCK_WRITER.getRoleName();
     private static final String SCHEDULER_R    = SCHEDULER_READER.getRoleName();
+    private static final String SCHEDULER_W    = SCHEDULER_WRITER.getRoleName();
     private static final String STATS_R        = POSTGRESQL_STATS_READER.getRoleName();
     private static final String QUEUE_R        = QUEUE_READER.getRoleName();
     private static final String QUEUE_W        = QUEUE_WRITER.getRoleName();
     private static final String SUBSCRIPTION_R = SUBSCRIPTION_READER.getRoleName();
+    private static final String SUBSCRIPTION_W = SUBSCRIPTION_WRITER.getRoleName();
 
     /** Registers all operations. Adding/removing an interface method without updating this triggers a build failure. */
     static void defineOperations(SpecBuilder b) {
@@ -211,12 +256,42 @@ final class EssentialsAdminApiSpec {
          .roles(SCHEDULER_R, ADMIN)
          .responseCount();
 
+        b.operation(SchedulerApi.class, "runJobNow")
+         .tag("scheduler").post("/scheduler/jobs/{jobName}/run")
+         .summary("Run a job registered with the scheduler once, now, and return the outcome. Its schedule is not changed. "
+                  + "A pg_cron job's run is not recorded in pg_cron's run history; a manual run is not coordinated with "
+                  + "a scheduled run of the same job.")
+         .roles(SCHEDULER_W, ADMIN)
+         .pathParam("jobName", new StringSchema(), "The job name, as listed by the executor or pg_cron job operations.")
+         .conflict("An executor job runs only on the instance holding the scheduler lock, and this request reached another "
+                   + "instance. The message names the instance holding the lock, when one does.")
+         .responseOptionalRef("ApiScheduledJobRun", "The outcome of the run.");
+
         // ---- postgresql-query-statistics ----
         b.operation(PostgresqlQueryStatisticsApi.class, "getTopTenSlowestQueries")
          .tag("postgresql-query-statistics").get("/postgresql/query-statistics/top-ten-slowest")
          .summary("Return the ten slowest queries from pg_stat_statements.")
          .roles(STATS_R, ADMIN)
          .responseArray("ApiQueryStatistics");
+
+        b.operation(PostgresqlQueryStatisticsApi.class, "getSlowestQueries")
+         .tag("postgresql-query-statistics").get("/postgresql/query-statistics/slowest")
+         .summary("Return the statements recorded by pg_stat_statements for the current database, ranked by the chosen order.")
+         .roles(STATS_R, ADMIN)
+         .queryParam("orderBy", queryStatisticsOrderSchema(), false,
+                     "What to rank by. TOTAL_TIME favours cheap statements that run constantly; MEAN_TIME and MAX_TIME "
+                             + "surface statements that are slow per call.")
+         .queryParam("limit", new IntegerSchema()._default(10).minimum(BigDecimal.ONE)
+                                                 .maximum(BigDecimal.valueOf(PostgresqlQueryStatisticsApi.MAX_SLOWEST_QUERIES_LIMIT)), false,
+                     "Maximum number of statements to return. A value above the maximum is capped.")
+         .responseArray("ApiQueryStatistics");
+
+        // ---- postgresql-table-statistics ----
+        b.operation(PostgresqlTableStatisticsApi.class, "fetchTableStatistics")
+         .tag("postgresql-table-statistics").get("/postgresql/table-statistics")
+         .summary("Return size, activity, and cache-hit statistics per Essentials table, grouped by section.")
+         .roles(STATS_R, ADMIN)
+         .responseArray("ApiTableStatistics");
 
         // ---- durable-queues ----
         b.operation(DurableQueuesApi.class, "getQueueNames")
@@ -293,6 +368,13 @@ final class EssentialsAdminApiSpec {
          .pagination()
          .responseArray("ApiQueuedMessage");
 
+        b.operation(DurableQueuesApi.class, "getQueueStatistics")
+         .tag("durable-queues").get("/durable-queues/queues/{queueName}/statistics")
+         .summary("Get cluster-wide depth and this instance's delivery statistics for a queue.")
+         .roles(QUEUE_R, ADMIN)
+         .pathParam("queueName", new StringSchema(), "The queue name.")
+         .responseRef("ApiQueueStatistics", "The queue statistics.");
+
         b.operation(DurableQueuesApi.class, "purgeQueue")
          .tag("durable-queues").delete("/durable-queues/queues/{queueName}/messages")
          .summary("Purge all messages (including dead-letters) from a queue.")
@@ -300,12 +382,105 @@ final class EssentialsAdminApiSpec {
          .pathParam("queueName", new StringSchema(), "The queue name.")
          .responsePurged();
 
-        b.operation(DurableQueuesApi.class, "getQueuedStatistics")
-         .tag("durable-queues").get("/durable-queues/queues/{queueName}/statistics")
-         .summary("Get delivery statistics for a queue.")
+        // ---- shard-owned-queues ----
+        // Paths mirror the controller in spring-boot-starter-postgresql-queue-shard-owned. Every one
+        // is queue-scoped: a MessageId is (lane, shard, sequence) and unique per queue only, so the
+        // queue name is part of addressing a message rather than a convenience.
+        b.operation(ShardOwnedQueuesApi.class, "getQueueNames")
+         .operationId("shardOwnedGetQueueNames")
+         .tag("shard-owned-queues").get("/shard-owned-queues")
+         .summary("List the names of all accessible shard-owned queues.")
+         .roles(QUEUE_R, ADMIN)
+         .responseStringSet("The accessible queue names.");
+
+        b.operation(ShardOwnedQueuesApi.class, "getQueueStatus")
+         .operationId("shardOwnedGetQueueStatus")
+         .tag("shard-owned-queues").get("/shard-owned-queues/{queueName}/status")
+         .summary("Depth and ownership for a queue, per lane.")
          .roles(QUEUE_R, ADMIN)
          .pathParam("queueName", new StringSchema(), "The queue name.")
-         .responseOptionalRef("ApiQueuedStatistics", "The queue statistics.");
+         .responseOptionalRef("ApiShardOwnedQueueStatus", "The queue's depth and ownership.");
+
+        b.operation(ShardOwnedQueuesApi.class, "getQueueStatistics")
+         .operationId("shardOwnedGetQueueStatistics")
+         .tag("shard-owned-queues").get("/shard-owned-queues/{queueName}/statistics")
+         .summary("Delivery counters for a queue, as recorded by the instance answering the request.")
+         .roles(QUEUE_R, ADMIN)
+         .pathParam("queueName", new StringSchema(), "The queue name.")
+         .responseRef("ApiShardOwnedQueueStatistics", "This instance's counters for the queue.");
+
+        b.operation(ShardOwnedQueuesApi.class, "getMessage")
+         .operationId("shardOwnedGetMessage")
+         .tag("shard-owned-queues").get("/shard-owned-queues/{queueName}/messages/{messageId}")
+         .summary("Get a single message by its id within a queue.")
+         .roles(QUEUE_R, ADMIN)
+         .pathParam("queueName", new StringSchema(), "The queue name.")
+         .pathParam("messageId", new StringSchema(), "The message id, as lane-shard-sequence (for example u-3-1042).")
+         .responseOptionalRef("ApiShardOwnedMessage", "The message.");
+
+        b.operation(ShardOwnedQueuesApi.class, "getDeadLetterMessages")
+         .operationId("shardOwnedGetDeadLetterMessages")
+         .tag("shard-owned-queues").get("/shard-owned-queues/{queueName}/dead-letter-messages")
+         .summary("Page the dead letters of a queue.")
+         .roles(QUEUE_R, ADMIN)
+         .pathParam("queueName", new StringSchema(), "The queue name.")
+         .queryParam("offset", new IntegerSchema()._default(0), false, "Rows to skip.")
+         .queryParam("limit", new IntegerSchema()._default(100), false, "Maximum rows to return.")
+         .responseArray("ApiShardOwnedMessage");
+
+        b.operation(ShardOwnedQueuesApi.class, "deleteMessage")
+         .operationId("shardOwnedDeleteMessage")
+         .tag("shard-owned-queues").delete("/shard-owned-queues/{queueName}/messages/{messageId}")
+         .summary("Delete a message from its queue.")
+         .roles(QUEUE_W, ADMIN)
+         .pathParam("queueName", new StringSchema(), "The queue name.")
+         .pathParam("messageId", new StringSchema(), "The message id.")
+         .responseDeleted();
+
+        b.operation(ShardOwnedQueuesApi.class, "retryMessage")
+         .operationId("shardOwnedRetryMessage")
+         .tag("shard-owned-queues").post("/shard-owned-queues/{queueName}/messages/{messageId}/retry")
+         .summary("Make a message visible again after an optional delay.")
+         .roles(QUEUE_W, ADMIN)
+         .pathParam("queueName", new StringSchema(), "The queue name.")
+         .pathParam("messageId", new StringSchema(), "The message id.")
+         .responseMessageOperation();
+
+        b.operation(ShardOwnedQueuesApi.class, "markAsDeadLetterMessage")
+         .operationId("shardOwnedMarkAsDeadLetterMessage")
+         .tag("shard-owned-queues").post("/shard-owned-queues/{queueName}/messages/{messageId}/mark-as-dead-letter")
+         .summary("Park a message as a dead letter.")
+         .roles(QUEUE_W, ADMIN)
+         .pathParam("queueName", new StringSchema(), "The queue name.")
+         .pathParam("messageId", new StringSchema(), "The message id.")
+         .responseMessageOperation();
+
+        b.operation(ShardOwnedQueuesApi.class, "resurrectDeadLetterMessage")
+         .operationId("shardOwnedResurrectDeadLetterMessage")
+         .tag("shard-owned-queues").post("/shard-owned-queues/{queueName}/messages/{messageId}/resurrect")
+         .summary("Return a dead letter to its lane. It re-enters at a fresh sequence, so its id changes.")
+         .roles(QUEUE_W, ADMIN)
+         .pathParam("queueName", new StringSchema(), "The queue name.")
+         .pathParam("messageId", new StringSchema(), "The dead-letter message id.")
+         .responseMessageOperation();
+
+        b.operation(ShardOwnedQueuesApi.class, "resurrectDeadLettersForKey")
+         .operationId("shardOwnedResurrectDeadLettersForKey")
+         .tag("shard-owned-queues").post("/shard-owned-queues/{queueName}/ordered-keys/{key}/resurrect")
+         .summary("Return every dead letter of one ordered key to its lane, in key_order. The recovery "
+                  + "operation for a key stopped behind a dead letter.")
+         .roles(QUEUE_W, ADMIN)
+         .pathParam("queueName", new StringSchema(), "The queue name.")
+         .pathParam("key", new StringSchema(), "The ordering key.")
+         .responseRef("ShardOwnedResurrectKeyResult", "How many messages were put back.");
+
+        b.operation(ShardOwnedQueuesApi.class, "purgeQueue")
+         .operationId("shardOwnedPurgeQueue")
+         .tag("shard-owned-queues").delete("/shard-owned-queues/{queueName}/messages")
+         .summary("Delete every message in a queue, both lanes.")
+         .roles(QUEUE_W, ADMIN)
+         .pathParam("queueName", new StringSchema(), "The queue name.")
+         .responseShardOwnedPurge();
 
         // ---- event-store ----
         b.operation(EventStoreApi.class, "findHighestGlobalEventOrderPersisted")
@@ -327,6 +502,51 @@ final class EssentialsAdminApiSpec {
          .roles(SUBSCRIPTION_R, ADMIN)
          .responseArray("ApiSubscriptionStatistics");
 
+        b.operation(EventStoreApi.class, "findEvent")
+         .tag("event-store").get("/event-store/events/{eventId}")
+         .summary("Find an event by its id alone, in whichever registered aggregate type's event stream holds it. "
+                  + "Returns the event's identity and recorded cause, not its payload.")
+         .roles(SUBSCRIPTION_R, ADMIN)
+         .pathParam("eventId", new StringSchema(), "The event id.")
+         .responseOptionalRef("ApiCausationEvent", "The event.");
+
+        b.operation(EventStoreApi.class, "findAggregateEvents")
+         .tag("event-store").get("/event-store/aggregate-types/{aggregateType}/aggregates/{aggregateId}/events")
+         .summary("The most recent events of one aggregate, oldest first - the starting point for walking causation. "
+                  + "Returns each event's identity and recorded cause, not its payload. Empty when the aggregate type is "
+                  + "not registered or the aggregate has no events.")
+         .roles(SUBSCRIPTION_R, ADMIN)
+         .pathParam("aggregateType", new StringSchema(), "The aggregate type.")
+         .pathParam("aggregateId", new StringSchema(), "The aggregate id, as text.")
+         .queryParam("limit", new IntegerSchema().format("int32").minimum(java.math.BigDecimal.ONE)
+                                                  .maximum(java.math.BigDecimal.valueOf(EventStoreApi.MAX_AGGREGATE_EVENTS))
+                                                  ._default(100),
+                     false, "How many of the most recent events to return.")
+         .responseArray("ApiCausationEvent");
+
+        b.operation(EventStoreApi.class, "findCausationChain")
+         .tag("event-store").get("/event-store/events/{eventId}/causation-chain")
+         .summary("Why did this event happen: the event, then the event that caused it, then that event's cause, and so "
+                  + "on. Stops at an event without a recorded cause, at a cause no registered event stream holds, or "
+                  + "after maxDepth events.")
+         .roles(SUBSCRIPTION_R, ADMIN)
+         .pathParam("eventId", new StringSchema(), "The id of the event to start from.")
+         .queryParam("maxDepth", new IntegerSchema().format("int32").minimum(java.math.BigDecimal.ONE)
+                                                     .maximum(java.math.BigDecimal.valueOf(EventStoreApi.MAX_CAUSATION_CHAIN_DEPTH))
+                                                     ._default(20),
+                     false, "The most events to return, starting with the event itself.")
+         .responseArray("ApiCausationEvent");
+
+        b.operation(EventStoreApi.class, "findEventsCausedBy")
+         .tag("event-store").get("/event-store/events/{eventId}/caused-events")
+         .summary("What did this event cause: every event whose recorded cause is this event, across all registered "
+                  + "aggregate types. Direct effects only. Requires the opt-in caused-by-event-id index.")
+         .roles(SUBSCRIPTION_R, ADMIN)
+         .pathParam("eventId", new StringSchema(), "The id of the causing event.")
+         .conflict("The caused-by-event-id index is not enabled (essentials.eventstore.causation.index-enabled), and the "
+                   + "lookup refuses to scan every event-stream table without it.")
+         .responseArray("ApiCausationEvent");
+
         b.operation(EventStoreApi.class, "findSubscriptionStatistics")
          .tag("event-store").get("/event-store/subscriptions/{subscriberId}/aggregate-types/{aggregateType}/statistics")
          .summary("Get runtime statistics for one event-store subscription running in this instance.")
@@ -334,6 +554,17 @@ final class EssentialsAdminApiSpec {
          .pathParam("subscriberId", new StringSchema(), "The subscriber id.")
          .pathParam("aggregateType", new StringSchema(), "The aggregate type the subscriber subscribes to.")
          .responseOptionalRef("ApiSubscriptionStatistics", "The subscription statistics.");
+
+        b.operation(EventStoreApi.class, "resumeSubscriptionStoppedByErrorPolicy")
+         .tag("event-store").post("/event-store/subscriptions/{subscriberId}/aggregate-types/{aggregateType}/resume")
+         .summary("Resume a subscription that its error policy stopped (stoppedByErrorPolicy) without a restart. Delivery "
+                  + "restarts at the failed event, so nothing is skipped; if it fails again the error policy applies again. "
+                  + "An exclusive subscription keeps its fenced lock. Acts on this instance only, which must be running the "
+                  + "subscription - for an exclusive subscription, holding its lock.")
+         .roles(SUBSCRIPTION_W, ADMIN)
+         .pathParam("subscriberId", new StringSchema(), "The subscriber id.")
+         .pathParam("aggregateType", new StringSchema(), "The aggregate type the subscriber subscribes to.")
+         .responseResumed();
 
         // ---- cdc ----
         b.operation(CdcApi.class, "getStatus")
@@ -446,6 +677,15 @@ final class EssentialsAdminApiSpec {
          .summary("Return aggregate archive statistics per aggregate type.")
          .roles(SUBSCRIPTION_R, ADMIN)
          .responseArray("ApiAggregateArchiveStatistics");
+    }
+
+    private static StringSchema queryStatisticsOrderSchema() {
+        var schema = new StringSchema();
+        for (QueryStatisticsOrder value : QueryStatisticsOrder.values()) {
+            schema.addEnumItem(value.name());
+        }
+        schema._default(QueryStatisticsOrder.TOTAL_TIME.name());
+        return schema;
     }
 
     private static StringSchema sortOrderSchema() {

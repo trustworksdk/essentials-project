@@ -25,7 +25,7 @@ import org.springframework.boot.data.mongodb.test.autoconfigure.DataMongoTest;
 import org.springframework.data.mongodb.core.convert.MongoCustomConversions;
 import org.springframework.test.annotation.DirtiesContext;
 import org.springframework.test.context.*;
-import org.testcontainers.containers.MongoDBContainer;
+import org.testcontainers.mongodb.MongoDBContainer;
 import org.testcontainers.junit.jupiter.*;
 
 import java.util.Map;
@@ -38,7 +38,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 class OrderRepositoryIT {
 
     @Container
-    static MongoDBContainer mongoDBContainer = new MongoDBContainer("mongo:8.2");
+    static MongoDBContainer mongoDBContainer = new MongoDBContainer("mongo:8.2").withReplicaSet();
 
     @DynamicPropertySource
     static void setProperties(DynamicPropertyRegistry registry) {

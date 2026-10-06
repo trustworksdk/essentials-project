@@ -54,6 +54,13 @@ class NotifyAwareEventStorePollingOptimizerTest {
     }
 
     @Test
+    void mayRepollImmediatelyAfterAnEmptyPollBecauseItsZeroDelayIsDeliberate() {
+        var optimizer = new NotifyAwareEventStorePollingOptimizer(epochSource, TABLE, settings(50, 1_000, 2.0));
+
+        assertThat(optimizer.mayRepollImmediatelyAfterAnEmptyPoll()).isTrue();
+    }
+
+    @Test
     void initialDelayIsInitialDelaySetting() {
         var optimizer = new NotifyAwareEventStorePollingOptimizer(epochSource, TABLE, settings(50, 1_000, 2.0));
         assertThat(optimizer.currentDelayMs()).isEqualTo(50L);

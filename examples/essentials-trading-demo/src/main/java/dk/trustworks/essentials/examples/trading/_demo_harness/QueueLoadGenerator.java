@@ -1,0 +1,611 @@
+/*
+ * Copyright 2021-2026 the original author or authors.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *      https://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+package dk.trustworks.essentials.examples.trading._demo_harness;
+
+import dk.trustworks.essentials.components.boot.autoconfigure.queue.shardowned.ShardOwnedQueueFactory;
+import dk.trustworks.essentials.components.queue.shardowned.spi.*;
+import jakarta.annotation.PreDestroy;
+import org.slf4j.*;
+import org.springframework.stereotype.Component;
+
+import java.nio.charset.StandardCharsets;
+import java.time.Instant;
+import java.util.*;
+import java.util.concurrent.*;
+import java.util.concurrent.atomic.*;
+
+/**
+ * Drives the shard-owned queue engine with realistic trading traffic on BOTH lanes at once.
+ *
+ * <h2>Why both lanes, and what each is for</h2>
+ * The lanes answer different questions and the demo needs both running together, because in a real
+ * application they share a database, a connection pool and a set of pump threads.
+ * <ul>
+ *     <li><b>Unordered</b> — price ticks. Placement is round-robin and nothing depends on which shard
+ *         a tick lands in, so this lane is about throughput and idle cost.</li>
+ *     <li><b>Ordered</b> — per-account activity, keyed by account. A key's messages must be handled
+ *         one at a time in {@code key_order}, so this lane is about ordering surviving depth,
+ *         rebalancing and restart.</li>
+ * </ul>
+ *
+ * <h2>Sustained versus spike</h2>
+ * A steady trickle exercises the costs the engine is designed around: whether its query rate follows
+ * the work rather than the fan-out. A spike exercises the opposite — a burst that arrives far faster
+ * than handlers drain it, so a backlog builds, the cursor falls behind, and per-key ordering has to
+ * hold while the queue is genuinely deep. Only the second reproduces the conditions most of the
+ * engine's mechanisms exist for, and only the first tells you what it costs when nothing is
+ * happening.
+ *
+ * <h2>What it records</h2>
+ * Ordering is checked as messages arrive: each ordered message carries its key's sequence number, and
+ * the handler asserts it is greater than the last one seen for that key. A violation is counted
+ * rather than thrown, because the point is to observe the property under load, not to fail a demo.
+ *
+ * <h2>Injected faults</h2>
+ * {@link #injectFaults} puts messages on both lanes whose handler fails on purpose: <b>retry</b> messages
+ * fail a fixed number of times and then succeed, <b>poison</b> messages fail on every attempt and end up
+ * dead-lettered. They are built to leave the traffic above untouched:
+ * <ul>
+ *     <li>They carry their own payload types, so they are neither ordering-checked nor counted as
+ *         handled price ticks or account activity.</li>
+ *     <li>Every ordered fault message gets a key of its own that nothing else ever uses. A dead
+ *         letter blocks its key and dead-letters whatever arrives for it afterwards, so a poison
+ *         message on an {@code ACC-} key would take that account's activity down with it; and a
+ *         retrying message holds its key for the length of its backoff.</li>
+ * </ul>
+ */
+@Component
+public class QueueLoadGenerator {
+
+    private static final Logger log = LoggerFactory.getLogger(QueueLoadGenerator.class);
+
+    /** Anything non-zero; the engine treats payload type as opaque application metadata. */
+    private static final int PRICE_TICK      = 1;
+    private static final int ACCOUNT_ACTIVITY = 2;
+    /** Fails the number of times its payload names, then succeeds. */
+    private static final int FAULT_RETRY      = 3;
+    /** Fails on every attempt, so it is dead-lettered once the attempts run out. */
+    private static final int FAULT_POISON     = 4;
+    /**
+     * A message on a blocked key: the head fails until it is resurrected, and the messages behind it
+     * are parked by the engine until then. See {@link #injectBlockedKey}.
+     */
+    private static final int FAULT_BLOCKED_KEY = 5;
+
+    private final QueueLoadGeneratorProperties properties;
+    private final ShardOwnedQueueFactory       queues;
+
+    private final AtomicBoolean running = new AtomicBoolean();
+    private final AtomicLong unorderedEnqueued = new AtomicLong();
+    private final AtomicLong orderedEnqueued   = new AtomicLong();
+    private final AtomicLong unorderedHandled  = new AtomicLong();
+    private final AtomicLong orderedHandled    = new AtomicLong();
+    private final AtomicLong orderViolations   = new AtomicLong();
+    private final AtomicLong spikes            = new AtomicLong();
+    private final AtomicReference<Instant> lastSpikeAt = new AtomicReference<>();
+    private final AtomicLong retryFaultsEnqueued  = new AtomicLong();
+    private final AtomicLong retryFaultsRecovered = new AtomicLong();
+    private final AtomicLong poisonFaultsEnqueued = new AtomicLong();
+    private final AtomicLong injectedFailures     = new AtomicLong();
+    /** Numbers the single-use keys of ordered fault messages; see {@link #injectFaults}. */
+    private final AtomicLong nextFaultKey         = new AtomicLong();
+    private final AtomicLong blockedKeysCreated          = new AtomicLong();
+    private final AtomicLong blockedKeyMessagesEnqueued  = new AtomicLong();
+    private final AtomicLong blockedKeyMessagesDelivered = new AtomicLong();
+    /**
+     * The ids blocked-key heads were enqueued under. A head fails while it still has one of these, and
+     * succeeds once resurrected, because resurrecting gives a message a fresh sequence value and so a
+     * fresh id. That is what makes a blocked key recoverable by {@code resurrectKey} without a switch
+     * anybody has to remember to flip.
+     * <p>
+     * In memory, so it is this instance's knowledge only. With several instances the key's unit may be
+     * owned by another one, which has never heard of the id and delivers the head first time — the key
+     * then never blocks. Run a single instance to exercise it.
+     */
+    private final Set<MessageId> blockedHeadIds = ConcurrentHashMap.newKeySet();
+
+    /** Highest sequence handled per key, which is what makes an ordering violation observable here. */
+    private final ConcurrentMap<String, Long> highestPerKey = new ConcurrentHashMap<>();
+    /** Producer-side sequence per key, so key_order is monotonic per key as the lane requires. */
+    private final ConcurrentMap<String, AtomicLong> nextOrderPerKey = new ConcurrentHashMap<>();
+
+    /**
+     * Every key this instance produces starts with this, and that is what makes the generator safe to
+     * run on more than one instance at a time.
+     * <p>
+     * {@code nextOrderPerKey} is in-memory and starts at zero in every JVM, so two instances
+     * generating into the same key space both number {@code ACC-77} 0, 1, 2 … — which is not a near
+     * miss, it is two producers each claiming to be the authority on what order that key's messages
+     * are in. The ordered lane's primary key is {@code (queue_id, shard, msg_key, key_order)}, so the
+     * second one to arrive at a given position is rejected outright:
+     * {@code duplicate key value violates unique constraint "shard_queue_ordered_pkey"}, once per
+     * sustained tick, plus an ordering violation for every pair that did get through interleaved.
+     * <p>
+     * That constraint is the engine being right. {@code key_order} is the PRODUCER's statement of
+     * what order means, and a statement needs one author: a real producer gets this for free because
+     * a key is an aggregate and an aggregate has one writer at a time. A load generator running in
+     * n processes has to arrange it, and the cheapest honest arrangement is to give each process a
+     * key space of its own rather than to elect one producer — every instance then exercises both
+     * the producing and the consuming side, which is the point of running two.
+     * <p>
+     * <b>A key space of its own per RUN, not only per instance.</b> The same holds across time: a
+     * restarted instance numbers {@code ACC-demo-1-14} from 0 again, while rows the previous run numbered
+     * up to 1 600 may still be queued. The engine then delivers 1 600 and afterwards 2, and reports an
+     * ordering violation per key - correctly, because this producer really did number them that way.
+     * A token from the start time makes each run's keys new, so no two runs ever number the same key.
+     * The previous run's backlog still drains; it simply belongs to keys nothing produces any more.
+     */
+    private final String keyPrefix;
+    /** Same instance id and run token as {@link #keyPrefix}, so fault keys can never collide with account keys. */
+    private final String faultKeyPrefix;
+    private final String blockedKeyPrefix;
+
+    /**
+     * Its own scheduler, like {@code TradingLoadGeneratorManager}, rather than {@code @Scheduled}.
+     * The demo has no {@code @EnableScheduling}, so the annotation is inert here — it binds, it
+     * validates, and it never fires, which is the quietest way for a load generator to generate no
+     * load.
+     */
+    private volatile ScheduledExecutorService scheduler;
+    private volatile MessageQueue queue;
+    private volatile Subscription subscription;
+
+    public QueueLoadGenerator(QueueLoadGeneratorProperties properties, ShardOwnedQueueFactory queues) {
+        this.properties = properties;
+        this.queues = queues;
+        // The instance id separates concurrent producers; the run token separates this JVM from the ones
+        // before it. See keyPrefix.
+        var instanceAndRun = queues.instanceId() + "-" + Long.toString(System.currentTimeMillis(), 36) + "-";
+        this.keyPrefix = "ACC-" + instanceAndRun;
+        this.faultKeyPrefix = "FAULT-" + instanceAndRun;
+        this.blockedKeyPrefix = "BLOCKED-" + instanceAndRun;
+        if (properties.isEnabled()) {
+            start();
+        }
+    }
+
+    public synchronized void start() {
+        if (running.get()) {
+            return;
+        }
+        try {
+            // Registered here rather than listed under essentials.shard-owned-queue.queues, so the
+            // name lives in one place instead of having to agree across YAML and this class.
+            // Idempotent: every instance may call it, and the first to arrive interns the name.
+            queue = queues.register(QueueName.of(properties.getQueueName()), properties.getShardCount());
+
+            // ONE subscription, and that is the contract rather than a simplification.
+            //
+            // MessageQueue.consume covers BOTH lanes: the lane a message takes is decided by the
+            // message — Message.of is unordered, Message.ordered carries a key — not by the
+            // consumer. A second consume() on the same queue is therefore not "the other lane", it
+            // is a genuinely separate competing consumer with its own instance identity, which
+            // halves everyone's fair share. Registering one per lane, as this first did, delivered
+            // price ticks to the ordered handler, dead-lettered nineteen hundred of them for failing
+            // to parse as a sequence number, and reported two live instances for one process.
+            //
+            // Which lane a message came from is answered by payloadType, which is what it is for.
+            subscription = queue.consume(
+                    (messageId, key, payload, payloadType) -> {
+                        simulateWork();
+                        if (payloadType == ACCOUNT_ACTIVITY) {
+                            recordOrdering(key, payload);
+                            orderedHandled.incrementAndGet();
+                        } else if (payloadType == FAULT_RETRY) {
+                            failUntilAttempt(messageId, payload);
+                        } else if (payloadType == FAULT_BLOCKED_KEY) {
+                            boolean head;
+                            // Under the lock injectBlockedKey holds across enqueue-and-register, so a
+                            // head delivered the instant its enqueue commits waits to be recognised.
+                            synchronized (blockedHeadIds) {
+                                head = blockedHeadIds.contains(messageId);
+                            }
+                            if (head) {
+                                injectedFailures.incrementAndGet();
+                                throw new InjectedFault("Blocked-key head " + messageId + " on '" + key
+                                                        + "' - fails until it is resurrected");
+                            }
+                            recordOrdering(key, payload);
+                            blockedKeyMessagesDelivered.incrementAndGet();
+                        } else if (payloadType == FAULT_POISON) {
+                            injectedFailures.incrementAndGet();
+                            throw new InjectedFault("Poison message " + messageId + " - fails on every attempt");
+                        } else {
+                            unorderedHandled.incrementAndGet();
+                        }
+                    },
+                    consumerOptions());
+
+            scheduler = Executors.newSingleThreadScheduledExecutor(runnable -> {
+                var thread = new Thread(runnable, "queue-load-generator");
+                thread.setDaemon(true);
+                return thread;
+            });
+            var intervalMillis = Math.max(1L, properties.getSustainedInterval().toMillis());
+            scheduler.scheduleWithFixedDelay(this::sustained, intervalMillis, intervalMillis,
+                                             TimeUnit.MILLISECONDS);
+
+            running.set(true);
+            log.info("Queue load generator started against queue '{}' — sustained {} msg per lane every {}, "
+                     + "spike {} per lane, {} keys under '{}'",
+                     properties.getQueueName(), properties.getSustainedBatch(),
+                     properties.getSustainedInterval(), properties.getSpikeSize(),
+                     properties.getKeyCount(), keyPrefix);
+        } catch (Exception e) {
+            log.error("Could not start the queue load generator", e);
+            throw new IllegalStateException("Could not start the queue load generator", e);
+        }
+    }
+
+    /**
+     * Defaults apart from the handler budget, which is the one knob a demo has any business setting:
+     * it decides how far behind the handlers fall during a spike, and therefore whether a spike
+     * produces a backlog worth watching.
+     */
+    private ConsumerOptions consumerOptions() {
+        var defaults = ConsumerOptions.defaults();
+        return new ConsumerOptions(properties.getParallelConsumers(),
+                                   defaults.maxShards(),
+                                   defaults.maxAttempts(),
+                                   defaults.retryBackoff());
+    }
+
+    public synchronized void stop() {
+        if (!running.compareAndSet(true, false)) {
+            return;
+        }
+        if (scheduler != null) {
+            scheduler.shutdownNow();
+            scheduler = null;
+        }
+        closeQuietly(subscription);
+        subscription = null;
+        log.info("Queue load generator stopped");
+    }
+
+    @PreDestroy
+    public void shutdown() {
+        stop();
+    }
+
+    /**
+     * The sustained arm. Deliberately small and frequent rather than large and rare: this is the
+     * shape that tells you what the engine costs when it is merely keeping up.
+     */
+    public void sustained() {
+        if (!running.get()) {
+            return;
+        }
+        try {
+            enqueueBatch(properties.getSustainedBatch());
+        } catch (Exception e) {
+            log.warn("Sustained enqueue failed", e);
+        }
+    }
+
+    /**
+     * The spike arm. One call, everything at once, in a single batch per lane so the burst really is
+     * a burst rather than a fast trickle — a five-thousand-message batch is also the size at which
+     * enqueue atomicity stops being accidental.
+     *
+     * @return how many messages were enqueued across both lanes
+     */
+    public int spike(int size) {
+        if (!running.get()) {
+            throw new IllegalStateException("The queue load generator is not running");
+        }
+        var perLane = size > 0 ? size : properties.getSpikeSize();
+        try {
+            var enqueued = enqueueBatch(perLane);
+            spikes.incrementAndGet();
+            lastSpikeAt.set(Instant.now());
+            log.info("Queue spike: {} messages per lane, {} in total", perLane, enqueued);
+            return enqueued;
+        } catch (Exception e) {
+            throw new IllegalStateException("Spike failed", e);
+        }
+    }
+
+    /**
+     * Allocation and enqueue happen together, and that is a correctness requirement rather than
+     * tidiness.
+     * <p>
+     * {@code key_order} is the PRODUCER's statement of what order means, so the engine can only
+     * deliver a key in the order the producer numbered it if the numbering and the committing agree.
+     * They did not here: the sustained arm and a spike both number the same keys, and a spike takes
+     * seconds to insert fifty thousand rows, so the sustained arm would take a HIGHER key_order and
+     * commit it FIRST. That is the producer-side race the ordered lane documents as a real ordering
+     * violation, and it produced 7 390 of them in one spike — the engine faithfully reporting a
+     * defect in the code feeding it.
+     * <p>
+     * A real producer gets this for free when a key's messages come from one aggregate under one
+     * unit of work. A load generator with two arms has to arrange it.
+     */
+    private final Object enqueueLock = new Object();
+
+    private int enqueueBatch(int perLane) throws Exception {
+        var messages = new ArrayList<Message>(perLane * 2);
+        synchronized (enqueueLock) {
+        for (var index = 0; index < perLane; index++) {
+            // Unordered: a price tick. Nothing depends on where it lands.
+            messages.add(Message.of(payload("tick"), PRICE_TICK));
+
+            // Ordered: activity on one account, with a key_order that only ever increases for that
+            // key. The engine enforces one-at-a-time per key; the producer still has to number them,
+            // because key_order is the producer's statement of what order means.
+            var key   = keyPrefix + ThreadLocalRandom.current().nextInt(properties.getKeyCount());
+            var order = nextOrderPerKey.computeIfAbsent(key, ignored -> new AtomicLong())
+                                       .getAndIncrement();
+            messages.add(Message.ordered(payload(Long.toString(order)), ACCOUNT_ACTIVITY, key, order));
+        }
+        queue.enqueue(messages);
+        }
+        unorderedEnqueued.addAndGet(perLane);
+        orderedEnqueued.addAndGet(perLane);
+        return messages.size();
+    }
+
+    /**
+     * Enqueue fault messages on both lanes, alongside whatever the sustained arm and spikes are doing.
+     * <p>
+     * Each ordered fault message gets a key no other message has or will have, so a poison message
+     * blocks only a key nothing else is waiting on, and a retrying one delays nothing but itself.
+     * {@code key_order} is always 0: a key with one message has nothing to order.
+     *
+     * @param retriesPerLane   messages per lane that fail {@code failuresPerRetry} times, then succeed
+     * @param poisonPerLane    messages per lane that fail every attempt and are dead-lettered
+     * @param failuresPerRetry failures before a retry message succeeds; must stay below the consumer's
+     *                         {@code maxAttempts}, or it is a poison message by another name
+     * @return how many messages were enqueued across both lanes
+     */
+    public int injectFaults(int retriesPerLane, int poisonPerLane, int failuresPerRetry) {
+        if (!running.get()) {
+            throw new IllegalStateException("The queue load generator is not running");
+        }
+        var maxAttempts = consumerOptions().maxAttempts();
+        if (retriesPerLane < 0 || poisonPerLane < 0) {
+            throw new IllegalArgumentException("Fault counts cannot be negative");
+        }
+        if (retriesPerLane > 0 && (failuresPerRetry < 1 || failuresPerRetry >= maxAttempts)) {
+            throw new IllegalArgumentException("failuresPerRetry must be between 1 and " + (maxAttempts - 1)
+                                               + " - the consumer dead-letters after " + maxAttempts + " attempts");
+        }
+        var messages = new ArrayList<Message>((retriesPerLane + poisonPerLane) * 2);
+        var retryPayload = payload(Integer.toString(failuresPerRetry));
+        for (var index = 0; index < retriesPerLane; index++) {
+            messages.add(Message.of(retryPayload, FAULT_RETRY));
+            messages.add(Message.ordered(retryPayload, FAULT_RETRY, nextFaultKey(), 0));
+        }
+        var poisonPayload = payload("poison");
+        for (var index = 0; index < poisonPerLane; index++) {
+            messages.add(Message.of(poisonPayload, FAULT_POISON));
+            messages.add(Message.ordered(poisonPayload, FAULT_POISON, nextFaultKey(), 0));
+        }
+        if (messages.isEmpty()) {
+            return 0;
+        }
+        try {
+            queue.enqueue(messages);
+        } catch (Exception e) {
+            throw new IllegalStateException("Fault injection failed", e);
+        }
+        retryFaultsEnqueued.addAndGet(retriesPerLane * 2L);
+        poisonFaultsEnqueued.addAndGet(poisonPerLane * 2L);
+        log.info("Injected faults: {} retry (failing {} time(s) each) and {} poison message(s) per lane",
+                 retriesPerLane, failuresPerRetry, poisonPerLane);
+        return messages.size();
+    }
+
+    /**
+     * One ordered key that stops: its head ({@code key_order} 0) fails every attempt and is
+     * dead-lettered, and the {@code behind} messages after it are parked by the engine without being
+     * delivered — a key never advances past a dead letter. Resurrecting the key
+     * ({@code POST .../shard-owned-queues/{queue}/ordered-keys/{key}/resurrect}) puts all of them back;
+     * the head then succeeds, having a new id, and the key replays in {@code key_order}, which the
+     * ordering check verifies as it would for account activity.
+     *
+     * @return the key, so the caller can resurrect it
+     */
+    public String injectBlockedKey(int behind) {
+        if (!running.get()) {
+            throw new IllegalStateException("The queue load generator is not running");
+        }
+        if (behind < 0 || behind > 10_000) {
+            throw new IllegalArgumentException("behind must be between 0 and 10000");
+        }
+        var key = blockedKeyPrefix + nextFaultKey.getAndIncrement();
+        var messages = new ArrayList<Message>(behind + 1);
+        for (var order = 0; order <= behind; order++) {
+            messages.add(Message.ordered(payload(Long.toString(order)), FAULT_BLOCKED_KEY, key, order));
+        }
+        List<MessageId> ids;
+        try {
+            // The enqueue commits before its ids are returned, so a fast consumer can be handed the
+            // head before it is registered; the handler reads the set under this lock, so it waits.
+            synchronized (blockedHeadIds) {
+                ids = queue.enqueue(messages);
+                blockedHeadIds.add(ids.getFirst());
+            }
+        } catch (Exception e) {
+            throw new IllegalStateException("Blocked-key injection failed", e);
+        }
+        blockedKeysCreated.incrementAndGet();
+        blockedKeyMessagesEnqueued.addAndGet(messages.size());
+        log.info("Injected blocked key '{}': head {} fails until resurrected, {} message(s) behind it",
+                 key, ids.getFirst(), behind);
+        return key;
+    }
+
+    private String nextFaultKey() {
+        return faultKeyPrefix + nextFaultKey.getAndIncrement();
+    }
+
+    /**
+     * Fail until the message has been tried {@code failures} times, reading the count from the queue.
+     * <p>
+     * The handler is not given the attempt count, so it asks for the row by id — the lookup
+     * {@link MessageHandler} documents for exactly this, paid only by fault messages. The count comes
+     * from the database, not from memory here, so it holds when a rebalance hands the message to
+     * another instance between attempts. While a message is in flight, {@code attempts} is the number
+     * of failures recorded so far.
+     */
+    private void failUntilAttempt(MessageId messageId, byte[] payload) throws Exception {
+        var failures = Integer.parseInt(new String(payload, StandardCharsets.UTF_8));
+        var attemptsSoFar = queue.getMessage(messageId).map(QueuedMessage::attempts).orElse(failures);
+        if (attemptsSoFar < failures) {
+            injectedFailures.incrementAndGet();
+            throw new InjectedFault("Retry message " + messageId + " - injected failure "
+                                    + (attemptsSoFar + 1) + " of " + failures);
+        }
+        retryFaultsRecovered.incrementAndGet();
+    }
+
+    /** Thrown on purpose by fault messages, so a log reader can tell an injected failure from a real one. */
+    static final class InjectedFault extends RuntimeException {
+        InjectedFault(String message) {
+            super(message, null, false, false);
+        }
+    }
+
+    /**
+     * The property the ordered lane sells, checked where it can actually be observed.
+     * <p>
+     * Counted rather than thrown: a violation is a finding to surface on the dashboard, and throwing
+     * here would instead put the message through the engine's retry and dead-letter path, which
+     * would obscure the very thing being measured.
+     */
+    private void recordOrdering(String key, byte[] payload) {
+        var order = Long.parseLong(new String(payload, StandardCharsets.UTF_8));
+        highestPerKey.merge(key, order, (previous, incoming) -> {
+            if (incoming <= previous) {
+                orderViolations.incrementAndGet();
+                log.warn("Ordering violation on key {}: {} arrived after {}", key, incoming, previous);
+                return previous;
+            }
+            return incoming;
+        });
+    }
+
+    private void simulateWork() {
+        var delay = properties.getHandlerDelay();
+        if (delay == null || delay.isZero() || delay.isNegative()) {
+            return;
+        }
+        try {
+            Thread.sleep(delay.toMillis());
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
+    }
+
+    private static byte[] payload(String body) {
+        return body.getBytes(StandardCharsets.UTF_8);
+    }
+
+    private static void closeQuietly(Subscription subscription) {
+        if (subscription != null) {
+            try {
+                subscription.close();
+            } catch (Exception e) {
+                log.warn("Could not close a queue subscription cleanly", e);
+            }
+        }
+    }
+
+    public QueueLoadStatus status() {
+        var depth  = safely(() -> queue == null ? null : queue.depth());
+        var health = safely(() -> queue == null ? null : queue.health());
+        return new QueueLoadStatus(running.get(),
+                                   properties.getQueueName(),
+                                   unorderedEnqueued.get(), unorderedHandled.get(),
+                                   orderedEnqueued.get(), orderedHandled.get(),
+                                   orderViolations.get(),
+                                   spikes.get(), lastSpikeAt.get(),
+                                   retryFaultsEnqueued.get(), retryFaultsRecovered.get(),
+                                   poisonFaultsEnqueued.get(), injectedFailures.get(),
+                                   blockedKeysCreated.get(), blockedKeyMessagesEnqueued.get(),
+                                   blockedKeyMessagesDelivered.get(),
+                                   depth == null ? 0 : depth.unordered(),
+                                   depth == null ? 0 : depth.ordered(),
+                                   depth == null ? 0 : depth.deadLettered(),
+                                   depth == null ? 0 : depth.parkedBehindDeadLetter(),
+                                   depth == null ? 0 : depth.blockedKeys(),
+                                   health == null ? 0 : health.unorderedOwned(),
+                                   health == null ? 0 : health.orderedOwned(),
+                                   health == null ? 0 : health.unownedShards(),
+                                   health != null && health.fullyOwned(),
+                                   health == null ? 0 : health.liveInstances());
+    }
+
+    private static <T> T safely(SupplierThatThrows<T> supplier) {
+        try {
+            return supplier.get();
+        } catch (Exception e) {
+            log.debug("Could not read queue state", e);
+            return null;
+        }
+    }
+
+    @FunctionalInterface
+    private interface SupplierThatThrows<T> {
+        T get() throws Exception;
+    }
+
+    /**
+     * @param retryFaultsEnqueued  retry messages enqueued across both lanes; each should end up in
+     *                             {@code retryFaultsRecovered}
+     * @param poisonFaultsEnqueued poison messages enqueued across both lanes; each should end up in
+     *                             {@code deadLetteredDepth}
+     * @param injectedFailures     handler invocations that failed on purpose
+     * @param blockedKeyMessagesDelivered messages on blocked keys delivered after a resurrect; equals
+     *                             {@code blockedKeyMessagesEnqueued} once every blocked key is resurrected
+     * @param parkedBehindDeadLetterDepth dead letters parked unhandled behind another on their key, right
+     *                             now; falls back to zero when the key is resurrected
+     * @param blockedKeys          ordered keys stopped behind a dead letter right now, across the queue -
+     *                             blocked keys from {@code /faults/blocked-key} and each poison
+     *                             message's single-use key alike
+     * @param unownedShards the number worth alerting on — depth cannot tell "nobody is consuming"
+     *                      from "busy", and this can
+     */
+    public record QueueLoadStatus(boolean running,
+                                  String queueName,
+                                  long unorderedEnqueued,
+                                  long unorderedHandled,
+                                  long orderedEnqueued,
+                                  long orderedHandled,
+                                  long orderViolations,
+                                  long spikes,
+                                  Instant lastSpikeAt,
+                                  long retryFaultsEnqueued,
+                                  long retryFaultsRecovered,
+                                  long poisonFaultsEnqueued,
+                                  long injectedFailures,
+                                  long blockedKeysCreated,
+                                  long blockedKeyMessagesEnqueued,
+                                  long blockedKeyMessagesDelivered,
+                                  long unorderedDepth,
+                                  long orderedDepth,
+                                  long deadLetteredDepth,
+                                  long parkedBehindDeadLetterDepth,
+                                  long blockedKeys,
+                                  int unorderedShardsOwned,
+                                  int orderedUnitsOwned,
+                                  int unownedShards,
+                                  boolean fullyOwned,
+                                  int liveInstances) {
+    }
+}

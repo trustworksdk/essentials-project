@@ -1,0 +1,18 @@
+{
+  "name": "essentials-marketplace",
+  "owner": {
+    "name": "Trustworks"
+  },
+  "metadata": {
+    "description": "Claude Code plugins for the Trustworks Essentials framework, published from the framework's own repository."
+  },
+  "plugins": [
+    {
+      "name": "essentials",
+      "source": "./essentials-plugin",
+      "description": "Trustworks Essentials Java/Kotlin framework support: framework docs, the slice-design law with scaffolding and audits, the application stack contract, /essentials:init, /essentials:upgrade and /essentials:review.",
+      "homepage": "https://github.com/trustworksdk/essentials-project/tree/main/essentials-plugin",
+      "repository": "https://github.com/trustworksdk/essentials-project"
+    }
+  ]
+}

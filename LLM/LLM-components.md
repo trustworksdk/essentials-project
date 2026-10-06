@@ -12,7 +12,6 @@
 - [MongoDB Components](#mongodb-components)
 - [Spring Boot Starters](#spring-boot-starters)
 - [Event Sourcing](#event-sourcing)
-- [UI Components](#ui-components)
 - [Common Patterns](#common-patterns)
 - [Gotchas](#gotchas)
 - [See Also](#see-also)
@@ -44,7 +43,7 @@
 | **PostgreSQL** | `postgresql-event-store` | Event Store with subscriptions, gap handling                                                 | PostgreSQL | [LLM-postgresql-event-store.md](LLM-postgresql-event-store.md) |
 | | `postgresql-queue` | Durable queues implementation                                                                | PostgreSQL | [LLM-postgresql-queue.md](LLM-postgresql-queue.md) |
 | | `postgresql-distributed-fenced-lock` | Distributed locking                                                                          | PostgreSQL | [LLM-postgresql-distributed-fenced-lock.md](LLM-postgresql-distributed-fenced-lock.md) |
-| | `postgresql-document-db` | Document database (Kotlin)                                                                   | PostgreSQL | [LLM-postgresql-document-db.md](LLM-postgresql-document-db.md) |
+| | `postgresql-document-db` | Document database (Kotlin-first, Java interop surface)                                       | PostgreSQL | [LLM-postgresql-document-db.md](LLM-postgresql-document-db.md) |
 | **Spring** | `spring-postgresql-event-store` | Spring transaction integration for EventStore                                                | PostgreSQL | [LLM-spring-postgresql-event-store.md](LLM-spring-postgresql-event-store.md) |
 | | `spring-boot-starter-postgresql` | Auto-config for PostgreSQL components                                                        | PostgreSQL | [LLM-spring-boot-starter-modules.md](LLM-spring-boot-starter-modules.md) |
 | | `spring-boot-starter-postgresql-event-store` | Auto-config for EventStore  + Postgresql components                                          | PostgreSQL | [LLM-spring-boot-starter-modules.md](LLM-spring-boot-starter-modules.md) |
@@ -314,12 +313,13 @@ public class PostgresqlEventStore<CONFIG extends EventStoreEventStreamConfigurat
 
 ```java
 // Package: dk.trustworks.essentials.components.eventsourced.eventstore.postgresql
-var eventStore = new PostgresqlEventStore<>(
-    eventStoreManagedUnitOfWorkFactory,
-    separateTablePerAggregateTypePersistenceStrategy,
-    Optional.of(eventStoreEventBus),
-    eventStreamGapHandlerFactory,
-    eventStoreSubscriptionObserver);
+var eventStore = PostgresqlEventStore.<SeparateTablePerAggregateEventStreamConfiguration>builder()
+                                     .setUnitOfWorkFactory(eventStoreManagedUnitOfWorkFactory)
+                                     .setPersistenceStrategy(separateTablePerAggregateTypePersistenceStrategy)
+                                     .setEventStoreEventBus(eventStoreEventBus)
+                                     .setEventStreamGapHandlerFactory(eventStreamGapHandlerFactory)
+                                     .setEventStoreSubscriptionObserver(eventStoreSubscriptionObserver)
+                                     .build();
 
 // Register aggregate type (required before persisting events)
 eventStore.addAggregateEventStreamConfiguration(
@@ -374,8 +374,9 @@ public class PostgresqlFencedLockManager implements FencedLockManager {
 Package: `dk.trustworks.essentials.components.document_db.postgresql`
 
 ```kotlin
-// JSONB-based document storage w/ indexing, type-safe querying, versioning (Kotlin)
-class PostgresqlDocumentDbRepository<ENTITY : VersionedEntity<ID, ENTITY>, ID : Any> : DocumentDbRepository<ENTITY, ID>
+// JSONB-based document storage w/ indexing, type-safe querying, versioning
+// Kotlin-first; Java extends JavaVersionedEntity and uses the Class<T>/path-string overloads
+class PostgresqlDocumentDbRepository<ENTITY : VersionedEntity<ID, ENTITY>, ID> : DocumentDbRepository<ENTITY, ID>
 ```
 
 ---
@@ -447,7 +448,6 @@ essentials:
     lock-time-out: "15s"
   durable-queues:
     shared-queue-table-name: "durable_queues"
-    transactional-mode: "single-operation-transaction"
 ```
 
 ### Override Pattern

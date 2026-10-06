@@ -43,9 +43,11 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
  * @param statisticsSince when the collection of these statistics started in this instance
  * @param lifecycle       start/stop statistics
  * @param eventHandling   event handling throughput, timing and failure statistics
- * @param polling         event-store polling statistics - zero for a subscription served over Change Data Capture
+ * @param polling         event-store polling statistics - see {@link ApiSubscriptionPollingStatistics} for when a
+ *                        subscription served over Change Data Capture still polls
  * @param lock            fenced-lock statistics, only relevant for exclusive subscriptions
  * @param reset           resume-point reset (replay) statistics
+ * @param gaps            global-event-order gap statistics - found, resolved and given up on
  */
 public record ApiSubscriptionStatistics(
         SubscriberId subscriberId,
@@ -55,7 +57,8 @@ public record ApiSubscriptionStatistics(
         ApiSubscriptionEventHandlingStatistics eventHandling,
         ApiSubscriptionPollingStatistics polling,
         ApiSubscriptionLockStatistics lock,
-        ApiSubscriptionResetStatistics reset
+        ApiSubscriptionResetStatistics reset,
+        ApiSubscriptionGapStatistics gaps
 ) {
 
     public static ApiSubscriptionStatistics from(SubscriptionStatistics statistics) {
@@ -68,7 +71,8 @@ public record ApiSubscriptionStatistics(
                 ApiSubscriptionEventHandlingStatistics.from(statistics.eventHandling()),
                 ApiSubscriptionPollingStatistics.from(statistics.polling()),
                 ApiSubscriptionLockStatistics.from(statistics.lock()),
-                ApiSubscriptionResetStatistics.from(statistics.reset()));
+                ApiSubscriptionResetStatistics.from(statistics.reset()),
+                ApiSubscriptionGapStatistics.from(statistics.gaps()));
     }
 
     /**
@@ -98,6 +102,7 @@ public record ApiSubscriptionStatistics(
                 ", polling=" + polling +
                 ", lock=" + lock +
                 ", reset=" + reset +
+                ", gaps=" + gaps +
                 '}';
     }
 }

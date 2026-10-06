@@ -31,7 +31,6 @@
 - [MongoDB-Specific Behavior](#mongodb-specific-behavior)
 - [Logging](#logging)
 - ⚠️ [Security](#security)
-- [Common Use Cases](#common-use-cases)
 - [Gotchas](#gotchas)
 - [Comparison with PostgreSQL](#comparison-with-postgresql)
 - [Dependencies & Tests](#dependencies--tests)
@@ -413,6 +412,34 @@ MongoClient client = MongoClients.create(
 .setLockTimeOut(Duration.ofSeconds(30))
 .setLockConfirmationInterval(Duration.ofSeconds(10))  // 3x buffer
 ```
+
+### ⚠️ Socket Timeouts Decide How Fast a Lost Lock Is Noticed
+
+A node learns it lost its database when a confirmation fails, so the worst case before it lets go is
+`lockConfirmationInterval` + however long the driver takes to fail that confirmation. Give the `MongoClient` explicit
+socket timeouts well below `lockTimeOut` - the Essentials integration tests use `connectTimeout(1, SECONDS)` and
+`readTimeout(1, SECONDS)`:
+
+```java
+MongoClientSettings.builder()
+                   .applyConnectionString(new ConnectionString(mongoUri))
+                   .applyToSocketSettings(socket -> socket.connectTimeout(1, SECONDS)
+                                                          .readTimeout(1, SECONDS))
+                   .build();
+```
+
+A lock that fails confirmation is released locally - `lockReleased` called - before the manager tries to release it in
+the database. That best-effort database release runs after the confirmation transaction, each in its own, so a failing
+release never rolls back the locks confirmed in the same tick. It can still be slow: MongoDB driver 5.12+ retries a
+timed-out connection establishment with backoff, so against an unreachable server one attempt takes several connect
+timeouts. So the manager stops at the first IO failure, and when the confirmation itself failed on IO it does not try
+the database at all. A lock left unreleased in the database is taken over by another node once `lockTimeOut` has passed -
+with one MongoDB exception: when the confirmation's commit itself fails during the outage (logged as `Transaction status
+was UNKNOWN`), the server can still apply the confirmation's write once it is reachable again, inside a transaction
+nobody commits or aborts. That transaction keeps the lock document write-locked, so every node's acquire fails with a
+`WriteConflict` until the server aborts it after `transactionLifetimeLimitSeconds` (60 s by default). Expect a lock
+hand-over after such an outage to take up to that long instead of `lockTimeOut`; nothing is lost, and it recovers by
+itself.
 
 ### ⚠️ Always Release Locks
 

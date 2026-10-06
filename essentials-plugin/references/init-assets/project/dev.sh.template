@@ -1,0 +1,87 @@
+#!/usr/bin/env bash
+# =============================================================================
+# dev.sh: development convenience script
+#
+# Usage:
+<!-- IF frontend!=none -->
+#   ./dev.sh              Start backend + frontend
+<!-- END frontend -->
+<!-- IF compose -->
+#   ./dev.sh backend      Start Spring Boot on :8080 ({{db_label}} starts via Docker Compose)
+<!-- END compose -->
+<!-- IF compose=false -->
+#   ./dev.sh backend      Start Spring Boot on :8080 (expects {{db_label}} to be running; see application.yml)
+<!-- END compose -->
+<!-- IF frontend!=none -->
+#   ./dev.sh frontend     Start the Vite dev server on :5173 (proxies /api to :8080)
+#   ./dev.sh generate     Regenerate contracts/openapi.json and the TypeScript client (needs Docker)
+<!-- END frontend -->
+<!-- IF compose -->
+#
+# The database is managed by Spring Boot's Docker Compose support: spring-boot:run starts the container
+# from backend/compose.yml and stops it on shutdown.
+<!-- END compose -->
+# =============================================================================
+set -e
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+cd "$SCRIPT_DIR"
+
+# The Maven wrapper when the project has one, otherwise the Maven on the PATH.
+if [ -x ./mvnw ]; then MVN=./mvnw; else MVN=mvn; fi
+
+cmd_backend() {
+    echo "Starting the Spring Boot backend on :8080..."
+<!-- IF frontend=embedded -->
+    "$MVN" -pl backend spring-boot:run -Pskip-frontend
+<!-- END frontend -->
+<!-- IF frontend!=embedded -->
+    "$MVN" -pl backend spring-boot:run
+<!-- END frontend -->
+}
+<!-- IF frontend!=none -->
+
+cmd_frontend() {
+    echo "Starting the Vite dev server (HMR) on :5173..."
+    cd "$SCRIPT_DIR/frontend"
+    npm run dev
+}
+
+cmd_generate() {
+    echo "Regenerating contracts/openapi.json (OpenApiContractIT; needs Docker)..."
+    "$MVN" -q -pl backend test-compile failsafe:integration-test failsafe:verify -Dit.test=OpenApiContractIT
+    echo "Spec written to contracts/openapi.json (commit it: it is the contract the frontend builds against)"
+
+    echo "Regenerating the TypeScript client..."
+    cd "$SCRIPT_DIR/frontend"
+    npx orval
+}
+
+cmd_all() {
+    trap 'kill 0' SIGINT SIGTERM
+    cmd_backend &
+    cmd_frontend &
+    wait
+}
+
+case "${1:-all}" in
+    backend)   cmd_backend ;;
+    frontend)  cmd_frontend ;;
+    generate)  cmd_generate ;;
+    all)       cmd_all ;;
+    *)
+        echo "Usage: $0 {backend|frontend|generate|all}"
+        exit 1
+        ;;
+esac
+<!-- END frontend -->
+<!-- IF frontend=none -->
+
+case "${1:-backend}" in
+    backend)   cmd_backend ;;
+    *)
+        echo "Usage: $0 {backend}"
+        exit 1
+        ;;
+esac
+<!-- END frontend -->

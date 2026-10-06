@@ -27,8 +27,14 @@ import java.util.*;
 /**
  * This mapper is used by the {@link AggregateEventStreamPersistenceStrategy} to convert from any type of Event to a {@link PersistableEvent}
  * which is the type of Event the {@link AggregateEventStreamPersistenceStrategy} understands how to persist.<br>
- * This mapper is also responsible for enriching the {@link PersistableEvent} with additional metadata, such as {@link CorrelationId}, {@link PersistableEvent#causedByEventId()}, {@link Tenant} and
- * {@link EventMetaData}
+ * A mapper may enrich the {@link PersistableEvent} with additional metadata, such as {@link CorrelationId}, {@link PersistableEvent#causedByEventId()}, {@link Tenant} and
+ * {@link EventMetaData}.<br>
+ * Metadata that does not depend on the event itself is better added by a
+ * {@link dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.persistence.table_per_aggregate_type.PersistableEventEnricher},
+ * which runs after the mapper and keeps the mapper a pure function. In particular
+ * {@link dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.persistence.table_per_aggregate_type.CausationPersistableEventEnricher}
+ * fills {@link PersistableEvent#causedByEventId()} from the cause bound for the current work - but only where the mapper
+ * left it empty, so a cause a mapper sets is never overwritten.
  */
 public interface PersistableEventMapper {
     /**

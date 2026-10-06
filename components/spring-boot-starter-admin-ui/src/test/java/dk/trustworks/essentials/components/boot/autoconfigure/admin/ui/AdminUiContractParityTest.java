@@ -66,8 +66,20 @@ class AdminUiContractParityTest {
     /** Keeps the comparisons below from passing vacuously. */
     @Test
     void both_sides_are_discovered() {
-        assertThat(contractPaths).hasSize(38);
+        // 38 before the shard-owned queue engine was published; its paths bring it to 48 — nine, plus
+        // resurrecting a whole ordered key, which is how a key stopped behind a dead letter is
+        // recovered. A literal rather than a computed figure on purpose: it is a tripwire for the
+        // contract silently losing paths, which the two parity assertions below cannot see. The ranked
+        // slow-query and the table statistics paths bring it to 50, running a scheduler job on demand to 51,
+        // the four event-causation lookups to 55, and resuming a subscription stopped by its error policy to 56.
+        assertThat(contractPaths).hasSize(48 + 8);
         assertThat(calledPaths()).isNotEmpty();
+    }
+
+    @Test
+    void superseded_paths_are_still_in_the_contract_and_no_longer_called() {
+        assertThat(contractPaths).containsAll(SUPERSEDED_PATHS);
+        assertThat(calledPaths()).doesNotContainAnyElementsOf(SUPERSEDED_PATHS);
     }
 
     @Test
@@ -79,10 +91,24 @@ class AdminUiContractParityTest {
                 .containsAll(calledPaths());
     }
 
+    /**
+     * Contract paths the console deliberately does not call, because a newer operation covers the same ground and the
+     * console uses that one. They stay in the contract for existing API clients.
+     */
+    private static final Set<String> SUPERSEDED_PATHS = Set.of(
+            // Covered by /postgresql/query-statistics/slowest, which the console calls with a selectable ranking
+            "/postgresql/query-statistics/top-ten-slowest",
+            // Covered by /postgresql/table-statistics, which reports every Essentials table rather than only the
+            // event-stream tables, in one call
+            "/event-store/statistics/table-sizes",
+            "/event-store/statistics/table-activity",
+            "/event-store/statistics/table-cache-hit-ratio");
+
     @Test
     void every_contract_path_is_surfaced_by_the_ui() {
         var uncovered = new TreeSet<>(contractPaths);
         uncovered.removeAll(calledPaths());
+        uncovered.removeAll(SUPERSEDED_PATHS);
 
         assertThat(uncovered)
                 .as("""

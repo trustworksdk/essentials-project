@@ -51,11 +51,12 @@ See [spring-boot-starter-postgresql README](../components/spring-boot-starter-po
 **Core Infrastructure:**
 - `Jdbi` - JDBI with PostgresPlugin + TransactionAwareDataSourceProxy
 - `SpringTransactionAwareJdbiUnitOfWorkFactory` - Spring transaction integration
+- `SchemaApplier` + `EssentialsSchemaHarnessRunner` - the schema harness, driven by `essentials.schema.mode` ([Database Schema](#database-schema))
 
 **Components:**
 - `PostgresqlFencedLockManager` - Distributed locks
 - `PostgresqlDurableQueues` - Durable message queuing
-- `PostgresqlDurableQueuesStatistics` - Queue statistics (when enabled)
+- `QueueStatisticsRegistry` + `StatisticsCollectingDurableQueueMessageObserver` - per-JVM delivery statistics
 - `Inboxes`, `Outboxes` - Store-and-forward patterns
 - `DurableLocalCommandBus` - Command bus with durable delivery
 - `MultiTableChangeListener` - PostgreSQL NOTIFY/LISTEN optimization
@@ -65,9 +66,9 @@ See [spring-boot-starter-postgresql README](../components/spring-boot-starter-po
 - `ReactiveHandlersBeanPostProcessor` - Auto-register handlers
 
 **Serialization:**
-- `EssentialTypesJacksonModule` - Jackson support for types
-- `EssentialsImmutableJacksonModule` - Immutable support (when enabled)
-- `JacksonJSONSerializer` - JSON serializer (when JSONEventSerializer not on classpath)
+- `EssentialTypesJacksonModule` - Jackson 3 support for types (bean, so Spring Boot also registers it on its **web** `JsonMapper`)
+- `EssentialsImmutableJacksonModule` - Immutable support (when enabled; also a bean for the web mapper)
+- `JSONSerializer` - `EssentialsObjectMappers.createJSONSerializer()` (Jackson 3; when JSONEventSerializer not on classpath). Deliberately does **not** collect `JacksonModule` beans from the context — those are usually web-layer modules and would silently change the persisted format. Need extra persistence modules? Define your own `JSONSerializer` bean; the starter backs off
 
 **Scheduler:**
 - `EssentialsScheduler` - Distributed scheduler (when enabled)
@@ -79,7 +80,9 @@ See [spring-boot-starter-postgresql README](../components/spring-boot-starter-po
 - Performance logging interceptors
 
 **Admin APIs:**
-- `DBFencedLockApi`, `DurableQueuesApi`, `PostgresqlQueryStatisticsApi`, `SchedulerApi`
+- `DBFencedLockApi`, `DurableQueuesApi`, `PostgresqlQueryStatisticsApi`, `PostgresqlTableStatisticsApi`, `SchedulerApi`
+- `PostgresqlStatisticsTableProvider` beans for the durable queues, fenced lock and infrastructure tables. The event
+  store and shard-owned queue starters add their own; declare one to report application tables too
 
 **Lifecycle:**
 - `DefaultLifecycleManager` - Manages Lifecycle beans
@@ -104,15 +107,6 @@ See [spring-boot-starter-mongodb README](../components/spring-boot-starter-mongo
 
 **Other:** Same reactive, serialization, observability as PostgreSQL starter
 
-**Which `jackson-databind`.** The Jackson one that matches your flavor: `tools.jackson.core:jackson-databind` for
-Jackson 3 (the default), `com.fasterxml.jackson.core:jackson-databind` for Jackson 2. From 0.50.1 a Jackson 3-only
-application does not need Jackson 2 on the classpath. Up to 0.50.0 the PostgreSQL, MongoDB and event-store starters
-failed at startup without it (`NoClassDefFoundError: com/fasterxml/jackson/databind/Module`), so Jackson 3 applications
-had to add `com.fasterxml.jackson.core:jackson-databind` as a workaround; it can be removed after upgrading. One thing
-still needs Jackson 2 in 0.50.x: duplicate-notification filtering in `MultiTableChangeListener`, whose
-`NotificationDuplicationFilter` SPI is typed on Jackson 2's `JsonNode`. Without Jackson 2 the listener logs a warning and
-delivers notifications unfiltered, which is correct but may trigger redundant polls. (0.60 moves that SPI to Jackson 3.)
-
 ### Event Store Starter
 
 Package: `dk.trustworks.essentials.components.boot.autoconfigure.postgresql.eventstore`
@@ -125,7 +119,7 @@ See [spring-boot-starter-postgresql-event-store README](../components/spring-boo
 - `PostgresqlEventStore` - Event persistence and loading
 - `SeparateTablePerAggregateTypePersistenceStrategy` - One table per AggregateType
 - `SpringTransactionAwareEventStoreUnitOfWorkFactory` - Spring transaction integration
-- `JacksonJSONEventSerializer` - Event JSON serialization
+- `JSONEventSerializer` - `EssentialsJSONEventSerializers.create()` (Jackson 3 `Jackson3JSONEventSerializer`); define your own bean to add persistence modules
 
 **Subscriptions & Processing:**
 - `EventStoreSubscriptionManager` - Coordinate subscriptions
@@ -136,14 +130,20 @@ See [spring-boot-starter-postgresql-event-store README](../components/spring-boo
 
 **Event Publishing:**
 - `EventStoreEventBus` - Local event publishing
-- `PersistableEventMapper` - Event metadata mapping
+- `PersistableEventMapper` - Event metadata mapping (sets no correlation id, tenant or cause)
+
+**Event Causation** (unless `essentials.eventstore.causation.enabled=false`):
+- `CausationPersistableEventEnricher` - Writes each event's `causedByEventId`
+- `CausationDurableQueuesInterceptor` - Carries the cause across Inbox/Outbox/durable command bus
+- `CausationCommandContextPropagator` - Added to every command-bus bean, for `sendAsync`/`sendAndDontWait`
 
 **Observability:**
 - `MicrometerTracingEventStoreInterceptor` - Distributed tracing (when enabled)
 - `RecordExecutionTimeEventStoreInterceptor` - Performance logging
 - `MeasurementEventStoreSubscriptionObserver` - Subscription metrics
 - `EventStoreSubscriptionMonitorManager` - Subscription health monitoring (runs every 1m by default)
-- `SubscriberGlobalOrderMicrometerMonitor` - Micrometer gauge for subscriber position
+- `SubscriberGlobalOrderMicrometerMonitor` - Micrometer gauge for subscriber position (only when `management.tracing.enabled=true`)
+- `SubscriptionStoppedMicrometerMonitor` - gauge `essentials.eventstore.subscription.stopped` (`1` while a subscription is stopped by its `SubscriptionErrorPolicy`, and through its automatic resumes until the failed event is handled) - the alerting signal for a halted projection; wired whenever a `MeterRegistry` is present
 
 **Admin APIs:**
 - `EventStoreApi` - Query events, manage subscriptions
@@ -194,23 +194,16 @@ Prefix: `essentials.durable-queues`
 | Property | Default | Notes |
 |----------|---------|-------|
 | `shared-queue-table-name` | `durable_queues` | Table name - see [Security](#security) |
-| `transactional-mode` | `single-operation-transaction` | **Use this**, not `fully-transactional` |
 | `message-handling-timeout` | `30s` | Single-op mode only |
 | `use-centralized-message-fetcher` | `true` | Recommended |
 | `centralized-message-fetcher-polling-interval` | `20ms` | Base interval |
 | `centralized-polling-delay-back-off-factor` | `1.5` | Backoff multiplier |
-| `use-ordered-unordered-query` | `true` | Optimize mixed ordering |
 | `polling-delay-interval-increment-factor` | `0.5` | Legacy (centralized=false) |
 | `max-polling-interval` | `2s` | Max backoff |
 | `verbose-tracing` | `false` | Include all ops in traces |
-| `enable-queue-statistics` | `false` | Collect statistics |
 | `shared-queue-statistics-table-name` | `durable_queues_statistics` | Stats table - see [Security](#security) |
 | `enable-queue-statistics-ttl` | `false` | Auto-cleanup stats |
 | `queue-statistics-ttl-duration` | `90` | Days |
-
-**Transactional Modes:**
-- `single-operation-transaction`: Queue ops outside transaction, timeout-based ack (RECOMMENDED)
-- `fully-transactional`: Queue ops in transaction (breaks retries/DLQ - don't use)
 
 #### MultiTableChangeListener
 
@@ -288,8 +281,29 @@ Prefix: `essentials`
 | Property | Default | Effect |
 |----------|---------|--------|
 | `life-cycles.start-life-cycles` | `true` | Auto-start Lifecycle beans |
+| `life-cycles.shutdown-timeout` | `10s` | Shutdown budget for stopping Lifecycle beans; bounded, best-effort DB cleanup during shutdown |
 | `reactive-bean-post-processor-enabled` | `true` | Auto-register handlers |
 | `immutable-jackson-module-enabled` | `true` | Enable immutable deserialization |
+
+#### Database Schema
+
+Prefix: `essentials.schema` - what happens to the schema every Essentials component describes. SPI and rules:
+[LLM-foundation.md](./LLM-foundation.md#database-schema-harness).
+
+| Property | Default | Effect |
+|----------|---------|--------|
+| `mode` | `create` | `create`: each component creates its own schema on construction (0.50 behaviour). `validate`: execute nothing, fail startup with `SchemaValidationException` unless `essentials_schema_history` records every change. `emit`: write the schema as one SQL script, start no Essentials lifecycle, exit 0. `external`: execute and verify nothing |
+| `history-table-name` | `essentials_schema_history` | The ledger table |
+| `emit.script-file` | `essentials-schema.sql` | Where `emit` writes the script |
+| `emit.exit` | `true` | Whether `emit` stops the application once the script is written |
+
+- Beans: `SchemaApplier` (selected by `mode`, `@ConditionalOnMissingBean`) and `EssentialsSchemaHarnessRunner`, which
+  applies every `EssentialsSchemaContributor` bean after all singletons exist and before lifecycles start. Your own
+  contributor beans are applied with them.
+- Outside `create`: registering an `AggregateType` whose table is not in the ledger throws in `validate`; a
+  `ClosingBooksSetup` bean needs `.setSchemaOwnership(essentialsComponentsProperties.getSchema().getMode().schemaOwnership())`;
+  the shard-owned engine creates each queue's sequences itself and so needs `CREATE` rights at runtime.
+- DBA flow: run once with `emit`, have the script run by a user with DDL rights, deploy with `validate`.
 
 ### MongoDB Starter
 
@@ -313,7 +327,6 @@ Prefix: `essentials.durable-queues`
 | Property | Default | Notes |
 |----------|---------|-------|
 | `shared-queue-collection-name` | `durable_queues` | Collection name - see [Security](#security) |
-| `transactional-mode` | `single-operation-transaction` | **Use this**, not `fully-transactional` |
 | `message-handling-timeout` | `30s` | Single-op mode only |
 | `polling-delay-interval-increment-factor` | `0.5` | Backoff factor |
 | `max-polling-interval` | `2s` | Max backoff |
@@ -348,6 +361,51 @@ Prefix: `essentials.eventstore`
 
 See [postgresql-event-store: Flush Publishing](../components/postgresql-event-store/README.md#flush-publishing)
 
+#### Gap Handling
+
+Full section: [starter README: Gap Handling](../components/spring-boot-starter-postgresql-event-store/README.md#gap-handling). Mechanics, gap types: [postgresql-event-store README](../components/postgresql-event-store/README.md#gap-handling), [LLM-postgresql-event-store.md](LLM-postgresql-event-store.md#gap-handling). `spring-postgresql-event-store` wires no gap handling.
+
+- `use-event-stream-gap-handler=true` (default): `PostgresqlEventStore` is built on the `EventStreamGapHandler` bean; `false`: on `NoEventStreamGapHandler` (bean still created, CDC beans take it)
+- Default bean `EventStreamGapHandler<SeparateTablePerAggregateEventStreamConfiguration>` is `@ConditionalOnMissingBean`: `PostgresqlEventStreamGapHandler(unitOfWorkFactory, schemaOwnership)` = 60 s transient-gap cache refresh, 120 s permanent-gap threshold, default per-poll selection
+- Per poll (default selection): every open transient gap up to 50; beyond that the 20 highest + 10 lowest + rotating window of 20. Transient gaps are per subscriber, permanent gaps per `AggregateType`. Tenant-filtered subscriptions filter in memory, so other tenants' orders are never gaps
+- A gap is resolved only once its filling event was handled: `EventStoreSubscriptionManager` subscriptions acknowledge via `SubscriberAcknowledgement` inside the handler's unit of work, so a stop or crash redelivers the fill. **Handlers must tolerate redelivery**
+- `GlobalEventOrder` is not delivered in strict sequence. Never dedupe by "highest seen" (trap `ESS-116` in [LLM-traps.md](LLM-traps.md))
+- Gap statistics: `SubscriptionStatistics.gaps()` (`newTransientGaps`, `resolvedTransientGaps`, `promotedToPermanentGaps`) while `subscription-manager.statistics.enabled=true` (default)
+- Reset permanent gaps: `eventStreamGapHandler.resetPermanentGapsFor(AggregateType)` (overloads: `LongRange`, `List<GlobalEventOrder>`)
+
+Override (consumer bean replaces the default; the event store, `CdcDispatcher` and `CdcEventStore` all use it). `ResolveTransientGapsToIncludeInQueryStrategy` and `ResolveTransientGapsToPermanentGapsPromotionStrategy` are nested in `PostgresqlEventStreamGapHandler`:
+
+```java
+@Bean
+EventStreamGapHandler<SeparateTablePerAggregateEventStreamConfiguration> eventStreamGapHandler(
+        EventStoreUnitOfWorkFactory<? extends EventStoreUnitOfWork> unitOfWorkFactory,
+        EssentialsComponentsProperties properties) {
+    return new PostgresqlEventStreamGapHandler<>(
+            unitOfWorkFactory,
+            Duration.ofSeconds(60),   // transient-gap cache refresh
+            PostgresqlEventStreamGapHandler.ResolveTransientGapsToIncludeInQueryStrategy.defaultSelection(),   // or compose it in your own
+            PostgresqlEventStreamGapHandler.ResolveTransientGapsToPermanentGapsPromotionStrategy.thresholdBased(300),
+            properties.getSchema().getMode().schemaOwnership());   // never omit: shorter constructors run DDL even in schema.mode=validate
+}
+```
+
+- `defaultSelection()` keeps a rotation per subscription and instance whenever the gap handler asks (as is, wrapped or composed in a custom strategy; call each instance once per ask); called directly outside the gap handler or from another thread (executor, `CompletableFuture`), an instance rotates with its own, shared by every subscription reaching it that way. A poll always also asks for gaps old enough to promote; a gap is promoted only when a poll asked for it and its event was missing
+- CDC gives up a gap at `thresholdBased(n)`'s threshold; a lambda promotion strategy states none (override `permanentGapThreshold()`), so CDC uses 120 s; the give-up becomes a permanent gap of the whole aggregate type
+- Use the event store's `EventStoreUnitOfWorkFactory`: a foreign one WARNs once and resolves gaps in its own transaction (commits before the handler's)
+
+#### CDC
+
+Prefix: `essentials.eventstore.cdc`. **Disabled by default** (`enabled=false`; every CDC bean is gated on `enabled=true`, no `matchIfMissing`): no slot, no publication changes, no tailer, polling as before. Opt in with `essentials.eventstore.cdc.enabled=true`; then `mode=auto` (falls back to polling if CDC cannot start), `delivery-mode=inbox`, `plugin=pgoutput`. All properties carry descriptions and defaults in the starter's `spring-configuration-metadata.json`. Details: [starter README: CDC Configuration](../components/spring-boot-starter-postgresql-event-store/README.md#cdc-configuration-hybrid-logical-replication), [LLM-postgresql-event-store.md](LLM-postgresql-event-store.md).
+
+#### Event Causation
+
+Prefix: `essentials.eventstore.causation` - see [event causation](./LLM-postgresql-event-store.md#event-causation)
+
+| Property | Default | Notes |
+|----------|---------|-------|
+| `enabled` | `true` | Record which event caused each event; `false` turns off every part that writes it |
+| `index-enabled` | `false` | Partial index on `caused_by_event_id` in every event-stream table; required by `EventStore.loadEventsCausedBy` and the admin `caused-events` operation. A schema change - pre-build concurrently on large tables |
+
 #### Subscription Manager
 
 Prefix: `essentials.eventstore.subscription-manager`
@@ -357,7 +415,16 @@ Prefix: `essentials.eventstore.subscription-manager`
 | `event-store-polling-batch-size` | `10` | Events per poll |
 | `event-store-polling-interval` | `100ms` | When processing events |
 | `max-event-store-polling-interval` | `2000ms` | Max backoff when idle |
-| `snapshot-resume-points-every` | `10s` | Save position frequency |
+| `snapshot-resume-points-every` | `1s` | Save position frequency (only changed positions are written) |
+| `snapshot-resume-points-after-events` | `0` (off) | Opt-in: also save a position once it advanced this many global orders since its last save |
+| `error-policy.mode` | `retry-n-then-stop` | `retry-n-then-stop` \| `stop` \| `skip` \| `retry-n-then-skip` - the manager's policy, for every subscription whose handler has none of its own (`subscriptionErrorPolicy()` / a processor's `getSubscriptionErrorPolicy()`) - what an async subscription does with an event whose handler throws a non-I/O exception. The default retries, then stops at the event and auto-resumes - nothing is skipped. 0.50 skipped such an event: set `skip` to keep that. See [SubscriptionErrorPolicy](LLM-postgresql-event-store.md#direct-async-subscribers-retry-stop-and-resume-at-a-failing-event) |
+| `error-policy.max-retries` | `3` | `retry-n-then-skip` and `retry-n-then-stop` only (`stop` never retries); must be ≥ 1 |
+| `error-policy.initial-backoff` | `100ms` | Wait before the first retry, doubled per retry |
+| `error-policy.max-backoff` | `1s` | Cap on the wait between retries |
+| `error-policy.auto-resume.enabled` | `true` | A subscription stopped by `stop` / `retry-n-then-stop` resumes by itself at the failed event; `false` = stays stopped until resumed by hand (admin API) or restarted. Ignored by the skipping modes |
+| `error-policy.auto-resume.initial-delay` | `10s` | Wait before the first resume at an event, doubled per resume at the same event |
+| `error-policy.auto-resume.max-delay` | `5m` | Cap on the wait between resumes |
+| `error-policy.auto-resume.max-attempts` | `0` (unlimited) | Resumes at the same event before the next failure **skips** it instead of stopping (counter `essentials.eventstore.subscription.skipped_after_auto_resumes`). Opt-in: for an `EventProcessor` the skipped event never reaches the `Inbox` or its dead-letter queue. Counted in memory per instance: a restart, redeploy or lock hand-over starts it over |
 
 #### Subscription Monitor
 
@@ -568,7 +635,7 @@ Enum: `dk.trustworks.essentials.shared.security.EssentialsSecurityRoles`
 - `QUEUE_READER` / `QUEUE_PAYLOAD_READER` / `QUEUE_WRITER`
 - `SUBSCRIPTION_READER` / `SUBSCRIPTION_WRITER`
 - `POSTGRESQL_STATS_READER`
-- `SCHEDULER_READER`
+- `SCHEDULER_READER` / `SCHEDULER_WRITER`
 
 ---
 
@@ -595,7 +662,6 @@ While Essentials applies naming convention validation as an initial defense laye
 **Affected Properties:**
 - `fenced-locks-table-name` / `fenced-locks-collection-name`
 - `shared-queue-table-name` / `shared-queue-collection-name`
-- `shared-queue-statistics-table-name`
 - All custom table/column/function/index and collection names
 - All custom `AggregateType` values
 
@@ -638,7 +704,7 @@ public PostgresqlDurableQueues postgresqlDurableQueues(...) {
     <groupId>dk.trustworks.essentials.components</groupId>
     <artifactId>spring-boot-starter-postgresql</artifactId>
 </dependency>
-<!-- Required: spring-boot-starter-jdbc, jdbi3-core, jdbi3-postgres, postgresql, jackson-databind, reactor-core -->
+<!-- Required: spring-boot-starter-jdbc, jdbi3-core, jdbi3-postgres, postgresql, tools.jackson.core:jackson-databind (Jackson 3), reactor-core -->
 ```
 
 ### MongoDB Starter
@@ -647,7 +713,7 @@ public PostgresqlDurableQueues postgresqlDurableQueues(...) {
     <groupId>dk.trustworks.essentials.components</groupId>
     <artifactId>spring-boot-starter-mongodb</artifactId>
 </dependency>
-<!-- Required: spring-boot-starter-data-mongodb, jackson-databind, reactor-core -->
+<!-- Required: spring-boot-starter-data-mongodb, tools.jackson.core:jackson-databind (Jackson 3), reactor-core -->
 ```
 
 ### Event Store Starter
@@ -663,22 +729,23 @@ public PostgresqlDurableQueues postgresqlDurableQueues(...) {
 ```xml
 <dependency>
     <groupId>dk.trustworks.essentials.components</groupId>
-    <artifactId>spring-boot-starter-admin-api</artifactId>
+    <artifactId>spring-boot-starter-admin-ui</artifactId>
 </dependency>
-<!-- Required: spring-boot-starter-webmvc; authentication is the host's choice -->
+<!-- Brings in spring-boot-starter-admin-api. Required: spring-boot-starter-webmvc, spring-boot-starter-thymeleaf (the UI does not register without it); authentication is the host's choice -->
 ```
 
 ---
 
 ## Gotchas
 
-- ⚠️ **Transactional Mode**: Use `single-operation-transaction` for reliable retry/DLQ (fully-transactional breaks retries)
 - ⚠️ **Bean Conditionals**: Event Store provides own `UnitOfWorkFactory`, `EventBus`, `JSONSerializer` (PostgreSQL starter skips these when EventStore on classpath)
 - ⚠️ **Lifecycle Start**: Set `start-life-cycles=false` to manually control lifecycle
+- ⚠️ **Shutdown with the database gone**: cleanup on stop (fenced-lock release, resume-point save, job unscheduling) is one bounded attempt and skipped once the DB proves unreachable; `life-cycles.shutdown-timeout` (10s) caps the whole stop. Implement `ShutdownAware` (foundation `lifecycle`) on your own `Lifecycle` beans whose `stop()` touches the DB, and run that work through `ShutdownContext.attemptCleanup(...)`
 - ⚠️ **MongoDB CharSequenceTypes**: Must register types using ObjectId values or used as Map keys
 - ⚠️ **Flush Publishing**: Enable only if sagas need per-event coordination (impacts transaction semantics)
-- ⚠️ **Queue Statistics**: Extra DB overhead when enabled, use TTL to prevent unbounded growth
 - ⚠️ **Admin UI**: Requires both `EssentialsAuthenticatedUser` implementation AND Spring Security config (not auto-configured)
+- ⚠️ **`essentials.reactive-bean-post-processor-enabled=false` silently unwires every `CommandHandler` and `EventHandler` bean.** `ReactiveHandlersBeanPostProcessor` is what registers them with the `CommandBus` and the `EventBus`es; nothing fails at compile time or in a unit test that calls the handler directly — `send(...)` fails only at runtime with no handler found. Leave it at its default `true`, and have each command's integration test send through the bus
+- ⚠️ **MongoDB connection properties are `spring.mongodb.*`**, not `spring.data.mongodb.*` (Spring Boot 4). The old connection names (`uri`, `host`, `port`, `database`, `username`, `password`, `authentication-database`, `replica-set-name`, `additional-hosts`, `protocol`, `ssl.*`) are no longer bound — no warning, no failure: Spring Boot falls back to its default `mongodb://localhost/test`, and every Mongo operation (queues, fenced locks) blocks until server selection times out with `MongoTimeoutException`. A Mongo timeout at startup is this until proven otherwise — grep the configuration for `spring.data.mongodb`. `spring.data.mongodb.uuid-representation` moved too, to `spring.mongodb.representation.uuid`. Only the Spring Data keys stay under `spring.data.mongodb.*` and are still bound: `auto-index-creation`, `field-naming-strategy`, `gridfs.bucket`, `gridfs.database`, `repositories.type`, `representation.big-decimal`
 
 ---
 

@@ -1,0 +1,20 @@
+import { defineConfig } from 'orval'
+
+// contracts/openapi.json -> typed TanStack Query hooks and DTOs. Both output directories are build output: never
+// edit them and never commit them. If a generated shape is wrong, the endpoint is wrong.
+export default defineConfig({
+  api: {
+    input: { target: '../contracts/openapi.json' },
+    output: {
+      mode: 'tags-split',
+      target: './src/shared/api/generated',
+      schemas: './src/shared/api/model',
+      client: 'react-query',
+      httpClient: 'fetch',
+      clean: true,
+      override: {
+        mutator: { path: './src/shared/api/custom-fetch.ts', name: 'customFetch' },
+      },
+    },
+  },
+})

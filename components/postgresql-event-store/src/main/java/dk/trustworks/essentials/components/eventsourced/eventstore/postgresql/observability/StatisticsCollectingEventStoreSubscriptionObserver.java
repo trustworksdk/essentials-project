@@ -18,6 +18,7 @@ package dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.o
 
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.*;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.gap.GapReconciliation;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.observability.SubscriptionStatisticsRegistry.SubscriptionKey;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.subscription.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.types.GlobalEventOrder;
@@ -188,6 +189,20 @@ public class StatisticsCollectingEventStoreSubscriptionObserver implements Event
     }
 
     @Override
+    public void gapReconciliationOutcome(SubscriberId subscriberId,
+                                         AggregateType aggregateType,
+                                         GapReconciliation gapReconciliation) {
+        delegate.gapReconciliationOutcome(subscriberId, aggregateType, gapReconciliation);
+        if (gapReconciliation == null || gapReconciliation.isEmpty()) {
+            return;
+        }
+        record(subscriberId, aggregateType,
+               statistics -> statistics.recordGapReconciliation(gapReconciliation.newTransientGaps(),
+                                                                gapReconciliation.resolvedTransientGaps(),
+                                                                gapReconciliation.promotedToPermanentGaps()));
+    }
+
+    @Override
     public void publishEvent(SubscriberId subscriberId,
                              AggregateType aggregateType,
                              PersistedEvent persistedEvent,
@@ -248,6 +263,32 @@ public class StatisticsCollectingEventStoreSubscriptionObserver implements Event
                                   EventStoreSubscription eventStoreSubscription) {
         delegate.handleEventFailed(event, eventHandler, cause, eventStoreSubscription);
         record(eventStoreSubscription, statistics -> statistics.recordEventHandlingFailed(cause));
+    }
+
+    @Override
+    public void handleEventBatchFailed(List<PersistedEvent> events,
+                                       BatchedPersistedEventHandler eventHandler,
+                                       Throwable cause,
+                                       EventStoreSubscription eventStoreSubscription) {
+        delegate.handleEventBatchFailed(events, eventHandler, cause, eventStoreSubscription);
+        record(eventStoreSubscription, statistics -> statistics.recordEventHandlingFailed(cause));
+    }
+
+    @Override
+    public void subscriptionStoppedByErrorPolicy(GlobalEventOrder stoppedAtGlobalEventOrder,
+                                                 Throwable cause,
+                                                 EventStoreSubscription eventStoreSubscription) {
+        // Forward only: the failure itself was already recorded by handleEventFailed/handleEventBatchFailed
+        delegate.subscriptionStoppedByErrorPolicy(stoppedAtGlobalEventOrder, cause, eventStoreSubscription);
+    }
+
+    @Override
+    public void subscriptionSkippedEventAfterAutoResumes(GlobalEventOrder skippedGlobalEventOrder,
+                                                         int autoResumes,
+                                                         Throwable cause,
+                                                         EventStoreSubscription eventStoreSubscription) {
+        // Forward only: the failure itself was already recorded by handleEventFailed/handleEventBatchFailed
+        delegate.subscriptionSkippedEventAfterAutoResumes(skippedGlobalEventOrder, autoResumes, cause, eventStoreSubscription);
     }
 
     @Override

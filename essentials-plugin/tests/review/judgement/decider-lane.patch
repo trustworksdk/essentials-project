@@ -1,0 +1,437 @@
+diff --git a/orders/events/OrderExpedited.kt b/orders/events/OrderExpedited.kt
+new file mode 100644
+index 0000000..fa2b657
+--- /dev/null
++++ b/orders/events/OrderExpedited.kt
+@@ -0,0 +1,11 @@
++package {{packagePath}}.orders.events
++
++import {{packagePath}}.orders.types.OrderId
++import com.fasterxml.jackson.annotation.JsonTypeName
++
++/** Emitted by the expedite_order slice. One variant, one file (rules/slice-design.md §R3). */
++@JsonTypeName("OrderExpedited")
++data class OrderExpedited(
++    override val id: OrderId,
++    val reason: String
++) : OrderEvent
+diff --git a/orders/external_systems/warehouse/WarehouseHttpClient.kt b/orders/external_systems/warehouse/WarehouseHttpClient.kt
+new file mode 100644
+index 0000000..cbdb84b
+--- /dev/null
++++ b/orders/external_systems/warehouse/WarehouseHttpClient.kt
+@@ -0,0 +1,31 @@
++package {{packagePath}}.orders.external_systems.warehouse
++
++import tools.jackson.module.kotlin.jacksonObjectMapper
++import org.springframework.beans.factory.annotation.Value
++import org.springframework.stereotype.Component
++import java.net.URI
++import java.net.http.HttpClient
++import java.net.http.HttpRequest
++import java.net.http.HttpResponse
++
++/**
++ * HTTP transport for [WarehouseClient]. The body is the warehouse's own JSON contract
++ * ([WarehouseReservationRequest]), written with a plain mapper; nothing here is stored.
++ */
++@Component
++class WarehouseHttpClient(
++    @Value("\${warehouse.base-url}") private val baseUrl: String
++) : WarehouseClient {
++
++    private val http = HttpClient.newHttpClient()
++    private val json = jacksonObjectMapper()
++
++    override fun reserve(request: WarehouseReservationRequest) {
++        val call = HttpRequest.newBuilder(URI.create("$baseUrl/reservations"))
++            .header("Content-Type", "application/json")
++            .POST(HttpRequest.BodyPublishers.ofString(json.writeValueAsString(request)))
++            .build()
++        val response = http.send(call, HttpResponse.BodyHandlers.discarding())
++        check(response.statusCode() in 200..299) { "warehouse answered ${response.statusCode()}" }
++    }
++}
+diff --git a/orders/use_cases/cancel_order/OrderStateEvolver.kt b/orders/use_cases/cancel_order/OrderStateEvolver.kt
+index 530c19a..6d07cbe 100644
+--- a/orders/use_cases/cancel_order/OrderStateEvolver.kt
++++ b/orders/use_cases/cancel_order/OrderStateEvolver.kt
+@@ -3,6 +3,7 @@ package {{packagePath}}.orders.use_cases.cancel_order
+ import {{packagePath}}.orders.events.OrderEvent
+ import {{packagePath}}.orders.events.OrderPlaced
+ import {{packagePath}}.orders.events.OrderCancelled
++import {{packagePath}}.orders.events.OrderExpedited
+ import {{packagePath}}.orders.types.OrderStatus
+ import dk.trustworks.essentials.components.kotlin.eventsourcing.Evolver
+ 
+@@ -16,5 +17,6 @@ class OrderStateEvolver : Evolver<OrderEvent, OrderState> {
+         when (event) {
+             is OrderPlaced    -> OrderState(event.id, OrderStatus.PLACED)
+             is OrderCancelled -> state?.copy(status = OrderStatus.CANCELLED)
++            is OrderExpedited -> state
+         }
+ }
+diff --git a/orders/use_cases/expedite_order/CLAUDE.md b/orders/use_cases/expedite_order/CLAUDE.md
+new file mode 100644
+index 0000000..6db166f
+--- /dev/null
++++ b/orders/use_cases/expedite_order/CLAUDE.md
+@@ -0,0 +1,18 @@
++# Slice: orders.expedite_order
++
++**Kind:** command
++**Status:** live
++**Owner:** orders-team
++**Purpose:** Expedite a placed order so the warehouse picks it first.
++
++## Invariants
++- Only a PLACED order can be expedited (enforced by `ExpediteOrderDecider`).
++- Expediting an already-expedited order is a no-op (idempotent).
++
++## Boundaries
++**Reacts to / reads:** `ExpediteOrder` command (via `/api/orders/{orderId}/expedite`); Order stream
++**Publishes:** `OrderExpedited` (owned by this slice)
++
++## Data
++**Owns (writes):** Order stream (`OrderExpedited`)
++**Reads:** Order stream
+diff --git a/orders/use_cases/expedite_order/ExpediteOrder.kt b/orders/use_cases/expedite_order/ExpediteOrder.kt
+new file mode 100644
+index 0000000..1c27a8b
+--- /dev/null
++++ b/orders/use_cases/expedite_order/ExpediteOrder.kt
+@@ -0,0 +1,10 @@
++package {{packagePath}}.orders.use_cases.expedite_order
++
++import {{packagePath}}.orders.routing.OrderCommand
++import {{packagePath}}.orders.types.OrderId
++
++/** Concrete command for the expedite_order slice. */
++data class ExpediteOrder(
++    override val id: OrderId,
++    val reason: String
++) : OrderCommand
+diff --git a/orders/use_cases/expedite_order/ExpediteOrderAPI.kt b/orders/use_cases/expedite_order/ExpediteOrderAPI.kt
+new file mode 100644
+index 0000000..94a8f70
+--- /dev/null
++++ b/orders/use_cases/expedite_order/ExpediteOrderAPI.kt
+@@ -0,0 +1,25 @@
++package {{packagePath}}.orders.use_cases.expedite_order
++
++import {{packagePath}}.orders.types.OrderId
++import dk.trustworks.essentials.reactive.command.CommandBus
++import org.springframework.http.HttpStatus
++import org.springframework.web.bind.annotation.PathVariable
++import org.springframework.web.bind.annotation.PostMapping
++import org.springframework.web.bind.annotation.RequestBody
++import org.springframework.web.bind.annotation.RequestMapping
++import org.springframework.web.bind.annotation.ResponseStatus
++import org.springframework.web.bind.annotation.RestController
++
++/** Single-method endpoint for the expedite_order slice. */
++@RestController
++@RequestMapping("/api/orders")
++class ExpediteOrderAPI(private val commandBus: CommandBus) {
++
++    data class ExpediteOrderRequest(val reason: String)
++
++    @PostMapping("/{orderId}/expedite")
++    @ResponseStatus(HttpStatus.ACCEPTED)
++    fun expediteOrder(@PathVariable orderId: OrderId, @RequestBody body: ExpediteOrderRequest) {
++        commandBus.send<Any?, ExpediteOrder>(ExpediteOrder(orderId, body.reason))
++    }
++}
+diff --git a/orders/use_cases/expedite_order/ExpediteOrderDecider.kt b/orders/use_cases/expedite_order/ExpediteOrderDecider.kt
+new file mode 100644
+index 0000000..b8a2421
+--- /dev/null
++++ b/orders/use_cases/expedite_order/ExpediteOrderDecider.kt
+@@ -0,0 +1,24 @@
++package {{packagePath}}.orders.use_cases.expedite_order
++
++import {{packagePath}}.orders.events.OrderEvent
++import {{packagePath}}.orders.events.OrderExpedited
++import {{packagePath}}.orders.types.OrderStatus
++import {{packagePath}}.orders.use_cases.cancel_order.OrderState
++import {{packagePath}}.orders.use_cases.cancel_order.OrderStateEvolver
++import dk.trustworks.essentials.components.kotlin.eventsourcing.Decider
++import dk.trustworks.essentials.components.kotlin.eventsourcing.Evolver
++
++/** Expedites a placed order: it jumps the warehouse queue. Only a PLACED order can be expedited. */
++class ExpediteOrderDecider : Decider<ExpediteOrder, OrderEvent> {
++    private val evolver = OrderStateEvolver()
++
++    override fun handle(cmd: ExpediteOrder, events: List<OrderEvent>): OrderEvent? {
++        val state: OrderState? = Evolver.applyEvents(evolver, null, events)
++        requireNotNull(state) { "Order does not exist" }
++        if (events.any { it is OrderExpedited }) return null           // idempotent
++        require(state.status == OrderStatus.PLACED) { "Cannot expedite order in ${state.status}" }
++        return OrderExpedited(cmd.id, cmd.reason)
++    }
++
++    override fun canHandle(cmd: Any): Boolean = cmd is ExpediteOrder
++}
+diff --git a/orders/use_cases/expedite_order/slice.yaml b/orders/use_cases/expedite_order/slice.yaml
+new file mode 100644
+index 0000000..a39e96c
+--- /dev/null
++++ b/orders/use_cases/expedite_order/slice.yaml
+@@ -0,0 +1,31 @@
++schemaVersion: "1.3"
++slice: orders.expedite_order
++kind: command
++bc: orders
++owner: orders-team
++status: live
++summary: Expedite a placed order so the warehouse picks it first.
++generator: essentials
++language: kotlin
++tier: cqrs-es
++lane: decider
++
++handles: [ExpediteOrder]
++publishes: [OrderExpedited]
++endpoints:
++  - { method: POST, path: "/api/orders/{orderId}/expedite", auth: user }
++
++writes: [Order]
++reads:
++  - { name: Order }
++
++invariants:
++  - { id: INV-EO-1, text: "Only a PLACED order can be expedited", enforcedBy: ExpediteOrderDecider }
++
++forbidden:
++  - cross-slice-internal:orders
++
++tests:
++  unit: { present: false }
++  integration: { present: false }
++  contract: { present: false }
+diff --git a/orders/views/expedited_orders/CLAUDE.md b/orders/views/expedited_orders/CLAUDE.md
+new file mode 100644
+index 0000000..1cd0480
+--- /dev/null
++++ b/orders/views/expedited_orders/CLAUDE.md
+@@ -0,0 +1,14 @@
++# Slice: orders.expedited_orders
++
++**Kind:** view
++**Status:** live
++**Owner:** orders-team
++**Purpose:** The board of expedited orders, for the warehouse supervisor.
++
++## Boundaries
++**Reacts to / reads:** `OrderExpedited` (the BC's public events in `orders/events/`)
++**Serves:** `GET /api/orders/expedited`, `GET /api/orders/expedited/{orderId}`
++
++## Data
++**Owns (writes):** `ExpeditedOrderRow` read model (PostgreSQL DocumentDB, `orders_expedited_orders`)
++**Reads:** Order event stream, through `ExpeditedOrdersProjection` (a `ViewEventProcessor`)
+diff --git a/orders/views/expedited_orders/ExpeditedOrderRow.kt b/orders/views/expedited_orders/ExpeditedOrderRow.kt
+new file mode 100644
+index 0000000..71fdbcd
+--- /dev/null
++++ b/orders/views/expedited_orders/ExpeditedOrderRow.kt
+@@ -0,0 +1,18 @@
++package {{packagePath}}.orders.views.expedited_orders
++
++import {{packagePath}}.orders.types.OrderId
++import dk.trustworks.essentials.components.document_db.Version
++import dk.trustworks.essentials.components.document_db.VersionedEntity
++import dk.trustworks.essentials.components.document_db.annotations.DocumentEntity
++import dk.trustworks.essentials.components.document_db.annotations.Id
++import java.time.OffsetDateTime
++import java.time.ZoneOffset.UTC
++
++/** Read model row for the expedited-orders board. Owned by this view slice. */
++@DocumentEntity("orders_expedited_orders")
++data class ExpeditedOrderRow(
++    @Id val orderId: OrderId,
++    val reason: String,
++    override var version: Version = Version.NOT_SAVED_YET,
++    override var lastUpdated: OffsetDateTime = OffsetDateTime.now(UTC)
++) : VersionedEntity<OrderId, ExpeditedOrderRow>
+diff --git a/orders/views/expedited_orders/ExpeditedOrdersAPI.kt b/orders/views/expedited_orders/ExpeditedOrdersAPI.kt
+new file mode 100644
+index 0000000..6b61bdb
+--- /dev/null
++++ b/orders/views/expedited_orders/ExpeditedOrdersAPI.kt
+@@ -0,0 +1,19 @@
++package {{packagePath}}.orders.views.expedited_orders
++
++import {{packagePath}}.orders.types.OrderId
++import org.springframework.web.bind.annotation.GetMapping
++import org.springframework.web.bind.annotation.PathVariable
++import org.springframework.web.bind.annotation.RequestMapping
++import org.springframework.web.bind.annotation.RestController
++
++/** Read API for THIS view slice only; both queries read its own read model. */
++@RestController
++@RequestMapping("/api/orders/expedited")
++class ExpeditedOrdersAPI(private val repository: ExpeditedOrdersRepository) {
++
++    @GetMapping
++    fun list(): List<ExpeditedOrderRow> = repository.findAll().sortedBy { it.orderId.value }
++
++    @GetMapping("/{orderId}")
++    fun get(@PathVariable orderId: OrderId): ExpeditedOrderRow? = repository.findById(orderId)
++}
+diff --git a/orders/views/expedited_orders/ExpeditedOrdersProjection.kt b/orders/views/expedited_orders/ExpeditedOrdersProjection.kt
+new file mode 100644
+index 0000000..df44056
+--- /dev/null
++++ b/orders/views/expedited_orders/ExpeditedOrdersProjection.kt
+@@ -0,0 +1,40 @@
++package {{packagePath}}.orders.views.expedited_orders
++
++import {{packagePath}}.orders.events.OrderExpedited
++import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.AggregateType
++import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.processor.ViewEventProcessor
++import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.processor.ViewEventProcessorDependencies
++import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.types.GlobalEventOrder
++import dk.trustworks.essentials.components.foundation.messaging.MessageHandler
++import org.springframework.stereotype.Service
++
++/**
++ * VIEW slice — the board of expedited orders the warehouse supervisor watches.
++ *
++ * The processor dispatches each event to the `@MessageHandler` whose parameter type matches it;
++ * a `@MessageHandler` may also take the message itself as a second parameter when it needs the
++ * event's order. This board only ever inserts, so it does not.
++ */
++@Service
++class ExpeditedOrdersProjection(
++    dependencies: ViewEventProcessorDependencies,
++    private val repository: ExpeditedOrdersRepository
++) : ViewEventProcessor(dependencies) {
++
++    override fun getProcessorName(): String = "ExpeditedOrdersProjection"
++
++    override fun reactsToEventsRelatedToAggregateTypes(): List<AggregateType> =
++        listOf(AggregateType.of("Orders"))
++
++    @MessageHandler
++    fun on(event: OrderExpedited) {
++        repository.save(ExpeditedOrderRow(event.id, event.reason))
++    }
++
++    override fun onSubscriptionsReset(
++        aggregateType: AggregateType,
++        resubscribeFromAndIncluding: GlobalEventOrder
++    ) {
++        repository.deleteAll()
++    }
++}
+diff --git a/orders/views/expedited_orders/ExpeditedOrdersRepository.kt b/orders/views/expedited_orders/ExpeditedOrdersRepository.kt
+new file mode 100644
+index 0000000..2b201fc
+--- /dev/null
++++ b/orders/views/expedited_orders/ExpeditedOrdersRepository.kt
+@@ -0,0 +1,11 @@
++package {{packagePath}}.orders.views.expedited_orders
++
++import {{packagePath}}.orders.types.OrderId
++import dk.trustworks.essentials.components.document_db.DelegatingDocumentDbRepository
++import dk.trustworks.essentials.components.document_db.DocumentDbRepositoryFactory
++import org.springframework.stereotype.Repository
++
++/** Repository for THIS view slice's read model. */
++@Repository
++class ExpeditedOrdersRepository(factory: DocumentDbRepositoryFactory) :
++    DelegatingDocumentDbRepository<ExpeditedOrderRow, OrderId>(factory.create(ExpeditedOrderRow::class))
+diff --git a/orders/views/expedited_orders/slice.yaml b/orders/views/expedited_orders/slice.yaml
+new file mode 100644
+index 0000000..993b91a
+--- /dev/null
++++ b/orders/views/expedited_orders/slice.yaml
+@@ -0,0 +1,33 @@
++schemaVersion: "1.3"
++slice: orders.expedited_orders
++kind: view
++bc: orders
++owner: orders-team
++status: live
++summary: The board of expedited orders, for the warehouse supervisor.
++generator: essentials
++language: kotlin
++tier: cqrs-es
++lane: decider
++
++serves: [ListExpeditedOrders, GetExpeditedOrder]
++endpoints:
++  - { method: GET, path: "/api/orders/expedited", auth: user }
++  - { method: GET, path: "/api/orders/expedited/{orderId}", auth: user }
++
++reads:
++  - { name: ExpeditedOrderRow }
++projections:
++  - name: ExpeditedOrdersProjection
++    aggregateTypes: [Orders]
++    from: [OrderExpedited]
++    consistency: eventual
++    store: document-db
++
++forbidden:
++  - cross-slice-internal:orders
++
++tests:
++  unit: { present: false }
++  integration: { present: false }
++  contract: { present: false }
+diff --git a/orders/views/order_list/OrderListProjection.kt b/orders/views/order_list/OrderListProjection.kt
+index dee9549..3313d82 100644
+--- a/orders/views/order_list/OrderListProjection.kt
++++ b/orders/views/order_list/OrderListProjection.kt
+@@ -1,6 +1,7 @@
+ package {{packagePath}}.orders.views.order_list
+ 
+ import {{packagePath}}.orders.events.OrderCancelled
++import {{packagePath}}.orders.events.OrderExpedited
+ import {{packagePath}}.orders.events.OrderPlaced
+ import {{packagePath}}.orders.types.OrderStatus
+ import dk.trustworks.essentials.components.document_db.Version
+@@ -49,6 +50,14 @@ class OrderListProjection(
+         repository.update(row, Version(message.order))
+     }
+ 
++    @MessageHandler
++    fun on(event: OrderExpedited, message: OrderedMessage) {
++        val row = repository.findById(event.id) ?: return
++        if (row.version.value >= message.order) return         // replay — already applied
++        row.expedited = true
++        repository.update(row, Version(message.order))
++    }
++
+     /** Called once per subscribed aggregate type; this view subscribes to one, so wipe it all. */
+     override fun onSubscriptionsReset(
+         aggregateType: AggregateType,
+diff --git a/orders/views/order_list/OrderListView.kt b/orders/views/order_list/OrderListView.kt
+index 10fb9f3..9f5f380 100644
+--- a/orders/views/order_list/OrderListView.kt
++++ b/orders/views/order_list/OrderListView.kt
+@@ -25,6 +25,7 @@ data class OrderListView(
+     val quantity: Int,
+     @Indexed var status: OrderStatus,
+     var cancelReason: String? = null,
++    var expedited: Boolean = false,
+     override var version: Version = Version.NOT_SAVED_YET,
+     override var lastUpdated: OffsetDateTime = OffsetDateTime.now(UTC)
+ ) : VersionedEntity<OrderId, OrderListView>
+diff --git a/src/main/resources/application.yml b/src/main/resources/application.yml
+new file mode 100644
+index 0000000..7647a83
+--- /dev/null
++++ b/src/main/resources/application.yml
+@@ -0,0 +1,10 @@
++spring:
++  application:
++    name: shop
++
++essentials:
++  fenced-lock-manager:
++    lock-time-out: 6s
++    lock-confirmation-interval: 4s
++  durable-queues:
++    transactional-mode: fully-transactional

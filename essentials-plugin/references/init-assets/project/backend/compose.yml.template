@@ -1,0 +1,31 @@
+# Development database, started and stopped by Spring Boot's Docker Compose support on spring-boot:run.
+# Tests do not use it (Spring Boot skips Docker Compose in tests): they start their own Testcontainers database.
+name: '{{artifactId}}'   # the project name; without it every generated project shares the directory name `backend`
+
+services:
+<!-- IF db!=mongo -->
+  postgres:
+    image: '{{pin:PostgreSQL image}}'
+    environment:
+      POSTGRES_DB: '{{artifactId}}'
+      POSTGRES_USER: '{{artifactId}}'
+      POSTGRES_PASSWORD: '{{artifactId}}'
+    ports:
+      - '5432'
+<!-- END db -->
+<!-- IF db=mongo -->
+  mongodb:
+    image: '{{pin:MongoDB image}}'
+    # Essentials' Mongo transactions need a replica set; a standalone mongod fails the first unit of work.
+    command: ['--replSet', 'rs0', '--bind_ip_all']
+    environment:
+      MONGO_INITDB_DATABASE: '{{artifactId}}'
+    ports:
+      - '27017'
+    healthcheck:
+      # Initiates the single-node replica set on first start; healthy once it has a primary.
+      test: ['CMD', 'mongosh', '--quiet', '--eval', "try { rs.status().ok } catch (e) { rs.initiate({ _id: 'rs0', members: [{ _id: 0, host: 'localhost:27017' }] }).ok }"]
+      interval: 2s
+      timeout: 10s
+      retries: 30
+<!-- END db -->

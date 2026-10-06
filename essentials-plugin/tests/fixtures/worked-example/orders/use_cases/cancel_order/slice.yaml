@@ -1,0 +1,32 @@
+schemaVersion: "1.2"
+slice: orders.cancel_order
+kind: command
+bc: orders
+owner: orders-team
+status: live
+summary: Cancel a previously placed order.
+generator: essentials
+language: kotlin
+tier: cqrs-es
+lane: decider
+
+handles: [CancelOrder]
+publishes: [OrderCancelled]
+endpoints:
+  - { method: POST, path: "/api/orders/{orderId}/cancel", auth: user }
+
+writes: [Order]
+reads:
+  - { name: Order }            # folded by this slice's own OrderStateEvolver
+
+invariants:
+  - { id: INV-CO-1, text: "Only a PLACED order can be cancelled", enforcedBy: CancelOrderDecider }
+
+forbidden:
+  - cross-slice-internal:orders
+  - direct-decider:place_order
+
+tests:
+  unit: { present: true }
+  integration: { present: false }
+  contract: { present: false }

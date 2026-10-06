@@ -38,10 +38,15 @@
 
     <properties>
         <!-- Demo module: it builds and tests with the rest of the reactor, but it is not a published artifact.
-             `mvn deploy -P release` runs over the whole reactor, so the exclusion has to live here. This module
-             parents straight off the root POM rather than the examples aggregator, so it does not inherit the
-             aggregator's copy of this property. -->
+             maven.deploy.skip only stops a plain `mvn deploy`. The release profile's central-publishing-maven-plugin
+             never reads it; it reads skipPublishing, set here so the module carries its own exclusion. The release
+             is also kept clear of this module by that plugin's excludeArtifacts in the root POM and by the release
+             workflow's -pl. scripts/check-release-exclusions.py fails CI unless all three hold. This module parents
+             straight off the root POM rather than the examples aggregator, so it does not inherit the aggregator's
+             copy of these properties. -->
         <maven.deploy.skip>true</maven.deploy.skip>
+        <skipPublishing>true</skipPublishing>
+        <loki-logback-appender.version>2.1.0</loki-logback-appender.version>
     </properties>
 
     <dependencies>
@@ -50,6 +55,22 @@
             <artifactId>spring-boot-starter-postgresql-event-store</artifactId>
             <version>${project.version}</version>
         </dependency>
+        <!--
+            The shard-owned queue engine. Experimental and unpublished, which is exactly why the demo
+            carries it: this app is where the engine gets exercised against a real workload — two
+            lanes, sustained traffic and spikes — rather than only against its own tests.
+        -->
+        <dependency>
+            <groupId>dk.trustworks.essentials.components</groupId>
+            <artifactId>spring-boot-starter-postgresql-queue-shard-owned</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+        <!--
+            The DurableQueues adapter over that engine. This is what lets the demo run its REAL work
+            on it: an EventProcessor forwards every event through an Inbox, so putting the Inbox on
+            this engine puts the projections on it — handlers that write SQL, not handlers that
+            sleep.
+        -->
         <dependency>
             <groupId>dk.trustworks.essentials.components</groupId>
             <artifactId>eventsourced-aggregates</artifactId>
@@ -82,7 +103,7 @@
         </dependency>
         <dependency>
             <groupId>dk.trustworks.essentials</groupId>
-            <artifactId>${essentials.types-jackson.artifactId}</artifactId>
+            <artifactId>types-jackson3</artifactId>
             <version>${project.version}</version>
         </dependency>
         <dependency>
@@ -92,7 +113,7 @@
         </dependency>
         <dependency>
             <groupId>dk.trustworks.essentials</groupId>
-            <artifactId>${essentials.immutable-jackson.artifactId}</artifactId>
+            <artifactId>immutable-jackson3</artifactId>
             <version>${project.version}</version>
         </dependency>
         <dependency>
@@ -109,6 +130,29 @@
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-actuator</artifactId>
             <version>${spring-boot.version}</version>
+        </dependency>
+        <!--
+          The `observability` profile's metrics and traces, exported over OTLP to the collector in
+          compose.yml. One starter in Spring Boot 4: the OTLP meter registry, the Micrometer/OpenTelemetry
+          tracing bridge and the exporter. Export is off unless that profile is active - see application.yml.
+        -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-opentelemetry</artifactId>
+            <version>${spring-boot.version}</version>
+        </dependency>
+        <!-- Pushes logs to Loki; only attached by logback-spring.xml under the `observability` profile. -->
+        <dependency>
+            <groupId>com.github.loki4j</groupId>
+            <artifactId>loki-logback-appender</artifactId>
+            <version>${loki-logback-appender.version}</version>
+            <scope>runtime</scope>
+            <exclusions>
+                <exclusion>
+                    <groupId>ch.qos.logback</groupId>
+                    <artifactId>logback-classic</artifactId>
+                </exclusion>
+            </exclusions>
         </dependency>
         <dependency>
             <groupId>org.springframework.boot</groupId>
@@ -157,18 +201,6 @@
         <dependency>
             <groupId>io.projectreactor</groupId>
             <artifactId>reactor-core</artifactId>
-        </dependency>
-        <dependency>
-            <groupId>com.fasterxml.jackson.core</groupId>
-            <artifactId>jackson-databind</artifactId>
-        </dependency>
-        <dependency>
-            <groupId>com.fasterxml.jackson.datatype</groupId>
-            <artifactId>jackson-datatype-jdk8</artifactId>
-        </dependency>
-        <dependency>
-            <groupId>com.fasterxml.jackson.datatype</groupId>
-            <artifactId>jackson-datatype-jsr310</artifactId>
         </dependency>
         <dependency>
             <groupId>org.springframework.boot</groupId>

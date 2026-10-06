@@ -2,7 +2,7 @@
 
 Jackson 3.x serialization/deserialization support for Essentials `SingleValueType` hierarchy. Maven: `types-jackson3`.
 
-Parallel sibling of `types-jackson` (Jackson 2.x). Same source, same package names — compiled against `tools.jackson.core:jackson-databind:3.x` (groupId `tools.jackson.core`) instead of `com.fasterxml.jackson.core`.
+Sole Jackson integration for types since 0.60 (Jackson 2 `types-jackson` deleted). Compiled against `tools.jackson.core:jackson-databind:3.x`. Package names/FQCNs identical to 0.50's `types-jackson`, so consumers only swap artifactId.
 
 ## Package Structure
 
@@ -28,7 +28,7 @@ Parallel sibling of `types-jackson` (Jackson 2.x). Same source, same package nam
 
 `SingleValueTypeCreatorModeTest` — value type still reads a bare scalar under `ALLOW_FINAL_FIELDS_AS_MUTATORS` and under `USE_PROPERTIES_BASED`. Both settings otherwise make Jackson 3 treat a value type as a bean expecting `{"value":"…"}`, silently changing persisted format of every id.
 
-`WireFormatCompatibilityTest` — golden file shared with `types-jackson`; proves both majors write the same bytes.
+`WireFormatCompatibilityTest` — golden file `src/test/resources/wire-format/serialization-test-subject.json`, written by 0.50's Jackson 2 module; proves Jackson 3 writes the same bytes. Never regenerate it — Jackson 2 writer gone; a diff is a format break.
 
 `EssentialTypesJacksonModuleTest`. One round-trip test covering all supported types:
 - `CharSequenceType` subtypes (ids, codes, email, currency, country)
@@ -48,12 +48,12 @@ No SPIs. Module is `final`. To support new types:
 
 ## Gotchas
 
-- **Mirror every change into `types-jackson`.** The two modules are hand-kept parallel sources, not generated — same FQCNs, different Jackson major.
-- **Jackson 3 groupId is `tools.jackson.core`** (not `com.fasterxml.jackson.core`) — wrong import resolves against Jackson 2 at test time; both are on classpath (annotations jar is still `com.fasterxml`).
+- **FQCNs shared with 0.50's Jackson 2 `types-jackson`** — a stale 0.50 jar on consumer classpath collides by name; `EssentialsJacksonModules.modules()` detects it and throws `IllegalStateException`.
+- **Jackson 3 groupId is `tools.jackson.core`** (not `com.fasterxml.jackson.core`) — a `com.fasterxml.jackson.databind` import won't resolve; root enforcer `ban-jackson-2` keeps Jackson 2 databind off the classpath (annotations jar is still `com.fasterxml`).
 - **`jackson-annotations` stays `com.fasterxml`** — Jackson 3 still ships annotations under `com.fasterxml.jackson.annotation`; only databind/core moved to `tools.jackson`.
 - **`createObjectMapper()` disables getter/setter detection** — serialization is field-based. Adding a getter to a domain class does NOT expose it as a JSON property; must be a field.
 - **`Money` deserialization hard-codes field names** `"amount"` and `"currency"` — any rename of `Money` fields breaks deserialization silently.
-- **Map keys need no annotation here** — `SingleValueTypeKeyDeserializers` converts a text key back into any `SingleValueType` (char-sequence, numeric, boolean families), so `Map<ProductId, Integer>` round-trips as-is. This differs from `types-jackson`, which still needs `@JsonDeserialize(keyUsing=…)` per property. **The upgrade hazard it removes:** that annotation lives in Jackson 2's `com.fasterxml.jackson.databind.annotation` package, which Jackson 3 does not read, so it silently stops applying and persisted data becomes unreadable with only "Cannot find a (Map) Key deserializer" to go on. It surfaced as aggregate snapshots failing to deserialize. Pinned by `SingleValueTypeMapKeyTest`. An explicit `keyUsing` still wins.
+- **Map keys need no annotation here** — `SingleValueTypeKeyDeserializers` converts a text key back into any `SingleValueType` (char-sequence, numeric, boolean families), so `Map<ProductId, Integer>` round-trips as-is. 0.50's Jackson 2 `types-jackson` needed `@JsonDeserialize(keyUsing=…)` per property. **The upgrade hazard it removes:** that annotation lives in Jackson 2's `com.fasterxml.jackson.databind.annotation` package, which Jackson 3 does not read, so it silently stops applying and persisted data becomes unreadable with only "Cannot find a (Map) Key deserializer" to go on. It surfaced as aggregate snapshots failing to deserialize. Pinned by `SingleValueTypeMapKeyTest`. An explicit `keyUsing` still wins.
 - **JPMS Automatic-Module-Name** → `dk.trustworks.essentials.types.jackson3`
 - **`SingleValueTypeCreatorIntrospector` is load-bearing — never remove it.** `EssentialsObjectMappers.createJackson3ObjectMapper` enables `ALLOW_FINAL_FIELDS_AS_MUTATORS` (Jackson 2's default, needed to populate immutable payloads). That makes a value type's wrapped `value` field a mutator, so without this pin Jackson reinterprets every value type as a bean reading `{"value":"…"}` instead of the bare scalar — silent on write, fatal when reading back existing data. `USE_PROPERTIES_BASED` breaks it identically. Both cases are pinned by `SingleValueTypeCreatorModeTest`.
 - **`NumberType` deserialization is registered via the `Deserializers` SPI, not `addDeserializer`.** Serializer lookup walks supertypes, so `addSerializer(NumberType.class, …)` covers every subclass; deserializer lookup is an exact-type match, so the same trick does not work and `NumberTypeJsonDeserializers` must resolve per concrete class. Without it, subclasses fall back to Jackson's creator detection, which picks a creator by JSON token type and will not widen an integral token to `BigDecimal` — a `BigDecimalType` with only the natural `(BigDecimal)` constructor serialized fine and failed on replay. The deserializer also owns the coercion rules: a fraction is **refused** by the integral bases rather than silently truncated, and quoted numbers stay readable. Pinned by `NumberTypeCreatorRequirementTest`.

@@ -1,0 +1,55 @@
+# review-scan signature fixture: ESS-110 / ESS-104 / ESS-056 / ESS-058 event-store call shapes
+# enableNotifyTriggerInstallation calls and Optional-taking AppendToStream are confirmed; order-less appendToStream and
+# direct async subscriptions are candidates in main code only. Declarations, comments and test code do not fire.
+# expect: backend/src/main/java/com/example/shop/EventStoreWiring.java:8 ess-110-notify-trigger-installation confirmed Should-fix manual
+# expect-not: backend/src/main/java/com/example/shop/EventStoreWiring.java:9 ess-110-notify-trigger-installation
+# expect-not: backend/src/main/java/com/example/shop/EventStoreWiring.java:12 ess-110-notify-trigger-installation
+# expect: backend/src/main/java/com/example/shop/EventStoreWiring.java:16 ess-104-append-to-stream-optional confirmed Blocking manual
+# expect-not: backend/src/main/java/com/example/shop/EventStoreWiring.java:17 ess-104-append-to-stream-optional
+# expect: backend/src/main/java/com/example/shop/EventStoreWiring.java:18 ess-056-append-without-order candidate Should-fix manual
+# expect-not: backend/src/main/java/com/example/shop/EventStoreWiring.java:19 ess-056-append-without-order
+# expect-not: backend/src/main/java/com/example/shop/EventStoreWiring.java:20 ess-056-append-without-order
+# expect: backend/src/main/java/com/example/shop/EventStoreWiring.java:21 ess-058-async-subscription candidate Advisory manual
+# expect-not: backend/src/test/java/com/example/shop/EventStoreIT.java:5 ess-056-append-without-order
+# expect-not: backend/src/test/java/com/example/shop/EventStoreIT.java:6 ess-058-async-subscription
+diff --git a/backend/src/main/java/com/example/shop/EventStoreWiring.java b/backend/src/main/java/com/example/shop/EventStoreWiring.java
+new file mode 100644
+--- /dev/null
++++ b/backend/src/main/java/com/example/shop/EventStoreWiring.java
+@@ -0,0 +1,23 @@
++package com.example.shop;
++
++import java.util.List;
++import java.util.Optional;
++
++class EventStoreWiring {
++    void wire(SeparateTablePerAggregateTypePersistenceStrategy strategy, NotifyTriggerInstaller installer) {
++        strategy.enableNotifyTriggerInstallation(installer);
++        strategy.enableNotifyTriggers(listener::listenTo);
++    }
++
++    public final void enableNotifyTriggerInstallation(NotifyTriggerInstaller installer) {
++    }
++
++    void append(EventStore eventStore, OrderId id, Object event, List<?> events) {
++        eventStore.appendToStream(new AppendToStream<>(ORDERS, id, Optional.empty(), events));
++        eventStore.appendToStream(new AppendToStream<>(ORDERS, id, 5L, events));
++        eventStore.appendToStream(ORDERS, id, event);
++        eventStore.appendToStream(ORDERS, id, EventOrder.of(4), event);
++        /* eventStore.appendToStream(ORDERS, id, event); */
++        eventStore.subscribeToAggregateEventsAsynchronously(SUBSCRIBER, ORDERS, GlobalEventOrder.FIRST_GLOBAL_EVENT_ORDER, Optional.empty(), handler);
++    }
++}
+diff --git a/backend/src/test/java/com/example/shop/EventStoreIT.java b/backend/src/test/java/com/example/shop/EventStoreIT.java
+new file mode 100644
+--- /dev/null
++++ b/backend/src/test/java/com/example/shop/EventStoreIT.java
+@@ -0,0 +1,8 @@
++package com.example.shop;
++
++class EventStoreIT {
++    void seed() {
++        eventStore.appendToStream(ORDERS, id, event);
++        eventStore.subscribeToAggregateEventsAsynchronously(SUBSCRIBER, ORDERS, FIRST, Optional.empty(), handler);
++    }
++}

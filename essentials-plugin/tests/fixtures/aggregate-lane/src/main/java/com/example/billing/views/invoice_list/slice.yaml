@@ -1,0 +1,31 @@
+schemaVersion: "1.3"
+slice: billing.invoice_list
+kind: view
+bc: billing
+owner: billing-team
+status: live
+summary: List invoices, all of them, the paid ones, or by amount range.
+generator: essentials
+language: java
+tier: cqrs-es
+lane: aggregate
+serves: [InvoiceList, PaidInvoices, InvoicesByAmount, PaidInvoicesByAmount]
+endpoints:
+  - { method: GET, path: "/api/billing/invoices", auth: user }
+  - { method: GET, path: "/api/billing/invoices?paid=true", auth: user }
+  - { method: GET, path: "/api/billing/invoices?minAmount=&maxAmount=", auth: user }
+  - { method: GET, path: "/api/billing/invoices?paid=true&minAmount=", auth: user }
+reads:
+  - { name: InvoiceListView }
+projections:
+  - name: InvoiceListProjection
+    aggregateTypes: [Invoices]
+    from: [InvoiceIssued, InvoicePaid]
+    consistency: eventual
+    store: document-db
+forbidden:
+  - cross-slice-internal:billing
+tests:
+  unit: { present: false }
+  integration: { present: false }
+  contract: { present: false }

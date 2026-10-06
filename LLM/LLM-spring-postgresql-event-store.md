@@ -9,6 +9,7 @@
 - **Key class**: `SpringTransactionAwareEventStoreUnitOfWorkFactory`
 - **Enables**: EventStore operations participate in `@Transactional` boundaries
 - **Status**: WORK-IN-PROGRESS
+- **Gap handling**: not wired here - this module only adds Spring transaction integration. The gap handler bean and its overrides are in the starter: [LLM-spring-boot-starter-modules.md](./LLM-spring-boot-starter-modules.md#gap-handling)
 
 ```xml
 <dependency>
@@ -195,6 +196,11 @@ void registerEventsPersisted(List<PersistedEvent> eventsPersistedInThisUnitOfWor
 // Remove flushed events
 void removeFlushedEventsPersisted(List<PersistedEvent> eventsPersistedToRemoveFromThisUnitOfWork)
 void removeFlushedEventPersisted(PersistedEvent eventPersistedToRemoveFromThisUnitOfWork)
+
+// Total events registered so far, including those removed after Flush publishing - never decreases, so two
+// readings that differ mean events were persisted in between (declared on EventStoreUnitOfWork; its default
+// throws UnsupportedOperationException, to be read as "events persisted")
+long getNumberOfEventsPersisted()
 ```
 
 ### PersistedEventsCommitLifecycleCallback
@@ -349,5 +355,5 @@ Key test classes demonstrating usage patterns:
 |----------|---------|
 | [postgresql-event-store](./LLM-postgresql-event-store.md) | Core EventStore functionality |
 | [foundation](./LLM-foundation.md) | Base Spring transaction integration |
-| [spring-boot-starter-postgresql-event-store](./LLM-spring-boot-starter-modules.md#spring-boot-starter-postgresql-event-store) | Auto-configuration |
+| [spring-boot-starter-postgresql-event-store](./LLM-spring-boot-starter-modules.md#event-store-starter) | Auto-configuration |
 | [README](../components/spring-postgresql-event-store/README.md) | Full developer documentation |

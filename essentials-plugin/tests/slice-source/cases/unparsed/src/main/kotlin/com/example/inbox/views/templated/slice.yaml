@@ -1,0 +1,15 @@
+schemaVersion: "1.3"
+slice: inbox.templated
+kind: view
+bc: inbox
+owner: inbox-team
+status: live
+summary: A view whose route is a template.
+generator: essentials
+language: kotlin
+serves: [Messages]
+endpoints:
+  - { method: GET, path: "/api/inbox/messages", auth: user }
+projections: []
+tests:
+  unit: { present: false }

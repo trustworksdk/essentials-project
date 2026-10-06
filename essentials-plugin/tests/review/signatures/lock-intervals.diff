@@ -1,0 +1,29 @@
+# review-scan signature fixture: ESS-050 lock-confirmation-interval not 2x shorter than lock-time-out
+# Both values in the diff: confirmed. One value against the starter default: candidate. A sound pair: nothing.
+# expect: backend/src/main/resources/application.yml:3 ess-050-lock-confirmation confirmed Should-fix manual
+# expect: backend/src/main/resources/application-prod.properties:1 ess-050-lock-confirmation candidate Blocking
+# expect-not: backend/src/main/resources/application-dev.yml:3 ess-050-lock-confirmation
+diff --git a/backend/src/main/resources/application.yml b/backend/src/main/resources/application.yml
+new file mode 100644
+--- /dev/null
++++ b/backend/src/main/resources/application.yml
+@@ -0,0 +1,4 @@
++essentials:
++  fenced-lock-manager:
++    lock-time-out: 10s
++    lock-confirmation-interval: 8s
+diff --git a/backend/src/main/resources/application-prod.properties b/backend/src/main/resources/application-prod.properties
+new file mode 100644
+--- /dev/null
++++ b/backend/src/main/resources/application-prod.properties
+@@ -0,0 +1 @@
++essentials.fenced-lock-manager.lock-confirmation-interval=20s
+diff --git a/backend/src/main/resources/application-dev.yml b/backend/src/main/resources/application-dev.yml
+new file mode 100644
+--- /dev/null
++++ b/backend/src/main/resources/application-dev.yml
+@@ -0,0 +1,4 @@
++essentials:
++  fenced-lock-manager:
++    lock-time-out: PT30S
++    lock-confirmation-interval: 5000

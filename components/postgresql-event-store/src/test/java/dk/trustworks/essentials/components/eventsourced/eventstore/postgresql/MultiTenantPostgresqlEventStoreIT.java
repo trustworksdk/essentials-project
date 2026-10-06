@@ -17,10 +17,8 @@
 package dk.trustworks.essentials.components.eventsourced.eventstore.postgresql;
 
 import com.fasterxml.jackson.annotation.JsonAutoDetect;
-import com.fasterxml.jackson.databind.*;
-import com.fasterxml.jackson.databind.json.JsonMapper;
-import com.fasterxml.jackson.datatype.jdk8.Jdk8Module;
-import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
+import tools.jackson.databind.*;
+import tools.jackson.databind.json.JsonMapper;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.bus.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.persistence.*;
@@ -38,7 +36,8 @@ import dk.trustworks.essentials.types.LongRange;
 import org.jdbi.v3.core.Jdbi;
 import org.jdbi.v3.postgres.PostgresPlugin;
 import org.junit.jupiter.api.*;
-import org.testcontainers.containers.PostgreSQLContainer;
+import org.slf4j.*;
+import org.testcontainers.postgresql.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.*;
 import org.testcontainers.shaded.org.awaitility.Awaitility;
 
@@ -47,14 +46,14 @@ import java.util.*;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.stream.*;
 
-import static dk.trustworks.essentials.shared.MessageFormatter.msg;
 import static org.assertj.core.api.Assertions.assertThat;
 
 @Testcontainers
 class MultiTenantPostgresqlEventStoreIT {
-    public static final EventMetaData META_DATA = EventMetaData.of("Key1", "Value1", "Key2", "Value2");
-    public static final AggregateType PRODUCTS  = AggregateType.of("Products");
-    public static final AggregateType ORDERS    = AggregateType.of("Orders");
+    private static final Logger        log       = LoggerFactory.getLogger(MultiTenantPostgresqlEventStoreIT.class);
+    public static final  EventMetaData META_DATA = EventMetaData.of("Key1", "Value1", "Key2", "Value2");
+    public static final  AggregateType PRODUCTS  = AggregateType.of("Products");
+    public static final  AggregateType ORDERS    = AggregateType.of("Orders");
 
 
     private Jdbi                                                                    jdbi;
@@ -64,7 +63,7 @@ class MultiTenantPostgresqlEventStoreIT {
     private PostgresqlEventStore<SeparateTablePerAggregateEventStreamConfiguration> eventStore;
 
     @Container
-    private final PostgreSQLContainer<?> postgreSQLContainer = new PostgreSQLContainer<>("postgres:18.4")
+    private final PostgreSQLContainer postgreSQLContainer = new PostgreSQLContainer("postgres:18.4")
             .withDatabaseName("event-store")
             .withUsername("test-user")
             .withPassword("secret-password");
@@ -283,10 +282,10 @@ class MultiTenantPostgresqlEventStoreIT {
         testEvents.forEach((aggregateType, aggregatesAndEvents) -> {
             tenantId = TenantId.of(aggregateType + "-Tenant");
             aggregatesAndEvents.forEach((aggregateId, events) -> {
-                System.out.println(msg("Persisting {} {} events related to aggregate id {}",
-                                       events.size(),
-                                       aggregateType,
-                                       aggregateId));
+                log.debug("Persisting {} {} events related to aggregate id {}",
+                          events.size(),
+                          aggregateType,
+                          aggregateId);
 
                 var aggregateEventStream = eventStore.appendToStream(aggregateType,
                                                                      aggregateId,
@@ -310,7 +309,7 @@ class MultiTenantPostgresqlEventStoreIT {
                                                    .map(List::size)
                                                    .reduce(Integer::sum)
                                                    .get();
-        System.out.println("Total number of Product Events: " + totalNumberOfProductEvents);
+        log.info("Total number of Product Events: {}", totalNumberOfProductEvents);
         assertThat(persistedProductEvents.size()).isEqualTo(totalNumberOfProductEvents);
         // Verify we only have Product related events
         assertThat(persistedProductEvents.stream().filter(persistedEvent -> !persistedEvent.aggregateType().equals(PRODUCTS)).findAny()).isEmpty();
@@ -335,7 +334,7 @@ class MultiTenantPostgresqlEventStoreIT {
                                                  .map(List::size)
                                                  .reduce(Integer::sum)
                                                  .get();
-        System.out.println("Total number of Order Events: " + totalNumberOfOrderEvents);
+        log.info("Total number of Order Events: {}", totalNumberOfOrderEvents);
 
         // Check we can split the number of order events in two
         assertThat(totalNumberOfOrderEvents % 2).isEqualTo(0);
@@ -401,7 +400,7 @@ class MultiTenantPostgresqlEventStoreIT {
                                                       Optional.of(productsSubscriberId),
                                                       Optional.empty())
                                           .subscribe(e -> {
-                                              System.out.println("Received Product event: " + e);
+                                              log.debug("Received Product event: {}", e);
                                               productEventsReceived.add(e);
                                           });
         var orderEventsReceived = new ArrayList<PersistedEvent>();
@@ -414,7 +413,7 @@ class MultiTenantPostgresqlEventStoreIT {
                                                     Optional.of(ordersSubscriberId),
                                                     Optional.empty())
                                         .subscribe(e -> {
-                                            System.out.println("Received Order event: " + e);
+                                            log.debug("Received Order event: {}", e);
                                             orderEventsReceived.add(e);
                                         });
 
@@ -423,10 +422,10 @@ class MultiTenantPostgresqlEventStoreIT {
             tenantId = TenantId.of(aggregateType + "-Tenant");
             aggregatesAndEvents.forEach((aggregateId, events) -> {
                 var unitOfWork = unitOfWorkFactory.getOrCreateNewUnitOfWork();
-                System.out.println(msg("Persisting {} {} events related to aggregate id {}",
-                                       events.size(),
-                                       aggregateType,
-                                       aggregateId));
+                log.debug("Persisting {} {} events related to aggregate id {}",
+                          events.size(),
+                          aggregateType,
+                          aggregateId);
                 var aggregateEventStream = eventStore.appendToStream(aggregateType,
                                                                      aggregateId,
                                                                      events);
@@ -444,7 +443,7 @@ class MultiTenantPostgresqlEventStoreIT {
                                                  .map(List::size)
                                                  .reduce(Integer::sum)
                                                  .get();
-        System.out.println("Total number of Order Events: " + totalNumberOfOrderEvents);
+        log.info("Total number of Order Events: {}", totalNumberOfOrderEvents);
         Awaitility.waitAtMost(Duration.ofSeconds(2))
                   .untilAsserted(() -> assertThat(orderEventsReceived.size()).isEqualTo(totalNumberOfOrderEvents));
         assertThat(orderEventsReceived.stream().filter(persistedEvent -> !persistedEvent.aggregateType().equals(ORDERS)).findAny()).isEmpty();
@@ -474,6 +473,59 @@ class MultiTenantPostgresqlEventStoreIT {
         orderEventsFlux.dispose();
     }
 
+
+    /**
+     * The SQL tenant predicates compare the tenant's serialized form, so the in-memory tenant filter must as well: with a serializer
+     * that normalizes the tenant (here to lower case) the stored tenant {@code acme} is the subscribed tenant {@code Acme}, and the
+     * subscriber must get those events - with their payload - and not another tenant's
+     */
+    @Test
+    void test_pollEvents_for_a_tenant_serializer_whose_serialized_form_differs_from_toString() {
+        eventStore.addAggregateEventStreamConfiguration(SeparateTablePerAggregateEventStreamConfiguration.standardConfiguration(PRODUCTS,
+                                                                                                                                createJSONSerializer(),
+                                                                                                                                AggregateIdSerializer.serializerFor(ProductId.class),
+                                                                                                                                IdentifierColumnType.TEXT,
+                                                                                                                                JSONColumnType.JSON,
+                                                                                                                                new LowerCasingTenantSerializer()));
+        var received = new CopyOnWriteArrayList<PersistedEvent>();
+        var subscription = eventStore.pollEvents(PRODUCTS,
+                                                 GlobalEventOrder.FIRST_GLOBAL_EVENT_ORDER,
+                                                 Optional.of(10),
+                                                 Optional.of(Duration.ofMillis(100)),
+                                                 Optional.of(TenantId.of("Acme")),
+                                                 Optional.of(SubscriberId.of("LowerCasedTenantSub")),
+                                                 Optional.empty())
+                                     .subscribe(received::add);
+
+        var acmeProductId  = ProductId.random();
+        var otherProductId = ProductId.random();
+        tenantId = TenantId.of("Acme");
+        var unitOfWork = unitOfWorkFactory.getOrCreateNewUnitOfWork();
+        eventStore.appendToStream(PRODUCTS, acmeProductId, List.of(new ProductEvent.ProductAdded(acmeProductId)));
+        unitOfWork.commit();
+        tenantId = TenantId.of("Other");
+        unitOfWork = unitOfWorkFactory.getOrCreateNewUnitOfWork();
+        eventStore.appendToStream(PRODUCTS, otherProductId, List.of(new ProductEvent.ProductAdded(otherProductId)));
+        unitOfWork.commit();
+
+        Awaitility.waitAtMost(Duration.ofSeconds(5))
+                  .untilAsserted(() -> assertThat(received).hasSize(1));
+        subscription.dispose();
+        assertThat((Object) received.get(0).aggregateId()).isEqualTo(acmeProductId);
+        assertThat(received.get(0).tenant()).isEqualTo(Optional.of(TenantId.of("acme")));
+        Object payload = received.get(0).event().deserialize();
+        assertThat(payload).usingRecursiveComparison().isEqualTo(new ProductEvent.ProductAdded(acmeProductId));
+    }
+
+    /**
+     * Stores the tenant in lower case, so the serialized form of {@code Acme} is {@code acme}
+     */
+    private static class LowerCasingTenantSerializer extends TenantSerializer.TenantIdSerializer {
+        @Override
+        public String serialize(TenantId tenant) {
+            return tenant == null ? null : tenant.toString().toLowerCase();
+        }
+    }
 
     private Map<AggregateType, Map<?, List<?>>> createTestEvents() {
         var eventsPerAggregateType = new HashMap<AggregateType, Map<?, List<?>>>();
@@ -519,28 +571,7 @@ class MultiTenantPostgresqlEventStoreIT {
     }
 
     private JSONEventSerializer createJSONSerializer() {
-        var objectMapper = JsonMapper.builder()
-                                     .disable(MapperFeature.AUTO_DETECT_GETTERS)
-                                     .disable(MapperFeature.AUTO_DETECT_IS_GETTERS)
-                                     .disable(MapperFeature.AUTO_DETECT_SETTERS)
-                                     .disable(MapperFeature.DEFAULT_VIEW_INCLUSION)
-                                     .disable(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS)
-                                     .disable(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES)
-                                     .disable(SerializationFeature.FAIL_ON_EMPTY_BEANS)
-                                     .enable(MapperFeature.AUTO_DETECT_CREATORS)
-                                     .enable(MapperFeature.AUTO_DETECT_FIELDS)
-                                     .enable(MapperFeature.PROPAGATE_TRANSIENT_MARKER)
-                                     .addModule(new Jdk8Module())
-                                     .addModule(new JavaTimeModule())
-                                     .addModules(dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.TestFasterxmlModules.optionalEssentialsModules())
-                                     .build();
-
-        objectMapper.setVisibility(objectMapper.getSerializationConfig().getDefaultVisibilityChecker()
-                                               .withGetterVisibility(JsonAutoDetect.Visibility.NONE)
-                                               .withSetterVisibility(JsonAutoDetect.Visibility.NONE)
-                                               .withFieldVisibility(JsonAutoDetect.Visibility.ANY)
-                                               .withCreatorVisibility(JsonAutoDetect.Visibility.ANY));
-        return EssentialsJSONEventSerializers.createForActiveJacksonFlavor();
+        return EssentialsJSONEventSerializers.create();
     }
 
     private class TestPersistableEventMapper implements PersistableEventMapper {

@@ -47,6 +47,9 @@ class MutableSubscriptionStatistics {
     private final LongAdder pollsWithoutEvents  = new LongAdder();
     private final LongAdder skippedPolls        = new LongAdder();
     private final LongAdder gapReconciliations  = new LongAdder();
+    private final LongAdder newTransientGaps        = new LongAdder();
+    private final LongAdder resolvedTransientGaps   = new LongAdder();
+    private final LongAdder promotedToPermanentGaps = new LongAdder();
     private final LongAdder lockAcquisitions    = new LongAdder();
     private final LongAdder lockReleases        = new LongAdder();
     private final LongAdder resets              = new LongAdder();
@@ -69,6 +72,8 @@ class MutableSubscriptionStatistics {
     private volatile long    lastLockReleasedAtEpochMillis;
     private volatile long    lastResetAtEpochMillis;
     private volatile long    lastResetToGlobalOrder;
+    private volatile long    lastNewTransientGapAtEpochMillis;
+    private volatile long    lastPromotedToPermanentGapAtEpochMillis;
 
     MutableSubscriptionStatistics(SubscriptionKey key, Clock clock) {
         this.key = key;
@@ -137,6 +142,20 @@ class MutableSubscriptionStatistics {
         gapReconciliations.increment();
     }
 
+    void recordGapReconciliation(int newGaps, int resolvedGaps, int promotedGaps) {
+        if (newGaps > 0) {
+            newTransientGaps.add(newGaps);
+            lastNewTransientGapAtEpochMillis = clock.millis();
+        }
+        if (resolvedGaps > 0) {
+            resolvedTransientGaps.add(resolvedGaps);
+        }
+        if (promotedGaps > 0) {
+            promotedToPermanentGaps.add(promotedGaps);
+            lastPromotedToPermanentGapAtEpochMillis = clock.millis();
+        }
+    }
+
     void recordLockAcquired() {
         lockAcquisitions.increment();
         lockCurrentlyHeld = true;
@@ -200,7 +219,13 @@ class MutableSubscriptionStatistics {
                 new SubscriptionStatistics.Reset(
                         resets.sum(),
                         instantOrNull(lastResetAtEpochMillis),
-                        globalEventOrderOrNull(lastResetToGlobalOrder)));
+                        globalEventOrderOrNull(lastResetToGlobalOrder)),
+                new SubscriptionStatistics.Gaps(
+                        newTransientGaps.sum(),
+                        resolvedTransientGaps.sum(),
+                        promotedToPermanentGaps.sum(),
+                        instantOrNull(lastNewTransientGapAtEpochMillis),
+                        instantOrNull(lastPromotedToPermanentGapAtEpochMillis)));
     }
 
     private static void recordMax(AtomicLong target, long candidate) {

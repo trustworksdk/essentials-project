@@ -21,6 +21,7 @@ Thin adapter — one class only. All event storage logic lives in `postgresql-ev
 - **Two IT subclasses** both instantiate `SpringTransactionAwareEventStoreUnitOfWorkFactory`; differ only by annotation context (`@SpringBootTest` + `@DirtiesContext`).
   - `SpringTransactionAwareEventStoreUnitOfWorkFactory_OrderAggregateRootRepositoryIT`
   - `SpringManagedUnitOfWorkFactory_OrderAggregateRootRepositoryIT`
+- `SpringTransactionAwareEventStoreUnitOfWorkFactory_ViewEventProcessorIT` — `ViewEventProcessor`'s queue-vs-escalate decision on the Spring `UnitOfWork` (`getNumberOfEventsPersisted`, `hasLifecycleCallbackResourcesWithPendingChanges`); unit-level twin `SpringTransactionAwareEventStoreUnitOfWorkTest`. Needs `postgresql-queue` (test scope).
 - **Infrastructure**: Testcontainers `PostgreSQLContainer` (postgres:latest) via `@DynamicPropertySource`. Docker required.
 - **Spring context**: minimal `ApplicationTests` `@SpringBootApplication` — wires `Jdbi` over `TransactionAwareDataSourceProxy`.
 - Tests cover both Spring-managed (`TransactionTemplate`) and manually managed (`unitOfWorkFactory.usingUnitOfWork`) transaction modes.

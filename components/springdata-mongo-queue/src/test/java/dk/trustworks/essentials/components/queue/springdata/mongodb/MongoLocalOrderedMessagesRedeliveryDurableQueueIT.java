@@ -25,7 +25,7 @@ import org.springframework.data.mongodb.*;
 import org.springframework.data.mongodb.core.MongoTemplate;
 import org.springframework.test.annotation.DirtiesContext;
 import org.springframework.test.context.*;
-import org.testcontainers.containers.MongoDBContainer;
+import org.testcontainers.mongodb.MongoDBContainer;
 import org.testcontainers.junit.jupiter.*;
 
 @Testcontainers
@@ -33,7 +33,7 @@ import org.testcontainers.junit.jupiter.*;
 @DirtiesContext(classMode = DirtiesContext.ClassMode.AFTER_EACH_TEST_METHOD)
 public class MongoLocalOrderedMessagesRedeliveryDurableQueueIT extends LocalOrderedMessagesRedeliveryDurableQueueIT<MongoDurableQueues, SpringMongoTransactionAwareUnitOfWorkFactory.SpringMongoTransactionAwareUnitOfWork, SpringMongoTransactionAwareUnitOfWorkFactory> {
     @Container
-    static MongoDBContainer mongoDBContainer = new MongoDBContainer(EssentialsTestContainers.MONGO_IMAGE);
+    static MongoDBContainer mongoDBContainer = new MongoDBContainer(EssentialsTestContainers.MONGO_IMAGE).withReplicaSet();
 
     @DynamicPropertySource
     static void setProperties(DynamicPropertyRegistry registry) {
@@ -51,8 +51,10 @@ public class MongoLocalOrderedMessagesRedeliveryDurableQueueIT extends LocalOrde
 
     @Override
     protected MongoDurableQueues createDurableQueues(SpringMongoTransactionAwareUnitOfWorkFactory unitOfWorkFactory) {
-        return new MongoDurableQueues(mongoTemplate,
-                                      unitOfWorkFactory);
+        return MongoDurableQueues.builder()
+                                  .setMongoTemplate(mongoTemplate)
+                                  .setUnitOfWorkFactory(unitOfWorkFactory)
+                                  .build();
     }
 
     @Override

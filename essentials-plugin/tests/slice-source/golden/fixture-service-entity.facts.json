@@ -1,0 +1,501 @@
+{
+  "tool": "slice-source",
+  "format": 1,
+  "mode": "facts",
+  "root": "tests/fixtures/service-entity",
+  "manifestsRead": true,
+  "sourceFiles": 18,
+  "bcs": [
+    {
+      "name": "shipping",
+      "path": "src/main/*/com/example/shipping",
+      "dirs": [
+        "src/main/java/com/example/shipping"
+      ],
+      "languages": [
+        "java"
+      ],
+      "slices": [
+        "shipping.auto_ship",
+        "shipping.register_shipping_order",
+        "shipping.ship_order",
+        "shipping.order_status"
+      ],
+      "lane": {
+        "signals": {
+          "decider": [],
+          "aggregates": null,
+          "entities": {
+            "dir": "src/main/*/com/example/shipping/entities",
+            "files": 1
+          },
+          "eventStore": []
+        },
+        "declared": [
+          {
+            "slice": "shipping.auto_ship",
+            "lane": "service-entity",
+            "file": "src/main/java/com/example/shipping/automations/auto_ship/slice.yaml"
+          },
+          {
+            "slice": "shipping.register_shipping_order",
+            "lane": "service-entity",
+            "file": "src/main/java/com/example/shipping/use_cases/register_shipping_order/slice.yaml"
+          },
+          {
+            "slice": "shipping.ship_order",
+            "lane": "service-entity",
+            "file": "src/main/java/com/example/shipping/use_cases/ship_order/slice.yaml"
+          },
+          {
+            "slice": "shipping.order_status",
+            "lane": "service-entity",
+            "file": "src/main/java/com/example/shipping/views/order_status/slice.yaml"
+          }
+        ],
+        "detected": "service-entity?"
+      }
+    }
+  ],
+  "slices": [
+    {
+      "id": "shipping.auto_ship",
+      "idSource": "manifest",
+      "bc": "shipping",
+      "bcPath": "src/main/*/com/example/shipping",
+      "dir": "src/main/java/com/example/shipping/automations/auto_ship",
+      "role": "automations",
+      "kind": "automation",
+      "manifest": "src/main/java/com/example/shipping/automations/auto_ship/slice.yaml",
+      "language": "java",
+      "package": "com.example.shipping.automations.auto_ship",
+      "files": [
+        "AutoShipProcessor.java"
+      ],
+      "processors": [],
+      "handlers": [
+        {
+          "class": "AutoShipProcessor",
+          "method": "on",
+          "annotation": "EventListener",
+          "annotationFqn": "org.springframework.context.event.EventListener",
+          "role": "event",
+          "file": "src/main/java/com/example/shipping/automations/auto_ship/AutoShipProcessor.java",
+          "line": 25,
+          "annotationLine": 24,
+          "message": {
+            "written": "ShippingOrderRegistered",
+            "name": "ShippingOrderRegistered",
+            "fqn": "com.example.shipping.events.ShippingOrderRegistered",
+            "resolvedBy": "import"
+          },
+          "params": [
+            {
+              "name": "event",
+              "type": "ShippingOrderRegistered"
+            }
+          ],
+          "envelope": false
+        }
+      ],
+      "handles": [],
+      "dispatches": [
+        {
+          "name": "ShipOrder",
+          "fqn": "com.example.shipping.use_cases.ship_order.ShipOrder",
+          "resolvedBy": "import",
+          "via": "sendAndDontWait",
+          "file": "src/main/java/com/example/shipping/automations/auto_ship/AutoShipProcessor.java",
+          "line": 26,
+          "own": false
+        },
+        {
+          "name": "ShipOrder",
+          "fqn": "com.example.shipping.use_cases.ship_order.ShipOrder",
+          "resolvedBy": "import",
+          "via": "sendAndDontWait",
+          "file": "src/main/java/com/example/shipping/automations/auto_ship/AutoShipProcessor.java",
+          "line": 31,
+          "own": false
+        }
+      ],
+      "publishes": [],
+      "subscriptions": [],
+      "mappings": [],
+      "schedules": [],
+      "notAnalysed": []
+    },
+    {
+      "id": "shipping.register_shipping_order",
+      "idSource": "manifest",
+      "bc": "shipping",
+      "bcPath": "src/main/*/com/example/shipping",
+      "dir": "src/main/java/com/example/shipping/use_cases/register_shipping_order",
+      "role": "use_cases",
+      "kind": "command",
+      "manifest": "src/main/java/com/example/shipping/use_cases/register_shipping_order/slice.yaml",
+      "language": "java",
+      "package": "com.example.shipping.use_cases.register_shipping_order",
+      "files": [
+        "RegisterShippingOrder.java",
+        "RegisterShippingOrderAPI.java",
+        "RegisterShippingOrderHandler.java"
+      ],
+      "processors": [],
+      "handlers": [
+        {
+          "class": "RegisterShippingOrderHandler",
+          "method": "handle",
+          "annotation": "CmdHandler",
+          "annotationFqn": "dk.trustworks.essentials.reactive.command.CmdHandler",
+          "role": "command",
+          "file": "src/main/java/com/example/shipping/use_cases/register_shipping_order/RegisterShippingOrderHandler.java",
+          "line": 25,
+          "annotationLine": 23,
+          "message": {
+            "written": "RegisterShippingOrder",
+            "name": "RegisterShippingOrder",
+            "fqn": "com.example.shipping.use_cases.register_shipping_order.RegisterShippingOrder",
+            "resolvedBy": "same-package"
+          },
+          "params": [
+            {
+              "name": "cmd",
+              "type": "RegisterShippingOrder"
+            }
+          ],
+          "envelope": false
+        }
+      ],
+      "handles": [
+        {
+          "name": "RegisterShippingOrder",
+          "fqn": "com.example.shipping.use_cases.register_shipping_order.RegisterShippingOrder",
+          "resolvedBy": "same-package",
+          "via": "CmdHandler",
+          "file": "src/main/java/com/example/shipping/use_cases/register_shipping_order/RegisterShippingOrderHandler.java",
+          "line": 25
+        }
+      ],
+      "dispatches": [
+        {
+          "name": "RegisterShippingOrder",
+          "fqn": "com.example.shipping.use_cases.register_shipping_order.RegisterShippingOrder",
+          "resolvedBy": "same-package",
+          "via": "send",
+          "file": "src/main/java/com/example/shipping/use_cases/register_shipping_order/RegisterShippingOrderAPI.java",
+          "line": 26,
+          "own": true
+        }
+      ],
+      "publishes": [
+        {
+          "name": "ShippingOrderRegistered",
+          "fqn": "com.example.shipping.events.ShippingOrderRegistered",
+          "resolvedBy": "import",
+          "via": "eventBus.publish",
+          "file": "src/main/java/com/example/shipping/use_cases/register_shipping_order/RegisterShippingOrderHandler.java",
+          "line": 28
+        }
+      ],
+      "subscriptions": [],
+      "mappings": [
+        {
+          "class": "RegisterShippingOrderAPI",
+          "method": "register",
+          "file": "src/main/java/com/example/shipping/use_cases/register_shipping_order/RegisterShippingOrderAPI.java",
+          "line": 25,
+          "annotationLine": 24,
+          "annotation": "PostMapping",
+          "httpMethods": [
+            "POST"
+          ],
+          "routes": [
+            "/api/shipping/orders"
+          ],
+          "params": [],
+          "requestParams": [],
+          "queryParams": [],
+          "requestBody": {
+            "name": "Body",
+            "fqn": "com.example.shipping.use_cases.register_shipping_order.RegisterShippingOrderAPI.Body",
+            "resolvedBy": "same-file"
+          }
+        }
+      ],
+      "schedules": [],
+      "notAnalysed": []
+    },
+    {
+      "id": "shipping.ship_order",
+      "idSource": "manifest",
+      "bc": "shipping",
+      "bcPath": "src/main/*/com/example/shipping",
+      "dir": "src/main/java/com/example/shipping/use_cases/ship_order",
+      "role": "use_cases",
+      "kind": "command",
+      "manifest": "src/main/java/com/example/shipping/use_cases/ship_order/slice.yaml",
+      "language": "java",
+      "package": "com.example.shipping.use_cases.ship_order",
+      "files": [
+        "ShipOrder.java",
+        "ShipOrderAPI.java",
+        "ShipOrderHandler.java"
+      ],
+      "processors": [],
+      "handlers": [
+        {
+          "class": "ShipOrderHandler",
+          "method": "handle",
+          "annotation": "CmdHandler",
+          "annotationFqn": "dk.trustworks.essentials.reactive.command.CmdHandler",
+          "role": "command",
+          "file": "src/main/java/com/example/shipping/use_cases/ship_order/ShipOrderHandler.java",
+          "line": 24,
+          "annotationLine": 22,
+          "message": {
+            "written": "ShipOrder",
+            "name": "ShipOrder",
+            "fqn": "com.example.shipping.use_cases.ship_order.ShipOrder",
+            "resolvedBy": "same-package"
+          },
+          "params": [
+            {
+              "name": "cmd",
+              "type": "ShipOrder"
+            }
+          ],
+          "envelope": false
+        }
+      ],
+      "handles": [
+        {
+          "name": "ShipOrder",
+          "fqn": "com.example.shipping.use_cases.ship_order.ShipOrder",
+          "resolvedBy": "same-package",
+          "via": "CmdHandler",
+          "file": "src/main/java/com/example/shipping/use_cases/ship_order/ShipOrderHandler.java",
+          "line": 24
+        }
+      ],
+      "dispatches": [
+        {
+          "name": "ShipOrder",
+          "fqn": "com.example.shipping.use_cases.ship_order.ShipOrder",
+          "resolvedBy": "same-package",
+          "via": "send",
+          "file": "src/main/java/com/example/shipping/use_cases/ship_order/ShipOrderAPI.java",
+          "line": 22,
+          "own": true
+        }
+      ],
+      "publishes": [
+        {
+          "name": "OrderShipped",
+          "fqn": "com.example.shipping.events.OrderShipped",
+          "resolvedBy": "import",
+          "via": "eventBus.publish",
+          "file": "src/main/java/com/example/shipping/use_cases/ship_order/ShipOrderHandler.java",
+          "line": 28
+        }
+      ],
+      "subscriptions": [],
+      "mappings": [
+        {
+          "class": "ShipOrderAPI",
+          "method": "ship",
+          "file": "src/main/java/com/example/shipping/use_cases/ship_order/ShipOrderAPI.java",
+          "line": 21,
+          "annotationLine": 20,
+          "annotation": "PostMapping",
+          "httpMethods": [
+            "POST"
+          ],
+          "routes": [
+            "/api/shipping/orders/{orderId}/ship"
+          ],
+          "params": [],
+          "requestParams": [],
+          "queryParams": [],
+          "requestBody": null
+        }
+      ],
+      "schedules": [],
+      "notAnalysed": []
+    },
+    {
+      "id": "shipping.order_status",
+      "idSource": "manifest",
+      "bc": "shipping",
+      "bcPath": "src/main/*/com/example/shipping",
+      "dir": "src/main/java/com/example/shipping/views/order_status",
+      "role": "views",
+      "kind": "view",
+      "manifest": "src/main/java/com/example/shipping/views/order_status/slice.yaml",
+      "language": "java",
+      "package": "com.example.shipping.views.order_status",
+      "files": [
+        "OrderStatusAPI.java",
+        "OrderStatusQueries.java",
+        "OrderStatusView.java"
+      ],
+      "processors": [],
+      "handlers": [],
+      "handles": [],
+      "dispatches": [],
+      "publishes": [],
+      "subscriptions": [],
+      "mappings": [
+        {
+          "class": "OrderStatusAPI",
+          "method": "list",
+          "file": "src/main/java/com/example/shipping/views/order_status/OrderStatusAPI.java",
+          "line": 23,
+          "annotationLine": 22,
+          "annotation": "GetMapping",
+          "httpMethods": [
+            "GET"
+          ],
+          "routes": [
+            "/api/shipping/order-status"
+          ],
+          "params": [],
+          "requestParams": [
+            {
+              "name": "shipped",
+              "required": false
+            }
+          ],
+          "queryParams": [],
+          "requestBody": null
+        },
+        {
+          "class": "OrderStatusAPI",
+          "method": "byStatus",
+          "file": "src/main/java/com/example/shipping/views/order_status/OrderStatusAPI.java",
+          "line": 28,
+          "annotationLine": 27,
+          "annotation": "GetMapping",
+          "httpMethods": [
+            "GET"
+          ],
+          "routes": [
+            "/api/shipping/order-status"
+          ],
+          "params": [
+            "status"
+          ],
+          "requestParams": [
+            {
+              "name": "status",
+              "required": true
+            }
+          ],
+          "queryParams": [],
+          "requestBody": null
+        },
+        {
+          "class": "OrderStatusAPI",
+          "method": "get",
+          "file": "src/main/java/com/example/shipping/views/order_status/OrderStatusAPI.java",
+          "line": 33,
+          "annotationLine": 32,
+          "annotation": "GetMapping",
+          "httpMethods": [
+            "GET"
+          ],
+          "routes": [
+            "/api/shipping/order-status/{orderId}"
+          ],
+          "params": [],
+          "requestParams": [],
+          "queryParams": [],
+          "requestBody": null
+        }
+      ],
+      "schedules": [],
+      "notAnalysed": [],
+      "readModels": [
+        {
+          "name": "OrderStatusView",
+          "store": "projection",
+          "columns": [
+            {
+              "name": "orderId",
+              "type": null,
+              "note": null
+            },
+            {
+              "name": "shipped",
+              "type": null,
+              "note": null
+            }
+          ],
+          "declaredIn": "src/main/java/com/example/shipping/views/order_status/OrderStatusView.java",
+          "line": 3,
+          "matchedBy": [
+            "name"
+          ]
+        }
+      ]
+    }
+  ],
+  "messages": [
+    {
+      "name": "OrderShipped",
+      "type": "event",
+      "bc": "shipping",
+      "found": true,
+      "identity": "orderId: String",
+      "fields": [
+        "orderId: String"
+      ],
+      "declaredIn": "src/main/java/com/example/shipping/events/OrderShipped.java",
+      "line": 3,
+      "alsoDeclaredIn": []
+    },
+    {
+      "name": "RegisterShippingOrder",
+      "type": "command",
+      "bc": "shipping",
+      "found": true,
+      "identity": "orderId: OrderId",
+      "fields": [
+        "orderId: OrderId",
+        "destination: String"
+      ],
+      "declaredIn": "src/main/java/com/example/shipping/use_cases/register_shipping_order/RegisterShippingOrder.java",
+      "line": 5,
+      "alsoDeclaredIn": []
+    },
+    {
+      "name": "ShipOrder",
+      "type": "command",
+      "bc": "shipping",
+      "found": true,
+      "identity": "orderId: OrderId",
+      "fields": [
+        "orderId: OrderId"
+      ],
+      "declaredIn": "src/main/java/com/example/shipping/use_cases/ship_order/ShipOrder.java",
+      "line": 5,
+      "alsoDeclaredIn": []
+    },
+    {
+      "name": "ShippingOrderRegistered",
+      "type": "event",
+      "bc": "shipping",
+      "found": true,
+      "identity": "orderId: String",
+      "fields": [
+        "orderId: String",
+        "destination: String"
+      ],
+      "declaredIn": "src/main/java/com/example/shipping/events/ShippingOrderRegistered.java",
+      "line": 5,
+      "alsoDeclaredIn": []
+    }
+  ],
+  "unparsed": [],
+  "unresolved": []
+}

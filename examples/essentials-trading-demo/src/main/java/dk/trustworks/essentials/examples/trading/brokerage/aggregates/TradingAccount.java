@@ -38,6 +38,8 @@ import dk.trustworks.essentials.examples.trading.brokerage.types.TradingAccountG
 import dk.trustworks.essentials.examples.trading.brokerage.types.TradingAccountId;
 import dk.trustworks.essentials.types.Amount;
 
+import java.util.*;
+
 import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 
 /**
@@ -85,6 +87,12 @@ public class TradingAccount extends AggregateRoot<TradingAccountGenerationId, Tr
     private Amount           reservedFunds;
     private Amount           realizedPnl;
     private boolean          booksClosed;
+    /**
+     * The trades whose settlement this generation has applied, so a repeated {@code ApplyTradeSettlement} - a redelivered
+     * message in the automated trade lifecycle - is ignored rather than moving the cash twice. Per generation: a new
+     * generation starts with an empty set. {@code null} in a snapshot taken before the field existed.
+     */
+    private Set<TradeId>     settledTrades = new HashSet<>();
 
     /**
      * Only for the JSON deserializer that restores an aggregate snapshot. Not the rehydration constructor and not a
@@ -167,6 +175,9 @@ public class TradingAccount extends AggregateRoot<TradingAccountGenerationId, Tr
                                      Amount cashDelta,
                                      Amount realizedPnlDelta) {
         assertBooksOpen();
+        if (settledTrades != null && settledTrades.contains(tradeId)) {
+            return;
+        }
         apply(new TradeSettlementApplied(aggregateId(),
                                          logicalAccountId,
                                          tradeId,
@@ -244,6 +255,10 @@ public class TradingAccount extends AggregateRoot<TradingAccountGenerationId, Tr
     private void on(TradeSettlementApplied event) {
         cashBalance = cashBalance.add(event.cashDelta());
         realizedPnl = realizedPnl.add(event.realizedPnlDelta());
+        if (settledTrades == null) {
+            settledTrades = new HashSet<>();
+        }
+        settledTrades.add(event.tradeId());
     }
 
     @EventHandler

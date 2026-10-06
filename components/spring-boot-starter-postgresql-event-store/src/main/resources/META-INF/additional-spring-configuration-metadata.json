@@ -1,0 +1,268 @@
+{
+  "properties": [
+    {
+      "name": "essentials.eventstore.cdc.enabled",
+      "description": "Enables Change Data Capture (CDC): a logical-replication slot tails the event-stream tables and pushes new events to subscriptions with lower latency than polling. Disabled unless set to true; the event store stays the durable source of truth and polling remains the fallback.",
+      "defaultValue": "false"
+    },
+    {
+      "name": "essentials.eventstore.cdc.mode",
+      "description": "CDC startup mode. AUTO falls back to polling if CDC cannot start; REQUIRE fails startup if CDC cannot start.",
+      "defaultValue": "AUTO"
+    },
+    {
+      "name": "essentials.eventstore.cdc.cdc-event-store-backfill-batch-size",
+      "description": "Number of events processed in a single batch when CdcEventStore back-fills events from the event store.",
+      "defaultValue": "1000"
+    },
+    {
+      "name": "essentials.eventstore.cdc.plugin",
+      "description": "Logical decoding plugin used by the replication slot: pgoutput (default) or wal2json.",
+      "defaultValue": "pgoutput"
+    },
+    {
+      "name": "essentials.eventstore.cdc.wal-parser-mode",
+      "description": "How wal2json payloads are parsed: STRING parses from String payloads, BYTES parses directly from UTF-8 bytes.",
+      "defaultValue": "STRING"
+    },
+    {
+      "name": "essentials.eventstore.cdc.delivery-mode",
+      "description": "How decoded WAL events reach the in-memory CDC event bus. INBOX: WAL to a durable inbox table to the dispatcher to the bus. DIRECT: WAL to converter to the bus with no inbox persistence.",
+      "defaultValue": "INBOX"
+    },
+    {
+      "name": "essentials.eventstore.cdc.inbox-table-name",
+      "description": "Name of the database table used as the CDC inbox (INBOX delivery mode). Concatenated into SQL, so it must be a valid table name.",
+      "defaultValue": "eventstore_cdc_inbox"
+    },
+    {
+      "name": "essentials.eventstore.cdc.inbox-ttl-duration-days",
+      "description": "Time-to-live, in days, of CDC inbox entries.",
+      "defaultValue": "90"
+    },
+    {
+      "name": "essentials.eventstore.cdc.wal-replication-tailer.poll-interval",
+      "description": "Polling interval of the WAL replication tailer.",
+      "defaultValue": "25ms"
+    },
+    {
+      "name": "essentials.eventstore.cdc.wal-replication-tailer.poll-backoff-interval",
+      "description": "Polling backoff interval of the WAL replication tailer, applied when backing off.",
+      "defaultValue": "250ms"
+    },
+    {
+      "name": "essentials.eventstore.cdc.wal-replication-tailer.max-poll-backoff-interval",
+      "description": "Upper limit for the polling backoff.",
+      "defaultValue": "5s"
+    },
+    {
+      "name": "essentials.eventstore.cdc.wal-replication-tailer.replication-status-interval",
+      "description": "Interval between replication status updates sent to PostgreSQL.",
+      "defaultValue": "1s"
+    },
+    {
+      "name": "essentials.eventstore.cdc.wal-replication-tailer.jitter-ratio",
+      "description": "Randomness (0 to 1) added to backoff intervals to avoid synchronized behaviour; 0 means no jitter.",
+      "defaultValue": "0.2"
+    },
+    {
+      "name": "essentials.eventstore.cdc.wal-replication-tailer.back-off-factor",
+      "description": "Multiplier applied to successive backoff delays (exponential backoff).",
+      "defaultValue": "2"
+    },
+    {
+      "name": "essentials.eventstore.cdc.wal-replication-tailer.pretty-print",
+      "description": "Whether wal2json output is pretty printed.",
+      "defaultValue": "false"
+    },
+    {
+      "name": "essentials.eventstore.cdc.wal-replication-tailer.include-xids",
+      "description": "Whether transaction ids (XIDs) are included in wal2json output.",
+      "defaultValue": "true"
+    },
+    {
+      "name": "essentials.eventstore.cdc.wal-replication-tailer.include-timestamp",
+      "description": "Whether timestamps are included in wal2json output.",
+      "defaultValue": "true"
+    },
+    {
+      "name": "essentials.eventstore.cdc.wal-replication-tailer.include-lsn",
+      "description": "Whether log sequence numbers (LSN) are included in wal2json output.",
+      "defaultValue": "true"
+    },
+    {
+      "name": "essentials.eventstore.cdc.wal-replication-tailer.max-idle-duration",
+      "description": "Hard ceiling on how long the tailer sits on a silent replication stream before treating it as stale (for example a half-open TCP connection) and forcing a reconnect. Zero disables the check (not recommended).",
+      "defaultValue": "5m"
+    },
+    {
+      "name": "essentials.eventstore.cdc.wal-replication-tailer.idle-lsn-push-interval",
+      "description": "How often the tailer acknowledges its current receive LSN while idle, so PostgreSQL keeps advancing confirmed_flush_lsn and the slot does not retain WAL indefinitely. Must be strictly positive; keep it under wal_sender_timeout (60s by default).",
+      "defaultValue": "30s"
+    },
+    {
+      "name": "essentials.eventstore.cdc.pg-output.publication-name",
+      "description": "Name of the pgoutput publication the replication slot reads from.",
+      "defaultValue": "essentials_cdc_publication"
+    },
+    {
+      "name": "essentials.eventstore.cdc.pg-output.proto-version",
+      "description": "pgoutput protocol version.",
+      "defaultValue": "1"
+    },
+    {
+      "name": "essentials.eventstore.cdc.pg-output.binary",
+      "description": "Whether pgoutput sends values in binary format.",
+      "defaultValue": "false"
+    },
+    {
+      "name": "essentials.eventstore.cdc.pg-output.messages",
+      "description": "Whether pgoutput logical decoding messages are enabled.",
+      "defaultValue": "false"
+    },
+    {
+      "name": "essentials.eventstore.cdc.pg-output.publication.auto-manage",
+      "description": "Whether the framework creates and maintains the pgoutput publication at tailer startup. Opt-in: most deployments pre-create the publication. Failures (typically missing privileges) are logged at WARN with the remediation SQL and the tailer continues.",
+      "defaultValue": "false"
+    },
+    {
+      "name": "essentials.eventstore.cdc.pg-output.publication.mode",
+      "description": "How an auto-managed publication is declared. FOR_TABLE_LIST creates it with an explicit list of event-stream tables and adds newly registered aggregates later (needs table ownership). FOR_ALL_TABLES creates it FOR ALL TABLES (needs superuser).",
+      "defaultValue": "FOR_TABLE_LIST"
+    },
+    {
+      "name": "essentials.eventstore.cdc.cdc-dispatcher.poll-interval",
+      "description": "How often the CDC dispatcher polls for new events.",
+      "defaultValue": "20ms"
+    },
+    {
+      "name": "essentials.eventstore.cdc.cdc-dispatcher.batch-size",
+      "description": "Maximum number of events the CDC dispatcher processes in a single operation.",
+      "defaultValue": "500"
+    },
+    {
+      "name": "essentials.eventstore.cdc.cdc-dispatcher.poison-policy",
+      "description": "What the dispatcher does with a message it cannot process. STOP stops processing; QUARANTINE_AND_CONTINUE sets the message aside and continues.",
+      "defaultValue": "QUARANTINE_AND_CONTINUE"
+    },
+    {
+      "name": "essentials.eventstore.cdc.cdc-dispatcher.dispatched-row-policy",
+      "description": "What happens to an inbox row once it has been dispatched: MARK_DISPATCHED marks it, DELETE removes it.",
+      "defaultValue": "MARK_DISPATCHED"
+    },
+    {
+      "name": "essentials.eventstore.cdc.cdc-dispatcher.query-timeout",
+      "description": "Per-statement timeout for the dispatcher's inbox poll query, rounded up to whole seconds. Zero means no framework-level timeout; the query then inherits the database, driver and pool settings.",
+      "defaultValue": "0s"
+    },
+    {
+      "name": "essentials.eventstore.cdc.cdc-dispatcher.inbox-metrics-enabled",
+      "description": "Whether the essentials.cdc.inbox.received_backlog and essentials.cdc.inbox.poison_rows gauges are registered. Only effective in INBOX delivery mode.",
+      "defaultValue": "true"
+    },
+    {
+      "name": "essentials.eventstore.cdc.event-bus.backpressure-buffer-size",
+      "description": "Capacity of the CDC event bus's per-aggregate-type buffer and of each subscription's live-event buffer while it back-fills and hands over.",
+      "defaultValue": "8192"
+    },
+    {
+      "name": "essentials.eventstore.cdc.event-bus.non-serialized-max-retries",
+      "description": "Maximum retries when emitting to the CDC event bus fails with a non-serialized emit result, before the overflow policy applies.",
+      "defaultValue": "16"
+    },
+    {
+      "name": "essentials.eventstore.cdc.event-bus.overflow-max-retries",
+      "description": "Maximum retries when the CDC event bus overflows, before the overflow policy applies.",
+      "defaultValue": "20"
+    },
+    {
+      "name": "essentials.eventstore.cdc.event-bus.queued-task-cap-factor",
+      "description": "Currently informational: kept for parity with the local event bus tuning. The CDC event bus does not use a bounded scheduler queue.",
+      "defaultValue": "1.5"
+    },
+    {
+      "name": "essentials.eventstore.cdc.event-bus.overflow-policy",
+      "description": "What the CDC event bus does with an event it cannot emit once the retries are spent. FAIL_FAST throws, so the dispatcher retries later (INBOX) or the tailer re-streams it (DIRECT); LOG_AND_DROP logs and drops the live push, leaving recovery to the subscriber's store-backed backfill.",
+      "defaultValue": "FAIL_FAST"
+    },
+    {
+      "name": "essentials.eventstore.cdc.slot.group",
+      "description": "Logical WAL consumer group; the main knob for the replication slot (for example default, orders, billing).",
+      "defaultValue": "default"
+    },
+    {
+      "name": "essentials.eventstore.cdc.slot.name",
+      "description": "Explicit replication slot name. When unset, the name is derived by the CdcSlotNameProvider (by default from the database name in the JDBC URL)."
+    },
+    {
+      "name": "essentials.eventstore.cdc.slot.mode",
+      "description": "Replication slot ownership. CREATE_IF_MISSING creates the slot when absent; REQUIRE_EXISTING fails fast when it is missing; RECREATE drops and recreates it at startup; EXTERNAL assumes it is managed outside the framework.",
+      "defaultValue": "CREATE_IF_MISSING"
+    },
+    {
+      "name": "essentials.eventstore.cdc.slot.recreate-on-start",
+      "description": "Destructive opt-in: drop the replication slot at startup (terminating an attached backend if needed) and create it fresh at the current WAL position. Unacknowledged WAL changes on the old slot are lost. For dev, test and perf labs; never in production.",
+      "defaultValue": "false"
+    },
+    {
+      "name": "essentials.eventstore.cdc.slot.metrics-enabled",
+      "description": "Whether the background sampler publishing essentials.cdc.slot.* gauges from pg_replication_slots is enabled.",
+      "defaultValue": "true"
+    },
+    {
+      "name": "essentials.eventstore.cdc.slot.metrics-interval",
+      "description": "How often the slot gauges are re-sampled from pg_replication_slots.",
+      "defaultValue": "30s"
+    },
+    {
+      "name": "essentials.eventstore.cdc.health-check.enabled",
+      "description": "Whether the CDC effectiveness monitor runs. It detects a CDC pipeline that looks ACTIVE but is not delivering (stuck delivery, dead dispatcher) and fails availability so subscribers fall back to polling.",
+      "defaultValue": "true"
+    },
+    {
+      "name": "essentials.eventstore.cdc.health-check.interval",
+      "description": "Evaluation window of the CDC effectiveness monitor.",
+      "defaultValue": "60s"
+    },
+    {
+      "name": "essentials.eventstore.cdc.health-check.messages-received-threshold",
+      "description": "Minimum number of messages the tailer must have received within a window before the 'received but published zero' heuristic can fire. Guards against false positives in idle systems.",
+      "defaultValue": "1000"
+    },
+    {
+      "name": "essentials.eventstore.cdc.health-check.dispatcher-idle-grace-period",
+      "description": "Extra grace on top of the interval before the monitor declares the dispatcher dead on a zero tick delta.",
+      "defaultValue": "120s"
+    },
+    {
+      "name": "essentials.eventstore.cdc.health-check.auto-recover",
+      "description": "Whether the monitor keeps running after it has fired, so a tailer reconnect that restores ACTIVE availability resumes evaluation from a fresh baseline. When false it fires once and stays quiet.",
+      "defaultValue": "true"
+    },
+    {
+      "name": "essentials.eventstore.cdc.health-check.active-cutback-debounce",
+      "description": "How long availability must stay steadily ACTIVE before an in-flight CDC subscription cuts back from polling to the CDC live bus. ACTIVE to FAILED or INACTIVE switches to polling immediately. Nothing is lost during the window.",
+      "defaultValue": "60s"
+    },
+    {
+      "name": "essentials.eventstore.cdc.health-check.auto-recreate-slot-on-stuck",
+      "description": "Opt-in, destructive self-healing: after the monitor has fired recreate-slot-after-consecutive-fires times in a row without recovering, drop and recreate the replication slot at the current WAL position. Subscribers keep receiving events through polling meanwhile.",
+      "defaultValue": "false"
+    },
+    {
+      "name": "essentials.eventstore.cdc.health-check.recreate-slot-after-consecutive-fires",
+      "description": "Consecutive monitor fires without an ACTIVE recovery required before auto-recreate-slot-on-stuck acts.",
+      "defaultValue": "3"
+    },
+    {
+      "name": "essentials.eventstore.cdc.event-bus.live-drain-stall-threshold",
+      "type": "java.time.Duration",
+      "description": "Has no effect since 0.60.0: a CDC subscription started while CDC is active no longer waits for a missing global order, so there is no stall to bound. Still bound, and still rejected when negative.",
+      "defaultValue": "180s",
+      "deprecation": {
+        "level": "warning",
+        "reason": "Has no effect; remove it from your configuration. Planned for removal in the next major release."
+      }
+    }
+  ]
+}

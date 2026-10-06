@@ -20,7 +20,6 @@ import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.cd
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.cdc.converter.LogicalReplicationToPersistedEventConverter;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.cdc.converter.PgOutputToPersistedEventConverter;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.cdc.converter.WalGlobalOrdersExtractor;
-import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.processor.EventProcessorIT;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.serializer.json.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.transaction.EventStoreManagedUnitOfWorkFactory;
 import dk.trustworks.essentials.components.foundation.transaction.jdbi.HandleAwareUnitOfWork;
@@ -39,6 +38,7 @@ import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
+import static org.awaitility.Awaitility.await;
 import static org.assertj.core.api.Assertions.*;
 
 @Testcontainers
@@ -200,6 +200,44 @@ public class CdcModeAutoRequireIT {
         assertThat(availability.snapshot().reason()).contains("publication").contains("does not exist");
     }
 
+    /**
+     * The trading-demo case: the server drops the replication connection (a suspended host outliving
+     * wal_sender_timeout ends the same way) and the tailer reconnects on its own. Availability's reason is cleared on
+     * recovery, so the interruption record is what shows it happened - and a requested stop must not add one.
+     */
+    @Test
+    void a_dropped_replication_connection_is_recorded_as_an_interruption_that_recovers() {
+        String slotName = "slot_" + UUID.randomUUID().toString().replace("-", "");
+        String publicationName = publicationName();
+        createPublication(publicationName);
+
+        var availability = new CdcAvailability();
+        var tailer = pgOutputDirectTailer(slotName, publicationName, availability, CdcMode.AUTO);
+        tailer.startAndAwaitReady(Duration.ofSeconds(10));
+        assertThat(availability.getState()).isEqualTo(CdcAvailability.State.ACTIVE);
+        assertThat(availability.interruptions().count()).isZero();
+
+        var terminated = adminJdbi.withHandle(h -> h.createQuery("select pg_terminate_backend(active_pid) from pg_replication_slots where slot_name = :slot and active_pid is not null")
+                                                    .bind("slot", slotName)
+                                                    .mapTo(Boolean.class)
+                                                    .list());
+        assertThat(terminated).as("the injection has to hit the tailer's walsender, or this proves nothing").containsExactly(true);
+
+        await().atMost(Duration.ofSeconds(15))
+               .untilAsserted(() -> {
+                   var interruptions = availability.interruptions();
+                   assertThat(interruptions.count()).isEqualTo(1);
+                   assertThat(interruptions.ongoing()).isFalse();
+                   assertThat(availability.getState()).isEqualTo(CdcAvailability.State.ACTIVE);
+               });
+        assertThat(availability.interruptions().lastReason()).isNotBlank();
+        assertThat(availability.interruptions().lastRecoveredAtEpochMs())
+                .isGreaterThanOrEqualTo(availability.interruptions().lastInterruptedAtEpochMs());
+
+        tailer.stop();
+        assertThat(availability.interruptions().count()).as("a requested stop is not an interruption").isEqualTo(1);
+    }
+
     private void createPublication(String publicationName) {
         adminJdbi.useHandle(handle -> {
             handle.execute("drop publication if exists " + publicationName);
@@ -226,11 +264,16 @@ public class CdcModeAutoRequireIT {
         LogicalReplicationToPersistedEventConverter noConverter = (String s) -> List.of();
         WalGlobalOrdersExtractor noExtractor = (String s) -> List.of();
         var plugin = new Wal2JsonLogicalDecodingPlugin(props, noConverter, noExtractor, CdcProperties.WalParserMode.STRING);
-        return new WalReplicationTailer(
-                ds, jdbi, uow, slotName, inboxRepository, props,
-                PgSlotMode.CREATE_IF_MISSING, mode, CdcProperties.CdcDeliveryMode.INBOX, plugin,
-                Optional.empty(), Optional.empty(), availability,
-                Optional.empty(), Optional.empty());
+        return new WalReplicationTailer(CdcTailerDependencies.builder()
+                                                             .setReplicationDataSource(ds)
+                                                             .setJdbi(jdbi)
+                                                             .setUnitOfWorkFactory(uow)
+                                                             .setLogicalDecodingPlugin(plugin)
+                                                             .setAvailability(availability)
+                                                             .setMeterRegistry(Optional.empty())
+                                                             .build(),
+                                        new CdcTailerSettings(slotName, props, PgSlotMode.CREATE_IF_MISSING, mode, false),
+                                        CdcDelivery.inbox(inboxRepository));
     }
 
     private WalReplicationTailer pgOutputDirectTailer(String slotName,
@@ -239,16 +282,19 @@ public class CdcModeAutoRequireIT {
                                                       CdcMode mode) {
         var props = tailerProps();
         var pgConverter = new PgOutputToPersistedEventConverter(
-                EssentialsJSONEventSerializers.createForActiveJacksonFlavor(),
+                EssentialsJSONEventSerializers.create(),
                 table -> null,
                 aggregateType -> Optional.empty());
-        return new WalReplicationTailer(
-                adminReplicationDataSource, adminJdbi, new EventStoreManagedUnitOfWorkFactory(adminJdbi),
-                slotName, inboxRepository, props,
-                PgSlotMode.CREATE_IF_MISSING, mode, CdcProperties.CdcDeliveryMode.DIRECT,
-                pgOutputPlugin(publicationName, pgConverter),
-                Optional.of(events -> { }), Optional.empty(), availability,
-                Optional.empty(), Optional.empty());
+        return new WalReplicationTailer(CdcTailerDependencies.builder()
+                                                             .setReplicationDataSource(adminReplicationDataSource)
+                                                             .setJdbi(adminJdbi)
+                                                             .setUnitOfWorkFactory(new EventStoreManagedUnitOfWorkFactory(adminJdbi))
+                                                             .setLogicalDecodingPlugin(pgOutputPlugin(publicationName, pgConverter))
+                                                             .setAvailability(availability)
+                                                             .setMeterRegistry(Optional.empty())
+                                                             .build(),
+                                        new CdcTailerSettings(slotName, props, PgSlotMode.CREATE_IF_MISSING, mode, false),
+                                        CdcDelivery.direct(events -> { }));
     }
 
     private static PgOutputLogicalDecodingPlugin pgOutputPlugin(String publicationName,

@@ -1,0 +1,24 @@
+schemaVersion: "1.3"
+slice: inventory.adjust_stock
+kind: command
+bc: inventory
+owner: inventory-team
+status: live
+summary: Adjust the on-hand count of a SKU up or down.
+generator: essentials
+language: java
+tier: service-entity
+lane: service-entity
+handles: [AdjustStock]
+publishes: [StockAdjusted]
+endpoints:
+  - { method: POST, path: "/api/inventory/stock/{sku}/adjustments", auth: user }
+writes: [StockItem]
+invariants:
+  - { id: INV-AS-1, text: "Stock cannot go negative", enforcedBy: StockItem.adjust }
+forbidden:
+  - cross-slice-internal:inventory
+tests:
+  unit: { present: false }
+  integration: { present: false }
+  contract: { present: false }

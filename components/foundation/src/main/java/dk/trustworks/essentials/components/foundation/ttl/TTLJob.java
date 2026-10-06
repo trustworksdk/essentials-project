@@ -23,12 +23,13 @@ import java.lang.annotation.*;
  * TTL jobs are used to manage the lifecycle of data by enforcing expiration policies
  * and executing related actions at scheduled intervals.
  * <pre>
- *     @TTLJob(name = "durable_queues_statistics_ttl",
- *         enabledProperty = "essentials.durable-queues.enable-queue-statistics-ttl",
- *         tableNameProperty = "essentials.durable-queues.shared-queue-statistics-table-name",
- *         timestampColumn = "deletion_ts",
- *         cronExpression = "0 0 * * *", // every day at midnight
- *         ttlDurationProperty = "essentials.durable-queues.queue-statistics-ttl-duration"
+ *     @TTLJob(name = "eventstore_cdc_inbox_ttl",
+ *         tableName = "eventstore_cdc_inbox",
+ *         tableNameProperty = "essentials.eventstore.cdc.inbox-table-name",
+ *         timestampColumn = "received_at",
+ *         cronExpression = "30 0 * * *", // every day at 00:30
+ *         ttlDurationProperty = "essentials.eventstore.cdc.inbox-ttl-duration",
+ *         defaultTtlDays = 90
  * )
  * </pre>
  * @see TTLJobBeanPostProcessor

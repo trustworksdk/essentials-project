@@ -66,4 +66,23 @@ public interface EventStoreUnitOfWork extends HandleAwareUnitOfWork {
      * @see FlushAndPublishPersistedEventsToEventBusRightAfterAppendToStream
      */
     void removeFlushedEventPersisted(PersistedEvent eventPersistedToRemoveFromThisUnitOfWork);
+
+    /**
+     * The total number of {@link PersistedEvent}'s registered through {@link #registerEventsPersisted(List)} in this
+     * {@link EventStoreUnitOfWork} - including those since removed through {@link #removeFlushedEventsPersisted(List)}/
+     * {@link #removeFlushedEventPersisted(PersistedEvent)}, because they were already published during {@link CommitStage#Flush}.<br>
+     * The number never decreases, so two readings that differ tell that events were persisted in between.
+     * A registered event is state the {@link EventStoreUnitOfWork} holds in memory and publishes when it commits,
+     * so it is not undone by rolling the underlying transaction back to a savepoint.
+     * <p>
+     * The default implementation throws {@link UnsupportedOperationException}, since an {@link EventStoreUnitOfWork}
+     * that doesn't count its events can't answer; callers must treat that as "unknown" and assume events were persisted.
+     * All {@link EventStoreUnitOfWork} implementations provided by Essentials override it.
+     *
+     * @return the number of {@link PersistedEvent}'s registered in this {@link EventStoreUnitOfWork} so far
+     * @throws UnsupportedOperationException if this {@link EventStoreUnitOfWork} doesn't count the events registered in it
+     */
+    default long getNumberOfEventsPersisted() {
+        throw new UnsupportedOperationException(getClass().getName() + " doesn't count the PersistedEvent's registered in it");
+    }
 }

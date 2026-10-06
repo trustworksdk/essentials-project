@@ -1,0 +1,52 @@
+package {{packagePath}}
+
+import {{packagePath}}.config.CorsProperties
+import org.assertj.core.api.Assertions.assertThat
+import org.junit.jupiter.api.Test
+import org.springframework.beans.factory.annotation.Autowired
+import java.net.URI
+import java.net.http.HttpClient
+import java.net.http.HttpRequest
+import java.net.http.HttpResponse
+
+/**
+ * The standalone frontend's backend half (S8, Mode B): a browser preflight from a configured origin gets through the
+ * security chain with an allow header. The Vite dev proxy hides this path, so nothing else exercises it before a
+ * deployment does.
+ */
+class CorsPreflightIT : IntegrationTestBase() {
+
+    @Autowired
+    lateinit var corsProperties: CorsProperties
+
+    @Test
+    fun `preflight from a configured origin is allowed`() {
+        assertThat(corsProperties.allowedOrigins).`as`("app.cors.allowed-origins").isNotEmpty()
+        val origin = corsProperties.allowedOrigins.first()
+
+        val response = preflight(origin)
+
+        assertThat(response.statusCode()).isEqualTo(200)
+        assertThat(response.headers().firstValue("Access-Control-Allow-Origin")).contains(origin)
+    }
+
+    @Test
+    fun `preflight from an unknown origin is refused`() {
+        val response = preflight("https://not-a-configured-origin.example")
+
+        assertThat(response.statusCode()).isEqualTo(403)
+        assertThat(response.headers().firstValue("Access-Control-Allow-Origin")).isEmpty()
+    }
+
+    private fun preflight(origin: String): HttpResponse<String> =
+        HttpClient.newHttpClient().use { client ->
+            client.send(
+                HttpRequest.newBuilder(URI.create(baseUrl() + "/api/cors-probe"))
+                    .method("OPTIONS", HttpRequest.BodyPublishers.noBody())
+                    .header("Origin", origin)
+                    .header("Access-Control-Request-Method", "POST")
+                    .build(),
+                HttpResponse.BodyHandlers.ofString()
+            )
+        }
+}

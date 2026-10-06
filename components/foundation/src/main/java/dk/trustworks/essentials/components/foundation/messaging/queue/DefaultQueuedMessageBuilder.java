@@ -140,7 +140,6 @@ public final class DefaultQueuedMessageBuilder {
     /**
      * @return the new {@link DefaultQueuedMessage}
      */
-    @SuppressWarnings("removal")
     public DefaultQueuedMessage build() {
         return new DefaultQueuedMessage(id,
                                         queueName,

@@ -42,10 +42,10 @@ straight into the domain instead of stopping here, and our internal type becomes
 do not own.
 
 It was never only a coupling concern. A DTO carrying a value type also needs the Essentials
-single-value-type (de)serializer on whichever `ObjectMapper` Kafka uses, and that dependency is what
-broke the module under `-Pjackson2`: Spring Boot 4 hands `KafkaConfiguration` a Jackson 3 `JsonMapper`,
-while that profile puts the Jackson 2 flavour of the types module on the classpath. Nothing internal
-crosses the wire now, so the mapper flavour no longer matters here.
+single-value-type (de)serializer on whichever `ObjectMapper` Kafka uses. Under 0.50's since-removed
+`-Pjackson2` profile that dependency broke the module: Spring Boot 4 hands `KafkaConfiguration` a
+Jackson 3 `JsonMapper`, while that profile put the Jackson 2 types module on the classpath. Essentials
+0.60 is Jackson 3 only, and nothing internal crosses the wire anyway.
 
 ## Files
 - `incoming/OrderEvent.java`, `incoming/OrderAccepted.java` — the foreign inbound schema

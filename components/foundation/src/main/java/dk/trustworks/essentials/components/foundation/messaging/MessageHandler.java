@@ -31,4 +31,18 @@ import java.lang.annotation.*;
 @Target(ElementType.METHOD)
 @Retention(RetentionPolicy.RUNTIME)
 public @interface MessageHandler {
+    /**
+     * Should the annotated method be invoked inside a {@link dk.trustworks.essentials.components.foundation.transaction.UnitOfWork}?
+     * <p>
+     * Defaults to {@link UnitOfWorkMode#REQUIRED}, which is the historic behaviour. Use {@link UnitOfWorkMode#NONE}
+     * for handlers that perform blocking I/O against an external system - read the {@link UnitOfWorkMode#NONE}
+     * documentation first, as it shifts idempotency and timeout responsibilities onto the handler.
+     * <p>
+     * Only honoured by message dispatchers that own their {@link dk.trustworks.essentials.components.foundation.transaction.UnitOfWork}
+     * boundary, see {@link UnitOfWorkBoundaryOwningMessageConsumer}. Dispatchers that do not own the boundary reject
+     * {@link UnitOfWorkMode#NONE} at start-up rather than silently ignoring it.
+     *
+     * @return the {@link UnitOfWorkMode} the annotated method should be invoked with
+     */
+    UnitOfWorkMode unitOfWork() default UnitOfWorkMode.REQUIRED;
 }

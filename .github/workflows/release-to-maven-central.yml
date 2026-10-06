@@ -10,9 +10,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - run: echo "Will release version ${{ github.event.release.tag_name }} to Maven Central"
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Set up JDK 25 with Maven Central Release settings
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6.0.1
         with:
           java-version: '25'
           distribution: 'temurin'
@@ -26,8 +26,19 @@ jobs:
       - name: Setting Project version to release tag_name
         run: mvn -B versions:set -DnewVersion=${{ github.event.release.tag_name }} -DgenerateBackupPoms=false
 
+      # Also a CI job on every push and pull request; repeated here so a release cut from a commit that skipped CI
+      # still cannot publish an example module.
+      - name: Every example module is excluded from the release
+        run: python3 scripts/check-release-exclusions.py
+
       - name: Release to Maven Central
-        run: mvn -B clean deploy -P release -DskipTests -DskipDependencyCheck=true
+        # The example modules are not published artifacts. They are left out of the reactor here, the release
+        # profile's excludeArtifacts in the root pom.xml also leaves them out of the bundle, and each sets
+        # skipPublishing=true in its own POM; a new example module needs all three (scripts/check-release-exclusions.py
+        # fails until it has them). maven.deploy.skip does not do it - central-publishing-maven-plugin never reads it
+        run: >-
+          mvn -B clean deploy -P release -DskipTests -DskipDependencyCheck=true
+          -pl '!:essentials-trading-demo,!:essentials-performance-lab,!:essentials-spring-examples,!:postgresql-cqrs,!:postgresql-inbox-outbox,!:mongodb-inbox-outbox'
         env:
           MAVEN_USERNAME: ${{ secrets.CENTRAL_TOKEN_USERNAME }}
           MAVEN_PASSWORD: ${{ secrets.CENTRAL_TOKEN_PASSWORD }}

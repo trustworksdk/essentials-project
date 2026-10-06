@@ -16,6 +16,8 @@
 
 package dk.trustworks.essentials.examples.trading._demo_harness;
 
+import org.springframework.context.event.ContextClosedEvent;
+import org.springframework.context.event.EventListener;
 import org.springframework.stereotype.Service;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
@@ -47,6 +49,27 @@ public class TradingDashboardStreamService {
         emitter.onError(error -> emitters.remove(emitter));
         sendSummary(emitter);
         return emitter;
+    }
+
+    /**
+     * Close every open stream as soon as shutdown begins.
+     * <p>
+     * The emitters never time out ({@code new SseEmitter(0L)}), so an open dashboard tab is an async request that
+     * never finishes on its own, and Spring Boot's graceful shutdown waits for in-flight requests: every Ctrl-C with the
+     * dashboard open cost the full 30 s {@code timeout-per-shutdown-phase}, ending in an
+     * {@code AsyncRequestTimeoutException}. {@link ContextClosedEvent} is published before the lifecycle phases stop,
+     * so completing here lets the web server's graceful shutdown finish at once. The browser's {@code EventSource}
+     * reconnects by itself when the application is back.
+     */
+    @EventListener(ContextClosedEvent.class)
+    public void completeAllOnShutdown() {
+        for (var emitter : emitters) {
+            emitters.remove(emitter);
+            try {
+                emitter.complete();
+            } catch (IllegalStateException ignored) {
+            }
+        }
     }
 
     public void broadcastSummary() {

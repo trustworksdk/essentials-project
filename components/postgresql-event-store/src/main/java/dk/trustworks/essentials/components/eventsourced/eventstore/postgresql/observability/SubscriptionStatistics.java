@@ -45,11 +45,13 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
  * @param statisticsSince when the collection of these statistics started in this JVM
  * @param lifecycle       start/stop statistics
  * @param eventHandling   event handling throughput, timing and failure statistics
- * @param polling         event-store polling statistics. Only the polling path updates these - a subscription served
- *                        by CDC leaves them at zero
+ * @param polling         event-store polling statistics - see {@link Polling} for when a CDC-served subscription
+ *                        still polls
  * @param lock            {@link dk.trustworks.essentials.components.foundation.fencedlock.FencedLock} statistics,
  *                        only relevant for exclusive subscriptions
  * @param reset           resume-point reset (replay) statistics
+ * @param gaps            {@link GlobalEventOrder} gap statistics - what gap reconciliation found, saw resolve and gave
+ *                        up on, on every path that reconciles gaps
  */
 public record SubscriptionStatistics(
         SubscriberId subscriberId,
@@ -59,7 +61,8 @@ public record SubscriptionStatistics(
         EventHandling eventHandling,
         Polling polling,
         Lock lock,
-        Reset reset
+        Reset reset,
+        Gaps gaps
 ) {
     public SubscriptionStatistics {
         requireNonNull(subscriberId, "No subscriberId provided");
@@ -70,6 +73,7 @@ public record SubscriptionStatistics(
         requireNonNull(polling, "No polling provided");
         requireNonNull(lock, "No lock provided");
         requireNonNull(reset, "No reset provided");
+        requireNonNull(gaps, "No gaps provided");
     }
 
     /**
@@ -119,8 +123,13 @@ public record SubscriptionStatistics(
     }
 
     /**
-     * Event-store polling statistics. Only the polling path updates these, so a subscription that is served over CDC
-     * leaves them at zero - that is expected and not a sign of a stalled subscription.
+     * Event-store polling statistics - updated whenever the subscription reads events by polling the event store.
+     * <p>
+     * Under Change Data Capture that is not "never". A subscription polls when it is established while CDC is not yet
+     * active, which is common at start-up, and whenever CDC becomes unavailable and it falls back to polling; it stops
+     * again once it switches to the CDC bus. So non-zero counters on a CDC-enabled store are normal, and a
+     * subscription served over CDC that is not advancing them is not stalled either. The CDC catch-up that runs
+     * before a subscription switches to live CDC delivery (backfill) is not counted here.
      *
      * @param polls                                how many times the event store was queried for this subscriber
      * @param pollsWithoutEvents                   how many of those queries returned no events
@@ -128,7 +137,9 @@ public record SubscriptionStatistics(
      * @param lastPollAt                           when the event store was last polled, or {@code null} if it never was
      * @param lastPollDuration                     how long the most recent poll took, or {@code null} if it never was polled
      * @param consecutiveNoPersistedEventsReturned the most recently reported number of consecutive polls returning no events
-     * @param gapReconciliations                   how many times transient {@link GlobalEventOrder} gaps were reconciled after a poll
+     * @param gapReconciliations                   how many polls ran gap reconciliation - one per poll that queried the
+     *                                             event store, whether or not there was a gap. For what reconciliation
+     *                                             found, see {@link SubscriptionStatistics#gaps()}
      */
     public record Polling(
             long polls,
@@ -174,5 +185,36 @@ public record SubscriptionStatistics(
             Instant lastResetAt,
             GlobalEventOrder lastResetToGlobalOrder
     ) {
+    }
+
+    /**
+     * {@link GlobalEventOrder} gap statistics: what gap reconciliation changed for this subscriber, on every path
+     * that reconciles - polling, and the CDC catch-up (backfill) that polling statistics do not cover.
+     * <p>
+     * A gap is a {@link GlobalEventOrder} the subscriber queried for and got no event for - usually a transaction that
+     * has not committed yet, or one that rolled back. It is registered as a <i>transient</i> gap and asked for again;
+     * it is <i>resolved</i> if its event turns up, or <i>promoted to permanent</i> once the promotion strategy decides
+     * it never will. Transient gaps coming and going is normal under concurrent writers. A steadily rising
+     * {@link #promotedToPermanentGaps()} is the number to watch: each is a {@link GlobalEventOrder} this subscriber
+     * stopped waiting for - correct for a rolled-back transaction, an event this subscriber never sees if the writing
+     * transaction simply outlived the promotion threshold.
+     *
+     * @param newTransientGaps             how many gaps were first registered as transient
+     * @param resolvedTransientGaps        how many transient gaps were resolved because their event arrived
+     * @param promotedToPermanentGaps      how many transient gaps this subscriber gave up on as permanent
+     * @param lastNewTransientGapAt        when a transient gap was last registered, or {@code null} if none was
+     * @param lastPromotedToPermanentGapAt when a gap was last promoted to permanent, or {@code null} if none was
+     */
+    public record Gaps(
+            long newTransientGaps,
+            long resolvedTransientGaps,
+            long promotedToPermanentGaps,
+            Instant lastNewTransientGapAt,
+            Instant lastPromotedToPermanentGapAt
+    ) {
+        /**
+         * No gap activity, and what a gap handler that does not report reconciliation outcomes leaves behind.
+         */
+        public static final Gaps NONE = new Gaps(0, 0, 0, null, null);
     }
 }

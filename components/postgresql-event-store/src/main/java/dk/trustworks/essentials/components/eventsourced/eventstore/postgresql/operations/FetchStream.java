@@ -81,24 +81,6 @@ public final class FetchStream<ID> {
     }
 
     /**
-     * @param aggregateType   the aggregate type that the underlying {@link AggregateEventStream} is associated with
-     * @param aggregateId     the identifier of the aggregate we want to fetch the {@link AggregateEventStream} for
-     * @param eventOrderRange the range of {@link EventOrder}'s to include in the {@link AggregateEventStream}
-     * @param tenant          only return events belonging to the specified tenant (if {@link Optional#isPresent()})
-     * @deprecated Use {@link #FetchStream(AggregateType, Object, LongRange, Tenant)}, passing {@code null} for "all
-     *         tenants", or {@link #builder()}. {@link #getTenant()} still returns an {@code Optional}, so reading code
-     *         is unaffected. This constructor delegates and behaves identically.
-     */
-    @Deprecated(forRemoval = true, since = "0.40.x")
-    @SuppressWarnings("OptionalUsedAsFieldOrParameterType")
-    public FetchStream(AggregateType aggregateType, ID aggregateId, LongRange eventOrderRange, Optional<Tenant> tenant) {
-        this(aggregateType,
-             aggregateId,
-             eventOrderRange,
-             requireNonNull(tenant, "No tenant provided").orElse(null));
-    }
-
-    /**
      * @return the aggregate type that the underlying {@link AggregateEventStream} is associated with
      */
     public AggregateType getAggregateType() {

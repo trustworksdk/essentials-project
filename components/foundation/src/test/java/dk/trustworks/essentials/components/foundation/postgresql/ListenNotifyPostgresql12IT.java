@@ -17,7 +17,7 @@
 package dk.trustworks.essentials.components.foundation.postgresql;
 
 import org.junit.jupiter.api.Test;
-import org.testcontainers.containers.PostgreSQLContainer;
+import org.testcontainers.postgresql.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.*;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -26,13 +26,13 @@ import static org.assertj.core.api.Assertions.assertThat;
 class ListenNotifyPostgresql12IT extends ListenNotifyIT {
 
     @Container
-    private static final PostgreSQLContainer<?> postgreSQLContainer = new PostgreSQLContainer<>("postgres:12")
+    private static final PostgreSQLContainer postgreSQLContainer = new PostgreSQLContainer("postgres:12")
             .withDatabaseName("listen-notify-db")
             .withUsername("test-user")
             .withPassword("secret-password");
 
 
-    protected PostgreSQLContainer<?> getPostgreSQLContainer() {
+    protected PostgreSQLContainer getPostgreSQLContainer() {
         return postgreSQLContainer;
     }
 

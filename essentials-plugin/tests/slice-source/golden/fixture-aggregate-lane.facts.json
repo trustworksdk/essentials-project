@@ -1,0 +1,648 @@
+{
+  "tool": "slice-source",
+  "format": 1,
+  "mode": "facts",
+  "root": "tests/fixtures/aggregate-lane",
+  "manifestsRead": true,
+  "sourceFiles": 21,
+  "bcs": [
+    {
+      "name": "billing",
+      "path": "src/main/*/com/example/billing",
+      "dirs": [
+        "src/main/java/com/example/billing"
+      ],
+      "languages": [
+        "java"
+      ],
+      "slices": [
+        "billing.recurring_billing",
+        "billing.issue_invoice",
+        "billing.pay_invoice",
+        "billing.invoice_list"
+      ],
+      "lane": {
+        "signals": {
+          "decider": [],
+          "aggregates": {
+            "dir": "src/main/*/com/example/billing/aggregates",
+            "files": 2
+          },
+          "entities": null,
+          "eventStore": [
+            {
+              "file": "src/main/java/com/example/billing/aggregates/Invoices.java",
+              "line": 17,
+              "symbol": "AggregateType"
+            },
+            {
+              "file": "src/main/java/com/example/billing/aggregates/Invoices.java",
+              "line": 21,
+              "symbol": "ConfigurableEventStore"
+            },
+            {
+              "file": "src/main/java/com/example/billing/automations/recurring_billing/RecurringBillingProcessor.java",
+              "line": 47,
+              "symbol": "AggregateType"
+            },
+            {
+              "file": "src/main/java/com/example/billing/views/invoice_list/InvoiceListProjection.java",
+              "line": 35,
+              "symbol": "AggregateType"
+            },
+            {
+              "file": "src/main/java/com/example/billing/views/invoice_list/InvoiceListProjection.java",
+              "line": 59,
+              "symbol": "GlobalEventOrder"
+            }
+          ]
+        },
+        "declared": [
+          {
+            "slice": "billing.recurring_billing",
+            "lane": "aggregate",
+            "file": "src/main/java/com/example/billing/automations/recurring_billing/slice.yaml"
+          },
+          {
+            "slice": "billing.issue_invoice",
+            "lane": "aggregate",
+            "file": "src/main/java/com/example/billing/use_cases/issue_invoice/slice.yaml"
+          },
+          {
+            "slice": "billing.pay_invoice",
+            "lane": "aggregate",
+            "file": "src/main/java/com/example/billing/use_cases/pay_invoice/slice.yaml"
+          },
+          {
+            "slice": "billing.invoice_list",
+            "lane": "aggregate",
+            "file": "src/main/java/com/example/billing/views/invoice_list/slice.yaml"
+          }
+        ],
+        "detected": "aggregate"
+      }
+    }
+  ],
+  "slices": [
+    {
+      "id": "billing.recurring_billing",
+      "idSource": "manifest",
+      "bc": "billing",
+      "bcPath": "src/main/*/com/example/billing",
+      "dir": "src/main/java/com/example/billing/automations/recurring_billing",
+      "role": "automations",
+      "kind": "automation",
+      "manifest": "src/main/java/com/example/billing/automations/recurring_billing/slice.yaml",
+      "language": "java",
+      "package": "com.example.billing.automations.recurring_billing",
+      "files": [
+        "RecurringBillingProcessor.java",
+        "RecurringBillingRepository.java",
+        "RecurringBillingTodo.java"
+      ],
+      "processors": [
+        {
+          "class": "RecurringBillingProcessor",
+          "base": "EventProcessor",
+          "file": "src/main/java/com/example/billing/automations/recurring_billing/RecurringBillingProcessor.java",
+          "line": 29
+        }
+      ],
+      "handlers": [
+        {
+          "class": "RecurringBillingProcessor",
+          "method": "on",
+          "annotation": "MessageHandler",
+          "annotationFqn": "dk.trustworks.essentials.components.foundation.messaging.MessageHandler",
+          "role": "event",
+          "file": "src/main/java/com/example/billing/automations/recurring_billing/RecurringBillingProcessor.java",
+          "line": 52,
+          "annotationLine": 51,
+          "message": {
+            "written": "InvoiceIssued",
+            "name": "InvoiceIssued",
+            "fqn": "com.example.billing.events.InvoiceIssued",
+            "resolvedBy": "import"
+          },
+          "params": [
+            {
+              "name": "event",
+              "type": "InvoiceIssued"
+            },
+            {
+              "name": "message",
+              "type": "OrderedMessage"
+            }
+          ],
+          "envelope": false
+        },
+        {
+          "class": "RecurringBillingProcessor",
+          "method": "on",
+          "annotation": "MessageHandler",
+          "annotationFqn": "dk.trustworks.essentials.components.foundation.messaging.MessageHandler",
+          "role": "event",
+          "file": "src/main/java/com/example/billing/automations/recurring_billing/RecurringBillingProcessor.java",
+          "line": 61,
+          "annotationLine": 60,
+          "message": {
+            "written": "InvoicePaid",
+            "name": "InvoicePaid",
+            "fqn": "com.example.billing.events.InvoicePaid",
+            "resolvedBy": "import"
+          },
+          "params": [
+            {
+              "name": "event",
+              "type": "InvoicePaid"
+            },
+            {
+              "name": "message",
+              "type": "OrderedMessage"
+            }
+          ],
+          "envelope": false
+        }
+      ],
+      "handles": [],
+      "dispatches": [
+        {
+          "name": "IssueInvoice",
+          "fqn": "com.example.billing.use_cases.issue_invoice.IssueInvoice",
+          "resolvedBy": "import",
+          "via": "sendAndDontWait",
+          "file": "src/main/java/com/example/billing/automations/recurring_billing/RecurringBillingProcessor.java",
+          "line": 71,
+          "own": false
+        }
+      ],
+      "publishes": [],
+      "subscriptions": [
+        {
+          "aggregateType": "Invoices",
+          "written": "Invoices.AGGREGATE_TYPE",
+          "file": "src/main/java/com/example/billing/automations/recurring_billing/RecurringBillingProcessor.java",
+          "line": 48
+        }
+      ],
+      "mappings": [],
+      "schedules": [],
+      "notAnalysed": []
+    },
+    {
+      "id": "billing.issue_invoice",
+      "idSource": "manifest",
+      "bc": "billing",
+      "bcPath": "src/main/*/com/example/billing",
+      "dir": "src/main/java/com/example/billing/use_cases/issue_invoice",
+      "role": "use_cases",
+      "kind": "command",
+      "manifest": "src/main/java/com/example/billing/use_cases/issue_invoice/slice.yaml",
+      "language": "java",
+      "package": "com.example.billing.use_cases.issue_invoice",
+      "files": [
+        "IssueInvoice.java",
+        "IssueInvoiceAPI.java",
+        "IssueInvoiceHandler.java"
+      ],
+      "processors": [],
+      "handlers": [
+        {
+          "class": "IssueInvoiceHandler",
+          "method": "handle",
+          "annotation": "CmdHandler",
+          "annotationFqn": "dk.trustworks.essentials.reactive.command.CmdHandler",
+          "role": "command",
+          "file": "src/main/java/com/example/billing/use_cases/issue_invoice/IssueInvoiceHandler.java",
+          "line": 16,
+          "annotationLine": 15,
+          "message": {
+            "written": "IssueInvoice",
+            "name": "IssueInvoice",
+            "fqn": "com.example.billing.use_cases.issue_invoice.IssueInvoice",
+            "resolvedBy": "same-package"
+          },
+          "params": [
+            {
+              "name": "cmd",
+              "type": "IssueInvoice"
+            }
+          ],
+          "envelope": false
+        }
+      ],
+      "handles": [
+        {
+          "name": "IssueInvoice",
+          "fqn": "com.example.billing.use_cases.issue_invoice.IssueInvoice",
+          "resolvedBy": "same-package",
+          "via": "CmdHandler",
+          "file": "src/main/java/com/example/billing/use_cases/issue_invoice/IssueInvoiceHandler.java",
+          "line": 16
+        }
+      ],
+      "dispatches": [
+        {
+          "name": "IssueInvoice",
+          "fqn": "com.example.billing.use_cases.issue_invoice.IssueInvoice",
+          "resolvedBy": "same-package",
+          "via": "send",
+          "file": "src/main/java/com/example/billing/use_cases/issue_invoice/IssueInvoiceAPI.java",
+          "line": 23,
+          "own": true
+        }
+      ],
+      "publishes": [],
+      "subscriptions": [],
+      "mappings": [
+        {
+          "class": "IssueInvoiceAPI",
+          "method": "issueInvoice",
+          "file": "src/main/java/com/example/billing/use_cases/issue_invoice/IssueInvoiceAPI.java",
+          "line": 21,
+          "annotationLine": 20,
+          "annotation": "PostMapping",
+          "httpMethods": [
+            "POST"
+          ],
+          "routes": [
+            "/api/billing"
+          ],
+          "params": [],
+          "requestParams": [],
+          "queryParams": [],
+          "requestBody": {
+            "name": "IssueInvoiceRequest",
+            "fqn": "com.example.billing.use_cases.issue_invoice.IssueInvoiceAPI.IssueInvoiceRequest",
+            "resolvedBy": "same-file"
+          }
+        }
+      ],
+      "schedules": [],
+      "notAnalysed": []
+    },
+    {
+      "id": "billing.pay_invoice",
+      "idSource": "manifest",
+      "bc": "billing",
+      "bcPath": "src/main/*/com/example/billing",
+      "dir": "src/main/java/com/example/billing/use_cases/pay_invoice",
+      "role": "use_cases",
+      "kind": "command",
+      "manifest": "src/main/java/com/example/billing/use_cases/pay_invoice/slice.yaml",
+      "language": "java",
+      "package": "com.example.billing.use_cases.pay_invoice",
+      "files": [
+        "PayInvoice.java",
+        "PayInvoiceAPI.java",
+        "PayInvoiceHandler.java"
+      ],
+      "processors": [],
+      "handlers": [
+        {
+          "class": "PayInvoiceHandler",
+          "method": "handle",
+          "annotation": "CmdHandler",
+          "annotationFqn": "dk.trustworks.essentials.reactive.command.CmdHandler",
+          "role": "command",
+          "file": "src/main/java/com/example/billing/use_cases/pay_invoice/PayInvoiceHandler.java",
+          "line": 15,
+          "annotationLine": 14,
+          "message": {
+            "written": "PayInvoice",
+            "name": "PayInvoice",
+            "fqn": "com.example.billing.use_cases.pay_invoice.PayInvoice",
+            "resolvedBy": "same-package"
+          },
+          "params": [
+            {
+              "name": "cmd",
+              "type": "PayInvoice"
+            }
+          ],
+          "envelope": false
+        }
+      ],
+      "handles": [
+        {
+          "name": "PayInvoice",
+          "fqn": "com.example.billing.use_cases.pay_invoice.PayInvoice",
+          "resolvedBy": "same-package",
+          "via": "CmdHandler",
+          "file": "src/main/java/com/example/billing/use_cases/pay_invoice/PayInvoiceHandler.java",
+          "line": 15
+        }
+      ],
+      "dispatches": [
+        {
+          "name": "PayInvoice",
+          "fqn": "com.example.billing.use_cases.pay_invoice.PayInvoice",
+          "resolvedBy": "same-package",
+          "via": "send",
+          "file": "src/main/java/com/example/billing/use_cases/pay_invoice/PayInvoiceAPI.java",
+          "line": 22,
+          "own": true
+        }
+      ],
+      "publishes": [],
+      "subscriptions": [],
+      "mappings": [
+        {
+          "class": "PayInvoiceAPI",
+          "method": "payInvoice",
+          "file": "src/main/java/com/example/billing/use_cases/pay_invoice/PayInvoiceAPI.java",
+          "line": 21,
+          "annotationLine": 20,
+          "annotation": "PostMapping",
+          "httpMethods": [
+            "POST"
+          ],
+          "routes": [
+            "/api/billing/{invoiceId}/payment"
+          ],
+          "params": [],
+          "requestParams": [],
+          "queryParams": [],
+          "requestBody": {
+            "name": "PayInvoiceRequest",
+            "fqn": "com.example.billing.use_cases.pay_invoice.PayInvoiceAPI.PayInvoiceRequest",
+            "resolvedBy": "same-file"
+          }
+        }
+      ],
+      "schedules": [],
+      "notAnalysed": []
+    },
+    {
+      "id": "billing.invoice_list",
+      "idSource": "manifest",
+      "bc": "billing",
+      "bcPath": "src/main/*/com/example/billing",
+      "dir": "src/main/java/com/example/billing/views/invoice_list",
+      "role": "views",
+      "kind": "view",
+      "manifest": "src/main/java/com/example/billing/views/invoice_list/slice.yaml",
+      "language": "java",
+      "package": "com.example.billing.views.invoice_list",
+      "files": [
+        "InvoiceListAPI.java",
+        "InvoiceListProjection.java",
+        "InvoiceListRepositoryConfiguration.java",
+        "InvoiceListView.java"
+      ],
+      "processors": [
+        {
+          "class": "InvoiceListProjection",
+          "base": "ViewEventProcessor",
+          "file": "src/main/java/com/example/billing/views/invoice_list/InvoiceListProjection.java",
+          "line": 19
+        }
+      ],
+      "handlers": [
+        {
+          "class": "InvoiceListProjection",
+          "method": "on",
+          "annotation": "MessageHandler",
+          "annotationFqn": "dk.trustworks.essentials.components.foundation.messaging.MessageHandler",
+          "role": "event",
+          "file": "src/main/java/com/example/billing/views/invoice_list/InvoiceListProjection.java",
+          "line": 40,
+          "annotationLine": 39,
+          "message": {
+            "written": "InvoiceIssued",
+            "name": "InvoiceIssued",
+            "fqn": "com.example.billing.events.InvoiceIssued",
+            "resolvedBy": "import"
+          },
+          "params": [
+            {
+              "name": "event",
+              "type": "InvoiceIssued"
+            },
+            {
+              "name": "message",
+              "type": "OrderedMessage"
+            }
+          ],
+          "envelope": false
+        },
+        {
+          "class": "InvoiceListProjection",
+          "method": "on",
+          "annotation": "MessageHandler",
+          "annotationFqn": "dk.trustworks.essentials.components.foundation.messaging.MessageHandler",
+          "role": "event",
+          "file": "src/main/java/com/example/billing/views/invoice_list/InvoiceListProjection.java",
+          "line": 49,
+          "annotationLine": 48,
+          "message": {
+            "written": "InvoicePaid",
+            "name": "InvoicePaid",
+            "fqn": "com.example.billing.events.InvoicePaid",
+            "resolvedBy": "import"
+          },
+          "params": [
+            {
+              "name": "event",
+              "type": "InvoicePaid"
+            },
+            {
+              "name": "message",
+              "type": "OrderedMessage"
+            }
+          ],
+          "envelope": false
+        }
+      ],
+      "handles": [],
+      "dispatches": [],
+      "publishes": [],
+      "subscriptions": [
+        {
+          "aggregateType": "Invoices",
+          "written": "Invoices.AGGREGATE_TYPE",
+          "file": "src/main/java/com/example/billing/views/invoice_list/InvoiceListProjection.java",
+          "line": 36
+        }
+      ],
+      "mappings": [
+        {
+          "class": "InvoiceListAPI",
+          "method": "list",
+          "file": "src/main/java/com/example/billing/views/invoice_list/InvoiceListAPI.java",
+          "line": 24,
+          "annotationLine": 23,
+          "annotation": "GetMapping",
+          "httpMethods": [
+            "GET"
+          ],
+          "routes": [
+            "/api/billing/invoices"
+          ],
+          "params": [],
+          "requestParams": [
+            {
+              "name": "limit",
+              "required": false
+            }
+          ],
+          "queryParams": [],
+          "requestBody": null
+        },
+        {
+          "class": "InvoiceListAPI",
+          "method": "paidInvoices",
+          "file": "src/main/java/com/example/billing/views/invoice_list/InvoiceListAPI.java",
+          "line": 29,
+          "annotationLine": 28,
+          "annotation": "GetMapping",
+          "httpMethods": [
+            "GET"
+          ],
+          "routes": [
+            "/api/billing/invoices"
+          ],
+          "params": [
+            "paid=true"
+          ],
+          "requestParams": [],
+          "queryParams": [],
+          "requestBody": null
+        },
+        {
+          "class": "InvoiceListAPI",
+          "method": "byAmount",
+          "file": "src/main/java/com/example/billing/views/invoice_list/InvoiceListAPI.java",
+          "line": 36,
+          "annotationLine": 35,
+          "annotation": "GetMapping",
+          "httpMethods": [
+            "GET"
+          ],
+          "routes": [
+            "/api/billing/invoices"
+          ],
+          "params": [
+            "minAmount",
+            "maxAmount"
+          ],
+          "requestParams": [
+            {
+              "name": "minAmount",
+              "required": true
+            },
+            {
+              "name": "maxAmount",
+              "required": true
+            }
+          ],
+          "queryParams": [],
+          "requestBody": null
+        }
+      ],
+      "schedules": [],
+      "notAnalysed": [],
+      "readModels": [
+        {
+          "name": "InvoiceListView",
+          "store": "document-db",
+          "columns": [
+            {
+              "name": "invoiceId",
+              "type": "String",
+              "note": "id"
+            },
+            {
+              "name": "amountMinor",
+              "type": "long",
+              "note": null
+            },
+            {
+              "name": "paid",
+              "type": "boolean",
+              "note": "indexed"
+            },
+            {
+              "name": "version",
+              "type": "long",
+              "note": null
+            },
+            {
+              "name": "lastUpdated",
+              "type": "OffsetDateTime",
+              "note": null
+            }
+          ],
+          "declaredIn": "src/main/java/com/example/billing/views/invoice_list/InvoiceListView.java",
+          "line": 17,
+          "matchedBy": [
+            "annotation",
+            "name",
+            "repository",
+            "manifest"
+          ]
+        }
+      ]
+    }
+  ],
+  "messages": [
+    {
+      "name": "InvoiceIssued",
+      "type": "event",
+      "bc": "billing",
+      "found": true,
+      "identity": "id: InvoiceId",
+      "fields": [
+        "id: InvoiceId",
+        "amountMinor: long"
+      ],
+      "declaredIn": "src/main/java/com/example/billing/events/InvoiceIssued.java",
+      "line": 7,
+      "alsoDeclaredIn": []
+    },
+    {
+      "name": "InvoicePaid",
+      "type": "event",
+      "bc": "billing",
+      "found": true,
+      "identity": "id: InvoiceId",
+      "fields": [
+        "id: InvoiceId",
+        "amountMinor: long"
+      ],
+      "declaredIn": "src/main/java/com/example/billing/events/InvoicePaid.java",
+      "line": 7,
+      "alsoDeclaredIn": []
+    },
+    {
+      "name": "IssueInvoice",
+      "type": "command",
+      "bc": "billing",
+      "found": true,
+      "identity": "id: InvoiceId",
+      "fields": [
+        "id: InvoiceId",
+        "amountMinor: long"
+      ],
+      "declaredIn": "src/main/java/com/example/billing/use_cases/issue_invoice/IssueInvoice.java",
+      "line": 5,
+      "alsoDeclaredIn": []
+    },
+    {
+      "name": "PayInvoice",
+      "type": "command",
+      "bc": "billing",
+      "found": true,
+      "identity": "id: InvoiceId",
+      "fields": [
+        "id: InvoiceId",
+        "paidMinor: long"
+      ],
+      "declaredIn": "src/main/java/com/example/billing/use_cases/pay_invoice/PayInvoice.java",
+      "line": 5,
+      "alsoDeclaredIn": []
+    }
+  ],
+  "unparsed": [],
+  "unresolved": []
+}

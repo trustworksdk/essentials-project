@@ -1,0 +1,24 @@
+schemaVersion: "1.3"
+slice: payments.capture_payment
+kind: command
+bc: payments
+owner: payments-team
+status: live
+summary: Capture a requested payment, once.
+generator: essentials
+language: java
+tier: cqrs-es
+lane: aggregate
+handles: [CapturePayment]
+publishes: [PaymentCaptured]
+endpoints:
+  - { method: POST, path: "/api/payments/{paymentId}/capture", auth: user }
+writes: [Payment]
+invariants:
+  - { id: INV-CP-1, text: "Only a requested payment can be captured", enforcedBy: CapturePaymentDecider }
+forbidden:
+  - cross-slice-internal:payments
+tests:
+  unit: { present: false }
+  integration: { present: false }
+  contract: { present: false }

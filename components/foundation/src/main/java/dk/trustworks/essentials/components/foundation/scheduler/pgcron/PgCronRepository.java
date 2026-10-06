@@ -91,10 +91,7 @@ public class PgCronRepository {
         PostgresqlUtil.isValidFunctionName(functionName);
 
         var jobName = JobNameResolver.resolve(job.name());
-        var hasArgs = job.args() != null && !job.args().isEmpty();
-        var functionCall = hasArgs
-                           ? String.format("SELECT %s(%s);", functionName, job.argsToCommaSeparatedString())
-                           : String.format("SELECT %s();", functionName);
+        var functionCall = job.functionCallSql() + ";";
         log.debug("Executing pg_cron query: '{}'", functionCall);
 
         var existingId = doesJobExist(jobName);

@@ -22,7 +22,7 @@ import dk.trustworks.essentials.components.foundation.transaction.jdbi.JdbiUnitO
 import org.jdbi.v3.core.Jdbi;
 import org.jdbi.v3.postgres.PostgresPlugin;
 import dk.trustworks.essentials.components.foundation.test.EssentialsTestContainers;
-import org.testcontainers.containers.PostgreSQLContainer;
+import org.testcontainers.postgresql.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.*;
 
 import java.time.Duration;
@@ -31,7 +31,7 @@ import java.util.Optional;
 @Testcontainers
 public class PostgresqlFencedLockManager_MultiNode_ReleaseLockIT extends DBFencedLockManager_MultiNode_ReleaseLockIT<PostgresqlFencedLockManager> {
     @Container
-    private static final PostgreSQLContainer<?> postgreSQLContainer = EssentialsTestContainers.postgres("lock-db");
+    private static final PostgreSQLContainer postgreSQLContainer = EssentialsTestContainers.postgres("lock-db");
 
     @Override
     protected PostgresqlFencedLockManager createLockManagerNode2() {

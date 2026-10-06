@@ -109,6 +109,17 @@ public record PgCronJob(String name, String functionName, List<Arg<?>> args, Cro
         return args.stream().map(Arg::toSql).collect(joining(","));
     }
 
+    /**
+     * @return the statement that calls this job's function with its arguments, e.g. {@code SELECT my_fn('a',42)} -
+     * what pg_cron runs on schedule, and what {@link dk.trustworks.essentials.components.foundation.scheduler.EssentialsScheduler#runJobNow(String)}
+     * runs on demand
+     */
+    public String functionCallSql() {
+        return args != null && !args.isEmpty()
+               ? String.format("SELECT %s(%s)", functionName, argsToCommaSeparatedString())
+               : String.format("SELECT %s()", functionName);
+    }
+
     @Override
     public boolean equals(Object o) {
         if (o == null || getClass() != o.getClass()) return false;

@@ -147,8 +147,6 @@ public final class DurableLocalCommandBusBuilder {
         return this;
     }
 
-    @SuppressWarnings("removal")
-
     public DurableLocalCommandBus build() {
         return new DurableLocalCommandBus(durableQueues,
                                           parallelSendAndDontWaitConsumers,

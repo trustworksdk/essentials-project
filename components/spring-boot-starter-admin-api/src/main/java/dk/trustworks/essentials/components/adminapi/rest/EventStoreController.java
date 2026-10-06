@@ -16,10 +16,10 @@
 
 package dk.trustworks.essentials.components.adminapi.rest;
 
-import dk.trustworks.essentials.components.adminapi.rest.dto.GlobalEventOrderResult;
+import dk.trustworks.essentials.components.adminapi.rest.dto.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.api.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.AggregateType;
-import dk.trustworks.essentials.components.foundation.types.SubscriberId;
+import dk.trustworks.essentials.components.foundation.types.*;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
@@ -60,6 +60,31 @@ public class EventStoreController {
         return eventStoreApi.findAllSubscriptionStatistics(principalResolver.requireAuthenticatedPrincipal());
     }
 
+    @GetMapping("/event-store/events/{eventId}")
+    public ApiCausationEvent findEvent(@PathVariable String eventId) {
+        return eventStoreApi.findEvent(principalResolver.requireAuthenticatedPrincipal(), EventId.of(eventId))
+                            .orElseThrow(() -> new AdminApiResourceNotFoundException(
+                                    "No registered event stream holds an event with id '" + eventId + "'."));
+    }
+
+    @GetMapping("/event-store/aggregate-types/{aggregateType}/aggregates/{aggregateId}/events")
+    public List<ApiCausationEvent> findAggregateEvents(@PathVariable String aggregateType,
+                                                       @PathVariable String aggregateId,
+                                                       @RequestParam(defaultValue = "100") int limit) {
+        return eventStoreApi.findAggregateEvents(principalResolver.requireAuthenticatedPrincipal(), AggregateType.of(aggregateType), aggregateId, limit);
+    }
+
+    @GetMapping("/event-store/events/{eventId}/causation-chain")
+    public List<ApiCausationEvent> findCausationChain(@PathVariable String eventId,
+                                                      @RequestParam(defaultValue = "20") int maxDepth) {
+        return eventStoreApi.findCausationChain(principalResolver.requireAuthenticatedPrincipal(), EventId.of(eventId), maxDepth);
+    }
+
+    @GetMapping("/event-store/events/{eventId}/caused-events")
+    public List<ApiCausationEvent> findEventsCausedBy(@PathVariable String eventId) {
+        return eventStoreApi.findEventsCausedBy(principalResolver.requireAuthenticatedPrincipal(), EventId.of(eventId));
+    }
+
     @GetMapping("/event-store/subscriptions/{subscriberId}/aggregate-types/{aggregateType}/statistics")
     public ApiSubscriptionStatistics findSubscriptionStatistics(@PathVariable String subscriberId,
                                                                @PathVariable String aggregateType) {
@@ -69,5 +94,14 @@ public class EventStoreController {
                             .orElseThrow(() -> new AdminApiResourceNotFoundException(
                                     "No statistics are collected in this instance for subscriber '" + subscriberId
                                             + "' and aggregate type '" + aggregateType + "'."));
+    }
+
+    @PostMapping("/event-store/subscriptions/{subscriberId}/aggregate-types/{aggregateType}/resume")
+    public ResumeResult resumeSubscriptionStoppedByErrorPolicy(@PathVariable String subscriberId,
+                                                               @PathVariable String aggregateType) {
+        var resumed = eventStoreApi.resumeSubscriptionStoppedByErrorPolicy(principalResolver.requireAuthenticatedPrincipal(),
+                                                                           SubscriberId.of(subscriberId),
+                                                                           AggregateType.of(aggregateType));
+        return new ResumeResult(resumed);
     }
 }

@@ -1,0 +1,24 @@
+schemaVersion: "1.3"
+slice: payments.request_payment
+kind: command
+bc: payments
+owner: payments-team
+status: live
+summary: Request a payment for an amount.
+generator: essentials
+language: java
+tier: cqrs-es
+lane: decider
+handles: [RequestPayment]
+publishes: [PaymentRequested]
+endpoints:
+  - { method: POST, path: "/api/payments", auth: user }
+writes: [Payment]
+invariants:
+  - { id: INV-RQ-1, text: "A payment amount must be positive", enforcedBy: RequestPaymentDecider }
+forbidden:
+  - cross-slice-internal:payments
+tests:
+  unit: { present: false }
+  integration: { present: false }
+  contract: { present: false }

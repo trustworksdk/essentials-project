@@ -363,10 +363,12 @@ public class OrderFulfillmentProcessor extends EventProcessor {
 
     @Override
     protected RedeliveryPolicy getInboxRedeliveryPolicy() {
-        return RedeliveryPolicy.exponentialBackoff()
-            .setInitialRedeliveryDelay(Duration.ofSeconds(1))
-            .setMaximumNumberOfRedeliveries(10)
-            .build();
+        return RedeliveryPolicy.exponentialBackoff(
+            Duration.ofSeconds(1),  // initialRedeliveryDelay
+            Duration.ofSeconds(1),  // followupRedeliveryDelay
+            1.1d,                   // followupRedeliveryDelayMultiplier
+            Duration.ofSeconds(3),  // maximumFollowupRedeliveryDelayThreshold
+            10);                    // maximumNumberOfRedeliveries
     }
 }
 ```
@@ -462,16 +464,17 @@ public class EmailService {
     // Consume emails across multiple instances
     @PostConstruct
     public void startWorker() {
-        queues.consumeFromQueue(
-            QueueName.of("emails"),
-            RedeliveryPolicy.exponentialBackoff(
-                Duration.ofSeconds(1),
-                Duration.ofMinutes(5),
-                2.0,
-                10
-            ),
-            message -> sendEmail(message.getPayload(EmailMessage.class))
-        );
+        queues.consumeFromQueue(ConsumeFromQueue.builder()
+            .setQueueName(QueueName.of("emails"))
+            .setRedeliveryPolicy(RedeliveryPolicy.exponentialBackoff(
+                Duration.ofSeconds(1),  // initialRedeliveryDelay
+                Duration.ofSeconds(1),  // followupRedeliveryDelay
+                2.0,                    // followupRedeliveryDelayMultiplier
+                Duration.ofMinutes(5),  // maximumFollowupRedeliveryDelayThreshold
+                10))                    // maximumNumberOfRedeliveries
+            .setParallelConsumers(3)
+            .setQueueMessageHandler(message -> sendEmail((EmailMessage) message.getPayload()))
+            .build());
     }
 
     // Scheduled job - only ONE instance executes
@@ -658,10 +661,12 @@ public class OrderFulfillmentProcessor extends EventProcessor {
 
     @Override
     protected RedeliveryPolicy getInboxRedeliveryPolicy() {
-        return RedeliveryPolicy.exponentialBackoff()
-            .setInitialRedeliveryDelay(Duration.ofSeconds(1))
-            .setMaximumNumberOfRedeliveries(10)
-            .build();
+        return RedeliveryPolicy.exponentialBackoff(
+            Duration.ofSeconds(1),  // initialRedeliveryDelay
+            Duration.ofSeconds(1),  // followupRedeliveryDelay
+            1.1d,                   // followupRedeliveryDelayMultiplier
+            Duration.ofSeconds(3),  // maximumFollowupRedeliveryDelayThreshold
+            10);                    // maximumNumberOfRedeliveries
     }
 }
 ```
@@ -712,7 +717,7 @@ For detailed examples of specific patterns, see the individual module READMEs:
 
 **Foundation Components:**
 - **Distributed Locks:** [postgresql-distributed-fenced-lock](postgresql-distributed-fenced-lock/README.md)
-- **Message Queues:** [postgresql-queue](postgresql-queue/README.md)
+- **Message Queues:** [postgresql-queue](postgresql-queue/README.md), [postgresql-queue-shard-owned](postgresql-queue-shard-owned/README.md)
 - **Inbox/Outbox:** [foundation](foundation/README.md)
 
 **Event-Driven Components:**
@@ -740,6 +745,8 @@ For detailed examples of specific patterns, see the individual module READMEs:
 |--------|-----------------------------------------------------------------------------------------------------------------|---------------|
 | [postgresql-distributed-fenced-lock](postgresql-distributed-fenced-lock/README.md) | `PostgresqlFencedLockManager` - PostgreSQL-based distributed locks                                              | [LLM](../LLM/LLM-postgresql-distributed-fenced-lock.md) |
 | [postgresql-queue](postgresql-queue/README.md) | `PostgresqlDurableQueues` - PostgreSQL-based message queues                                                     | [LLM](../LLM/LLM-postgresql-queue.md) |
+| [postgresql-queue-shard-owned](postgresql-queue-shard-owned/README.md) | `PostgresqlMessageQueue` - shard-owned durable queue: one owner per shard, no claim write, ordering across processes | [LLM](../LLM/LLM-postgresql-queue-shard-owned.md) |
+| [postgresql-queue-shard-owned-adapter](postgresql-queue-shard-owned-adapter/README.md) | `ShardOwnedDurableQueues` - presents the shard-owned engine as a `DurableQueues`, so `Inbox`/`Outbox`/`DurableLocalCommandBus` run on it unchanged | [LLM](../LLM/LLM-postgresql-queue-shard-owned.md) |
 | [postgresql-document-db](postgresql-document-db/README.md) | `DocumentDbRepository` / `VersionedEntity` - Kotlin-focused document database using JSONB and type safe queries | [LLM](../LLM/LLM-postgresql-document-db.md) |
 
 #### MongoDB (Spring Data)

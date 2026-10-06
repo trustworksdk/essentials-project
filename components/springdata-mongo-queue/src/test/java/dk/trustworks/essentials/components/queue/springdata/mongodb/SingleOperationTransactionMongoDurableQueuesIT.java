@@ -30,7 +30,7 @@ import org.springframework.boot.data.mongodb.test.autoconfigure.DataMongoTest;
 import org.springframework.data.mongodb.core.MongoTemplate;
 import org.springframework.test.annotation.DirtiesContext;
 import org.springframework.test.context.*;
-import org.testcontainers.containers.MongoDBContainer;
+import org.testcontainers.mongodb.MongoDBContainer;
 import org.testcontainers.junit.jupiter.*;
 
 import java.time.Duration;
@@ -43,7 +43,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 @DirtiesContext(classMode = DirtiesContext.ClassMode.AFTER_EACH_TEST_METHOD)
 class SingleOperationTransactionMongoDurableQueuesIT extends DurableQueuesIT<MongoDurableQueues, SpringMongoTransactionAwareUnitOfWork, SpringMongoTransactionAwareUnitOfWorkFactory> {
     @Container
-    static MongoDBContainer mongoDBContainer = new MongoDBContainer(EssentialsTestContainers.MONGO_IMAGE);
+    static MongoDBContainer mongoDBContainer = new MongoDBContainer(EssentialsTestContainers.MONGO_IMAGE).withReplicaSet();
 
     @DynamicPropertySource
     static void setProperties(DynamicPropertyRegistry registry) {
@@ -61,9 +61,11 @@ class SingleOperationTransactionMongoDurableQueuesIT extends DurableQueuesIT<Mon
     @Override
     protected MongoDurableQueues createDurableQueues(SpringMongoTransactionAwareUnitOfWorkFactory unitOfWorkFactory,
                                                      JSONSerializer jsonSerializer) {
-        return new MongoDurableQueues(mongoTemplate,
-                                      jsonSerializer,
-                                      Duration.ofSeconds(5));
+        return MongoDurableQueues.builder()
+                                  .setMongoTemplate(mongoTemplate)
+                                  .setJsonSerializer(jsonSerializer)
+                                  .setMessageHandlingTimeout(Duration.ofSeconds(5))
+                                  .build();
     }
 
     @Override
@@ -77,7 +79,7 @@ class SingleOperationTransactionMongoDurableQueuesIT extends DurableQueuesIT<Mon
     }
 
     @Test
-    void test_SingleOperationTransaction_TransactionalMode() {
+    void test_SingleOperationTransaction() {
         // Given
         var queueName = QueueName.of("TestQueue");
 
@@ -106,7 +108,7 @@ class SingleOperationTransactionMongoDurableQueuesIT extends DurableQueuesIT<Mon
     }
 
     @Test
-    void test_SingleOperationTransaction_TransactionalMode_timeout_messages_gets_automatically_retried() throws InterruptedException {
+    void test_SingleOperationTransaction_timeout_messages_gets_automatically_retried() throws InterruptedException {
         // Given
         var queueName = QueueName.of("TestQueue");
 

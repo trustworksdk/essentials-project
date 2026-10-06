@@ -22,6 +22,7 @@ import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.pe
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.serializer.json.JSONEventSerializer;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.types.EventOrder;
 import dk.trustworks.essentials.components.foundation.postgresql.PostgresqlUtil;
+import dk.trustworks.essentials.components.foundation.schema.*;
 import dk.trustworks.essentials.components.foundation.transaction.jdbi.*;
 import dk.trustworks.essentials.shared.collections.Lists;
 import io.micrometer.core.instrument.MeterRegistry;
@@ -57,12 +58,12 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
  * vulnerabilities, compromising the security and integrity of the database.</b>
  */
 @SuppressWarnings("unchecked")
-public class PostgresqlAggregateSnapshotRepository implements AggregateSnapshotRepository {
+public class PostgresqlAggregateSnapshotRepository implements AggregateSnapshotRepository, EssentialsSchemaContributor {
     private static final Logger log                                    = LoggerFactory.getLogger(dk.trustworks.essentials.components.eventsourced.aggregates.snapshot.PostgresqlAggregateSnapshotRepository.class);
     public static final  String DEFAULT_AGGREGATE_SNAPSHOTS_TABLE_NAME = "aggregate_snapshots";
 
     private final AggregateSnapshotStateAdapter                                       snapshotStateAdapter;
-    private final AggregateSnapshotStore                                               snapshotStore;
+    private final PostgresqlAggregateSnapshotStore                                     snapshotStore;
     private final AggregateSnapshotMeasurementSupport                                 measurementSupport;
     private final AddNewAggregateSnapshotStrategy                                     addNewSnapshotStrategy;
     private final AggregateSnapshotDeletionStrategy                                   snapshotDeletionStrategy;
@@ -154,15 +155,13 @@ public class PostgresqlAggregateSnapshotRepository implements AggregateSnapshotR
      *                                 vulnerabilities, compromising the security and integrity of the database.</b>
      * @param addNewSnapshotStrategy   the strategy determining when a new {@link AggregateSnapshot} will be stored
      * @param snapshotDeletionStrategy the strategy determining when an existing {@link AggregateSnapshot} will be deleted
-     * @deprecated Use {@link #builder()}. This constructor declares an {@code Optional} parameter and/or more than five parameters; the builder names every argument and accepts both plain values and {@code Optional}s. It is unchanged and remains the implementation the builder delegates to.
      */
-    @Deprecated(forRemoval = true, since = "0.40.x")
-    public PostgresqlAggregateSnapshotRepository(ConfigurableEventStore<? extends AggregateEventStreamConfiguration> eventStore,
-                                                 HandleAwareUnitOfWorkFactory<? extends HandleAwareUnitOfWork> unitOfWorkFactory,
-                                                 String snapshotTableName,
-                                                 JSONEventSerializer jsonSerializer,
-                                                 AddNewAggregateSnapshotStrategy addNewSnapshotStrategy,
-                                                 AggregateSnapshotDeletionStrategy snapshotDeletionStrategy) {
+    PostgresqlAggregateSnapshotRepository(ConfigurableEventStore<? extends AggregateEventStreamConfiguration> eventStore,
+                            HandleAwareUnitOfWorkFactory<? extends HandleAwareUnitOfWork> unitOfWorkFactory,
+                            String snapshotTableName,
+                            JSONEventSerializer jsonSerializer,
+                            AddNewAggregateSnapshotStrategy addNewSnapshotStrategy,
+                            AggregateSnapshotDeletionStrategy snapshotDeletionStrategy) {
         this(eventStore,
              unitOfWorkFactory,
              Optional.ofNullable(snapshotTableName),
@@ -221,10 +220,8 @@ public class PostgresqlAggregateSnapshotRepository implements AggregateSnapshotR
      * @param jsonSerializer           JSON serializer that will be used to serialize Aggregate instances
      * @param addNewSnapshotStrategy   the strategy determining when a new {@link AggregateSnapshot} will be stored
      * @param snapshotDeletionStrategy the strategy determining when an existing {@link AggregateSnapshot} will be deleted
-     * @deprecated Use {@link #builder()}. This constructor declares an {@code Optional} parameter and/or more than five parameters; the builder names every argument and accepts both plain values and {@code Optional}s. It is unchanged and remains the implementation the builder delegates to.
      */
-    @Deprecated(forRemoval = true, since = "0.40.x")
-    public PostgresqlAggregateSnapshotRepository(ConfigurableEventStore<? extends AggregateEventStreamConfiguration> eventStore,
+    PostgresqlAggregateSnapshotRepository(ConfigurableEventStore<? extends AggregateEventStreamConfiguration> eventStore,
                                                  HandleAwareUnitOfWorkFactory<? extends HandleAwareUnitOfWork> unitOfWorkFactory,
                                                  Optional<String> snapshotTableName,
                                                  JSONEventSerializer jsonSerializer,
@@ -240,26 +237,58 @@ public class PostgresqlAggregateSnapshotRepository implements AggregateSnapshotR
     }
 
     @SuppressWarnings("OptionalUsedAsFieldOrParameterType")
-    /**
-     * @deprecated Use {@link #builder()}. This constructor declares an {@code Optional} parameter and/or more than five parameters; the builder names every argument and accepts both plain values and {@code Optional}s. It is unchanged and remains the implementation the builder delegates to.
-     */
-    @Deprecated(forRemoval = true, since = "0.40.x")
-    public PostgresqlAggregateSnapshotRepository(ConfigurableEventStore<? extends AggregateEventStreamConfiguration> eventStore,
+    PostgresqlAggregateSnapshotRepository(ConfigurableEventStore<? extends AggregateEventStreamConfiguration> eventStore,
                                                  HandleAwareUnitOfWorkFactory<? extends HandleAwareUnitOfWork> unitOfWorkFactory,
                                                  Optional<String> snapshotTableName,
                                                  JSONEventSerializer jsonSerializer,
                                                  AddNewAggregateSnapshotStrategy addNewSnapshotStrategy,
                                                  AggregateSnapshotDeletionStrategy snapshotDeletionStrategy,
                                                  Optional<MeterRegistry> meterRegistryOptional) {
+        this(eventStore, unitOfWorkFactory, snapshotTableName, jsonSerializer, addNewSnapshotStrategy, snapshotDeletionStrategy, meterRegistryOptional,
+             SchemaOwnership.COMPONENT);
+    }
+
+    /**
+     * @param schemaOwnership {@link SchemaOwnership#COMPONENT} creates the snapshot table now; {@link SchemaOwnership#HARNESS}
+     *                        leaves it to an {@link EssentialsSchemaHarness}
+     */
+    @SuppressWarnings("OptionalUsedAsFieldOrParameterType")
+    PostgresqlAggregateSnapshotRepository(ConfigurableEventStore<? extends AggregateEventStreamConfiguration> eventStore,
+                                          HandleAwareUnitOfWorkFactory<? extends HandleAwareUnitOfWork> unitOfWorkFactory,
+                                          Optional<String> snapshotTableName,
+                                          JSONEventSerializer jsonSerializer,
+                                          AddNewAggregateSnapshotStrategy addNewSnapshotStrategy,
+                                          AggregateSnapshotDeletionStrategy snapshotDeletionStrategy,
+                                          Optional<MeterRegistry> meterRegistryOptional,
+                                          SchemaOwnership schemaOwnership) {
         this.snapshotStateAdapter = new DefaultAggregateSnapshotStateAdapter(requireNonNull(jsonSerializer, "No jsonSerializer instance provided"));
         this.snapshotStore = new PostgresqlAggregateSnapshotStore(eventStore,
                                                                   unitOfWorkFactory,
                                                                   snapshotTableName,
                                                                   jsonSerializer,
-                                                                  meterRegistryOptional);
+                                                                  meterRegistryOptional,
+                                                                  schemaOwnership);
         this.measurementSupport = new AggregateSnapshotMeasurementSupport(meterRegistryOptional);
         this.addNewSnapshotStrategy = requireNonNull(addNewSnapshotStrategy, "No snapshotUpdateStrategy instance provided");
         this.snapshotDeletionStrategy = requireNonNull(snapshotDeletionStrategy, "No snapshotDeletionStrategy instance provided");
+    }
+
+    /**
+     * The snapshot table, as contributed by the {@link PostgresqlAggregateSnapshotStore} this repository stores through.
+     */
+    @Override
+    public String moduleId() {
+        return snapshotStore.moduleId();
+    }
+
+    @Override
+    public int order() {
+        return snapshotStore.order();
+    }
+
+    @Override
+    public List<SchemaChange> contribute(SchemaContext context) {
+        return snapshotStore.contribute(context);
     }
 
     @Override
@@ -421,6 +450,7 @@ public class PostgresqlAggregateSnapshotRepository implements AggregateSnapshotR
         private AddNewAggregateSnapshotStrategy addNewSnapshotStrategy;
         private AggregateSnapshotDeletionStrategy snapshotDeletionStrategy;
         private MeterRegistry meterRegistryOptional;
+        private SchemaOwnership schemaOwnership = SchemaOwnership.COMPONENT;
 
         /**
          * @param eventStore required
@@ -510,9 +540,19 @@ public class PostgresqlAggregateSnapshotRepository implements AggregateSnapshotR
         }
 
         /**
+         * @param schemaOwnership {@link SchemaOwnership#COMPONENT} (the default) creates the snapshot table when the
+         *                        repository is built; {@link SchemaOwnership#HARNESS} leaves it to the
+         *                        {@link EssentialsSchemaHarness} the repository is registered with
+         * @return this builder
+         */
+        public Builder setSchemaOwnership(SchemaOwnership schemaOwnership) {
+            this.schemaOwnership = requireNonNull(schemaOwnership, "No schemaOwnership provided");
+            return this;
+        }
+
+        /**
          * @return the new {@link PostgresqlAggregateSnapshotRepository}
          */
-        @SuppressWarnings("removal")
         public PostgresqlAggregateSnapshotRepository build() {
             return new PostgresqlAggregateSnapshotRepository(eventStore,
                                                              unitOfWorkFactory,
@@ -520,7 +560,8 @@ public class PostgresqlAggregateSnapshotRepository implements AggregateSnapshotR
                                                              jsonSerializer,
                                                              addNewSnapshotStrategy,
                                                              snapshotDeletionStrategy,
-                                                             Optional.ofNullable(meterRegistryOptional));
+                                                             Optional.ofNullable(meterRegistryOptional),
+                                                             schemaOwnership);
         }
     }
 

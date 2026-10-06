@@ -1,0 +1,37 @@
+package {{packagePath}}.config;
+
+import org.springframework.boot.context.properties.EnableConfigurationProperties;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Configuration;
+import org.springframework.web.cors.CorsConfiguration;
+<!-- IF web=webflux -->
+import org.springframework.web.cors.reactive.CorsConfigurationSource;
+import org.springframework.web.cors.reactive.UrlBasedCorsConfigurationSource;
+<!-- END web -->
+<!-- IF web=webmvc -->
+import org.springframework.web.cors.CorsConfigurationSource;
+import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
+<!-- END web -->
+
+import java.util.List;
+
+/**
+ * Standalone frontend (S8, Mode B): real CORS, published as a CorsConfigurationSource so Spring Security applies it
+ * inside its filter chain. A standalone CORS filter would see the preflight only after Security has rejected it.
+ */
+@Configuration
+@EnableConfigurationProperties(CorsProperties.class)
+public class CorsConfig {
+    @Bean
+    public CorsConfigurationSource corsConfigurationSource(CorsProperties props) {
+        var config = new CorsConfiguration();
+        config.setAllowedOrigins(props.allowedOrigins());   // real origins, never "*" with credentials
+        config.setAllowedMethods(List.of("GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"));
+        config.setAllowedHeaders(List.of("Authorization", "Content-Type", "Accept"));
+        config.setAllowCredentials(true);
+        config.setMaxAge(3600L);
+        var source = new UrlBasedCorsConfigurationSource();
+        source.registerCorsConfiguration("/api/**", config);
+        return source;
+    }
+}

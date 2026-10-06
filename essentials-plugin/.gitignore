@@ -1,0 +1,2 @@
+# Bytecode Python writes beside the scripts and tests when they run without -B.
+__pycache__/

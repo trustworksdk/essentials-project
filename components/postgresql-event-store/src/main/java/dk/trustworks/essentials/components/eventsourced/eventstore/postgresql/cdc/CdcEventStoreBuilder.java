@@ -124,7 +124,6 @@ public final class CdcEventStoreBuilder<CONFIG extends AggregateEventStreamConfi
      *
      * @return the store
      */
-    @SuppressWarnings("removal")
     public CdcEventStore<CONFIG> build() {
         return new CdcEventStore<>(requireNonNull(delegate, "delegate cannot be null"),
                                    requireNonNull(unitOfWorkFactory, "unitOfWorkFactory cannot be null"),

@@ -16,6 +16,7 @@
 
 package dk.trustworks.essentials.components.boot.autoconfigure.postgresql.eventstore;
 
+import dk.trustworks.essentials.components.boot.autoconfigure.postgresql.EssentialsComponentsProperties;
 import dk.trustworks.essentials.components.eventsourced.aggregates.api.*;
 import dk.trustworks.essentials.components.eventsourced.aggregates.archive.*;
 import dk.trustworks.essentials.components.eventsourced.aggregates.closingbooks.AggregateClosingBooksGenerationAccessProvider;
@@ -50,8 +51,12 @@ public class AggregateArchiveApiConfiguration {
 
     @Bean
     @ConditionalOnMissingBean
-    public AggregateArchiveRegistry aggregateArchiveRegistry(HandleAwareUnitOfWorkFactory<? extends HandleAwareUnitOfWork> unitOfWorkFactory) {
-        return new PostgresqlAggregateArchiveRegistry(unitOfWorkFactory, Optional.empty());
+    public AggregateArchiveRegistry aggregateArchiveRegistry(HandleAwareUnitOfWorkFactory<? extends HandleAwareUnitOfWork> unitOfWorkFactory,
+                                                             EssentialsComponentsProperties essentialsComponentsProperties) {
+        return PostgresqlAggregateArchiveRegistry.builder()
+                                                 .setUnitOfWorkFactory(unitOfWorkFactory)
+                                                 .setSchemaOwnership(essentialsComponentsProperties.getSchema().getMode().schemaOwnership())
+                                                 .build();
     }
 
     @Bean
@@ -107,12 +112,14 @@ public class AggregateArchiveApiConfiguration {
                                                                    AggregateArchiveExporter aggregateArchiveExporter,
                                                                    AggregateArchiveDestination aggregateArchiveDestination,
                                                                    Optional<MeterRegistry> meterRegistryOptional) {
-        return new DefaultAggregateGenerationArchiver(aggregateArchiveRegistry,
-                                                      generationAccessProvider,
-                                                      eventStore,
-                                                      unitOfWorkFactory,
-                                                      aggregateArchiveExporter,
-                                                      aggregateArchiveDestination,
-                                                      meterRegistryOptional);
+        return DefaultAggregateGenerationArchiver.builder()
+                                                 .setArchiveRegistry(aggregateArchiveRegistry)
+                                                 .setGenerationAccessProvider(generationAccessProvider)
+                                                 .setEventStore(eventStore)
+                                                 .setUnitOfWorkFactory(unitOfWorkFactory)
+                                                 .setArchiveExporter(aggregateArchiveExporter)
+                                                 .setArchiveDestination(aggregateArchiveDestination)
+                                                 .setMeterRegistry(meterRegistryOptional)
+                                                 .build();
     }
 }

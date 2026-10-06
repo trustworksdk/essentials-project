@@ -19,6 +19,15 @@ package dk.trustworks.essentials.types.springdata.jpa.converters;
 import dk.trustworks.essentials.types.Amount;
 import jakarta.persistence.Converter;
 
+/**
+ * Auto-applied {@link Amount} converter that maps to a <code>double precision</code> column.<br>
+ * <br>
+ * <b>⚠ Lossy for monetary values</b> - the scale of the value written is not preserved and SQL arithmetic on the column is
+ * floating point. Prefer {@link AmountNumericAttributeConverter}, which maps to an exact <code>numeric</code> column; see
+ * {@link BaseBigDecimalTypeAttributeConverter} for the full explanation.
+ *
+ * @see AmountNumericAttributeConverter
+ */
 @Converter(autoApply = true)
 public final class AmountAttributeConverter extends BaseBigDecimalTypeAttributeConverter<Amount> {
     @Override

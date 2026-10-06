@@ -16,7 +16,7 @@
 
 package dk.trustworks.essentials.components.foundation.postgresql;
 
-import com.fasterxml.jackson.databind.JsonNode;
+import tools.jackson.databind.JsonNode;
 import org.postgresql.core.Notification;
 
 import java.util.Optional;
@@ -62,7 +62,7 @@ public interface NotificationDuplicationFilter {
          */
         @Override
         public Optional<String> extractDuplicationKey(JsonNode parameterJson) {
-            return Optional.ofNullable(parameterJson.has("table_name") ? parameterJson.get("table_name").asText() : null);
+            return Optional.ofNullable(parameterJson.has("table_name") ? parameterJson.get("table_name").asString() : null);
         }
     }
 }

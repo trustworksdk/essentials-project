@@ -18,6 +18,7 @@ package dk.trustworks.essentials.components.foundation.fencedlock;
 
 import dk.trustworks.essentials.components.foundation.IOExceptionUtil;
 import dk.trustworks.essentials.components.foundation.fencedlock.FencedLockEvents.*;
+import dk.trustworks.essentials.components.foundation.lifecycle.*;
 import dk.trustworks.essentials.components.foundation.transaction.*;
 import dk.trustworks.essentials.reactive.*;
 import dk.trustworks.essentials.shared.concurrent.ThreadFactoryBuilder;
@@ -28,6 +29,7 @@ import reactor.core.publisher.Mono;
 import java.time.*;
 import java.util.*;
 import java.util.concurrent.*;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.locks.ReentrantLock;
 
 import static dk.trustworks.essentials.shared.Exceptions.rethrowIfCriticalError;
@@ -41,7 +43,7 @@ import static dk.trustworks.essentials.shared.MessageFormatter.msg;
  * @param <UOW>  the type of {@link UnitOfWork} required
  * @param <LOCK> the concrete type of {@link DBFencedLock} used
  */
-public abstract class DBFencedLockManager<UOW extends UnitOfWork, LOCK extends DBFencedLock> implements FencedLockManager {
+public abstract class DBFencedLockManager<UOW extends UnitOfWork, LOCK extends DBFencedLock> implements FencedLockManager, ShutdownAware {
     protected final Logger log = LoggerFactory.getLogger(this.getClass());
 
     private final FencedLockStorage<UOW, LOCK>                lockStorage;
@@ -77,6 +79,11 @@ public abstract class DBFencedLockManager<UOW extends UnitOfWork, LOCK extends D
      * Paused is used for testing purposes to pause async lock acquiring and confirmation
      */
     private volatile boolean paused;
+    /**
+     * Set by {@link #shutdownStarting(ShutdownContext)}, cleared by {@link #stop()}. While set, no background work touches
+     * the database and lock releases are a bounded best effort - see {@link #shutdownStarting(ShutdownContext)}
+     */
+    private volatile ShutdownContext shutdown;
 
     private   ScheduledExecutorService lockConfirmationExecutor;
     private   ScheduledExecutorService asyncLockAcquiringExecutor;
@@ -84,7 +91,7 @@ public abstract class DBFencedLockManager<UOW extends UnitOfWork, LOCK extends D
      * {@link #tryAcquireLock(LockName)}/{@link #tryAcquireLock(LockName, Duration)} and {@link #acquireLock(LockName)} pause interval between retries
      */
     protected int                      syncAcquireLockPauseIntervalMs = 100;
-    private   ScheduledFuture<?>       confirmationScheduledFuture;
+    private volatile ScheduledFuture<?> confirmationScheduledFuture;
 
     /**
      * @param lockStorage       the lock storage used for the lock manager
@@ -122,44 +129,6 @@ public abstract class DBFencedLockManager<UOW extends UnitOfWork, LOCK extends D
                         e -> {
                             throw new IllegalStateException(msg("[{}] Failed to initialize lock storage", this.lockManagerInstanceId), e);
                         });
-    }
-
-    /**
-     * @param lockStorage                                                    the lock storage used for the lock manager
-     * @param unitOfWorkFactory                                              the {@link UnitOfWork} factory
-     * @param lockManagerInstanceId                                          The unique name for this lock manager instance. If left {@link Optional#empty()} then the machines hostname is used
-     * @param lockTimeOut                                                    the period between {@link FencedLock#getLockLastConfirmedTimestamp()} and the current time before the lock is marked as timed out
-     * @param lockConfirmationInterval                                       how often should the locks be confirmed. MUST is less than the <code>lockTimeOut</code>
-     * @param releaseAcquiredLocksInCaseOfIOExceptionsDuringLockConfirmation Should {@link FencedLock}'s acquired by this {@link FencedLockManager} be released in case calls to {@link FencedLockStorage#confirmLockInDB(DBFencedLockManager, UnitOfWork, DBFencedLock, OffsetDateTime)} fails
-     *                                                                       with an exception where {@link IOExceptionUtil#isIOException(Throwable)} returns true -
-     *                                                                       If releaseAcquiredLocksInCaseOfIOExceptionsDuringLockConfirmation is true, then {@link FencedLock}'s will be released locally,
-     *                                                                       otherwise we will retain the {@link FencedLock}'s as locked.
-     * @param eventBus                                                       optional {@link LocalEventBus} where {@link FencedLockEvents} will be published
-     * @deprecated Use {@link #DBFencedLockManager(FencedLockStorage, UnitOfWorkFactory, FencedLockManagerSettings, EventBus)}.
-     *         The four configuration arguments in the middle are now one {@link FencedLockManagerSettings} value —
-     *         build it with {@link FencedLockManagerSettings#builder()} — and the {@code Optional<EventBus>} is a
-     *         plain nullable argument. This constructor delegates and behaves identically; note only that the
-     *         {@code lockConfirmationInterval < lockTimeOut} check now fires when the settings are created rather
-     *         than here, which is strictly earlier.
-     */
-    @Deprecated(forRemoval = true, since = "0.40.x")
-    @SuppressWarnings("OptionalUsedAsFieldOrParameterType")
-    protected DBFencedLockManager(FencedLockStorage<UOW, LOCK> lockStorage,
-                                  UnitOfWorkFactory<? extends UOW> unitOfWorkFactory,
-                                  Optional<String> lockManagerInstanceId,
-                                  Duration lockTimeOut,
-                                  Duration lockConfirmationInterval,
-                                  boolean releaseAcquiredLocksInCaseOfIOExceptionsDuringLockConfirmation,
-                                  Optional<EventBus> eventBus) {
-        this(lockStorage,
-             unitOfWorkFactory,
-             FencedLockManagerSettings.builder()
-                                      .setLockManagerInstanceId(requireNonNull(lockManagerInstanceId, "No lockManagerInstanceId option provided"))
-                                      .setLockTimeOut(lockTimeOut)
-                                      .setLockConfirmationInterval(lockConfirmationInterval)
-                                      .setReleaseAcquiredLocksInCaseOfIOExceptionsDuringLockConfirmation(releaseAcquiredLocksInCaseOfIOExceptionsDuringLockConfirmation)
-                                      .build(),
-             requireNonNull(eventBus, "No eventBus option provided").orElse(null));
     }
 
     @Override
@@ -217,7 +186,7 @@ public abstract class DBFencedLockManager<UOW extends UnitOfWork, LOCK extends D
     }
 
     private void confirmAllLocallyAcquiredLocks() {
-        if (stopping) {
+        if (stopping || shutdown != null) {
             log.debug("[{}] Shutting down, skipping confirmAllLocallyAcquiredLocks", lockManagerInstanceId);
             return;
         }
@@ -239,6 +208,8 @@ public abstract class DBFencedLockManager<UOW extends UnitOfWork, LOCK extends D
                 log.debug("[{}] Confirming {} locks acquired by this Lock Manager Instance", lockManagerInstanceId, numberOfLocallyAcquiredLocksBeforeConfirmation);
             }
             var confirmedTimestamp = OffsetDateTime.now(Clock.systemUTC());
+            // Released in the DB only once the confirmation UnitOfWork has completed - see releaseLostLocksInDB
+            var lostLocks = new ArrayList<LOCK>();
             usingUnitOfWork(uow -> {
                 locksAcquiredByThisLockManager.forEach((lockName, fencedLock) -> {
                     if (fencedLock.getLockedByLockManagerInstanceId() == null) {
@@ -269,14 +240,8 @@ public abstract class DBFencedLockManager<UOW extends UnitOfWork, LOCK extends D
                         } else {
                             // We failed to confirm this lock, someone must have taken over the lock in the meantime
                             log.info("[{}] Failed to confirm lock '{}': {}", lockManagerInstanceId, fencedLock.getName(), fencedLock);
-                            try {
-                                fencedLock.release();
-                            } catch (Exception e) {
-                                if (IOExceptionUtil.isIOException(e)) {
-                                    log.debug(msg("[{}] Failed to release lock '{}'", lockManagerInstanceId, fencedLock.getName()), e);
-                                } else {
-                                    log.error(msg("[{}] Failed to release lock '{}'", lockManagerInstanceId, fencedLock.getName()), e);
-                                }
+                            if (releaseLostLockLocally(fencedLock)) {
+                                lostLocks.add(fencedLock);
                             }
                         }
                     } catch (Exception e) {
@@ -290,21 +255,18 @@ public abstract class DBFencedLockManager<UOW extends UnitOfWork, LOCK extends D
                     log.error("[{}] Failed to acknowledge the {} locks acquired by this Lock Manager Instance", lockManagerInstanceId, locksAcquiredByThisLockManager.size(), e);
                 }
 
-                if (IOExceptionUtil.isIOException(e) && releaseAcquiredLocksInCaseOfIOExceptionsDuringLockConfirmation) {
-                    log.info("[{}] Releasing all locally acquired locks due to IO Exception", lockManagerInstanceId);
-                    locksAcquiredByThisLockManager.forEach((lockName, fencedLock) -> {
-                        try {
-                            fencedLock.release();
-                        } catch (Exception ex) {
-                            if (IOExceptionUtil.isIOException(ex)) {
-                                log.debug(msg("[{}] Failed to release lock '{}'", lockManagerInstanceId, fencedLock.getName()), ex);
-                            } else {
-                                log.error(msg("[{}] Failed to release lock '{}'", lockManagerInstanceId, fencedLock.getName()), ex);
-                            }
-                        }
-                    });
+                if (IOExceptionUtil.isIOException(e)) {
+                    // The DB has just failed on IO, so a DB release would almost certainly fail too - each attempt only after
+                    // waiting out the socket timeout(s), while holding this thread and reentrantLock. Release locally only:
+                    // the rows expire after lockTimeOut
+                    lostLocks.clear();
+                    if (releaseAcquiredLocksInCaseOfIOExceptionsDuringLockConfirmation) {
+                        log.info("[{}] Releasing all locally acquired locks due to IO Exception - locally only, their DB rows expire after lockTimeOut", lockManagerInstanceId);
+                        locksAcquiredByThisLockManager.forEach((lockName, fencedLock) -> releaseLostLockLocally(fencedLock));
+                    }
                 }
             });
+            releaseLostLocksInDB(lostLocks);
             if (log.isTraceEnabled()) {
                 log.trace("[{}] Completed confirmation of {} locks acquired by this Lock Manager Instance. Number of Locks acquired locally after confirmation {}: {}",
                           lockManagerInstanceId, numberOfLocallyAcquiredLocksBeforeConfirmation, locksAcquiredByThisLockManager.size(), locksAcquiredByThisLockManager.keySet());
@@ -319,12 +281,144 @@ public abstract class DBFencedLockManager<UOW extends UnitOfWork, LOCK extends D
 
 
     /**
+     * First half of releasing a lock this instance failed to confirm: remove it locally, mark it as released and
+     * notify {@link LockReleased}, without any DB round trip. The lock is already lost, so the local release must
+     * not wait on the DB: when the DB is unreachable a release attempt can take several times the socket timeout
+     * (MongoDB driver 5.12+ retries connection establishment with backoff), and for all that time this instance
+     * would keep reporting a lock that another instance may take over once <code>lockTimeOut</code> has passed.
+     * The best-effort DB release follows in {@link #releaseLostLocksInDB(List)}.
+     *
+     * @param lock the lock that could not be confirmed
+     * @return true if the lock was held locally and has now been released, false if it was already gone
+     */
+    private boolean releaseLostLockLocally(LOCK lock) {
+        if (locksAcquiredByThisLockManager.remove(lock.getName()) == null) {
+            return false;
+        }
+        log.debug("[{}] Releasing lost lock '{}' locally: {}", lockManagerInstanceId, lock.getName(), lock);
+        // Runs on the confirmation thread, partly outside any catch: a throwing lockReleased callback or event
+        // subscriber must not escape and end the scheduled confirmation.
+        try {
+            lock.markAsReleased();
+        } catch (Exception e) {
+            rethrowIfCriticalError(e);
+            log.error(msg("[{}] Failure while marking lost lock '{}' as released", lockManagerInstanceId, lock.getName()), e);
+        }
+        try {
+            notify(new LockReleased(lock, this));
+        } catch (Exception e) {
+            rethrowIfCriticalError(e);
+            log.error(msg("[{}] Failure while notifying that lost lock '{}' was released", lockManagerInstanceId, lock.getName()), e);
+        }
+        return true;
+    }
+
+    /**
+     * Second half of releasing lost locks (see {@link #releaseLostLockLocally(DBFencedLock)}): a best-effort release
+     * in the DB, so another instance does not have to wait for <code>lockTimeOut</code>. The storage matches on lock
+     * name and fence token, so this never releases a newer acquisition of the same lock.
+     * <p>
+     * Must be called after the confirmation {@link UnitOfWork} has completed, never inside it, so each release runs in a
+     * {@link UnitOfWork} of its own. Inside it a release would join the confirmation {@link UnitOfWork}, and a failing
+     * release would mark it rollback-only (on PostgreSQL the failed statement aborts the transaction anyway) - rolling back
+     * every confirmation made in the same tick, although those locks are already marked confirmed and
+     * {@link LockAcquired} notified.
+     * <p>
+     * Stops at the first IO failure: every further attempt against the unreachable DB would wait out the socket timeout(s)
+     * too, while holding the confirmation thread and <code>reentrantLock</code>. The remaining rows expire after
+     * <code>lockTimeOut</code>.
+     *
+     * @param lostLocks the lost locks, already released locally
+     */
+    private void releaseLostLocksInDB(List<LOCK> lostLocks) {
+        for (var i = 0; i < lostLocks.size(); i++) {
+            if (!releaseLostLockInDB(lostLocks.get(i))) {
+                log.debug("[{}] Skipping DB release of the remaining {} lost lock(s) after an IO failure - their DB rows expire after lockTimeOut",
+                          lockManagerInstanceId, lostLocks.size() - i - 1);
+                return;
+            }
+        }
+    }
+
+    /**
+     * Best-effort DB release of one lost lock in its own {@link UnitOfWork} - see {@link #releaseLostLocksInDB(List)}
+     *
+     * @param lock the lost lock, already released locally
+     * @return false if the release failed with an IO exception (the DB is presumably unreachable), otherwise true
+     */
+    private boolean releaseLostLockInDB(LOCK lock) {
+        var dbReachable = new AtomicBoolean(true);
+        var releasedInDB = withUnitOfWork(uow -> lockStorage.releaseLockInDB(this, uow, lock),
+                                          e -> {
+                                              if (IOExceptionUtil.isIOException(e)) {
+                                                  dbReachable.set(false);
+                                                  log.debug(msg("[{}] Failed to release lost lock '{}' in DB", lockManagerInstanceId, lock.getName()), e);
+                                              } else {
+                                                  log.error(msg("[{}] Failed to release lost lock '{}' in DB", lockManagerInstanceId, lock.getName()), e);
+                                              }
+                                              return false;
+                                          });
+        log.debug("[{}] Lost lock '{}' {} in DB", lockManagerInstanceId, lock.getName(), releasedInDB ? "released" : "not released");
+        return dbReachable.get();
+    }
+
+    /**
+     * From here on nothing in this lock manager waits on the database for longer than the shutdown allows:
+     * <ul>
+     *     <li>the confirmation and async-acquiring ticks are cancelled, interrupting any that are blocked - each holds
+     *     {@code reentrantLock} for its whole database round-trip, so a tick waiting out the connection timeout used to
+     *     hold up every release queued behind it</li>
+     *     <li>no new async acquiring is started, and ticks that still run return straight away</li>
+     *     <li>a lock release is one {@link ShutdownContext#attemptCleanup bounded attempt}, skipped once the database has
+     *     shown itself unreachable. The lock is dropped locally either way; its row expires after the lock timeout</li>
+     * </ul>
+     * Releases are called from other components' shutdown - an event processor stopping its subscription cancels its
+     * lock acquiring - typically before this lock manager's own {@link #stop()}, which is why this cannot wait for it.
+     */
+    @Override
+    public void shutdownStarting(ShutdownContext shutdown) {
+        requireNonNull(shutdown, "No shutdown provided");
+        this.shutdown = shutdown;
+        // Deliberately without reentrantLock: the ticks being cancelled may be holding it
+        var confirmation = confirmationScheduledFuture;
+        if (confirmation != null) {
+            confirmation.cancel(true);
+        }
+        asyncLockAcquirings.values().forEach(acquiring -> acquiring.cancel(true));
+        log.debug("[{}] Shutdown starting - lock confirmation and async acquiring cancelled", lockManagerInstanceId);
+    }
+
+    private void releaseLockDuringShutdown(LOCK lock, ShutdownContext shutdown) {
+        if (!locksAcquiredByThisLockManager.containsKey(lock.getName())) {
+            return;
+        }
+        var released = shutdown.attemptCleanup(msg("[{}] release fenced lock '{}'", lockManagerInstanceId, lock.getName()), () -> {
+            // Interruptibly, so the attempt's timeout also covers waiting for the lock
+            reentrantLock.lockInterruptibly();
+            try {
+                unitOfWorkFactory.usingUnitOfWork(uow -> lockStorage.releaseLockInDB(this, uow, lock));
+            } finally {
+                reentrantLock.unlock();
+            }
+        });
+        locksAcquiredByThisLockManager.remove(lock.getName());
+        lock.markAsReleased();
+        notify(new LockReleased(lock, this));
+        log.debug("[{}] {} lock '{}' during shutdown", lockManagerInstanceId, released ? "Released" : "Dropped (left to expire)", lock.getName());
+    }
+
+    /**
      * Internal method only to be called by subclasses of {@link DBFencedLockManager} and {@link DBFencedLock}
      *
      * @param lock the lock to be released
      */
     protected void releaseLock(LOCK lock) {
         requireNonNull(lock, "No lock was provided");
+        var shutdown = this.shutdown;
+        if (shutdown != null) {
+            releaseLockDuringShutdown(lock, shutdown);
+            return;
+        }
         if (locksAcquiredByThisLockManager.containsKey(lock.getName())) {
             log.debug("[{}] Releasing lock '{}': {}", lockManagerInstanceId, lock.getName(), lock);
             var releaseWithSuccess = withUnitOfWork(uow -> lockStorage.releaseLockInDB(this, uow, lock),
@@ -461,6 +555,7 @@ public abstract class DBFencedLockManager<UOW extends UnitOfWork, LOCK extends D
 
                 started = false;
                 stopping = false;
+                shutdown = null;
             } finally {
                 reentrantLock.unlock();
             }
@@ -666,7 +761,7 @@ public abstract class DBFencedLockManager<UOW extends UnitOfWork, LOCK extends D
             // being reset does stop()/start() around the reset, and a subscription manager shutting down in between
             // used to make this throw a NullPointerException on the caller's own (often non-pooled) thread.
             var executor = asyncLockAcquiringExecutor;
-            if (!started || stopping || executor == null) {
+            if (!started || stopping || shutdown != null || executor == null) {
                 log.debug("[{}] Lock Manager isn't started - ignoring async lock acquiring for lock '{}'", lockManagerInstanceId, lockName);
                 return;
             }
@@ -694,7 +789,7 @@ public abstract class DBFencedLockManager<UOW extends UnitOfWork, LOCK extends D
     private void asyncLockAcquiringTick(LockName lockName, LockCallback lockCallback) {
         try {
             reentrantLock.lock();
-            if (!started) {
+            if (!started || shutdown != null) {
                 return;
             }
             var existingLock = locksAcquiredByThisLockManager.get(lockName);
@@ -716,7 +811,26 @@ public abstract class DBFencedLockManager<UOW extends UnitOfWork, LOCK extends D
                     var fencedLock = lock.get();
                     fencedLock.registerCallback(lockCallback);
                     locksAcquiredByThisLockManager.put(lockName, (LOCK) fencedLock);
-                    lockCallback.lockAcquired(lock.get());
+                    try {
+                        lockCallback.lockAcquired(fencedLock);
+                    } catch (RuntimeException e) {
+                        // The lock WAS acquired; it is the callback that failed. Keeping the lock would
+                        // be the worst of both outcomes: this instance owns a lock it is not serving,
+                        // no other instance can take it, and no later tick will ever call the callback
+                        // again - the next tick finds the lock already held by this instance and takes
+                        // neither branch below, so the failure is permanent and silent apart from one
+                        // log line whose text says the acquisition failed, when it did not.
+                        //
+                        // Releasing turns that into something recoverable: the next tick tries again,
+                        // and a cause that clears itself (a queue registered a moment later, a
+                        // dependency that finished starting) is picked up without a restart. A cause
+                        // that does not clear logs once per tick, which is the paced, visible failure
+                        // a permanent one should be.
+                        log.error(msg("[{}] Lock '{}' was acquired but its lockAcquired callback failed - releasing it "
+                                      + "so the next attempt can retry rather than holding a lock nothing is serving",
+                                      lockManagerInstanceId, lockName), e);
+                        releaseLock((LOCK) fencedLock);
+                    }
                 } else {
                     if (log.isTraceEnabled()) {
                         log.trace("[{}] Couldn't async Acquire lock '{}' as it is acquired by another Lock Manager instance: {}",

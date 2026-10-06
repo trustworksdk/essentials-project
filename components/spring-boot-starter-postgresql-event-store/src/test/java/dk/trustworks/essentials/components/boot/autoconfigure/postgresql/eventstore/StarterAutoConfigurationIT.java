@@ -16,13 +16,18 @@
 
 package dk.trustworks.essentials.components.boot.autoconfigure.postgresql.eventstore;
 
-import dk.trustworks.essentials.components.boot.autoconfigure.postgresql.EssentialsComponentsConfiguration;
+import dk.trustworks.essentials.components.boot.autoconfigure.postgresql.*;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.gap.*;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.persistence.table_per_aggregate_type.SeparateTablePerAggregateEventStreamConfiguration;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.transaction.*;
+import org.springframework.context.annotation.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.cdc.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.api.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.observability.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.observability.micrometer.MeasurementEventStoreSubscriptionObserver;
-import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.subscription.EventStoreSubscriptionManager;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.subscription.*;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.subscription.monitoring.*;
 import dk.trustworks.essentials.shared.security.EssentialsSecurityProvider;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
@@ -33,8 +38,10 @@ import org.springframework.boot.health.contributor.*;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
 import org.springframework.boot.test.util.TestPropertyValues;
 import org.springframework.test.context.*;
-import org.testcontainers.containers.PostgreSQLContainer;
+import org.testcontainers.postgresql.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.*;
+
+import java.time.Duration;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -42,7 +49,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 public class StarterAutoConfigurationIT {
 
     @Container
-    private static final PostgreSQLContainer<?> postgreSQLContainer = new PostgreSQLContainer<>("postgres:18.4")
+    private static final PostgreSQLContainer postgreSQLContainer = new PostgreSQLContainer("postgres:18.4")
             .withDatabaseName("starter-test-db")
             .withUsername("test-user")
             .withPassword("secret-password");
@@ -124,6 +131,14 @@ public class StarterAutoConfigurationIT {
             assertThat(ctx).hasSingleBean(PostgresqlEventStoreStatisticsApi.class);
             PostgresqlEventStoreStatisticsApi postgresqlEventStoreStatisticsApi = ctx.getBean(PostgresqlEventStoreStatisticsApi.class);
             assertThat(postgresqlEventStoreStatisticsApi.fetchTableActivityStatistics("principal")).isNotNull();
+            assertThat(postgresqlEventStoreStatisticsApi.fetchTableCacheHitRatio("principal").values())
+                    .allSatisfy(ratio -> assertThat(ratio.cacheHitRatio()).isBetween(0L, 100L));
+
+            var tableStatistics = ctx.getBean(dk.trustworks.essentials.components.foundation.postgresql.api.PostgresqlTableStatisticsApi.class)
+                                     .fetchTableStatistics("principal");
+            assertThat(tableStatistics).extracting(table -> table.section() + "/" + table.tableName())
+                                       .contains("subscriptions/durable_subscriptions",
+                                                 "cdc/eventstore_cdc_inbox");
 
             assertThat(ctx).hasSingleBean(dk.trustworks.essentials.components.eventsourced.aggregates.api.AggregateLifecycleApi.class);
             assertThat(ctx).hasSingleBean(dk.trustworks.essentials.components.eventsourced.aggregates.api.AggregateLifecycleStatisticsApi.class);
@@ -172,6 +187,50 @@ public class StarterAutoConfigurationIT {
 
             assertThat(ctx.getBean(EventStoreApi.class).findAllSubscriptionStatistics("principal")).isNotNull();
         });
+    }
+
+    @Test
+    void the_subscription_manager_retries_then_stops_and_resumes_by_itself_unless_configured_otherwise() {
+        contextRunner.run(ctx -> assertThat(ctx.getBean(DefaultEventStoreSubscriptionManager.class).getSubscriptionErrorPolicy())
+                .isEqualTo(SubscriptionErrorPolicy.defaultPolicy())
+                .satisfies(policy -> {
+                    assertThat(policy.resumesAutomatically()).isTrue();
+                    assertThat(policy.autoResume().skipsAfterMaxAttempts()).isFalse();
+                }));
+    }
+
+    @Test
+    void the_subscription_error_policy_is_configurable() {
+        contextRunner
+                .withPropertyValues("essentials.eventstore.subscription-manager.error-policy.mode=retry-n-then-skip",
+                                    "essentials.eventstore.subscription-manager.error-policy.max-retries=5",
+                                    "essentials.eventstore.subscription-manager.error-policy.initial-backoff=50ms",
+                                    "essentials.eventstore.subscription-manager.error-policy.max-backoff=2s")
+                .run(ctx -> assertThat(ctx.getBean(DefaultEventStoreSubscriptionManager.class).getSubscriptionErrorPolicy())
+                        .isEqualTo(SubscriptionErrorPolicy.retryThenSkip(5, Duration.ofMillis(50), Duration.ofSeconds(2))));
+        contextRunner
+                .withPropertyValues("essentials.eventstore.subscription-manager.error-policy.mode=stop")
+                .run(ctx -> assertThat(ctx.getBean(DefaultEventStoreSubscriptionManager.class).getSubscriptionErrorPolicy())
+                        // STOP ignores the max-retries default of 3: it never retries
+                        .isEqualTo(SubscriptionErrorPolicy.stop()));
+        contextRunner
+                .withPropertyValues("essentials.eventstore.subscription-manager.error-policy.mode=retry-n-then-stop",
+                                    "essentials.eventstore.subscription-manager.error-policy.max-retries=4",
+                                    "essentials.eventstore.subscription-manager.error-policy.initial-backoff=50ms",
+                                    "essentials.eventstore.subscription-manager.error-policy.max-backoff=2s")
+                .run(ctx -> assertThat(ctx.getBean(DefaultEventStoreSubscriptionManager.class).getSubscriptionErrorPolicy())
+                        .isEqualTo(SubscriptionErrorPolicy.retryThenStop(4, Duration.ofMillis(50), Duration.ofSeconds(2))));
+        contextRunner
+                .withPropertyValues("essentials.eventstore.subscription-manager.error-policy.auto-resume.initial-delay=2s",
+                                    "essentials.eventstore.subscription-manager.error-policy.auto-resume.max-delay=1m",
+                                    "essentials.eventstore.subscription-manager.error-policy.auto-resume.max-attempts=7")
+                .run(ctx -> assertThat(ctx.getBean(DefaultEventStoreSubscriptionManager.class).getSubscriptionErrorPolicy())
+                        .isEqualTo(SubscriptionErrorPolicy.defaultPolicy()
+                                                          .withAutoResume(SubscriptionErrorPolicy.AutoResume.skippingAfter(7, Duration.ofSeconds(2), Duration.ofMinutes(1)))));
+        contextRunner
+                .withPropertyValues("essentials.eventstore.subscription-manager.error-policy.auto-resume.enabled=false")
+                .run(ctx -> assertThat(ctx.getBean(DefaultEventStoreSubscriptionManager.class).getSubscriptionErrorPolicy())
+                        .isEqualTo(SubscriptionErrorPolicy.defaultPolicy().withoutAutoResume()));
     }
 
     @Test
@@ -227,6 +286,45 @@ public class StarterAutoConfigurationIT {
     }
 
     @Test
+    void the_default_event_stream_gap_handler_is_the_postgresql_one() {
+        contextRunner.run(ctx -> assertThat(ctx.getBean(EventStreamGapHandler.class)).isInstanceOf(PostgresqlEventStreamGapHandler.class));
+    }
+
+    /**
+     * Pins the override documented in the starter README ("Gap handling"): a consumer-supplied
+     * {@code EventStreamGapHandler<SeparateTablePerAggregateEventStreamConfiguration>} bean replaces the default and is
+     * the one the event store is built on.
+     */
+    @Test
+    void a_consumer_event_stream_gap_handler_bean_replaces_the_default() {
+        contextRunner
+                .withUserConfiguration(CustomGapHandlerConfiguration.class)
+                .run(ctx -> {
+                    var gapHandler = ctx.getBean(EventStreamGapHandler.class);
+                    assertThat(ctx.getBeansOfType(EventStreamGapHandler.class)).hasSize(1);
+                    assertThat(gapHandler).isSameAs(CustomGapHandlerConfiguration.INSTANCE.get());
+                });
+    }
+
+    @Configuration(proxyBeanMethods = false)
+    static class CustomGapHandlerConfiguration {
+        static final java.util.concurrent.atomic.AtomicReference<EventStreamGapHandler<SeparateTablePerAggregateEventStreamConfiguration>> INSTANCE = new java.util.concurrent.atomic.AtomicReference<>();
+
+        @Bean
+        EventStreamGapHandler<SeparateTablePerAggregateEventStreamConfiguration> eventStreamGapHandler(EventStoreUnitOfWorkFactory<? extends EventStoreUnitOfWork> unitOfWorkFactory,
+                                                                                                         EssentialsComponentsProperties properties) {
+            var gapHandler = new PostgresqlEventStreamGapHandler<SeparateTablePerAggregateEventStreamConfiguration>(
+                    unitOfWorkFactory,
+                    Duration.ofSeconds(60),
+                    (aggregateType, queryRange, allTransientGaps) -> allTransientGaps.stream().map(gap -> gap._1).limit(50).toList(),
+                    PostgresqlEventStreamGapHandler.ResolveTransientGapsToPermanentGapsPromotionStrategy.thresholdBased(300),
+                    properties.getSchema().getMode().schemaOwnership());
+            INSTANCE.set(gapHandler);
+            return gapHandler;
+        }
+    }
+
+    @Test
     void verify_essentials_properties() {
         contextRunner
                 .withPropertyValues("essentials.event-store.use-event-stream-gap-handler=true")
@@ -265,6 +363,23 @@ public class StarterAutoConfigurationIT {
                     assertThat(health.getStatus()).isEqualTo(Status.DOWN);
                     assertThat(health.getDetails()).containsEntry("state", CdcAvailability.State.FAILED.name());
                     assertThat(health.getDetails()).containsEntry("mode", CdcMode.REQUIRE.name());
+                });
+    }
+
+    /**
+     * The stopped-subscription gauge is the alerting signal for a halted projection, so - like the
+     * {@code stopped_by_error_policy} counter - it must not depend on {@code management.tracing.enabled}, which gates
+     * {@link SubscriberGlobalOrderMicrometerMonitor}.
+     */
+    @Test
+    void the_subscription_stopped_monitor_is_wired_without_tracing() {
+        contextRunner
+                .withBean(MeterRegistry.class, SimpleMeterRegistry::new)
+                .run(ctx -> {
+                    assertThat(ctx).hasSingleBean(SubscriptionStoppedMicrometerMonitor.class);
+                    assertThat(ctx).doesNotHaveBean(SubscriberGlobalOrderMicrometerMonitor.class);
+                    assertThat(ctx.getBeansOfType(EventStoreSubscriptionMonitor.class).values())
+                            .containsExactly(ctx.getBean(SubscriptionStoppedMicrometerMonitor.class));
                 });
     }
 

@@ -23,7 +23,8 @@ import dk.trustworks.essentials.examples.trading.market_data.types.InstrumentId;
  * updating the {@code permits} clause, which is a compile error away rather than a silent omission. Sealing does not
  * restrict the EventStore, which deserializes the concrete records reflectively by their fully qualified class name.
  */
-public sealed interface InstrumentEvent permits InstrumentRegistered, InstrumentRenamed, InstrumentSuspended {
+public sealed interface InstrumentEvent permits InstrumentRegistered, InstrumentRenamed, InstrumentSuspended,
+                                                InstrumentRiskApproved, InstrumentRiskRejected {
 
     InstrumentId instrumentId();
 }

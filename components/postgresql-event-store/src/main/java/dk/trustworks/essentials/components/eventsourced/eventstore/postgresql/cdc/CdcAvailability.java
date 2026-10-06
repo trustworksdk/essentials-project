@@ -80,8 +80,24 @@ public final class CdcAvailability {
      */
     private final AtomicBoolean           everActive         = new AtomicBoolean(false);
 
+    /**
+     * Times CDC stopped being {@link State#ACTIVE} other than by a requested stop - a dropped replication connection,
+     * a stream error, the slot taken by another instance. Kept, with the last one's time and reason, after CDC is
+     * active again: {@link #active} clears {@link #reason}, so without this a recovered outage left no trace in the
+     * status at all, and a laptop suspend that cost two reconnects read exactly like a quiet healthy hour.
+     */
+    private final AtomicLong              interruptionCount            = new AtomicLong(0);
+    private final AtomicLong              lastInterruptedAtEpochMs     = new AtomicLong(0);
+    private final AtomicReference<String> lastInterruptionReason       = new AtomicReference<>(null);
+    private final AtomicLong              lastRecoveredAtEpochMs       = new AtomicLong(0);
+    private final AtomicBoolean           interruptionOngoing          = new AtomicBoolean(false);
+
+    /** The reason {@code WalReplicationTailer} gives an owner-requested stop - the one departure from ACTIVE that is not an interruption. */
+    static final String STOPPED_REASON = "stopped";
+
     private final Counter fallbackCounter;
     private final Counter warmupPollCounter;
+    private final Counter interruptionCounter;
     private final MeterRegistry meterRegistry;
 
     /**
@@ -101,18 +117,6 @@ public final class CdcAvailability {
     }
 
     /**
-     * @param meterRegistry an Optional registry to publish the CDC availability gauge and counters on
-     * @deprecated Use {@link #CdcAvailability(MeterRegistry)}, passing {@code null} for "no metrics", or the no-arg
-     *         {@link #CdcAvailability()}. The {@code Optional} was unwrapped to a nullable field on the first line of
-     *         the body, so it never bought anything. This constructor delegates and behaves identically.
-     */
-    @Deprecated(forRemoval = true, since = "0.40.x")
-    @SuppressWarnings("OptionalUsedAsFieldOrParameterType")
-    public CdcAvailability(Optional<MeterRegistry> meterRegistry) {
-        this(requireNonNull(meterRegistry, "meterRegistry cannot be null").orElse(null));
-    }
-
-    /**
      * @param meterRegistry the registry to publish the CDC availability gauge and counters on, or {@code null} for no
      *                      metrics. Nullable rather than {@code Optional}: this class registers Micrometer
      *                      {@code Gauge}s and {@code Counter}s directly, which a {@code MeasurementTaker} — a timing
@@ -124,8 +128,11 @@ public final class CdcAvailability {
             Gauge.builder("essentials.cdc.active", state, s -> s.get() == State.ACTIVE ? 1.0 : 0.0)
                  .register(this.meterRegistry);
             fallbackCounter = Counter.builder("essentials.cdc.fallback_total")
-                                     .description("Number of subscriptions that fell back to polling after CDC had been active - i.e. a real CDC regression. Safe to alert on")
+                                     .description("Number of times a subscription started on, or switched to, polling after CDC had been active - one per subscription per interruption. Safe to alert on")
                                      .register(this.meterRegistry);
+            interruptionCounter = Counter.builder("essentials.cdc.interruptions_total")
+                                         .description("Number of times CDC stopped being active other than by a requested stop, e.g. a dropped replication connection. Recovers on its own when followed by the state returning to active")
+                                         .register(this.meterRegistry);
             warmupPollCounter = Counter.builder("essentials.cdc.warmup_poll_total")
                                        .description("Number of subscriptions that started on polling because CDC had not become active yet. Expected on every startup, one per subscription that wins the race against the WAL tailer. Not an error")
                                        .register(this.meterRegistry);
@@ -140,6 +147,7 @@ public final class CdcAvailability {
         } else {
             fallbackCounter = null;
             warmupPollCounter = null;
+            interruptionCounter = null;
         }
         // Seed the replay sink with the initial state so subscribers that connect before any
         // transition (which is the common case) still get a starting value to drive source
@@ -163,7 +171,8 @@ public final class CdcAvailability {
     }
 
     /**
-     * Records that a subscription started on the polling path because CDC was not active.
+     * Records that a subscription is reading by polling because CDC is not active - either it started while CDC was
+     * down, or it was running on the CDC bus and switched to polling when CDC stopped being active.
      * <p>
      * Routed by {@link #everActive}: before CDC has ever been active this is a warm-up poll, which is
      * the normal startup case and is not a fallback. Afterwards it is a genuine fallback.
@@ -198,6 +207,18 @@ public final class CdcAvailability {
     }
 
     /**
+     * How often CDC stopped being active other than by a requested stop, and when and why it last did - kept after
+     * CDC recovers, unlike {@link Snapshot#reason()}.
+     */
+    public Interruptions interruptions() {
+        return new Interruptions(interruptionCount.get(),
+                                 interruptionOngoing.get(),
+                                 lastInterruptedAtEpochMs.get(),
+                                 lastInterruptionReason.get(),
+                                 lastRecoveredAtEpochMs.get());
+    }
+
+    /**
      * Whether CDC has been active at least once in this JVM. {@code false} together with a non-zero
      * {@link #getWarmupPollCount()} means CDC never came up, which a zero {@link #getFallbackCount()} alone
      * would not distinguish from a healthy run.
@@ -229,7 +250,10 @@ public final class CdcAvailability {
         );
     }
 
-    private void set(State newState, String slot, String reason) {
+    // Synchronized: set is called from the tailer, its heartbeat and stop concurrently, and the state sink rejects
+    // concurrent emission (FAIL_NON_SERIALIZED) - which dropped a transition, leaving the replayed state stale - and
+    // the transitions must reach it in the order they were made
+    private synchronized void set(State newState, String slot, String reason) {
         State previous = this.state.getAndSet(newState);
         this.slotName.set(slot);
         this.reason.set(reason);
@@ -239,7 +263,21 @@ public final class CdcAvailability {
         // redundant events; distinctUntilChanged downstream would still filter, but emitting less
         // keeps the replay sink's cached value meaningful and reduces wake-ups.
         if (previous != newState) {
+            recordInterruptionOrRecovery(previous, newState, reason);
             this.stateSink.tryEmitNext(newState);
+        }
+    }
+
+    private void recordInterruptionOrRecovery(State previous, State newState, String reason) {
+        var nowMs = System.currentTimeMillis();
+        if (previous == State.ACTIVE && !(newState == State.INACTIVE && STOPPED_REASON.equals(reason))) {
+            interruptionCount.incrementAndGet();
+            lastInterruptedAtEpochMs.set(nowMs);
+            lastInterruptionReason.set(reason);
+            interruptionOngoing.set(true);
+            if (interruptionCounter != null) interruptionCounter.increment();
+        } else if (newState == State.ACTIVE && interruptionOngoing.compareAndSet(true, false)) {
+            lastRecoveredAtEpochMs.set(nowMs);
         }
     }
 
@@ -259,6 +297,23 @@ public final class CdcAvailability {
                                   .replaceAll("^_+|_+$", "");
         if (normalized.isBlank()) return "unknown";
         return normalized.length() > 64 ? normalized.substring(0, 64) : normalized;
+    }
+
+    /**
+     * CDC interruptions: departures from {@link State#ACTIVE} other than a requested stop.
+     *
+     * @param count                    how many there have been in this JVM
+     * @param ongoing                  whether the most recent one is still ongoing - CDC has not been active since
+     * @param lastInterruptedAtEpochMs when the last one began, or {@code 0} if there has been none
+     * @param lastReason               why the last one began, as the state change reported it, or {@code null}
+     * @param lastRecoveredAtEpochMs   when CDC was last active again after an interruption, or {@code 0} if it has not
+     *                                 recovered from one yet
+     */
+    public record Interruptions(long count,
+                                boolean ongoing,
+                                long lastInterruptedAtEpochMs,
+                                String lastReason,
+                                long lastRecoveredAtEpochMs) {
     }
 
     public record Snapshot(State state,

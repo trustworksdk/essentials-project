@@ -1,0 +1,89 @@
+# `{{bc}}/entities/` — the write side's consistency boundary
+
+**No template ships for the two files that belong here.** They are the only files on this lane that
+must name a persistence flavour, and Essentials' own docs are not settled enough to scaffold one —
+see "Why no template" below. Everything else in a service-entity slice *is* templated, because it is
+persistence-neutral.
+
+Write these two by hand:
+
+```
+{{bc}}/entities/{{Entity}}.{java,kt}            the entity — invariant-carrying methods only
+{{bc}}/entities/{{Entity}}Repository.{java,kt}  the write repository — load by id, save, delete
+```
+
+## `{{Entity}}` — the contract
+
+The entity **is** the consistency boundary (`rules/slice-design.md` § Service-entity style), so every
+rule that protects an aggregate protects it. Four tests, from § The entity's own bar:
+
+1. **Every public method enforces an invariant.** A method that only assigns fields is a setter with a
+   better name — the slice should assign them itself, or the entity should not expose it.
+2. **No query surface — but distinguish by caller, not by shape.** An accessor whose only callers are
+   the ORM and `toString()` is machinery. The same getter called from a `@RestController` or a view is
+   the read side served from the write model — project it into a view slice instead.
+3. **It does not grow one method per slice.** Method count tracking slice count with independent
+   invariants is R1's router returned as a class.
+4. **It imports no command type** (§R4). Take the fields; let the slice unpack.
+
+**This lane's distinctive defect.** `AggregateRoot` has no setters, so on the aggregate lane a caller
+physically cannot bypass an invariant method. Here the ORM pushes you toward full get/set, and a
+public `setShipped(true)` defeats the very guard the entity exists to hold. Make the distinction
+structural rather than conventional:
+
+- **JPA** — `@Access(AccessType.FIELD)` on the class, private fields, no public setter for any field a
+  guard method writes.
+- **Mongo** — field mapping (the default), same discipline.
+- **Kotlin** — declare the guarded property `var … private set`.
+
+**Name its identifier property `id`** (`val id: String`), and type it `String`: the write repository below is
+`Repository<{{Entity}}, String>`, and every view slice's scaffolded query derives from `id`, the one
+property a view may assume. A different name makes those derived queries fail at context start.
+
+## `{{Entity}}Repository` — the contract
+
+**Extend the bare `Repository` marker, never `JpaRepository` / `MongoRepository` / `CrudRepository`**
+(`rules/slice-design.md` § Spring Data repository surface). The marker exposes nothing, so the
+interface's surface *is* the three methods you declare — `findAll()`, `deleteAll()` and `count()` are
+simply not on offer, and the sanctioned surface stops being a convention a reviewer has to enforce:
+
+```kotlin
+package {{packagePath}}.{{bc}}.entities
+
+import org.springframework.data.repository.Repository
+
+interface {{Entity}}Repository : Repository<{{Entity}}, String> {
+
+    fun findById(id: String): {{Entity}}?
+
+    fun save({{entity}}: {{Entity}}): {{Entity}}
+
+    fun delete({{entity}}: {{Entity}})
+}
+```
+
+`findById` is correct **here** — it returns the entity, which is what the base implementation
+provides. It is only a defect on a *view* slice's query interface, where it silently captures a
+declared projection type and fails as a `ClassCastException` at the call site.
+
+Its sanctioned surface is **load by id, save, delete. Nothing else.** The moment it grows
+`findByStatus(...)` for a screen, the read side is being served from the write model — that query
+belongs to a view slice's own read-only query interface (§ The read side on this lane), and
+`/essentials:slice-check` gate 15 reports it. Gate 18 reports the base-interface choice.
+
+A finder used *by the write path* — loading a batch in order to mutate it — is fine and is not a
+finding. The test is the caller, not the method name.
+
+It lives here, beside the entity, and never in a `repositories/` folder: this directory is named for a
+domain concept, not for a layer.
+
+## Why no template
+
+- The Essentials `types-springdata-jpa` integration is marked **EXPERIMENTAL — "may be discontinued;
+  prefer types-jdbi"** upstream (`references/llm/LLM-types-springdata-jpa.md`).
+- The bundled docs disagree on how a semantic `@Id` behaves under JPA: one shows `@EmbeddedId` plus a
+  converter, another says to degrade to a Java primitive. Shipping a template would harden that
+  contradiction into scaffolding that fails at someone's compiler.
+
+Spring Data Mongo has neither problem, so if the choice is open, it is the smoother of the two.
+`references/slice/slice-model.md` §3.5 carries the full anatomy either way.

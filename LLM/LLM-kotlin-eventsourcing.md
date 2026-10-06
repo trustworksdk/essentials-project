@@ -31,6 +31,7 @@
 - [GivenWhenThenScenario Testing](#givenwhenthenscenario-testing)
 - [Query State from EventStore](#query-state-from-eventstore)
 - [Common Patterns](#common-patterns)
+- ⚠️ [Gotchas](#gotchas)
 - ⚠️ [Security](#security)
 - [Key Classes](#key-classes)
 - [Maven Dependency](#maven-dependency)
@@ -180,9 +181,10 @@ class ConfirmOrderDecider : Decider<ConfirmOrder, OrderEvent> {
     private val evolver = OrderStateEvolver()
 
     override fun handle(cmd: ConfirmOrder, events: List<OrderEvent>): OrderEvent? {
+        // applyEvents throws NPE on an empty list - guard first (see Gotchas)
+        if (events.isEmpty()) throw RuntimeException("Order does not exist")
         val state = Evolver.applyEvents(evolver, null, events)
 
-        if (state == null) throw RuntimeException("Order does not exist")
         if (state.status == OrderStatus.CONFIRMED) return null // Idempotent
         if (!state.canBeConfirmed())
             throw RuntimeException("Cannot confirm order in ${state.status}")
@@ -230,12 +232,12 @@ Benefits: Auto-deserialization, type filtering, cleaner than manual `stream.even
 import dk.trustworks.essentials.components.kotlin.eventsourcing.AggregateTypeConfiguration
 import dk.trustworks.essentials.components.kotlin.eventsourcing.DeciderSupportsAggregateTypeChecker
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.AggregateType
-import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.serializer.AggregateIdSerializer
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.serializer.StringValueTypeAggregateIdSerializer
 
 AggregateTypeConfiguration(
     aggregateType = AggregateType.of("Orders"),
     aggregateIdType = OrderId::class.java,
-    aggregateIdSerializer = AggregateIdSerializer.serializerFor(OrderId::class.java),
+    aggregateIdSerializer = StringValueTypeAggregateIdSerializer(OrderId::class),
 
     // Which deciders handle this aggregate
     deciderSupportsAggregateTypeChecker = DeciderSupportsAggregateTypeChecker
@@ -255,10 +257,16 @@ AggregateTypeConfiguration(
 |-----------|---------|---------|
 | `aggregateType` | Aggregate identifier | `AggregateType.of("Orders")` |
 | `aggregateIdType` | ID type | `OrderId::class.java` |
-| `aggregateIdSerializer` | Serializer | `AggregateIdSerializer.serializerFor(...)` |
+| `aggregateIdSerializer` | Serializer | `StringValueTypeAggregateIdSerializer(OrderId::class)` |
 | `deciderSupportsAggregateTypeChecker` | Decider filter | Check if cmd inherits from `OrderCommand` |
 | `commandAggregateIdResolver` | Extract ID from cmd | `{ (it as OrderCommand).id }` |
 | `eventAggregateIdResolver` | Extract ID from event | `{ (it as OrderEvent).id }` |
+
+**Id serializer**: for a Kotlin `StringValueType` id (`@JvmInline value class OrderId(override val value: String) : StringValueType<OrderId>`)
+use `StringValueTypeAggregateIdSerializer(OrderId::class)` (package `…eventstore.postgresql.serializer`); it needs `kotlin-reflect` at runtime.
+`AggregateIdSerializer.serializerFor(OrderId::class.java)` returns the same serializer for such an id and covers `String`, `UUID` and
+Java `CharSequenceType` ids. Any other id type makes `serializerFor` throw `EventStoreException` when the configuration bean is created,
+so implement `AggregateIdSerializer` for it.
 
 ### Spring Boot Wiring
 
@@ -266,7 +274,7 @@ AggregateTypeConfiguration(
 
 **Dependencies from other modules**:
 - `dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.AggregateType` from [postgresql-event-store](./LLM-postgresql-event-store.md)
-- `dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.serializer.AggregateIdSerializer` from [postgresql-event-store](./LLM-postgresql-event-store.md)
+- `dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.serializer.StringValueTypeAggregateIdSerializer` from [postgresql-event-store](./LLM-postgresql-event-store.md)
 - `dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.ConfigurableEventStore` from [postgresql-event-store](./LLM-postgresql-event-store.md)
 - `dk.trustworks.essentials.reactive.command.CommandBus` from [reactive](./LLM-reactive.md)
 
@@ -277,7 +285,7 @@ import dk.trustworks.essentials.components.kotlin.eventsourcing.DeciderSupportsA
 import dk.trustworks.essentials.components.kotlin.eventsourcing.adapters.DeciderAndAggregateTypeConfigurator
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.ConfigurableEventStore
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.AggregateType
-import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.serializer.AggregateIdSerializer
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.serializer.StringValueTypeAggregateIdSerializer
 import dk.trustworks.essentials.reactive.command.CommandBus
 
 @Configuration
@@ -304,7 +312,7 @@ class OrdersConfiguration {
         return AggregateTypeConfiguration(
             aggregateType = AGGREGATE_TYPE,
             aggregateIdType = OrderId::class.java,
-            aggregateIdSerializer = AggregateIdSerializer.serializerFor(OrderId::class.java),
+            aggregateIdSerializer = StringValueTypeAggregateIdSerializer(OrderId::class),
             deciderSupportsAggregateTypeChecker = DeciderSupportsAggregateTypeChecker
                 .HandlesCommandsThatInheritsFromCommandType(OrderCommand::class),
             commandAggregateIdResolver = { cmd -> (cmd as OrderCommand).id },
@@ -334,12 +342,12 @@ class OrderService(
     private val unitOfWorkFactory: UnitOfWorkFactory
 ) {
     fun createOrder(orderId: OrderId, customerId: CustomerId): Boolean {
-        val event = commandBus.send(CreateOrder(orderId, customerId)) as OrderEvent?
+        val event: OrderEvent? = commandBus.send(CreateOrder(orderId, customerId))
         return event != null // false if already exists
     }
 
     fun confirmOrder(orderId: OrderId) {
-        commandBus.send(ConfirmOrder(orderId))
+        commandBus.send<Any?, ConfirmOrder>(ConfirmOrder(orderId))
     }
 }
 ```
@@ -460,8 +468,8 @@ fun getOrderStateManual(orderId: OrderId, eventStore: EventStore<*>): OrderState
 ### Command/Event Design
 
 ```kotlin
-// Commands (sealed for exhaustiveness)
-sealed interface OrderCommand {
+// Commands - plain interface; each Decider handles one concrete command class
+interface OrderCommand {
     val id: OrderId
 }
 
@@ -473,7 +481,7 @@ data class CreateOrder(
 data class AcceptOrder(override val id: OrderId) : OrderCommand
 data class ShipOrder(override val id: OrderId) : OrderCommand
 
-// Events (sealed for exhaustiveness)
+// Events (sealed for an exhaustive `when` in the Evolver - all subtypes in this package)
 sealed interface OrderEvent {
     val id: OrderId
     val occurredAt: OffsetDateTime
@@ -507,7 +515,8 @@ if (events.any { it is OrderAccepted })
 ```kotlin
 import dk.trustworks.essentials.components.kotlin.eventsourcing.Evolver
 
-// ✅ Use Evolver for complex validation
+// ✅ Use Evolver for complex validation - guard the empty stream first
+if (events.isEmpty()) throw RuntimeException("Order not created")
 val state = Evolver.applyEvents(evolver, null, events)
 if (!state.canBeShipped()) throw RuntimeException("Invalid state")
 
@@ -540,6 +549,75 @@ is OrderConfirmed -> {
 | Adapter | `DeciderCommandHandlerAdapter` | `EventStreamDeciderCommandHandlerAdapter` |
 
 For Java patterns or OOP aggregates, see [eventsourced-aggregates](./LLM-eventsourced-aggregates.md).
+
+## Gotchas
+
+### `Evolver.applyEvents()` throws instead of returning `null`
+
+`applyEvents` ends with `!!` on the fold result, so it throws `NullPointerException` whenever the fold ends at `null`:
+an empty event list with a `null` initial state (every new aggregate — `DeciderCommandHandlerAdapter` passes an empty
+list when no stream exists), or an evolver whose last applied event yields `null` (e.g. `else -> state` before any
+creation event). A `state == null` check *after* the call never runs. Guard before calling:
+
+```kotlin
+// ✅ Check before folding
+if (events.isEmpty()) throw RuntimeException("Order does not exist")
+val state = Evolver.applyEvents(evolver, null, events)
+
+// ❌ NPE inside applyEvents on an empty list - the null check is dead code
+val state = Evolver.applyEvents(evolver, null, events)
+if (state == null) throw RuntimeException("Order does not exist")
+```
+
+The evolver must also return a non-null state after the first event it can see, or the same NPE fires on a non-empty list.
+
+### `CommandBus.send()` needs an expected type in Kotlin — a cast is not enough
+
+`CommandBus.send` is declared `<R, C> R send(C command)`. `R` appears only in the return type, so Kotlin must take it from
+an expected type or explicit type arguments; `as` does not supply it. The result is the event the `Decider` returned, or
+`null` when it returned `null` (idempotent no-op).
+
+```kotlin
+// ✅ Expected type on the declaration
+val event: OrderEvent? = commandBus.send(CreateOrder(orderId, customerId))
+
+// ✅ Explicit type arguments - also for a call whose result you ignore
+commandBus.send<Any?, ConfirmOrder>(ConfirmOrder(orderId))
+
+// ❌ Does not compile: "cannot infer type for type parameter 'R'"
+val event = commandBus.send(cmd) as OrderEvent?
+commandBus.send(cmd)
+```
+
+### Sealed command/event interfaces must live in one package
+
+Kotlin requires every direct subtype of a `sealed` interface to be declared in the **same package and module** as the
+interface ("a class can only extend a sealed class or interface declared in the same package"). The framework itself does
+not care: `DeciderCommandHandlerAdapter` routes by the exact command class, and
+`HandlesCommandsThatInheritsFromCommandType` matches with `isAssignableFrom`, so sealed and plain interfaces behave the same.
+
+- Commands: a `Decider` handles exactly one concrete command class, so a sealed command hierarchy buys no exhaustiveness.
+  Use a plain `interface OrderCommand` when commands live next to their deciders in separate (slice) packages.
+- Events: `sealed` pays off in the `Evolver`'s exhaustive `when`, as long as all events of the aggregate share one package.
+
+### A sealed type used as a *field* inside an event needs type info
+
+The event store records each event's class name, so the event itself deserializes without any type
+metadata. A field *inside* the event whose declared type is a sealed interface (or any abstract type) has
+no such help: the Essentials mapper enables no default typing, so Jackson cannot pick the subtype and
+deserialization fails — the subscriber or processor reading that event cannot get past it. Annotate the
+nested sealed type:
+
+```kotlin
+@JsonTypeInfo(use = JsonTypeInfo.Id.NAME, property = "@type")
+@JsonSubTypes(
+    JsonSubTypes.Type(CardPayment::class, name = "card"),
+    JsonSubTypes.Type(InvoicePayment::class, name = "invoice"))
+sealed interface PaymentMethod
+```
+
+Adding it to a type that is already persisted changes the JSON it writes; rows written before carry no
+`@type`, so give the annotation a `defaultImpl` or migrate them.
 
 ## Security
 

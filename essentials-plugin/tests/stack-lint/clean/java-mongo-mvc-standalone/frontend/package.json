@@ -1,0 +1,1 @@
+{ "name": "shop-frontend", "private": true, "scripts": { "build": "vite build" } }

@@ -1,0 +1,35 @@
+{
+  "name": "{{artifactId}}-frontend",
+  "private": true,
+  "version": "0.0.1",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview",
+    "test": "vitest",
+    "lint": "eslint .",
+    "generate-api": "orval"
+  },
+  "dependencies": {
+    "@tanstack/react-query": "{{pin:@tanstack/react-query}}",
+    "react": "{{pin:react / react-dom}}",
+    "react-dom": "{{pin:react / react-dom}}",
+    "react-router-dom": "{{pin:react-router-dom}}"
+  },
+  "devDependencies": {
+    "@eslint/js": "{{pin:@eslint/js}}",
+    "@tailwindcss/postcss": "{{pin:@tailwindcss/postcss}}",
+    "@types/react": "{{pin:@types/react}}",
+    "@types/react-dom": "{{pin:@types/react-dom}}",
+    "@vitejs/plugin-react": "{{pin:@vitejs/plugin-react}}",
+    "eslint": "{{pin:eslint}}",
+    "eslint-plugin-react-hooks": "{{pin:eslint-plugin-react-hooks}}",
+    "orval": "{{pin:orval}}",
+    "tailwindcss": "{{pin:tailwindcss}}",
+    "typescript": "{{pin:typescript}}",
+    "typescript-eslint": "{{pin:typescript-eslint}}",
+    "vite": "{{pin:vite}}",
+    "vitest": "{{pin:vitest}}"
+  }
+}

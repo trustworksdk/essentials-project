@@ -18,7 +18,7 @@ package dk.trustworks.essentials.components.foundation.fencedlock;
 
 import org.jdbi.v3.core.Jdbi;
 import org.junit.jupiter.api.*;
-import org.testcontainers.containers.PostgreSQLContainer;
+import org.testcontainers.postgresql.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.*;
 
 import java.util.Optional;
@@ -30,8 +30,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 public class TestFencedLockManagerIT {
 
     @Container
-    private static final PostgreSQLContainer<?> postgresContainer =
-            new PostgreSQLContainer<>("postgres:18.4")
+    private static final PostgreSQLContainer postgresContainer =
+            new PostgreSQLContainer("postgres:18.4")
                     .withDatabaseName("testdb")
                     .withUsername("user")
                     .withPassword("password");

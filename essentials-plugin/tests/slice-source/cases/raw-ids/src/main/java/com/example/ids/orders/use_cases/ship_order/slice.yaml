@@ -1,0 +1,15 @@
+schemaVersion: "1.3"
+slice: orders.ship_order
+kind: command
+bc: orders
+owner: orders-team
+status: live
+summary: Ship an order.
+generator: essentials
+language: java
+handles: [ShipOrder]
+endpoints:
+  - { method: POST, path: "/api/orders/{id}/ship", auth: user }
+writes: [Order]
+tests:
+  unit: { present: false }

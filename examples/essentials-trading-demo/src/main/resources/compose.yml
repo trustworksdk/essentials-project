@@ -1,3 +1,8 @@
+# The project name is pinned, not derived. Spring Boot runs the classpath copy of this file, from
+# target/classes, and an unnamed project is named after its directory - so the demo showed up as
+# "classes", and `docker compose down` run next to the module's own copy could not find it.
+name: essentials-trading-demo
+
 networks:
   default:
     name: essentials-trading-demo
@@ -7,8 +12,8 @@ services:
     container_name: essentials-trading-demo-postgresql
     image: essentials-postgres:17.5
     build:
-      context: ../../../../
-      dockerfile: docker/postgresql/Dockerfile
+      context: ../../../../docker/postgresql
+      dockerfile: Dockerfile
     restart: unless-stopped
     ports:
       - "5432:5432"
@@ -16,5 +21,109 @@ services:
       POSTGRES_USER: essentials
       POSTGRES_PASSWORD: password
       POSTGRES_DB: essentials-trading-demo
-      POSTGRES_SHARED_PRELOAD_LIBRARIES: pg_cron
-    command: ["postgres", "-c", "shared_preload_libraries=pg_cron,pg_stat_statements", "-c", "cron.database_name=essentials-trading-demo", "-c", "wal_level=logical", "-c", "max_replication_slots=10", "-c", "max_wal_senders=10"]
+    # shared_preload_libraries is set here, and only here: the official image has no environment
+    # variable for it. Loading pg_stat_statements is not enough on its own - the extension also has to
+    # be created in the database, which the application does at startup when it can.
+    command: ["postgres", "-c", "shared_preload_libraries=pg_cron,pg_stat_statements", "-c", "cron.database_name=essentials-trading-demo", "-c", "wal_level=logical", "-c", "max_replication_slots=10", "-c", "max_wal_senders=10", "-c", "max_slot_wal_keep_size=2GB"]
+
+  # ---- Observability, behind the `observability` compose profile ----------------------------------
+  # Started only when that profile is active - the `observability` Spring profile activates it, see
+  # application-observability.yml - so a plain run still starts PostgreSQL alone. Metrics and traces
+  # arrive over OTLP at the collector, which remote-writes metrics into Prometheus and forwards traces
+  # to Tempo; logs are pushed to Loki by the application. Grafana: http://localhost:3000
+  #
+  # Paths are relative to where Spring Boot runs this copy from, target/classes, so they reach the
+  # module's observability/ directory without packaging its config into the jar.
+  #
+  # Same host ports as essentials-spring-examples' stack, so the two cannot run at once.
+  collector:
+    profiles: [observability]
+    container_name: essentials-trading-demo-collector
+    image: otel/opentelemetry-collector-contrib:0.127.0
+    depends_on: [prometheus, tempo, loki]
+    volumes:
+      - ../../observability/otel-collector/otel-collector-config.yaml:/etc/otelcol-contrib/config.yaml:ro
+    ports:
+      - "4317:4317" # OTLP gRPC
+      - "4318:4318" # OTLP HTTP - where the application sends metrics and traces
+    restart: unless-stopped
+
+  prometheus:
+    profiles: [observability]
+    container_name: essentials-trading-demo-prometheus
+    image: prom/prometheus:v2.55.1
+    command:
+      - --enable-feature=exemplar-storage
+      - --web.enable-remote-write-receiver
+      - --config.file=/etc/prometheus/prometheus.yml
+      # The load generators never stop, so without a cap the TSDB grows until the disk is full (4 GB+ seen)
+      - --storage.tsdb.retention.time=2d
+      - --storage.tsdb.retention.size=1GB
+    volumes:
+      - prometheus:/prometheus
+      - ../../observability/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    ports:
+      - "9090:9090"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O- http://localhost:9090/-/ready | grep -q Ready"]
+      interval: 3s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+  tempo:
+    profiles: [observability]
+    container_name: essentials-trading-demo-tempo
+    image: grafana/tempo:2.7.2
+    command: ['-config.file=/etc/tempo.yml']
+    volumes:
+      - tempo:/var/tempo
+      - ../../observability/grafana/tempo.yml:/etc/tempo.yml:ro
+    ports:
+      - "3200:3200"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O- http://localhost:3200/ready | grep -q ready"]
+      interval: 3s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+  loki:
+    profiles: [observability]
+    container_name: essentials-trading-demo-loki
+    image: grafana/loki:3.5.0
+    command: ['-config.file=/etc/loki/local-config.yaml']
+    volumes:
+      - ../../observability/loki/local-config.yaml:/etc/loki/local-config.yaml:ro
+    ports:
+      - "3100:3100"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O- http://localhost:3100/ready | grep -q ready"]
+      interval: 3s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+  grafana:
+    profiles: [observability]
+    container_name: essentials-trading-demo-grafana
+    image: grafana/grafana:10.4.18
+    depends_on:
+      prometheus: { condition: service_healthy }
+      tempo: { condition: service_healthy }
+      loki: { condition: service_healthy }
+    environment:
+      - GF_AUTH_ANONYMOUS_ENABLED=true
+      - GF_AUTH_ANONYMOUS_ORG_ROLE=Admin
+      - GF_AUTH_DISABLE_LOGIN_FORM=true
+    volumes:
+      - ../../observability/grafana/grafana.ini:/etc/grafana/grafana.ini:ro
+      - ../../observability/grafana/provisioning/datasources:/etc/grafana/provisioning/datasources:ro
+      - ../../observability/grafana/provisioning/dashboards:/etc/grafana/provisioning/dashboards:ro
+    ports:
+      - "3000:3000"
+    restart: unless-stopped
+
+volumes:
+  prometheus:
+  tempo:

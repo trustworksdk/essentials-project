@@ -1,0 +1,554 @@
+# PostgreSQL Queue - LLM Reference
+
+> Quick reference for LLMs. For detailed explanations, see [README](https://github.com/trustworksdk/essentials-project/blob/0.60.0/components/postgresql-queue/README.md). For DurableQueues API patterns, see [LLM-foundation.md](./LLM-foundation.md#durablequeues-messaging).
+
+## Quick Facts
+- **Package**: `dk.trustworks.essentials.components.queue.postgresql`
+- **Implementation**: `PostgresqlDurableQueues` implements `DurableQueues`
+- **Storage**: PostgreSQL table with JSONB payloads
+- **Locking**: `FOR UPDATE SKIP LOCKED`
+- **Notifications**: LISTEN/NOTIFY via `MultiTableChangeListener`
+- **Dependencies**: JDBI, PostgreSQL, Jackson (all `provided`), foundation module
+- **Status**: WORK-IN-PROGRESS
+
+```xml
+<dependency>
+    <groupId>dk.trustworks.essentials.components</groupId>
+    <artifactId>postgresql-queue</artifactId>
+</dependency>
+```
+
+## TOC
+- [Core API](#core-api)
+- [Configuration](#configuration)
+- [Transactions](#transactions)
+- [Polling Mechanisms](#polling-mechanisms)
+- [Polling Optimization](#polling-optimization)
+- [Database Schema](#database-schema)
+- [Dead-Letter Classification](#dead-letter-classification)
+- [Monitoring](#monitoring)
+- [Performance Tuning](#performance-tuning)
+- ⚠️ [Security](#security)
+- [Gotchas](#gotchas)
+
+## Core API
+
+Base package: `dk.trustworks.essentials.components.queue.postgresql`
+
+**Dependencies from other modules**:
+- `DurableQueues`, `QueueName`, `ConsumeFromQueue`, `RedeliveryPolicy` from [foundation](./LLM-foundation.md)
+- `HandleAwareUnitOfWorkFactory` from [foundation](./LLM-foundation.md)
+
+| Class | Purpose |
+|-------|---------|
+| `PostgresqlDurableQueues` | Main implementation |
+| `PostgresqlDurableQueuesBuilder` | Builder via `PostgresqlDurableQueues.builder()` |
+| `PostgresqlDurableQueueConsumer` | Traditional per-consumer polling |
+
+Foundation classes (package: `dk.trustworks.essentials.components.foundation.messaging.queue`):
+
+| Class | Purpose |
+|-------|---------|
+| `CentralizedMessageFetcher` | Single-thread polling across queues |
+| `DefaultDurableQueueConsumer` | Per-consumer polling threads |
+| `SimpleQueuePollingOptimizer` | Linear backoff for traditional consumers |
+| `CentralizedQueuePollingOptimizer` | Exponential backoff with jitter |
+| `MultiTableChangeListener` | PostgreSQL LISTEN/NOTIFY support |
+
+## Configuration
+
+### Basic Setup
+
+```java
+import dk.trustworks.essentials.components.queue.postgresql.PostgresqlDurableQueues;
+import dk.trustworks.essentials.components.foundation.transaction.jdbi.JdbiUnitOfWorkFactory;
+
+var durableQueues = PostgresqlDurableQueues.builder()
+    .setUnitOfWorkFactory(new JdbiUnitOfWorkFactory(jdbi))
+    .build();
+durableQueues.start();
+```
+
+### Spring Integration
+
+```java
+import dk.trustworks.essentials.components.queue.postgresql.PostgresqlDurableQueues;
+import dk.trustworks.essentials.components.foundation.transaction.spring.jdbi.SpringTransactionAwareJdbiUnitOfWorkFactory;
+import dk.trustworks.essentials.components.foundation.messaging.queue.TransactionMode;
+
+@Bean
+public SpringTransactionAwareJdbiUnitOfWorkFactory unitOfWorkFactory(
+        Jdbi jdbi, DataSourceTransactionManager transactionManager) {
+    return new SpringTransactionAwareJdbiUnitOfWorkFactory(jdbi, transactionManager);
+}
+
+@Bean
+public DurableQueues durableQueues(HandleAwareUnitOfWorkFactory unitOfWorkFactory) {
+    return PostgresqlDurableQueues.builder()
+        .setUnitOfWorkFactory(unitOfWorkFactory)
+        .build();
+}
+```
+
+### Builder Options
+
+Created via `PostgresqlDurableQueues.builder()`.
+
+| Option | Type | Default | Notes |
+|--------|------|---------|-------|
+| `unitOfWorkFactory` | `HandleAwareUnitOfWorkFactory` | **Required** | JDBI transaction factory |
+| `jsonSerializer` | `JSONSerializer` | Jackson | Message serialization |
+| `sharedQueueTableName` | `String` | `durable_queues` | ⚠️ SQL injection risk - validate! |
+| `messageHandlingTimeout` | `Duration` | 30s | Stuck message timeout |
+| `useCentralizedMessageFetcher` | `boolean` | `true` | Centralized vs per-consumer |
+| `centralizedMessageFetcherPollingInterval` | `Duration` | 20ms | Polling interval |
+| `queuePollingOptimizerFactory` | `Function<ConsumeFromQueue,QueuePollingOptimizer>` | null | For `DefaultDurableQueueConsumer` |
+| `centralizedQueuePollingOptimizerFactory` | `Function<QueueName,QueuePollingOptimizer>` | null | For `CentralizedMessageFetcher` |
+| `multiTableChangeListener` | `MultiTableChangeListener` | null | LISTEN/NOTIFY support |
+
+## Transactions
+
+Every queue operation runs in its own transaction: queueing, fetching, acknowledging, retrying and dead-lettering are
+separate, so a failing handler can never roll back its own retry count. (0.60 removed `TransactionalMode`; its
+`FullyTransactional` mode broke exactly that.) A `queueMessage` called inside a caller's `UnitOfWork` joins it, so the
+enqueue commits or rolls back with the caller's writes - which is what an Outbox relies on.
+
+## Polling Mechanisms
+
+### CentralizedMessageFetcher (Default)
+
+Single polling thread fetches from all queues, distributes to workers.
+
+**Pros**: Low DB load, batch ops, ordering support
+**Cons**: Single point of failure
+
+```java
+.setUseCentralizedMessageFetcher(true)
+.setCentralizedMessageFetcherPollingInterval(Duration.ofMillis(20))
+```
+
+### DefaultDurableQueueConsumer (Traditional)
+
+Per-consumer polling threads.
+
+**Pros**: Simpler, fault isolation
+**Cons**: Higher DB load
+
+```java
+.setUseCentralizedMessageFetcher(false)
+```
+
+### Comparison
+
+| Aspect | CentralizedMessageFetcher | DefaultDurableQueueConsumer |
+|--------|---------------------------|----------------------------|
+| DB Load | Low | Higher |
+| Scalability | Excellent | Good |
+| Complexity | Higher | Lower |
+| Fault Isolation | Lower | Higher |
+
+## Polling Optimization
+
+### Why Optimize
+
+Continuous polling at fixed intervals wastes DB resources when queues are idle. Optimizers implement adaptive backoff - reducing poll frequency during quiet periods, resetting to aggressive polling when messages arrive.
+
+### How It Works
+
+1. **Message found** → Reset to initial (fast) polling interval
+2. **No message found** → Increase delay using backoff strategy
+3. **Message added** → LISTEN/NOTIFY immediately resets to fast polling (requires `MultiTableChangeListener`)
+
+### SimpleQueuePollingOptimizer
+
+**Used with**: `DefaultDurableQueueConsumer`
+**Strategy**: Linear backoff (`delay += increment`)
+
+```java
+import dk.trustworks.essentials.components.foundation.messaging.queue.SimpleQueuePollingOptimizer;
+
+.setUseCentralizedMessageFetcher(false)
+.setMultiTableChangeListener(multiTableChangeListener)  // Required
+.setQueuePollingOptimizerFactory(consumeFromQueue ->
+    new SimpleQueuePollingOptimizer(
+        consumeFromQueue,
+        100,    // delayIncrementMs - add 100ms per empty poll
+        5000    // maxDelayMs - cap at 5s
+    ))
+```
+
+| Param | Description |
+|-------|-------------|
+| `delayIncrementMs` | Added per empty poll (e.g., 100ms) |
+| `maxDelayMs` | Cap (e.g., 5000ms) |
+
+**Algorithm**: `delay = min(maxDelay, delay + increment)`
+
+### CentralizedQueuePollingOptimizer
+
+**Used with**: `CentralizedMessageFetcher`
+**Strategy**: Exponential backoff with jitter (`delay = min(max, delay × factor) ± jitter`)
+
+```java
+import dk.trustworks.essentials.components.foundation.messaging.queue.CentralizedQueuePollingOptimizer;
+
+.setUseCentralizedMessageFetcher(true)
+.setMultiTableChangeListener(multiTableChangeListener)  // Required
+.setCentralizedQueuePollingOptimizerFactory(queueName ->
+    new CentralizedQueuePollingOptimizer(
+        queueName,
+        100,    // initialDelayMs - start at 100ms
+        30000,  // maxDelayMs - cap at 30s
+        2.0,    // backoffFactor - double each time
+        0.1     // jitterFraction - ±10% randomization
+    ))
+```
+
+| Param | Description |
+|-------|-------------|
+| `initialDelayMs` | Start delay (e.g., 100ms) |
+| `maxDelayMs` | Cap (e.g., 30000ms) |
+| `backoffFactor` | Multiplier (e.g., 2.0 = double) |
+| `jitterFraction` | Variance (e.g., 0.1 = ±10%) |
+
+**Algorithm**: `delay = min(maxDelay, delay × factor) ± jitter`
+
+### LISTEN/NOTIFY Setup
+
+PostgreSQL NOTIFY triggers immediate polling when messages arrive.
+
+```java
+import dk.trustworks.essentials.components.foundation.postgresql.MultiTableChangeListener;
+
+var multiTableChangeListener = new MultiTableChangeListener<>(
+    jdbi,
+    Duration.ofMillis(100),
+    jsonSerializer
+);
+
+var durableQueues = PostgresqlDurableQueues.builder()
+    .setUnitOfWorkFactory(unitOfWorkFactory)
+    .setMultiTableChangeListener(multiTableChangeListener)
+    .build();
+```
+
+## Database Schema
+
+Auto-created on start - unless a schema harness owns it: `PostgresqlDurableQueuesBuilder.setSchemaOwnership(SchemaOwnership.HARNESS)`
+(the Spring starter does it when `essentials.schema.mode` is not `create`), after which the queues are a schema
+contributor (module `postgresql-queue`) - see [LLM-foundation.md](./LLM-foundation.md#database-schema-harness). The legacy index drops and the 0.50 queue-statistics
+removal stay repeatable changes, so a 0.50 instance restarting mid-rollout cannot leave them behind.
+
+```sql
+CREATE TABLE durable_queues (
+    id                      TEXT PRIMARY KEY,        -- QueueEntryId
+    queue_name              TEXT NOT NULL,
+    message_payload         JSONB NOT NULL,
+    message_payload_type    TEXT NOT NULL,
+    added_ts                TIMESTAMPTZ NOT NULL,
+    next_delivery_ts        TIMESTAMPTZ NOT NULL,
+    delivery_ts             TIMESTAMPTZ,
+    total_attempts          INT DEFAULT 0,
+    redelivery_attempts     INT DEFAULT 0,
+    last_error              TEXT,
+    is_being_delivered      BOOLEAN DEFAULT FALSE,
+    is_dead_letter_message  BOOLEAN DEFAULT FALSE,
+    meta_data               JSONB,
+
+    -- OrderedMessage only
+    delivery_mode           TEXT,                    -- "NORMAL" | "IN_ORDER"
+    key                     TEXT,                    -- OrderedMessage key
+    key_order               BIGINT                   -- OrderedMessage sequence
+);
+```
+
+### Indexes
+
+Auto-created. `*` = table name.
+
+```sql
+-- Ordered message lookup
+CREATE INDEX idx_*_ordered_msg
+  ON durable_queues (queue_name, key, key_order);
+
+-- Unordered messages ready
+CREATE INDEX idx_*_unordered_ready
+  ON durable_queues (queue_name, next_delivery_ts)
+  INCLUDE (id)
+  WHERE key IS NULL AND NOT is_dead_letter_message AND NOT is_being_delivered;
+
+-- Ordered message head (for ordered processing)
+CREATE INDEX idx_*_ordered_head
+  ON durable_queues (queue_name, key_order, next_delivery_ts)
+  INCLUDE (id)
+  WHERE key IS NOT NULL AND is_dead_letter_message = FALSE AND is_being_delivered = FALSE;
+```
+
+**Query pattern**: `FOR UPDATE SKIP LOCKED` for lock-free concurrent access.
+
+## Dead-Letter Classification
+
+A failed delivery is either retried according to the `RedeliveryPolicy` or dead-lettered immediately. The
+consumer asks the policy's `MessageDeliveryErrorHandler` first, then applies its own built-in list of permanent
+error types. Two of the five can be overridden by an explicit `alwaysRetryOn(...)`; three cannot:
+
+| Type | Overridable by `alwaysRetryOn` |
+|---|---|
+| `DurableQueueDeserializationException` | No |
+| `MismatchedInputException` | No |
+| `NoClassDefFoundError` | No |
+| `IllegalArgumentException` (incl. `NumberFormatException`) | **Yes** |
+| `ClassCastException` | **Yes** |
+
+`IllegalArgumentException` on that list is the common surprise: `FailFast.requireNonNull(...)` /
+`requireTrue(...)` and Kotlin's `require(...)` all throw it, so a `@MessageHandler` that guards its arguments
+dead-letters its message on the first delivery attempt unless the policy opts out.
+
+The whole cause chain is examined, not just the thrown exception and the deepest root cause. Overriding does
+not lift `maximumNumberOfRedeliveries`.
+
+See [LLM-foundation.md](./LLM-foundation.md) for `MessageDeliveryErrorHandler`, the opt-out, the
+`RedeliveryPolicy` strategies and the recipe for validating inside a handler.
+
+## Monitoring
+
+### Standard DurableQueues API
+
+Package: `dk.trustworks.essentials.components.foundation.messaging.queue`
+
+```java
+// Queue depth and dead letter counts
+QueuedMessageCounts counts = durableQueues.getQueuedMessageCountsFor(queueName);
+long queuedMessages = counts.getTotalQueuedMessages();
+long deadLetterMessages = counts.getDeadLetterMessages();
+
+// Dead letter messages (paginated)
+List<QueuedMessage> dlq = durableQueues.getDeadLetterMessages(
+    queueName, QueueingSortOrder.ASC, 0, 100);
+
+// All queue names
+Set<QueueName> queueNames = durableQueues.getQueueNames();
+```
+
+### Interceptors (Micrometer)
+
+Package: `dk.trustworks.essentials.components.foundation.messaging.queue.micrometer` and `.foundation.interceptor.micrometer`
+
+```java
+import dk.trustworks.essentials.components.foundation.messaging.queue.micrometer.*;
+import dk.trustworks.essentials.components.foundation.interceptor.micrometer.RecordExecutionTimeDurableQueueInterceptor;
+
+var durableQueues = PostgresqlDurableQueues.builder()
+    .setUnitOfWorkFactory(unitOfWorkFactory)
+    .addInterceptor(new DurableQueuesMicrometerInterceptor(meterRegistry, "MyService"))
+    .addInterceptor(new DurableQueuesMicrometerTracingInterceptor(tracer, propagator, registry))
+    .addInterceptor(new RecordExecutionTimeDurableQueueInterceptor(meterRegistry, "MyService"))
+    .build();
+```
+
+| Interceptor | Metrics |
+|-------------|---------|
+| `DurableQueuesMicrometerInterceptor` | Queue size gauges, counters (processed, handled, retries, DLQ) |
+| `DurableQueuesMicrometerTracingInterceptor` | Distributed tracing via Micrometer Observation |
+| `RecordExecutionTimeDurableQueueInterceptor` | Operation execution time |
+
+### Queue statistics
+
+The trigger-based statistics table was removed in 0.60. Delivery figures now come from an in-memory
+`QueueStatisticsRegistry` fed by a `DurableQueueMessageObserver`, joined with the cluster-wide queue depth at
+the API layer:
+
+```
+GET /durable-queues/queues/{queueName}/statistics   ->  ApiQueueStatistics
+```
+
+| Half | Source | Scope |
+|---|---|---|
+| `depth` | the queue table, one statement | **cluster-wide** — queued, dead letters, in flight, oldest ready age |
+| `instance` | `QueueStatisticsRegistry` | **this JVM only** — handled, retried, dead-lettered, handler durations, last failure. `null` when this instance has delivered nothing |
+
+`depth.messagesBeingDelivered` and `depth.oldestReadyMessageAgeMillis` are what separate "nothing to do" from
+"stalled": zero handled on this instance means nothing on its own. `PostgresqlDurableQueues` always reports
+`messagesBeingDelivered`; the field is a nullable `Long` because an implementation that cannot count it cluster-wide
+reports `null` — unknown, not zero.
+
+See [LLM-foundation.md](./LLM-foundation.md) for the observer contract.
+
+### Logging
+
+| Logger | Purpose |
+|--------|---------|
+| `dk.trustworks.essentials.components.queue.postgresql.PostgresqlDurableQueues` | PostgreSQL queue ops |
+| `dk.trustworks.essentials.components.foundation.messaging.queue.DurableQueueConsumer` | Consumer ops |
+| `dk.trustworks.essentials.components.foundation.messaging.queue.DurableQueueConsumer.MessageHandlingFailures` | Message failures |
+| `dk.trustworks.essentials.components.foundation.messaging.queue.CentralizedMessageFetcher` | Centralized polling |
+| `dk.trustworks.essentials.components.foundation.messaging.queue.CentralizedMessageFetcherDurableQueueConsumer` | Centralized consumer |
+| `dk.trustworks.essentials.components.foundation.messaging.queue.CentralizedQueuePollingOptimizer` | Exponential backoff |
+| `dk.trustworks.essentials.components.foundation.messaging.queue.SimpleQueuePollingOptimizer` | Linear backoff |
+
+```yaml
+# Logback/Spring Boot
+logging.level:
+  dk.trustworks.essentials.components.queue.postgresql: DEBUG
+  dk.trustworks.essentials.components.foundation.messaging.queue.DurableQueueConsumer: DEBUG
+  dk.trustworks.essentials.components.foundation.messaging.queue.DurableQueueConsumer.MessageHandlingFailures: WARN
+  dk.trustworks.essentials.components.foundation.messaging.queue.CentralizedMessageFetcher: DEBUG
+```
+
+### SQL Queries (Custom Metrics)
+
+```sql
+-- Dead letter counts by queue
+SELECT queue_name, COUNT(*) as dead_letter_count,
+       MAX(added_ts) as latest_dead_letter
+FROM durable_queues
+WHERE is_dead_letter_message = true
+GROUP BY queue_name;
+
+-- Queue depth
+SELECT queue_name, COUNT(*) as pending_count,
+       MIN(next_delivery_ts) as earliest_delivery
+FROM durable_queues
+WHERE is_being_delivered = false AND is_dead_letter_message = false
+GROUP BY queue_name;
+
+-- Stuck messages (being delivered too long)
+SELECT queue_name, COUNT(*) as stuck_count
+FROM durable_queues
+WHERE is_being_delivered = true
+  AND delivery_ts < NOW() - INTERVAL '5 minutes'
+GROUP BY queue_name;
+```
+
+## Performance Tuning
+
+### High-Throughput
+
+```java
+PostgresqlDurableQueues.builder()
+    .setUnitOfWorkFactory(unitOfWorkFactory)
+    .setUseCentralizedMessageFetcher(true)
+    .setCentralizedMessageFetcherPollingInterval(Duration.ofMillis(5))
+    .setMultiTableChangeListener(multiTableChangeListener)
+    .setCentralizedQueuePollingOptimizerFactory(queueName ->
+        new CentralizedQueuePollingOptimizer(queueName, 5, 10000, 1.5, 0.1))
+    .build();
+```
+
+### Low-Latency
+
+```java
+PostgresqlDurableQueues.builder()
+    .setUnitOfWorkFactory(unitOfWorkFactory)
+    .setUseCentralizedMessageFetcher(true)
+    .setCentralizedMessageFetcherPollingInterval(Duration.ofMillis(5))
+    .setMultiTableChangeListener(multiTableChangeListener)
+    .build();
+```
+
+## Security
+
+### ⚠️ Critical: SQL Injection Risk
+
+`sharedQueueTableName` used in SQL via string concatenation → SQL injection risk.
+
+While `PostgresqlUtil.checkIsValidTableOrColumnName()` provides basic validation, this is **NOT exhaustive protection**.
+
+**Safe usage**:
+
+```java
+// ✅ SAFE - hardcoded only
+.setSharedQueueTableName("message_queue")
+
+// ⚠️ Validate if from config
+PostgresqlUtil.checkIsValidTableOrColumnName(tableName);  // Basic validation
+.setSharedQueueTableName(tableName)
+
+// ❌ DANGEROUS - never from untrusted input
+.setSharedQueueTableName(userInput)
+```
+
+**Developer responsibility**:
+- Only use values from controlled, trusted sources
+- Never derive from external/untrusted input
+- Validate all config values at startup
+
+See [README Security](https://github.com/trustworksdk/essentials-project/blob/0.60.0/components/postgresql-queue/README.md#security) for full details.
+
+### What Validation Does NOT Protect Against
+
+- SQL injection via **values** (use parameterized queries)
+- Malicious input that passes naming conventions but exploits application logic
+- Configuration loaded from untrusted external sources without additional validation
+- Names that are technically valid but semantically dangerous
+- WHERE clauses and raw SQL strings
+
+**Bottom line:** Validation is a defense layer, not a security guarantee. Always use hardcoded names or thoroughly validated configuration.
+
+## Gotchas
+
+| Issue | Wrong | Right |
+|-------|-------|-------|
+| Expecting the handler's writes and the acknowledgement to commit together | Relying on a handler rollback to un-acknowledge | Idempotent handler - a retried delivery repeats it |
+| SQL injection via table name | `.setSharedQueueTableName(request.getParameter("table"))` | `.setSharedQueueTableName("message_queue")` |
+| Optimizer without listener | `.setQueuePollingOptimizerFactory(...)` alone | `.setMultiTableChangeListener(...).setQueuePollingOptimizerFactory(...)` |
+| Aggressive polling without optimization | `.setCentralizedMessageFetcherPollingInterval(Duration.ofMillis(1))` | Add optimizer + reasonable interval |
+
+## Integration
+
+### Spring Boot Starter
+
+See [LLM-spring-boot-starter-modules.md](./LLM-spring-boot-starter-modules.md#postgresql-starter).
+
+```yaml
+essentials.postgresql:
+  queue-table-name: message_queue
+  use-centralized-fetcher: true
+  polling-interval: 20ms
+```
+
+### Related Modules
+
+| Module | Purpose |
+|--------|---------|
+| [foundation](./LLM-foundation.md#durablequeues-messaging) | `DurableQueues` interface and core patterns |
+| [springdata-mongo-queue](./LLM-springdata-mongo-queue.md) | MongoDB implementation |
+| [types-jdbi](./LLM-types-jdbi.md) | JDBI argument factories |
+| [types-jackson3](./LLM-types-jackson.md) | JSON serialization |
+
+### PostgreSQL vs MongoDB
+
+| Aspect | PostgreSQL | MongoDB |
+|--------|-----------|---------|
+| **Module** | `postgresql-queue` | `springdata-mongo-queue` |
+| **Storage** | SQL table + JSONB | Collection + BSON |
+| **Transactions** | JDBI/JDBC | Spring Data MongoDB |
+| **Notifications** | LISTEN/NOTIFY | Change Streams |
+| **Locking** | `FOR UPDATE SKIP LOCKED` | `findAndModify()` |
+| **Polling** | Centralized + Linear/Exponential | Linear only |
+| **Config** | Builder pattern | Constructor |
+
+## Test Utilities
+
+```java
+import org.testcontainers.postgresql.PostgreSQLContainer;
+import dk.trustworks.essentials.components.queue.postgresql.PostgresqlDurableQueues;
+import dk.trustworks.essentials.components.foundation.transaction.jdbi.JdbiUnitOfWorkFactory;
+
+@Container
+static PostgreSQLContainer postgres = new PostgreSQLContainer("postgres:15");
+
+@Bean
+public DurableQueues testDurableQueues(Jdbi jdbi) {
+    return PostgresqlDurableQueues.builder()
+        .setUnitOfWorkFactory(new JdbiUnitOfWorkFactory(jdbi))
+        .setSharedQueueTableName("test_queue")
+        .build();
+}
+```
+
+## See Also
+
+- [README.md](https://github.com/trustworksdk/essentials-project/blob/0.60.0/components/postgresql-queue/README.md) - Full documentation with examples
+- [LLM-foundation.md](./LLM-foundation.md#durablequeues-messaging) - DurableQueues API patterns
+- [LLM-springdata-mongo-queue.md](./LLM-springdata-mongo-queue.md) - MongoDB implementation

@@ -17,23 +17,22 @@
 package dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.cdc;
 
 /**
- * Raised on the ordered live sink of {@code CdcEventStore.BackfillThenLiveOrdered} when the live-tail
- * drain has been parked on a missing {@code global_event_order} for longer than the configured
- * {@code eventBus.liveDrainStallThreshold}.
+ * <b>No longer raised</b> - kept for compatibility with code that refers to it.
  * <p>
- * The drain advances {@code expectedNext} strictly by {@code +1} and has no way to skip a global order
- * that will never arrive on the live CDC bus (most commonly a rolled-back {@code IDENTITY} value that
- * never produces data WAL). Left alone, such a permanent hole in the live tail stalls the affected
- * subscriber forever — and, because CDC stays globally healthy, the stall never self-heals via an
- * availability flip to polling (see {@code cdc/cdc-improvements.md} §P10).
+ * It was raised on the ordered live sink of {@code CdcEventStore.BackfillThenLiveOrdered} when the live-tail drain had
+ * been parked on a missing {@code global_event_order} for longer than {@code eventBus.liveDrainStallThreshold}. The
+ * drain advanced {@code expectedNext} strictly by {@code +1} past the head and could not skip a global order that never
+ * arrives on the live CDC bus (most commonly a rolled-back {@code IDENTITY} value, which writes no WAL), so this was the
+ * retryable signal that re-subscribed the pipeline and resumed its gap-handler-aware backfill from
+ * {@link #stalledAtGlobalOrder()}.
  * <p>
- * This exception is the <b>retryable</b> signal that drives the Tier-1 recovery: {@code pollEvents}
- * filters on this type in its {@code retryWhen} and re-subscribes the CDC pipeline, resuming the
- * gap-handler-aware backfill from {@link #stalledAtGlobalOrder()}. Backfill then classifies the hole
- * (transient → wait/recover, permanent → skip) using the existing {@code SubscriptionGapHandler}, which
- * is the only path proven to heal this condition. The {@code expectedNext} value at stall time is the
- * authoritative resume point: every order below it has already been emitted contiguously.
+ * The drain no longer waits for a missing global order: past the head it hands live events on as the CDC bus delivers
+ * them, and the subscription's delivery tracker delivers an event whose transaction commits after a higher global order
+ * when it arrives, out of global order. There is nothing left to stall on.
+ *
+ * @deprecated never raised; planned for removal in the next major release
  */
+@Deprecated(forRemoval = true)
 public class CdcLiveDrainStalledException extends RuntimeException {
     /**
      * The {@code global_event_order} the live drain was parked on (its {@code expectedNext}) when the

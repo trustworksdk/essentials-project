@@ -16,6 +16,7 @@
 
 package dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.cdc;
 
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.SubscriberAcknowledgement;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.ConfigurableEventStore;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.EventStore;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.EventStorePollingOptimizer;
@@ -102,6 +103,9 @@ class CdcEventStoreAdaptiveLiveSourceTest {
 
         await().atMost(Duration.ofSeconds(2)).until(() -> received.size() >= 6);
         assertThat(globalOrders(received)).containsExactly(1L, 2L, 3L, 4L, 5L, 6L);
+        // A running subscription switching off the CDC bus is a fallback, just as starting on polling would be.
+        // It used to leave fallbackCount at zero, so an outage every subscription polled through went unrecorded.
+        assertThat(fx.availability.getFallbackCount()).isEqualTo(1);
     }
 
     @Test
@@ -160,6 +164,8 @@ class CdcEventStoreAdaptiveLiveSourceTest {
 
         await().atMost(Duration.ofSeconds(2)).until(() -> received.size() >= 3);
         assertThat(globalOrders(received)).containsExactly(1L, 2L, 3L);
+        // Starting on polling before CDC was ever active is warm-up, and the cut-over is not a fallback either
+        assertThat(fx.availability.getFallbackCount()).isZero();
     }
 
     @Test
@@ -190,6 +196,10 @@ class CdcEventStoreAdaptiveLiveSourceTest {
         fx.bus.publish(List.of(event(4), event(5)));
         await().atMost(Duration.ofSeconds(2)).until(() -> received.size() >= 5);
         assertThat(globalOrders(received)).containsExactly(1L, 2L, 3L, 4L, 5L);
+        // One fall to polling; the cutback to CDC is recovery, not a second fallback
+        assertThat(fx.availability.getFallbackCount()).isEqualTo(1);
+        assertThat(fx.availability.interruptions().count()).isEqualTo(1);
+        assertThat(fx.availability.interruptions().ongoing()).isFalse();
     }
 
     @Test
@@ -234,11 +244,11 @@ class CdcEventStoreAdaptiveLiveSourceTest {
         var fx = fixture(Duration.ofMillis(100));
         fx.availability.active("slot");
 
-        var received = subscribe(fx, Optional.of(new TestTenant("acme")));
+        var received = subscribe(fx, Optional.of(new TestTenant("example")));
 
         fx.bus.publish(List.of(
                 event(1),                  // tenant-less     -> must be delivered (IS NULL)
-                tenantEvent(2, "acme")     // matching tenant -> delivered (= :tenant)
+                tenantEvent(2, "example")  // matching tenant -> delivered (= :tenant)
                                                   ));
 
         await().atMost(Duration.ofSeconds(2)).until(() -> received.size() >= 2);
@@ -248,22 +258,22 @@ class CdcEventStoreAdaptiveLiveSourceTest {
     @Test
     void tenant_filter_excludes_interleaved_other_tenant_events_without_stalling_ordering() throws Exception {
         // Regression: tenant filtering must be applied to the ORDERED OUTPUT, not upstream of
-        // BackfillThenLiveOrdered's strict expectedNext drain. An other-tenant event sitting in the
+        // BackfillThenLiveOrdered and its delivery tracker. An other-tenant event sitting in the
         // MIDDLE of the global-order sequence must be excluded WITHOUT stalling the events after it —
         // the common multi-tenant case where tenants interleave in global_event_order. With the filter
-        // misplaced upstream of the drain, event 3 (globex) would punch a hole and events 4 & 5 would
-        // never be delivered.
+        // misplaced upstream, event 3 (example2) would punch a hole: the drain used to wait for it
+        // (strict +1), and the tracker would record and wait for it as a gap.
         var fx = fixture(Duration.ofMillis(100));
         fx.availability.active("slot");
 
-        var received = subscribe(fx, Optional.of(new TestTenant("acme")));
+        var received = subscribe(fx, Optional.of(new TestTenant("example")));
 
         fx.bus.publish(List.of(
-                event(1),                  // tenant-less     -> delivered
-                tenantEvent(2, "acme"),    // matching tenant -> delivered
-                tenantEvent(3, "globex"),  // other tenant    -> excluded (mid-sequence — must not stall)
-                event(4),                  // tenant-less     -> delivered (proves no stall)
-                tenantEvent(5, "acme")     // matching tenant -> delivered
+                event(1),                   // tenant-less     -> delivered
+                tenantEvent(2, "example"),  // matching tenant -> delivered
+                tenantEvent(3, "example2"), // other tenant    -> excluded (mid-sequence — must not stall)
+                event(4),                   // tenant-less     -> delivered (proves no stall)
+                tenantEvent(5, "example")   // matching tenant -> delivered
                                                   ));
 
         await().atMost(Duration.ofSeconds(2)).until(() -> received.size() >= 4);
@@ -333,7 +343,7 @@ class CdcEventStoreAdaptiveLiveSourceTest {
     }
 
     private static void stubPollingSource(Fixture fx, Flux<PersistedEvent> source) {
-        when(fx.delegate.pollEvents(any(), anyLong(), any(), any(), any(), any(), any()))
+        when(fx.delegate.pollEvents(any(), anyLong(), any(), any(), any(), any(), any(), any(SubscriberAcknowledgement.class)))
                 .thenReturn(source);
     }
 

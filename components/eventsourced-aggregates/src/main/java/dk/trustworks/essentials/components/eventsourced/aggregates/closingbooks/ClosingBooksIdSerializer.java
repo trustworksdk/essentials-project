@@ -85,9 +85,9 @@ public interface ClosingBooksIdSerializer<ID> {
      * Serializer built from the two directions as functions - the shortest way to describe an id type the framework
      * cannot derive on its own.
      *
-     * @param serialize   maps an id to its persisted string form; must not be null
-     * @param deserialize maps a persisted string back to an id; must not be null
-     * @param <ID>        the id type
+     * @param serializeFunction   maps an id to its persisted string form; must not be null
+     * @param deserializeFunction maps a persisted string back to an id; must not be null
+     * @param <ID>                the id type
      * @return a {@link ClosingBooksIdSerializer} over the two functions
      */
     static <ID> ClosingBooksIdSerializer<ID> of(Function<ID, String> serializeFunction,

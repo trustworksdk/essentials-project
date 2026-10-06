@@ -1,0 +1,26 @@
+schemaVersion: "1.2"
+slice: billing.issue_invoice
+kind: command
+bc: billing
+owner: billing-team
+status: live
+summary: Issue a new invoice for an amount.
+generator: essentials
+language: java
+tier: cqrs-es
+lane: aggregate
+handles: [IssueInvoice]
+publishes: [InvoiceIssued]
+endpoints:
+  - { method: POST, path: "/api/billing", auth: user }
+writes: [Invoice]
+reads:
+  - { name: Invoice }
+invariants:
+  - { id: INV-II-1, text: "Invoice amount must be positive", enforcedBy: "Invoice" }
+forbidden:
+  - cross-slice-internal:billing
+tests:
+  unit: { present: true }
+  integration: { present: false }
+  contract: { present: false }

@@ -1,0 +1,23 @@
+// The one file you own in the generated-client chain (S8): auth headers, error shape and the base URL live here.
+export const customFetch = async <T>(url: string, options: RequestInit = {}): Promise<T> => {
+<!-- IF frontend=standalone -->
+  // Standalone (Mode B): the API is on another origin. VITE_API_BASE_URL is read at build time and prefixed onto every
+  // request, because the generated client emits relative paths, which would otherwise resolve against the static host.
+  // Declaring the variable is not wiring it; this line is. '' keeps a same-origin build correct.
+  const baseUrl = import.meta.env.VITE_API_BASE_URL ?? ''
+<!-- END frontend -->
+<!-- IF frontend=embedded -->
+  // Embedded (Mode A): the SPA and the API share an origin, so requests stay relative. Do not add a base URL here.
+  const baseUrl = ''
+<!-- END frontend -->
+  const headers = new Headers(options.headers)
+  if (!headers.has('Accept')) headers.set('Accept', 'application/json')
+
+  const response = await fetch(`${baseUrl}${url}`, { ...options, headers })
+
+  // Void endpoints answer 200/204 with no body; response.json() throws on that and would break every void mutation.
+  const text = await response.text()
+  const data: unknown = text ? JSON.parse(text) : undefined
+
+  return { data, status: response.status, headers: response.headers } as T
+}

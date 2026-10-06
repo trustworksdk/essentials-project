@@ -1,0 +1,33 @@
+package {{packagePath}}.config
+
+<!-- IF db=pg-event-sourced -->
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.serializer.json.Jackson3JSONEventSerializer
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.serializer.json.JSONEventSerializer
+<!-- END db -->
+import dk.trustworks.essentials.components.foundation.json.EssentialsObjectMappers
+<!-- IF db!=pg-event-sourced -->
+import dk.trustworks.essentials.components.foundation.json.Jackson3JSONSerializer
+import dk.trustworks.essentials.components.foundation.json.JSONSerializer
+<!-- END db -->
+import org.springframework.context.annotation.Bean
+import org.springframework.context.annotation.Configuration
+import tools.jackson.module.kotlin.KotlinModule
+
+/**
+ * S3.2 / S3.4: the starter's persistence serializer ignores Jackson module beans, so a Kotlin value class would
+ * persist as {"value":"…"} instead of "…". This bean replaces the starter's (it backs off from a bean of the same
+ * type) and adds KotlinModule to the mapper EssentialsObjectMappers builds. Never hand-build that mapper: its
+ * configuration is the persisted format.
+ */
+@Configuration
+class PersistenceSerializerConfiguration {
+    @Bean
+<!-- IF db=pg-event-sourced -->
+    fun jsonSerializer(): JSONEventSerializer =
+        Jackson3JSONEventSerializer(EssentialsObjectMappers.createJackson3ObjectMapper(KotlinModule.Builder().build()))
+<!-- END db -->
+<!-- IF db!=pg-event-sourced -->
+    fun jsonSerializer(): JSONSerializer =
+        Jackson3JSONSerializer(EssentialsObjectMappers.createJackson3ObjectMapper(KotlinModule.Builder().build()))
+<!-- END db -->
+}

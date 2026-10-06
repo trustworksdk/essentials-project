@@ -1,0 +1,16 @@
+schemaVersion: "1.2"
+slice: ledger.open_account
+kind: command
+bc: ledger
+owner: team
+status: live
+summary: Lane fixture slice.
+generator: essentials
+language: java
+tier: cqrs-es
+lane: decider
+handles: [OpenAccount]
+
+writes: [Ledger]
+tests:
+  unit: { present: false }

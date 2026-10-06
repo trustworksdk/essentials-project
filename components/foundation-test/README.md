@@ -461,7 +461,7 @@ public class PostgresqlDurableQueuesIT
     extends DurableQueuesIT<PostgresqlDurableQueues, JdbiUnitOfWork, JdbiUnitOfWorkFactory> {
 
     @Container
-    static PostgreSQLContainer<?> postgres = new PostgreSQLContainer<>("postgres:15");
+    static PostgreSQLContainer postgres = new PostgreSQLContainer("postgres:15");
 
     private Jdbi jdbi;
 
@@ -492,10 +492,7 @@ public class PostgresqlDurableQueuesIT
 
     @Override
     protected JSONSerializer createJSONSerializer() {
-        return new JacksonJSONSerializer(
-            JsonMapper.builder()
-                .addModule(new EssentialTypesJacksonModule())
-                .build());
+        return EssentialsObjectMappers.createJSONSerializer();
     }
 }
 ```

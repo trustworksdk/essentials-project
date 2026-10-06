@@ -26,14 +26,13 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 import static dk.trustworks.essentials.shared.MessageFormatter.msg;
 
 /**
- * Jackson 3 ({@code tools.jackson}) counterpart to {@link JacksonJSONEventSerializer}, for applications on Spring
- * Boot 4 whose JSON stack is Jackson 3.
+ * The Jackson 3 ({@code tools.jackson}) {@link JSONEventSerializer}. Build it through
+ * {@link EssentialsJSONEventSerializers#create()} so the mapper carries the canonical Essentials configuration.
  * <p>
- * The two produce the same JSON: {@code types-jackson} and {@code types-jackson3} encode the Essentials value types
- * identically, which is what lets a Jackson 3 deployment read event and metadata payloads that Jackson 2 persisted.
- * That equivalence is not assumed — it is pinned by the wire-format gate in those modules.
- *
- * @see JacksonJSONEventSerializer
+ * It writes the same JSON the Jackson 2 {@code JacksonJSONEventSerializer} of Essentials 0.50 and earlier wrote, which
+ * is what keeps event and metadata payloads persisted by those versions readable. That equivalence is pinned by the
+ * golden documents in {@code EssentialsObjectMappersWireFormatTest} and {@code types-jackson3}'s
+ * {@code WireFormatCompatibilityTest}.
  */
 public final class Jackson3JSONEventSerializer extends Jackson3JSONSerializer implements JSONEventSerializer {
 

@@ -1,0 +1,6 @@
+expected: tests/review/judgement/decider-lane.expected.yaml
+command: /essentials:review
+sections: [must_find, must_not_find, dismissed, not_run]
+ess_ids: all
+read_only: true
+runs_scripts: [review-scan.py, stack-lint.py, slice-lint.py, slice-source.py]

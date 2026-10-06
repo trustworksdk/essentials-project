@@ -107,7 +107,6 @@ public final class SeparateTablePerAggregateTypeEventStreamConfigurationFactoryB
     }
 
     /** @return the new factory */
-    @SuppressWarnings("removal")
     public SeparateTablePerAggregateTypeEventStreamConfigurationFactory build() {
         return new SeparateTablePerAggregateTypeEventStreamConfigurationFactory(resolveEventStreamTableName,
                                                                                 eventStreamTableColumnNames,

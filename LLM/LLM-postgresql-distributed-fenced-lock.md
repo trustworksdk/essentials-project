@@ -27,7 +27,6 @@
 - [Configuration](#configuration)
 - [Usage Patterns](#usage-patterns)
 - [Spring Integration](#spring-integration)
-- [Common Use Cases](#common-use-cases)
 - [Integration with Other Components](#integration-with-other-components)
 - [Gotchas](#gotchas)
 - ⚠️ [Security](#security)
@@ -52,7 +51,10 @@
 
 ### Table Structure
 
-Automatically created on first use:
+Automatically created on first use - unless a schema harness owns it:
+`PostgresqlFencedLockManagerBuilder.setSchemaOwnership(SchemaOwnership.HARNESS)`, after which the manager contributes
+the table (module `postgresql-fenced-lock`) - see [LLM-foundation.md](./LLM-foundation.md#database-schema-harness). Build such a manager with `build()` and start it after
+the harness ran: its lock-confirmation thread reads the table at once.
 
 ```sql
 CREATE TABLE IF NOT EXISTS fenced_locks (

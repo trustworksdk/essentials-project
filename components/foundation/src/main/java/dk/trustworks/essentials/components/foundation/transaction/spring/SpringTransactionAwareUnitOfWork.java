@@ -41,6 +41,11 @@ public class SpringTransactionAwareUnitOfWork<TRX_MGR extends PlatformTransactio
     Throwable        causeOfRollback;
     UnitOfWorkStatus status;
     protected Map<UnitOfWorkLifecycleCallback<Object>, List<Object>> unitOfWorkLifecycleCallbackResources;
+    /**
+     * Counts {@link #registerLifecycleCallbackForResource(Object, UnitOfWorkLifecycleCallback)} calls, so the commit can
+     * tell that a pass registered new resources and make another
+     */
+    long lifecycleCallbackResourceRegistrations;
 
 
     public SpringTransactionAwareUnitOfWork(SpringTransactionAwareUnitOfWorkFactory<TRX_MGR, UOW> unitOfWorkFactory) {
@@ -188,6 +193,7 @@ public class SpringTransactionAwareUnitOfWork<TRX_MGR extends PlatformTransactio
         requireNonNull(associatedUnitOfWorkCallback, "You must provide a UnitOfWorkLifecycleCallback");
         List<Object> resources = unitOfWorkLifecycleCallbackResources.computeIfAbsent((UnitOfWorkLifecycleCallback<Object>) associatedUnitOfWorkCallback, callback -> new LinkedList<>());
         resources.add(resource);
+        lifecycleCallbackResourceRegistrations++;
         return resource;
     }
 
@@ -195,5 +201,19 @@ public class SpringTransactionAwareUnitOfWork<TRX_MGR extends PlatformTransactio
     public <T> List<T> getUnitOfWorkLifecycleCallbackResources(UnitOfWorkLifecycleCallback<T> associatedUnitOfWorkCallback) {
         requireNonNull(associatedUnitOfWorkCallback, "You must provide a UnitOfWorkLifecycleCallback");
         return (List<T>) Collections.unmodifiableList(unitOfWorkLifecycleCallbackResources.getOrDefault(associatedUnitOfWorkCallback, List.of()));
+    }
+
+    @Override
+    public List<Object> getAllUnitOfWorkLifecycleCallbackResources() {
+        return unitOfWorkLifecycleCallbackResources.values().stream()
+                                                   .flatMap(List::stream)
+                                                   .toList();
+    }
+
+    @Override
+    public boolean hasLifecycleCallbackResourcesWithPendingChanges() {
+        return unitOfWorkLifecycleCallbackResources.entrySet().stream()
+                                                   .anyMatch(callbackAndResources -> callbackAndResources.getValue().stream()
+                                                                                                         .anyMatch(callbackAndResources.getKey()::hasPendingChanges));
     }
 }

@@ -827,7 +827,7 @@ public class DefaultDurableQueuesApi implements DurableQueuesApi {
 | `QUEUE_PAYLOAD_READER` | View message payloads (sensitive data) |
 | `SUBSCRIPTION_READER` / `SUBSCRIPTION_WRITER` | Event subscription administration |
 | `POSTGRESQL_STATS_READER` | PostgreSQL statistics access |
-| `SCHEDULER_READER` | Scheduler administration |
+| `SCHEDULER_READER` / `SCHEDULER_WRITER` | Scheduler administration; the writer may run a job on demand |
 
 **Note:** For business application security, use your framework's security model (Spring Security, etc.) directly.
 

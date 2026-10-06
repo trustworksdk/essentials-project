@@ -16,8 +16,8 @@
 
 package dk.trustworks.essentials.examples.perflab.scenario;
 
-import com.fasterxml.jackson.core.JsonProcessingException;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.core.JacksonException;
+import tools.jackson.databind.ObjectMapper;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.ConfigurableEventStore;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.EventStore;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.EventStoreSubscription;
@@ -537,7 +537,7 @@ public class BackpressureScenario implements LabScenario {
     private String toJson(BackpressureMetrics metrics) {
         try {
             return objectMapper.writeValueAsString(metrics);
-        } catch (JsonProcessingException e) {
+        } catch (JacksonException e) {
             throw new IllegalStateException("Failed to serialize backpressure metrics to JSON", e);
         }
     }

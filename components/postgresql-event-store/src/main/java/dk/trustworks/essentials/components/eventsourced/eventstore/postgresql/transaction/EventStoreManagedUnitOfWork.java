@@ -34,6 +34,7 @@ final class EventStoreManagedUnitOfWork extends GenericHandleAwareUnitOfWorkFact
     private final List<PersistedEventsCommitLifecycleCallback> lifecycleCallbacks;
     private final List<PersistedEvent>                         beforeCommitEventsPersisted;
     private final List<PersistedEvent>                         afterCommitEventsPersisted;
+    private       long                                         numberOfEventsPersisted;
 
     public EventStoreManagedUnitOfWork(GenericHandleAwareUnitOfWorkFactory<?> unitOfWorkFactory, List<PersistedEventsCommitLifecycleCallback> lifecycleCallbacks) {
         super(unitOfWorkFactory);
@@ -46,6 +47,7 @@ final class EventStoreManagedUnitOfWork extends GenericHandleAwareUnitOfWorkFact
     public void registerEventsPersisted(List<PersistedEvent> eventsPersistedInThisUnitOfWork) {
         requireNonNull(eventsPersistedInThisUnitOfWork, "No eventsPersistedInThisUnitOfWork provided");
         this.beforeCommitEventsPersisted.addAll(eventsPersistedInThisUnitOfWork);
+        numberOfEventsPersisted += eventsPersistedInThisUnitOfWork.size();
     }
 
     @Override
@@ -58,6 +60,11 @@ final class EventStoreManagedUnitOfWork extends GenericHandleAwareUnitOfWorkFact
     public void removeFlushedEventPersisted(PersistedEvent eventPersistedToRemoveFromThisUnitOfWork) {
         requireNonNull(eventPersistedToRemoveFromThisUnitOfWork, "No eventPersistedToRemoveFromThisUnitOfWork provided");
         this.beforeCommitEventsPersisted.remove(eventPersistedToRemoveFromThisUnitOfWork);
+    }
+
+    @Override
+    public long getNumberOfEventsPersisted() {
+        return numberOfEventsPersisted;
     }
 
     @Override

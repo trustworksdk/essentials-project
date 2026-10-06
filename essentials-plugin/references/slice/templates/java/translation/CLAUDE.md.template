@@ -1,0 +1,38 @@
+# Slice: {{bc}}.{{externalSystem}}
+
+**Kind:** translation
+**Status:** live
+**Owner:** {{owner}}
+**Purpose:** Anti-corruption boundary to the {{ExternalSystem}} system.
+
+## Invariants
+- No {{ExternalSystem}} type appears anywhere outside this directory. If one reaches a Decider, an
+  event, or a view, the ACL has failed.
+- `{{ExternalSystem}}Translator` is pure — no Spring, no Essentials, no I/O — so the mapping is
+  testable without either side running.
+- Inbound commands are dispatched with `sendAndDontWait`, so they are retried; the receiving slice
+  must be idempotent.
+
+## Boundaries
+**Reacts to / reads:** `{{ExternalEvent}}` from {{ExternalSystem}} (inbound); `{{Event}}` from
+`{{bc}}/events/` (outbound)
+**Dispatches:** the internal command mapped in `slice.yaml` `maps`
+**External API:** none of its own — `/webhooks/{{externalSystem}}` is {{ExternalSystem}}'s ingress
+**Forbidden:**
+  - Never import another slice's internals — only `{{bc}}/events/` and `{{bc}}/types/`.
+  - Never let an external wire type cross out of this directory.
+
+## Data
+**Owns (writes):** nothing — a translation slice holds no state
+**Reads:** nothing internal
+
+## Files
+- `{{ExternalSystem}}Translator.java` — the pure mapping (both directions)
+- `{{ExternalSystem}}Client.java` — typed outbound port
+- `{{ExternalSystem}}ClientAdapter.java` — the transport behind the port; its `send` throws until you implement it; delete if `direction: inbound`
+- `On{{ExternalEvent}}.java` — inbound ingress → CommandBus (Inbox); delete if `direction: outbound`
+- `{{ExternalSystem}}Publisher.java` — outbound `EventProcessor` (Outbox); delete if `direction: inbound`
+- test: `{{ExternalSystem}}TranslatorTest.java`
+
+## Direction
+`both` by default. Delete the half you do not need and set `direction` in `slice.yaml` to match.

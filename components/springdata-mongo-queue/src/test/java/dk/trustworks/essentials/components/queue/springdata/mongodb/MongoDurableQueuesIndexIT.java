@@ -25,7 +25,7 @@ import org.springframework.data.mongodb.core.MongoTemplate;
 import org.springframework.data.mongodb.core.index.*;
 import org.springframework.test.annotation.DirtiesContext;
 import org.springframework.test.context.*;
-import org.testcontainers.containers.MongoDBContainer;
+import org.testcontainers.mongodb.MongoDBContainer;
 import org.testcontainers.junit.jupiter.*;
 
 import java.time.Duration;
@@ -39,7 +39,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 @DirtiesContext(classMode = DirtiesContext.ClassMode.AFTER_EACH_TEST_METHOD)
 public class MongoDurableQueuesIndexIT {
     @Container
-    static MongoDBContainer mongoDBContainer = new MongoDBContainer(EssentialsTestContainers.MONGO_IMAGE);
+    static MongoDBContainer mongoDBContainer = new MongoDBContainer(EssentialsTestContainers.MONGO_IMAGE).withReplicaSet();
 
     @DynamicPropertySource
     static void setProperties(DynamicPropertyRegistry registry) {
@@ -66,8 +66,10 @@ public class MongoDurableQueuesIndexIT {
 
 
         // Create DurableQueues to ensure indexes
-        var durableQueues = new MongoDurableQueues(mongoTemplate,
-                                                   Duration.ofSeconds(10));
+        var durableQueues = MongoDurableQueues.builder()
+                                               .setMongoTemplate(mongoTemplate)
+                                               .setMessageHandlingTimeout(Duration.ofSeconds(10))
+                                               .build();
 
         indexes = mongoTemplate.getCollection(MongoDurableQueues.DEFAULT_DURABLE_QUEUES_COLLECTION_NAME).listIndexes();
         indexNames = StreamSupport.stream(indexes.spliterator(), false)

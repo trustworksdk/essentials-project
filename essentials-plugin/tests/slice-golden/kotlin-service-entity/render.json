@@ -1,0 +1,161 @@
+[
+  {
+    "language": "kotlin",
+    "kind": "command",
+    "lane": "service-entity",
+    "families": [
+      "bc-scaffold-service-entity",
+      "command_service_entity"
+    ],
+    "inputs": {
+      "Aggregate": "Order",
+      "Bc": "Orders",
+      "Command": "PlaceOrder",
+      "Entity": "Order",
+      "Event": "OrderPlaced",
+      "Slice": "PlaceOrder",
+      "aggregate": "order",
+      "apiPath": "/api/orders",
+      "bc": "orders",
+      "entity": "order",
+      "lane": "service-entity",
+      "owner": "orders-team",
+      "packagePath": "com.example.shop",
+      "slice": "place_order",
+      "sliceCamel": "placeOrder",
+      "tier": "service-entity"
+    },
+    "written": [
+      "src/main/kotlin/com/example/shop/orders/CLAUDE.md",
+      "src/main/kotlin/com/example/shop/orders/config/OrdersConfiguration.kt",
+      "src/main/kotlin/com/example/shop/orders/entities/CLAUDE.md",
+      "src/main/kotlin/com/example/shop/orders/events/OrderEvent.kt",
+      "src/main/kotlin/com/example/shop/orders/events/OrderPlaced.kt",
+      "src/main/kotlin/com/example/shop/orders/types/OrderId.kt",
+      "src/main/kotlin/com/example/shop/orders/use_cases/place_order/CLAUDE.md",
+      "src/main/kotlin/com/example/shop/orders/use_cases/place_order/PlaceOrder.kt",
+      "src/main/kotlin/com/example/shop/orders/use_cases/place_order/PlaceOrderAPI.kt",
+      "src/main/kotlin/com/example/shop/orders/use_cases/place_order/PlaceOrderHandler.kt",
+      "src/main/kotlin/com/example/shop/orders/use_cases/place_order/slice.yaml",
+      "src/test/kotlin/com/example/shop/orders/entities/PlaceOrderTest.kt",
+      "src/test/kotlin/com/example/shop/orders/use_cases/place_order/PlaceOrderIT.kt"
+    ],
+    "wiring": [],
+    "todos": [
+      "src/main/kotlin/com/example/shop/orders/CLAUDE.md:7: **Purpose:** TODO one sentence — what this context is responsible for.",
+      "src/main/kotlin/com/example/shop/orders/CLAUDE.md:11: TODO — **state the reason, do not delete this heading.** Service-entity style is chosen because this",
+      "src/main/kotlin/com/example/shop/orders/events/OrderPlaced.kt:24: // TODO: replace with the facts this event carries",
+      "src/main/kotlin/com/example/shop/orders/use_cases/place_order/CLAUDE.md:7: **Purpose:** TODO one sentence, present tense.",
+      "src/main/kotlin/com/example/shop/orders/use_cases/place_order/CLAUDE.md:10: - TODO the rule this slice enforces. It lives on `Order`, not in the handler — the entity is the",
+      "src/main/kotlin/com/example/shop/orders/use_cases/place_order/PlaceOrder.kt:27: // TODO: replace with this command's real payload",
+      "src/main/kotlin/com/example/shop/orders/use_cases/place_order/PlaceOrderHandler.kt:38: // TODO: call the ONE invariant method this slice's intent maps to. The Boolean-returning",
+      "src/main/kotlin/com/example/shop/orders/use_cases/place_order/slice.yaml:9: summary: TODO one sentence, present tense.",
+      "src/main/kotlin/com/example/shop/orders/use_cases/place_order/slice.yaml:28: - { id: INV-1, text: \"TODO the rule this slice enforces\", enforcedBy: \"Order.applyPlaceholder\" }",
+      "src/test/kotlin/com/example/shop/orders/entities/PlaceOrderTest.kt:24: // TODO: assert the resulting state through the entity's own read path",
+      "src/test/kotlin/com/example/shop/orders/entities/PlaceOrderTest.kt:38: // TODO: assert the field applyPlaceholder() guards has no public setter. In Kotlin, declare",
+      "src/test/kotlin/com/example/shop/orders/use_cases/place_order/PlaceOrderIT.kt:26: // TODO: seed a Order, send PlaceOrder on the bus, assert the row changed.",
+      "src/test/kotlin/com/example/shop/orders/use_cases/place_order/PlaceOrderIT.kt:31: // TODO: subscribe to the EventBus (or use a test recorder bean) and assert OrderPlaced arrived.",
+      "src/test/kotlin/com/example/shop/orders/use_cases/place_order/PlaceOrderIT.kt:37: // TODO: send the same command twice; assert one change and one event."
+    ]
+  },
+  {
+    "seed": "_seeds/kotlin-service-entity",
+    "written": [
+      "src/main/kotlin/com/example/shop/orders/entities/Order.kt",
+      "src/main/kotlin/com/example/shop/orders/entities/OrderRepository.kt"
+    ]
+  },
+  {
+    "language": "kotlin",
+    "kind": "command",
+    "lane": "service-entity",
+    "families": [
+      "command_service_entity"
+    ],
+    "inputs": {
+      "Aggregate": "Order",
+      "Bc": "Orders",
+      "Command": "CancelOrder",
+      "Entity": "Order",
+      "Event": "OrderCancelled",
+      "Slice": "CancelOrder",
+      "aggregate": "order",
+      "apiPath": "/api/orders/cancel",
+      "bc": "orders",
+      "entity": "order",
+      "lane": "service-entity",
+      "owner": "orders-team",
+      "packagePath": "com.example.shop",
+      "slice": "cancel_order",
+      "sliceCamel": "cancelOrder",
+      "tier": "service-entity"
+    },
+    "written": [
+      "src/main/kotlin/com/example/shop/orders/events/OrderCancelled.kt",
+      "src/main/kotlin/com/example/shop/orders/use_cases/cancel_order/CLAUDE.md",
+      "src/main/kotlin/com/example/shop/orders/use_cases/cancel_order/CancelOrder.kt",
+      "src/main/kotlin/com/example/shop/orders/use_cases/cancel_order/CancelOrderAPI.kt",
+      "src/main/kotlin/com/example/shop/orders/use_cases/cancel_order/CancelOrderHandler.kt",
+      "src/main/kotlin/com/example/shop/orders/use_cases/cancel_order/slice.yaml",
+      "src/test/kotlin/com/example/shop/orders/entities/CancelOrderTest.kt",
+      "src/test/kotlin/com/example/shop/orders/use_cases/cancel_order/CancelOrderIT.kt"
+    ],
+    "wiring": [],
+    "todos": [
+      "src/main/kotlin/com/example/shop/orders/events/OrderCancelled.kt:24: // TODO: replace with the facts this event carries",
+      "src/main/kotlin/com/example/shop/orders/use_cases/cancel_order/CLAUDE.md:7: **Purpose:** TODO one sentence, present tense.",
+      "src/main/kotlin/com/example/shop/orders/use_cases/cancel_order/CLAUDE.md:10: - TODO the rule this slice enforces. It lives on `Order`, not in the handler — the entity is the",
+      "src/main/kotlin/com/example/shop/orders/use_cases/cancel_order/CancelOrder.kt:27: // TODO: replace with this command's real payload",
+      "src/main/kotlin/com/example/shop/orders/use_cases/cancel_order/CancelOrderHandler.kt:38: // TODO: call the ONE invariant method this slice's intent maps to. The Boolean-returning",
+      "src/main/kotlin/com/example/shop/orders/use_cases/cancel_order/slice.yaml:9: summary: TODO one sentence, present tense.",
+      "src/main/kotlin/com/example/shop/orders/use_cases/cancel_order/slice.yaml:28: - { id: INV-1, text: \"TODO the rule this slice enforces\", enforcedBy: \"Order.applyPlaceholder\" }",
+      "src/test/kotlin/com/example/shop/orders/entities/CancelOrderTest.kt:24: // TODO: assert the resulting state through the entity's own read path",
+      "src/test/kotlin/com/example/shop/orders/entities/CancelOrderTest.kt:38: // TODO: assert the field applyPlaceholder() guards has no public setter. In Kotlin, declare",
+      "src/test/kotlin/com/example/shop/orders/use_cases/cancel_order/CancelOrderIT.kt:26: // TODO: seed a Order, send CancelOrder on the bus, assert the row changed.",
+      "src/test/kotlin/com/example/shop/orders/use_cases/cancel_order/CancelOrderIT.kt:31: // TODO: subscribe to the EventBus (or use a test recorder bean) and assert OrderCancelled arrived.",
+      "src/test/kotlin/com/example/shop/orders/use_cases/cancel_order/CancelOrderIT.kt:37: // TODO: send the same command twice; assert one change and one event."
+    ]
+  },
+  {
+    "language": "kotlin",
+    "kind": "view",
+    "lane": "service-entity",
+    "families": [
+      "view_service_entity"
+    ],
+    "inputs": {
+      "Aggregate": "Order",
+      "Bc": "Orders",
+      "Entity": "Order",
+      "View": "OrderList",
+      "aggregate": "order",
+      "apiPath": "/api/orders",
+      "bc": "orders",
+      "entity": "order",
+      "lane": "service-entity",
+      "owner": "orders-team",
+      "packagePath": "com.example.shop",
+      "tier": "service-entity",
+      "view": "order_list",
+      "viewCamel": "orderList"
+    },
+    "written": [
+      "src/main/kotlin/com/example/shop/orders/views/order_list/CLAUDE.md",
+      "src/main/kotlin/com/example/shop/orders/views/order_list/OrderListAPI.kt",
+      "src/main/kotlin/com/example/shop/orders/views/order_list/OrderListQueries.kt",
+      "src/main/kotlin/com/example/shop/orders/views/order_list/OrderListView.kt",
+      "src/main/kotlin/com/example/shop/orders/views/order_list/slice.yaml",
+      "src/test/kotlin/com/example/shop/orders/views/order_list/OrderListIT.kt"
+    ],
+    "wiring": [],
+    "todos": [
+      "src/main/kotlin/com/example/shop/orders/views/order_list/CLAUDE.md:7: **Purpose:** TODO one sentence, present tense.",
+      "src/main/kotlin/com/example/shop/orders/views/order_list/OrderListQueries.kt:47: // TODO: the queries this slice actually serves, e.g. findByStatus(status: String). Several are fine —",
+      "src/main/kotlin/com/example/shop/orders/views/order_list/OrderListView.kt:26: // TODO: add the fields this view actually serves, e.g. `val status: String`. Name them exactly as the",
+      "src/main/kotlin/com/example/shop/orders/views/order_list/slice.yaml:9: summary: TODO one sentence, present tense.",
+      "src/test/kotlin/com/example/shop/orders/views/order_list/OrderListIT.kt:25: // TODO: seed one Order row, query it, assert every property on OrderListView returns the",
+      "src/test/kotlin/com/example/shop/orders/views/order_list/OrderListIT.kt:31: // TODO: once the slice has a filtering query (findByStatus, …), seed rows that differ on it and",
+      "src/test/kotlin/com/example/shop/orders/views/order_list/OrderListIT.kt:37: // TODO: send the command that changes the row, then query without waiting."
+    ]
+  }
+]

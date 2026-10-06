@@ -16,13 +16,13 @@
 
 package dk.trustworks.essentials.examples.perflab;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
-import org.testcontainers.containers.PostgreSQLContainer;
+import org.testcontainers.postgresql.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Testcontainers;
 
 import java.nio.file.Files;
@@ -50,6 +50,12 @@ import static org.assertj.core.api.Assertions.assertThat;
                 "essentials.lab.aggregate-cardinality=10",
                 "essentials.lab.random-seed=11",
                 "essentials.lab.subscriber-handler-delay-ms=10",
+                // Throttled, so the catch-up check measures delivery rather than the machine. Unthrottled, 2s of
+                // producing was ~3 000 events for a subscriber that drains ~100/s, against a budget of only 1.5x the
+                // ideal drain time: a CPU-starved run (a loaded laptop's Docker VM) missed it with nothing wrong. At 150/s
+                // the subscriber still falls behind, so a backlog still forms, but ~300 events drain in ~3s against
+                // the 30s minimum budget.
+                "essentials.lab.producer-rate-hz=150",
                 "essentials.eventstore.cdc.enabled=false",
                 "essentials.lab.metrics-output-file=target/perf-lab-smoke/backpressure.json"
         })
@@ -63,7 +69,7 @@ class BackpressureScenarioSmokeIT {
     // its locks and blocks on Hikari's connectionTimeout. Starting the container manually (see
     // registerProperties) leaves it running for the life of the JVM, so it outlives the context;
     // Testcontainers' Ryuk sidecar reaps it after the JVM exits.
-    static PostgreSQLContainer<?> postgres = new PostgreSQLContainer<>("postgres:17.5-bookworm")
+    static PostgreSQLContainer postgres = new PostgreSQLContainer("postgres:17.5-bookworm")
             .withDatabaseName("essentials_lab")
             .withUsername("essentials")
             .withPassword("essentials")

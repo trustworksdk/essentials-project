@@ -1,0 +1,34 @@
+# Workflow actions are pinned by commit SHA with the release tag in a trailing comment; Dependabot moves both together.
+# Not covered here: the chrome-headless-shell pin in maven.yml (version + sha256, bumped by hand), the devcontainer
+# Dockerfile's tool ARGs and its floating `base:debian` image, and the Testcontainers image tags in test code.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      github-actions:
+        patterns: [ "*" ]
+
+  # Features in .devcontainer/devcontainer.json.
+  - package-ecosystem: devcontainers
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      devcontainers:
+        patterns: [ "*" ]
+
+  # The root reactor only: Dependabot follows <module> entries from /pom.xml, so the plugin's test fixtures (some
+  # deliberately out of date, e.g. essentials-plugin/tests/stack-lint/violating/) are never touched.
+  # Minor and patch updates land together in one PR; a major update gets its own PR, because a major bump of a
+  # provided-scope integration changes what consumers have to declare.
+  - package-ecosystem: maven
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 10
+    groups:
+      maven-minor-and-patch:
+        update-types: [ minor, patch ]

@@ -48,7 +48,31 @@ public interface PostgresqlQueryStatisticsApi {
      *
      * @return a list of the ten slowest queries, represented as {@code ApiQueryStats} objects,
      *         sorted in descending order of execution time.
+     * @see #getSlowestQueries(Object, QueryStatisticsOrder, int)
      */
     List<ApiQueryStatistics> getTopTenSlowestQueries(Object principal);
+
+    /**
+     * Retrieves the statements recorded by {@code pg_stat_statements} for the current database, ranked by
+     * {@code orderBy}, highest first.
+     * <p>
+     * {@code pg_stat_statements} is cluster-wide; only statements executed against the database this API is
+     * connected to are returned, and statements that read {@code pg_stat_statements} itself are left out. The
+     * normalization and eviction caveats described on {@link #getTopTenSlowestQueries(Object)} apply here too.
+     *
+     * @param principal the principal requesting the statistics
+     * @param orderBy   what to rank by - see {@link QueryStatisticsOrder} for how much that changes the answer
+     * @param limit     the maximum number of statements to return, 1 to {@value #MAX_SLOWEST_QUERIES_LIMIT};
+     *                  a larger value is capped
+     * @return up to {@code limit} statements, ranked by {@code orderBy}. Empty if {@code pg_stat_statements} is
+     * not available
+     * @throws IllegalArgumentException if {@code limit} is below 1
+     */
+    List<ApiQueryStatistics> getSlowestQueries(Object principal, QueryStatisticsOrder orderBy, int limit);
+
+    /**
+     * The largest number of statements {@link #getSlowestQueries(Object, QueryStatisticsOrder, int)} returns
+     */
+    int MAX_SLOWEST_QUERIES_LIMIT = 100;
 
 }

@@ -416,7 +416,7 @@ public interface EventStore {
                                                          List<?> eventsToAppend) {
         return appendToStream(new AppendToStream<>(aggregateType,
                                                    aggregateId,
-                                                   appendEventsAfterEventOrder,
+                                                   requireNonNull(appendEventsAfterEventOrder, "No appendEventsAfterEventOrder option provided").orElse(null),
                                                    eventsToAppend));
     }
 
@@ -456,10 +456,12 @@ public interface EventStore {
                                                          ID aggregateId,
                                                          Optional<Long> appendEventsAfterEventOrder,
                                                          Object... eventsToAppend) {
+        // List.of(...) matters: passed as-is, the array and the Optional before it would both bind to the
+        // AppendToStream(AggregateType, ID, Object...) constructor and be appended as two "events"
         return appendToStream(new AppendToStream<>(aggregateType,
                                                    aggregateId,
-                                                   appendEventsAfterEventOrder,
-                                                   eventsToAppend));
+                                                   requireNonNull(appendEventsAfterEventOrder, "No appendEventsAfterEventOrder option provided").orElse(null),
+                                                   List.of(eventsToAppend)));
     }
 
     /**
@@ -516,6 +518,46 @@ public interface EventStore {
      * @return an {@link Optional} with the {@link PersistedEvent} or {@link Optional#empty()} if the event couldn't be found
      */
     Optional<PersistedEvent> loadEvent(LoadEvent operation);
+
+    /**
+     * Find an event by its id alone, across every {@link AggregateType} registered with this event store - "what
+     * caused this event?" is {@code findEvent(event.causedByEventId().get())}.<br>
+     * Each lookup uses the event-stream table's event-id index; no extra index is needed.
+     * <p>
+     * Only the aggregate types registered with this event store are searched. The default implementation throws
+     * {@link UnsupportedOperationException}.
+     *
+     * @param eventId the id of the event
+     * @return the event, or {@link Optional#empty()} if no registered event stream contains it
+     */
+    default Optional<PersistedEvent> findEvent(EventId eventId) {
+        throw new UnsupportedOperationException(getClass().getName() + " does not support finding an event by its id alone");
+    }
+
+    /**
+     * Load every event whose {@link PersistedEvent#causedByEventId()} is the given event id - "what did this event
+     * cause?" - across every registered {@link AggregateType}. Within an aggregate type the events come in
+     * global-event-order; there is no order across aggregate types.
+     * <p>
+     * Requires the opt-in caused-by-event-id index ({@code essentials.eventstore.causation.index-enabled}), and fails
+     * without it rather than scanning every event-stream table.
+     *
+     * @param causedByEventId the id of the causing event
+     * @return the events caused by it; empty if none
+     */
+    default List<PersistedEvent> loadEventsCausedBy(EventId causedByEventId) {
+        return loadEventsCausedBy(new LoadEventsCausedBy(causedByEventId));
+    }
+
+    /**
+     * See {@link #loadEventsCausedBy(EventId)}. The default implementation throws {@link UnsupportedOperationException}.
+     *
+     * @param operation the operation
+     * @return the events caused by the operation's event id
+     */
+    default List<PersistedEvent> loadEventsCausedBy(LoadEventsCausedBy operation) {
+        throw new UnsupportedOperationException(getClass().getName() + " does not support loading the events caused by an event");
+    }
 
     /**
      * Load the events belonging to <code>aggregateType</code> which have the specified <code>eventId</code>'s
@@ -707,7 +749,7 @@ public interface EventStore {
                                                                 ID aggregateId,
                                                                 LongRange eventOrderRange,
                                                                 Optional<Tenant> tenant) {
-        return fetchStream(new FetchStream<>(aggregateType, aggregateId, eventOrderRange, tenant));
+        return fetchStream(new FetchStream<>(aggregateType, aggregateId, eventOrderRange, requireNonNull(tenant, "No tenant option provided").orElse(null)));
     }
 
     /**
@@ -828,7 +870,8 @@ public interface EventStore {
                                                            LongRange globalEventOrderRange,
                                                            List<GlobalEventOrder> includeAdditionalGlobalOrders,
                                                            Optional<Tenant> onlyIncludeEventIfItBelongsToTenant) {
-        return loadEventsByGlobalOrder(new LoadEventsByGlobalOrder(aggregateType, globalEventOrderRange, includeAdditionalGlobalOrders, onlyIncludeEventIfItBelongsToTenant));
+        return loadEventsByGlobalOrder(new LoadEventsByGlobalOrder(aggregateType, globalEventOrderRange, includeAdditionalGlobalOrders,
+                                                                    requireNonNull(onlyIncludeEventIfItBelongsToTenant, "No onlyIncludeEventIfItBelongsToTenant option provided").orElse(null)));
     }
 
     /**
@@ -915,6 +958,86 @@ public interface EventStore {
                                     Optional<Function<String, EventStorePollingOptimizer>> eventStorePollingOptimizerFactory);
 
     /**
+     * {@link #pollEvents(AggregateType, long, Optional, Optional, Optional, Optional, Optional)}, with the subscriber
+     * reporting through {@code acknowledgement} each event it is done with. The transient gap a gap fill fills - an
+     * event that committed after higher global orders, delivered below the subscriber's resume point - is then resolved
+     * when the subscriber acknowledges the event, in the unit of work it acknowledges it in, rather than once the event
+     * was handed on: an event that waits for a batch, for an I/O retry or for demand, and is never handled because the
+     * subscriber stopped or its process died, keeps its gap and is delivered again to the next subscription. See
+     * {@link SubscriberAcknowledgement} for the contract on both sides.
+     * <p>
+     * The subscriber must acknowledge every event it handles or gives up on: a gap fill handed on and never acknowledged
+     * keeps its transient gap, and this subscription does not hand it on again.
+     * <p>
+     * The default implementation ignores {@code acknowledgement} and calls the overload without it, which resolves a gap
+     * fill's gap once the event was handed on; {@link SubscriberAcknowledgement#isHonoured()} then stays false. The event
+     * stores Essentials provides ({@link PostgresqlEventStore},
+     * {@link dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.cdc.CdcEventStore}) honour it.
+     *
+     * @param aggregateType                       the aggregate type that the underlying events are associated with
+     * @param fromInclusiveGlobalOrder            the first {@link GlobalEventOrder}'s to include in the returned {@link Flux}
+     * @param loadEventsByGlobalOrderBatchSize    how many events should we maximum return from every call to {@link #loadEventsByGlobalOrder(AggregateType, LongRange, List, Tenant)}
+     *                                            Default value is {@link AggregateEventStreamConfiguration#queryFetchSize} or {@link EventStore#DEFAULT_QUERY_BATCH_SIZE}
+     * @param pollingInterval                     how often should the {@link EventStore} be polled for new events. Default value is {@link #DEFAULT_POLLING_INTERVAL_MILLISECONDS}
+     * @param onlyIncludeEventIfItBelongsToTenant if {@link Optional#isPresent()} then only include events that belong to the specified {@link Tenant}, otherwise all Events matching the criteria are returned
+     * @param subscriptionId                      unique subscriber id which is used for creating a unique logger name. If {@link Optional#empty()} then a UUID value is generated and used
+     * @param eventStorePollingOptimizerFactory   factory to create {@link EventStorePollingOptimizer}; Input String parameter is the {@code eventStreamLogName} that is used label for logs (e.g., subscriberId+aggregateType).<br>
+     *                                            If empty {@link EventStorePollingOptimizer#None()} is used.
+     * @param acknowledgement                     the subscriber's acknowledgement of the events it is done with - one per subscription
+     * @return a {@link Flux} that asynchronously will publish events associated with the provided <code>aggregateType</code>
+     */
+    default Flux<PersistedEvent> pollEvents(AggregateType aggregateType,
+                                            long fromInclusiveGlobalOrder,
+                                            Optional<Integer> loadEventsByGlobalOrderBatchSize,
+                                            Optional<Duration> pollingInterval,
+                                            Optional<Tenant> onlyIncludeEventIfItBelongsToTenant,
+                                            Optional<SubscriberId> subscriptionId,
+                                            Optional<Function<String, EventStorePollingOptimizer>> eventStorePollingOptimizerFactory,
+                                            SubscriberAcknowledgement acknowledgement) {
+        requireNonNull(acknowledgement, "No acknowledgement provided");
+        return pollEvents(aggregateType,
+                          fromInclusiveGlobalOrder,
+                          loadEventsByGlobalOrderBatchSize,
+                          pollingInterval,
+                          onlyIncludeEventIfItBelongsToTenant,
+                          subscriptionId,
+                          eventStorePollingOptimizerFactory);
+    }
+
+    /**
+     * {@link #pollEvents(AggregateType, long, Optional, Optional, Optional, Optional, Optional, SubscriberAcknowledgement)}
+     * from a {@link GlobalEventOrder}
+     *
+     * @param aggregateType                       the aggregate type that the underlying events are associated with
+     * @param fromInclusiveGlobalOrder            the first {@link GlobalEventOrder}'s to include in the returned {@link Flux}
+     * @param loadEventsByGlobalOrderBatchSize    how many events should we maximum return from every call to {@link #loadEventsByGlobalOrder(AggregateType, LongRange, List, Tenant)}
+     * @param pollingInterval                     how often should the {@link EventStore} be polled for new events
+     * @param onlyIncludeEventIfItBelongsToTenant if {@link Optional#isPresent()} then only include events that belong to the specified {@link Tenant}
+     * @param subscriptionId                      unique subscriber id
+     * @param eventStorePollingOptimizerFactory   factory to create {@link EventStorePollingOptimizer}
+     * @param acknowledgement                     the subscriber's acknowledgement of the events it is done with - one per subscription
+     * @return a {@link Flux} that asynchronously will publish events associated with the provided <code>aggregateType</code>
+     */
+    default Flux<PersistedEvent> pollEvents(AggregateType aggregateType,
+                                            GlobalEventOrder fromInclusiveGlobalOrder,
+                                            Optional<Integer> loadEventsByGlobalOrderBatchSize,
+                                            Optional<Duration> pollingInterval,
+                                            Optional<Tenant> onlyIncludeEventIfItBelongsToTenant,
+                                            Optional<SubscriberId> subscriptionId,
+                                            Optional<Function<String, EventStorePollingOptimizer>> eventStorePollingOptimizerFactory,
+                                            SubscriberAcknowledgement acknowledgement) {
+        requireNonNull(fromInclusiveGlobalOrder, "No fromInclusiveGlobalOrder value provided");
+        return pollEvents(aggregateType,
+                          fromInclusiveGlobalOrder.longValue(),
+                          loadEventsByGlobalOrderBatchSize,
+                          pollingInterval,
+                          onlyIncludeEventIfItBelongsToTenant,
+                          subscriptionId,
+                          eventStorePollingOptimizerFactory,
+                          acknowledgement);
+    }
+
+    /**
      * Asynchronously poll for new events related to the given <code>aggregateType</code><br>
      * The returned Flux does NOT support backpressure
      *
@@ -961,6 +1084,62 @@ public interface EventStore {
                                                 Optional<Duration> pollingInterval,
                                                 Optional<Tenant> onlyIncludeEventIfItBelongsToTenant,
                                                 Optional<SubscriberId> subscriptionId);
+
+    /**
+     * {@link #unboundedPollForEvents(AggregateType, long, Optional, Optional, Optional, Optional)}, with the subscriber
+     * reporting through {@code acknowledgement} each event it is done with, so a gap fill's transient gap is resolved
+     * when the event is acknowledged rather than once it was handed on - see
+     * {@link #pollEvents(AggregateType, long, Optional, Optional, Optional, Optional, Optional, SubscriberAcknowledgement)}
+     * and {@link SubscriberAcknowledgement}.
+     * <p>
+     * The default implementation ignores {@code acknowledgement} and calls the overload without it.
+     *
+     * @param aggregateType                       the aggregate type that the underlying events are associated with
+     * @param fromInclusiveGlobalOrder            the first {@link GlobalEventOrder}'s to include in the returned {@link Flux}
+     * @param loadEventsByGlobalOrderBatchSize    how many events should we maximum return from every call to {@link #loadEventsByGlobalOrder(AggregateType, LongRange, List, Tenant)}
+     * @param pollingInterval                     how often should the {@link EventStore} be polled for new events
+     * @param onlyIncludeEventIfItBelongsToTenant if {@link Optional#isPresent()} then only include events that belong to the specified {@link Tenant}
+     * @param subscriptionId                      unique subscriber id
+     * @param acknowledgement                     the subscriber's acknowledgement of the events it is done with - one per subscription
+     * @return a {@link Flux} that asynchronously will publish events associated with the provided <code>aggregateType</code>
+     */
+    default Flux<PersistedEvent> unboundedPollForEvents(AggregateType aggregateType,
+                                                        long fromInclusiveGlobalOrder,
+                                                        Optional<Integer> loadEventsByGlobalOrderBatchSize,
+                                                        Optional<Duration> pollingInterval,
+                                                        Optional<Tenant> onlyIncludeEventIfItBelongsToTenant,
+                                                        Optional<SubscriberId> subscriptionId,
+                                                        SubscriberAcknowledgement acknowledgement) {
+        requireNonNull(acknowledgement, "No acknowledgement provided");
+        return unboundedPollForEvents(aggregateType,
+                                      fromInclusiveGlobalOrder,
+                                      loadEventsByGlobalOrderBatchSize,
+                                      pollingInterval,
+                                      onlyIncludeEventIfItBelongsToTenant,
+                                      subscriptionId);
+    }
+
+    /**
+     * Stop awaiting the middles of wide gaps the polls of {@code subscriberId} for {@code aggregateType} await in memory
+     * only. A gap wider than twice {@code SubscriptionGapHandler.MAX_AWAITED_ORDERS_PER_GAP_END} - a global order sequence
+     * moved forward, or an append of more than that many events overtaken by a concurrent commit - is recorded as
+     * transient gaps only at its two ends; its middle is awaited in memory, by this event store instance, for the gap
+     * handler's give-up threshold, and survives a re-subscribe of the same subscriber and aggregate type on this instance
+     * (the resume after a {@code SubscriptionErrorPolicy} stop, a stop and start of the subscription). Called by the
+     * subscriptions of an {@code EventStoreSubscriptionManager} when the subscriber's resume point moves deliberately
+     * ({@code resetFrom}), when it is unsubscribed, and when it loses its fenced lock: an event committed late in such a
+     * middle is then not delivered to it.
+     * <p>
+     * The default implementation does nothing - an event store that awaits no such middles has none to forget. The event
+     * stores Essentials provides ({@link PostgresqlEventStore},
+     * {@link dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.cdc.CdcEventStore}) implement it; an
+     * event store that decorates one of them must forward it.
+     *
+     * @param subscriberId  the subscriber
+     * @param aggregateType the aggregate type it subscribes to
+     */
+    default void forgetGapMiddlesAwaitedInMemory(SubscriberId subscriberId, AggregateType aggregateType) {
+    }
 
     /**
      * Find the highest {@link GlobalEventOrder} persisted in relation to the given aggregateType

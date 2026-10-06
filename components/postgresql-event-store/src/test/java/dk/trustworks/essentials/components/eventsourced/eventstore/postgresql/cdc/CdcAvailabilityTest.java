@@ -99,4 +99,63 @@ class CdcAvailabilityTest {
         assertThat(meterRegistry.counter("essentials.cdc.fallback_total").count()).isEqualTo(1.0);
         assertThat(meterRegistry.counter("essentials.cdc.warmup_poll_total").count()).isEqualTo(1.0);
     }
+
+    /**
+     * A dropped replication connection flips ACTIVE to FAILED and back within a second. Reason is cleared on
+     * recovery, so the interruption record is the only trace it leaves.
+     */
+    @Test
+    void an_interruption_is_recorded_and_kept_after_recovery() {
+        var meterRegistry = new SimpleMeterRegistry();
+        var availability  = new CdcAvailability(meterRegistry);
+        availability.active("slot");
+
+        availability.failed("slot", "Database connection failed when writing to copy");
+        var during = availability.interruptions();
+        assertThat(during.count()).isEqualTo(1);
+        assertThat(during.ongoing()).isTrue();
+        assertThat(during.lastReason()).isEqualTo("Database connection failed when writing to copy");
+        assertThat(during.lastInterruptedAtEpochMs()).isPositive();
+        assertThat(during.lastRecoveredAtEpochMs()).isZero();
+
+        availability.active("slot");
+        var after = availability.interruptions();
+        assertThat(after.count()).isEqualTo(1);
+        assertThat(after.ongoing()).isFalse();
+        assertThat(after.lastReason()).isEqualTo("Database connection failed when writing to copy");
+        assertThat(after.lastRecoveredAtEpochMs()).isGreaterThanOrEqualTo(after.lastInterruptedAtEpochMs());
+        assertThat(availability.snapshot().reason()).isNull();
+        assertThat(meterRegistry.counter("essentials.cdc.interruptions_total").count()).isEqualTo(1.0);
+    }
+
+    @Test
+    void only_leaving_active_is_an_interruption() {
+        var availability = new CdcAvailability();
+
+        // Startup: INACTIVE -> FAILED -> INACTIVE never reached ACTIVE, so nothing was interrupted
+        availability.inactive("slot", "starting");
+        availability.failed("slot", "logical decoding not enabled");
+        availability.inactive("slot", "starting");
+        assertThat(availability.interruptions().count()).isZero();
+
+        // Losing the slot to another instance is one: this instance stopped delivering over CDC
+        availability.active("slot");
+        availability.inactive("slot", "another instance holds the slot");
+        assertThat(availability.interruptions().count()).isEqualTo(1);
+
+        // Repeating a non-active state is not a second one
+        availability.failed("slot", "still down");
+        assertThat(availability.interruptions().count()).isEqualTo(1);
+    }
+
+    @Test
+    void a_requested_stop_is_not_an_interruption() {
+        var availability = new CdcAvailability();
+        availability.active("slot");
+
+        availability.inactive("slot", CdcAvailability.STOPPED_REASON);
+
+        assertThat(availability.interruptions().count()).isZero();
+        assertThat(availability.interruptions().ongoing()).isFalse();
+    }
 }

@@ -14,7 +14,8 @@ Spring Boot auto-configuration for the PostgreSQL Event Store and all PostgreSQL
 - [Auto-Configured Beans](#auto-configured-beans)
 - [Configuration Properties](#configuration-properties)
   - [Event Store Configuration](#event-store-configuration)
-  - [CDC Configuration (Hybrid wal2json)](#cdc-configuration-hybrid-wal2json)
+  - [Gap Handling](#gap-handling)
+  - [CDC Configuration (Hybrid Logical Replication)](#cdc-configuration-hybrid-logical-replication)
   - [Subscription Manager Configuration](#subscription-manager-configuration)
   - [Subscription Monitor Configuration](#subscription-monitor-configuration)
   - [Event Store Metrics Configuration](#event-store-metrics-configuration)
@@ -107,7 +108,7 @@ All beans use `@ConditionalOnMissingBean` - define your own bean of the same typ
 | `PostgresqlEventStore` | The main event store. Use it to append events and load event history. See [Event Store documentation](../postgresql-event-store/README.md)                                                                         |
 | `SeparateTablePerAggregateTypePersistenceStrategy` | Creates one database table per `AggregateType` <br/>(e.g., `AggregateType("Orders")` -> `orders_events`, `AggregateType("Customers")` -> `customers_events`). <br/>This keeps related events together for efficient querying |
 | `SpringTransactionAwareEventStoreUnitOfWorkFactory` | Ensures event store operations participate in Spring's `@Transactional` transactions. See [UnitOfWork documentation](../foundation/README.md#unitofwork-transactions)                                              |
-| `JacksonJSONEventSerializer` | Converts your event objects to/from JSON for database storage                                                                                                                                                      |
+| `Jackson3JSONEventSerializer` | Converts your event objects to/from JSON for database storage                                                                                                                                                      |
 
 ### Subscriptions & Event Processing
 
@@ -137,6 +138,7 @@ Subscriptions let you react to events - for building read models, sending notifi
 | `MeasurementEventStoreSubscriptionObserver` | Always | Collects metrics about subscription processing (events/second, lag, etc.) |
 | `EventStoreSubscriptionMonitorManager` | Always | Periodically checks subscription health (enabled by default, runs every minute) |
 | `SubscriberGlobalOrderMicrometerMonitor` | `management.tracing.enabled=true` | Exposes a Micrometer gauge showing each subscriber's current position |
+| `SubscriptionStoppedMicrometerMonitor` | A `MeterRegistry` is present and `essentials.eventstore.subscription-monitor.enabled=true` (default) | Exposes the gauge `essentials.eventstore.subscription.stopped` - `1` while a subscription is stopped by its `SubscriptionErrorPolicy`, else `0`. The signal to alert on for a halted projection (the `stopped_by_error_policy` counter only records that a stop happened) |
 
 ### Admin APIs
 
@@ -169,7 +171,7 @@ essentials.eventstore.auto-flush-and-publish-after-append-to-stream=false
 |----------|---------|----------------------------------------------------------------------------------------------------------------------------------------------------------------------|
 | `identifier-column-type` | `text` | How aggregate IDs are stored: `text` (any string) or `uuid` (optimized for UUID values)                                                                              |
 | `json-column-type` | `jsonb` | How events are stored: `jsonb` (queryable, slightly slower writes) or `json` (faster writes, no indexing)                                                            |
-| `use-event-stream-gap-handler` | `true` | Whether to detect and handle gaps in event sequences (can happen during concurrent writes). Disable only if you don't need strict ordering guarantees                |
+| `use-event-stream-gap-handler` | `true` | Whether to detect and handle gaps in `GlobalEventOrder` (can happen during concurrent writes). See [Gap Handling](#gap-handling) before turning it off                |
 | `verbose-tracing` | `false` | When `true`, traces include low-level operations. When `false`, only high-level operations are traced                                                                |
 | `add-annotation-based-in-memory-projector` | `true` | Auto-register the projector that supports `@EventHandler` methods on POJOs - See [In-Memory Projections](../eventsourced-aggregates/README.md#in-memory-projections) |
 | `auto-flush-and-publish-after-append-to-stream` | `false` | **Flush Publishing** - Publish events immediately after `appendToStream()` instead of waiting for commit. See [Flush Publishing](#flush-publishing)                  |
@@ -183,6 +185,58 @@ Controls *when* in-transaction subscribers receive events. See [postgresql-event
 | `false` (default) | Events published at `BeforeCommit` and `AfterCommit`. Subscribers receive all events from a transaction together, just before it commits |
 | `true` | Events *also* published immediately after each `appendToStream()` call. Use this when subscribers need to react to each event individually within the same transaction (e.g., saga coordination) |
 
+### Gap Handling
+
+A **gap** is a `GlobalEventOrder` that is missing from what a subscription just read, typically because the transaction that took it has not committed yet. A **transient** gap may still be filled when that transaction commits; one that stays open past the promotion threshold (120 seconds by default) becomes **permanent** (the transaction was most likely rolled back) and is no longer waited for. The mechanics, the gap types and their behavior are documented in [postgresql-event-store: Gap Handling](../postgresql-event-store/README.md#gap-handling) (see "Gap Types" and "Behavior"); this section covers what the starter wires and how to change it. `spring-postgresql-event-store` only adds Spring transaction integration and wires no gap handling itself.
+
+**What the starter wires**
+
+| Piece | Default | Notes |
+|-------|---------|-------|
+| `essentials.eventstore.use-event-stream-gap-handler` | `true` | `true`: the `PostgresqlEventStore` is built on the `EventStreamGapHandler` bean. `false`: it is built on `NoEventStreamGapHandler`, so polling subscriptions track no gaps at all. The `EventStreamGapHandler` bean itself is still created (the CDC beans take it) |
+| `EventStreamGapHandler<SeparateTablePerAggregateEventStreamConfiguration>` bean | `PostgresqlEventStreamGapHandler`, 60 s refresh of its transient-gap cache, 120 s permanent-gap threshold, default per-poll gap selection | `@ConditionalOnMissingBean`. Schema ownership follows `essentials.schema.mode` |
+| Gap statistics | collected | Per subscription, as `SubscriptionStatistics.gaps()` (`newTransientGaps`, `resolvedTransientGaps`, `promotedToPermanentGaps`), while `essentials.eventstore.subscription-manager.statistics.enabled` is `true` (the default). Also exposed through the admin API |
+
+**How gaps are handled in 0.60**
+
+- Each poll asks again for the subscriber's open transient gaps. With the default handler that is every open gap up to 50; beyond 50, the 20 highest, the 10 lowest and a rotating window of 20 in between, so a poll never carries more than 50 gap orders.
+- Transient gaps are per subscriber; permanent gaps are shared by every subscriber of the `AggregateType` (and can be reset, see below).
+- A tenant-filtered subscription loads every tenant's events in the polled range and filters by tenant in memory, so other tenants' global orders are never mistaken for gaps. This holds for polling and for CDC.
+- A gap is resolved only once the event that fills it has been **handled**. Subscriptions created by the `EventStoreSubscriptionManager` acknowledge each event through a `SubscriberAcknowledgement`, and the gap is deleted inside the handler's own unit of work, so a rolled-back handler leaves the gap open and a subscription that stops or crashes before handling the fill gets the event again after the restart.
+
+**Consequences for your handlers**
+
+- Handlers must tolerate redelivery of a gap-filling event.
+- `GlobalEventOrder` is **not** delivered in strict sequence across aggregates (polling when a gap fills, CDC whenever a lower order commits after a higher one). Never deduplicate in a handler by "the highest `GlobalEventOrder` seen so far": that drops exactly the late events. Deduplicate by event id, or rely on `EventOrder` per aggregate. This is trap `ESS-116` in [LLM-traps.md](../../LLM/LLM-traps.md).
+
+**Customizing**
+
+Define your own `EventStreamGapHandler<SeparateTablePerAggregateEventStreamConfiguration>` bean and the starter's default backs off. The event store, the CDC dispatcher and `CdcEventStore` then all use your bean. The `PostgresqlEventStreamGapHandler` constructor takes the strategies:
+
+```java
+@Bean
+EventStreamGapHandler<SeparateTablePerAggregateEventStreamConfiguration> eventStreamGapHandler(
+        EventStoreUnitOfWorkFactory<? extends EventStoreUnitOfWork> unitOfWorkFactory,
+        EssentialsComponentsProperties properties) {
+    return new PostgresqlEventStreamGapHandler<>(
+            unitOfWorkFactory,
+            Duration.ofSeconds(60),    // how often the transient-gap cache is refreshed from the database
+            // which transient gaps each poll asks for again: keep the default selection (or compose it in your own strategy)
+            PostgresqlEventStreamGapHandler.ResolveTransientGapsToIncludeInQueryStrategy.defaultSelection(),
+            // when a transient gap is given up on and becomes permanent (CDC subscriptions give up at the same threshold)
+            PostgresqlEventStreamGapHandler.ResolveTransientGapsToPermanentGapsPromotionStrategy.thresholdBased(300),
+            properties.getSchema().getMode().schemaOwnership());   // keeps essentials.schema.mode honoured
+}
+```
+
+- `ResolveTransientGapsToIncludeInQueryStrategy` decides which transient gaps a poll asks for; `ResolveTransientGapsToPermanentGapsPromotionStrategy` decides when a gap becomes permanent (`thresholdBased(seconds)` is the built-in). Both are nested in `PostgresqlEventStreamGapHandler`. Keep the promotion threshold longer than your longest transaction.
+- `ResolveTransientGapsToIncludeInQueryStrategy.defaultSelection()` returns the default selection described above; call it inside your own strategy to add to it or filter it. It keeps a rotation per subscription and per instance whenever the gap handler asks - passed as is, wrapped, or composed in your own strategy - so call each instance once per ask. That holds only on the thread the gap handler asks on: called directly outside the gap handler, or from an executor or a `CompletableFuture`, an instance rotates with its own, shared by every subscription that reaches it that way. Whatever your strategy returns, a poll also asks for the gaps that are old enough to be promoted, because a gap is only promoted when a poll asked for it and its event was not there.
+- Under CDC a subscription gives up waiting for a gap at the promotion threshold of `thresholdBased(seconds)`. A promotion strategy written as a lambda states no threshold, so CDC then gives up after 120 s; implement `permanentGapThreshold()` on it to change that.
+- Build the gap handler on the event store's `EventStoreUnitOfWorkFactory`. On a different factory it logs a one-time WARN and resolves gaps in a transaction of its own, which commits before the handler's.
+- Always pass `properties.getSchema().getMode().schemaOwnership()`; the shorter constructors default to `SchemaOwnership.COMPONENT` and would run DDL even in `essentials.schema.mode=validate`.
+- Reset permanent gaps (for example after data recovery) with `eventStreamGapHandler.resetPermanentGapsFor(AggregateType.of("Orders"))`; the overloads take a `LongRange` or a list of `GlobalEventOrder`.
+- Gaps are also covered by [LLM-postgresql-event-store.md](../../LLM/LLM-postgresql-event-store.md#gap-handling).
+
 ### CDC Configuration (Hybrid Logical Replication)
 
 > **Which delivery mechanism should I use?** Subscribers are always correct regardless —
@@ -190,29 +244,26 @@ Controls *when* in-transaction subscribers receive events. See [postgresql-event
 > See **[cdc.md §12.6 "Choosing a delivery mechanism"](../../docs/cdc.md)**
 > for the full comparison (plain/jittered/notify polling vs CDC INBOX/DIRECT, with indicative
 > latency and DB-load numbers). Quick guide:
-> - **Simplest, any Postgres, new project** → leave defaults (CDC `AUTO`, falls back to
->   jittered polling automatically if logical replication is unavailable).
+> - **Simplest, any Postgres, new project** → leave CDC off (the default) and run polling
+>   (jittered by default).
 > - **Latency-sensitive read models / high fan-out / want audit trail or replica-offload** →
->   CDC `INBOX` (the default).
-> - **Don't control the DB / no `wal_level=logical` / want minimal moving parts** → disable
->   CDC and run polling (see the upgrade note below).
+>   opt in with `essentials.eventstore.cdc.enabled=true`; the delivery mode is then `INBOX` (the
+>   default) and the startup mode `AUTO` (falls back to polling if CDC cannot start).
+> - **Don't control the DB / no `wal_level=logical` / want minimal moving parts** → leave CDC
+>   disabled.
 
-> **⚠️ Upgrade note (existing users).** CDC is **enabled by default**
-> (`essentials.eventstore.cdc.enabled` defaults to `true` — it starts unless you explicitly set
-> it `false`). Before this version the default delivery was **polling with jitter**. On upgrade:
-> - If your database does **not** have `wal_level=logical` (or you can't create slots), `mode=auto`
->   transparently falls back to the previous polling-with-jitter behaviour — no action needed, no
->   events lost.
-> - If your database **does** support logical replication, the app will now create a **replication
->   slot** and stream WAL — a real operational change (slot/publication management and WAL-retention
->   risk; see [cdc.md §5](../../docs/cdc.md)).
->
-> **To keep the pre-upgrade behaviour (polling with jitter), set:**
+> **CDC is disabled by default.** `essentials.eventstore.cdc.enabled` defaults to `false`, and
+> every CDC bean is gated on it being `true` with no `matchIfMissing`. An application that says
+> nothing about CDC gets no replication slot, no publication changes and no tailer: the event store
+> polls, exactly as before CDC existed. CDC's operational surface (replication slot, publication,
+> WAL retention; see [cdc.md §5](../../docs/cdc.md)) is heavier than polling, so adopt it
+> deliberately:
 > ```properties
-> essentials.eventstore.cdc.enabled=false
+> essentials.eventstore.cdc.enabled=true
 > ```
-> CDC's operational surface (replication slot, publication, WAL retention) is heavier than polling,
-> so adopt it deliberately rather than inheriting it on upgrade.
+> Once enabled, if your database does **not** have `wal_level=logical` (or you can't create slots),
+> `mode=auto` keeps the application up with subscribers on polling - no events are lost, but check
+> `/actuator/health/cdc` so a broken CDC setup does not go unnoticed.
 
 Hybrid CDC can run in durable inbox mode (`INBOX`) or direct publish mode (`DIRECT`):
 
@@ -234,12 +285,12 @@ Tuning baseline (good starting point from perf-lab runs):
 essentials.eventstore.cdc.cdc-event-store-backfill-batch-size=1000
 essentials.eventstore.cdc.cdc-dispatcher.batch-size=200
 essentials.eventstore.cdc.cdc-dispatcher.poll-interval=PT0.05S
-essentials.eventstore.cdc.wal2-json-tailer.poll-interval=PT0.025S
+essentials.eventstore.cdc.wal-replication-tailer.poll-interval=PT0.025S
 ```
 
 | Property | Default | What It Controls |
 |----------|---------|------------------|
-| `essentials.eventstore.cdc.enabled` | `true` | Enables CDC beans (`WalReplicationTailer`, `CdcDispatcher`, `CdcEventStore`) |
+| `essentials.eventstore.cdc.enabled` | `false` | Opt-in. Enables CDC beans (`WalReplicationTailer`, `CdcDispatcher`, `CdcEventStore`) |
 | `essentials.eventstore.cdc.mode` | `auto` | `auto`: fallback to polling if CDC cannot start. `require`: fail startup if CDC cannot start |
 | `essentials.eventstore.cdc.delivery-mode` | `inbox` | `inbox`: durable inbox + dispatcher. `direct`: tailer converts and publishes directly (no inbox persistence, dispatcher idle) |
 | `essentials.eventstore.cdc.plugin` | `pgoutput` | Logical decoding plugin. `pgoutput` is the default; `wal2json` remains available for explicit use |
@@ -260,7 +311,8 @@ Controls how the subscription manager polls for and processes events:
 essentials.eventstore.subscription-manager.event-store-polling-batch-size=10
 essentials.eventstore.subscription-manager.event-store-polling-interval=100ms
 essentials.eventstore.subscription-manager.max-event-store-polling-interval=2000ms
-essentials.eventstore.subscription-manager.snapshot-resume-points-every=10s
+essentials.eventstore.subscription-manager.snapshot-resume-points-every=1s
+essentials.eventstore.subscription-manager.snapshot-resume-points-after-events=0
 ```
 
 | Property | Default | What It Controls |
@@ -268,7 +320,39 @@ essentials.eventstore.subscription-manager.snapshot-resume-points-every=10s
 | `event-store-polling-batch-size` | `10` | How many events to fetch per poll. Higher = more throughput, but more memory per batch |
 | `event-store-polling-interval` | `100ms` | How often to check for new events when events are being processed |
 | `max-event-store-polling-interval` | `2000ms` | Maximum wait between polls when no events are found (uses jittered backoff) |
-| `snapshot-resume-points-every` | `10s` | How often to save each subscriber's position. Lower = less re-processing after crash, but more database writes |
+| `snapshot-resume-points-every` | `1s` | How often to save each subscriber's position. Bounds how much is re-processed after a crash. Only positions that changed are written (one batched `UPDATE` per interval at most), so idle subscribers cost nothing |
+| `snapshot-resume-points-after-events` | `0` (off) | Opt-in. Also save a subscriber's position as soon as it has moved this many global event order positions since its last save, instead of waiting for the next `snapshot-resume-points-every` tick. Bounds re-processing after a crash by event count as well as by time. Checked in memory, so idle or slow subscribers cost nothing extra |
+
+#### Subscription error policy
+
+What an asynchronous subscription does when its event handler throws an exception that is not an I/O error (I/O errors are always retried).
+These properties set the manager's `SubscriptionErrorPolicy`; an event handler or processor can override it for its own subscription.
+See [Subscription Error Policy](../postgresql-event-store/README.md#subscription-error-policy).
+
+```properties
+essentials.eventstore.subscription-manager.error-policy.mode=retry-n-then-stop
+essentials.eventstore.subscription-manager.error-policy.max-retries=3
+essentials.eventstore.subscription-manager.error-policy.initial-backoff=100ms
+essentials.eventstore.subscription-manager.error-policy.max-backoff=1s
+essentials.eventstore.subscription-manager.error-policy.auto-resume.enabled=true
+essentials.eventstore.subscription-manager.error-policy.auto-resume.initial-delay=10s
+essentials.eventstore.subscription-manager.error-policy.auto-resume.max-delay=5m
+essentials.eventstore.subscription-manager.error-policy.auto-resume.max-attempts=0
+```
+
+| Property | Default | What It Controls |
+|----------|---------|------------------|
+| `error-policy.mode` | `retry-n-then-stop` | `retry-n-then-stop`: retry the event, then stop the subscription at it - without moving its resume point past it - and resume it by itself (see `auto-resume`), so no event is skipped. `stop`: the same, but on the first failure. `skip`: log at ERROR and move past the event, which is never redelivered - the behaviour before 0.60. `retry-n-then-skip`: retry, then skip |
+| `error-policy.max-retries` | `3` | How many times the two `retry-n-then-*` modes call the handler again after its first failure. Must be at least 1 |
+| `error-policy.initial-backoff` | `100ms` | The wait before the first retry, doubled for each later retry |
+| `error-policy.max-backoff` | `1s` | The longest wait between two retries |
+| `error-policy.auto-resume.enabled` | `true` | Whether a subscription stopped by `stop` or `retry-n-then-stop` resumes by itself at the failed event. `false`: it stays stopped until it is resumed through the admin API or the application restarts |
+| `error-policy.auto-resume.initial-delay` | `10s` | The wait before the first resume at an event, doubled for each later resume at the same event |
+| `error-policy.auto-resume.max-delay` | `5m` | The longest wait between two resumes |
+| `error-policy.auto-resume.max-attempts` | `0` (unlimited) | How many resumes at the same event before the next failure **skips** the event instead of stopping, counted in `essentials.eventstore.subscription.skipped_after_auto_resumes`. Opt-in: for an `EventProcessor` a skipped event never reaches the `Inbox` or its dead-letter queue. Counted in memory per instance: a restart, redeploy or fenced-lock hand-over starts it over |
+
+Every stop is still logged, and the `essentials.eventstore.subscription.stopped` gauge stays at `1` from the stop until the failed event is handled - through every automatic resume in between - so alert on that gauge: a subscription that keeps stopping at the same event needs a fix.
+Upgrading from 0.50, where a failing event was always skipped: set `error-policy.mode=skip` to keep that behaviour.
 
 ### CDC Operational API
 
@@ -401,16 +485,8 @@ public PersistableEventMapper persistableEventMapper() {
         <artifactId>postgresql</artifactId>
     </dependency>
     <dependency>
-        <groupId>com.fasterxml.jackson.core</groupId>
+        <groupId>tools.jackson.core</groupId>
         <artifactId>jackson-databind</artifactId>
-    </dependency>
-    <dependency>
-        <groupId>com.fasterxml.jackson.datatype</groupId>
-        <artifactId>jackson-datatype-jdk8</artifactId>
-    </dependency>
-    <dependency>
-        <groupId>com.fasterxml.jackson.datatype</groupId>
-        <artifactId>jackson-datatype-jsr310</artifactId>
     </dependency>
     <dependency>
         <groupId>io.projectreactor</groupId>

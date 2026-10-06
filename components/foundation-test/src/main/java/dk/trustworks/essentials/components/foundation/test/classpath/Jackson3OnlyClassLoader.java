@@ -26,7 +26,7 @@ import java.util.Arrays;
  * dataformat artifacts under {@code com.fasterxml.jackson}); {@code jackson-annotations} stays, as Jackson 3 uses it too.
  * <p>
  * It exists to test what an application whose only Jackson is Jackson 3 experiences. A plain unit test cannot show
- * that: the Essentials test classpaths carry both Jackson majors, so a class that needs Jackson 2 links fine there and
+ * that: test classpaths can still carry Jackson 2 transitively, so a class that needs Jackson 2 links fine there and
  * fails with {@code NoClassDefFoundError} only in the application. Classes loaded through this loader - its parent is
  * the platform class loader, not the test class loader - link against the reduced classpath, including the test's own
  * scenario classes.
@@ -35,22 +35,6 @@ public final class Jackson3OnlyClassLoader extends URLClassLoader {
 
     private Jackson3OnlyClassLoader(URL[] urls) {
         super("jackson3-only", urls, ClassLoader.getPlatformClassLoader());
-    }
-
-    /**
-     * A Jackson 3-only application exists only with the Jackson 3 flavor of the Essentials modules: under
-     * {@code -Pjackson2} they are built on Jackson 2, so hiding Jackson 2 makes them unloadable by construction. Tests
-     * using this class loader skip themselves unless this returns {@code true}.
-     *
-     * @return {@code true} if the Essentials types module on the test classpath is the Jackson 3 flavor
-     */
-    public static boolean isJackson3FlavorOnTestClasspath() {
-        try {
-            var typesModule = Class.forName("dk.trustworks.essentials.jackson.types.EssentialTypesJacksonModule");
-            return typesModule.getSuperclass().getName().startsWith("tools.jackson.");
-        } catch (ClassNotFoundException e) {
-            return false;
-        }
     }
 
     /**

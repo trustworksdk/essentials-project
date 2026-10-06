@@ -1,0 +1,266 @@
+# The slower and rarer halves of the essentials plugin's scaffold check, kept off the pull-request path. The per-PR
+# jobs (maven.yml: scaffold-install, scaffold-matrix, scaffold-slices, scaffold-frontend) prove that every generated
+# project builds and starts in its tests; this workflow proves the things a user does next, which the PR jobs do not
+# run: the documented inner-loop command, the Compose dev loop, the S2.1 "what breaks without it" column, and the
+# released artifacts. A separate file rather than a `schedule` trigger in maven.yml, which would re-run `verify` and
+# the unit matrix every night as well.
+
+name: Plugin scaffold (scheduled)
+
+permissions:
+  contents: read
+
+on:
+  schedule:
+    - cron: '23 2 * * *'
+  workflow_dispatch:
+
+jobs:
+  # Against this checkout's reactor (DEV-SNAPSHOT), like the PR jobs. One job, not legs: the reactor install and the
+  # nine cell builds are shared by all three checks, and each check adds only seconds per cell.
+  scaffold-dev-loop:
+    name: scaffold · inner loop, dev loop, S2.1 (DEV-SNAPSHOT)
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Set up JDK 25
+        uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6.0.1
+        with:
+          java-version: '25'
+          distribution: 'temurin'
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.m2/repository
+          key: scaffold-m2-${{ github.job }}-${{ hashFiles('**/pom.xml', 'essentials-plugin/references/stack/stack-pins.md') }}
+          restore-keys: scaffold-m2-${{ github.job }}-
+
+      # The same subset as maven.yml's scaffold-install, read the same way from the init pom templates.
+      - name: Install the modules the generated projects depend on
+        id: install
+        run: |
+          modules=$(python3 - <<'PY'
+          import re
+          ids = set()
+          for f in ("pom.xml.template", "backend/pom.xml.template"):
+              text = open("essentials-plugin/references/init-assets/project/" + f).read()
+              for block in re.findall(r"<dependency>(.*?)</dependency>", text, re.S):
+                  if "<groupId>dk.trustworks.essentials" in block:
+                      ids.update(re.findall(r"<artifactId>([\w.-]+)</artifactId>", block))
+          print(",".join(":" + a for a in sorted(ids)))
+          PY
+          )
+          echo "modules: $modules (and what they need, -am)"
+          mvn -B -ntp install -DskipTests -DskipDependencyCheck=true -am -pl "$modules"
+
+      - name: Pre-pull the database images the generated projects use
+        run: |
+          python3 essentials-plugin/scripts/init-render.py --list-names |
+            awk -F '\t' '$1 == "{{pin:PostgreSQL image}}" || $1 == "{{pin:MongoDB image}}" { print $2 }' |
+            xargs -n 1 docker pull
+
+      - name: Build every cell (plugin-scaffold.sh matrix)
+        run: scripts/plugin-scaffold.sh matrix --work "$RUNNER_TEMP/scaffold"
+
+      # The rendered CLAUDE.md's one-integration-test line, run as written (the wrapper swapped for `mvn`, because the
+      # harness does not run init's maven-wrapper hook) on each green cell, with the placeholder test replaced by
+      # OpenApiContractIT. The report is deleted first, so a run that silently executed nothing cannot pass.
+      - name: Inner-loop command from the generated CLAUDE.md
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        run: |
+          version=$(sed -n 's:.*<revision>\(.*\)</revision>.*:\1:p' pom.xml | head -n 1)
+          failed=0
+          for dir in "$RUNNER_TEMP"/scaffold/*/; do
+            cell=$(basename "$dir")
+            read -r _ result _ < "$dir/result"
+            [ "$result" = green ] || { echo "$cell: not built green, skipped"; continue; }
+            line=$(grep -m 1 -E '^\./mvnw .*-Dit\.test=ChangedIT$' "$dir/project/CLAUDE.md") ||
+              { echo "::error::$cell: CLAUDE.md has no './mvnw … -Dit.test=ChangedIT' line"; failed=1; continue; }
+            line=${line#./mvnw }
+            read -ra args <<< "${line%ChangedIT}OpenApiContractIT"
+            cmd=(mvn -B -ntp "-Dessentials.version=$version" "${args[@]}")
+            rm -f "$dir"/project/backend/target/failsafe-reports/TEST-*OpenApiContractIT.xml
+            if (cd "$dir/project" && "${cmd[@]}") > "$dir/doc-test.log" 2>&1 &&
+                grep -qs 'tests="1"' "$dir"/project/backend/target/failsafe-reports/TEST-*OpenApiContractIT.xml; then
+              echo "$cell: ok (${cmd[*]})"
+            else
+              echo "::error::$cell: the CLAUDE.md inner-loop command did not run OpenApiContractIT (${cmd[*]})"
+              tail -n 40 "$dir/doc-test.log"
+              failed=1
+            fi
+          done
+          exit $failed
+
+      # The Compose cells, started the way ./dev.sh backend starts them (spring-boot-docker-compose brings up
+      # backend/compose.yml, incl. Mongo's replica-set healthcheck), polled until /actuator/health is UP, then
+      # stopped. spring-boot:start/stop rather than :run, because :run forks the application and killing Maven leaves
+      # it and its containers running.
+      - name: Compose dev loop (spring-boot:start with backend/compose.yml)
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        run: |
+          version=$(sed -n 's:.*<revision>\(.*\)</revision>.*:\1:p' pom.xml | head -n 1)
+          # compose.yml names its project after the artifactId, which every cell shares.
+          project=$(python3 -c 'import json; print(json.load(open("essentials-plugin/tests/golden/init/cells.json"))["defaults"]["artifactId"])')
+          failed=0
+          for dir in "$RUNNER_TEMP"/scaffold/*/; do
+            cell=$(basename "$dir")
+            [ -f "$dir/project/backend/compose.yml" ] || continue
+            read -r _ result _ < "$dir/result"
+            [ "$result" = green ] || { echo "$cell: not built green, skipped"; continue; }
+            profile=()
+            grep -q '<id>skip-frontend</id>' "$dir/project/pom.xml" "$dir/project/backend/pom.xml" && profile=(-Pskip-frontend)
+            mvn=(mvn -B -ntp "-Dessentials.version=$version" -pl backend "${profile[@]}")
+            up=false
+            if (cd "$dir/project" && "${mvn[@]}" spring-boot:start -Dspring-boot.start.maxAttempts=180) > "$dir/dev-loop.log" 2>&1; then
+              for _ in $(seq 60); do
+                if curl -fsS http://localhost:8080/actuator/health 2>/dev/null | grep -q '"status":"UP"'; then up=true; break; fi
+                sleep 2
+              done
+            fi
+            (cd "$dir/project" && "${mvn[@]}" spring-boot:stop) >> "$dir/dev-loop.log" 2>&1 || true
+            sleep 5
+            left=$(docker ps --filter "label=com.docker.compose.project=$project" --format '{{.Names}}')
+            if $up && [ -z "$left" ]; then
+              echo "$cell: UP, and its Compose services stopped with it"
+            else
+              echo "::error::$cell: dev loop failed (health UP: $up; containers left running: ${left:-none})"
+              tail -n 60 "$dir/dev-loop.log"
+              xargs -r docker stop <<< "$left" > /dev/null
+              failed=1
+            fi
+          done
+          exit $failed
+
+      # stack-contract.md S2.1 says each of these dependencies is not brought by the starter, fails no compile, and
+      # kills context startup. Each row is removed from one Compose cell that needs it, and the application is started
+      # as in the dev loop (no test code involved). It must fail to start, and the message the application shows (the
+      # last column below) must be the one S2.1 names. Green means the row is stale; a compile error, another message,
+      # or a row that does not name the message means the section is wrong. Not here: jackson-databind (every cell has
+      # a web starter, which brings it) and jdbi3-core (the generated DocumentDbConfig imports Jdbi itself).
+      - name: S2.1 dependency-removal run
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        run: |
+          version=$(sed -n 's:.*<revision>\(.*\)</revision>.*:\1:p' pom.xml | head -n 1)
+          work=$RUNNER_TEMP/s21
+          contract=$(awk '/^#+ S2\.1 /{on=1; next} on && /^#/{exit} on' essentials-plugin/references/stack/stack-contract.md)
+          [ -n "$contract" ] || { echo "::error::no '### S2.1' section in stack-contract.md"; exit 1; }
+          failed=0
+          while IFS='|' read -r row cell remove expect; do
+            dir=$work/$row
+            mkdir -p "$dir"
+            python3 - "$cell" "$dir/answers.json" <<'PY'
+          import json, sys
+          cells = json.load(open("essentials-plugin/tests/golden/init/cells.json"))
+          json.dump({**cells["defaults"], **cells["cells"][sys.argv[1]]}, open(sys.argv[2], "w"))
+          PY
+            python3 essentials-plugin/scripts/init-render.py --answers "$dir/answers.json" --out "$dir/project" > "$dir/render.log"
+            pom=$dir/project/backend/pom.xml
+            # Drop every <dependency> block naming one of the artifactIds, and nothing else.
+            awk -v ids=",$remove," '
+              /<dependency>/ { block = $0; inside = 1; drop = 0; next }
+              inside {
+                block = block "\n" $0
+                if (match($0, /<artifactId>[^<]+<\/artifactId>/) && index(ids, "," substr($0, RSTART + 12, RLENGTH - 25) ",")) drop = 1
+                if ($0 ~ /<\/dependency>/) { inside = 0; if (drop) dropped++; else print block }
+                next
+              }
+              { print }
+              END { print dropped + 0 > "/dev/stderr" }' "$pom" > "$pom.new" 2> "$dir/dropped"
+            mv "$pom.new" "$pom"
+            if [ "$(cat "$dir/dropped")" != "$(tr ',' '\n' <<< "$remove" | wc -l)" ]; then
+              echo "::error::S2.1 $row: expected to remove $remove from $cell, removed $(cat "$dir/dropped") block(s)"
+              failed=1
+              continue
+            fi
+            profile=()
+            grep -q '<id>skip-frontend</id>' "$dir/project/pom.xml" "$pom" && profile=(-Pskip-frontend)
+            mvn=(mvn -B -ntp "-Dessentials.version=$version" -pl backend "${profile[@]}")
+            status=0
+            (cd "$dir/project" && "${mvn[@]}" compile spring-boot:start -Dspring-boot.start.maxAttempts=60) > "$dir/start.log" 2>&1 || status=$?
+            (cd "$dir/project" && "${mvn[@]}" spring-boot:stop) >> "$dir/start.log" 2>&1 || true
+            docker compose -f "$dir/project/backend/compose.yml" down > /dev/null 2>&1 || true
+            if grep -qE 'COMPILATION ERROR|Compilation failure' "$dir/start.log"; then
+              echo "::error::S2.1 $row: without $remove, $cell does not compile; the section says none of these fails at compile time"
+              grep -m 5 -E '\[ERROR\] .*\.(java|kt)' "$dir/start.log" || true
+              failed=1
+            elif [ $status -eq 0 ]; then
+              echo "::error::S2.1 $row: $cell starts without $remove; the row is stale"
+              failed=1
+            elif ! grep -qE ' Starting .+ using Java ' "$dir/start.log"; then
+              echo "::error::S2.1 $row: the application was never launched (harness problem, not a finding)"
+              tail -n 20 "$dir/start.log"
+              failed=1
+            elif grep -qF -- "$expect" "$dir/start.log"; then
+              if grep -qF -- "$expect" <<< "$contract"; then
+                echo "S2.1 $row: without $remove, $cell fails to start with \"$expect\", as S2.1 says"
+              else
+                echo "::error::S2.1 $row: without $remove, $cell fails to start with \"$expect\", which the S2.1 row does not name"
+                failed=1
+              fi
+            else
+              echo "::error::S2.1 $row: without $remove, $cell fails to start, but not with \"$expect\"; the symptom column is wrong"
+              grep -m 5 -E 'Caused by|APPLICATION FAILED' "$dir/start.log" || true
+              failed=1
+            fi
+          done <<'ROWS'
+          jdbc|java-pges-flux-backend-compose|spring-boot-starter-jdbc|reactiveHandlersBeanPostProcessor
+          driver|java-pges-flux-backend-compose|postgresql|org.postgresql.Driver
+          jdbi|kotlin-pgcrud-mvc-standalone-compose|jdbi3-postgres|org/jdbi/v3/postgres/PostgresPlugin
+          kotlin|java-pges-flux-backend-compose|kotlin-stdlib-jdk8,kotlin-reflect|kotlin/jvm/internal/Intrinsics
+          mongo|java-mongo-mvc-embedded-compose|spring-boot-starter-data-mongodb|org/springframework/data/mongodb/core/convert/MongoCustomConversions
+          reactor|java-mongo-mvc-embedded-compose|reactor-core|org/reactivestreams/Publisher
+          ROWS
+          exit $failed
+
+      - name: Upload the logs
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: scaffold-scheduled-logs
+          path: |
+            ${{ runner.temp }}/scaffold/*/*.log
+            ${{ runner.temp }}/scaffold/*/result
+            ${{ runner.temp }}/s21/*/*.log
+          retention-days: 7
+
+  # What users get: the nine cells at the released essentials.version pin, resolved from Maven Central with no reactor
+  # install. Until that version is on Central the job says so and passes.
+  scaffold-released:
+    name: scaffold · init matrix against the released pin
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Is the pinned essentials.version on Maven Central?
+        id: pin
+        run: |
+          version=$(python3 essentials-plugin/scripts/init-render.py --list-names |
+            awk -F '\t' '$1 == "{{pin:essentials.version}}" { print $2 }')
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          url=https://repo.maven.apache.org/maven2/dk/trustworks/essentials/types-spring-web/$version/types-spring-web-$version.pom
+          if curl -fsSI "$url" > /dev/null 2>&1; then
+            echo "released=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::notice::essentials $version is not on Maven Central yet; nothing to build"
+            echo "released=false" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Set up JDK 25
+        if: steps.pin.outputs.released == 'true'
+        uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6.0.1
+        with:
+          java-version: '25'
+          distribution: 'temurin'
+      - name: Build every cell against the released artifacts
+        if: steps.pin.outputs.released == 'true'
+        env:
+          ESSENTIALS_VERSION: ${{ steps.pin.outputs.version }}
+        run: scripts/plugin-scaffold.sh matrix --essentials-version "$ESSENTIALS_VERSION" --work "$RUNNER_TEMP/scaffold"
+      - name: Upload the logs of a failed cell
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: scaffold-released-logs
+          path: |
+            ${{ runner.temp }}/scaffold/*/*.log
+            ${{ runner.temp }}/scaffold/*/result
+          retention-days: 7

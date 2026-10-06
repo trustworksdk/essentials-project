@@ -21,7 +21,8 @@ import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.ev
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.subscription.jdbi.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.types.GlobalEventOrder;
 import dk.trustworks.essentials.components.foundation.IOExceptionUtil;
-import dk.trustworks.essentials.components.foundation.postgresql.PostgresqlUtil;
+import dk.trustworks.essentials.components.foundation.postgresql.*;
+import dk.trustworks.essentials.components.foundation.schema.*;
 import dk.trustworks.essentials.components.foundation.transaction.jdbi.HandleAwareUnitOfWorkFactory;
 import dk.trustworks.essentials.components.foundation.types.SubscriberId;
 import org.jdbi.v3.core.Jdbi;
@@ -31,6 +32,7 @@ import org.slf4j.*;
 import java.sql.*;
 import java.time.*;
 import java.util.*;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.stream.Collectors;
 
 import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
@@ -59,7 +61,7 @@ import static dk.trustworks.essentials.shared.MessageFormatter.msg;
  * <b>Failure to adequately sanitize and validate this value could expose the application to SQL injection
  * vulnerabilities, compromising the security and integrity of the database.</b>
  */
-public final class PostgresqlDurableSubscriptionRepository implements DurableSubscriptionRepository {
+public final class PostgresqlDurableSubscriptionRepository implements DurableSubscriptionRepository, EssentialsSchemaContributor {
     private static final Logger                          log                                      = LoggerFactory.getLogger(PostgresqlDurableSubscriptionRepository.class);
     /**
      * The default name for the table name that will store the durable resume points
@@ -69,6 +71,8 @@ public final class PostgresqlDurableSubscriptionRepository implements DurableSub
     private final        String                          durableSubscriptionsTableName;
     private final        HandleAwareUnitOfWorkFactory<?> unitOfWorkFactory;
     private final        EventStore                      eventStore;
+    /** Resume points already warned about in {@link #markRefusedSave} - a foreign writer refuses every later save too */
+    private final        Set<SubscriptionResumePoint>    warnedAboutRefusedSave                   = ConcurrentHashMap.newKeySet();
 
     /**
      * Create a {@link PostgresqlDurableSubscriptionRepository} using the default {@value #DEFAULT_DURABLE_SUBSCRIPTIONS_TABLE_NAME}
@@ -111,6 +115,22 @@ public final class PostgresqlDurableSubscriptionRepository implements DurableSub
     public PostgresqlDurableSubscriptionRepository(Jdbi jdbi,
                                                    EventStore eventStore,
                                                    String durableSubscriptionsTableName) {
+        this(jdbi, eventStore, durableSubscriptionsTableName, SchemaOwnership.COMPONENT);
+    }
+
+    /**
+     * @param jdbi                          the jdbi instance
+     * @param eventStore                    the event store
+     * @param durableSubscriptionsTableName the table name - see {@link #PostgresqlDurableSubscriptionRepository(Jdbi, EventStore, String)}
+     *                                      for the SQL injection caveat
+     * @param schemaOwnership               {@link SchemaOwnership#COMPONENT} creates the table now, as the other constructors do;
+     *                                      {@link SchemaOwnership#HARNESS} leaves it to an {@link EssentialsSchemaHarness}
+     */
+    public PostgresqlDurableSubscriptionRepository(Jdbi jdbi,
+                                                   EventStore eventStore,
+                                                   String durableSubscriptionsTableName,
+                                                   SchemaOwnership schemaOwnership) {
+        requireNonNull(schemaOwnership, "No schemaOwnership provided");
         this.eventStore = requireNonNull(eventStore, "No eventStore instance provided");
         this.jdbi = requireNonNull(jdbi, "No Jdbi instance provided");
         this.unitOfWorkFactory = eventStore.getUnitOfWorkFactory();
@@ -122,16 +142,41 @@ public final class PostgresqlDurableSubscriptionRepository implements DurableSub
         jdbi.registerColumnMapper(new AggregateTypeColumnMapper());
         jdbi.registerArgument(new SubscriberIdArgumentFactory());
         jdbi.registerColumnMapper(new SubscriberIdColumnMapper());
-        unitOfWorkFactory.usingUnitOfWork(uow -> {
-            PostgresqlUtil.acquireBootstrapLock(uow.handle());
-            uow.handle().execute("CREATE TABLE IF NOT EXISTS " + this.durableSubscriptionsTableName + " (\n" +
-                                         "subscriber_id TEXT NOT NULL,\n" +
-                                         "aggregate_type TEXT NOT NULL,\n" +
-                                         "resume_from_and_including_global_eventorder bigint,\n" +
-                                         "last_updated TIMESTAMP WITH TIME ZONE,\n" +
-                                         "PRIMARY KEY (subscriber_id, aggregate_type))");
+        if (schemaOwnership == SchemaOwnership.COMPONENT) {
+            PostgresqlCreateSchemaApplier.applyOwnSchema(unitOfWorkFactory, this);
             log.info("Ensured '{}' table exists", this.durableSubscriptionsTableName);
-        });
+        }
+    }
+
+    @Override
+    public String moduleId() {
+        return "postgresql-event-store-subscriptions";
+    }
+
+    @Override
+    public int order() {
+        return SchemaOrder.ORDER_EVENT_STORE;
+    }
+
+    /**
+     * The durable subscriptions table - one resume point per {@code (subscriber_id, aggregate_type)}, plus the
+     * {@code reposition_epoch} column added in 0.60 (see {@link SubscriptionResumePoint}).
+     */
+    @Override
+    public List<SchemaChange> contribute(SchemaContext context) {
+        return List.of(SchemaChange.repeatable("durable-subscriptions-table",
+                                               durableSubscriptionsTableName,
+                                               "CREATE TABLE IF NOT EXISTS " + this.durableSubscriptionsTableName + " (\n" +
+                                                       "subscriber_id TEXT NOT NULL,\n" +
+                                                       "aggregate_type TEXT NOT NULL,\n" +
+                                                       "resume_from_and_including_global_eventorder bigint,\n" +
+                                                       "last_updated TIMESTAMP WITH TIME ZONE,\n" +
+                                                       "reposition_epoch BIGINT NOT NULL DEFAULT 0,\n" +
+                                                       "PRIMARY KEY (subscriber_id, aggregate_type))",
+                                               // Added in 0.60, so tables created by an earlier release get it here rather than only via CREATE TABLE.
+                                               // 0 is the epoch of a resume point that has never been repositioned - what every existing row is
+                                               "ALTER TABLE " + this.durableSubscriptionsTableName +
+                                                       " ADD COLUMN IF NOT EXISTS reposition_epoch BIGINT NOT NULL DEFAULT 0"));
     }
 
     @Override
@@ -200,13 +245,14 @@ public final class PostgresqlDurableSubscriptionRepository implements DurableSub
                                                             AggregateType forAggregateType) {
         requireNonNull(forAggregateType, "No forAggregateType value provided");
         requireNonNull(subscriberId, "No subscriberId value provided");
-        var subscriptionResumePoint = unitOfWorkFactory.withUnitOfWork(uow -> uow.handle().createQuery("SELECT resume_from_and_including_global_eventorder, last_updated FROM " + this.durableSubscriptionsTableName +
+        var subscriptionResumePoint = unitOfWorkFactory.withUnitOfWork(uow -> uow.handle().createQuery("SELECT resume_from_and_including_global_eventorder, reposition_epoch, last_updated FROM " + this.durableSubscriptionsTableName +
                                                                                                                " WHERE aggregate_type = :aggregate_type AND subscriber_id = :subscriber_id")
                                                                                  .bind("aggregate_type", forAggregateType)
                                                                                  .bind("subscriber_id", subscriberId)
                                                                                  .map((rs, ctx) -> new SubscriptionResumePoint(subscriberId,
                                                                                                                                forAggregateType,
                                                                                                                                GlobalEventOrder.of(rs.getLong("resume_from_and_including_global_eventorder")),
+                                                                                                                               rs.getLong("reposition_epoch"),
                                                                                                                                rs.getObject("last_updated", OffsetDateTime.class)))
                                                                                  .findOne());
         if (subscriptionResumePoint.isPresent()) {
@@ -231,7 +277,7 @@ public final class PostgresqlDurableSubscriptionRepository implements DurableSub
         // Filter to the changed resume points BEFORE opening a UnitOfWork — isChanged() is a pure
         // in-memory flag, so there is no reason to hold a DB transaction open for it, and when nothing
         // changed we can skip the transaction (and the empty batch execute) entirely. Snapshotting the
-        // changed set here also makes the post-execute setLastUpdated() loop below operate on exactly the
+        // changed set here also makes the post-execute markAsPersisted() loop below operate on exactly the
         // rows we wrote: the previous in-trx approach re-tested isChanged() afterwards, so a resume point
         // that advanced concurrently mid-transaction could be marked clean (changed=false) without ever
         // having been persisted.
@@ -244,54 +290,66 @@ public final class PostgresqlDurableSubscriptionRepository implements DurableSub
         }
 
         var now = OffsetDateTime.now(Clock.systemUTC());
-        // Snapshot the exact value bound for each resume point. A resume point can advance concurrently
+        // Snapshot the exact value and reposition epoch bound for each resume point. A resume point can advance concurrently
         // while this save is in-flight, so marking it persisted at its *current* value afterwards would
         // claim a value we never wrote - and nothing re-dirties a resume point that has stopped
         // advancing, so that progress would never be persisted by any later save.
-        var boundValues = changedResumePoints.stream()
-                                             .collect(Collectors.toMap(resumePoint -> resumePoint,
-                                                                       SubscriptionResumePoint::getResumeFromAndIncluding,
-                                                                       (first, second) -> first,
-                                                                       IdentityHashMap::new));
+        var boundSnapshots = changedResumePoints.stream()
+                                                .collect(Collectors.toMap(resumePoint -> resumePoint,
+                                                                          SubscriptionResumePoint::snapshot,
+                                                                          (first, second) -> first,
+                                                                          IdentityHashMap::new));
         try {
-            unitOfWorkFactory.usingUnitOfWork(uow -> {
+            // The reposition_epoch guard makes a write that captured the resume point before a reset (an older epoch) a
+            // no-op once the reset is stored, whichever of the two commits first - see SubscriptionResumePoint
+            int[] rowsUpdatedPerResumePoint = unitOfWorkFactory.withUnitOfWork(uow -> {
                 var preparedBatch = uow.handle().prepareBatch("UPDATE " + this.durableSubscriptionsTableName +
-                                                                      " SET resume_from_and_including_global_eventorder = :resume_from_and_including_global_eventorder, last_updated = :last_updated " +
-                                                                      " WHERE aggregate_type = :aggregate_type AND subscriber_id = :subscriber_id");
+                                                                      " SET resume_from_and_including_global_eventorder = :resume_from_and_including_global_eventorder," +
+                                                                      " reposition_epoch = :reposition_epoch, last_updated = :last_updated" +
+                                                                      " WHERE aggregate_type = :aggregate_type AND subscriber_id = :subscriber_id" +
+                                                                      " AND reposition_epoch <= :reposition_epoch");
 
                 changedResumePoints.forEach(subscriptionResumePoint -> {
-                    log.debug("Saving {}", subscriptionResumePoint);
+                    var snapshot = boundSnapshots.get(subscriptionResumePoint);
+                    log.debug("Saving {} as {}", subscriptionResumePoint, snapshot);
                     preparedBatch
                             .bind("aggregate_type", subscriptionResumePoint.getAggregateType())
                             .bind("subscriber_id", subscriptionResumePoint.getSubscriberId())
-                            .bind("resume_from_and_including_global_eventorder", boundValues.get(subscriptionResumePoint))
+                            .bind("resume_from_and_including_global_eventorder", snapshot.resumeFromAndIncluding())
+                            .bind("reposition_epoch", snapshot.repositionEpoch())
                             .bind("last_updated", now)
                             .add();
                 });
 
-                var batchSize = preparedBatch.size();
-                var rowsUpdated = Arrays.stream(preparedBatch.execute())
-                                        .reduce(Integer::sum).orElse(0);
+                var rowsUpdated = preparedBatch.execute();
                 if (log.isTraceEnabled()) {
                     log.trace("Saved {} resumePoints out of {} resulting in {} updated rows: {}",
-                              batchSize,
+                              rowsUpdated.length,
                               resumePoints.size(),
-                              rowsUpdated,
+                              Arrays.stream(rowsUpdated).sum(),
                               resumePoints);
                 } else {
                     log.debug("Saved {} resumePoints out of {} resulting in {} updated rows",
-                              batchSize,
+                              rowsUpdated.length,
                               resumePoints.size(),
-                              rowsUpdated);
+                              Arrays.stream(rowsUpdated).sum());
                 }
+                return rowsUpdated;
             });
             // Mark the resume points persisted ONLY once the transaction has actually committed, and only
-            // at the value that was actually bound. Doing this inside the UnitOfWork would mark them clean
+            // at the snapshot that was actually bound. Doing this inside the UnitOfWork would mark them clean
             // even when the commit subsequently fails (e.g. the database became unreachable mid-save) - and
             // since nothing re-dirties a resume point that has stopped advancing, that progress would then
             // never be persisted by any later save.
-            changedResumePoints.forEach(subscriptionResumePoint ->
-                                                subscriptionResumePoint.markAsPersisted(boundValues.get(subscriptionResumePoint), now));
+            for (int i = 0; i < changedResumePoints.size(); i++) {
+                var subscriptionResumePoint = changedResumePoints.get(i);
+                var snapshot                = boundSnapshots.get(subscriptionResumePoint);
+                if (rowsUpdatedPerResumePoint[i] > 0) {
+                    subscriptionResumePoint.markAsPersisted(snapshot, now);
+                } else {
+                    markRefusedSave(subscriptionResumePoint, snapshot);
+                }
+            }
         } catch (Exception e) {
             if (IOExceptionUtil.isIOException(e)) {
                 log.debug("Failed to save the {} ResumePoints", resumePoints.size(), e);
@@ -299,6 +357,37 @@ public final class PostgresqlDurableSubscriptionRepository implements DurableSub
                 log.error("Failed to save the {} ResumePoints", resumePoints.size(), e);
             }
         }
+    }
+
+    /**
+     * No row was updated: either the stored reposition epoch is newer than the one bound, or the row is gone.
+     * Either way the bound snapshot can never be written, so it is recorded as dealt with instead of being retried
+     * on every save.
+     */
+    private void markRefusedSave(SubscriptionResumePoint subscriptionResumePoint, SubscriptionResumePoint.Snapshot snapshot) {
+        if (subscriptionResumePoint.getRepositionEpoch() > snapshot.repositionEpoch()) {
+            // This instance was repositioned (reset) while the save was in flight - the reset is what the row now holds
+            log.debug("[{}-{}] Skipped saving resumeFromAndIncluding {} from reposition epoch {}: overtaken by this subscription's own reposition to epoch {}",
+                      subscriptionResumePoint.getSubscriberId(),
+                      subscriptionResumePoint.getAggregateType(),
+                      snapshot.resumeFromAndIncluding(),
+                      snapshot.repositionEpoch(),
+                      subscriptionResumePoint.getRepositionEpoch());
+        } else if (warnedAboutRefusedSave.add(subscriptionResumePoint)) {
+            log.warn("[{}-{}] Did not save resumeFromAndIncluding {}: the stored resume point was repositioned by another writer (stored reposition epoch is newer than {}) " +
+                             "or no longer exists. The stored resume point is kept; restart the subscription to pick it up. Further refusals are logged at DEBUG",
+                     subscriptionResumePoint.getSubscriberId(),
+                     subscriptionResumePoint.getAggregateType(),
+                     snapshot.resumeFromAndIncluding(),
+                     snapshot.repositionEpoch());
+        } else {
+            log.debug("[{}-{}] Did not save resumeFromAndIncluding {} from reposition epoch {}: refused again",
+                      subscriptionResumePoint.getSubscriberId(),
+                      subscriptionResumePoint.getAggregateType(),
+                      snapshot.resumeFromAndIncluding(),
+                      snapshot.repositionEpoch());
+        }
+        subscriptionResumePoint.markAsSuperseded(snapshot);
     }
 
     @Override
@@ -314,6 +403,7 @@ public final class PostgresqlDurableSubscriptionRepository implements DurableSub
                     SubscriberId.of(resultSet.getString("subscriber_id")),
                     AggregateType.of(resultSet.getString("aggregate_type")),
                     GlobalEventOrder.of(resultSet.getLong("resume_from_and_including_global_eventorder")),
+                    resultSet.getLong("reposition_epoch"),
                     resultSet.getObject("last_updated", OffsetDateTime.class)
             );
         } catch (SQLException e) {

@@ -60,7 +60,7 @@ public abstract class DuplicateConsumptionDurableQueuesIT<DURABLE_QUEUES extends
      * Number of messages to queue for testing.
      * More messages = more opportunities for the race condition to trigger.
      * <p>
-     * Test duration estimate: 40 messages / 2 consumers × 3000ms = ~60 seconds + overhead
+     * Test duration estimate: 40 messages / 2 consumers × 1000ms = ~20 seconds + overhead
      */
     public static final int NUMBER_OF_MESSAGES = 40;
 
@@ -78,28 +78,37 @@ public abstract class DuplicateConsumptionDurableQueuesIT<DURABLE_QUEUES extends
     public static final int PARALLEL_CONSUMERS = 1;
 
     /**
-     * Processing delay in milliseconds to increase race condition window.
-     * This must be long enough that messages pile up and sit in the worker queue
-     * longer than messageHandlingTimeout, triggering the stuck message reset.
+     * How long each handler runs.
      * <p>
-     * For Bug #19 reproduction, this should be MUCH LONGER than the message handling timeout
-     * to ensure queued messages are reset multiple times before they can start processing.
+     * Long enough that, with one worker per instance, a message the fetcher over-fetched waits in the worker pool
+     * behind the ones ahead of it - several seconds by the time a queue of them has formed. That wait is the Bug #19
+     * hazard: a message that has not even started is reset as stuck and fetched by the other instance.
+     * <p>
+     * It was 3000ms against a 50ms {@link #DEFAULT_MESSAGE_HANDLING_TIMEOUT_MS}, which made each test ~60s and, worse,
+     * let the timeout expire on every message while its handler was still running - see that constant for why that
+     * is not what this test guards.
      */
-    public static final long PROCESSING_DELAY_MS = 3000;
+    public static final long PROCESSING_DELAY_MS = 1000;
 
     /**
-     * Default message handling timeout in milliseconds.
+     * The message handling timeout, and the one number this test's verdict depends on.
      * <p>
-     * This value is deliberately short (much less than {@link #PROCESSING_DELAY_MS}) to
-     * reproduce the duplicate consumption issue described in Bug #19. When messages queue
-     * up in the worker pool and wait longer than this timeout, they are reset as "stuck"
-     * even though they haven't started processing yet. Another instance can then fetch
-     * the reset message, potentially causing duplicate consumption.
+     * {@code messageHandlingTimeout} is a lease: a message delivered but not acknowledged within it is treated as
+     * abandoned and redelivered, even if its handler is still running. That is the documented contract - a handler
+     * must finish well inside the timeout - so a timeout shorter than a handler guarantees legitimate redeliveries, and
+     * "no duplicates" is then only true by luck. It was 50ms against 1000-3000ms handlers: every in-flight message was
+     * reset, and the assertion held only because the other instance was usually still busy with a message of its own.
+     * Desynchronise them - which the connectivity variant's database pause does - and the last message was delivered
+     * twice, every run at a 1000ms delay.
      * <p>
-     * With a 50ms timeout and 3000ms processing delay, queued messages will be reset
-     * multiple times before they can start processing.
+     * So it must be <b>longer</b> than anything a correctly handled message can take - one handler, plus the connectivity
+     * variant's 5s database pause during which its acknowledgement cannot be written - and <b>shorter</b> than the wait
+     * of a message over-fetched behind others, which is what Bug #19 was. 10s sits between the two: 6s of the former
+     * leaves a 4s margin, and an over-fetching fetcher piles most of the 40 messages into one worker queue, where they
+     * wait up to ~20s and are reset. Verified both ways - passes as is, fails with the over-fetch put back into
+     * {@code CentralizedMessageFetcher.calculateAvailableWorkerSlotsPerQueue}.
      */
-    public static final long DEFAULT_MESSAGE_HANDLING_TIMEOUT_MS = 50;
+    public static final long DEFAULT_MESSAGE_HANDLING_TIMEOUT_MS = 10_000;
 
     // Separate unit of work factories to simulate separate pods with separate connection pools
     private UOW_FACTORY                                unitOfWorkFactory1;
@@ -188,13 +197,8 @@ public abstract class DuplicateConsumptionDurableQueuesIT<DURABLE_QUEUES extends
     /**
      * Returns the message handling timeout in milliseconds.
      * <p>
-     * Default is {@link #DEFAULT_MESSAGE_HANDLING_TIMEOUT_MS}, which is deliberately
-     * shorter than {@link #PROCESSING_DELAY_MS} to reproduce the duplicate consumption
-     * issue described in Bug #19.
-     * <p>
-     * When the timeout is shorter than the processing delay, messages queued
-     * in the worker pool (but not yet executing) will be reset as "stuck"
-     * before they can start processing, allowing another instance to fetch them.
+     * Default is {@link #DEFAULT_MESSAGE_HANDLING_TIMEOUT_MS}: longer than a handler, shorter than the wait of a message
+     * over-fetched into the worker pool - the window Bug #19 lived in.
      * <p>
      * Override this method if a specific implementation needs a different timeout.
      *
@@ -208,11 +212,7 @@ public abstract class DuplicateConsumptionDurableQueuesIT<DURABLE_QUEUES extends
      * Helper method to execute actions within a UnitOfWork if required by the transactional mode.
      */
     protected void usingDurableQueue(Runnable action) {
-        if (durableQueues1.getTransactionalMode() == TransactionalMode.FullyTransactional) {
-            unitOfWorkFactory1.usingUnitOfWork(uow -> action.run());
-        } else {
-            action.run();
-        }
+        action.run();
     }
 
     @Test

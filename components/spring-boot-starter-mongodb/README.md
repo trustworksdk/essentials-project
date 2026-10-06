@@ -113,7 +113,7 @@ All beans use `@ConditionalOnMissingBean` for easy overriding.
 |------|-----------|-------------|
 | `EssentialTypesJacksonModule` | Always | Jackson support for Essentials semantic types |
 | `EssentialsImmutableJacksonModule` | Objenesis on classpath + `essentials.immutable-jackson-module-enabled=true` | Jackson support for immutable objects without default constructor |
-| `JacksonJSONSerializer` | Always | Pre-configured ObjectMapper with sensible defaults |
+| `JSONSerializer` (`Jackson3JSONSerializer`) | Always | `EssentialsObjectMappers.createJSONSerializer()` — the canonical persistence mapper. Define your own `JSONSerializer` bean to add modules; the starter does not pick up `JacksonModule` beans for persistence |
 
 ### MongoDB Integration
 
@@ -162,7 +162,6 @@ essentials.fenced-lock-manager.release-acquired-locks-in-case-of-i-o-exceptions-
 
 ```properties
 essentials.durable-queues.shared-queue-collection-name=durable_queues
-essentials.durable-queues.transactional-mode=single-operation-transaction
 essentials.durable-queues.message-handling-timeout=5s
 essentials.durable-queues.polling-delay-interval-increment-factor=0.5
 essentials.durable-queues.max-polling-interval=2s
@@ -172,7 +171,6 @@ essentials.durable-queues.verbose-tracing=false
 | Property | Default | Description                                                                   |
 |----------|---------|-------------------------------------------------------------------------------|
 | `shared-queue-collection-name` | `durable_queues` | MongoDB collection for messages. **See [Security](#security)** |
-| `transactional-mode` | `singleoperationtransaction` | `fully-transactional` or `single-operation-transaction` (recommended)            |
 | `message-handling-timeout` | `30s` | Timeout before unacknowledged message is redelivered (single-op mode only)    |
 | `polling-delay-interval-increment-factor` | `0.5` | Backoff factor when no messages found                                         |
 | `max-polling-interval` | `2s` | Maximum polling delay                                                         |
@@ -244,6 +242,7 @@ essentials:
 
 ```properties
 essentials.life-cycles.start-life-cycles=true
+essentials.life-cycles.shutdown-timeout=10s
 essentials.reactive-bean-post-processor-enabled=true
 essentials.immutable-jackson-module-enabled=true
 ```
@@ -251,6 +250,7 @@ essentials.immutable-jackson-module-enabled=true
 | Property | Default | Description                                                                                                                                                                                                                       |
 |----------|---------|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
 | `life-cycles.start-life-cycles` | `true` | **true**: Automatically call `start()` on all `Lifecycle` beans (FencedLockManager, DurableQueues, etc.) when ApplicationContext starts, and `stop()` on shutdown.  <br/>**false**: You must manually start/stop Lifecycle beans. |
+| `life-cycles.shutdown-timeout` | `10s` | Time budget for stopping every `Lifecycle` bean on shutdown. Database cleanup during shutdown (releasing fenced locks, saving resume points, unscheduling jobs) gets one short attempt and is skipped once the database proves unreachable; a bean still stopping when the budget is spent is abandoned so the application can exit. Locks and leases left behind expire on their own. |
 | `reactive-bean-post-processor-enabled` | `true` | **true**: Auto-register `EventHandler` beans with `EventBus` and `CommandHandler` beans with `CommandBus`.  <br/>**false**: You must manually register handlers with their buses.                                                 |
 | `immutable-jackson-module-enabled` | `true` | **true**: Enable `EssentialsImmutableJacksonModule` for deserializing immutable objects (requires Objenesis).  <br/>**false**: Disable even if Objenesis is available.                                                                 |
 
@@ -364,16 +364,8 @@ See [types-springdata-mongo](../../types-springdata-mongo/README.md) for complet
         <artifactId>spring-boot-starter-data-mongodb</artifactId>
     </dependency>
     <dependency>
-        <groupId>com.fasterxml.jackson.core</groupId>
+        <groupId>tools.jackson.core</groupId>
         <artifactId>jackson-databind</artifactId>
-    </dependency>
-    <dependency>
-        <groupId>com.fasterxml.jackson.datatype</groupId>
-        <artifactId>jackson-datatype-jdk8</artifactId>
-    </dependency>
-    <dependency>
-        <groupId>com.fasterxml.jackson.datatype</groupId>
-        <artifactId>jackson-datatype-jsr310</artifactId>
     </dependency>
     <dependency>
         <groupId>io.projectreactor</groupId>

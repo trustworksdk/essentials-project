@@ -30,6 +30,7 @@
 - [Test Utilities](#test-utilities)
 - [Test Data Classes](#test-data-classes)
 - [Implementation Pattern](#implementation-pattern)
+- [Fast integration tests](#fast-integration-tests)
 - [Common Pitfalls](#common-pitfalls)
 
 ## Purpose
@@ -163,7 +164,7 @@ protected abstract JSONSerializer createJSONSerializer();
 #### Helpers
 
 ```java
-// Auto-wraps in UnitOfWork if TransactionalMode.FullyTransactional
+// Runs the action directly — each queue operation carries its own transaction
 protected <R> R withDurableQueue(Supplier<R> supplier);
 protected void usingDurableQueue(Runnable action);
 
@@ -393,6 +394,16 @@ protected abstract UOW_FACTORY createUnitOfWorkFactory();
 
 ## Test Utilities
 
+### Schema rules (ArchUnit)
+
+**Package**: `dk.trustworks.essentials.components.foundation.test.architecture`
+
+`EssentialsSchemaRules.ddlLivesInSchemaContributors(allowed)` fails for a class holding a `CREATE`/`ALTER`/`DROP`/`TRUNCATE`
+statement that is no `EssentialsSchemaContributor` and not nested in one ([LLM-foundation.md](./LLM-foundation.md#database-schema-harness)). It reads the class files'
+constant pools (literals, text blocks, concatenation recipes), so it sees DDL that starts a string constant.
+`ALLOWED_DDL_HOLDERS` lists the justified exceptions with their reasons. Subclass `AbstractEssentialsSchemaRulesTest`
+in a module whose classpath reaches the modules to guard; it is not frozen.
+
 ### ProxyJSONSerializer
 
 **Package**: `dk.trustworks.essentials.components.foundation.test.messaging.queue`
@@ -439,13 +450,17 @@ All immutable, proper `equals()`/`hashCode()`, JSON serialization support.
 
 ### FencedLock Implementation Test
 
+> This test disrupts the database (`disruptDatabaseConnection()` stops or pauses the container), so it owns its container per class
+> with `@Testcontainers`/`@Container` and must never share a reused one. Tests that do not disrupt the database should use the
+> shared, tuned container in [Fast integration tests](#fast-integration-tests) instead.
+
 ```java
 package dk.trustworks.essentials.components.postgresql.fencedlock;
 
 import dk.trustworks.essentials.components.foundation.test.fencedlock.DBFencedLockManagerIT;
 import org.jdbi.v3.core.Jdbi;
 import org.junit.jupiter.api.*;
-import org.testcontainers.containers.PostgreSQLContainer;
+import org.testcontainers.postgresql.PostgreSQLContainer;   // Testcontainers 2.x; not generic
 import org.testcontainers.junit.jupiter.*;
 import java.time.Duration;
 
@@ -454,7 +469,7 @@ public class PostgresqlFencedLockManagerIT
     extends DBFencedLockManagerIT<PostgresqlFencedLockManager> {
 
     @Container
-    static PostgreSQLContainer<?> postgres = new PostgreSQLContainer<>("postgres:15");
+    static PostgreSQLContainer postgres = new PostgreSQLContainer("postgres:18.4"); // pin an exact tag
 
     private Jdbi jdbi;
 
@@ -504,18 +519,21 @@ public class PostgresqlFencedLockManagerIT
 
 ### DurableQueues Implementation Test
 
+> `DurableQueuesIT` does not disrupt the database, so it can run against one shared, reused, in-RAM container. The example below keeps a
+> per-class container for brevity; the faster form, and the rules that keep it safe, are in
+> [Fast integration tests](#fast-integration-tests). The disruptive variants (`DistributedCompetingConsumersDurableQueuesIT`,
+> `DuplicateConsumptionDurableQueuesIT`) keep a per-class container.
+
 ```java
 package dk.trustworks.essentials.components.postgresql.queue;
 
 import dk.trustworks.essentials.components.foundation.json.JSONSerializer;
 import dk.trustworks.essentials.components.foundation.test.messaging.queue.DurableQueuesIT;
 import dk.trustworks.essentials.components.foundation.transaction.jdbi.*;
-import dk.trustworks.essentials.jackson.immutable.JacksonJSONSerializer;
-import dk.trustworks.essentials.jackson.types.EssentialTypesJacksonModule;
-import com.fasterxml.jackson.databind.json.JsonMapper;
+import dk.trustworks.essentials.components.foundation.json.EssentialsObjectMappers;
 import org.jdbi.v3.core.Jdbi;
 import org.junit.jupiter.api.*;
-import org.testcontainers.containers.PostgreSQLContainer;
+import org.testcontainers.postgresql.PostgreSQLContainer;   // Testcontainers 2.x; not generic
 import org.testcontainers.junit.jupiter.*;
 
 @Testcontainers
@@ -523,7 +541,7 @@ public class PostgresqlDurableQueuesIT
     extends DurableQueuesIT<PostgresqlDurableQueues, JdbiUnitOfWork, JdbiUnitOfWorkFactory> {
 
     @Container
-    static PostgreSQLContainer<?> postgres = new PostgreSQLContainer<>("postgres:15");
+    static PostgreSQLContainer postgres = new PostgreSQLContainer("postgres:18.4");
 
     private Jdbi jdbi;
 
@@ -554,13 +572,198 @@ public class PostgresqlDurableQueuesIT
 
     @Override
     protected JSONSerializer createJSONSerializer() {
-        return new JacksonJSONSerializer(
-            JsonMapper.builder()
-                .addModule(new EssentialTypesJacksonModule())
-                .build());
+        // Never hand-build a mapper here: it drifts from the persisted format
+        return EssentialsObjectMappers.createJSONSerializer();
     }
 }
 ```
+
+---
+
+## Fast integration tests
+
+For application integration tests (`@SpringBootTest` + Testcontainers), almost all wall-clock time is container start-up and Spring
+context boot. The techniques below remove most of it. **Read [What makes this safe with Essentials](#what-makes-this-safe-with-essentials)
+before adopting them:** applied unchanged to an event-sourced application, the usual "shared container + truncate between tests" recipe
+makes tests hang instead of fail.
+
+### One container per JVM
+
+A `static` container, started once in a static initializer and shared by every test class, instead of `@Testcontainers`/`@Container`
+(whose JUnit extension starts and stops a container per test class). Wire it into Spring with `@ServiceConnection`; the container is
+already started when the context boots.
+
+Keeping the container alive across `mvn` invocations (Testcontainers reuse) is **off by default** and gated on a project property,
+`.withReuse(Boolean.getBoolean("it.containers.reuse"))`, the same way Essentials' own `EssentialsTestContainers` gates it. A developer
+opts in with `-Dit.containers.reuse=true` together with the machine flag, set once per developer machine (never on CI, which wants
+throwaway containers):
+
+```bash
+echo 'testcontainers.reuse.enable=true' >> ~/.testcontainers.properties
+mvn verify -Dit.containers.reuse=true      # only with a single Failsafe fork, see below
+```
+
+It is gated because a reused container is shared by every test whose container definition hashes the same: Failsafe forks, and
+concurrent builds on the same host, attach to the *same* database and drop each other's tables. Only enable it with a single Failsafe
+fork (`-Dfailsafe.forkCount=1` where the build exposes that property, as Essentials' does, or `<forkCount>1</forkCount>`). Without the
+machine flag Testcontainers ignores the opt-in (it logs `Reuse was requested but the environment does not support the reuse of
+containers`) and the container simply lives for one JVM.
+
+Reuse keys on a hash of the container definition (image, command, env, mounts). **Pin an exact image tag** (Essentials' own tests use
+`postgres:18.4`), never `latest` or a floating major, and keep the definition stable: any change starts a new container.
+
+### Postgres in RAM
+
+Put the data directory on a tmpfs and turn off durability. This is safe only because the data is throwaway.
+
+- **Postgres 18 images:** mount the tmpfs at `/var/lib/postgresql`. The image's data directory (`PGDATA`) is
+  `/var/lib/postgresql/18/docker`, inside that mount. A tmpfs at the pre-18 path `/var/lib/postgresql/data` without also pointing `PGDATA`
+  into it (e.g. `PGDATA=/var/lib/postgresql/data/pgdata`) stops the container at start-up: the 18+ entrypoint refuses an "unused mount" at
+  the old location.
+- `withCommand(...)` **replaces** Testcontainers' default command (`postgres -c fsync=off`), so list `fsync=off` again alongside
+  `synchronous_commit=off` and `full_page_writes=off`.
+- Testcontainers 2.x: the class is `org.testcontainers.postgresql.PostgreSQLContainer` and it is **not generic**. `PostgreSQLContainer<?>`
+  (Java) or `PostgreSQLContainer<*>` (Kotlin) does not compile against it; `org.testcontainers.containers.PostgreSQLContainer` is the
+  deprecated generic one.
+
+```java
+import org.jdbi.v3.core.Jdbi;
+import org.junit.jupiter.api.BeforeEach;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.boot.testcontainers.service.connection.ServiceConnection;
+import org.testcontainers.postgresql.PostgreSQLContainer;
+import java.util.List;
+import java.util.Map;
+
+@SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
+public abstract class IntegrationTestBase {
+
+    @ServiceConnection
+    static final PostgreSQLContainer postgres = new PostgreSQLContainer("postgres:18.4")
+        .withReuse(Boolean.getBoolean("it.containers.reuse"))   // opt-in, off by default: see "One container per JVM"
+        .withTmpFs(Map.of("/var/lib/postgresql", "rw"))   // PG 18: PGDATA is /var/lib/postgresql/18/docker, inside the mount
+        .withCommand("postgres",
+            "-c", "fsync=off",                            // replaces Testcontainers' default command, so repeat it
+            "-c", "synchronous_commit=off",
+            "-c", "full_page_writes=off");
+
+    static { postgres.start(); }
+
+    @Autowired
+    protected Jdbi jdbi;
+
+    /** Read-model tables only - never an *_events table. See "What makes this safe with Essentials". */
+    protected List<String> readModelTablesToTruncate() {
+        return List.of();
+    }
+
+    @BeforeEach
+    void truncateReadModels() {
+        var tables = readModelTablesToTruncate();
+        if (!tables.isEmpty()) {
+            jdbi.useHandle(h -> h.execute("TRUNCATE TABLE " + String.join(", ", tables)));
+        }
+    }
+}
+```
+
+Kotlin: the same container in a `companion object`:
+
+```kotlin
+companion object {
+    @JvmStatic
+    @ServiceConnection
+    val postgres = PostgreSQLContainer("postgres:18.4")      // not generic: no <*>
+        .withReuse(System.getProperty("it.containers.reuse").toBoolean())   // opt-in, off by default
+        .withTmpFs(mapOf("/var/lib/postgresql" to "rw"))
+        .withCommand("postgres", "-c", "fsync=off", "-c", "synchronous_commit=off", "-c", "full_page_writes=off")
+        .also { it.start() }
+}
+```
+
+### Keep the Spring context cache warm
+
+- **No `@DirtiesContext`.** It evicts the cached context and forces a fresh boot per test class. Isolate tests through the database
+  instead (next section), and reset in-memory state in `@BeforeEach` rather than dirtying the context.
+- **`reuseForks=true`**, so one test JVM, and therefore one context cache, serves every test class in the fork.
+- **A small `spring.test.context.cache.maxSize`** (e.g. `4`) in the Failsafe `argLine` as a fragmentation tripwire: a test class that
+  adds a distinct `@MockitoBean`/`@TestPropertySource`/`@Import` creates a second context, and the small cap makes the eviction visible
+  instead of letting the default of 32 hide it.
+
+### Cheaper JVM start in test forks
+
+`-XX:TieredStopAtLevel=1` (skip C2) and `-Dspring.jmx.enabled=false` in the test `argLine`. **Never on benchmark or load suites**, which
+need the optimising compiler; give those their own profile.
+
+```xml
+<plugin>
+    <artifactId>maven-failsafe-plugin</artifactId>
+    <configuration>
+        <forkCount>1</forkCount>   <!-- with container reuse: every fork would attach to the same database -->
+        <reuseForks>true</reuseForks>
+        <argLine>-XX:TieredStopAtLevel=1 -Dspring.jmx.enabled=false -Dspring.test.context.cache.maxSize=4</argLine>
+    </configuration>
+</plugin>
+```
+
+Surefire can take the same `argLine` without `cache.maxSize`.
+
+### Inner loop
+
+Run one class or one method while iterating, the full suite once at the end:
+
+```bash
+mvn test-compile failsafe:integration-test failsafe:verify -Dit.test='OrderPlacementIT#places_an_order'
+```
+
+### Verification
+
+- With reuse opted in (`-Dit.containers.reuse=true` plus the machine flag), a second run logs `Reusing container with ID: … and hash: …`.
+- With `-Dlogging.level.org.springframework.test.context.cache=DEBUG`, the context cache holds one entry across the suite.
+
+### What makes this safe with Essentials
+
+- **Never truncate an `*_events` table with `RESTART IDENTITY`.** Each aggregate type's events live in `<aggregateType>_events` (the
+  standard naming; it is configurable), and `global_order` is an identity column. `RESTART IDENTITY` rewinds it, while every running
+  subscription keeps its higher in-memory resume point: projections silently stop and the next test **hangs** on its await instead of
+  failing. Truncate read-model tables only. Prefer fresh (random) aggregate ids per test over clearing event tables at all.
+- **Truncating a read model only works for rows the test itself causes.** Its subscription has already moved past the events that
+  populated it, so rows seeded before the test never come back, not even after a restart that re-sends the seeding commands (those are
+  no-ops against the existing streams). To rebuild a read model, clear it in `onSubscriptionsReset` and call `resetAllSubscriptions()`,
+  or seed the read model directly in the test.
+
+  ```java
+  public class OrderSummaryProjection extends ViewEventProcessor {   // same hooks on EventProcessor
+      // ...
+      @Override
+      protected void onSubscriptionsReset(AggregateType aggregateType, GlobalEventOrder resubscribeFromAndIncluding) {
+          jdbi.useHandle(h -> h.execute("TRUNCATE TABLE order_summaries"));
+      }
+  }
+
+  // in the test
+  @BeforeEach
+  void rebuildOrderSummaries() {
+      orderSummaryProjection.resetAllSubscriptions();   // resume points -> first global order; queue/inbox purged
+      // await the replayed rows before asserting
+  }
+  ```
+
+  `resetAllSubscriptions()` only acts on the instance that **holds the processor's lock**. Anywhere else it does nothing but log at INFO;
+  on a `ViewEventProcessor` that has not acquired its lock yet it throws `NullPointerException`. Wait for the processor to be active
+  before resetting. `resetSubscriptions(Map<AggregateType, GlobalEventOrder>, boolean)` resets selected aggregate types from a given
+  `GlobalEventOrder`.
+- **Reuse plus an identical container definition means one shared store per host.** Every build on the machine (another terminal, another
+  checkout, an agent session) whose definition hashes the same attaches to the *same* database. Their application instances then form an
+  accidental cluster: processor locks move between builds, event tables interleave every build's history, and one build's truncation
+  deletes rows another build has already projected. A reset is also skipped when another build's instance holds the lock. Run one build
+  per host at a time against a reused container (or give each checkout a distinct definition, e.g. its own database name), use
+  `forkCount=1`, and keep fixture ids random per run. The default subscription table, `durable_subscriptions`, is shared the same way.
+- **A test that disrupts the database owns its container per class.** See
+  [Sharing a Container With a Disruption Test](#-sharing-a-container-with-a-disruption-test); `DBFencedLockManagerIT`,
+  `DBFencedLockManager_MultiNode_ReleaseLockIT`, `DistributedCompetingConsumersDurableQueuesIT` and `DuplicateConsumptionDurableQueuesIT`
+  are the base ITs that declare `disruptDatabaseConnection()`.
 
 ---
 
@@ -581,10 +784,10 @@ durableQueues.start();
 ### ⚠️ Missing Transaction Wrapper
 
 ```java
-// ❌ Wrong - FullyTransactional mode needs wrapping
+// ❌ Wrong - bypasses the subclass's hook, e.g. one that wraps queue calls in a UnitOfWork
 durableQueues.queueMessage(queueName, message);
 
-// ✅ Correct
+// ✅ Correct - withDurableQueue/usingDurableQueue are pass-throughs a subclass can override
 withDurableQueue(() -> durableQueues.queueMessage(queueName, message));
 ```
 
@@ -625,6 +828,15 @@ void cleanup() {
     }
 }
 ```
+
+### ⚠️ Sharing a Container With a Disruption Test
+
+The base ITs that declare `disruptDatabaseConnection()` / `restoreDatabaseConnection()` take the database away
+mid-test (the module's own subclasses pause the container). On a container shared with other test classes — a
+JVM-wide singleton, or one reused with `withReuse(true)` — that disruption hits every other test using it.
+Give each disruption IT its own per-class container (`@Testcontainers` + `@Container`, as the module's own
+`…_MultiNode_ReleaseLockIT` / `…DistributedCompetingConsumersDurableQueuesIT` do); share a singleton only
+between ITs that never disrupt it.
 
 ---
 

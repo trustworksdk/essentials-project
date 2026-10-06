@@ -253,8 +253,8 @@ Default `Tenant` implementation for tenant isolation.
 TenantId.of(CharSequence value)
 
 // Usage
-TenantId tenantId = TenantId.of("acme-corp");
-String value = tenantId.toString();  // "acme-corp"
+TenantId tenantId = TenantId.of("example-corp");
+String value = tenantId.toString();  // "example-corp"
 
 // Use in multi-tenant queries
 List<Order> orders = repository.findByTenantId(tenantId);
@@ -772,7 +772,7 @@ public class MultiTenantPersistableEventMapper implements PersistableEventMapper
 }
 
 // Append events - tenant is embedded via mapper
-TenantId tenant = TenantId.of("acme-corp");
+TenantId tenant = TenantId.of("example-corp");
 eventStore.appendToStream(
     ORDER_TYPE,
     orderId,
@@ -939,7 +939,7 @@ EventRevision extends IntegerType<EventRevision>
 ```
 
 **Benefit**: Inherits all `SingleValueType` features:
-- Jackson serialization (with [types-jackson](../../types-jackson/README.md))
+- Jackson serialization (with [types-jackson3](../../types-jackson3/README.md))
 - Spring Data MongoDB persistence (with [types-springdata-mongo](../../types-springdata-mongo/README.md))
 - JDBI argument support (with [types-jdbi](../../types-jdbi/README.md))
 - Spring Web converters (with [types-spring-web](../../types-spring-web/README.md))

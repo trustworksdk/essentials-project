@@ -21,12 +21,14 @@ import dk.trustworks.essentials.components.eventsourced.aggregates.closingbooks.
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.transaction.EventStoreUnitOfWork;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.transaction.EventStoreUnitOfWorkFactory;
 import dk.trustworks.essentials.examples.trading._demo_harness.DirectInstrumentPriceService;
+import dk.trustworks.essentials.examples.trading._demo_harness.QueueLoadGeneratorProperties;
 import dk.trustworks.essentials.examples.trading._demo_harness.TradingDashboardStreamService;
 import dk.trustworks.essentials.examples.trading._demo_harness.TradingDemoLoadGeneratorProperties;
 import dk.trustworks.essentials.examples.trading._demo_harness.TradingDemoSimulationProperties;
 import dk.trustworks.essentials.examples.trading._demo_harness.TradingLoadGeneratorManager;
 import dk.trustworks.essentials.examples.trading._demo_harness.TradingSimulationRunner;
 import dk.trustworks.essentials.examples.trading.brokerage.aggregates.Settlements;
+import dk.trustworks.essentials.examples.trading.brokerage.views.trade_settlement_status.TradeSettlementStatusQuery;
 import dk.trustworks.essentials.examples.trading.brokerage.aggregates.TradingAccountClosingBooksPolicy;
 import dk.trustworks.essentials.examples.trading.brokerage.aggregates.TradingAccounts;
 import dk.trustworks.essentials.examples.trading.brokerage.aggregates.Trades;
@@ -55,7 +57,8 @@ import org.springframework.context.annotation.Bean;
  */
 @SpringBootApplication
 @EnableConfigurationProperties({TradingDemoSimulationProperties.class,
-        TradingDemoLoadGeneratorProperties.class})
+        TradingDemoLoadGeneratorProperties.class,
+        QueueLoadGeneratorProperties.class})
 public class TradingDemoApplication {
     public static void main(String[] args) {
         SpringApplication.run(TradingDemoApplication.class, args);
@@ -99,7 +102,8 @@ public class TradingDemoApplication {
                                                      TradingAccounts tradingAccounts,
                                                      Trades trades,
                                                      Settlements settlements,
-                                                     Instruments instruments) {
+                                                     Instruments instruments,
+                                                     TradeSettlementStatusQuery tradeSettlementStatusQuery) {
         return new TradingSimulationRunner(properties,
                                            commandBus,
                                            closingBooksPolicy,
@@ -110,7 +114,8 @@ public class TradingDemoApplication {
                                            tradingAccounts,
                                            trades,
                                            settlements,
-                                           instruments);
+                                           instruments,
+                                           tradeSettlementStatusQuery);
     }
 
     @Bean

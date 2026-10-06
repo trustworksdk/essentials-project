@@ -92,7 +92,7 @@ public class AbstractLogicalReplicationPostgresIT {
      * first boot: a temporary local-only server for {@code initdb}, a shutdown, then the real one. {@code
      * Wait.forListeningPort()} returns as soon as the postmaster binds 5432 - which happens while the second server is
      * still starting up and answers every connection with {@code FATAL: the database system is starting up}. Waiting
-     * for the readiness line the second time is what {@link org.testcontainers.containers.PostgreSQLContainer} does,
+     * for the readiness line the second time is what {@link org.testcontainers.postgresql.PostgreSQLContainer} does,
      * and the only reason these two suites hand-roll it is that they need {@link GenericContainer} for the custom image.
      * <p>
      * A new instance per call on purpose: {@code AbstractWaitStrategy} binds itself to the container it is waiting on,

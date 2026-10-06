@@ -1,0 +1,14 @@
+schemaVersion: "1.2"
+slice: orders.notify_customer
+kind: automation
+bc: orders
+owner: orders-team
+status: live
+summary: Tell the customer.
+generator: essentials
+language: kotlin
+tier: cqrs-es
+lane: decider
+consumes: [Placed, OrderCancelled]
+tests:
+  unit: { present: false }

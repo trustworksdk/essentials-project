@@ -20,10 +20,11 @@ import dk.trustworks.essentials.components.foundation.fencedlock.TestFencedLockM
 import dk.trustworks.essentials.components.foundation.scheduler.pgcron.*;
 import dk.trustworks.essentials.components.foundation.transaction.jdbi.JdbiUnitOfWorkFactory;
 import org.junit.jupiter.api.Test;
-import org.testcontainers.containers.PostgreSQLContainer;
+import org.testcontainers.postgresql.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.*;
 
 import java.time.Duration;
+import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.waitAtMost;
@@ -36,7 +37,7 @@ import static org.awaitility.Awaitility.waitAtMost;
 public class EssentialsSchedulerIT_WithPgCron extends AbstractEssentialsSchedulerTest {
 
     @Container
-    PostgreSQLContainer<?> postgreSQLContainer = new PostgreSQLContainer<>(pgCronImage)
+    PostgreSQLContainer postgreSQLContainer = new PostgreSQLContainer(pgCronImage)
             .withCommand("postgres", "-c", "shared_preload_libraries=pg_cron", "-c", "cron.database_name=test-db")
             .withDatabaseName("test-db")
             .withUsername("postgres")
@@ -44,7 +45,7 @@ public class EssentialsSchedulerIT_WithPgCron extends AbstractEssentialsSchedule
             .withImagePullPolicy((ignored) -> false);
 
     @Override
-    protected PostgreSQLContainer<?> getPostgreSQLContainer() {
+    protected PostgreSQLContainer getPostgreSQLContainer() {
         return postgreSQLContainer;
     }
 
@@ -204,4 +205,48 @@ public class EssentialsSchedulerIT_WithPgCron extends AbstractEssentialsSchedule
         fencedLockManager2.stop();
     }
 
+
+    @Test
+    public void a_pg_cron_job_is_run_on_demand_by_calling_its_function_directly() {
+        var unitOfWorkFactory = new JdbiUnitOfWorkFactory(jdbi);
+        var fencedLockManager = new TestFencedLockManager(jdbi);
+        fencedLockManager.start();
+        var scheduler = new DefaultEssentialsScheduler(unitOfWorkFactory, fencedLockManager, 2);
+        scheduler.start();
+        assertThat(scheduler.isPgCronAvailable()).isTrue();
+        waitAtMost(Duration.ofSeconds(5)).until(() -> fencedLockManager.isLockAcquired(scheduler.getLockName()));
+
+        unitOfWorkFactory.usingUnitOfWork(uow -> {
+            uow.handle().execute("CREATE TABLE IF NOT EXISTS run_now_marker (label TEXT)");
+            uow.handle().execute("""
+                    CREATE OR REPLACE FUNCTION run_now_mark(label TEXT) RETURNS void AS $$
+                    BEGIN INSERT INTO run_now_marker VALUES (label); END; $$ LANGUAGE plpgsql""");
+            uow.handle().execute("""
+                    CREATE OR REPLACE FUNCTION run_now_fail() RETURNS void AS $$
+                    BEGIN RAISE EXCEPTION 'deliberately failing'; END; $$ LANGUAGE plpgsql""");
+        });
+        // Daily, so the schedule itself does not run during the test
+        scheduler.schedulePgCronJob(new PgCronJob("runNowMark", "run_now_mark", List.of(Arg.literal("on-demand")), CronExpression.ONE_DAY));
+        scheduler.schedulePgCronJob(new PgCronJob("runNowFail", "run_now_fail", null, CronExpression.ONE_DAY));
+
+        // The name pg_cron stores - and the admin API lists - carries the instance suffix
+        var storedName = scheduler.fetchPgCronEntries(0, 10).stream()
+                                  .map(PgCronRepository.PgCronEntry::jobName)
+                                  .filter(name -> name.startsWith("runNowMark"))
+                                  .findFirst().orElseThrow();
+        assertThat(scheduler.runJobNow(storedName)).hasValueSatisfying(run -> {
+            assertThat(run.jobType()).isEqualTo(ScheduledJobRun.JobType.PG_CRON);
+            assertThat(run.succeeded()).isTrue();
+        });
+        List<String> marked = unitOfWorkFactory.withUnitOfWork(uow -> uow.handle().createQuery("SELECT label FROM run_now_marker").mapTo(String.class).list());
+        assertThat(marked).containsExactly("on-demand");
+
+        assertThat(scheduler.runJobNow("runNowFail")).hasValueSatisfying(run -> {
+            assertThat(run.succeeded()).isFalse();
+            assertThat(run.error()).contains("deliberately failing");
+        });
+
+        scheduler.stop();
+        fencedLockManager.stop();
+    }
 }

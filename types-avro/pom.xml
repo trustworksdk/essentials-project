@@ -91,6 +91,19 @@
         <plugins>
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-enforcer-plugin</artifactId>
+                <executions>
+                    <!-- Needs Jackson 2 for reasons of its own; see the ban-jackson-2 execution in the root pom.xml. -->
+                    <execution>
+                        <id>ban-jackson-2</id>
+                        <configuration>
+                            <skip>true</skip>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-source-plugin</artifactId>
                 <configuration>
                     <excludes>
@@ -103,6 +116,19 @@
                 <artifactId>maven-javadoc-plugin</artifactId>
                 <configuration>
                     <excludePackageNames>dk.trustworks.essentials.types.avro.test:dk.trustworks.essentials.types.avro.test.*</excludePackageNames>
+                </configuration>
+            </plugin>
+            <!-- Avro 1.12.2 runs ClassSecurityValidator inside SpecificData.getClass, so a SpecificDatumReader for a
+                 generated record outside Avro's own trusted list throws SecurityException ("This class is not trusted
+                 to be included in Avro schemas"). The test records are generated into the package below; trust it
+                 for the tests only. A consumer on Avro 1.12.2+ needs the same for their own record packages. -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-surefire-plugin</artifactId>
+                <configuration>
+                    <systemPropertyVariables>
+                        <org.apache.avro.SERIALIZABLE_PACKAGES>dk.trustworks.essentials.types.avro.test</org.apache.avro.SERIALIZABLE_PACKAGES>
+                    </systemPropertyVariables>
                 </configuration>
             </plugin>
             <plugin>

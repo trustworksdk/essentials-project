@@ -1,0 +1,11 @@
+spring:
+  application:
+    name: store
+  data:
+    mongodb:
+      uri: mongodb://localhost:27017/store
+      database: store
+app:
+  cors:
+    allowed-origins:
+      - https://store.example.com

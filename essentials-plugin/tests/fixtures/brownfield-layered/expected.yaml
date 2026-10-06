@@ -1,0 +1,275 @@
+# expected.yaml — the machine-readable expectations for this fixture (format 1). TEST-GUIDE.md is the
+# human description of the same expectations; when they disagree, fix both.
+#
+# Paths are relative to this fixture's directory. `line` is 1-based and `anchor` is text that must
+# appear on that line, so a stale line number is detectable. `gate` is the /essentials:slice-check
+# gate as written in commands/slice-check.md ("14", "8a", "6"); `ess` is the review id derived from
+# it (ESS-G<gate><clause>); both are null where the expectation is a law section rather than a numbered
+# gate. Severities: Blocking | Should-fix | Advisory.
+#
+#   runs          which command runs against this fixture, with which argument
+#   lanes         gate 14 per bounded context: code signals, declared lanes, verdict
+#   must_find     every entry must appear in the report (matched on file, plus symbol when given)
+#   must_not_find a finding under any listed gate at that file/symbol fails the run ("*" = any gate)
+#   skipped       gates the report must name as skipped or out of scope, never silently omit
+#   tolerated     findings that may appear or not; neither counts for or against the run
+#   reader        syntactic facts a source reader must extract (handlers, mappings, endpoint bindings)
+#   slice_map     what /essentials:slice-map must draw: slice count, event/command edges, cycles
+#   manifests     facts about the manifests themselves (service-entity)
+#   terrain, contexts, slices, ladder
+#                 /essentials:slice-discover's passes 0-4 (brownfield-layered); must_find there carries
+#                 `rank` (payoff order) and `kind` instead of a gate, and severity is null by design
+#
+# `tests/fixtures/check-expected.py` checks this file against the tree (paths, line anchors, ess ids)
+# and that no fixture source carries an answer hint.
+#
+# Entry fields beyond file/line/anchor: `symbol` narrows the match to a type or method; `also_names`
+# lists other files the same finding must cite; `may_merge_with` names a finding this one may be
+# reported inside of; `law` names the rules/slice-design.md section when `gate` is null.
+
+fixture: brownfield-layered
+language: java
+runs:
+- command: /essentials:slice-discover
+  args: essentials-plugin/tests/fixtures/brownfield-layered
+- command: /essentials:slice-check
+  args: essentials-plugin/tests/fixtures/brownfield-layered
+  expect: >-
+    Step 1.2: says the project has not opted into the slice law (no slice.yaml anywhere and no use_cases/, views/,
+    automations/ or external_systems/ directory), points the user at /essentials:slice-discover and stops. Runs
+    no gates, reports no findings or severities (not even a missing manifest), and writes nothing.
+terrain:
+  build: maven
+  modules: 1
+  language: java
+  frameworks:
+  - spring-boot-web
+  - spring-data-jpa
+  essentials: false
+  lane: 'none (nearest: service-entity)'
+  redirect_to_slice_check: false
+contexts:
+  count: 2
+  candidates:
+    orders:
+      owns:
+      - Order
+      - OrderLine
+      - OrderRepository
+      counter_evidence:
+        file: src/main/java/com/example/shop/service/BillingService.java
+        line: 35
+        anchor: orders.save(order);
+        what: BillingService.payInvoice also writes Order
+    billing:
+      owns:
+      - Invoice
+      - InvoiceRepository
+      counter_evidence:
+        file: src/main/java/com/example/shop/model/Invoice.java
+        line: 10
+        anchor: private String orderId;
+        what: Invoice.orderId references the other context
+  confidence_at_most: medium
+slices:
+  count: 7
+  list:
+  - kind: command
+    slice: orders.place_order
+    file: src/main/java/com/example/shop/controller/OrderController.java
+    line: 16
+    anchor: public String place(@RequestBody PlaceOrderRequest body) {
+  - kind: command
+    slice: orders.cancel_order
+    file: src/main/java/com/example/shop/controller/OrderController.java
+    line: 21
+    anchor: public void cancel(@PathVariable String orderId, @RequestBody CancelRequest body) {
+  - kind: command
+    slice: orders.ship_order
+    file: src/main/java/com/example/shop/controller/OrderController.java
+    line: 26
+    anchor: public void ship(@PathVariable String orderId) {
+  - kind: view
+    slice: orders.order_list
+    file: src/main/java/com/example/shop/controller/OrderController.java
+    line: 31
+    anchor: public List<Order> list(@RequestParam String customerId) {
+    also: OrderController.get — one slice, two queries
+  - kind: command
+    slice: billing.pay_invoice
+    file: src/main/java/com/example/shop/controller/InvoiceController.java
+    line: 16
+    anchor: public void pay(@PathVariable String invoiceId, @RequestBody PayRequest body) {
+  - kind: view
+    slice: billing.unpaid_invoices
+    file: src/main/java/com/example/shop/controller/InvoiceController.java
+    line: 21
+    anchor: public List<Invoice> unpaid() {
+  - kind: view
+    slice: orders.order_status_report
+    file: src/main/java/com/example/shop/controller/ReportController.java
+    line: 16
+    anchor: public Map<String, Long> ordersByStatus() {
+  also:
+  - kind: automation
+    slice: billing.payment_reminders
+    file: src/main/java/com/example/shop/service/PaymentReminderJob.java
+    line: 15
+    anchor: '@Scheduled(cron = "0 0 9 * * *")'
+  - kind: translation
+    slice: payment_gateway
+    file: src/main/java/com/example/shop/integration/PaymentGatewayClient.java
+    line: 10
+    anchor: public class PaymentGatewayClient {
+  order_controller_splits_into: 4
+must_find:
+- id: P1
+  rank: 1
+  gate: null
+  ess: null
+  severity: null
+  kind: sole-writer
+  file: src/main/java/com/example/shop/service/BillingService.java
+  line: 24
+  anchor: public void payInvoice(String invoiceId, String cardToken) {
+  what: >-
+    Order is written by OrderService (three methods) and by BillingService.payInvoice; the cross-service write is
+    the finding and ranks first.
+- id: P2
+  rank: 2
+  gate: null
+  ess: null
+  severity: null
+  kind: cohesion
+  file: src/main/java/com/example/shop/controller/OrderController.java
+  line: 10
+  anchor: public class OrderController {
+  what: OrderController → 4 slices; OrderService → 4 slices. Reported as slice counts, not line counts.
+- id: P3
+  rank: 3
+  gate: null
+  ess: null
+  severity: null
+  kind: boundary
+  file: src/main/java/com/example/shop/service/BillingService.java
+  line: 14
+  anchor: private final OrderRepository orders;
+  what: BillingService reaches into orders' entity and repository directly.
+- id: P4
+  rank: 4
+  gate: null
+  ess: null
+  severity: null
+  kind: lane
+  file: pom.xml
+  line: 19
+  anchor: <artifactId>spring-boot-starter-data-jpa</artifactId>
+  what: >-
+    No sanctioned R5 lane; nearest is service-entity. Rung 4 is a later choice, not a recommendation now.
+- id: P5
+  rank: null
+  gate: null
+  ess: null
+  severity: null
+  kind: write-repository-query-drift
+  file: src/main/java/com/example/shop/repository/OrderRepository.java
+  line: 8
+  anchor: List<Order> findByCustomerId(String customerId);
+  what: >-
+    Write-repository finders serve OrderController.list/.get, ReportController and InvoiceController.unpaid.
+- id: P6
+  rank: null
+  gate: null
+  ess: null
+  severity: null
+  kind: entity-returned-from-api
+  file: src/main/java/com/example/shop/controller/OrderController.java
+  line: 36
+  anchor: public Order get(@PathVariable String orderId) {
+  what: The controllers return Order / Invoice directly.
+- id: P7
+  rank: null
+  gate: null
+  ess: null
+  severity: null
+  kind: primitive-id-at-edge
+  file: src/main/java/com/example/shop/controller/InvoiceController.java
+  line: 16
+  anchor: public void pay(@PathVariable String invoiceId, @RequestBody PayRequest body) {
+  also_names:
+  - src/main/java/com/example/shop/service/BillingService.java
+  - src/main/java/com/example/shop/model/Invoice.java
+  what: >-
+    Order, invoice and customer ids are plain Strings in the controller signatures, the service methods
+    (BillingService.payInvoice(String invoiceId, String cardToken)) and the entity fields (Invoice.orderId), where
+    the law puts semantic id types in each BC's types/. Grouped (per BC, or once overall), not one finding per
+    parameter, and with no severity.
+ladder:
+  rung_1: a pure regroup; must not mention Decider, AggregateRoot or the event store
+  rung_4: offers service-entity first; must not be presented as 'adopt event sourcing'
+  semantic_ids: >-
+    introducing the BCs' semantic id types into types/ sits at rung 2 or later, never in rung 1's pure move, and
+    needs no Essentials (a plain record or final class); Essentials' CharSequenceType enters only at rung 4
+must_not_find:
+- id: N1
+  not_gates:
+  - '*'
+  what: a payments or reporting bounded context
+  file: src/main/java/com/example/shop/integration/PaymentGatewayClient.java
+  line: 10
+  anchor: public class PaymentGatewayClient {
+- id: N2
+  not_gates:
+  - '*'
+  what: orders.get_order as its own view slice
+  file: src/main/java/com/example/shop/controller/OrderController.java
+  line: 36
+  anchor: public Order get(@PathVariable String orderId) {
+- id: N3
+  not_gates:
+  - '*'
+  what: a recommendation to adopt Essentials before rungs 1-3
+- id: N4
+  not_gates:
+  - '*'
+  what: any severity labelled Blocking (the report ranks by payoff)
+- id: N5
+  not_gates:
+  - '*'
+  what: 'lane: service-entity (the actual lane is none)'
+- id: N6
+  not_gates:
+  - '*'
+  what: Order.getStatus() / Invoice.getStatus() as a query surface
+  file: src/main/java/com/example/shop/model/Order.java
+  line: 20
+  anchor: public String getStatus() { return status; }
+- id: N7
+  not_gates:
+  - '*'
+  what: merging ReportController.ordersByStatus into orders.order_list
+  file: src/main/java/com/example/shop/controller/ReportController.java
+  line: 16
+  anchor: public Map<String, Long> ordersByStatus() {
+- id: N8
+  not_gates:
+  - '*'
+  what: >-
+    the payment gateway's own ids in integration/dto/ (merchant_ref, txn_id) as primitive ids that need one of our
+    semantic types
+  why: >-
+    They are the gateway's foreign schema; the translation maps them to the BC's types at the boundary, and typing
+    the DTO itself would couple the BC's types to a schema it does not control.
+  file: src/main/java/com/example/shop/integration/dto/GatewayChargeRequest.java
+  line: 4
+  anchor: public String merchant_ref;
+tolerated:
+- id: TOL-gateway-charge-id
+  gates:
+  - '*'
+  file: src/main/java/com/example/shop/integration/PaymentGatewayClient.java
+  line: 15
+  anchor: public String charge(String invoiceId, BigDecimal amount, String cardToken) {
+  what: >-
+    Naming PaymentGatewayClient.charge(String invoiceId, …) as a primitive-id site, inside P7 or beside it. It is the
+    inner side of the translation, where the BC's own id may be typed; reporting or omitting it counts neither way.

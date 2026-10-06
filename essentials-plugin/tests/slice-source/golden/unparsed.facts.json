@@ -1,0 +1,248 @@
+{
+  "tool": "slice-source",
+  "format": 1,
+  "mode": "facts",
+  "root": "tests/slice-source/cases/unparsed",
+  "manifestsRead": true,
+  "sourceFiles": 5,
+  "bcs": [
+    {
+      "name": "inbox",
+      "path": "src/main/*/com/example/inbox",
+      "dirs": [
+        "src/main/kotlin/com/example/inbox"
+      ],
+      "languages": [
+        "java",
+        "kotlin"
+      ],
+      "slices": [
+        "inbox.relay",
+        "inbox.legacy",
+        "inbox.broken_view",
+        "inbox.templated"
+      ],
+      "lane": {
+        "signals": {
+          "decider": [],
+          "aggregates": null,
+          "entities": null,
+          "eventStore": []
+        },
+        "declared": [],
+        "detected": "undetermined"
+      }
+    }
+  ],
+  "slices": [
+    {
+      "id": "inbox.relay",
+      "idSource": "manifest",
+      "bc": "inbox",
+      "bcPath": "src/main/*/com/example/inbox",
+      "dir": "src/main/kotlin/com/example/inbox/automations/relay",
+      "role": "automations",
+      "kind": "automation",
+      "manifest": "src/main/kotlin/com/example/inbox/automations/relay/slice.yaml",
+      "language": "kotlin",
+      "package": "com.example.inbox.automations.relay",
+      "files": [
+        "RelayProcessor.kt"
+      ],
+      "processors": [
+        {
+          "class": "RelayProcessor",
+          "base": "EventProcessor",
+          "file": "src/main/kotlin/com/example/inbox/automations/relay/RelayProcessor.kt",
+          "line": 8
+        }
+      ],
+      "handlers": [
+        {
+          "class": "RelayProcessor",
+          "method": "on",
+          "annotation": "MessageHandler",
+          "annotationFqn": "dk.trustworks.essentials.components.foundation.messaging.MessageHandler",
+          "role": "event",
+          "file": "src/main/kotlin/com/example/inbox/automations/relay/RelayProcessor.kt",
+          "line": 11,
+          "annotationLine": 10,
+          "message": {
+            "written": "MessageReceived",
+            "name": "MessageReceived",
+            "fqn": "com.example.inbox.events.MessageReceived",
+            "resolvedBy": "import"
+          },
+          "params": [
+            {
+              "name": "event",
+              "type": "MessageReceived"
+            }
+          ],
+          "envelope": false
+        },
+        {
+          "class": "RelayProcessor",
+          "method": "heartbeat",
+          "annotation": "MessageHandler",
+          "annotationFqn": "dk.trustworks.essentials.components.foundation.messaging.MessageHandler",
+          "role": "event",
+          "file": "src/main/kotlin/com/example/inbox/automations/relay/RelayProcessor.kt",
+          "line": 18,
+          "annotationLine": 17,
+          "message": null,
+          "params": [],
+          "envelope": false
+        }
+      ],
+      "handles": [],
+      "dispatches": [],
+      "publishes": [],
+      "subscriptions": [],
+      "mappings": [],
+      "schedules": [],
+      "notAnalysed": []
+    },
+    {
+      "id": "inbox.legacy",
+      "idSource": "directory",
+      "bc": "inbox",
+      "bcPath": "src/main/*/com/example/inbox",
+      "dir": "src/main/kotlin/com/example/inbox/external_systems/legacy",
+      "role": "external_systems",
+      "kind": "translation",
+      "manifest": null,
+      "language": "kotlin",
+      "package": null,
+      "files": [
+        "LegacyClient.kt"
+      ],
+      "processors": [],
+      "handlers": [],
+      "handles": [],
+      "dispatches": [],
+      "publishes": [],
+      "subscriptions": [],
+      "mappings": [],
+      "schedules": [],
+      "notAnalysed": []
+    },
+    {
+      "id": "inbox.broken_view",
+      "idSource": "manifest",
+      "bc": "inbox",
+      "bcPath": "src/main/*/com/example/inbox",
+      "dir": "src/main/kotlin/com/example/inbox/views/broken_view",
+      "role": "views",
+      "kind": "view",
+      "manifest": "src/main/kotlin/com/example/inbox/views/broken_view/slice.yaml",
+      "language": "java",
+      "package": null,
+      "files": [
+        "BrokenProjection.java"
+      ],
+      "processors": [],
+      "handlers": [],
+      "handles": [],
+      "dispatches": [],
+      "publishes": [],
+      "subscriptions": [],
+      "mappings": [],
+      "schedules": [],
+      "notAnalysed": [],
+      "readModels": []
+    },
+    {
+      "id": "inbox.templated",
+      "idSource": "manifest",
+      "bc": "inbox",
+      "bcPath": "src/main/*/com/example/inbox",
+      "dir": "src/main/kotlin/com/example/inbox/views/templated",
+      "role": "views",
+      "kind": "view",
+      "manifest": "src/main/kotlin/com/example/inbox/views/templated/slice.yaml",
+      "language": "kotlin",
+      "package": "com.example.inbox.views.templated",
+      "files": [
+        "TemplatedAPI.kt"
+      ],
+      "processors": [],
+      "handlers": [],
+      "handles": [],
+      "dispatches": [],
+      "publishes": [],
+      "subscriptions": [],
+      "mappings": [
+        {
+          "class": "TemplatedAPI",
+          "method": "messages",
+          "file": "src/main/kotlin/com/example/inbox/views/templated/TemplatedAPI.kt",
+          "line": 12,
+          "annotationLine": 11,
+          "annotation": "GetMapping",
+          "httpMethods": [
+            "GET"
+          ],
+          "routes": null,
+          "params": [],
+          "requestParams": [],
+          "queryParams": [],
+          "requestBody": null
+        }
+      ],
+      "schedules": [],
+      "notAnalysed": [],
+      "readModels": []
+    }
+  ],
+  "messages": [
+    {
+      "name": "MessageReceived",
+      "type": "event",
+      "bc": "inbox",
+      "found": true,
+      "identity": "messageId: String",
+      "fields": [
+        "messageId: String",
+        "body: String"
+      ],
+      "declaredIn": "src/main/kotlin/com/example/inbox/events/MessageReceived.kt",
+      "line": 3,
+      "alsoDeclaredIn": []
+    }
+  ],
+  "unparsed": [
+    {
+      "file": "src/main/kotlin/com/example/inbox/automations/relay/RelayProcessor.kt",
+      "line": 18,
+      "what": "@MessageHandler RelayProcessor.heartbeat",
+      "reason": "handler with no readable first parameter"
+    },
+    {
+      "file": "src/main/kotlin/com/example/inbox/external_systems/legacy/LegacyClient.kt",
+      "line": 5,
+      "what": "source file",
+      "reason": "unterminated string literal"
+    },
+    {
+      "file": "src/main/kotlin/com/example/inbox/views/broken_view/BrokenProjection.java",
+      "line": 7,
+      "what": "source file",
+      "reason": "unclosed '{'"
+    },
+    {
+      "file": "src/main/kotlin/com/example/inbox/views/templated/TemplatedAPI.kt",
+      "line": 11,
+      "what": "@GetMapping path on messages",
+      "reason": "not a readable string: \"$BASE/messages\""
+    }
+  ],
+  "unresolved": [
+    {
+      "file": "src/main/kotlin/com/example/inbox/automations/relay/RelayProcessor.kt",
+      "line": 13,
+      "what": "dispatch argument",
+      "reason": "type not statically known: translator.toCommand(event)"
+    }
+  ]
+}

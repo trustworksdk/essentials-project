@@ -26,7 +26,7 @@ import org.jdbi.v3.core.Jdbi;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestInstance;
 import org.junit.jupiter.api.condition.EnabledIfSystemProperty;
-import org.testcontainers.containers.PostgreSQLContainer;
+import org.testcontainers.postgresql.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 
@@ -54,7 +54,7 @@ import static org.junit.jupiter.api.Assumptions.assumeTrue;
 public class QueueFetchStrategyBenchmarkIT {
 
     @Container
-    static final PostgreSQLContainer<?> postgreSQLContainer = EssentialsTestContainers.postgres("test", "test", "test");
+    static final PostgreSQLContainer postgreSQLContainer = EssentialsTestContainers.postgres("test", "test", "test");
 
     private static final QueuedMessageHandler NO_OP_HANDLER = _msg -> {
     };
@@ -124,7 +124,6 @@ public class QueueFetchStrategyBenchmarkIT {
         var durableQueues = PostgresqlDurableQueues.builder()
                                                    .setUnitOfWorkFactory(unitOfWorkFactory)
                                                    .setUseCentralizedMessageFetcher(true)
-                                                   .setUseOrderedUnorderedQuery(true)
                                                    .setCentralizedMessageFetcherPollingInterval(Duration.ofMillis(20))
                                                    .build();
 

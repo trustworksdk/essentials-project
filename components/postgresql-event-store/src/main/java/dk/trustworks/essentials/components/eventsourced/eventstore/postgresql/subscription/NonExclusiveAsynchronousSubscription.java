@@ -18,11 +18,9 @@ package dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.s
 
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.*;
-import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.observability.EventStoreSubscriptionObserver;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.types.GlobalEventOrder;
 import dk.trustworks.essentials.components.foundation.types.*;
 import dk.trustworks.essentials.shared.time.StopWatch;
-import reactor.core.publisher.BaseSubscriber;
 import reactor.util.retry.RetryBackoffSpec;
 
 import java.util.Optional;
@@ -46,7 +44,7 @@ public class NonExclusiveAsynchronousSubscription extends AbstractEventStoreSubs
     private final GlobalEventOrder onFirstSubscriptionSubscribeFromAndIncludingGlobalOrder;
     private final PersistedEventHandler eventHandler;
     private SubscriptionResumePoint resumePoint;
-    private BaseSubscriber<PersistedEvent> subscription;
+    private volatile PersistedEventSubscriber subscription;
     private final EventStoreSubscriptionManagerSettings eventStoreSubscriptionManagerSettings;
 
     /**
@@ -66,32 +64,11 @@ public class NonExclusiveAsynchronousSubscription extends AbstractEventStoreSubs
     }
 
     /**
-     * @deprecated Use {@link #NonExclusiveAsynchronousSubscription(EventStoreSubscriptionContext, DurableSubscriptionContext, PersistedEventHandler)}.
-     *         The shared arguments are now two context values. This constructor delegates and behaves identically.
+     * Synchronized with {@link #stop()} and {@link #resumeIfStoppedByErrorPolicy()}: a resume (stop + start) racing a stop
+     * of the subscription must not start it again after the stop
      */
-    @Deprecated(forRemoval = true, since = "0.40.x")
-    @SuppressWarnings("OptionalUsedAsFieldOrParameterType")
-    public NonExclusiveAsynchronousSubscription(EventStore eventStore,
-                                                DurableSubscriptionRepository durableSubscriptionRepository,
-                                                AggregateType aggregateType,
-                                                SubscriberId subscriberId,
-                                                GlobalEventOrder onFirstSubscriptionSubscribeFromAndIncludingGlobalOrder,
-                                                Optional<Tenant> onlyIncludeEventsForTenant,
-                                                PersistedEventHandler eventHandler,
-                                                EventStoreSubscriptionObserver eventStoreSubscriptionObserver,
-                                                EventStoreSubscriptionManagerSettings eventStoreSubscriptionManagerSettings,
-                                                Consumer<EventStoreSubscription> unsubscribeCallback,
-                                                Function<String, EventStorePollingOptimizer> eventStorePollingOptimizerFactory) {
-        super(eventStore, aggregateType, subscriberId, onlyIncludeEventsForTenant, eventStoreSubscriptionObserver, unsubscribeCallback, eventStorePollingOptimizerFactory);
-        this.durableSubscriptionRepository = requireNonNull(durableSubscriptionRepository, "No durableSubscriptionRepository provided");
-        this.onFirstSubscriptionSubscribeFromAndIncludingGlobalOrder = requireNonNull(onFirstSubscriptionSubscribeFromAndIncludingGlobalOrder,
-                "No onFirstSubscriptionSubscribeFromAndIncludingGlobalOrder provided");
-        this.eventHandler = requireNonNull(eventHandler, "No eventHandler provided");
-        this.eventStoreSubscriptionManagerSettings = requireNonNull(eventStoreSubscriptionManagerSettings, "No eventStoreSubscriptionManagerSettings provided");
-    }
-
     @Override
-    public void start() {
+    public synchronized void start() {
         if (!started) {
             started = true;
             log.info("[{}-{}] Looking up subscription resumePoint",
@@ -110,18 +87,26 @@ public class NonExclusiveAsynchronousSubscription extends AbstractEventStoreSubs
                     NonExclusiveAsynchronousSubscription.this,
                     resolveResumePointTiming.stop().getDuration());
 
-            subscription = new PersistedEventSubscriber(eventHandler,
-                    this,
-                    this::onErrorHandlingEvent,
-                    eventStoreSubscriptionManagerSettings.eventStorePollingBatchSize(),
-                    eventStore);
+            // The subscriber reports what it handled, and the event store resolves a gap fill's gap only then
+            var acknowledgement = SubscriberAcknowledgement.create();
+            subscription = PersistedEventSubscriber.builder()
+                                                   .setEventHandler(eventHandler)
+                                                   .setEventStoreSubscription(this)
+                                                   .setOnErrorHandler(this::onErrorHandlingEvent)
+                                                   .setEventStorePollingBatchSize(eventStoreSubscriptionManagerSettings.eventStorePollingBatchSize())
+                                                   .setEventStore(eventStore)
+                                                   .setSubscriptionErrorPolicy(eventStoreSubscriptionManagerSettings.subscriptionErrorPolicyFor(eventHandler))
+                                                   .setSubscriberAcknowledgement(acknowledgement)
+                                                   .setAutoResumer(autoResumer)
+                                                   .build();
             eventStore.pollEvents(aggregateType,
                             resumePoint.getResumeFromAndIncluding(),
                             Optional.of(eventStoreSubscriptionManagerSettings.eventStorePollingBatchSize()),
                             Optional.of(eventStoreSubscriptionManagerSettings.eventStorePollingInterval()),
                             onlyIncludeEventsForTenant(),
                             Optional.of(subscriberId),
-                            Optional.of(eventStorePollingOptimizerFactory))
+                            Optional.of(eventStorePollingOptimizerFactory),
+                            acknowledgement)
                     .limitRate(eventStoreSubscriptionManagerSettings.eventStorePollingBatchSize())
                     .subscribe(subscription);
         } else {
@@ -183,7 +168,16 @@ public class NonExclusiveAsynchronousSubscription extends AbstractEventStoreSubs
     }
 
     @Override
-    public void stop() {
+    public synchronized void stop() {
+        // Also when not started: a resume must never start the subscription after it was stopped
+        autoResumer.subscriptionStopped();
+        stopSubscriber();
+    }
+
+    /**
+     * Stop without telling the {@link SubscriptionAutoResumer} - for a resume, which is still awaiting recovery from the stop
+     */
+    private void stopSubscriber() {
         if (started) {
             log.info("[{}-{}] Stopping subscription",
                     subscriberId,
@@ -200,7 +194,9 @@ public class NonExclusiveAsynchronousSubscription extends AbstractEventStoreSubs
             }
             try {
                 // Allow the reactive components to complete
-                Thread.sleep(500);
+                if (!isShutdownCleanupAbandoned()) {
+                    Thread.sleep(500);
+                }
             } catch (InterruptedException e) {
                 // Ignore
                 Thread.currentThread().interrupt();
@@ -226,9 +222,11 @@ public class NonExclusiveAsynchronousSubscription extends AbstractEventStoreSubs
     }
 
     @Override
-    public void resetFrom(GlobalEventOrder subscribeFromAndIncludingGlobalOrder, Consumer<GlobalEventOrder> resetProcessor) {
+    public synchronized void resetFrom(GlobalEventOrder subscribeFromAndIncludingGlobalOrder, Consumer<GlobalEventOrder> resetProcessor) {
         requireNonNull(subscribeFromAndIncludingGlobalOrder, "subscribeFromAndIncludingGlobalOrder must not be null");
         requireNonNull(resetProcessor, "resetProcessor must not be null");
+        // The resume point moves, so the count of resumes at the event the subscription stopped at no longer applies
+        autoResumer.reset();
 
         eventStoreSubscriptionObserver.resettingFrom(subscribeFromAndIncludingGlobalOrder, this);
         if (started) {
@@ -255,6 +253,8 @@ public class NonExclusiveAsynchronousSubscription extends AbstractEventStoreSubs
                 subscribeFromAndIncludingGlobalOrder);
         resumePoint.setResumeFromAndIncluding(subscribeFromAndIncludingGlobalOrder);
         durableSubscriptionRepository.saveResumePoint(resumePoint);
+        // The resume point moved deliberately: a middle of a wide gap awaited below it must not be delivered after the reset
+        eventStore.forgetGapMiddlesAwaitedInMemory(subscriberId, aggregateType);
         try {
             eventHandler.onResetFrom(this, subscribeFromAndIncludingGlobalOrder);
         } catch (Exception e) {
@@ -270,6 +270,41 @@ public class NonExclusiveAsynchronousSubscription extends AbstractEventStoreSubs
     @Override
     public Optional<SubscriptionResumePoint> currentResumePoint() {
         return Optional.ofNullable(resumePoint);
+    }
+
+    /**
+     * @return true if the {@link SubscriptionErrorPolicy} stopped the current subscriber - see {@link EventStoreSubscription#isStoppedByErrorPolicy()}
+     */
+    @Override
+    public boolean isStoppedByErrorPolicy() {
+        var subscriber = subscription;
+        return subscriber != null && subscriber.isStoppedByErrorPolicy();
+    }
+
+    /**
+     * Stops and starts this subscription, as {@link #resetFrom(GlobalEventOrder, Consumer)} does but without moving the
+     * resume point: {@link #stop()} saves the resume point the {@link SubscriptionErrorPolicy} held at the failed event, and
+     * {@link #start()} subscribes a new subscriber from it. Synchronized so two concurrent resumes do not stop each other's
+     * restarted subscriber. See {@link EventStoreSubscription#resumeIfStoppedByErrorPolicy()}
+     */
+    @Override
+    public synchronized boolean resumeIfStoppedByErrorPolicy() {
+        if (!started || !isStoppedByErrorPolicy()) {
+            log.debug("[{}-{}] Not resuming - the subscription is not stopped by its SubscriptionErrorPolicy (started: {})",
+                      subscriberId,
+                      aggregateType,
+                      started);
+            return false;
+        }
+        log.info("[{}-{}] Resuming the subscription stopped by its SubscriptionErrorPolicy from and including globalOrder {}",
+                 subscriberId,
+                 aggregateType,
+                 resumePoint.getResumeFromAndIncluding());
+        // Not stop(): the resumed subscription has yet to get past the failed event
+        autoResumer.cancel();
+        stopSubscriber();
+        start();
+        return true;
     }
 
     @Override

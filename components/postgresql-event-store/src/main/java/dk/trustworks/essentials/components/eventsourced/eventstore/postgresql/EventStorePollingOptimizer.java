@@ -23,32 +23,14 @@ package dk.trustworks.essentials.components.eventsourced.eventstore.postgresql;
  * manage polling efficiency and load on the system.
  */
 public interface EventStorePollingOptimizer {
+    /**
+     * An optimizer that never skips or delays polling of its own. A polling worker using it still waits the
+     * polling interval after a poll that returned no events - without that it would poll again at once, in a busy
+     * loop. Use {@link SimpleEventStorePollingOptimizer} or {@link JitteredEventStorePollingOptimizer} to back off
+     * further while the event store is idle.
+     */
     static EventStorePollingOptimizer None() {
-        return new EventStorePollingOptimizer() {
-
-            @Override
-            public void eventStorePollingReturnedNoEvents() {
-            }
-
-            @Override
-            public void eventStorePollingReturnedEvents() {
-            }
-
-            @Override
-            public boolean shouldSkipPolling() {
-                return false;
-            }
-
-            @Override
-            public long currentDelayMs() {
-                return 0L;
-            }
-
-            @Override
-            public String toString() {
-                return "NoEventStorePollingOptimizer";
-            }
-        };
+        return new NoEventStorePollingOptimizer();
     }
 
     void eventStorePollingReturnedNoEvents();
@@ -59,4 +41,16 @@ public interface EventStorePollingOptimizer {
     boolean shouldSkipPolling();
 
     long currentDelayMs();
+
+    /**
+     * Whether a zero {@link #currentDelayMs()} after an empty poll is deliberate, meaning the polling worker may poll again
+     * at once (such as an optimizer that returns zero because a NOTIFY landed since the last poll). When {@code false}
+     * (the default) the polling worker waits the polling interval after an empty poll whenever the delay is zero -
+     * without that a decorated {@link #None()} or a custom optimizer returning zero would poll in a busy loop.
+     *
+     * @return true if the optimizer deliberately returns zero to have the polling worker poll again at once
+     */
+    default boolean mayRepollImmediatelyAfterAnEmptyPoll() {
+        return false;
+    }
 }

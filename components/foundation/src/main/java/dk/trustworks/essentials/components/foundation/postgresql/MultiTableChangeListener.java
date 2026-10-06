@@ -16,8 +16,10 @@
 
 package dk.trustworks.essentials.components.foundation.postgresql;
 
+import tools.jackson.databind.json.JsonMapper;
 import dk.trustworks.essentials.components.foundation.IOExceptionUtil;
 import dk.trustworks.essentials.components.foundation.json.*;
+import dk.trustworks.essentials.components.foundation.lifecycle.*;
 import dk.trustworks.essentials.components.foundation.postgresql.ListenNotify.SqlOperation;
 import dk.trustworks.essentials.reactive.EventBus;
 import dk.trustworks.essentials.shared.Lifecycle;
@@ -72,8 +74,14 @@ import static dk.trustworks.essentials.shared.MessageFormatter.msg;
  * <b>Failure to adequately sanitize and validate this value could expose the application to SQL injection
  * vulnerabilities, compromising the security and integrity of the database.</b>
  */
-public final class MultiTableChangeListener<T extends TableChangeNotification> implements Lifecycle, Closeable {
+public final class MultiTableChangeListener<T extends TableChangeNotification> implements Lifecycle, ShutdownAware, Closeable {
     private static final Logger log = LoggerFactory.getLogger(MultiTableChangeListener.class);
+
+    /**
+     * Set once the application is shutting down: polling has been cancelled and {@code UNLISTEN} is skipped - see
+     * {@link #shutdownStarting(ShutdownContext)}
+     */
+    private volatile ShutdownContext shutdown;
 
     private final Jdbi                                      jdbi;
     private final Duration                                  pollingInterval;
@@ -86,12 +94,8 @@ public final class MultiTableChangeListener<T extends TableChangeNotification> i
     private final ConcurrentMap<String, Class<? extends T>> listenForNotificationsRelatedToTables;
     private final AtomicReference<Handle>                   handleReference;
     private       ScheduledExecutorService                  executorService;
-    private       ScheduledFuture<?>                        scheduledFuture;
+    private volatile ScheduledFuture<?>                     scheduledFuture;
     private final boolean                                   filterDuplicateNotifications;
-    /**
-     * {@code null} when Jackson 2 is not on the classpath: the {@link NotificationDuplicationFilter} SPI is typed on
-     * Jackson 2's {@code JsonNode}, so without it no filter can run and duplicate notifications are simply not filtered.
-     */
     private final NotificationFilterChain                   notificationFilterChain;
     private volatile boolean started;
 
@@ -105,11 +109,12 @@ public final class MultiTableChangeListener<T extends TableChangeNotification> i
         this.jsonSerializer = requireNonNull(jsonSerializer, "No jsonSerializer provided");
         this.eventBus = requireNonNull(eventBus, "No localEventBus instance provided");
         this.filterDuplicateNotifications = filterDuplicateNotifications;
-        this.notificationFilterChain = Jackson2NotificationFilterChain.createFor(jsonSerializer);
-        if (notificationFilterChain == null && filterDuplicateNotifications) {
-            log.warn("Duplicate notification filtering is disabled: NotificationDuplicationFilter requires Jackson 2 " +
-                             "(com.fasterxml.jackson.core:jackson-databind), which is not on the classpath. Notifications are " +
-                             "delivered unfiltered, which is correct but may trigger redundant polls.");
+        if (jsonSerializer instanceof Jackson3JSONSerializer jackson3JSONSerializer) {
+            this.notificationFilterChain = new NotificationFilterChain(jackson3JSONSerializer.getObjectMapper());
+        } else {
+            // The notification parameter is a small flat JSON object read as a tree, so it needs no Essentials
+            // mapper configuration: a plain mapper is enough for any other JSONSerializer implementation.
+            this.notificationFilterChain = new NotificationFilterChain(JsonMapper.builder().build());
         }
         listenForNotificationsRelatedToTables = new ConcurrentHashMap<>();
         handleReference = new AtomicReference<>();
@@ -137,16 +142,14 @@ public final class MultiTableChangeListener<T extends TableChangeNotification> i
      * @param filter the filter to be added to the chain
      */
     public void removeDuplicationFilter(NotificationDuplicationFilter filter) {
-        if (notificationFilterChain != null) {
-            notificationFilterChain.removeFilter(filter);
-        }
+        notificationFilterChain.removeFilter(filter);
     }
 
     /**
      * Adds a custom {@link NotificationDuplicationFilter} to the filter chain as the very first (highest priority).<br>
      * The {@link NotificationDuplicationFilter}'s are used to extract unique keys from the {@link Notification#getParameter()}
      * JSON content.<br>
-     * The key extracted from {@link NotificationDuplicationFilter#extractDuplicationKey(com.fasterxml.jackson.databind.JsonNode)}
+     * The key extracted from {@link NotificationDuplicationFilter#extractDuplicationKey(JsonNode)}
      * will be used inside {@link MultiTableChangeListener} for duplication checks across all {@link Notification}'s
      * returned in one poll.<br>
      * If an empty {@link Optional} is returned then the given notification won't be deduplicated.<br>
@@ -157,18 +160,17 @@ public final class MultiTableChangeListener<T extends TableChangeNotification> i
      * determined by calling {@link Object#equals(Object)} on the filters.
      *
      * @param filter the filter to be added to the chain
-     * @return true if the filter was added as the first, otherwise false (e.g. the filter was already added, or Jackson 2 -
-     * which the filters are typed on - is not on the classpath)
+     * @return true if the filter was added as the first, otherwise false (e.g. the filter was already added)
      */
     public boolean addDuplicationFilterAsFirst(NotificationDuplicationFilter filter) {
-        return notificationFilterChain != null && notificationFilterChain.addFilterAsFirst(filter);
+        return notificationFilterChain.addFilterAsFirst(filter);
     }
 
     /**
      * Adds a custom {@link NotificationDuplicationFilter} to the filter chain as the very last (lowest priority).<br>
      * The {@link NotificationDuplicationFilter}'s are used to extract unique keys from the {@link Notification#getParameter()}
      * JSON content.<br>
-     * The key extracted from {@link NotificationDuplicationFilter#extractDuplicationKey(com.fasterxml.jackson.databind.JsonNode)}
+     * The key extracted from {@link NotificationDuplicationFilter#extractDuplicationKey(JsonNode)}
      * will be used inside {@link MultiTableChangeListener} for duplication checks across all {@link Notification}'s
      * returned in one poll.<br>
      * If an empty {@link Optional} is returned then the given notification won't be deduplicated.<br>
@@ -179,11 +181,10 @@ public final class MultiTableChangeListener<T extends TableChangeNotification> i
      * determined by calling {@link Object#equals(Object)} on the filters.
      *
      * @param filter the filter to be added to the chain
-     * @return true if the filter was added as the last, otherwise false (e.g. the filter was already added, or Jackson 2 -
-     * which the filters are typed on - is not on the classpath)
+     * @return true if the filter was added as the last, otherwise false (e.g. the filter was already added)
      */
     public boolean addDuplicationFilterAsLast(NotificationDuplicationFilter filter) {
-        return notificationFilterChain != null && notificationFilterChain.addFilterAsLast(filter);
+        return notificationFilterChain.addFilterAsLast(filter);
     }
 
     /**
@@ -273,8 +274,27 @@ public final class MultiTableChangeListener<T extends TableChangeNotification> i
         }
     }
 
+    /**
+     * Stops the poll loop, which otherwise reconnects and re-issues {@code LISTEN} for every table on each tick against a
+     * database that may be gone, and makes {@code UNLISTEN} a no-op from here on. A {@code LISTEN} lasts only as long as
+     * its database session, so it ends with the connection anyway - while each {@code UNLISTEN} after a failed poll had to
+     * open a new connection first, one connection timeout per table when the database is unreachable.
+     */
+    @Override
+    public void shutdownStarting(ShutdownContext shutdown) {
+        this.shutdown = requireNonNull(shutdown, "No shutdown provided");
+        var future = scheduledFuture;
+        if (future != null) {
+            future.cancel(true);
+        }
+    }
+
     private void unlisten(String tableName) {
         requireNonBlank(tableName, "No tableName provided");
+        if (shutdown != null) {
+            log.debug("Shutting down - not issuing UNLISTEN for '{}', the LISTEN ends with the session", tableName);
+            return;
+        }
         log.info("Removing table change LISTENER for '{}'", tableName);
         PostgresqlUtil.checkIsValidTableOrColumnName(tableName);
         try {
@@ -289,7 +309,7 @@ public final class MultiTableChangeListener<T extends TableChangeNotification> i
     }
 
     private Stream<PGNotification> filterDuplicateNotifications(PGNotification[] notifications) {
-        if (filterDuplicateNotifications && notifications.length > 1 && notificationFilterChain != null && notificationFilterChain.hasDuplicationFilters()) {
+        if (filterDuplicateNotifications && notifications.length > 1 && notificationFilterChain.hasDuplicationFilters()) {
             var duplicationKeys       = new HashSet<String>();
             var filteredNotifications = new ArrayList<PGNotification>();
 
@@ -475,37 +495,6 @@ public final class MultiTableChangeListener<T extends TableChangeNotification> i
             log.info("Ignoring call to close as MultiTableChangeListener was started using Lifecycle methods");
         } else {
             stopListeners();
-        }
-    }
-
-    /**
-     * Builds the Jackson 2 {@link NotificationFilterChain}, and is the only place in this class that touches Jackson 2.
-     * Kept apart so that {@link MultiTableChangeListener} itself loads and runs on a classpath with only Jackson 3.
-     */
-    private static final class Jackson2NotificationFilterChain {
-        private static final boolean JACKSON_2_AVAILABLE = isJackson2Available();
-
-        /**
-         * @return the chain, reading notification JSON with the serializer's own mapper when it is the Jackson 2 one,
-         * otherwise with a plain Jackson 2 mapper; {@code null} when Jackson 2 is not on the classpath
-         */
-        static NotificationFilterChain createFor(JSONSerializer jsonSerializer) {
-            if (!JACKSON_2_AVAILABLE) {
-                return null;
-            }
-            if (jsonSerializer instanceof JacksonJSONSerializer jacksonJSONSerializer) {
-                return new NotificationFilterChain(jacksonJSONSerializer.getObjectMapper());
-            }
-            return new NotificationFilterChain(new com.fasterxml.jackson.databind.ObjectMapper());
-        }
-
-        private static boolean isJackson2Available() {
-            try {
-                Class.forName("com.fasterxml.jackson.databind.ObjectMapper", false, MultiTableChangeListener.class.getClassLoader());
-                return true;
-            } catch (ClassNotFoundException | LinkageError e) {
-                return false;
-            }
         }
     }
 }

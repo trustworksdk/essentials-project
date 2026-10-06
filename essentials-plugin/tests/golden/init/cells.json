@@ -1,0 +1,19 @@
+{
+  "defaults": {
+    "projectName": "Golden",
+    "groupId": "com.example",
+    "artifactId": "golden",
+    "packagePath": "com.example.golden"
+  },
+  "cells": {
+    "kotlin-pges-flux-embedded-compose":    {"language": "kotlin", "db": "pg-event-sourced", "web": "webflux", "frontend": "embedded",     "compose": true,  "lintGate": "hook"},
+    "java-pges-mvc-standalone":             {"language": "java",   "db": "pg-event-sourced", "web": "webmvc",  "frontend": "standalone",   "compose": false, "lintGate": "script"},
+    "java-pges-flux-backend-compose":       {"language": "java",   "db": "pg-event-sourced", "web": "webflux", "frontend": "none",         "compose": true,  "lintGate": "none"},
+    "java-pgcrud-flux-embedded":            {"language": "java",   "db": "pg-crud",          "web": "webflux", "frontend": "embedded",     "compose": false, "lintGate": "script"},
+    "kotlin-pgcrud-mvc-standalone-compose": {"language": "kotlin", "db": "pg-crud",          "web": "webmvc",  "frontend": "standalone",   "compose": true,  "lintGate": "none"},
+    "kotlin-pgcrud-mvc-backend":            {"language": "kotlin", "db": "pg-crud",          "web": "webmvc",  "frontend": "none",         "compose": false, "lintGate": "hook"},
+    "java-mongo-mvc-embedded-compose":      {"language": "java",   "db": "mongo",            "web": "webmvc",  "frontend": "embedded",     "compose": true,  "lintGate": "hook"},
+    "kotlin-mongo-flux-standalone":         {"language": "kotlin", "db": "mongo",            "web": "webflux", "frontend": "standalone",   "compose": false, "lintGate": "none"},
+    "kotlin-mongo-mvc-backend-compose":     {"language": "kotlin", "db": "mongo",            "web": "webmvc",  "frontend": "none",         "compose": true,  "lintGate": "script"}
+  }
+}

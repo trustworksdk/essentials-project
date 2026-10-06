@@ -28,9 +28,11 @@ public final class EventStoreSubscriptionManagerBuilder {
     private Duration                                     eventStorePollingInterval         = Duration.ofMillis(500);
     private FencedLockManager                            fencedLockManager;
     private Duration                                     snapshotResumePointsEvery         = Duration.ofSeconds(1);
+    private int                                          snapshotResumePointsAfterEvents   = 0;
     private DurableSubscriptionRepository                durableSubscriptionRepository;
     private boolean                                      startLifeCycles                   = true;
     private Function<String, EventStorePollingOptimizer> eventStorePollingOptimizerFactory = null;
+    private SubscriptionErrorPolicy                      subscriptionErrorPolicy           = SubscriptionErrorPolicy.defaultPolicy();
 
     /**
      * @param eventStore the event store that the created {@link EventStoreSubscriptionManager} can manage event subscriptions against
@@ -79,6 +81,25 @@ public final class EventStoreSubscriptionManagerBuilder {
     }
 
     /**
+     * Opt-in: also save an active subscriber's {@link SubscriptionResumePoint} as soon as it has advanced this many
+     * {@link dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.types.GlobalEventOrder} positions
+     * since it was last saved, instead of waiting for the next {@link #setSnapshotResumePointsEvery(Duration)} tick.<br>
+     * This bounds how many already-handled events are redelivered after an ungraceful stop by event count as well as
+     * by time, which matters for high-throughput subscribers. The threshold is checked in memory every tenth of
+     * {@code snapshotResumePointsEvery}, kept between 50 ms and 1 second, on the same thread as the periodic save,
+     * and only the resume points past the threshold are written - so an idle or slow subscriber costs nothing extra.<br>
+     * The distance is measured in {@code GlobalEventOrder} positions, so for a tenant-filtered subscriber or across
+     * gaps it is an upper bound on the events actually handled.
+     *
+     * @param snapshotResumePointsAfterEvents the threshold; {@code 0} (the default) disables the early save
+     * @return this builder
+     */
+    public EventStoreSubscriptionManagerBuilder setSnapshotResumePointsAfterEvents(int snapshotResumePointsAfterEvents) {
+        this.snapshotResumePointsAfterEvents = snapshotResumePointsAfterEvents;
+        return this;
+    }
+
+    /**
      * @param durableSubscriptionRepository The repository responsible for persisting {@link SubscriptionResumePoint}
      * @return this builder
      */
@@ -115,7 +136,23 @@ public final class EventStoreSubscriptionManagerBuilder {
         return this;
     }
 
-    @SuppressWarnings("removal")
+    /**
+     * What the asynchronous subscriptions created by the {@link EventStoreSubscriptionManager} do when their
+     * {@link PersistedEventHandler} / {@link BatchedPersistedEventHandler} throws an exception that isn't an I/O error
+     * (I/O errors are always retried). Default: {@link SubscriptionErrorPolicy#defaultPolicy()} - retry the event, then
+     * stop at it and resume by itself until it succeeds, so no event is skipped and no subscription stays halted. A
+     * handler whose {@code subscriptionErrorPolicy()}
+     * returns a policy of its own ({@link PersistedEventHandler#subscriptionErrorPolicy()},
+     * {@link BatchedPersistedEventHandler#subscriptionErrorPolicy()}) overrides this one for its subscription.
+     *
+     * @param subscriptionErrorPolicy the policy - see {@link SubscriptionErrorPolicy}
+     * @return this builder
+     */
+    public EventStoreSubscriptionManagerBuilder setSubscriptionErrorPolicy(SubscriptionErrorPolicy subscriptionErrorPolicy) {
+        this.subscriptionErrorPolicy = subscriptionErrorPolicy;
+        return this;
+    }
+
     public DefaultEventStoreSubscriptionManager build() {
         return new DefaultEventStoreSubscriptionManager(eventStore,
                                                         eventStorePollingBatchSize,
@@ -124,6 +161,8 @@ public final class EventStoreSubscriptionManagerBuilder {
                                                         snapshotResumePointsEvery,
                                                         durableSubscriptionRepository,
                                                         startLifeCycles,
-                                                        eventStorePollingOptimizerFactory);
+                                                        eventStorePollingOptimizerFactory,
+                                                        snapshotResumePointsAfterEvents,
+                                                        subscriptionErrorPolicy);
     }
 }

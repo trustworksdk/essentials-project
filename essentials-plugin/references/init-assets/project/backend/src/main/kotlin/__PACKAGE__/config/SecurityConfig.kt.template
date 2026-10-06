@@ -1,0 +1,49 @@
+package {{packagePath}}.config
+
+import org.springframework.context.annotation.Bean
+import org.springframework.context.annotation.Configuration
+<!-- IF web=webflux -->
+import org.springframework.security.config.annotation.web.reactive.EnableWebFluxSecurity
+import org.springframework.security.config.web.server.ServerHttpSecurity
+import org.springframework.security.web.server.SecurityWebFilterChain
+<!-- END web -->
+<!-- IF web=webmvc -->
+import org.springframework.security.config.annotation.web.builders.HttpSecurity
+import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity
+import org.springframework.security.web.SecurityFilterChain
+<!-- END web -->
+
+/**
+ * S9: a permit-all STARTING POINT, not a security posture. Replace it before the application leaves a laptop.
+ * CSRF is off because nothing here authenticates yet; decide it again together with authentication.
+ */
+@Configuration
+<!-- IF web=webflux -->
+@EnableWebFluxSecurity
+<!-- END web -->
+<!-- IF web=webmvc -->
+@EnableWebSecurity
+<!-- END web -->
+class SecurityConfig {
+    @Bean
+<!-- IF web=webflux -->
+    fun securityWebFilterChain(http: ServerHttpSecurity): SecurityWebFilterChain =
+        http
+            .csrf { it.disable() }
+<!-- IF frontend=standalone -->
+            .cors { }   // applies the CorsConfigurationSource bean inside the security chain (S8, Mode B)
+<!-- END frontend -->
+            .authorizeExchange { it.anyExchange().permitAll() }
+            .build()
+<!-- END web -->
+<!-- IF web=webmvc -->
+    fun securityFilterChain(http: HttpSecurity): SecurityFilterChain =
+        http
+            .csrf { it.disable() }
+<!-- IF frontend=standalone -->
+            .cors { }   // applies the CorsConfigurationSource bean inside the security chain (S8, Mode B)
+<!-- END frontend -->
+            .authorizeHttpRequests { it.anyRequest().permitAll() }
+            .build()
+<!-- END web -->
+}

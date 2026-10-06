@@ -18,6 +18,7 @@ package dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.o
 
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.*;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.gap.GapReconciliation;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.persistence.AggregateEventStreamPersistenceStrategy;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.subscription.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.transaction.EventStoreUnitOfWork;
@@ -150,6 +151,24 @@ public interface EventStoreSubscriptionObserver {
                         Duration reconcileGapsDuration);
 
     /**
+     * What a gap reconciliation changed for a subscriber: gaps first registered, resolved, and given up on as
+     * permanent.
+     * <p>
+     * Unlike {@link #reconciledGaps}, which the polling loop reports once per poll with its timing, this is reported
+     * wherever gaps are reconciled - polling, and the Change Data Capture catch-up (backfill) that runs before a
+     * subscription switches to live CDC delivery - and carries the outcome rather than the inputs. The default does
+     * nothing, so existing observers are unaffected.
+     *
+     * @param subscriberId      the id of the subscriber whose gaps were reconciled
+     * @param aggregateType     the type of aggregate the subscriber is subscribing to
+     * @param gapReconciliation what the reconciliation changed; {@link GapReconciliation#NONE} is not reported
+     */
+    default void gapReconciliationOutcome(SubscriberId subscriberId,
+                                          AggregateType aggregateType,
+                                          GapReconciliation gapReconciliation) {
+    }
+
+    /**
      * How long did it take for the {@link EventStore}'s poll event to publish an event to the underlying {@link Flux}'s
      * sink
      *
@@ -244,6 +263,70 @@ public interface EventStoreSubscriptionObserver {
                            Throwable cause,
                            EventStoreSubscription eventStoreSubscription
                           );
+
+    /**
+     * The handling of a batch of events by a batched asynchronous subscription failed, after the subscription's
+     * {@link SubscriptionErrorPolicy} gave up on it - the batch is about to be skipped, or the subscription stops at it.
+     * The counterpart of {@link #handleEventFailed(PersistedEvent, PersistedEventHandler, Throwable, EventStoreSubscription)}
+     * for {@link BatchedPersistedEventHandler}s. The default does nothing, so existing observers are unaffected.
+     *
+     * @param events                 the batch the <code>eventHandler</code> failed to handle, in {@link GlobalEventOrder} order
+     * @param eventHandler           the {@link BatchedPersistedEventHandler} that failed to handle the batch
+     * @param cause                  the exception thrown by {@link BatchedPersistedEventHandler#handleBatch(List)}
+     * @param eventStoreSubscription the {@link EventStoreSubscription} that subscribed to the events
+     */
+    default void handleEventBatchFailed(List<PersistedEvent> events,
+                                        BatchedPersistedEventHandler eventHandler,
+                                        Throwable cause,
+                                        EventStoreSubscription eventStoreSubscription) {
+    }
+
+    /**
+     * An asynchronous {@link EventStoreSubscription} stopped handling events because its {@link SubscriptionErrorPolicy}
+     * stops ({@link SubscriptionErrorPolicy.Mode#stops()}) and handling an event (or a batch) failed. Called once per stop,
+     * right after {@link #handleEventFailed(PersistedEvent, PersistedEventHandler, Throwable, EventStoreSubscription)} /
+     * {@link #handleEventBatchFailed(List, BatchedPersistedEventHandler, Throwable, EventStoreSubscription)} reported the
+     * failure, and after {@link EventStoreSubscription#isStoppedByErrorPolicy()} has turned true.
+     * <p>
+     * The subscription handles no further events until it is resumed - by itself after a delay, unless the policy's
+     * {@link SubscriptionErrorPolicy#autoResume()} is disabled, then by hand - or started again; its resume point stays at
+     * {@code stoppedAtGlobalEventOrder} (or before it, if an earlier event is still unhandled). Unlike the failure
+     * callbacks, which fire for every skipped event too, this marks a subscription that has halted. An event that keeps
+     * failing stops the subscription again after every resume, so this is called once per stop. It reports the stop as an
+     * event; to alert on the state, use the level-triggered gauge
+     * {@value dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.subscription.monitoring.SubscriptionStoppedMicrometerMonitor#SUBSCRIPTION_STOPPED_METRIC},
+     * which reads {@link EventStoreSubscription#isStoppedOrRecoveringFromErrorPolicyStop()}.
+     * The default does nothing, so existing observers are unaffected.
+     *
+     * @param stoppedAtGlobalEventOrder the {@link GlobalEventOrder} of the failed event - for a batched subscription the first event of the failed batch
+     * @param cause                     the failure that made the subscription stop
+     * @param eventStoreSubscription    the {@link EventStoreSubscription} that stopped
+     */
+    default void subscriptionStoppedByErrorPolicy(GlobalEventOrder stoppedAtGlobalEventOrder,
+                                                  Throwable cause,
+                                                  EventStoreSubscription eventStoreSubscription) {
+    }
+
+    /**
+     * An asynchronous {@link EventStoreSubscription} skipped an event (or a batch) its stopping {@link SubscriptionErrorPolicy}
+     * would otherwise have stopped at, because the subscription had already been resumed
+     * {@link SubscriptionErrorPolicy.AutoResume#maxAttempts()} times at it - see
+     * {@link SubscriptionErrorPolicy.AutoResume#skippingAfter(int, java.time.Duration, java.time.Duration)}. Called right after
+     * {@link #handleEventFailed(PersistedEvent, PersistedEventHandler, Throwable, EventStoreSubscription)} /
+     * {@link #handleEventBatchFailed(List, BatchedPersistedEventHandler, Throwable, EventStoreSubscription)} reported the
+     * failure. The resume point moves past the event and it is not redelivered: this is the callback to alert on for an
+     * event the subscription has given up on. The default does nothing, so existing observers are unaffected.
+     *
+     * @param skippedGlobalEventOrder the {@link GlobalEventOrder} of the skipped event - for a batched subscription the first event of the skipped batch
+     * @param autoResumes             how many times the subscription was resumed at the event before it was skipped
+     * @param cause                   the failure the event was skipped for
+     * @param eventStoreSubscription  the {@link EventStoreSubscription} that skipped the event
+     */
+    default void subscriptionSkippedEventAfterAutoResumes(GlobalEventOrder skippedGlobalEventOrder,
+                                                          int autoResumes,
+                                                          Throwable cause,
+                                                          EventStoreSubscription eventStoreSubscription) {
+    }
 
 
     /**

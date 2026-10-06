@@ -74,7 +74,7 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
  *                        eventStores,
  *                        standardSingleTenantConfiguration(
  *                             AggregateType.of("Orders"),
- *                             new JacksonJSONEventSerializer(createObjectMapper()),
+ *                             EssentialsJSONEventSerializers.create(),
  *                             AggregateIdSerializer.serializerFor(OrderId.class),
  *                             IdentifierColumnType.UUID,
  *                             JSONColumnType.JSONB),

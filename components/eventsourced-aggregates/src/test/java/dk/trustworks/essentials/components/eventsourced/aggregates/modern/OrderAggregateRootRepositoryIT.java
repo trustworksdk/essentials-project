@@ -16,11 +16,10 @@
 
 package dk.trustworks.essentials.components.eventsourced.aggregates.modern;
 
+import dk.trustworks.essentials.components.foundation.json.EssentialsObjectMappers;
 import com.fasterxml.jackson.annotation.JsonAutoDetect;
-import com.fasterxml.jackson.databind.*;
-import com.fasterxml.jackson.databind.json.JsonMapper;
-import com.fasterxml.jackson.datatype.jdk8.Jdk8Module;
-import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
+import tools.jackson.databind.*;
+import tools.jackson.databind.json.JsonMapper;
 import dk.trustworks.essentials.components.eventsourced.aggregates.*;
 import dk.trustworks.essentials.components.eventsourced.aggregates.stateful.StatefulAggregateRepository;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.*;
@@ -35,7 +34,7 @@ import dk.trustworks.essentials.components.foundation.transaction.UnitOfWork;
 import org.jdbi.v3.core.Jdbi;
 import org.jdbi.v3.postgres.PostgresPlugin;
 import org.junit.jupiter.api.*;
-import org.testcontainers.containers.PostgreSQLContainer;
+import org.testcontainers.postgresql.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.*;
 import org.testcontainers.shaded.org.awaitility.Awaitility;
 import reactor.core.Disposable;
@@ -60,7 +59,7 @@ class OrderAggregateRootRepositoryIT {
     private PostgresqlEventStore<SeparateTablePerAggregateEventStreamConfiguration> eventStore;
 
     @Container
-    private final PostgreSQLContainer<?> postgreSQLContainer = new PostgreSQLContainer<>("postgres:18.4").withDatabaseName("event-store")
+    private final PostgreSQLContainer postgreSQLContainer = new PostgreSQLContainer("postgres:18.4").withDatabaseName("event-store")
                                                                                                            .withUsername("test-user")
                                                                                                            .withPassword("secret-password");
 
@@ -84,7 +83,7 @@ class OrderAggregateRootRepositoryIT {
                                                 new SeparateTablePerAggregateTypePersistenceStrategy(jdbi,
                                                                                                      unitOfWorkFactory,
                                                                                                      eventMapper,
-                                                                                                     SeparateTablePerAggregateTypeEventStreamConfigurationFactory.standardSingleTenantConfiguration(EssentialsJSONEventSerializers.createForActiveJacksonFlavor(),
+                                                                                                     SeparateTablePerAggregateTypeEventStreamConfigurationFactory.standardSingleTenantConfiguration(EssentialsJSONEventSerializers.create(),
                                                                                                                                                                                                     IdentifierColumnType.UUID,
                                                                                                                                                                                                     JSONColumnType.JSONB)));
         recordingLocalEventBusConsumer = new RecordingLocalEventBusConsumer();
@@ -201,6 +200,32 @@ class OrderAggregateRootRepositoryIT {
         assertThat(loadedOrder.accepted).isFalse();
     }
 
+    /**
+     * The repository's {@link dk.trustworks.essentials.components.foundation.transaction.UnitOfWorkLifecycleCallback}
+     * reports a loaded aggregate as having pending changes only once an event has been applied to it - which e.g. lets
+     * a ViewEventProcessor queue a failed event whose handler only read an aggregate
+     */
+    @Test
+    void a_loaded_Order_has_pending_changes_in_the_unit_of_work_only_after_an_event_is_applied() {
+        var orderId = OrderId.of("beed77fb-d911-1111-9c48-03ed5bfe8f89");
+        unitOfWorkFactory.usingUnitOfWork(unitOfWork -> ordersRepository.save(new Order(orderId, CustomerId.of("Test-Customer-Id-10"), 1234)));
+
+        unitOfWorkFactory.usingUnitOfWork(unitOfWork -> {
+            var loadedOrder = ordersRepository.load(orderId);
+            assertThat(unitOfWork.getAllUnitOfWorkLifecycleCallbackResources()).containsExactly(loadedOrder);
+            assertThat(unitOfWork.hasLifecycleCallbackResourcesWithPendingChanges()).isFalse();
+
+            loadedOrder.accept();
+
+            assertThat(unitOfWork.hasLifecycleCallbackResourcesWithPendingChanges()).isTrue();
+        });
+        // Once committed, the Order's changes are no longer pending
+        unitOfWorkFactory.usingUnitOfWork(unitOfWork -> {
+            ordersRepository.load(orderId);
+            assertThat(unitOfWork.hasLifecycleCallbackResourcesWithPendingChanges()).isFalse();
+        });
+    }
+
     @Test
     void persist_load_and_persist_Order() {
         // Given
@@ -276,28 +301,7 @@ class OrderAggregateRootRepositoryIT {
     }
 
     private ObjectMapper createObjectMapper() {
-        var objectMapper = JsonMapper.builder()
-                                     .disable(MapperFeature.AUTO_DETECT_GETTERS)
-                                     .disable(MapperFeature.AUTO_DETECT_IS_GETTERS)
-                                     .disable(MapperFeature.AUTO_DETECT_SETTERS)
-                                     .disable(MapperFeature.DEFAULT_VIEW_INCLUSION)
-                                     .disable(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS)
-                                     .disable(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES)
-                                     .disable(SerializationFeature.FAIL_ON_EMPTY_BEANS)
-                                     .enable(MapperFeature.AUTO_DETECT_CREATORS)
-                                     .enable(MapperFeature.AUTO_DETECT_FIELDS)
-                                     .enable(MapperFeature.PROPAGATE_TRANSIENT_MARKER)
-                                     .addModule(new Jdk8Module())
-                                     .addModule(new JavaTimeModule())
-                                     .addModules(dk.trustworks.essentials.components.eventsourced.aggregates.TestFasterxmlObjectMapperFactory.optionalEssentialsModules())
-                                     .build();
-
-        objectMapper.setVisibility(objectMapper.getSerializationConfig().getDefaultVisibilityChecker()
-                                               .withGetterVisibility(JsonAutoDetect.Visibility.NONE)
-                                               .withSetterVisibility(JsonAutoDetect.Visibility.NONE)
-                                               .withFieldVisibility(JsonAutoDetect.Visibility.ANY)
-                                               .withCreatorVisibility(JsonAutoDetect.Visibility.ANY));
-        return objectMapper;
+        return EssentialsObjectMappers.createJackson3ObjectMapper();
     }
 
 

@@ -17,12 +17,19 @@
 package dk.trustworks.essentials.components.adminapi.rest;
 
 import dk.trustworks.essentials.components.eventsourced.aggregates.api.*;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.api.ApiCausationEvent;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.api.EventStoreApi;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.AggregateType;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.persistence.CausationIndexNotEnabledException;
+import dk.trustworks.essentials.components.foundation.types.*;
 import dk.trustworks.essentials.components.foundation.fencedlock.LockName;
 import dk.trustworks.essentials.components.foundation.fencedlock.api.*;
 import dk.trustworks.essentials.components.foundation.messaging.queue.*;
 import dk.trustworks.essentials.components.foundation.messaging.queue.DurableQueues.QueueingSortOrder;
 import dk.trustworks.essentials.components.foundation.messaging.queue.api.*;
+import dk.trustworks.essentials.components.foundation.postgresql.api.*;
+import dk.trustworks.essentials.components.foundation.scheduler.ScheduledJobNotRunnableHereException;
+import dk.trustworks.essentials.components.foundation.scheduler.api.*;
 import dk.trustworks.essentials.shared.security.*;
 import org.junit.jupiter.api.*;
 import org.springframework.http.MediaType;
@@ -34,6 +41,7 @@ import tools.jackson.databind.json.JsonMapper;
 import java.time.*;
 import java.util.*;
 
+import static org.hamcrest.Matchers.containsString;
 import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.*;
@@ -55,6 +63,9 @@ class AdminApiEndpointsTest {
     private final DurableQueuesApi durableQueuesApi = mock(DurableQueuesApi.class);
     private final AggregateLifecycleApi aggregateLifecycleApi = mock(AggregateLifecycleApi.class);
     private final AggregateArchiveApi   aggregateArchiveApi   = mock(AggregateArchiveApi.class);
+    private final PostgresqlQueryStatisticsApi queryStatisticsApi = mock(PostgresqlQueryStatisticsApi.class);
+    private final SchedulerApi                 schedulerApi       = mock(SchedulerApi.class);
+    private final EventStoreApi                eventStoreApi      = mock(EventStoreApi.class);
 
     private final TestAuthenticatedUser authenticatedUser = new TestAuthenticatedUser();
 
@@ -68,11 +79,19 @@ class AdminApiEndpointsTest {
         mockMvc = MockMvcBuilders.standaloneSetup(new FencedLocksController(dbFencedLockApi, principalResolver),
                                                  new DurableQueuesController(durableQueuesApi, principalResolver),
                                                  new AggregateLifecycleController(aggregateLifecycleApi, principalResolver),
-                                                 new AggregateArchiveController(aggregateArchiveApi, principalResolver))
+                                                 new AggregateArchiveController(aggregateArchiveApi, principalResolver),
+                                                 new PostgresqlQueryStatisticsController(queryStatisticsApi, principalResolver),
+                                                 new SchedulerController(schedulerApi, principalResolver),
+                                                 new EventStoreController(eventStoreApi, principalResolver))
                                  .setControllerAdvice(new AdminApiExceptionHandler())
                                  .setMessageConverters(new JacksonJsonHttpMessageConverter(jsonMapper))
                                  .addPlaceholderValue(AdminApiPaths.BASE_PATH_PROPERTY, BASE)
                                  .build();
+    }
+
+    private static ApiCausationEvent causationEvent(EventId eventId, String causedBy) {
+        return new ApiCausationEvent(eventId.toString(), "Orders", "order-1", "OrderPlaced", 0, 7,
+                                     OffsetDateTime.parse("2026-10-03T10:00:00Z"), causedBy);
     }
 
     @Nested
@@ -95,6 +114,70 @@ class AdminApiEndpointsTest {
         }
 
         @Test
+        void an_event_is_found_by_its_id_alone_with_its_cause() throws Exception {
+            var eventId = EventId.random();
+            when(eventStoreApi.findEvent(any(), eq(eventId))).thenReturn(Optional.of(causationEvent(eventId, "the-cause")));
+
+            mockMvc.perform(get(BASE + "/event-store/events/" + eventId))
+                   .andExpect(status().isOk())
+                   .andExpect(jsonPath("$.eventId").value(eventId.toString()))
+                   .andExpect(jsonPath("$.causedByEventId").value("the-cause"))
+                   .andExpect(jsonPath("$.eventPayload").doesNotExist());
+        }
+
+        @Test
+        void an_event_no_registered_event_stream_holds_is_not_found() throws Exception {
+            when(eventStoreApi.findEvent(any(), any())).thenReturn(Optional.empty());
+
+            mockMvc.perform(get(BASE + "/event-store/events/" + EventId.random()))
+                   .andExpect(status().isNotFound());
+        }
+
+        @Test
+        void an_aggregates_events_default_to_the_most_recent_hundred() throws Exception {
+            var eventId = EventId.random();
+            when(eventStoreApi.findAggregateEvents(any(), eq(AggregateType.of("Orders")), eq("order-1"), eq(100)))
+                    .thenReturn(List.of(causationEvent(eventId, null)));
+
+            mockMvc.perform(get(BASE + "/event-store/aggregate-types/Orders/aggregates/order-1/events"))
+                   .andExpect(status().isOk())
+                   .andExpect(jsonPath("$[0].eventId").value(eventId.toString()))
+                   .andExpect(jsonPath("$[0].eventPayload").doesNotExist());
+        }
+
+        @Test
+        void the_causation_chain_defaults_to_twenty_events() throws Exception {
+            var eventId = EventId.random();
+            when(eventStoreApi.findCausationChain(any(), eq(eventId), eq(20)))
+                    .thenReturn(List.of(causationEvent(eventId, "the-cause"), causationEvent(EventId.of("the-cause"), null)));
+
+            mockMvc.perform(get(BASE + "/event-store/events/" + eventId + "/causation-chain"))
+                   .andExpect(status().isOk())
+                   .andExpect(jsonPath("$[0].eventId").value(eventId.toString()))
+                   .andExpect(jsonPath("$[1].eventId").value("the-cause"));
+        }
+
+        @Test
+        void the_events_an_event_caused_are_listed() throws Exception {
+            var eventId = EventId.random();
+            when(eventStoreApi.findEventsCausedBy(any(), eq(eventId))).thenReturn(List.of(causationEvent(EventId.of("effect"), eventId.toString())));
+
+            mockMvc.perform(get(BASE + "/event-store/events/" + eventId + "/caused-events"))
+                   .andExpect(status().isOk())
+                   .andExpect(jsonPath("$[0].eventId").value("effect"));
+        }
+
+        @Test
+        void listing_caused_events_without_the_causation_index_is_a_conflict_saying_how_to_enable_it() throws Exception {
+            when(eventStoreApi.findEventsCausedBy(any(), any()))
+                    .thenThrow(new CausationIndexNotEnabledException("Set essentials.eventstore.causation.index-enabled=true"));
+
+            mockMvc.perform(get(BASE + "/event-store/events/" + EventId.random() + "/caused-events"))
+                   .andExpect(status().isConflict())
+                   .andExpect(jsonPath("$.message").value(containsString("essentials.eventstore.causation.index-enabled")));
+        }
+
+        @Test
         void a_boolean_spi_result_is_wrapped_in_the_contract_envelope() throws Exception {
             when(dbFencedLockApi.releaseLock(any(), eq(LockName.of("my-lock")))).thenReturn(true);
 
@@ -104,12 +187,102 @@ class AdminApiEndpointsTest {
         }
 
         @Test
+        void resuming_a_subscription_stopped_by_its_error_policy_reports_that_it_was_resumed() throws Exception {
+            when(eventStoreApi.resumeSubscriptionStoppedByErrorPolicy(any(), eq(SubscriberId.of("OrderProjection")), eq(AggregateType.of("Orders"))))
+                    .thenReturn(true);
+
+            mockMvc.perform(post(BASE + "/event-store/subscriptions/OrderProjection/aggregate-types/Orders/resume"))
+                   .andExpect(status().isOk())
+                   .andExpect(jsonPath("$.resumed").value(true));
+        }
+
+        @Test
+        void resuming_a_subscription_that_is_not_stopped_is_a_normal_false_answer() throws Exception {
+            when(eventStoreApi.resumeSubscriptionStoppedByErrorPolicy(any(), any(), any())).thenReturn(false);
+
+            mockMvc.perform(post(BASE + "/event-store/subscriptions/OrderProjection/aggregate-types/Orders/resume"))
+                   .andExpect(status().isOk())
+                   .andExpect(jsonPath("$.resumed").value(false));
+        }
+
+        @Test
+        void resuming_a_subscription_without_the_subscription_writer_role_is_forbidden() throws Exception {
+            when(eventStoreApi.resumeSubscriptionStoppedByErrorPolicy(any(), any(), any()))
+                    .thenThrow(new EssentialsSecurityException("Unauthorized access required role is missing"));
+
+            mockMvc.perform(post(BASE + "/event-store/subscriptions/OrderProjection/aggregate-types/Orders/resume"))
+                   .andExpect(status().isForbidden())
+                   .andExpect(jsonPath("$.status").value(403));
+        }
+
+        @Test
         void a_count_operation_is_wrapped_in_the_contract_envelope() throws Exception {
             when(durableQueuesApi.getTotalMessagesQueuedFor(any(), eq(QueueName.of("orders")))).thenReturn(42L);
 
             mockMvc.perform(get(BASE + "/durable-queues/queues/orders/messages/count"))
                    .andExpect(status().isOk())
                    .andExpect(jsonPath("$.total").value(42));
+        }
+
+        @Test
+        void running_a_scheduler_job_returns_its_outcome() throws Exception {
+            when(schedulerApi.runJobNow(any(), eq("cdc_inbox_ttl_host-1")))
+                    .thenReturn(Optional.of(new ApiScheduledJobRun("cdc_inbox_ttl", "PG_CRON", OffsetDateTime.parse("2026-10-02T12:00:00Z"),
+                                                                   42, true, null)));
+
+            mockMvc.perform(post(BASE + "/scheduler/jobs/cdc_inbox_ttl_host-1/run"))
+                   .andExpect(status().isOk())
+                   .andExpect(jsonPath("$.jobType").value("PG_CRON"))
+                   .andExpect(jsonPath("$.durationMs").value(42))
+                   .andExpect(jsonPath("$.succeeded").value(true));
+        }
+
+        @Test
+        void running_an_unknown_scheduler_job_is_not_found() throws Exception {
+            when(schedulerApi.runJobNow(any(), any())).thenReturn(Optional.empty());
+
+            mockMvc.perform(post(BASE + "/scheduler/jobs/someone_elses_job/run"))
+                   .andExpect(status().isNotFound());
+        }
+
+        @Test
+        void running_an_executor_job_away_from_the_lock_holder_is_a_conflict_naming_the_holder() throws Exception {
+            when(schedulerApi.runJobNow(any(), any())).thenThrow(new ScheduledJobNotRunnableHereException("ttl", "instance-2"));
+
+            mockMvc.perform(post(BASE + "/scheduler/jobs/ttl/run"))
+                   .andExpect(status().isConflict())
+                   .andExpect(jsonPath("$.message").value(containsString("instance-2")));
+        }
+
+        @Test
+        void the_slowest_queries_fall_back_to_the_contract_defaults() throws Exception {
+            when(queryStatisticsApi.getSlowestQueries(any(), any(), anyInt())).thenReturn(List.of());
+
+            mockMvc.perform(get(BASE + "/postgresql/query-statistics/slowest"))
+                   .andExpect(status().isOk());
+
+            verify(queryStatisticsApi).getSlowestQueries(any(), eq(QueryStatisticsOrder.TOTAL_TIME), eq(10));
+        }
+
+        @Test
+        void the_slowest_queries_order_and_limit_are_passed_through() throws Exception {
+            when(queryStatisticsApi.getSlowestQueries(any(), any(), anyInt()))
+                    .thenReturn(List.of(new ApiQueryStatistics("SELECT 1", 10.0, 2, 5.0, 2, 4.0, 6.0, 1.0, 8, 2, 80.0)));
+
+            mockMvc.perform(get(BASE + "/postgresql/query-statistics/slowest")
+                                    .param("orderBy", "MEAN_TIME")
+                                    .param("limit", "25"))
+                   .andExpect(status().isOk())
+                   .andExpect(jsonPath("$[0].maxTime").value(6.0))
+                   .andExpect(jsonPath("$[0].cacheHitRatio").value(80.0));
+
+            verify(queryStatisticsApi).getSlowestQueries(any(), eq(QueryStatisticsOrder.MEAN_TIME), eq(25));
+        }
+
+        @Test
+        void an_unknown_slowest_queries_order_is_a_bad_request() throws Exception {
+            mockMvc.perform(get(BASE + "/postgresql/query-statistics/slowest").param("orderBy", "NOPE"))
+                   .andExpect(status().isBadRequest());
         }
 
         @Test
@@ -216,7 +389,10 @@ class AdminApiEndpointsTest {
                                     1,
                                     0,
                                     false,
-                                    false);
+                                    false,
+                                    null,
+                                    null,
+                                    null);
     }
 
     /** Stands in for the consumer's own {@link EssentialsAuthenticatedUser} implementation. */

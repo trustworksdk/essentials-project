@@ -1,0 +1,18 @@
+schemaVersion: "1.2"
+slice: billing.issue_invoice
+kind: command
+bc: billing
+owner: billing-team
+status: live
+summary: Issue an invoice.
+generator: essentials
+language: java
+tier: cqrs-es
+lane: aggregate
+handles: [IssueInvoice]
+publishes: [InvoiceIssued]
+endpoints:
+  - { method: POST, path: "/api/billing/invoices", auth: user }
+writes: [Invoice]
+tests:
+  unit: { present: false }
