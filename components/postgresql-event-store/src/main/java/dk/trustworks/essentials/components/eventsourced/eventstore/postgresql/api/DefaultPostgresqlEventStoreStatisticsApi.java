@@ -64,10 +64,10 @@ public class DefaultPostgresqlEventStoreStatisticsApi implements PostgresqlEvent
 
     @Override
     public Map<String, ApiTableSizeStatistics> fetchTableSizeStatistics(Object principal) {
+        validateRoles(principal);
         if (aggregateEventStreamTableNames.isEmpty()) {
             return Map.of();
         }
-        validateRoles(principal);
         String sql = """
                 SELECT relname AS table_name,
                   pg_size_pretty(pg_total_relation_size(relid)) AS total_size,
@@ -93,10 +93,10 @@ public class DefaultPostgresqlEventStoreStatisticsApi implements PostgresqlEvent
 
     @Override
     public Map<String, ApiTableActivityStatistics> fetchTableActivityStatistics(Object principal) {
+        validateRoles(principal);
         if (aggregateEventStreamTableNames.isEmpty()) {
             return Map.of();
         }
-        validateRoles(principal);
         String sql = """
                 SELECT
                     relname AS table_name,
@@ -129,20 +129,26 @@ public class DefaultPostgresqlEventStoreStatisticsApi implements PostgresqlEvent
                                                       .collect(Collectors.toMap(Map.Entry::getKey, Map.Entry::getValue)));
     }
 
+    /**
+     * The ratio is a whole percentage, 0-100. It used to be read as the raw 0-1 fraction through
+     * {@code getLong}, which truncated every value below an exact 100% to 0. A table with no block reads or hits
+     * yet has no meaningful ratio and is left out, rather than reported as 0%.
+     */
     @Override
     public Map<String, ApiTableCacheHitRatio> fetchTableCacheHitRatio(Object principal) {
+        validateRoles(principal);
         if (aggregateEventStreamTableNames.isEmpty()) {
             return Map.of();
         }
-        validateRoles(principal);
         String sql = """
                 SELECT
                     relname AS table_name,
-                    ((heap_blks_hit + idx_blks_hit)::float /
-                    nullif((heap_blks_hit + idx_blks_hit + heap_blks_read + idx_blks_read), 0))
+                    round(100.0 * (coalesce(heap_blks_hit, 0) + coalesce(idx_blks_hit, 0)) /
+                          (coalesce(heap_blks_hit, 0) + coalesce(idx_blks_hit, 0) + coalesce(heap_blks_read, 0) + coalesce(idx_blks_read, 0)))
                     AS cache_hit_ratio
                 FROM pg_statio_user_tables
-                WHERE relname IN (<tables>);
+                WHERE relname IN (<tables>)
+                  AND coalesce(heap_blks_hit, 0) + coalesce(idx_blks_hit, 0) + coalesce(heap_blks_read, 0) + coalesce(idx_blks_read, 0) > 0;
                 """;
         return unitOfWorkFactory.withUnitOfWork(uow -> uow.handle().createQuery(sql)
                                                       .bindList("tables", aggregateEventStreamTableNames.values())

@@ -16,15 +16,23 @@
 
 package dk.trustworks.essentials.examples.trading.brokerage.events;
 
-import dk.trustworks.essentials.examples.trading.brokerage.types.SettlementId;
+import dk.trustworks.essentials.examples.trading.brokerage.types.*;
+import dk.trustworks.essentials.types.Amount;
 
 import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 
 /**
  * The settlement has settled. Named {@code SettlementMarkedSettled} rather than {@code SettlementSettled} because the
  * class name is the persisted event type -- renaming it would orphan every event already stored under the old name.
+ * <p>
+ * {@code tradeId}, {@code accountId} and {@code grossAmount} are what the follow-up steps need - marking the trade
+ * settled and applying the settlement to the account - carried here so the {@code brokerage.settle_trade} automation
+ * can issue them from this event alone. All three are {@code null} on events persisted before they were added.
  */
-public record SettlementMarkedSettled(SettlementId settlementId) implements SettlementEvent {
+public record SettlementMarkedSettled(SettlementId settlementId,
+                                      TradeId tradeId,
+                                      TradingAccountId accountId,
+                                      Amount grossAmount) implements SettlementEvent {
     public SettlementMarkedSettled {
         requireNonNull(settlementId, "No settlementId provided");
     }

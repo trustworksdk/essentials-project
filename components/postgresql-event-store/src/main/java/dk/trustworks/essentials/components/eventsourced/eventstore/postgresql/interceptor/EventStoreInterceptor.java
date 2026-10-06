@@ -67,6 +67,17 @@ public interface EventStoreInterceptor extends Interceptor {
     }
 
     /**
+     * Intercept the {@link LoadEventsCausedBy} operation
+     *
+     * @param operation                  the operation instance
+     * @param eventStoreInterceptorChain the interceptor chain
+     * @return the result of the processing (default implementation just calls {@link EventStoreInterceptorChain#proceed()})
+     */
+    default List<PersistedEvent> intercept(LoadEventsCausedBy operation, EventStoreInterceptorChain<LoadEventsCausedBy, List<PersistedEvent>> eventStoreInterceptorChain) {
+        return eventStoreInterceptorChain.proceed();
+    }
+
+    /**
      * Intercept the {@link LoadEvents} operation
      *
      * @param operation                  the operation instance

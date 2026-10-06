@@ -36,8 +36,9 @@ import static dk.trustworks.essentials.shared.interceptor.DefaultInterceptorChai
 public abstract class AbstractCommandBus implements CommandBus {
     private final Logger log = LoggerFactory.getLogger(this.getClass());
 
-    protected final List<CommandBusInterceptor> interceptors    = new CopyOnWriteArrayList<>();
-    protected final Set<CommandHandler>         commandHandlers = new HashSet<>();
+    protected final List<CommandBusInterceptor>    interceptors       = new CopyOnWriteArrayList<>();
+    protected final List<CommandContextPropagator> contextPropagators = new CopyOnWriteArrayList<>();
+    protected final Set<CommandHandler>            commandHandlers    = new HashSet<>();
     protected final SendAndDontWaitErrorHandler sendAndDontWaitErrorHandler;
 
     protected AbstractCommandBus(List<CommandBusInterceptor> interceptors) {
@@ -71,6 +72,45 @@ public abstract class AbstractCommandBus implements CommandBus {
         }
         sortInterceptorsByOrder(this.interceptors);
         return this;
+    }
+
+    /**
+     * Add a {@link CommandContextPropagator}, which carries context from the sending thread to the thread that runs the
+     * handler for {@link #sendAsync(Object)} and {@link #sendAndDontWait(Object)}. Propagators added first wrap outermost.
+     *
+     * @param contextPropagator the propagator
+     * @return this bus
+     */
+    public CommandBus addContextPropagator(CommandContextPropagator contextPropagator) {
+        requireNonNull(contextPropagator, "No contextPropagator provided");
+        if (!contextPropagators.contains(contextPropagator)) {
+            log.info("Adding CommandContextPropagator: {}", contextPropagator);
+            contextPropagators.add(contextPropagator);
+        }
+        return this;
+    }
+
+    /**
+     * @return the registered {@link CommandContextPropagator}s, outermost first
+     */
+    public List<CommandContextPropagator> getContextPropagators() {
+        return Collections.unmodifiableList(contextPropagators);
+    }
+
+    /**
+     * Wrap a handler invocation with every registered {@link CommandContextPropagator}. <b>Must be called on the sending
+     * thread</b>, since that is where the propagators capture their context.
+     *
+     * @param handlerInvocation the invocation to run on the handling thread
+     * @param <R>               the result type
+     * @return the wrapped invocation
+     */
+    protected <R> Callable<R> propagateContext(Callable<R> handlerInvocation) {
+        var invocation = requireNonNull(handlerInvocation, "No handlerInvocation provided");
+        for (var index = contextPropagators.size() - 1; index >= 0; index--) {
+            invocation = contextPropagators.get(index).propagate(invocation);
+        }
+        return invocation;
     }
 
     @Override
@@ -124,12 +164,13 @@ public abstract class AbstractCommandBus implements CommandBus {
     public <R, C> Mono<R> sendAsync(C command) {
         var commandHandler = findCommandHandlerCapableOfHandling(command);
         log.debug("Asynchronously sending command of type '{}' to {} '{}'", command.getClass().getName(), CommandHandler.class.getSimpleName(), commandHandler.toString());
-        return Mono.fromCallable(() -> (R) CommandBusInterceptorChain.newInterceptorChain(command,
-                                                                                          commandHandler,
-                                                                                          interceptors,
-                                                                                          (interceptor, commandBusInterceptorChain) -> interceptor.interceptSendAsync(command, commandBusInterceptorChain),
-                                                                                          commandHandler::handle)
-                                                                     .proceed()).publishOn(Schedulers.boundedElastic());
+        // The handler runs on a Reactor worker (publishOn fuses with fromCallable), so context is captured here, on the sending thread
+        return Mono.fromCallable(propagateContext(() -> (R) CommandBusInterceptorChain.newInterceptorChain(command,
+                                                                                                           commandHandler,
+                                                                                                           interceptors,
+                                                                                                           (interceptor, commandBusInterceptorChain) -> interceptor.interceptSendAsync(command, commandBusInterceptorChain),
+                                                                                                           commandHandler::handle)
+                                                                                      .proceed())).publishOn(Schedulers.boundedElastic());
     }
 
     @Override

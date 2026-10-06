@@ -44,4 +44,10 @@ public class PostgresqlQueryStatisticsController {
     public List<ApiQueryStatistics> getTopTenSlowestQueries() {
         return postgresqlQueryStatisticsApi.getTopTenSlowestQueries(principalResolver.requireAuthenticatedPrincipal());
     }
+
+    @GetMapping("/postgresql/query-statistics/slowest")
+    public List<ApiQueryStatistics> getSlowestQueries(@RequestParam(defaultValue = "TOTAL_TIME") QueryStatisticsOrder orderBy,
+                                                      @RequestParam(defaultValue = "10") int limit) {
+        return postgresqlQueryStatisticsApi.getSlowestQueries(principalResolver.requireAuthenticatedPrincipal(), orderBy, limit);
+    }
 }

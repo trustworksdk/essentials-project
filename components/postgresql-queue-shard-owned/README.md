@@ -259,8 +259,16 @@ That is a cost paid per lookup by the handler that wants it, rather than per mes
 Per key, within the ordered lane. Two things hold, and they hold across processes because a key maps
 to one unit and a unit has one owner:
 
-- **A key is never in two handlers at once.** The owner refuses to dispatch a key that has something
-  in flight. That single refusal — no query, no lock, no exclusion list — *is* the FIFO mechanism.
+- **A key is never in two handlers at once — provided every handler finishes within `leaseTtl`.** The
+  owner refuses to dispatch a key that has something in flight. That single refusal — no query, no lock,
+  no exclusion list — *is* the FIFO mechanism. The condition is the one thing an owner cannot enforce:
+  if its instance stops heartbeating while a handler runs, the rest of the cluster takes the unit after
+  `leaseTtl`, and a handler already running cannot be recalled, so the successor starts the key beside
+  it. The queue stays correct (the old owner's acknowledgement is refused) but the key has been in two
+  handlers. An instance stops *starting* work at four fifths of the lease, before anyone can take its
+  units; the remaining exposure is a handler longer than what is left of the lease, which is why
+  `handlersOutlastingLease` counts every handler that ran longer than `leaseTtl` and logs a WARN once a
+  minute naming the setting.
 - **A key is handed its lowest `key_order` next**, among the messages the owner has that are
   committed and visible.
 
@@ -320,7 +328,7 @@ owner as it reads it, so the ordered lane never holds rows it cannot deliver.
 | **Where the block comes from** | The dead-letter table, not memory. It survives a rebalance, a restart and a redeploy |
 | **What clears it** | Resurrecting or deleting the dead letter. Both are noticed, including when done from another process |
 | **Telling the two kinds apart** | `DeadLetter.neverDelivered()`, backed by the `blocked_by_key_order` column — which also names the message recovery has to start from. Do not use `attempts`; a takeover bumps it on rows that were never delivered |
-| **Noticing it** | One WARN per key when it blocks, plus `keysBlockedByDeadLetter` and `messagesPoisonedBehindDeadLetter` on `statistics()` and the admin API. **Not** queue depth: the backlog moves out of the lane, so depth falls |
+| **Noticing it** | One WARN per key when it blocks. For what is stopped **now**, `depth().blockedKeys()` and `depth().parkedBehindDeadLetter()`, read from the dead-letter table and served on the admin API's queue status as `blockedKeys` and `parkedBehindDeadLetterDepth` — both return to zero once the key is resurrected. `keysBlockedByDeadLetter` and `messagesPoisonedBehindDeadLetter` on `statistics()` are per-instance running totals that never fall; read them as history, not state. **Not** the lane depths: the backlog moves out of the lane, so they fall |
 | **What it costs** | 1.70x WAL per message and 75% of throughput while stalled, and **241 B per message in a dead-letter table shared by every queue on the database** — about 87 MB for an hour at 100 msg/s. Alert on it in minutes, not days ([measurements](../../docs/durable-queue-measurements.md) §3.11) |
 
 **Recovery is per key.** Restore the whole key in one call:
@@ -502,7 +510,7 @@ every queue once with a user that has them.
 | `chaseDelay` | 2 ms | **Unordered lane only** as hole-resolution latency. On the ordered lane it only throttles the watermark probe | Rarely |
 | `maxHolesPerChase` | 1 000 | **Unordered lane only.** Holes resolved per chase query | Rarely |
 | `watermarkCap` | 60 s | **Ordered lane only.** How long one long-running *write* transaction may pin the lane before the cursor is forced past it — which can skip that transaction's messages | Leave it. An escape hatch, not a tuning knob; if it fires, fix the long transaction |
-| `leaseTtl` | 30 s | How long a shard stays unserved if its owner dies without releasing. The heartbeat renews at a third of it | Lower for faster failover, but not below your worst stop-the-world pause |
+| `leaseTtl` | 30 s | How long a shard stays unserved if its owner dies without releasing. The heartbeat renews at a third of it | Lower for faster failover, but not below your worst stop-the-world pause, and **well above your slowest handler** — a handler longer than the lease is what lets a liveness lapse put a key in two handlers at once (`handlersOutlastingLease`) |
 | `shedGrace` | 5 s | How long an ordered shard waits to drain before abandoning a hand-over, and how long `stop()` waits for handlers in flight | Raise if handlers are slow and rebalancing stalls, or if `stop()` keeps ordered units |
 
 `watermarkCap` and `holeExpiry` answer the same question for different lanes, and are deliberately
@@ -724,8 +732,9 @@ database queries — hence the `maxAge` argument.
 ### Two engine-level metrics worth watching
 
 **`ShardOwnerMetrics.deliveryPauses`.** An instance that has not been able to confirm its own liveness
-within `leaseTtl` stops dispatching until it can — by then the rest of the cluster already considers
-its units takeable, so anything it delivered would be work a successor is doing too. Nothing is lost
+within four fifths of `leaseTtl` stops dispatching until it can — at the full lease the rest of the
+cluster already considers its units takeable, so anything it started would be work a successor is doing
+too, and the margin covers its own view running a round trip behind theirs. Nothing is lost
 and it resumes at the next successful heartbeat. A non-zero count says the database was unreachable or
 too slow for longer than the lease.
 

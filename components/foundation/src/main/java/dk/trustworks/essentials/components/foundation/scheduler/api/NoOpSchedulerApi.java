@@ -16,7 +16,7 @@
 
 package dk.trustworks.essentials.components.foundation.scheduler.api;
 
-import java.util.List;
+import java.util.*;
 
 /**
  * A no-operation implementation of the {@link SchedulerApi} interface.
@@ -54,5 +54,10 @@ public class NoOpSchedulerApi implements SchedulerApi {
     @Override
     public long getTotalExecutorJobs(Object principal) {
         return 0;
+    }
+
+    @Override
+    public Optional<ApiScheduledJobRun> runJobNow(Object principal, String jobName) {
+        return Optional.empty();
     }
 }

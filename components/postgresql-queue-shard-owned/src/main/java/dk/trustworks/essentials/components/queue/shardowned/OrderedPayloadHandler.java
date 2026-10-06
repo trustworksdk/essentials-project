@@ -25,4 +25,16 @@ import dk.trustworks.essentials.components.queue.shardowned.spi.MessageId;
 @FunctionalInterface
 public interface OrderedPayloadHandler {
     void handle(MessageId messageId, String key, byte[] payload, int payloadType);
+
+    /**
+     * What the owner calls. Carries the message's {@code key_order} as well - its position within the key, which a
+     * consumer may need to make sense of the message (the {@code DurableQueues} adapter rebuilds an
+     * {@code OrderedMessage} from it). Defaults to {@link #handle(MessageId, String, byte[], int)}, so a handler that
+     * has no use for it stays a lambda.
+     *
+     * @param keyOrder the message's position within its key, as supplied by the producer
+     */
+    default void handle(MessageId messageId, String key, long keyOrder, byte[] payload, int payloadType) {
+        handle(messageId, key, payload, payloadType);
+    }
 }

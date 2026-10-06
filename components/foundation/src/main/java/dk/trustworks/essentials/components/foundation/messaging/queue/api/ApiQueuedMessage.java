@@ -26,6 +26,14 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
  * Represents a message that has been queued and its associated metadata.
  * This record provides details about the enqueued message,
  * such as its identifiers, payload, timestamps, delivery attempts, and its current state.
+ *
+ * @param orderedMessageKey       the key of an {@link OrderedMessage}; null for an unordered message
+ * @param orderedMessageOrder     the order of an {@link OrderedMessage}; null for an unordered message
+ * @param referencedAggregateType set when the message refers to a persisted event rather than carrying one - as the
+ *                                inbox messages of an {@code EventProcessor} do: the aggregate type, with
+ *                                {@code orderedMessageKey} the aggregate id and {@code orderedMessageOrder} the event
+ *                                order. Routing information, not payload, so it is present whatever the caller's
+ *                                payload rights. Null for every other message
  */
 public record ApiQueuedMessage(
         QueueEntryId id,
@@ -38,7 +46,10 @@ public record ApiQueuedMessage(
         int totalDeliveryAttempts,
         int redeliveryAttempts,
         boolean isDeadLetterMessage,
-        boolean isBeingDelivered
+        boolean isBeingDelivered,
+        String orderedMessageKey,
+        Long orderedMessageOrder,
+        String referencedAggregateType
 ) {
 
     /**
@@ -62,8 +73,33 @@ public record ApiQueuedMessage(
                 message.getTotalDeliveryAttempts(),
                 message.getRedeliveryAttempts(),
                 message.isDeadLetterMessage(),
-                message.isBeingDelivered()
+                message.isBeingDelivered(),
+                message.getMessage() instanceof OrderedMessage ordered ? ordered.getKey() : null,
+                message.getMessage() instanceof OrderedMessage ordered ? ordered.getOrder() : null,
+                referencedAggregateType(message.getMessage())
         );
+    }
+
+    /**
+     * The metadata key an {@code EventProcessor} marks its event-reference messages with - the value of
+     * {@code AbstractEventProcessor.EventReferenceOrderedMessage.EVENT_REFERENCE_METADATA_KEY}. Repeated rather than
+     * referenced: that class, and the {@code AggregateType} such a message carries, live in packages that depend on
+     * this one, and naming either here is a package cycle {@code EssentialsArchitectureTest} refuses.
+     */
+    public static final String EVENT_REFERENCE_METADATA_KEY = "EVENT_REFERENCE";
+
+    /**
+     * An {@code EventProcessor}'s inbox message refers to the persisted event at its payload's aggregate type, its key
+     * (aggregate id) and its order, rather than carrying the event. Recognised the way the processor recognises it - by
+     * its metadata marker, not by the payload's type
+     */
+    private static String referencedAggregateType(Message message) {
+        return message instanceof OrderedMessage
+                       && message.getMetaData() != null
+                       && "true".equals(message.getMetaData().get(EVENT_REFERENCE_METADATA_KEY))
+                       && message.getPayload() != null
+               ? message.getPayload().toString()
+               : null;
     }
 
     /**
@@ -91,6 +127,9 @@ public record ApiQueuedMessage(
                 ", redeliveryAttempts=" + redeliveryAttempts +
                 ", isDeadLetterMessage=" + isDeadLetterMessage +
                 ", isBeingDelivered=" + isBeingDelivered +
+                ", orderedMessageKey='" + orderedMessageKey + '\'' +
+                ", orderedMessageOrder=" + orderedMessageOrder +
+                ", referencedAggregateType='" + referencedAggregateType + '\'' +
                 '}';
     }
 }

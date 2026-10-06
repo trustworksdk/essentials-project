@@ -16,7 +16,7 @@ mvn spring-boot:run -pl :essentials-trading-demo        # after `docker compose 
 
 | BC | Aggregates | Slices |
 |---|---|---|
-| `brokerage` | `TradingAccount`, `Trade`, `Settlement` | 19 command, 6 view |
+| `brokerage` | `TradingAccount`, `Trade`, `Settlement` | 19 command, 1 automation, 6 view |
 | `market_data` | `Instrument`, `InstrumentPrice` | 5 command, 1 automation, 2 view |
 
 Both on the **aggregate write style** (§R5) — `AggregateRoot` + `StatefulAggregateRepository`. Sanctioned
@@ -60,8 +60,18 @@ lane. Do **not** convert to `Decider`s.
   this replaced.
 - **Two projections are eventually consistent** (`account_statement`, `trade_settlement_status`). Tests must
   await them. `trade_valuation` likewise.
-- **`market_data.risk_approve_instrument` is the only `UnitOfWorkMode.NONE` handler here**, and the demo's
-  worked example of one. It blocks on a stubbed external risk service with no `UnitOfWork` — hence no pooled
+- **`brokerage.settle_trade` drives the trade lifecycle by default** (`trading-demo.simulation.trade-lifecycle=automated`):
+  the harness only places and executes trades, and the automation issues every settlement step from the previous
+  step's event, so a trade's settlement is one causation tree in the admin console's *Event causation* page. `scripted`
+  turns it off and makes the harness send every step itself, as the benchmark scenarios assume. Tests that send the
+  settlement commands themselves must pin `scripted`, or the automation races them. See that slice's `CLAUDE.md`.
+  The automation test runs twice — `SettleTradeAutomationTest` on `PostgresqlDurableQueues`, `…OnShardOwnedQueuesTest` on the
+  shard-owned engine the `compose` profile uses; only the latter caught the adapter delivering every event reference as order 0.
+- **Every `@SpringBootTest` here carries `@DirtiesContext`.** Each class owns a static Postgres container, so a cached
+  context outlives its database; on the next context switch Spring pauses it, and every event-processor subscription's
+  lock release waits out a Hikari connection timeout. Three such classes turned a 30s suite into 25+ minutes.
+- **`market_data.risk_approve_instrument` is the demo's worked example of a `UnitOfWorkMode.NONE` handler**
+  (`brokerage.settle_trade`'s clearing step is a second one). It blocks on a stubbed external risk service with no `UnitOfWork` — hence no pooled
   connection — and wraps its transactional tail in `usingUnitOfWork(...)`. Three constraints travel with the
   mode: the handler must be idempotent (the aggregate's risk methods no-op once a decision exists), the
   blocking call must finish well inside `essentials.durable-queues.message-handling-timeout`
@@ -112,6 +122,36 @@ for; one instance exercises none of its ownership, rebalancing or fencing.
   out a transient outage and none can tell this one is permanent. `application-compose.yml` sets
   `spring.docker.compose.lifecycle-management: start-only`; the database outlives the demo and
   `docker compose down` stops it.
+
+## Observability profile
+
+`run-instance.sh N observability` (or profile `compose,observability`): collector, Prometheus, Tempo, Loki,
+Grafana from `compose.yml`'s `observability` compose profile; config and dashboards in `observability/`.
+
+- **Two compose files, one config dir.** The classpath copy runs from `target/classes`, so it mounts
+  `../../observability/...`; the module-root copy mounts `./observability/...`. Keep both in step. Config
+  stays out of `src/main/resources` so it is not packaged.
+- **`spring.docker.compose.start.skip: never` is load-bearing.** Boot skips `docker compose up` when any
+  service of the project is running — PostgreSQL almost always is — so the profiled services never start.
+- **Export is off in `application.yml`** (`management.otlp.metrics.export.enabled`,
+  `management.tracing.export.enabled`) and on only in `application-observability.yml`; otherwise every test
+  and plain run spends each export step failing to reach a collector that is not there.
+- **`management.tracing.enabled: true` is an Essentials switch, not a Boot one, and must stay.** The starters
+  register their tracing interceptors (DurableQueues, event store), the DurableQueues operation metrics and the
+  subscriber global-order gauges only when it is `true`. Without it Tempo holds nothing but HTTP-request traces,
+  which the background load never makes, and no log line carries a trace id - so traces and logs look empty.
+- **The Logs/Traces/Metrics dashboard needs a trace id typed into its `traceId` textbox** - copy one from Tempo
+  search. A `custom` variable with no options, which it was, offers an empty dropdown and nothing can be entered.
+- **loki4j 2.x labels are one per line.** The comma-separated form 1.x accepted fails the whole logging
+  configuration at start-up (`Unable to split ... to key-value pairs`).
+- **Every store the demo writes to is size- or time-capped, because the load generators never stop.** Prometheus
+  `retention.time=2d` + `retention.size=1GB` (uncapped it reached 4 GB+), Tempo `block_retention: 24h`, Postgres
+  `max_slot_wal_keep_size=2GB`. The last one is the CDC slot: unread, it retained WAL until the disk filled and Postgres
+  could not restart. Past the cap Postgres invalidates the slot instead and the database survives; subscriptions fall
+  back to polling (`CdcMode.AUTO`), and CDC stays down until the slot is dropped and recreated — by hand, or by
+  `CdcEffectivenessMonitor`'s opt-in recreate-on-stuck. Keep all of these in both compose copies.
+- **Dashboards query OTLP names** (`..._milliseconds_bucket`, `..._total`), not the Prometheus registry's
+  `_seconds`. Queue gauges are cluster-wide and reported by every instance: `max by (queue)`, never `sum`.
 
 ## Admin UI
 

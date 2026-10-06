@@ -41,6 +41,7 @@ class AdminApiContractConformanceTest {
             FencedLocksController.class,
             SchedulerController.class,
             PostgresqlQueryStatisticsController.class,
+            PostgresqlTableStatisticsController.class,
             DurableQueuesController.class,
             EventStoreController.class,
             CdcController.class,
@@ -72,9 +73,10 @@ class AdminApiContractConformanceTest {
     void both_sides_of_the_comparison_are_actually_discovered() {
         // 40 before the shard-owned queue engine was published; its operations bring it to 51 — ten,
         // plus resurrecting a whole ordered key at once, which is how a key stopped behind a dead
-        // letter is recovered.
-        assertThat(contractOperations()).hasSize(51);
-        assertThat(implementedOperations()).hasSize(51);
+        // letter is recovered. The ranked slow-query and the table statistics operations bring it to 53,
+        // running a scheduler job on demand to 54, and the four event-causation lookups to 58.
+        assertThat(contractOperations()).hasSize(58);
+        assertThat(implementedOperations()).hasSize(58);
     }
 
     @Test

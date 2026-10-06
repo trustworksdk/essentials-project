@@ -75,6 +75,8 @@ public class EssentialsEventStoreProperties {
 
     private final CdcProperties cdc = new CdcProperties();
 
+    private final CausationProperties causation = new CausationProperties();
+
     /**
      * Should the Tracing produces only include all operations or only top level operations (default false)
      *
@@ -273,6 +275,15 @@ public class EssentialsEventStoreProperties {
     }
 
     /**
+     * Event causation: recording, on every persisted event, the id of the event that caused it
+     *
+     * @return the {@link CausationProperties}
+     */
+    public CausationProperties getCausation() {
+        return causation;
+    }
+
+    /**
      * Configuration properties for essentials metrics collection and logging.
      * <p>
      * This configuration is used to enable and fine-tune metrics gathering and logging for the event store.
@@ -336,7 +347,8 @@ public class EssentialsEventStoreProperties {
         private int                                              eventStorePollingBatchSize   = 10;
         private Duration                                         eventStorePollingInterval    = Duration.ofMillis(100);
         private Duration                                         maxEventStorePollingInterval = Duration.ofMillis(2000);
-        private Duration                                         snapshotResumePointsEvery    = Duration.ofSeconds(10);
+        private Duration                                         snapshotResumePointsEvery    = Duration.ofSeconds(1);
+        private int                                              snapshotResumePointsAfterEvents = 0;
         private EssentialsComponentsProperties.MetricsProperties metrics                      = new EssentialsComponentsProperties.MetricsProperties();
         private final NotifyPollingProperties                    notifyPolling                = new NotifyPollingProperties();
         private final SubscriptionStatisticsProperties            statistics                   = new SubscriptionStatisticsProperties();
@@ -410,9 +422,34 @@ public class EssentialsEventStoreProperties {
          * How often should active (for exclusive subscribers this means subscribers that have acquired a distributed lock) subscribers have their {@link SubscriptionResumePoint} saved
          *
          * @param snapshotResumePointsEvery How often should active (for exclusive subscribers this means subscribers that have acquired a distributed lock) subscribers have their {@link SubscriptionResumePoint} saved
+         *                                  - default: every 1 second. Only resume points that changed since the last save are written, so an
+         *                                  idle subscriber costs nothing; the interval bounds how many already-handled events are redelivered
+         *                                  after an ungraceful stop
          */
         public void setSnapshotResumePointsEvery(Duration snapshotResumePointsEvery) {
             this.snapshotResumePointsEvery = snapshotResumePointsEvery;
+        }
+
+        /**
+         * Opt-in early save of a busy subscriber's {@link SubscriptionResumePoint} - {@code 0} (the default) means disabled
+         *
+         * @return the number of {@code GlobalEventOrder} positions a resume point may advance before it is saved ahead of the next
+         * {@link #getSnapshotResumePointsEvery()} tick, or {@code 0} when disabled
+         */
+        public int getSnapshotResumePointsAfterEvents() {
+            return snapshotResumePointsAfterEvents;
+        }
+
+        /**
+         * Opt-in: also save an active subscriber's {@link SubscriptionResumePoint} as soon as it has advanced this many
+         * {@code GlobalEventOrder} positions since it was last saved, instead of waiting for the next {@link #getSnapshotResumePointsEvery()} tick.
+         * Bounds how many already-handled events are redelivered after an ungraceful stop by count as well as by time. The threshold is checked
+         * in memory and only resume points past it are written, so idle or slow subscribers cost nothing extra
+         *
+         * @param snapshotResumePointsAfterEvents the threshold; {@code 0} (the default) disables the early save
+         */
+        public void setSnapshotResumePointsAfterEvents(int snapshotResumePointsAfterEvents) {
+            this.snapshotResumePointsAfterEvents = snapshotResumePointsAfterEvents;
         }
 
         /**
@@ -591,6 +628,64 @@ public class EssentialsEventStoreProperties {
 
         public void setBackoffMultiplier(double backoffMultiplier) {
             this.backoffMultiplier = backoffMultiplier;
+        }
+    }
+
+    /**
+     * Event causation configuration.
+     * <p>
+     * When enabled, every event written in reaction to another event records that event's id as its
+     * {@code caused_by_event_id}. The framework binds the cause at each event delivery site it owns, and the
+     * {@link dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.persistence.table_per_aggregate_type.CausationPersistableEventEnricher}
+     * writes it. A cause a custom {@link dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.persistence.PersistableEventMapper}
+     * sets itself is never overwritten.
+     */
+    public static class CausationProperties {
+        private boolean enabled      = true;
+        private boolean indexEnabled = false;
+
+        /**
+         * Is event causation recorded (default {@code true})
+         *
+         * @return Is event causation recorded
+         */
+        public boolean isEnabled() {
+            return enabled;
+        }
+
+        /**
+         * Record event causation. Set to {@code false} to restore the pre-causation behaviour, where
+         * {@code caused_by_event_id} is only set by a custom {@link dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.persistence.PersistableEventMapper}
+         *
+         * @param enabled Record event causation
+         */
+        public void setEnabled(boolean enabled) {
+            this.enabled = enabled;
+        }
+
+        /**
+         * Is the caused-by-event-id index created on every event-stream table (default {@code false})
+         *
+         * @return Is the caused-by-event-id index enabled
+         */
+        public boolean isIndexEnabled() {
+            return indexEnabled;
+        }
+
+        /**
+         * Create a partial index on the caused-by-event-id column of every event-stream table, which
+         * {@code EventStore.loadEventsCausedBy(EventId)} ("what did this event cause?") requires and refuses to run
+         * without. Not needed for {@code EventStore.findEvent(EventId)} ("what caused this event?"), which uses the
+         * event-id index.<br>
+         * The index is created by the schema harness, in one transaction, so on a large existing table it blocks writes
+         * while it builds: build it by hand with {@code CREATE INDEX CONCURRENTLY} first, using
+         * {@code SeparateTablePerAggregateTypePersistenceStrategy.causationIndexStatement(...)} for the exact statement.
+         * In {@code essentials.schema.mode=validate} enabling this adds a schema change that must be applied first.
+         *
+         * @param indexEnabled Create the caused-by-event-id index
+         */
+        public void setIndexEnabled(boolean indexEnabled) {
+            this.indexEnabled = indexEnabled;
         }
     }
 

@@ -77,7 +77,8 @@ public final class LocalCommandBus extends AbstractCommandBus {
     public <C> void sendAndDontWait(C command) {
         var commandHandler = findCommandHandlerCapableOfHandling(command);
         log.debug("sendAndDontWait command of type '{}' to {} '{}'", command.getClass().getName(), CommandHandler.class.getSimpleName(), commandHandler.toString());
-        Mono.fromCallable(() -> CommandBusInterceptorChain.newInterceptorChain(command,
+        // The handler runs on a Reactor worker (publishOn fuses with fromCallable), so context is captured here, on the sending thread
+        Mono.fromCallable(propagateContext(() -> CommandBusInterceptorChain.newInterceptorChain(command,
                                                                                commandHandler,
                                                                                interceptors,
                                                                                (interceptor, commandBusInterceptorChain) -> {
@@ -94,7 +95,7 @@ public final class LocalCommandBus extends AbstractCommandBus {
                                                                                        return null;
                                                                                    }
                                                                                })
-                                                          .proceed())
+                                                          .proceed()))
             .publishOn(Schedulers.boundedElastic())
             .subscribe();
     }
@@ -108,7 +109,12 @@ public final class LocalCommandBus extends AbstractCommandBus {
                   command.getClass().getName(),
                   CommandHandler.class.getSimpleName(),
                   commandHandler.toString());
-        scheduledExecutorService.schedule(() -> sendAndDontWait(command),
+        // Captured now, on the sending thread; the delayed send then runs inside it on the scheduler thread
+        var delayedSend = propagateContext(() -> {
+            sendAndDontWait(command);
+            return null;
+        });
+        scheduledExecutorService.schedule(delayedSend,
                                           delayMessageDelivery.toMillis(),
                                           TimeUnit.MILLISECONDS);
     }

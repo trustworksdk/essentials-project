@@ -28,6 +28,7 @@ const API = document.body.dataset.api;
 const CAN = {
     writeLocks: document.body.dataset.canWriteLocks === 'true',
     writeQueues: document.body.dataset.canWriteQueues === 'true',
+    writeScheduler: document.body.dataset.canWriteScheduler === 'true',
     readPayloads: document.body.dataset.canReadPayloads === 'true'
 };
 
@@ -110,6 +111,10 @@ function errorState(err, requiredRole) {
                detail: 'The request was not authenticated. Sign in to the host application, then reload.' },
         403: { cls: 'state-403', icon: '▲', title: 'Not permitted',
                detail: 'Your roles do not cover this operation.' },
+        404: { cls: 'state-403', icon: '▲', title: 'Not found',
+               detail: 'The server has nothing by that name or identifier.' },
+        409: { cls: 'state-403', icon: '▲', title: 'Not possible here',
+               detail: 'The request is valid, but cannot be carried out on the instance it reached.' },
         500: { cls: 'state-5xx', icon: '■', title: 'Server error',
                detail: 'The server failed to answer. No detail is returned on a 5xx by design — check the application logs.' },
         0:   { cls: 'state-5xx', icon: '■', title: 'Cannot reach the server',
@@ -244,6 +249,11 @@ views.queues = async () => {
       <td class="truncate">${m.lastDeliveryError ? badge('serious', m.lastDeliveryError) : nil()}</td>
       <td>${m.isBeingDelivered ? badge('warning', 'Delivering') : m.isDeadLetterMessage ? badge('critical', 'Dead letter') : badge('neutral', 'Queued')}</td>
       <td class="actions">
+        ${m.referencedAggregateType
+            ? `<button class="btn btn-sm" data-causation-aggregate-type="${esc(m.referencedAggregateType)}"
+                       data-causation-aggregate-id="${esc(m.orderedMessageKey)}"
+                       title="The event this message refers to: ${esc(m.referencedAggregateType)} ${esc(m.orderedMessageKey)} #${esc(String(m.orderedMessageOrder))}">Causation</button>`
+            : ''}
         ${m.isDeadLetterMessage
             ? `<button class="btn btn-sm" data-act="resurrect" data-name="${esc(m.id)}" ${CAN.writeQueues ? '' : 'disabled'}>Resurrect</button>`
             : `<button class="btn btn-sm" data-act="dlq" data-name="${esc(m.id)}" ${CAN.writeQueues ? '' : 'disabled'}>Dead-letter</button>`}
@@ -254,7 +264,7 @@ views.queues = async () => {
     const cols = [
         { label: 'Entry id' }, { label: 'Payload' }, { label: 'Added' },
         { label: 'Attempts', num: true }, { label: 'Redel.', num: true }, { label: 'Last error' },
-        { label: 'State' }, { label: '', width: '170px', sticky: true }
+        { label: 'State' }, { label: '', width: '250px', sticky: true }
     ];
 
     return `
@@ -384,6 +394,13 @@ views.subscriptions = async () => {
     ], rows, { empty: 'No active subscriptions' }), 'GET /event-store/subscriptions', true)}`;
 };
 
+/* The outcome of the last on-demand run, shown above the job lists until the next one. Kept across re-renders: the
+   action re-renders the view as soon as the run returns. */
+let lastJobRun = null;
+
+const runNowButton = (name) => `<button class="btn btn-sm" data-act="runJob" data-name="${esc(name)}"
+      ${CAN.writeScheduler ? '' : 'disabled title="Requires essentials_scheduler_writer"'}>Run now</button>`;
+
 views.scheduler = async () => {
     const settled = await Promise.allSettled([
         api('/scheduler/pg-cron-jobs?startIndex=0&pageSize=100'),
@@ -401,7 +418,8 @@ views.scheduler = async () => {
       <td>${esc(j.nodeName)}:${j.nodePort}</td>
       <td>${esc(j.database)}</td>
       <td>${j.active ? badge('good', 'Active') : badge('neutral', 'Paused')}</td>
-      <td class="actions"><button class="btn btn-sm" data-runs="${j.jobId}" data-job="${esc(j.jobName ?? j.jobId)}">Run details</button></td>
+      <td class="actions">${j.jobName ? runNowButton(j.jobName) : ''}
+        <button class="btn btn-sm" data-runs="${j.jobId}" data-job="${esc(j.jobName ?? j.jobId)}">Run details</button></td>
     </tr>`);
 
     const execRows = (execJobs ?? []).map((e) => `<tr>
@@ -410,13 +428,21 @@ views.scheduler = async () => {
       <td class="num">${num(e.period)}</td>
       <td>${esc(e.unit)}</td>
       <td>${ts(e.scheduledAt)}</td>
+      <td class="actions">${runNowButton(e.name)}</td>
     </tr>`);
 
+    const lastRun = lastJobRun && `<div class="notice">
+      <strong>Last on-demand run:</strong> <span class="mono">${esc(lastJobRun.jobName)}</span> (${esc(lastJobRun.jobType)})
+      ${lastJobRun.succeeded ? badge('good', 'Succeeded') : badge('critical', 'Failed')}
+      in ${num(lastJobRun.durationMs)} ms, started ${ts(lastJobRun.startedAt)}
+      ${lastJobRun.error ? `<br><span class="mono" style="font-size:12px">${esc(lastJobRun.error)}</span>` : ''}</div>`;
+
     return `
+    ${lastRun || ''}
     ${card('pg_cron jobs', jobs
         ? table([
             { label: 'Job', num: true }, { label: 'Name' }, { label: 'Schedule' }, { label: 'Command' },
-            { label: 'Node' }, { label: 'Database' }, { label: 'State' }, { label: '', width: '110px', sticky: true }
+            { label: 'Node' }, { label: 'Database' }, { label: 'State' }, { label: '', width: '190px', sticky: true }
         ], jobRows, { empty: 'pg_cron is not installed or exposes no jobs' })
         : errorState(settled[0].reason, 'essentials_scheduler_reader'),
         jobCount ? `${jobCount.total} total` : 'GET /scheduler/pg-cron-jobs', true)}
@@ -426,75 +452,231 @@ views.scheduler = async () => {
     ${card('Executor jobs', execJobs
         ? table([
             { label: 'Name' }, { label: 'Initial delay', num: true }, { label: 'Period', num: true },
-            { label: 'Unit' }, { label: 'Scheduled at' }
+            { label: 'Unit' }, { label: 'Scheduled at' }, { label: '', width: '100px', sticky: true }
         ], execRows, { empty: 'No executor jobs registered' })
         : errorState(settled[2].reason, 'essentials_scheduler_reader'), 'GET /scheduler/executor-jobs', true)}`;
 };
 
+/* What the slowest queries are ranked by, and how many are shown. TOTAL_TIME is the default, but on a busy system it
+   is dominated by cheap statements that run constantly - queue polling above all - so the ranking is selectable. */
+let pgState = { orderBy: 'TOTAL_TIME', limit: 10 };
+
+const QUERY_ORDERS = {
+    TOTAL_TIME: ['Total time', 'Where the database spends its time. Favours cheap statements that run constantly, such as queue polling.'],
+    MEAN_TIME: ['Mean time', 'Statements that are slow each time they run, however rarely.'],
+    MAX_TIME: ['Max time', 'The slowest single execution - outliers such as lock waits.'],
+    CALLS: ['Calls', 'The busiest statements.'],
+    BLOCKS_READ: ['Blocks read', 'Statements reading the most blocks from outside shared buffers.']
+};
+
+/* Section ids are stable identifiers from the API; anything unknown is shown as reported. */
+const TABLE_SECTIONS = {
+    'event-store': 'Event store',
+    subscriptions: 'Event subscriptions and gaps',
+    cdc: 'CDC inbox',
+    'durable-queues': 'Durable queues',
+    'shard-owned-queues': 'Shard-owned queues',
+    'fenced-locks': 'Fenced locks',
+    aggregates: 'Aggregates',
+    infrastructure: 'Infrastructure'
+};
+
+const pct = (v) => (v == null ? nil('n/a') : `${Number(v).toFixed(1)}%`);
+const cacheCell = (v) => (v == null ? nil('n/a') : v < 90 ? badge('warning', pct(v)) : pct(v));
+
 views.postgresql = async () => {
+    const { orderBy, limit } = pgState;
     const settled = await Promise.allSettled([
-        api('/postgresql/query-statistics/top-ten-slowest'),
-        api('/event-store/statistics/table-sizes'),
-        api('/event-store/statistics/table-activity'),
-        api('/event-store/statistics/table-cache-hit-ratio')
+        api(`/postgresql/query-statistics/slowest?orderBy=${orderBy}&limit=${limit}`),
+        api('/postgresql/table-statistics')
     ]);
-    const [slow, sizes, activity, cacheHit] = settled.map((r) => (r.status === 'fulfilled' ? r.value : null));
+    const [slow, tables] = settled.map((r) => (r.status === 'fulfilled' ? r.value : null));
 
-    const maxMean = slow?.length ? Math.max(...slow.map((q) => q.meanTime)) : 0;
+    const rankValue = {
+        TOTAL_TIME: (q) => q.totalTime, MEAN_TIME: (q) => q.meanTime, MAX_TIME: (q) => q.maxTime,
+        CALLS: (q) => q.calls, BLOCKS_READ: (q) => q.sharedBlksRead
+    }[orderBy];
+    const maxRank = slow?.length ? Math.max(...slow.map(rankValue)) : 0;
+    const ms = (v) => `${Number(v).toLocaleString('en-US', { maximumFractionDigits: v < 10 ? 2 : 0 })} ms`;
+    const ranked = (q, formatted) => bar(rankValue(q), maxRank, formatted);
     const qRows = (slow ?? []).map((q) => `<tr>
-      <td class="truncate mono" title="${esc(q.query)}">${esc(q.query)}</td>
-      <td class="num">${num(q.calls)}</td>
-      <td class="num">${q.totalTime.toLocaleString('en-US', { maximumFractionDigits: 0 })} ms</td>
-      <td>${bar(q.meanTime, maxMean, q.meanTime.toFixed(2) + ' ms')}</td>
+      <td class="truncate mono" title="${esc(q.query ?? '')}">${q.query == null ? nil() : esc(q.query)}</td>
+      <td class="num">${orderBy === 'CALLS' ? ranked(q, num(q.calls)) : num(q.calls)}</td>
+      <td class="num">${orderBy === 'TOTAL_TIME' ? ranked(q, ms(q.totalTime)) : ms(q.totalTime)}</td>
+      <td class="num">${orderBy === 'MEAN_TIME' ? ranked(q, ms(q.meanTime)) : ms(q.meanTime)}</td>
+      <td class="num">${orderBy === 'MAX_TIME' ? ranked(q, ms(q.maxTime)) : ms(q.maxTime)}</td>
+      <td class="num">${num(q.rows)}</td>
+      <td class="num">${orderBy === 'BLOCKS_READ' ? ranked(q, num(q.sharedBlksRead)) : num(q.sharedBlksRead)}</td>
+      <td class="num">${cacheCell(q.cacheHitRatio)}</td>
     </tr>`);
 
-    const mb = (s) => parseFloat(s) || 0;
-    const maxSize = sizes ? Math.max(...Object.values(sizes).map((v) => mb(v.totalSize))) : 0;
-    const sRows = Object.entries(sizes ?? {}).map(([t, v]) => `<tr>
-      <td class="mono">${esc(t)}</td>
-      <td>${bar(mb(v.totalSize), maxSize, esc(v.totalSize))}</td>
-      <td class="num">${esc(v.tableSize)}</td>
-      <td class="num">${esc(v.indexSize)}</td>
-    </tr>`);
+    const toolbar = `
+    <div class="toolbar">
+      <label>Rank queries by
+        <select id="pgOrderSelect">${Object.entries(QUERY_ORDERS)
+            .map(([k, [label]]) => `<option value="${k}" ${k === orderBy ? 'selected' : ''}>${esc(label)}</option>`).join('')}</select>
+      </label>
+      <label>Show
+        <select id="pgLimitSelect">${[10, 25, 50, 100]
+            .map((n) => `<option ${n === limit ? 'selected' : ''}>${n}</option>`).join('')}</select>
+      </label>
+    </div>`;
 
-    const aRows = Object.entries(activity ?? {}).map(([t, v]) => `<tr>
-      <td class="mono">${esc(t)}</td>
-      <td class="num">${num(v.seq_scan)}</td>
-      <td class="num">${num(v.idx_scan)}</td>
-      <td class="num">${num(v.idx_tup_fetch)}</td>
-      <td class="num">${num(v.n_tup_ins)}</td>
-      <td class="num">${num(v.n_tup_upd)}</td>
-      <td class="num">${num(v.n_tup_del)}</td>
-    </tr>`);
-
-    return `
-    ${card('Ten slowest queries', slow
-        ? table([{ label: 'Query' }, { label: 'Calls', num: true }, { label: 'Total time', num: true }, { label: 'Mean time', num: true }],
-                qRows, { empty: 'pg_stat_statements is not enabled' })
+    const slowCard = card(`Slowest queries by ${QUERY_ORDERS[orderBy][0].toLowerCase()}`, slow
+        ? table([{ label: 'Query' }, { label: 'Calls', num: true }, { label: 'Total', num: true }, { label: 'Mean', num: true },
+                 { label: 'Max', num: true }, { label: 'Rows', num: true }, { label: 'Blocks read', num: true }, { label: 'Cache hit', num: true }],
+                qRows, { empty: 'pg_stat_statements is not enabled, or has recorded nothing for this database yet' })
         : errorState(settled[0].reason, 'essentials_postgresql_stats_reader'),
-        'GET /postgresql/query-statistics/top-ten-slowest', true)}
+        QUERY_ORDERS[orderBy][1], true);
 
-    <div class="grid-2">
-      ${card('Table sizes', sizes
-        ? table([{ label: 'Table' }, { label: 'Total', num: true }, { label: 'Heap', num: true }, { label: 'Indexes', num: true }], sRows)
-        : errorState(settled[1].reason, 'essentials_postgresql_stats_reader'), 'table-sizes', true)}
+    if (!tables) {
+        return toolbar + slowCard + card('Table statistics', errorState(settled[1].reason, 'essentials_postgresql_stats_reader'),
+                                         'GET /postgresql/table-statistics', true);
+    }
 
-      ${card('Cache hit ratio', cacheHit
-        ? Object.entries(cacheHit).map(([t, v]) => {
-            const low = v.cacheHitRatio < 90;
-            return `<div class="meter-row"><span class="mono">${esc(t)} ${low ? badge('warning', 'low') : ''}</span>
-              <span class="meter-track" role="img" aria-label="${v.cacheHitRatio}%"><span class="meter-fill" style="width:${v.cacheHitRatio}%"></span></span>
-              <span class="meter-val">${v.cacheHitRatio}%</span></div>`;
-          }).join('')
-        : errorState(settled[3].reason, 'essentials_postgresql_stats_reader'), 'table-cache-hit-ratio')}
+    /* Sizes are compared in bytes - the pretty-printed sizes mix units ("12 kB" against "4 MB") */
+    const maxSize = tables.length ? Math.max(...tables.map((t) => t.totalSizeBytes)) : 0;
+    const totalBytes = tables.reduce((sum, t) => sum + t.totalSizeBytes, 0);
+    const withRatio = tables.filter((t) => t.cacheHitRatio != null);
+    const lowest = withRatio.length ? withRatio.reduce((a, b) => (b.cacheHitRatio < a.cacheHitRatio ? b : a)) : null;
+    const prettyBytes = (b) => {
+        const units = ['B', 'kB', 'MB', 'GB', 'TB'];
+        let i = 0;
+        while (b >= 1024 && i < units.length - 1) { b /= 1024; i++; }
+        return `${b.toLocaleString('en-US', { maximumFractionDigits: i ? 1 : 0 })} ${units[i]}`;
+    };
+    /* Dead rows worth a look: a fifth of the live rows or more, ignoring tables too small to matter. Queue tables
+       churn constantly, so this is the bloat signal that matters most there. */
+    const bloated = (t) => t.deadRows > 1000 && t.deadRows >= t.liveRows / 5;
+    /* HOT updates touch no index. A low share on a frequently updated table means an update changes an indexed
+       column - often by design, as with a status flag - or, only when none does, too little free space per page. */
+    const hotRatio = (t) => (t.rowsUpdated ? (100 * t.rowsHotUpdated) / t.rowsUpdated : null);
+    const hotCell = (t) => {
+        const r = hotRatio(t);
+        return r == null ? nil('n/a') : t.rowsUpdated > 1000 && r < 50 ? badge('warning', pct(r)) : pct(r);
+    };
+    /* Unique and primary-key indexes do their job without being scanned, so only the others count as unused */
+    const unusedIndex = (i) => i.idxScan === 0 && !i.unique && !i.primary;
+    const allIndexes = tables.flatMap((t) => (t.indexes ?? []).map((i) => ({ ...i, tableName: t.tableName })));
+    const unused = allIndexes.filter(unusedIndex);
+    const invalid = allIndexes.filter((i) => !i.valid);
+    const maxIndexSize = allIndexes.length ? Math.max(...allIndexes.map((i) => i.sizeBytes)) : 0;
+    const indexFlags = (i) => [
+        i.primary ? badge('neutral', 'primary key') : i.unique ? badge('neutral', 'unique') : '',
+        unusedIndex(i) ? badge('warning', 'unused') : '',
+        i.valid ? '' : badge('critical', 'invalid')
+    ].join(' ');
+    /* One place naming everything the tiles and badges flag, so a count is never the end of the trail */
+    const sectionOf = (t) => TABLE_SECTIONS[t.section] ?? t.section;
+    const showLink = (target) => `<button class="link" data-scroll="${target}">show</button>`;
+    const bloatedTables = tables.filter(bloated).sort((a, b) => b.deadRows - a.deadRows);
+    const lowCacheTables = withRatio.filter((t) => t.cacheHitRatio < 90).sort((a, b) => a.cacheHitRatio - b.cacheHitRatio);
+    const lowHotTables = tables.filter((t) => t.rowsUpdated > 1000 && hotRatio(t) < 50).sort((a, b) => hotRatio(a) - hotRatio(b));
+    const attentionPart = (id, title, hint, cols, rows) => (rows.length
+        ? `<div class="attention-part" id="${id}"><div class="attention-title">${esc(title)} <span class="card-note">${esc(hint)}</span></div>${table(cols, rows)}</div>`
+        : '');
+    const attention = [
+        attentionPart('pg-attention-bloat', 'Dead-row bloat', 'vacuum is not keeping up, or something holds it back',
+            [{ label: 'Table' }, { label: 'Section' }, { label: 'Live rows', num: true }, { label: 'Dead rows', num: true },
+             { label: 'Dead / live', num: true }, { label: 'Last vacuum' }],
+            bloatedTables.map((t) => `<tr><td class="mono">${esc(t.tableName)}</td><td>${esc(sectionOf(t))}</td>
+              <td class="num">${num(t.liveRows)}</td><td class="num">${num(t.deadRows)}</td>
+              <td class="num">${t.liveRows ? pct((100 * t.deadRows) / t.liveRows) : nil('n/a')}</td><td>${ts(t.lastVacuum)}</td></tr>`)),
+        attentionPart('pg-attention-unused', 'Unused indexes', 'never scanned since the statistics reset - drop candidates',
+            [{ label: 'Table' }, { label: 'Index' }, { label: 'Size', num: true }, { label: 'Entries read', num: true }],
+            [...unused].sort((a, b) => b.sizeBytes - a.sizeBytes).map((i) => `<tr><td class="mono">${esc(i.tableName)}</td>
+              <td class="mono">${esc(i.indexName)}</td><td class="num">${esc(i.size)}</td><td class="num">${num(i.idxTupRead)}</td></tr>`)),
+        attentionPart('pg-attention-invalid', 'Invalid indexes', 'left by a failed CREATE INDEX CONCURRENTLY - drop or rebuild',
+            [{ label: 'Table' }, { label: 'Index' }, { label: 'Size', num: true }],
+            invalid.map((i) => `<tr><td class="mono">${esc(i.tableName)}</td><td class="mono">${esc(i.indexName)}</td>
+              <td class="num">${esc(i.size)}</td></tr>`)),
+        attentionPart('pg-attention-cache', 'Low cache hit', 'under 90% of block requests served from shared buffers',
+            [{ label: 'Table' }, { label: 'Section' }, { label: 'Cache hit', num: true }, { label: 'Total size', num: true }],
+            lowCacheTables.map((t) => `<tr><td class="mono">${esc(t.tableName)}</td><td>${esc(sectionOf(t))}</td>
+              <td class="num">${pct(t.cacheHitRatio)}</td><td class="num">${esc(t.totalSize)}</td></tr>`)),
+        /* Usually by design: an update that changes an indexed column - a status flag in an index, as on the CDC inbox
+           and the queue tables - can never be HOT, and fillfactor does not change that. It only helps when no indexed
+           column changes and the page is merely full. The table's indexes are listed so the cause can be read off. */
+        attentionPart('pg-attention-hot', 'Few HOT updates',
+            'expected when updates change an indexed column, such as a status in an index - fillfactor helps only when they do not',
+            [{ label: 'Table' }, { label: 'Section' }, { label: 'Updates', num: true }, { label: 'HOT', num: true }, { label: 'Indexes' }],
+            lowHotTables.map((t) => `<tr><td class="mono">${esc(t.tableName)}</td><td>${esc(sectionOf(t))}</td>
+              <td class="num">${num(t.rowsUpdated)}</td><td class="num">${pct(hotRatio(t))}</td>
+              <td class="mono">${(t.indexes ?? []).map((i) => esc(i.indexName)).join('<br>') || nil()}</td></tr>`))
+    ].join('');
+    const indexDetails = (rows) => {
+        const indexes = rows.flatMap((t) => (t.indexes ?? []).map((i) => ({ ...i, tableName: t.tableName })));
+        if (!indexes.length) return '';
+        const sectionUnused = indexes.filter(unusedIndex).length;
+        return `<details class="index-details"><summary>Indexes (${indexes.length})${sectionUnused ? ` · ${badge('warning', `${sectionUnused} unused`)}` : ''}</summary>
+          ${table([
+              { label: 'Table' }, { label: 'Index' }, { label: 'Size', num: true }, { label: 'Scans', num: true },
+              { label: 'Entries read', num: true }, { label: 'Rows fetched', num: true }, { label: 'Cache hit', num: true }, { label: '' }
+          ], indexes.map((i) => `<tr>
+            <td class="mono">${esc(i.tableName)}</td>
+            <td class="mono">${esc(i.indexName)}</td>
+            <td>${bar(i.sizeBytes, maxIndexSize, esc(i.size))}</td>
+            <td class="num">${num(i.idxScan)}</td>
+            <td class="num">${num(i.idxTupRead)}</td>
+            <td class="num">${num(i.idxTupFetch)}</td>
+            <td class="num">${cacheCell(i.cacheHitRatio)}</td>
+            <td>${indexFlags(i)}</td>
+          </tr>`))}</details>`;
+    };
+
+    const bySection = new Map();
+    tables.forEach((t) => bySection.set(t.section, [...(bySection.get(t.section) ?? []), t]));
+
+    const sectionCards = [...bySection.entries()].map(([section, rows]) => card(TABLE_SECTIONS[section] ?? section,
+        table([
+            { label: 'Table' }, { label: 'Total', num: true }, { label: 'Heap', num: true }, { label: 'Indexes', num: true },
+            { label: 'Live rows', num: true }, { label: 'Dead rows', num: true }, { label: 'Seq scans', num: true },
+            { label: 'Index scans', num: true }, { label: 'Inserts', num: true }, { label: 'Updates', num: true },
+            { label: 'HOT', num: true }, { label: 'Deletes', num: true }, { label: 'Cache hit', num: true }, { label: 'Last vacuum' }
+        ], rows.map((t) => `<tr>
+          <td class="mono">${esc(t.tableName)}</td>
+          <td>${bar(t.totalSizeBytes, maxSize, esc(t.totalSize))}</td>
+          <td class="num">${esc(t.tableSize)}</td>
+          <td class="num">${esc(t.indexSize)}</td>
+          <td class="num">${num(t.liveRows)}</td>
+          <td class="num">${bloated(t) ? badge('warning', num(t.deadRows)) : num(t.deadRows)}</td>
+          <td class="num">${num(t.seqScan)}</td>
+          <td class="num">${num(t.idxScan)}</td>
+          <td class="num">${num(t.rowsInserted)}</td>
+          <td class="num">${num(t.rowsUpdated)}</td>
+          <td class="num">${hotCell(t)}</td>
+          <td class="num">${num(t.rowsDeleted)}</td>
+          <td class="num">${cacheCell(t.cacheHitRatio)}</td>
+          <td>${ts(t.lastVacuum)}</td>
+        </tr>`)) + indexDetails(rows),
+        `${rows.length} ${rows.length === 1 ? 'table' : 'tables'}`, true)).join('');
+
+    return `${toolbar}
+    <div class="kpi-row">
+      ${tile('Essentials tables', num(tables.length), 'that exist in this database')}
+      ${tile('Total size', prettyBytes(totalBytes), 'tables, indexes and TOAST')}
+      ${tile('Lowest cache hit', lowest ? pct(lowest.cacheHitRatio) : nil(),
+             lowest ? `${esc(lowest.tableName)}${lowCacheTables.length ? ` · ${showLink('pg-attention-cache')}` : ''}` : 'no block access yet',
+             !!(lowest && lowest.cacheHitRatio < 90))}
+      ${tile('Dead-row bloat', num(bloatedTables.length),
+             `tables with many dead rows${bloatedTables.length ? ` · ${showLink('pg-attention-bloat')}` : ''}`, bloatedTables.length > 0)}
+      ${tile('Unused indexes', num(unused.length),
+             unused.length ? `${prettyBytes(unused.reduce((sum, i) => sum + i.sizeBytes, 0))} written for nothing · ${showLink('pg-attention-unused')}`
+                           : 'every non-unique index is scanned',
+             unused.length > 0)}
+      ${invalid.length ? tile('Invalid indexes', num(invalid.length), `maintained but never used · ${showLink('pg-attention-invalid')}`, true) : ''}
     </div>
 
-    ${card('Table activity', activity
-        ? table([
-            { label: 'Table' }, { label: 'Seq scans', num: true }, { label: 'Index scans', num: true },
-            { label: 'Index tuples', num: true }, { label: 'Inserts', num: true }, { label: 'Updates', num: true }, { label: 'Deletes', num: true }
-        ], aRows)
-        : errorState(settled[2].reason, 'essentials_postgresql_stats_reader'), 'table-activity', true)}`;
+    ${attention ? `<div id="pg-attention">${card('Needs attention', attention, 'what the tiles and badges flag', true)}</div>` : ''}
+
+    ${slowCard}
+
+    <div class="notice">Table counters are cumulative since PostgreSQL's statistics were last reset, not since this
+      application started. Cache hit is the share of block requests served from shared buffers. HOT is the share of
+      updates that touched no index. An index counts as unused when nothing on this server has scanned it since the
+      reset - check that the statistics cover a representative period, and any read replicas, before dropping one.</div>
+
+    ${sectionCards || card('Table statistics', table([], [], { empty: 'None of the Essentials tables exist yet' }), null, true)}`;
 };
 
 views.cdc = async () => {
@@ -813,6 +995,17 @@ function closeDialog() {
 }
 
 const actions = {
+    runJob: (name) => ({
+        title: 'Run job now?', danger: false, confirmLabel: 'Run now',
+        body: `<p>Runs <code class="mono">${esc(name)}</code> once, now, and waits for it to finish. Its schedule is not
+           changed, and the run is not coordinated with a scheduled run of the same job.</p>
+           <p>An executor job runs only on the instance holding the scheduler lock - if this request reaches another
+           instance it is refused, naming the one that holds it. A pg_cron job's run is not recorded in its run
+           details. Only jobs this application's scheduler registered can be run.</p>`,
+        run: async () => {
+            lastJobRun = await api(`/scheduler/jobs/${encodeURIComponent(name)}/run`, { method: 'POST' });
+        }
+    }),
     shardRetry: (id) => ({
         title: 'Retry now?', danger: false, confirmLabel: 'Retry',
         body: `<p>Makes <code class="mono">${esc(id)}</code> visible again immediately, ahead of whatever backoff it
@@ -1155,12 +1348,14 @@ views.aggregateLookup = async () => {
           <td class="num">${num(ev.eventRevision)}</td>
           <td>${ts(ev.timestamp)}</td>
           <td class="truncate mono">${ev.eventPayload ? esc(ev.eventPayload) : nil()}</td>
+          <td class="actions"><button class="btn btn-sm" data-causation-event="${esc(ev.eventId)}">Causation</button></td>
         </tr>`;
         eventStreamCard = card(`Event stream · generation ${aggregateState.generation}`
                 + (stream?.partialEventStream ? ' · truncated' : ''),
             stream
                 ? table([{ label: 'Event order', num: true }, { label: 'Global order', num: true },
-                         { label: 'Revision', num: true }, { label: 'Timestamp' }, { label: 'Payload' }],
+                         { label: 'Revision', num: true }, { label: 'Timestamp' }, { label: 'Payload' },
+                         { label: '', width: '110px', sticky: true }],
                         (stream.events ?? []).map(eventRow), { empty: 'The generation holds no events' })
                 : streamError?.status === 404
                     ? '<div class="empty">No such generation</div>'
@@ -1461,6 +1656,198 @@ async function openShardOwnedDrawer(queueName, id) {
       </div>`;
 }
 
+/* ── Event causation ─────────────────────────────────────────────────────────────────────────
+   "Why did this happen?" walks back through recorded causes; "what did it cause?" lists direct effects and needs the
+   opt-in caused-by-event-id index, so a 409 there is explained rather than shown as a failure. Event ids are links:
+   following one re-centres the view on that event. Payloads are deliberately not part of these operations. */
+let causationState = { eventId: '', aggregateType: '', aggregateId: '' };
+
+/* A persisted event type is "FQCN:" plus the fully qualified class name - far too long for a table cell. The label
+   shows the simple class name (nested-class part included) and keeps the full type in the tooltip. An event *name*
+   (a named, not typed, event) is shown as it is. */
+function eventTypeLabel(eventType) {
+    if (eventType == null) return nil();
+    const full = String(eventType).replace(/^FQCN:/, '');
+    const simple = full.includes('.') ? full.slice(full.lastIndexOf('.') + 1).replace(/\$/g, '.') : full;
+    return `<span class="badge badge-neutral event-type" title="${esc(full)}">${esc(simple)}</span>`;
+}
+
+const causationLink = (id) => (id == null ? nil('none recorded')
+    : `<button class="link mono" data-causation-event="${esc(id)}" title="Show causation for this event">${esc(String(id).slice(0, 18))}…</button>`);
+
+const causationRow = (ev, index) => `<tr${index === 0 ? ' class="is-selected"' : ''}>
+  <td class="num">${index == null ? '' : num(index)}</td>
+  <td>${causationLink(ev.eventId)}</td>
+  <td>${eventTypeLabel(ev.eventType)}</td>
+  <td>${esc(ev.aggregateType)}</td>
+  <td class="truncate mono">${esc(ev.aggregateId)}</td>
+  <td class="num">${num(ev.eventOrder)}</td>
+  <td>${ts(ev.timestamp)}</td>
+  <td>${causationLink(ev.causedByEventId)}</td>
+</tr>`;
+
+const causationCols = (first) => [
+    { label: first, num: true, width: '60px' }, { label: 'Event id' }, { label: 'Event type' }, { label: 'Aggregate type' },
+    { label: 'Aggregate id' }, { label: 'Event order', num: true }, { label: 'Timestamp' }, { label: 'Caused by' }
+];
+
+views.causation = async () => {
+    const eventId       = causationState.eventId.trim();
+    const aggregateType = causationState.aggregateType.trim();
+    const aggregateId   = causationState.aggregateId.trim();
+
+    /* Aggregate type suggestions come from the subscriptions, the one listing of aggregate types the API has. A failure
+       only loses the suggestions - the field still accepts any type. */
+    let knownTypes = [];
+    try {
+        knownTypes = [...new Set((await api('/event-store/subscriptions')).map((s) => s.aggregateType))].sort();
+    } catch (e) { /* suggestions are optional */ }
+
+    const toolbar = `
+    <div class="toolbar">
+      <label><input type="text" id="causationAggregateType" list="causationAggregateTypes" placeholder="Aggregate type" size="18"
+                    value="${esc(aggregateType)}"></label>
+      <datalist id="causationAggregateTypes">${knownTypes.map((t) => `<option value="${esc(t)}">`).join('')}</datalist>
+      <label><input type="text" id="causationAggregateId" placeholder="Aggregate id" size="26" value="${esc(aggregateId)}"></label>
+      <span class="chip">or</span>
+      <label><input type="text" id="causationEventInput" placeholder="Event id" size="38" value="${esc(eventId)}"></label>
+      <div class="spacer"></div>
+      <span class="chip">identity and cause only · no payloads</span>
+    </div>`;
+
+    let aggregateCard = '';
+    if (aggregateType && aggregateId) {
+        let events = null;
+        let eventsError = null;
+        try {
+            events = await api(`/event-store/aggregate-types/${encodeURIComponent(aggregateType)}/aggregates/${encodeURIComponent(aggregateId)}/events?limit=100`);
+        } catch (e) {
+            eventsError = e;
+        }
+        aggregateCard = card(`Events of ${aggregateType} ${aggregateId} · most recent 100, pick one to walk its causation`,
+            events
+                ? table(causationCols(''), events.map((ev) => causationRow(ev, null)),
+                        { empty: 'No events - check the aggregate type is registered with this event store, and the id' })
+                : errorState(eventsError, 'essentials_subscription_reader'),
+            'GET /event-store/aggregate-types/{aggregateType}/aggregates/{aggregateId}/events', true);
+    }
+
+    if (!eventId) {
+        return toolbar + (aggregateCard || card('Event causation',
+            `<div class="empty"><div class="empty-icon" aria-hidden="true">◌</div>
+             <div>Enter an aggregate type and id to list its events, or an event id, to see why an event happened and
+                  what it caused</div></div>`, null, true));
+    }
+
+    let event;
+    try {
+        event = await api(`/event-store/events/${encodeURIComponent(eventId)}`);
+    } catch (e) {
+        return toolbar + aggregateCard + card('Event causation',
+            e.status === 404 ? '<div class="empty">No registered event stream holds an event with that id</div>'
+                             : errorState(e, 'essentials_subscription_reader'),
+            'GET /event-store/events/{eventId}', true);
+    }
+
+    let chain;
+    try {
+        chain = await api(`/event-store/events/${encodeURIComponent(eventId)}/causation-chain?maxDepth=20`);
+    } catch (e) {
+        return toolbar + aggregateCard + card('Causation', errorState(e, 'essentials_subscription_reader'),
+            'GET /event-store/events/{eventId}/causation-chain', true);
+    }
+    const treeCard = await causationTreeCard(eventId, chain);
+    return toolbar + aggregateCard + `
+    <div class="kpi-row">
+      ${tile('Event type', eventTypeLabel(event.eventType), esc(event.aggregateType))}
+      ${tile('Aggregate', `<span class="mono">${esc(String(event.aggregateId).slice(0, 18))}</span>`, `event order ${num(event.eventOrder)}`)}
+      ${tile('Persisted', ts(event.timestamp), `global order ${num(event.globalEventOrder)}`)}
+      ${tile('Caused by', event.causedByEventId ? causationLink(event.causedByEventId) : nil('none recorded'),
+             event.causedByEventId ? 'follow to walk back' : 'started by a request, a schedule or a person')}
+    </div>
+    ${treeCard}`;
+};
+
+/* ── Causation tree ──────────────────────────────────────────────────────────────────────────
+   The whole flow the looked-up event belongs to: rooted at the start of its chain, with the path down to the event
+   expanded and the event highlighted. Every other branch expands on click, one level at a time - a busy event can
+   have caused thousands - and each node's effects are fetched once and kept while the page stays on that event. */
+let causationTree = { forEventId: null, children: new Map(), expanded: new Set(), indexDisabled: false };
+
+const TREE_CHILD_LIMIT = 50;
+
+async function loadCausedEvents(id) {
+    if (causationTree.children.has(id)) return;
+    try {
+        causationTree.children.set(id, await api(`/event-store/events/${encodeURIComponent(id)}/caused-events`));
+    } catch (e) {
+        if (e.status === 409) {
+            causationTree.indexDisabled = true;
+            return;
+        }
+        throw e;
+    }
+}
+
+async function causationTreeCard(eventId, chain) {
+    const path = [...chain].reverse();   // root first, the looked-up event last
+    if (causationTree.forEventId !== eventId) {
+        causationTree = { forEventId: eventId, children: new Map(), expanded: new Set(path.map((ev) => ev.eventId)), indexDisabled: false };
+    }
+    try {
+        // The path's own levels, so the siblings along the way are visible; then whatever the user expanded
+        for (const id of causationTree.expanded) {
+            if (causationTree.indexDisabled) break;
+            await loadCausedEvents(id);
+        }
+    } catch (e) {
+        return card('Causation', errorState(e, 'essentials_subscription_reader'), 'GET /event-store/events/{eventId}/caused-events', true);
+    }
+
+    const onPath = new Map(path.map((ev, i) => [ev.eventId, path[i + 1]]));   // path node -> its child on the path
+    const rows = [];
+    const addRow = (ev, depth) => {
+        const kids = causationTree.indexDisabled ? (onPath.get(ev.eventId) ? [onPath.get(ev.eventId)] : [])
+                                                 : causationTree.children.get(ev.eventId);
+        const open = causationTree.expanded.has(ev.eventId);
+        const toggle = kids && kids.length === 0
+            ? `<span class="tree-leaf" aria-hidden="true">·</span>`
+            : `<button class="tree-toggle" data-causation-expand="${esc(ev.eventId)}" aria-expanded="${open}"
+                       title="${open ? 'Collapse' : 'Show what this event caused'}">${open ? '▾' : '▸'}</button>`;
+        rows.push(`<tr${ev.eventId === eventId ? ' class="is-selected"' : ''}>
+          <td><div class="tree-cell" style="padding-left:${depth * 18}px">${toggle} ${eventTypeLabel(ev.eventType)}</div></td>
+          <td>${esc(ev.aggregateType)}</td>
+          <td class="truncate mono">${esc(ev.aggregateId)}</td>
+          <td class="num">${num(ev.eventOrder)}</td>
+          <td>${ts(ev.timestamp)}</td>
+          <td>${causationLink(ev.eventId)}</td>
+        </tr>`);
+        if (open && kids) {
+            kids.slice(0, TREE_CHILD_LIMIT).forEach((kid) => addRow(kid, depth + 1));
+            if (kids.length > TREE_CHILD_LIMIT) {
+                rows.push(`<tr><td colspan="6"><div class="tree-cell" style="padding-left:${(depth + 1) * 18}px">
+                  <span class="nil">… ${num(kids.length - TREE_CHILD_LIMIT)} more not shown</span></div></td></tr>`);
+            }
+        }
+    };
+    addRow(path[0], 0);
+
+    const notes = [];
+    if (path[0].causedByEventId) {
+        notes.push(`<div class="notice">This is not the root: the first event's cause was not found in a registered event
+          stream, or the chain is longer than 20 steps.</div>`);
+    }
+    if (causationTree.indexDisabled) {
+        notes.push(`<div class="notice"><strong>Only the chain is shown.</strong> Showing everything each event caused needs
+          the caused-by-event-id index. Enable it with <code class="mono">essentials.eventstore.causation.index-enabled=true</code>;
+          on large existing event tables, build the index concurrently first.</div>`);
+    }
+    return card('Causation · from the root of the chain, the selected event highlighted',
+        notes.join('') + table([{ label: 'Event' }, { label: 'Aggregate type' }, { label: 'Aggregate id' },
+                                { label: 'Event order', num: true }, { label: 'Timestamp' }, { label: 'Event id' }], rows),
+        'GET /event-store/events/{eventId}/causation-chain · GET /event-store/events/{eventId}/caused-events', true);
+}
+
 const titles = {
     overview: ['Dashboard', 'Current state of the Essentials infrastructure'],
     locks: ['Fenced locks', 'Distributed locks held across service instances'],
@@ -1471,7 +1858,8 @@ const titles = {
     cdc: ['Change Data Capture', 'Replication slot, tailer and dispatcher state'],
     postgresql: ['PostgreSQL statistics', 'Query, size, activity and cache statistics'],
     aggregates: ['Aggregates', 'Snapshot and closing-books policies and statistics'],
-    aggregateLookup: ['Aggregate lookup', 'Generations, snapshots and archives of one logical aggregate']
+    aggregateLookup: ['Aggregate lookup', 'Generations, snapshots and archives of one logical aggregate'],
+    causation: ['Event causation', 'Why an event happened, and what it caused']
 };
 
 let currentView = 'overview';
@@ -1515,6 +1903,28 @@ document.addEventListener('click', async (e) => {
         closeDialog();
         await fn?.();
         return;
+    }
+
+    const expandTarget = e.target.closest('[data-causation-expand]');
+    if (expandTarget) {
+        const id = expandTarget.dataset.causationExpand;
+        if (causationTree.expanded.has(id)) causationTree.expanded.delete(id);
+        else causationTree.expanded.add(id);
+        return render('causation');
+    }
+
+    const aggregateCausationTarget = e.target.closest('[data-causation-aggregate-type]');
+    if (aggregateCausationTarget) {
+        causationState = { eventId: '',
+                           aggregateType: aggregateCausationTarget.dataset.causationAggregateType,
+                           aggregateId: aggregateCausationTarget.dataset.causationAggregateId };
+        return show('causation');
+    }
+
+    const causationTarget = e.target.closest('[data-causation-event]');
+    if (causationTarget) {
+        causationState.eventId = causationTarget.dataset.causationEvent;
+        return show('causation');
     }
 
     if (e.target.closest('[data-copy]')) {
@@ -1609,6 +2019,12 @@ document.addEventListener('click', async (e) => {
         return;
     }
 
+    const scrollTarget = e.target.closest('[data-scroll]');
+    if (scrollTarget) {
+        document.getElementById(scrollTarget.dataset.scroll)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        return;
+    }
+
     const trigger = e.target.closest('[data-msg]');
     if (trigger && !e.target.closest('.actions')) openDrawer(trigger.dataset.msg);
 });
@@ -1627,6 +2043,8 @@ document.addEventListener('change', (e) => {
     if (e.target.id === 'queueSelect') { queueState.queue = e.target.value; render('queues'); }
     if (e.target.id === 'shardQueueSelect') { shardOwnedState.queue = e.target.value; render('shardOwnedQueues'); }
     if (e.target.id === 'sortSelect') { queueState.sortOrder = e.target.value; render('queues'); }
+    if (e.target.id === 'pgOrderSelect') { pgState.orderBy = e.target.value; render('postgresql'); }
+    if (e.target.id === 'pgLimitSelect') { pgState.limit = Number(e.target.value); render('postgresql'); }
 });
 
 /*
@@ -1640,6 +2058,20 @@ document.addEventListener('keydown', (e) => {
     aggregateState.generation = null;
     aggregateState.archivedGeneration = null;
     render('aggregateLookup');
+});
+
+document.addEventListener('keydown', (e) => {
+    if (e.key !== 'Enter' || e.target.id !== 'causationEventInput') return;
+    causationState.eventId = e.target.value;
+    render('causation');
+});
+
+document.addEventListener('keydown', (e) => {
+    if (e.key !== 'Enter' || (e.target.id !== 'causationAggregateType' && e.target.id !== 'causationAggregateId')) return;
+    causationState.aggregateType = document.getElementById('causationAggregateType').value;
+    causationState.aggregateId = document.getElementById('causationAggregateId').value;
+    causationState.eventId = '';
+    render('causation');
 });
 
 document.addEventListener('keydown', async (e) => {

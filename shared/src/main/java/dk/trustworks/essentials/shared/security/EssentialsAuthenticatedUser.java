@@ -145,6 +145,15 @@ public interface EssentialsAuthenticatedUser {
     }
 
     /**
+     * Checks if the user has the {@link EssentialsSecurityRoles#SCHEDULER_WRITER} role.
+     *
+     * @return true if the user has the scheduler writer role, false otherwise.
+     */
+    default boolean hasSchedulerWriterRole() {
+        return false;
+    }
+
+    /**
      * Checks if the user has the {@link EssentialsSecurityRoles#POSTGRESQL_STATS_READER} role.
      *
      * @return true if the user has the scheduled reader role, false otherwise.
@@ -231,6 +240,11 @@ public interface EssentialsAuthenticatedUser {
 
         @Override
         public boolean hasSchedulerReaderRole() {
+            return true;
+        }
+
+        @Override
+        public boolean hasSchedulerWriterRole() {
             return true;
         }
 

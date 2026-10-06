@@ -57,6 +57,8 @@ public class ShardOwnedQueueFactory implements MessageQueues, AutoCloseable {
      */
     private final List<MessageQueueInterceptor> interceptors;
     private final List<QueueObserver>           observers;
+    /** Called once per queue, for the per-queue meters a shared observer cannot give. */
+    private final List<ShardOwnedQueueMetrics>  metrics;
 
     private final Map<QueueName, PostgresqlMessageQueue> queues = new ConcurrentHashMap<>();
 
@@ -66,13 +68,15 @@ public class ShardOwnedQueueFactory implements MessageQueues, AutoCloseable {
                                   String instanceId,
                                   ShardOwnedQueueInitializer initializer,
                                   List<MessageQueueInterceptor> interceptors,
-                                  List<QueueObserver> observers) {
+                                  List<QueueObserver> observers,
+                                  List<ShardOwnedQueueMetrics> metrics) {
         this.dataSource = requireNonNull(dataSource, "No dataSource provided");
         this.runtime = requireNonNull(runtime, "No runtime provided");
         this.settings = requireNonNull(settings, "No settings provided");
         this.instanceId = requireNonNull(instanceId, "No instanceId provided");
         this.interceptors = List.copyOf(requireNonNull(interceptors, "No interceptors provided"));
         this.observers = List.copyOf(requireNonNull(observers, "No observers provided"));
+        this.metrics = List.copyOf(requireNonNull(metrics, "No metrics provided"));
         // Not stored: depended on so that Spring orders schema creation and queue registration
         // before this bean exists. A factory that could hand out a queue whose tables are not there
         // yet would fail in a way that looks like a queue bug rather than a start-up ordering one.
@@ -94,11 +98,17 @@ public class ShardOwnedQueueFactory implements MessageQueues, AutoCloseable {
                                               .setQueueName(name)
                                               .setInstanceId(instanceId)
                                               .setSettings(settings)
+                                              // The process's one runtime. Without it every queue's
+                                              // consumers borrowed a second, shared runtime, and the
+                                              // bean's pumps and listener held their connections for
+                                              // nothing.
+                                              .setRuntime(runtime)
                                               .build();
             // Before anything consumes: both are read when a subscription starts, so one attached
             // afterwards would silently see nothing.
             interceptors.forEach(queue::addInterceptor);
             observers.forEach(queue::addObserver);
+            metrics.forEach(binding -> binding.bind(name, queue));
             return queue;
         });
     }

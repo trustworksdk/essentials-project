@@ -21,6 +21,7 @@ import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.ev
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.subscription.EventStoreSubscriptionManager;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.types.GlobalEventOrder;
 import dk.trustworks.essentials.components.foundation.Lifecycle;
+import dk.trustworks.essentials.components.foundation.causation.CausationContext;
 import dk.trustworks.essentials.components.foundation.fencedlock.*;
 import dk.trustworks.essentials.components.foundation.messaging.*;
 import dk.trustworks.essentials.components.foundation.messaging.eip.store_and_forward.*;
@@ -228,7 +229,8 @@ public abstract class ViewEventProcessor extends AbstractEventProcessor {
                 durableQueues.queueMessage(durableQueueName,
                                            new EventReferenceOrderedMessage(aggregateType, key, event.eventOrder(), meta));
             } else {
-                patternMatchingMessageHandlerDelegate.accept(msg);
+                CausationContext.where(event.eventId())
+                                .run(() -> patternMatchingMessageHandlerDelegate.accept(msg));
             }
         } catch (Exception e) {
             logger.debug("[{}:{}] Direct handling failed for event '{}', enqueuing for retry.",

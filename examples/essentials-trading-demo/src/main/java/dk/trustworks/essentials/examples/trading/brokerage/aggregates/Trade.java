@@ -119,7 +119,7 @@ public class Trade extends AggregateRoot<TradeId, TradeEvent, Trade> {
         if (settlementRequested) {
             return;
         }
-        apply(new SettlementRequested(aggregateId(), settlementId));
+        apply(new SettlementRequested(aggregateId(), settlementId, accountId, grossAmount));
     }
 
     public void markSettled() {

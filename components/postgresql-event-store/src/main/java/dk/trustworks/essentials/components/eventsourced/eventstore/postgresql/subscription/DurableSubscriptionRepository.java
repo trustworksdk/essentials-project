@@ -115,7 +115,12 @@ public interface DurableSubscriptionRepository {
     }
 
     /**
-     * Batch save all the resume points. Only {@link SubscriptionResumePoint#isChanged()} Resume Points will saved
+     * Batch save all the resume points. Only {@link SubscriptionResumePoint#isChanged()} Resume Points will saved<br>
+     * Implementations must write each resume point's {@link SubscriptionResumePoint#snapshot()} - value and
+     * {@link SubscriptionResumePoint#getRepositionEpoch() reposition epoch} together - and refuse the write when the stored
+     * epoch is newer, so a save that captured a resume point before a reset cannot overwrite the reset. A written snapshot
+     * is recorded with {@link SubscriptionResumePoint#markAsPersisted(SubscriptionResumePoint.Snapshot, java.time.OffsetDateTime)},
+     * a refused one with {@link SubscriptionResumePoint#markAsSuperseded(SubscriptionResumePoint.Snapshot)}
      *
      * @param resumePoints the resume points to save
      */

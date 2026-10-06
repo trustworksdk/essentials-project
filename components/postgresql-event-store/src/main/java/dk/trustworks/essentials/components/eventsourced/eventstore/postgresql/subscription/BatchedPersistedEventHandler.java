@@ -18,6 +18,7 @@ package dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.s
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.EventStoreSubscription;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.PersistedEvent;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.types.GlobalEventOrder;
+import dk.trustworks.essentials.components.foundation.causation.CausationContext;
 import dk.trustworks.essentials.components.foundation.transaction.UnitOfWork;
 
 import java.util.List;
@@ -28,6 +29,16 @@ import java.util.List;
  * <p>
  * This handler is used by the {@link BatchedPersistedEventSubscriber}, which collects
  * events up to a specified batch size or maximum latency before invoking the handler.
+ * <p>
+ * <b>Causation:</b> unlike the per-event subscriptions, a batch is delivered with no cause bound in
+ * {@link CausationContext} - a batch has as many causes as it has events, and binding any one of them would be a
+ * guess. A handler that appends events in response to a specific event in the batch binds that event as the cause
+ * itself:
+ * <pre>{@code
+ * for (var event : events) {
+ *     CausationContext.where(event.eventId()).run(() -> react(event));
+ * }
+ * }</pre>
  */
 public interface BatchedPersistedEventHandler {
     /**

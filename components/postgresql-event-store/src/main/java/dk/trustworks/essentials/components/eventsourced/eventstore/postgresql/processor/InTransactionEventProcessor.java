@@ -23,6 +23,7 @@ import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.se
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.subscription.EventStoreSubscriptionManager;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.types.EventType;
 import dk.trustworks.essentials.components.foundation.Lifecycle;
+import dk.trustworks.essentials.components.foundation.causation.CausationContext;
 import dk.trustworks.essentials.components.foundation.fencedlock.*;
 import dk.trustworks.essentials.components.foundation.json.JSONDeserializationException;
 import dk.trustworks.essentials.components.foundation.messaging.*;
@@ -326,11 +327,12 @@ public abstract class InTransactionEventProcessor implements Lifecycle {
     private void invokeHandler(PersistedEvent event, UnitOfWork unitOfWork, AggregateType aggregateType, SubscriberId subscriberId) {
         try {
             log.debug("[{}-{}] Processing event: {} using unit of work '{}'", subscriberId, aggregateType, event, unitOfWork.info());
-            patternMatchingHandlerDelegate.accept(OrderedMessage.of(event.event().deserialize(),
-                                                                    resolveAggregateIdSerializer(event.aggregateType()).serialize(event.aggregateId()),
-                                                                    event.eventOrder().value(),
-                                                                    new MessageMetaData(event.metaData().deserialize()))
-                                                 );
+            var message = OrderedMessage.of(event.event().deserialize(),
+                                            resolveAggregateIdSerializer(event.aggregateType()).serialize(event.aggregateId()),
+                                            event.eventOrder().value(),
+                                            new MessageMetaData(event.metaData().deserialize()));
+            CausationContext.where(event.eventId())
+                            .run(() -> patternMatchingHandlerDelegate.accept(message));
         } catch (JSONDeserializationException e) {
             log.error("Failed to deserialize PersistedEvent '{}'", event.event().getEventTypeOrNamePersistenceValue(), e);
             throw e;

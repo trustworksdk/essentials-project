@@ -39,6 +39,13 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
  *                      operator chooses and can grow, and the ordered lane's is its fixed unit space
  *                      — so this is the larger of the two. Deploying more than this leaves the extras
  *                      consuming nothing; it is a ceiling on horizontal scale, not just on throughput
+ * @param parkedBehindDeadLetterDepth dead letters, of {@code deadLetteredDepth}, parked unhandled behind
+ *                      another dead letter on their key. Current, from the table - it falls when the key
+ *                      is resurrected. Not {@code messagesPoisonedBehindDeadLetter} in the statistics,
+ *                      which is a per-instance running total and never falls
+ * @param blockedKeys   ordered keys stopped behind a dead letter right now. Zero means no key is waiting
+ *                      on an operator. Not {@code keysBlockedByDeadLetter} in the statistics, which
+ *                      counts each time a block was recorded
  */
 public record ApiShardOwnedQueueStatus(QueueName queueName,
                                        int shardCount,
@@ -51,7 +58,9 @@ public record ApiShardOwnedQueueStatus(QueueName queueName,
                                        int unownedShards,
                                        boolean fullyOwned,
                                        int liveInstances,
-                                       int maxInstances) {
+                                       int maxInstances,
+                                       long parkedBehindDeadLetterDepth,
+                                       long blockedKeys) {
 
     public static ApiShardOwnedQueueStatus from(QueueName queueName, QueueDepth depth, QueueHealth health) {
         requireNonNull(queueName, "No queueName provided");
@@ -68,6 +77,8 @@ public record ApiShardOwnedQueueStatus(QueueName queueName,
                                             health.unownedShards(),
                                             health.fullyOwned(),
                                             health.liveInstances(),
-                                            Math.max(health.shardCount(), health.orderedUnits()));
+                                            Math.max(health.shardCount(), health.orderedUnits()),
+                                            depth.parkedBehindDeadLetter(),
+                                            depth.blockedKeys());
     }
 }

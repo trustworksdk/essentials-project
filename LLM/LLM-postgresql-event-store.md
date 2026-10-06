@@ -36,6 +36,7 @@
 - [In-Memory Projections](#in-memory-projections)
 - [Gap Handling](#gap-handling)
 - [Interceptors & EventBus](#interceptors--eventbus)
+- [Event Causation](#event-causation)
 - [Multitenancy](#multitenancy)
 - [Configuration](#configuration)
 - [Gotchas](#gotchas)
@@ -328,6 +329,12 @@ var subscriptionManager = EventStoreSubscriptionManager.builder()
 
 subscriptionManager.start();
 ```
+
+Resume points are saved every `snapshotResumePointsEvery` (builder default 1s), and only those that changed are written.
+After an ungraceful stop, events handled since the last save are redelivered. To bound that by count as well as time,
+opt in with `.setSnapshotResumePointsAfterEvents(n)`: a resume point that has moved `n` global orders past its last
+save is written early. The check runs in memory every tenth of `snapshotResumePointsEvery`, kept between 50 ms and
+1 s. `0` (default) disables it.
 
 ### Subscription Types
 
@@ -929,6 +936,86 @@ eventBus.addAsyncSubscriber(events ->
 ```
 
 **CommitStage**: `Flush` (with interceptor), `BeforeCommit`, `AfterCommit`, `AfterRollback`.
+
+## Event Causation
+
+Every persisted event can record the id of the event that caused it: `PersistedEvent.causedByEventId()`, column
+`caused_by_event_id`. Design: [`docs/event-causation.md`](../docs/event-causation.md).
+
+**On by default with the Spring Boot starter.** `essentials.eventstore.causation.enabled=false` turns off everything
+that writes it. Correlation ids are not populated - use trace context (OpenTelemetry) for "what did this request do".
+
+### What records a cause
+
+The framework binds "the event that caused the current work" (`CausationContext`, a `ScopedValue` in
+[foundation](./LLM-foundation.md#event-causation)) around every handler it delivers a `PersistedEvent` to, and
+`CausationPersistableEventEnricher` writes it on every event appended inside that binding:
+
+| Delivery | Cause bound |
+|---|---|
+| `EventProcessor` `@MessageHandler` (`REQUIRED` and `UnitOfWorkMode.NONE`) | the delivered event, enclosing the handler's UnitOfWork commit |
+| `ViewEventProcessor`, `InTransactionEventProcessor` | the delivered event |
+| Async and in-transaction subscriptions (`PersistedEventHandler`, `TransactionalPersistedEventHandler`) | the delivered event |
+| Batched subscriptions (`BatchedPersistedEventHandler`) | **nothing** - bind per event yourself (below) |
+| `Inbox`, `Outbox`, `DurableLocalCommandBus.sendAndDontWait` | the cause bound when the message was queued (carried in `MessageMetaData`) |
+| `CommandBus.send`; `sendAsync` / `LocalCommandBus.sendAndDontWait` | the sender's cause (the async ones via `CausationCommandContextPropagator`) |
+| HTTP requests, schedulers | nothing - no causing event; correct |
+
+Lazily appending repositories (`StatefulAggregateRepository`, `FlexAggregateRepository`, decider `CommandHandler`)
+record the cause bound when the aggregate *joined the UnitOfWork*, not the one bound at commit.
+
+**Rules**
+- A cause set by your own `PersistableEventMapper` is never overwritten.
+- No cause bound = no cause written; never an error.
+- A cause a UUID-typed event-id column cannot hold is dropped with a WARN; it never fails the append.
+- A policy waiting for two inputs records the event whose delivery completed it.
+
+### Binding a cause yourself
+
+```java
+// A webhook answering an event you can look up (e.g. by idempotency key)
+CausationContext.where(fundsCaptureRequestedEventId)
+                .run(() -> inbox.addMessageReceived(new RecordCaptureOutcome(paymentId)));
+
+// A batch handler reacting per event
+for (var event : events) {
+    CausationContext.where(event.eventId()).run(() -> react(event));
+}
+
+// Read it (logging, or recording it in your own state). Deciders are never given it.
+Optional<EventId> cause = CausationContext.current();
+```
+
+Bindings nest - the innermost wins. `CausationContext.where(Optional.empty())` binds "no cause" and hides an outer one.
+
+### Looking causes up
+
+```java
+// What caused this? Searches every registered aggregate type; uses the event-id index.
+Optional<PersistedEvent> event = eventStore.findEvent(eventId);
+Optional<PersistedEvent> cause = event.flatMap(PersistedEvent::causedByEventId).flatMap(eventStore::findEvent);
+
+// What did this cause? Direct effects; table-name order, then global order within a type.
+List<PersistedEvent> effects = eventStore.loadEventsCausedBy(eventId);   // needs the index below
+```
+
+Both need an active UnitOfWork. Only aggregate types registered with this event store are searched.
+
+**The caused-by index** (`essentials.eventstore.causation.index-enabled=true`, or
+`SeparateTablePerAggregateTypePersistenceStrategy.enableCausationIndex()`): a partial index
+(`WHERE caused_by_event_id IS NOT NULL`) on every event-stream table, created by the schema harness. Off by default;
+without it `loadEventsCausedBy` throws `CausationIndexNotEnabledException` instead of scanning every table.
+On a large existing table, build it concurrently first with the statement from
+`SeparateTablePerAggregateTypePersistenceStrategy.causationIndexStatement(configuration)` (replace `CREATE INDEX` with
+`CREATE INDEX CONCURRENTLY`); enabling the property then finds it in place. In `essentials.schema.mode=validate` the
+index is a schema change to apply first.
+
+The admin API exposes both directions, and lists an aggregate's recent events as the place to start - see
+[admin API](./LLM-admin-api.md). The console's *Event causation* page takes an aggregate type and id, or an event id.
+
+**Cost** (performance lab, `EventCausationCostIT`): no measurable throughput or latency difference on appends or
+through an `EventProcessor`; WAL grows by the stored id (~40 bytes per event). Across a durable queue, ~116 bytes of
+WAL per message and about 0.5% throughput.
 
 ## Multitenancy
 

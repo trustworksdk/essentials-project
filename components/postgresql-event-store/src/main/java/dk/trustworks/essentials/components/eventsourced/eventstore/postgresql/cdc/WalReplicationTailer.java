@@ -98,6 +98,12 @@ public class WalReplicationTailer implements Lifecycle {
      * on every reconnect cycle.
      */
     private final AtomicBoolean                                                 keepSizeAdvisoryEvaluated = new AtomicBoolean(false);
+    /**
+     * One recreation per {@link #start()} for a slot that predates its publication - see
+     * {@link #recreateSlotIfItPredatesThePublication(Exception)}. A second occurrence means the cause is something else,
+     * and recreating again every backoff interval would hide it.
+     */
+    private final AtomicBoolean                                                 slotPredatingPublicationRecreated = new AtomicBoolean(false);
 
     /**
      * Resolved idle-LSN-push cadence in nanoseconds. Captured from
@@ -263,6 +269,7 @@ public class WalReplicationTailer implements Lifecycle {
         }
 
         stopping.set(false);
+        slotPredatingPublicationRecreated.set(false);
         availability.inactive(slotName, "starting");
         log.info("[{}] ⚙️ Starting Essentials WalReplicationTailer", slotName);
 
@@ -355,6 +362,11 @@ public class WalReplicationTailer implements Lifecycle {
 
                     incrementCounter(connectFailuresCounter);
                     logFailedAttempt(attempt, startNs, backoffMs, e);
+
+                    if (recreateSlotIfItPredatesThePublication(e)) {
+                        backoffMs = tailerProperties.getPollBackoffInterval().toMillis();
+                        continue;
+                    }
 
                     try {
                         sleepBackoffWithJitter(backoffMs);
@@ -773,21 +785,84 @@ public class WalReplicationTailer implements Lifecycle {
         // conversionFailures / poisonRows and stalling publishedEventCount. Wipe them.
         // Runs in its own unit of work so a probe-slot check in downstream handshake isn't
         // contaminated by this write (same rationale as the plugin.prepare() split).
-        if (performingRecreate && deliveryMode == CdcDeliveryMode.INBOX) {
-            try {
-                int deleted = inboxRepository.deleteAllForSlot(slotName);
-                log.info("[{}] recreate-on-start: cleared {} inbox row(s) carrying stale pgoutput " +
-                                 "relation metadata from prior sessions",
-                         slotName, deleted);
-            } catch (Exception e) {
-                // Inbox clear failure is non-fatal; stale rows will surface as conversion
-                // failures + poison rows during dispatch, which is the visible-but-degraded
-                // mode the monitor already reports. Log loud so operators can intervene.
-                log.warn("[{}] recreate-on-start: failed to clear inbox rows — expect " +
-                                 "conversion failures on any stale rows from prior sessions: {}",
-                         slotName, e.toString());
+        if (performingRecreate) {
+            clearInboxAfterSlotRecreation("recreate-on-start");
+        }
+    }
+
+    private void clearInboxAfterSlotRecreation(String trigger) {
+        if (deliveryMode != CdcDeliveryMode.INBOX) return;
+        try {
+            int deleted = inboxRepository.deleteAllForSlot(slotName);
+            log.info("[{}] {}: cleared {} inbox row(s) carrying stale pgoutput " +
+                             "relation metadata from prior sessions",
+                     slotName, trigger, deleted);
+        } catch (Exception e) {
+            // Inbox clear failure is non-fatal; stale rows will surface as conversion
+            // failures + poison rows during dispatch, which is the visible-but-degraded
+            // mode the monitor already reports. Log loud so operators can intervene.
+            log.warn("[{}] {}: failed to clear inbox rows — expect " +
+                             "conversion failures on any stale rows from prior sessions: {}",
+                     slotName, trigger, e.toString());
+        }
+    }
+
+    /**
+     * Recovers a pgoutput slot that was created before its publication.
+     * <p>
+     * pgoutput looks the publication up in the catalog <i>as of the change being decoded</i>. A slot that predates its
+     * publication therefore fails on its first change with {@code publication "…" does not exist} even though the
+     * publication exists by now - and since a failed stream never confirms anything, every reconnect replays from the same
+     * position and fails the same way, forever. Reconnecting cannot fix it, so when the error names our publication and
+     * that publication does exist, the slot is recreated at the current WAL head (once per {@link #start()}).
+     * <p>
+     * Lossy in the same way as {@link #requestSlotRecreation()}: changes the slot had not delivered are dropped. They
+     * could not have been delivered through this slot, and the events remain in the event store for polling to find. A
+     * publication that really is missing is left alone - recreating the slot would not help, and the WARN logged at
+     * startup already names the fix.
+     *
+     * @return {@code true} if the slot was recreated, so the caller can reconnect without backing off
+     */
+    private boolean recreateSlotIfItPredatesThePublication(Exception streamFailure) {
+        if (!PgOutputLogicalDecodingPlugin.PLUGIN_NAME.equals(logicalDecodingPlugin.pluginName())) return false;
+        var publicationName = extractPublicationNameFromPlugin();
+        if (publicationName == null || !isMissingPublicationError(streamFailure, publicationName)) return false;
+
+        boolean publicationExists;
+        try {
+            publicationExists = unitOfWorkFactory.withUnitOfWork(uow -> PostgresqlUtil.isPublicationAvailable(uow.handle(), publicationName));
+        } catch (Exception e) {
+            log.debug("[{}] Could not check whether publication '{}' exists: {}", slotName, publicationName, e.getMessage());
+            return false;
+        }
+        if (!publicationExists) return false;
+
+        if (!slotPredatingPublicationRecreated.compareAndSet(false, true)) {
+            log.error("[{}] pgoutput still reports publication '{}' as missing although it exists, after the slot was already " +
+                              "recreated once - not recreating it again. Check whether the publication is being dropped and recreated.",
+                      slotName, publicationName);
+            return false;
+        }
+        log.warn("[{}] Replication slot predates publication '{}': pgoutput reads the publication as of each change, so " +
+                         "this slot fails on every change made before the publication existed and can never get past them. " +
+                         "Recreating the slot at the current WAL head.",
+                 slotName, publicationName);
+        requestSlotRecreation();
+        clearInboxAfterSlotRecreation("slot-predating-publication");
+        return true;
+    }
+
+    private static boolean isMissingPublicationError(Throwable failure, String publicationName) {
+        var expectedMessage = "publication \"" + publicationName + "\" does not exist";
+        for (Throwable t = failure; t != null; t = t.getCause() == t ? null : t.getCause()) {
+            if (t instanceof SQLException sqlException
+                    && "42704".equals(sqlException.getSQLState())
+                    && sqlException.getMessage() != null
+                    && sqlException.getMessage().contains(expectedMessage)) {
+                return true;
             }
         }
+        return false;
     }
 
     private ChainedLogicalStreamBuilder logicalStreamBuilder(PGConnection pgConn) {

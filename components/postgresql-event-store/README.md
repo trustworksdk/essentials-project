@@ -15,6 +15,7 @@ Full-featured Event Store for PostgreSQL with durable subscriptions, gap handlin
   - [Event Streams and Aggregate Types](#event-streams-and-aggregate-types)
   - [Typed Events vs Named Events](#typed-events-vs-named-events)
 - [Setup](#setup)
+- [Event Causation](#event-causation)
 - [Multitenancy](#multitenancy)
 - [Event Operations](#event-operations)
   - [EventStoreInterceptor](#eventstoreinterceptor)
@@ -297,7 +298,7 @@ public class MyPersistableEventMapper implements PersistableEventMapper {
                 EventRevision.of(1),                        // Event schema version
                 new EventMetaData(),                        // Additional metadata (empty or populated)
                 OffsetDateTime.now(ZoneOffset.UTC),         // Event timestamp (UTC)
-                null,                                        // causedByEventId - causal event reference (optional)
+                null,                                        // causedByEventId - leave null: CausationPersistableEventEnricher fills it
                 CorrelationId.random(),                     // Correlation ID for tracking related events
                 null                                         // tenant - multi-tenancy identifier (optional)
         );
@@ -584,6 +585,47 @@ eventStore.addAggregateEventStreamConfiguration(
 | `JSONColumnType.JSON` | Use JSON for event JSON |
 
 ---
+
+## Event Causation
+
+Every persisted event can record which event caused it (`PersistedEvent.causedByEventId()`), so "why did this happen?"
+becomes a lookup instead of an investigation. The framework binds the cause - the event being delivered - around every
+handler it calls (`EventProcessor`, `ViewEventProcessor`, `InTransactionEventProcessor`, async and in-transaction
+subscriptions), carries it across durable queues and command buses, and `CausationPersistableEventEnricher` writes it
+on every event appended inside that binding. A cause your own `PersistableEventMapper` sets is never overwritten.
+
+With the Spring Boot starter it is on by default (`essentials.eventstore.causation.enabled`). Without Spring, register
+the enricher yourself:
+
+```java
+SeparateTablePerAggregateTypePersistenceStrategy.builder()
+        // ...
+        .setPersistableEventEnrichers(List.of(new CausationPersistableEventEnricher()))
+        .build();
+```
+
+Binding a cause the framework cannot see - a webhook answering an event it looked up, or a batch handler reacting per
+event:
+
+```java
+CausationContext.where(causingEventId).run(() -> inbox.addMessageReceived(outcome));
+```
+
+Looking causes up (inside a UnitOfWork):
+
+```java
+Optional<PersistedEvent> event   = eventStore.findEvent(eventId);           // what caused this? - no extra index
+List<PersistedEvent>     effects = eventStore.loadEventsCausedBy(eventId);   // what did this cause? - needs the index
+```
+
+`loadEventsCausedBy` requires the opt-in partial caused-by index (`essentials.eventstore.causation.index-enabled=true`,
+or `enableCausationIndex()` on the persistence strategy) and refuses without it. On large existing tables build it
+concurrently first, using `SeparateTablePerAggregateTypePersistenceStrategy.causationIndexStatement(configuration)`
+with `CREATE INDEX CONCURRENTLY`.
+
+Full rules - joins, batch subscriptions, explicit bindings, cost - in
+[LLM-postgresql-event-store.md](../../LLM/LLM-postgresql-event-store.md#event-causation); design in
+[docs/event-causation.md](../../docs/event-causation.md).
 
 ## Multitenancy
 
@@ -1191,7 +1233,7 @@ This enables:
 **How it works:**
 
 1. The `DurableSubscriptionRepository` (e.g., `PostgresqlDurableSubscriptionRepository`) persists resume points to the database
-2. The `EventStoreSubscriptionManager` periodically snapshots resume points (configured via `setSnapshotResumePointsEvery`)
+2. The `EventStoreSubscriptionManager` periodically snapshots resume points (configured via `setSnapshotResumePointsEvery`). Only resume points that changed are written. To also save a busy subscriber's resume point once it has advanced a given number of global event orders, opt in with `setSnapshotResumePointsAfterEvents(n)`. Each save carries the resume point's reposition epoch, which a subscription reset increments, so a save that read the resume point before a reset can never overwrite the reset
 3. On startup, the subscription queries its last persisted resume point and continues from there
 
 **First subscription behavior:**

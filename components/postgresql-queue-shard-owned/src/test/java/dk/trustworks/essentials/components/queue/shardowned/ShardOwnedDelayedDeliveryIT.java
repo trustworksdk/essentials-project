@@ -108,6 +108,50 @@ class ShardOwnedDelayedDeliveryIT {
     }
 
     /**
+     * A delayed row sits below the cursor as a hole until its delay passes, and the hole is written off
+     * after {@code holeExpiry}. From then on nothing in memory protects it from the range delete that
+     * acknowledges the messages after it, so with traffic flowing it used to be deleted undelivered.
+     * {@code holeExpiry} is shortened so that happens well inside the delay.
+     */
+    @Test
+    void a_delayed_message_survives_the_acknowledgement_of_the_traffic_after_it() throws Exception {
+        var arrivals = ConcurrentHashMap.<String>newKeySet();
+        try (var queue = new PostgresqlMessageQueue(dataSource, QUEUE_ID, SHARD_COUNT, "delay-3",
+                                                    withHoleExpiry(Duration.ofMillis(200)))) {
+            queue.consume((messageId, key, payload, payloadType) -> arrivals.add(new String(payload, StandardCharsets.UTF_8)),
+                          ConsumerOptions.defaults());
+            Awaitility.await().atMost(Duration.ofSeconds(20)).until(() -> queue.isStarted());
+
+            queue.enqueue(Message.delayed("late".getBytes(StandardCharsets.UTF_8), 1, Duration.ofSeconds(2)));
+            var sent = 0;
+            var until = System.nanoTime() + Duration.ofMillis(1_500).toNanos();
+            while (System.nanoTime() < until) {
+                var batch = new ArrayList<Message>();
+                for (var index = 0; index < 20; index++) {
+                    batch.add(Message.of(("m-" + sent++).getBytes(StandardCharsets.UTF_8), 1));
+                }
+                queue.enqueue(batch);
+                Thread.sleep(25L);
+            }
+            var expected = sent + 1;
+
+            Awaitility.await().atMost(Duration.ofSeconds(15))
+                      .untilAsserted(() -> assertThat(arrivals)
+                              .as("the delayed message must be delivered, not deleted by a later message's ack")
+                              .hasSize(expected)
+                              .contains("late"));
+        }
+    }
+
+    private static ShardOwnerSettings withHoleExpiry(Duration holeExpiry) {
+        var d = ShardOwnerSettings.defaults();
+        return new ShardOwnerSettings(d.readBatchSize(), d.ackBatchSize(), d.ackFlushInterval(), d.chaseDelay(),
+                                      holeExpiry, d.sweepInterval(), d.maxHolesPerChase(), d.keyConcurrency(),
+                                      d.pollBackstop(), d.maxSweepInterval(), d.pumpThreads(), d.shedGrace(),
+                                      d.leaseTtl(), d.watermarkCap());
+    }
+
+    /**
      * The delay is applied by the server, which is what keeps it independent of the enqueueing node's
      * clock — the same rule every other durable moment in this engine follows. Checked structurally,
      * because with one clock in the test there is no skew to observe.

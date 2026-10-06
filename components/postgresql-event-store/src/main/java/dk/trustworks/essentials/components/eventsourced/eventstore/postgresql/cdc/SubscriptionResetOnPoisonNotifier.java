@@ -24,7 +24,6 @@ import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.ty
 import dk.trustworks.essentials.components.foundation.types.SubscriberId;
 import org.slf4j.*;
 
-import java.time.*;
 import java.util.*;
 
 import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
@@ -124,11 +123,9 @@ public class SubscriptionResetOnPoisonNotifier implements CdcPoisonNotifier {
         log.warn("[{}-{}] reset-after-poison from {} (requested {}, current {}) reason='{}'",
                  subscriberId, aggregateType, effectiveResetFrom, requestedResetFrom, currentResumeOpt.orElse(null), reason);
 
+        // resetFrom persists the reset itself, before invoking the callback: every subscription that supports a reset
+        // sets its own resume point and saves it straight away. Nothing is left for the callback to do
         subscription.resetFrom(effectiveResetFrom, resetPoint -> {
-            // Force durable persistence NOW (don’t wait for the async batch save)
-            var resumePoint = new SubscriptionResumePoint(subscriberId, aggregateType, resetPoint, OffsetDateTime.now(Clock.systemUTC()));
-            resumePoint.setResumeFromAndIncluding(resetPoint);
-            durableSubscriptionRepository.saveResumePoint(resumePoint);
         });
     }
 

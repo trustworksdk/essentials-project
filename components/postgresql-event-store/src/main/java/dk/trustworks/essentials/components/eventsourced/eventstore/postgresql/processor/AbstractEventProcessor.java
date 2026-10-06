@@ -21,6 +21,7 @@ import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.ev
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.serializer.AggregateIdSerializer;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.subscription.EventStoreSubscriptionManager;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.types.*;
+import dk.trustworks.essentials.components.foundation.causation.CausationContext;
 import dk.trustworks.essentials.components.foundation.json.JSONDeserializationException;
 import dk.trustworks.essentials.components.foundation.messaging.*;
 import dk.trustworks.essentials.components.foundation.messaging.eip.store_and_forward.*;
@@ -214,6 +215,8 @@ public abstract class AbstractEventProcessor implements Lifecycle {
      *       method's {@link MessageHandler#unitOfWork()} - so a {@link UnitOfWorkMode#NONE} handler runs with no
      *       database connection held and can perform blocking I/O</li>
      * </ol>
+     * Phase 2 runs with the resolved event bound as the cause in {@link CausationContext}, so every event the handler
+     * method appends - including the ones written lazily when its {@link UnitOfWork} commits - records it as its cause.
      */
     protected class EventReferenceResolvingMessageConsumer implements UnitOfWorkBoundaryOwningMessageConsumer {
         private final PatternMatchingMessageHandler patternMatchingMessageHandlerDelegate;
@@ -226,9 +229,11 @@ public abstract class AbstractEventProcessor implements Lifecycle {
         public void accept(Message msg) {
             if (msg instanceof OrderedMessage orderedMessage && AbstractEventProcessor.EventReferenceOrderedMessage.isEventReference(orderedMessage)) {
                 // Phase 1: resolve the event reference into the actual event - a database read, so it needs its own UnitOfWork
-                var resolvedMessage = withUnitOfWork(() -> resolveEventReference(orderedMessage));
-                // Phase 2: hand it to the handler methods, which decide their own UnitOfWork scope
-                patternMatchingMessageHandlerDelegate.accept(resolvedMessage);
+                var resolved = withUnitOfWork(() -> resolveEventReference(orderedMessage));
+                // Phase 2: hand it to the handler methods, which decide their own UnitOfWork scope. The binding
+                // encloses those UnitOfWorks, so it also covers events appended lazily when they commit
+                CausationContext.where(resolved.persistedEvent().eventId())
+                                .run(() -> patternMatchingMessageHandlerDelegate.accept(resolved.message()));
             } else {
                 patternMatchingMessageHandlerDelegate.accept(msg);
             }
@@ -241,13 +246,13 @@ public abstract class AbstractEventProcessor implements Lifecycle {
 
         /**
          * Load the {@link PersistedEvent} that the given event-reference {@link OrderedMessage} points to and return it
-         * as an {@link OrderedMessage} carrying the deserialized event as its payload.<br>
+         * together with an {@link OrderedMessage} carrying the deserialized event as its payload.<br>
          * <b>Must be called with an active {@link UnitOfWork}</b>
          *
          * @param orderedMessage the event-reference message
-         * @return the resolved {@link OrderedMessage} carrying the deserialized event
+         * @return the loaded {@link PersistedEvent} and the resolved {@link OrderedMessage} carrying the deserialized event
          */
-        private OrderedMessage resolveEventReference(OrderedMessage orderedMessage) {
+        private ResolvedEventReference resolveEventReference(OrderedMessage orderedMessage) {
             var aggregateType         = (AggregateType) orderedMessage.getPayload();
             var aggregateIdSerializer = resolveAggregateIdSerializer(aggregateType);
 
@@ -276,14 +281,22 @@ public abstract class AbstractEventProcessor implements Lifecycle {
             var persistedEvent = events.get(0);
             log.debug("[{}:{}] Handling Event of type '{}'", aggregateType, aggregateId, persistedEvent.event().getEventTypeOrNamePersistenceValue());
             try {
-                return OrderedMessage.of(persistedEvent.event().deserialize(),
-                                         stringAggregateId,
-                                         eventOrder,
-                                         orderedMessage.getMetaData());
+                return new ResolvedEventReference(persistedEvent,
+                                                  OrderedMessage.of(persistedEvent.event().deserialize(),
+                                                                    stringAggregateId,
+                                                                    eventOrder,
+                                                                    orderedMessage.getMetaData()));
             } catch (JSONDeserializationException e) {
                 log.error("Failed to deserialize PersistedEvent '{}'", persistedEvent.event().getEventTypeOrNamePersistenceValue(), e);
                 throw e;
             }
+        }
+
+        /**
+         * The outcome of {@link #resolveEventReference(OrderedMessage)}: the loaded event, kept so it can be bound as the
+         * cause, and the message handed to the handler methods
+         */
+        private record ResolvedEventReference(PersistedEvent persistedEvent, OrderedMessage message) {
         }
     }
 

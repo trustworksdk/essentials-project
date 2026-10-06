@@ -42,6 +42,7 @@
              parents straight off the root POM rather than the examples aggregator, so it does not inherit the
              aggregator's copy of this property. -->
         <maven.deploy.skip>true</maven.deploy.skip>
+        <loki-logback-appender.version>2.1.0</loki-logback-appender.version>
     </properties>
 
     <dependencies>
@@ -125,6 +126,29 @@
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-actuator</artifactId>
             <version>${spring-boot.version}</version>
+        </dependency>
+        <!--
+          The `observability` profile's metrics and traces, exported over OTLP to the collector in
+          compose.yml. One starter in Spring Boot 4: the OTLP meter registry, the Micrometer/OpenTelemetry
+          tracing bridge and the exporter. Export is off unless that profile is active - see application.yml.
+        -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-opentelemetry</artifactId>
+            <version>${spring-boot.version}</version>
+        </dependency>
+        <!-- Pushes logs to Loki; only attached by logback-spring.xml under the `observability` profile. -->
+        <dependency>
+            <groupId>com.github.loki4j</groupId>
+            <artifactId>loki-logback-appender</artifactId>
+            <version>${loki-logback-appender.version}</version>
+            <scope>runtime</scope>
+            <exclusions>
+                <exclusion>
+                    <groupId>ch.qos.logback</groupId>
+                    <artifactId>logback-classic</artifactId>
+                </exclusion>
+            </exclusions>
         </dependency>
         <dependency>
             <groupId>org.springframework.boot</groupId>

@@ -19,6 +19,7 @@ package dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.s
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.observability.EventStoreSubscriptionObserver;
+import dk.trustworks.essentials.components.foundation.lifecycle.*;
 import dk.trustworks.essentials.components.foundation.types.*;
 import org.slf4j.*;
 
@@ -27,12 +28,13 @@ import java.util.Optional;
 import java.util.function.*;
 
 import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
+import static dk.trustworks.essentials.shared.MessageFormatter.msg;
 
 /**
  * Abstract base class for EventStoreSubscription implementations.
  * Provides common functionality and fields used by all subscription types.
  */
-public abstract class AbstractEventStoreSubscription implements EventStoreSubscription {
+public abstract class AbstractEventStoreSubscription implements EventStoreSubscription, ShutdownAware {
     protected final Logger log;
 
     protected final EventStore                                   eventStore;
@@ -47,6 +49,11 @@ public abstract class AbstractEventStoreSubscription implements EventStoreSubscr
     protected final EventStoreSubscriptionObserver               eventStoreSubscriptionObserver;
     protected final Consumer<EventStoreSubscription>             unsubscribeCallback;
     protected final Function<String, EventStorePollingOptimizer> eventStorePollingOptimizerFactory;
+    /**
+     * Set once the application is shutting down - forwarded by {@link DefaultEventStoreSubscriptionManager}, whose
+     * subscriptions these are. From then on the resume point save on stop is one bounded attempt
+     */
+    private volatile ShutdownContext                             shutdown;
 
     protected volatile boolean started;
 
@@ -119,6 +126,21 @@ public abstract class AbstractEventStoreSubscription implements EventStoreSubscr
                   e.event().getEventTypeOrName().getValue(), cause);
     }
 
+    @Override
+    public void shutdownStarting(ShutdownContext shutdown) {
+        this.shutdown = requireNonNull(shutdown, "No shutdown provided");
+    }
+
+    /**
+     * @return true once the application is shutting down and has given up on database cleanup - the database is
+     * unreachable or the shutdown timeout has passed. A stop then has nothing to wait for: the resume point save it would
+     * wait to make is skipped anyway
+     */
+    protected boolean isShutdownCleanupAbandoned() {
+        var shutdown = this.shutdown;
+        return shutdown != null && shutdown.isCleanupAbandoned();
+    }
+
     /** How long {@link #persistResumePointUntilSettled} keeps re-saving before giving up. */
     protected static final Duration RESUME_POINT_SETTLE_TIMEOUT    = Duration.ofSeconds(5);
     /** Delay between the settle re-checks - short enough to see in-flight work land, long enough not to spin. */
@@ -146,13 +168,23 @@ public abstract class AbstractEventStoreSubscription implements EventStoreSubscr
         requireNonNull(durableSubscriptionRepository, "No durableSubscriptionRepository provided");
         requireNonNull(resumePoint, "No resumePoint provided");
 
-        var deadline = System.nanoTime() + RESUME_POINT_SETTLE_TIMEOUT.toNanos();
+        // During shutdown each save is one bounded attempt, and an unreachable database ends the settling: the resume
+        // point is then the last periodic checkpoint, so events after it are redelivered on the next start - at-least-once,
+        // as after any crash
+        var shutdown       = this.shutdown;
+        var settleTimeout  = shutdown != null && shutdown.remaining().compareTo(RESUME_POINT_SETTLE_TIMEOUT) < 0 ? shutdown.remaining() : RESUME_POINT_SETTLE_TIMEOUT;
+        var deadline       = System.nanoTime() + settleTimeout.toNanos();
         while (true) {
             log.debug("[{}-{}] Storing ResumePoint with resumeFromAndIncluding {}",
                       subscriberId,
                       aggregateType,
                       resumePoint.getResumeFromAndIncluding());
-            durableSubscriptionRepository.saveResumePoint(resumePoint);
+            if (shutdown == null) {
+                durableSubscriptionRepository.saveResumePoint(resumePoint);
+            } else if (!shutdown.attemptCleanup(msg("[{}-{}] save resume point", subscriberId, aggregateType),
+                                                () -> durableSubscriptionRepository.saveResumePoint(resumePoint))) {
+                return;
+            }
 
             if (!resumePoint.isChanged()) {
                 // What we wrote is what the resume point holds - nothing advanced past it mid-save
@@ -163,7 +195,7 @@ public abstract class AbstractEventStoreSubscription implements EventStoreSubscr
                                  "Events up to that point may be redelivered on the next start",
                          subscriberId,
                          aggregateType,
-                         RESUME_POINT_SETTLE_TIMEOUT,
+                         settleTimeout,
                          resumePoint.getResumeFromAndIncluding());
                 return;
             }

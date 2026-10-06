@@ -18,7 +18,7 @@ package dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.a
 
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.AggregateType;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.types.GlobalEventOrder;
-import dk.trustworks.essentials.components.foundation.types.SubscriberId;
+import dk.trustworks.essentials.components.foundation.types.*;
 
 import java.util.*;
 
@@ -86,4 +86,67 @@ public interface EventStoreApi {
     Optional<ApiSubscriptionStatistics> findSubscriptionStatistics(Object principal,
                                                                   SubscriberId subscriberId,
                                                                   AggregateType aggregateType);
+
+    /**
+     * The largest {@code maxDepth} {@link #findCausationChain(Object, EventId, int)} accepts
+     */
+    int MAX_CAUSATION_CHAIN_DEPTH = 100;
+
+    /**
+     * The largest {@code limit} {@link #findAggregateEvents(Object, AggregateType, String, int)} accepts
+     */
+    int MAX_AGGREGATE_EVENTS = 1000;
+
+    /**
+     * The most recent events of one aggregate, in event order - the starting point for "why is this aggregate in this
+     * state?": pick an event, then walk its causation. Describes each event's identity and cause only - no payloads.
+     *
+     * @param principal     the principal or identity making the request
+     * @param aggregateType the aggregate type
+     * @param aggregateId   the aggregate id, as text; converted with the aggregate type's configured id serializer
+     * @param limit         how many of the most recent events to return, 1 to {@link #MAX_AGGREGATE_EVENTS}
+     * @return the aggregate's most recent events, oldest first; empty if the aggregate type is not registered with this
+     * event store or the aggregate has no events
+     * @throws dk.trustworks.essentials.shared.security.EssentialsSecurityException if the principal is not authorized to access
+     */
+    List<ApiCausationEvent> findAggregateEvents(Object principal, AggregateType aggregateType, String aggregateId, int limit);
+
+    /**
+     * Find an event by its id alone, in whichever registered aggregate type's event stream holds it. Describes the
+     * event's identity and cause only - no payloads.
+     *
+     * @param principal the principal or identity making the request
+     * @param eventId   the id of the event
+     * @return the event, or {@link Optional#empty()} if no registered event stream holds it
+     * @throws dk.trustworks.essentials.shared.security.EssentialsSecurityException if the principal is not authorized to access
+     */
+    Optional<ApiCausationEvent> findEvent(Object principal, EventId eventId);
+
+    /**
+     * "Why did this happen?" - the event and the chain of events that caused it, walking back one recorded cause at a
+     * time: the event itself first, then its cause, then that event's cause, and so on.<br>
+     * The walk stops at an event with no recorded cause, at a cause no registered event stream holds, after
+     * {@code maxDepth} events, or if it would revisit an event.
+     *
+     * @param principal the principal or identity making the request
+     * @param eventId   the id of the event to start from
+     * @param maxDepth  the most events to return, 1 to {@link #MAX_CAUSATION_CHAIN_DEPTH}
+     * @return the chain, starting with the event itself; empty if no registered event stream holds it
+     * @throws dk.trustworks.essentials.shared.security.EssentialsSecurityException if the principal is not authorized to access
+     */
+    List<ApiCausationEvent> findCausationChain(Object principal, EventId eventId, int maxDepth);
+
+    /**
+     * "What did this cause?" - every event whose recorded cause is the given event, across every registered aggregate
+     * type: in aggregate-type table-name order, and global event order within an aggregate type. Direct effects only;
+     * call again with an effect's id to walk further.
+     *
+     * @param principal the principal or identity making the request
+     * @param eventId   the id of the causing event
+     * @return the events it caused; empty if none
+     * @throws dk.trustworks.essentials.shared.security.EssentialsSecurityException if the principal is not authorized to access
+     * @throws dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.persistence.CausationIndexNotEnabledException
+     *                                                                              if the caused-by-event-id index is not enabled
+     */
+    List<ApiCausationEvent> findEventsCausedBy(Object principal, EventId eventId);
 }

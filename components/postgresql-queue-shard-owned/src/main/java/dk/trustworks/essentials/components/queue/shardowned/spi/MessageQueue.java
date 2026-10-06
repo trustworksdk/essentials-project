@@ -200,6 +200,10 @@ public interface MessageQueue extends Lifecycle, AutoCloseable {
      * acknowledgement then matches no row — which the engine already tolerates, because a fenced-out
      * owner produces the same thing. The message is gone either way; what is not guaranteed is that
      * its handler did not run.
+     * <p>
+     * A dead letter is deleted by the same id, the one {@link DeadLetter#id()} reports. Deleting the
+     * dead letter that holds an ordered key releases the key once its owner next re-reads its blocks,
+     * which it does on the sweep cadence while a block stands.
      *
      * @return false if it was already gone
      */

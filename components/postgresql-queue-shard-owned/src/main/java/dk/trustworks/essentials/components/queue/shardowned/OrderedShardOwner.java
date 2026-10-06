@@ -154,9 +154,18 @@ final class OrderedShardOwner implements BatchReadableOwner {
     }
 
     /**
-     * Set once a WARN has been logged for a key, so a blocked key is reported on transition only.
+     * Set once a key has been handed to {@link BlockedKeyReport}, so a blocked key is reported on transition only.
      */
     private final Set<String> reportedBlocks = new HashSet<>();
+    /**
+     * The in-flight keys an abandoned shed has already been WARNed about. The rebalancer re-attempts
+     * the shed every heartbeat tick, so a handler that hangs would otherwise produce the same WARN on
+     * every tick for as long as it hangs. Only an abandon held up by a key not reported yet is logged
+     * at WARN; a repeat for the same keys goes to DEBUG.
+     * <p>
+     * Guarded by {@link #stateLock}.
+     */
+    private final Set<String> reportedStuckKeys = new HashSet<>();
     /**
      * Set when a row arrives at exactly a key's blocked {@code key_order} — which can only be the
      * dead letter itself, resurrected, since {@code (key, key_order)} is unique and the original row
@@ -561,17 +570,14 @@ final class OrderedShardOwner implements BatchReadableOwner {
                     metrics.keyHeadOfLineBlocks.increment();
                     continue;
                 }
-                if (activeKeys.get() >= settings.keyConcurrency()) {
-                    break;
-                }
-                // Per-shard cap first, then the process-wide budget the unordered lane also draws on.
-                if (!dispatch.tryAcquire()) {
-                    break;
-                }
                 // The guarantee itself, not an optimisation: a key never advances past a dead letter.
                 // accept() keeps these out of readyByKey, so reaching this is either a row held from
                 // before the block appeared or one the refresh has just learned about — both of which
                 // must be moved, not delivered.
+                //
+                // Tested BEFORE a permit is taken. It used to come after tryAcquire and `continue`
+                // without releasing, so every pass through here cost the consumer one of its
+                // parallelConsumers permits for good, and enough of them stopped it dispatching at all.
                 if (blockedAbove(key, byOrder.firstKey())) {
                     // The lowest value held is already above the block, so everything here is.
                     byOrder.values().forEach(row -> pendingPoison.add(
@@ -579,6 +585,13 @@ final class OrderedShardOwner implements BatchReadableOwner {
                     byOrder.clear();
                     exhaustedKeys.add(key);
                     continue;
+                }
+                if (activeKeys.get() >= settings.keyConcurrency()) {
+                    break;
+                }
+                // Per-shard cap first, then the process-wide budget the unordered lane also draws on.
+                if (!dispatch.tryAcquire()) {
+                    break;
                 }
                 var next     = byOrder.pollFirstEntry();
                 var previous = highestDeliveredOrder.get(key);
@@ -604,9 +617,10 @@ final class OrderedShardOwner implements BatchReadableOwner {
     }
 
     private void runHandler(String key, long keyOrder, ShardOwnedStorage.OrderedRow row) {
+        var startedNanos = System.nanoTime();
         try {
             handler.handle(new MessageId(MessageId.Lane.ORDERED, shard, row.seq()),
-                           key, row.payload(), row.payloadType());
+                           key, keyOrder, row.payload(), row.payloadType());
             synchronized (stateLock) {
                 if (Thread.currentThread().isInterrupted()) {
                     metrics.abandonedOnInterrupt.increment();
@@ -623,6 +637,7 @@ final class OrderedShardOwner implements BatchReadableOwner {
             // and, on a virtual thread before JDK 24, pins the carrier for its duration.
             onFailure(key, keyOrder, row, e);
         } finally {
+            LeaseOverrun.check(metrics, settings, "ordered", shard, startedNanos);
             synchronized (stateLock) {
                 keysInFlight.remove(key);
             }
@@ -645,8 +660,19 @@ final class OrderedShardOwner implements BatchReadableOwner {
         metrics.observer().deliveryFailed(key, attempts, cause);
         try (var connection = storage.connection()) {
             if (redeliveryPolicy.isExhausted(attempts)) {
-                storage.moveToDeadLetter(connection, ShardOwnedSchema.ORDERED_TABLE, "ordered", shard, row.seq(),
-                                         cause.getClass().getName() + ": " + cause.getMessage());
+                var moved = storage.moveToDeadLetter(connection, ShardOwnedSchema.ORDERED_TABLE, "ordered", shard,
+                                                     row.seq(), cause.getClass().getName() + ": " + cause.getMessage());
+                if (!moved) {
+                    // Nothing was parked, so there is no dead letter for the key to wait behind: blocking
+                    // it here would hold the key on a block no later owner can see or clear.
+                    synchronized (stateLock) {
+                        attemptsBySeq.remove(row.seq());
+                        seen.remove(row.seq());
+                    }
+                    log.warn("Ordered shard {}: seq {} of key '{}' exhausted its attempts but was no longer in the "
+                             + "table, so it was not dead-lettered", shard, row.seq(), key);
+                    return;
+                }
                 synchronized (stateLock) {
                     attemptsBySeq.remove(row.seq());
                     seen.remove(row.seq());
@@ -691,14 +717,9 @@ final class OrderedShardOwner implements BatchReadableOwner {
             above.clear();
         }
         if (reportedBlocks.add(key)) {
-            // Once per key, because this is a state an operator has to act on: nothing for this key
-            // will be delivered again until the dead letter is resurrected or deleted. It is also the
-            // only signal — the messages behind it are moved out of the queue, so depth falls rather
-            // than rises, and a rising dead-letter count is what is left to notice.
-            log.warn("Ordered shard {}: key '{}' is blocked at key_order {} — its message was dead-lettered, so "
-                             + "nothing above that order will be delivered and anything arriving for it is dead-lettered "
-                             + "too. Resurrect or delete the dead letter to release the key",
-                     shard, key, previous);
+            // Once per key, and further limited per consumer by BlockedKeyReport: a handler failing for
+            // everything blocks every key with traffic, which was a WARN per key without end.
+            BlockedKeyReport.keyBlocked(metrics, storage.queueId(), shard, key, previous);
         }
         metrics.keysBlockedByDeadLetter.increment();
     }
@@ -745,12 +766,24 @@ final class OrderedShardOwner implements BatchReadableOwner {
         var seqs = batch.stream().map(PoisonCandidate::seq).toList();
         var moved = storage.poisonOrderedBehindDeadLetter(connection, shard, seqs,
                                                           DeadLetter.BLOCKED_BEHIND_DEAD_LETTER);
-        metrics.messagesPoisonedBehindDeadLetter.add(moved);
+        metrics.messagesPoisonedBehindDeadLetter.add(moved.size());
+        var notMoved = batch.stream().filter(candidate -> !moved.contains(candidate.seq())).toList();
+        if (!notMoved.isEmpty()) {
+            // The table had no dead letter left below them: the block in memory is stale, typically
+            // because an operator deleted the dead letter since the last refresh. Re-read it now, so
+            // the rows handed back below are dispatched on this block's absence rather than queued
+            // for a move again.
+            refreshDeadLetterBlocks(connection);
+        }
         synchronized (stateLock) {
             pendingPoison.removeAll(batch);
             // The rows are gone from the lane, so remembering their sequence values would leak for as
             // long as this owner lives — the same reason flushAcks forgets what it acknowledged.
-            seqs.forEach(seen::remove);
+            moved.forEach(seen::remove);
+            // Still in the lane, so back where accept() would have put them had the block been known
+            // to be gone.
+            notMoved.forEach(candidate -> readyByKey.computeIfAbsent(candidate.key(), key -> new TreeMap<>())
+                                                    .put(candidate.keyOrder(), candidate.row()));
         }
     }
 
@@ -941,6 +974,9 @@ final class OrderedShardOwner implements BatchReadableOwner {
         int inFlight;
         synchronized (stateLock) {
             inFlight = keysInFlight.size();
+            if (inFlight == 0) {
+                reportedStuckKeys.clear();
+            }
         }
         if (inFlight == 0) {
             // Flush while the fence is still valid. Acknowledging after the release would be refused,
@@ -959,11 +995,34 @@ final class OrderedShardOwner implements BatchReadableOwner {
             // unbalanced is a performance cost, releasing here would be an ordering bug.
             shedding.set(false);
             metrics.shedsAbandoned.increment();
-            log.warn("Ordered shard {}: shed abandoned with {} key(s) still in a handler — keeping the shard",
-                     shard, inFlight);
+            List<String> stuckKeys;
+            boolean      notReportedYet;
+            synchronized (stateLock) {
+                stuckKeys = List.copyOf(keysInFlight);
+                // Forget keys that have since finished, so one that gets stuck again later is reported again.
+                reportedStuckKeys.retainAll(keysInFlight);
+                notReportedYet = reportedStuckKeys.addAll(keysInFlight);
+            }
+            if (notReportedYet) {
+                log.warn("Ordered shard {}: shed abandoned with {} key(s) still in a handler {} — keeping the shard. "
+                                 + "The shed is retried every heartbeat; this is logged again only if another key holds it up",
+                         shard, stuckKeys.size(), describeKeys(stuckKeys));
+            } else {
+                log.debug("Ordered shard {}: shed abandoned again with {} key(s) still in a handler {}",
+                          shard, stuckKeys.size(), describeKeys(stuckKeys));
+            }
             return false;
         }
         return false;
+    }
+
+    /**
+     * The keys named in a log line, capped: they are what an operator looks up, but a shard can hold
+     * up to {@code keyConcurrency} of them.
+     */
+    private static String describeKeys(List<String> keys) {
+        var max = 10;
+        return keys.size() <= max ? keys.toString() : keys.subList(0, max) + " and " + (keys.size() - max) + " more";
     }
 
     @Override

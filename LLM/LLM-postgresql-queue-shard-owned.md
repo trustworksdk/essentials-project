@@ -139,7 +139,7 @@ Full detail and the failure modes: [docs/durable-queue-shard-owned.md](../docs/d
 - **The engine probes for it at start-up** (`verifyWatermarkPrerequisites`, first statement of `startOrdered`, once per `DataSource`) and refuses to start the lane rather than risk silent loss. Do not suppress it. It constructs the condition rather than inspecting the column, because `backend_xid` is legitimately null for a backend that has not written.
 - **No superuser, no replication slot, no `wal_level=logical`, no extensions.**
 - **The right to create sequences at runtime.** Each queue's sequences are named after the id the registry assigns at registration, so they cannot come from a script written beforehand. Under the schema harness ([LLM-foundation.md](./LLM-foundation.md#database-schema-harness)) in a mode other than `create`, the tables, views and fixed sequences come from the script (`ShardOwnedSchema.schemaStatements()`, carried by `ShardOwnedSchemaContributor` in the adapter module) and the engine creates each queue's sequences as it registers; the contributor logs a warning saying so. `registerQueue`/`growShardCount` take a `QueueDdlExecutor` to route that DDL elsewhere.
-- **`pumpThreads + 1` connections are held permanently** (default 3) and never returned to the pool. Everything else is per operation — lease renewal and enqueue included, so the pool needs room above that floor. `ShardRuntime` checks at start-up from the pool's `ConnectionPoolMetadata`: a maximum size `<= pumpThreads + 1` throws `IllegalStateException` before any connection is taken, and held connections above half the pool — summed across every running runtime on the same `DataSource` — log a WARN. The Spring Boot starter supplies the metadata from Spring Boot's `DataSourcePoolMetadataProvider`s (HikariCP, Commons DBCP2, Tomcat JDBC, Oracle UCP, proxies seen through). Constructing the runtime yourself, pass `new ShardRuntime(dataSource, settings, metrics, ConnectionPoolMetadata.ofMaximumSize(n))` or your own implementation; without one the requirement is only logged at INFO. When a pump later fails to get a connection and every connection is checked out, it logs ERROR `connection pool exhausted` instead of `lost its connection; reconnecting`.
+- **`pumpThreads + 1` connections are held permanently** (default 3) and never returned to the pool. Everything else is per operation — lease renewal and enqueue included, so the pool needs room above that floor. `ShardRuntime` checks at start-up from the pool's `ConnectionPoolMetadata`: a maximum size `<= pumpThreads + 1` throws `IllegalStateException` before any connection is taken, and held connections above half the pool — summed across every running runtime on the same `DataSource` — log a WARN. The Spring Boot starter supplies the metadata from Spring Boot's `DataSourcePoolMetadataProvider`s (HikariCP, Commons DBCP2, Tomcat JDBC, Oracle UCP, proxies seen through). Constructing the runtime yourself, pass `new ShardRuntime(dataSource, settings, metrics, ConnectionPoolMetadata.ofMaximumSize(n))` or your own implementation; without one the requirement is only logged at INFO. Every start logs the share held — `Shard-owned queue: holding 3 of the connection pool's 20 connections permanently (15%; ...)` — at INFO, as a WARN naming the pool size to set once it passes half. When a pump later fails to get a connection and every connection is checked out, it logs ERROR `connection pool exhausted` instead of `lost its connection; reconnecting`.
 - **`LISTEN`/`NOTIFY` on one channel.** Blocked notifications (some poolers in transaction mode) cost latency, not correctness: delivery falls back to the sweep cadence, worst case `maxSweepInterval`.
 - **Set `socketTimeout` on the DataSource.** Not a requirement, the single most consequential thing you can get wrong. Measured across a real network partition: with `socketTimeout=3` a cut-off instance learns it has lost the database in 3.3 s; without one it had not learned within 90 s, and 90 s is where the measurement stopped, not where the socket did. Nothing else saves it — the pool's `connectionTimeout` never fires, because the heartbeat is blocked inside a read on a connection the pool still considers healthy. The survivors are unaffected either way, taking the shards over at one lease TTL; the cut-off instance is the one that keeps delivering duplicates until its read returns. See `docs/durable-queue-measurements.md` §3.4.1.
 - **Intra-service only.** Multiple instances of one service against one database — like the rest of Essentials' queues, locks and inbox/outbox.
@@ -161,7 +161,7 @@ Full detail and the failure modes: [docs/durable-queue-shard-owned.md](../docs/d
 | `chaseDelay` | 2 ms | **UNORDERED lane only** as hole-resolution latency. On the ordered lane it only throttles the watermark probe | Rarely |
 | `maxHolesPerChase` | 1 000 | **UNORDERED lane only.** Holes resolved per chase query | Rarely |
 | `watermarkCap` | 60 s | **ORDERED lane only.** How long one long-running *write* transaction may pin the lane before the cursor is forced past it — which can skip that transaction's messages | Leave it. It is an escape hatch, not a tuning knob; if it fires, fix the long transaction |
-| `leaseTtl` | 30 s | How long a shard stays unserved if its owner dies without releasing. Heartbeat renews at a third of it | Lower for faster failover, but not below your worst stop-the-world pause |
+| `leaseTtl` | 30 s | How long a shard stays unserved if its owner dies without releasing. Heartbeat renews at a third of it | Lower for faster failover, but not below your worst stop-the-world pause, and **well above your slowest handler**: if an instance loses liveness while a handler runs longer than the rest of the lease, a successor starts the same key beside it. `ShardOwnerMetrics.handlersOutlastingLease` counts handlers that ran longer than `leaseTtl`, with a WARN at most once a minute |
 | `shedGrace` | 5 s | How long an ordered shard waits to drain before abandoning a hand-over, and how long `stop()` waits for handlers in flight | Raise if handlers are slow and rebalancing stalls, or if `stop()` keeps ordered units |
 
 `watermarkCap` and `holeExpiry` answer the same question for different lanes and are deliberately
@@ -381,11 +381,27 @@ Via Micrometer, `bindQueueHealth(queue, maxAge)` publishes:
 | `essentials.queue.shards.owned` (tag `lane`) | coverage per lane |
 | `essentials.queue.instances` | scale events, and id collisions |
 | `essentials.queue.depth` (tag `lane`) | backlog, via `bindQueueDepth` |
+| `essentials.queue.keys.blocked` | ordered keys stopped behind a dead letter right now, via `bindQueueDepth` |
+| `essentials.queue.deadletters.parked` | dead letters parked unhandled behind another on their key, right now, via `bindQueueDepth`. Already included in the `dead-letter` lane of `essentials.queue.depth` — do not add the two |
 
 Both bindings are opt-in and cached, because a gauge is polled on every scrape and these are queries.
 
+**In Spring Boot** the starter binds a `MicrometerQueueObserver` to every queue `ShardOwnedQueueFactory` builds whenever a `MeterRegistry` exists — tagged `queue=<name>` — so the event meters (`essentials.queue.enqueued`, `.delivery`, `.delivery.failures`, `.retries`, `.deadletters`, `.shard.ownership`) need no code. The gauges stay opt-in:
+
+```yaml
+essentials:
+  shard-owned-queue:
+    metrics:
+      enabled: true          # default; false turns every per-queue meter off
+      depth-gauges: true     # depth per lane, blocked keys, parked dead letters
+      health-gauges: true    # shards owned/unowned, live instances
+      gauge-max-age: 10s     # scrapes inside the window share one query round
+```
+
+The gauges read the database, so every instance reports the same cluster-wide value: aggregate them with `max by (queue)`, not `sum`. Event meters are per instance and do sum.
+
 **`ShardOwnerMetrics.deliveryPauses`** is the other one to watch. An instance that has not been able
-to confirm its own liveness within `leaseTtl` stops dispatching until it can — by then the rest of the
+to confirm its own liveness within four fifths of `leaseTtl` stops dispatching until it can — by then the rest of the
 cluster already considers its units takeable, so anything it delivered would be work a successor is
 doing too. Nothing is lost and it resumes on its own at the next successful heartbeat; a non-zero
 count says the database was unreachable or too slow for longer than the lease, which is the same

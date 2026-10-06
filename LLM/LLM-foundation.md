@@ -30,6 +30,7 @@
 - [Inbox/Outbox Patterns](#inboxoutbox-patterns)
 - [Ordered Message Processing](#ordered-message-processing)
 - [DurableLocalCommandBus](#durablelocalcommandbus)
+- [Event Causation](#event-causation)
 - [Database Schema Harness](#database-schema-harness)
 - [Utilities](#utilities)
 - ⚠️ [Security](#security)
@@ -849,6 +850,35 @@ commandBus.sendAndDontWait(new SendReminderCommand(customerId), Duration.ofHours
 OrderId result = commandBus.send(new CreateOrderCommand(...));
 ```
 
+## Event Causation
+
+`CausationContext` (package `dk.trustworks.essentials.components.foundation.causation`) carries "the event that
+caused the work currently being done" from the place that knows it to the place that writes new events. It is a
+`ScopedValue`: bound for the dynamic extent of a call, never leaking into a pooled thread's next task. What reads and
+writes it in the event store: [postgresql-event-store](./LLM-postgresql-event-store.md#event-causation).
+
+```java
+CausationContext.where(eventId).run(() -> ...);          // bind for a call
+var result = CausationContext.where(eventId).call(() -> ...);
+CausationContext.where(Optional.empty()).run(() -> ...); // bind "no cause" - hides an outer binding
+Optional<EventId> cause = CausationContext.current();     // read
+```
+
+- **Bindings nest; the innermost wins.**
+- **A binding does not cross threads.** Capture `current()` and re-bind on the other side.
+- **Durable queues carry it**: `CausationDurableQueuesInterceptor` writes it into `MessageMetaData` under
+  `MessageMetaData.CAUSED_BY_EVENT_ID` (`essentials.causedByEventId`) when a message is queued - unless the message
+  already carries one - and re-binds it around the handler. So `Inbox.addMessageReceived`, `Outbox.sendMessage` and
+  `DurableLocalCommandBus.sendAndDontWait` carry the sender's cause. It must run outermost
+  (`@InterceptorOrder(1)`), because on PostgreSQL the handler's UnitOfWork is opened by an interceptor.
+- **Command buses carry it**: `send` runs the handler on the caller's thread; `sendAsync` and
+  `LocalCommandBus.sendAndDontWait` run it on a Reactor worker, so `CausationCommandContextPropagator` (a
+  `CommandContextPropagator`, see [reactive](./LLM-reactive.md#localcommandbus-api)) captures it at send.
+- The Spring Boot event-store starter registers the interceptor and the propagator (on every command-bus bean)
+  unless `essentials.eventstore.causation.enabled=false`. Without Spring:
+  `durableQueues.addInterceptor(new CausationDurableQueuesInterceptor())` and
+  `commandBus.addContextPropagator(new CausationCommandContextPropagator())`.
+
 ## Database Schema Harness
 
 **Package**: `dk.trustworks.essentials.components.foundation.schema` (SPI), PostgreSQL appliers in `.postgresql`.
@@ -1264,8 +1294,38 @@ All APIs require `principal` parameter for authorization. Throw `EssentialsSecur
 |-----|-------------|
 | `DBFencedLockApi` | `getAllLocks()`, `releaseLock()` |
 | `DurableQueuesApi` | `getQueueNames()`, `getQueuedMessages()`, `resurrectDeadLetterMessage()`, `deleteMessage()` |
-| `SchedulerApi` | `getPgCronJobs()`, `getExecutorJobs()` |
-| `PostgresqlQueryStatisticsApi` | `getTopTenSlowestQueries()` (requires `pg_stat_statements`: in the server's `shared_preload_libraries`, and created in the database — the API creates it at startup when the server preloads it and the role may create extensions; otherwise it returns an empty list) |
+| `SchedulerApi` | `getPgCronJobs()`, `getExecutorJobs()`, `runJobNow(principal, jobName)` — runs a registered job once and returns `ApiScheduledJobRun` (succeeded, duration, error); requires `SCHEDULER_WRITER`. An executor job only on the scheduler-lock holder (else `ScheduledJobNotRunnableHereException`, 409 over HTTP, naming the holder); a pg_cron job calls its registered function directly from any instance, not recorded in `cron.job_run_details`. Not coordinated with a scheduled run of the same job |
+| `PostgresqlQueryStatisticsApi` | `getSlowestQueries(principal, QueryStatisticsOrder, limit)`, `getTopTenSlowestQueries()` (requires `pg_stat_statements`: in the server's `shared_preload_libraries`, and created in the database — the API creates it at startup when the server preloads it and the role may create extensions; otherwise it returns an empty list) |
+| `PostgresqlTableStatisticsApi` | `fetchTableStatistics()` — size, activity, dead rows, cache hit and last vacuum/analyze for every table the registered `PostgresqlStatisticsTableProvider`s report, each tagged with a section |
+
+**Ranking slow queries.** `getTopTenSlowestQueries()` ranks by cumulative time (`TOTAL_TIME`), which a busy system's
+cheap, constantly running statements dominate — queue polling above all. Use `getSlowestQueries(...)` with
+`MEAN_TIME` or `MAX_TIME` to find statements that are slow per call; `CALLS` and `BLOCKS_READ` rank by load and I/O.
+Only statements for the current database are returned (`pg_stat_statements` is cluster-wide), and `limit` is capped
+at `MAX_SLOWEST_QUERIES_LIMIT` (100).
+
+**Reporting tables.** `DefaultPostgresqlTableStatisticsApi` reports what its `PostgresqlStatisticsTableProvider`s
+contribute, asked on every request. A `PostgresqlStatisticsTable` is `(section, tableName)`; the `SECTION_*` constants
+cover the Essentials components, and any other section id is reported after them. Names resolve through
+`to_regclass`, so a table that does not exist yet is left out rather than failing. The Spring Boot starters register a
+provider per component with its configured table names; add a provider bean to report your own tables:
+
+```java
+@Bean
+PostgresqlStatisticsTableProvider orderTables() {
+    return PostgresqlStatisticsTableProvider.of("orders", "order_view", "order_lines_view");
+}
+```
+
+`cacheHitRatio` is a percentage 0-100 (one decimal), `null` until the table has had block access.
+
+Index tuning signals on `ApiTableStatistics`:
+- `rowsHotUpdated` / `hotUpdateRatio()` — share of updates that touched no index. Low on a frequently updated table
+  means an index covers an updated column, or pages lack free space (`fillfactor`).
+- `indexes` — one `ApiIndexStatistics` per index: size, `idxScan`, entries read, rows fetched, cache hit, and
+  `unique` / `primary` / `valid`. `unused()` is `idxScan == 0` on a non-unique, non-primary index: a drop candidate
+  once the statistics cover a representative period. Scans on read replicas are not counted. `valid == false` is a
+  leftover of a failed `CREATE INDEX CONCURRENTLY`, maintained on every write and never used.
 
 ## Common Patterns
 

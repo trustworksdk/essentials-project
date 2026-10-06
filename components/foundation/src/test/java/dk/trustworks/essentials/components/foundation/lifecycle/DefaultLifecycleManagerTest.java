@@ -20,10 +20,13 @@ import dk.trustworks.essentials.shared.Lifecycle;
 import org.junit.jupiter.api.Test;
 import org.springframework.context.ApplicationContext;
 
+import java.time.Duration;
 import java.util.*;
+import java.util.concurrent.CountDownLatch;
 import java.util.function.Consumer;
 
-import static org.assertj.core.api.Assertions.assertThatNoException;
+import static org.assertj.core.api.Assertions.*;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.*;
 
 class DefaultLifecycleManagerTest {
@@ -107,6 +110,62 @@ class DefaultLifecycleManagerTest {
                 .isThrownBy(manager::stop);
 
         verify(laterBean).stop();
+    }
+
+    @Test
+    void every_shutdown_aware_bean_is_told_before_the_first_bean_is_stopped() {
+        var applicationContext = mock(ApplicationContext.class);
+        var firstBean          = mock(Lifecycle.class);
+        var shutdownAwareBean  = mock(ShutdownAware.class);
+        when(firstBean.isStarted()).thenReturn(true);
+        when(applicationContext.getBeansOfType(Lifecycle.class)).thenReturn(Map.of("first", firstBean));
+        when(applicationContext.getBeansOfType(ShutdownAware.class, false, false)).thenReturn(Map.of("aware", shutdownAwareBean));
+
+        var manager = new DefaultLifecycleManager(true);
+        manager.setApplicationContext(applicationContext);
+        manager.start();
+        manager.stop();
+
+        var inOrder = inOrder(shutdownAwareBean, firstBean);
+        inOrder.verify(shutdownAwareBean).shutdownStarting(any(ShutdownContext.class));
+        inOrder.verify(firstBean).stop();
+    }
+
+    /**
+     * A JVM already running its shutdown hooks ignores a second Ctrl-C, so a stop() that never returns - waiting on a
+     * database that is gone - used to leave kill -9 as the only way out.
+     */
+    @Test
+    void a_bean_that_hangs_while_stopping_is_abandoned_at_the_shutdown_timeout_and_the_beans_after_it_are_still_stopped() throws InterruptedException {
+        var applicationContext = mock(ApplicationContext.class);
+        var hangingBean        = mock(Lifecycle.class);
+        var laterBean          = mock(Lifecycle.class);
+        var neverReleased      = new CountDownLatch(1);
+        when(hangingBean.isStarted()).thenReturn(true);
+        when(laterBean.isStarted()).thenReturn(true);
+        doAnswer(invocation -> {
+            neverReleased.await();
+            return null;
+        }).when(hangingBean).stop();
+
+        var beans = new LinkedHashMap<String, Lifecycle>();
+        beans.put("hanging", hangingBean);
+        beans.put("later", laterBean);
+        when(applicationContext.getBeansOfType(Lifecycle.class)).thenReturn(beans);
+
+        var manager = new DefaultLifecycleManager(context -> {}, true, Duration.ofMillis(200));
+        manager.setApplicationContext(applicationContext);
+        manager.start();
+        var started = System.nanoTime();
+        try {
+            manager.stop();
+
+            assertThat(Duration.ofNanos(System.nanoTime() - started)).isLessThan(Duration.ofSeconds(3));
+            verify(laterBean).stop();
+            assertThat(manager.isRunning()).isFalse();
+        } finally {
+            neverReleased.countDown();
+        }
     }
 
     @Test
