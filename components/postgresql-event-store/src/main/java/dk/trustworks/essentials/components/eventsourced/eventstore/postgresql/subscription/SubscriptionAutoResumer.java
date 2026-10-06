@@ -64,9 +64,16 @@ final class SubscriptionAutoResumer {
      */
     private GlobalEventOrder stoppedAt;
     /**
-     * How many times the subscription has been resumed by this resumer at {@link #stoppedAt} - guarded by {@link #lock}
+     * How many times the subscription has been resumed by this resumer at {@link #stoppedAt} - guarded by {@link #lock}.
+     * Only a resume that went through counts: one that threw is no attempt at the event, so it never uses up
+     * {@link SubscriptionErrorPolicy.AutoResume#maxAttempts()}
      */
     private int              resumesAtStoppedAt;
+    /**
+     * How many resumes in a row threw since the last one that went through - guarded by {@link #lock}. Lengthens the wait
+     * before the next try, as a resume at the event would, without counting as one
+     */
+    private int              failedResumesInARow;
     /**
      * The scheduled resume, or null - guarded by {@link #lock}
      */
@@ -145,6 +152,7 @@ final class SubscriptionAutoResumer {
             if (!failedAt.equals(stoppedAt)) {
                 stoppedAt = failedAt;
                 resumesAtStoppedAt = 0;
+                failedResumesInARow = 0;
             }
             schedule(failedAt, policy);
         }
@@ -211,6 +219,7 @@ final class SubscriptionAutoResumer {
             cancelPendingResume();
             stoppedAt = null;
             resumesAtStoppedAt = 0;
+            failedResumesInARow = 0;
             awaitingRecoveryAt = null;
         }
     }
@@ -238,7 +247,8 @@ final class SubscriptionAutoResumer {
         }
         var autoResume    = policy.autoResume();
         var attemptNumber = resumesAtStoppedAt + 1;
-        var delay         = autoResume.delayBeforeAttempt(attemptNumber);
+        // A resume that threw backs off like one more resume at the event, without counting as one
+        var delay         = autoResume.delayBeforeAttempt(attemptNumber + failedResumesInARow);
         log.warn("[{}-{}] Resuming the subscription stopped at #{} automatically in {} ms - resume {} of {} at this event",
                  subscription.subscriberId(),
                  subscription.aggregateType(),
@@ -268,7 +278,11 @@ final class SubscriptionAutoResumer {
             return;
         }
         try {
-            if (subscription.resumeIfStoppedByErrorPolicy()) {
+            var resumed = subscription.resumeIfStoppedByErrorPolicy();
+            synchronized (lock) {
+                failedResumesInARow = 0;
+            }
+            if (resumed) {
                 log.info("[{}-{}] Resumed the subscription stopped at #{} automatically (resume {} at this event)",
                          subscription.subscriberId(),
                          subscription.aggregateType(),
@@ -287,7 +301,13 @@ final class SubscriptionAutoResumer {
                          subscription.aggregateType(),
                          at), e);
             synchronized (lock) {
+                // Unless the resumed subscriber stopped again meanwhile (a pending resume) - then the resume went through
                 if (pendingResume == null && at.equals(stoppedAt)) {
+                    // Not an attempt at the event: take back the count made before resuming, so an outage does not use up maxAttempts
+                    if (resumesAtStoppedAt == attemptNumber) {
+                        resumesAtStoppedAt = attemptNumber - 1;
+                    }
+                    failedResumesInARow++;
                     schedule(at, policy);
                 }
             }

@@ -240,9 +240,42 @@ class SubscriptionAutoResumerTest {
         verify(subscription, times(1)).resumeIfStoppedByErrorPolicy();
         assertThat(autoResumer.isResumePending()).isTrue();
 
-        // The second resume at the event waits twice as long
+        // A resume that threw is no attempt at the event
+        assertThat(autoResumer.resumesAt(AT)).isZero();
+
+        // The next try waits twice as long
         scheduler.advanceTimeBy(Duration.ofSeconds(2));
         verify(subscription, times(2)).resumeIfStoppedByErrorPolicy();
         assertThat(autoResumer.isResumePending()).isFalse();
+        assertThat(autoResumer.resumesAt(AT)).isEqualTo(1);
+    }
+
+    @Test
+    void resumes_that_throw_do_not_use_up_max_attempts() {
+        when(subscription.resumeIfStoppedByErrorPolicy()).thenThrow(new IllegalStateException("Database unreachable"))
+                                                         .thenThrow(new IllegalStateException("Database unreachable"))
+                                                         .thenThrow(new IllegalStateException("Database unreachable"))
+                                                         .thenReturn(true);
+        var policy = policy(SubscriptionErrorPolicy.AutoResume.skippingAfter(1, Duration.ofSeconds(1), Duration.ofSeconds(8)));
+        autoResumer.stoppedAt(AT, policy);
+
+        // Three resumes throw, backing off 1, 2 and 4 s - none of them counts
+        scheduler.advanceTimeBy(Duration.ofSeconds(1 + 2 + 4));
+        verify(subscription, times(3)).resumeIfStoppedByErrorPolicy();
+        assertThat(autoResumer.resumesAt(AT)).isZero();
+        assertThat(autoResumer.skipInsteadOfStopping(AT, policy)).isFalse();
+
+        // The fourth goes through: the one attempt is used, so the next give-up skips
+        scheduler.advanceTimeBy(Duration.ofSeconds(8));
+        verify(subscription, times(4)).resumeIfStoppedByErrorPolicy();
+        assertThat(autoResumer.resumesAt(AT)).isEqualTo(1);
+        assertThat(autoResumer.skipInsteadOfStopping(AT, policy)).isTrue();
+
+        // And the wait for the next stop at the event is back to a resume's own backoff - 2 s for the second resume
+        autoResumer.stoppedAt(AT, policy(SubscriptionErrorPolicy.AutoResume.unlimited(Duration.ofSeconds(1), Duration.ofSeconds(8))));
+        scheduler.advanceTimeBy(Duration.ofMillis(1999));
+        verify(subscription, times(4)).resumeIfStoppedByErrorPolicy();
+        scheduler.advanceTimeBy(Duration.ofMillis(1));
+        verify(subscription, times(5)).resumeIfStoppedByErrorPolicy();
     }
 }

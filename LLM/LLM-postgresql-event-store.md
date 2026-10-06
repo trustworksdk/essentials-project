@@ -1395,7 +1395,7 @@ starts over at another event:
 |---|---|
 | `AutoResume.defaults()` (default) | Resume after 10 s (`DEFAULT_INITIAL_DELAY`), doubling up to 5 min (`DEFAULT_MAX_DELAY`), for as long as the event fails - `maxAttempts` = `UNLIMITED_ATTEMPTS` (`0`), never skips |
 | `AutoResume.unlimited(initialDelay, maxDelay)` | The same with your own delays |
-| `AutoResume.skippingAfter(maxAttempts, initialDelay, maxDelay)` | Once resumed `maxAttempts` times at the same event, the next give-up **skips** it instead of stopping: ERROR log, observer `subscriptionSkippedEventAfterAutoResumes(...)`, counter `essentials.eventstore.subscription.skipped_after_auto_resumes` |
+| `AutoResume.skippingAfter(maxAttempts, initialDelay, maxDelay)` | Once resumed `maxAttempts` times at the same event, the next give-up **skips** it instead of stopping: ERROR log, observer `subscriptionSkippedEventAfterAutoResumes(...)`, counter `essentials.eventstore.subscription.skipped_after_auto_resumes`. Count is in-memory per instance - a restart, redeploy, lock hand-over or re-subscribe starts it over; a resume that throws doesn't count |
 | `AutoResume.disabled()` | Stays stopped until resumed by hand or started again |
 
 Set it with `policy.withAutoResume(AutoResume)` / `policy.withoutAutoResume()`; `resumesAutomatically()` is true when the

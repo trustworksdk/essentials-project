@@ -34,7 +34,8 @@ targets, with a `-N` suffix for plugin-only releases.
   that keeps stopping at a poison event (and the 0.50 upgrade that relied on skipping: `error-policy.mode=skip`).
   The `essentials.eventstore.subscription.stopped` gauge stays at `1` through the automatic resumes until the failed
   event is handled (new `EventStoreSubscription#isRecoveringFromErrorPolicyStop()`), so an alert's `for:` duration is
-  not reset by each resume.
+  not reset by each resume. `skippingAfter(...)`'s count is documented as in memory per instance (a restart,
+  redeploy or lock hand-over starts it over), and a resume that throws no longer counts toward it.
 - **Framework docs: bounded polling gaps** — a poll now records a new gap only
   `SubscriptionGapHandler.MAX_AWAITED_ORDERS_PER_GAP_END` (5,000) orders deep from each end and awaits
   the middle of a wider one (sequence `setval`, restore) in memory only, as CDC does, instead of writing a

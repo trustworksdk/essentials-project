@@ -349,7 +349,7 @@ essentials.eventstore.subscription-manager.error-policy.auto-resume.max-attempts
 | `error-policy.auto-resume.enabled` | `true` | Whether a subscription stopped by `stop` or `retry-n-then-stop` resumes by itself at the failed event. `false`: it stays stopped until it is resumed through the admin API or the application restarts |
 | `error-policy.auto-resume.initial-delay` | `10s` | The wait before the first resume at an event, doubled for each later resume at the same event |
 | `error-policy.auto-resume.max-delay` | `5m` | The longest wait between two resumes |
-| `error-policy.auto-resume.max-attempts` | `0` (unlimited) | How many resumes at the same event before the next failure **skips** the event instead of stopping, counted in `essentials.eventstore.subscription.skipped_after_auto_resumes`. Opt-in: for an `EventProcessor` a skipped event never reaches the `Inbox` or its dead-letter queue |
+| `error-policy.auto-resume.max-attempts` | `0` (unlimited) | How many resumes at the same event before the next failure **skips** the event instead of stopping, counted in `essentials.eventstore.subscription.skipped_after_auto_resumes`. Opt-in: for an `EventProcessor` a skipped event never reaches the `Inbox` or its dead-letter queue. Counted in memory per instance: a restart, redeploy or fenced-lock hand-over starts it over |
 
 Every stop is still logged, and the `essentials.eventstore.subscription.stopped` gauge stays at `1` from the stop until the failed event is handled - through every automatic resume in between - so alert on that gauge: a subscription that keeps stopping at the same event needs a fix.
 Upgrading from 0.50, where a failing event was always skipped: set `error-policy.mode=skip` to keep that behaviour.

@@ -461,6 +461,31 @@ class EventStoreSubscriptionManager_SubscriptionErrorPolicy_IT {
     }
 
     @Test
+    void resuming_an_exclusive_subscription_by_hand_cancels_its_pending_auto_resume() {
+        eventStoreSubscriptionManager = startSubscriptionManager(SubscriptionErrorPolicy.stop()
+                                                                                        .withAutoResume(SubscriptionErrorPolicy.AutoResume.unlimited(Duration.ofSeconds(30), Duration.ofSeconds(30))));
+        var failing      = new AtomicBoolean(true);
+        var handled      = new CopyOnWriteArrayList<Long>();
+        var attempts     = new ConcurrentHashMap<Long, AtomicInteger>();
+        var subscription = exclusivelySubscribe(handled, attempts, failing::get);
+        var autoResumer  = ((AbstractEventStoreSubscription) subscription).autoResumer;
+        Awaitility.waitAtMost(Duration.ofSeconds(10)).until(subscription::isActive);
+
+        appendThreeEvents();
+        Awaitility.waitAtMost(Duration.ofSeconds(10)).until(subscription::isStoppedByErrorPolicy);
+        assertThat(autoResumer.isResumePending()).isTrue();
+
+        failing.set(false);
+        assertThat(subscription.resumeIfStoppedByErrorPolicy()).isTrue();
+        // Replaced by the resume by hand - it would otherwise run in 30 s and resume the next stop early
+        assertThat(autoResumer.isResumePending()).isFalse();
+        Awaitility.waitAtMost(Duration.ofSeconds(10))
+                  .untilAsserted(() -> assertThat(handled).containsExactly(1L, 2L, 3L));
+        assertThat(autoResumer.isResumePending()).isFalse();
+        assertThat(autoResumer.resumesAt(GlobalEventOrder.of(FAILING_EVENT))).isZero();
+    }
+
+    @Test
     void a_batched_subscription_resumes_by_itself_at_the_failed_batch() {
         eventStoreSubscriptionManager = startSubscriptionManager(SubscriptionErrorPolicy.retryThenStop(1, Duration.ofMillis(10), Duration.ofMillis(10))
                                                                                         .withAutoResume(SubscriptionErrorPolicy.AutoResume.unlimited(Duration.ofMillis(200), Duration.ofMillis(200))));

@@ -846,7 +846,8 @@ dead-letter queue and its monitoring never see it.
 - Otherwise keep the default, or tune it: `error-policy.max-retries`, `.initial-backoff`, `.max-backoff`, and
   `.auto-resume.enabled` / `.initial-delay` / `.max-delay` / `.max-attempts` (Java:
   `policy.withAutoResume(SubscriptionErrorPolicy.AutoResume...)`, `withoutAutoResume()`). `max-attempts` above `0` skips an
-  event once it has been resumed that many times - see the caveat above. `stop()` halts on the first failure, transient ones
+  event once it has been resumed that many times - see the caveat above. The count is kept in memory by the instance
+  running the subscription, so a restart, redeploy or fenced-lock hand-over starts it over. `stop()` halts on the first failure, transient ones
   included - prefer `retryThenStop(...)`. A stopped subscription can also be resumed at once with
   `EventStoreSubscription#resumeIfStoppedByErrorPolicy()` or the admin API.
 - **Alert on the gauge `essentials.eventstore.subscription.stopped`** (`1` while stopped, and through every automatic

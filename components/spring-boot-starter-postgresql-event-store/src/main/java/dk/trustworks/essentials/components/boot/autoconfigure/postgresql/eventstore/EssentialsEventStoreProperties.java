@@ -694,7 +694,8 @@ public class EssentialsEventStoreProperties {
         /**
          * How many times the subscription is resumed at the same event before the next failure skips the event instead of
          * stopping (reported as essentials.eventstore.subscription.skipped_after_auto_resumes). 0 (default): unlimited -
-         * keep resuming for as long as the event fails, never skip it.
+         * keep resuming for as long as the event fails, never skip it. The count is kept in memory by the instance running
+         * the subscription: a restart, a redeploy or a fenced-lock hand-over starts it over.
          */
         private int      maxAttempts  = 0;
 

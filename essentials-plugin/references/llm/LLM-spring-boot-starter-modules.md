@@ -424,7 +424,7 @@ Prefix: `essentials.eventstore.subscription-manager`
 | `error-policy.auto-resume.enabled` | `true` | A subscription stopped by `stop` / `retry-n-then-stop` resumes by itself at the failed event; `false` = stays stopped until resumed by hand (admin API) or restarted. Ignored by the skipping modes |
 | `error-policy.auto-resume.initial-delay` | `10s` | Wait before the first resume at an event, doubled per resume at the same event |
 | `error-policy.auto-resume.max-delay` | `5m` | Cap on the wait between resumes |
-| `error-policy.auto-resume.max-attempts` | `0` (unlimited) | Resumes at the same event before the next failure **skips** it instead of stopping (counter `essentials.eventstore.subscription.skipped_after_auto_resumes`). Opt-in: for an `EventProcessor` the skipped event never reaches the `Inbox` or its dead-letter queue |
+| `error-policy.auto-resume.max-attempts` | `0` (unlimited) | Resumes at the same event before the next failure **skips** it instead of stopping (counter `essentials.eventstore.subscription.skipped_after_auto_resumes`). Opt-in: for an `EventProcessor` the skipped event never reaches the `Inbox` or its dead-letter queue. Counted in memory per instance: a restart, redeploy or lock hand-over starts it over |
 
 #### Subscription Monitor
 

@@ -206,6 +206,8 @@ public class ExclusiveAsynchronousSubscription extends AbstractEventStoreSubscri
                      subscriberId,
                      aggregateType,
                      resumePoint.getResumeFromAndIncluding());
+            // A resume by hand replaces the pending automatic one, which would otherwise resume the next stop early and count as an attempt
+            autoResumer.cancel();
             // Already disposed by the stop itself (asynchronously) - disposing again makes sure it is before we subscribe anew
             stoppedSubscriber.dispose();
             try {

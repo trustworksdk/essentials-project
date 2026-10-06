@@ -330,7 +330,12 @@ public record SubscriptionErrorPolicy(Mode mode,
      * <p>
      * The resumes at one event wait {@link #delayBeforeAttempt(int)}: {@link #initialDelay()}, doubled for every earlier
      * resume at that event, capped at {@link #maxDelay()}. The count starts over when the subscription stops at another
-     * event.
+     * event. Only a resume that went through counts: one that throws (e.g. the database is unreachable while the resume
+     * point is saved) is tried again later, with a longer wait, without counting.
+     * <p>
+     * The count is kept in memory by the instance running the subscription: a restart, a redeploy, a fenced-lock
+     * hand-over or unsubscribe + subscribe starts it over, so an instance that restarts more often than the resumes take
+     * (about 30 minutes for 10 resumes at the default delays) never reaches the skip.
      *
      * @param enabled      false to leave a stopped subscription stopped until it is resumed by hand or started again
      * @param initialDelay the wait before the first resume at an event. Must not be negative
@@ -399,6 +404,10 @@ public record SubscriptionErrorPolicy(Mode mode,
          * {@link dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.observability.EventStoreSubscriptionObserver#subscriptionSkippedEventAfterAutoResumes}
          * - and continue with the next event. Trades the event for liveness: for a subscriber that forwards to an
          * {@code Inbox} the skipped event never reaches the {@code Inbox} or its dead-letter queue.
+         * <p>
+         * The count is kept in memory by the instance running the subscription: a restart, a redeploy, a fenced-lock
+         * hand-over or unsubscribe + subscribe starts it over, so an instance that restarts more often than the resumes take
+         * (about 30 minutes for 10 resumes at the default delays) never reaches the skip.
          *
          * @param maxAttempts  how many resumes at the same event before it is skipped. Must be {@code >= 1}
          * @param initialDelay the wait before the first resume at an event
