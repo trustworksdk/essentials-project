@@ -173,6 +173,28 @@ public interface EventStoreSubscription extends Lifecycle, Subscription {
     }
 
     /**
+     * Is this subscription either stopped by its
+     * {@link dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.subscription.SubscriptionErrorPolicy}
+     * ({@link #isStoppedByErrorPolicy()}) or resumed but not yet past the event it stopped at
+     * ({@link #isRecoveringFromErrorPolicyStop()})? This is the value of the
+     * {@value dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.subscription.monitoring.SubscriptionStoppedMicrometerMonitor#SUBSCRIPTION_STOPPED_METRIC}
+     * gauge.
+     * <p>
+     * Use this rather than combining the two yourself while the subscription is running: a resumed subscription that
+     * fails at the event again turns {@link #isStoppedByErrorPolicy()} true and {@link #isRecoveringFromErrorPolicyStop()}
+     * false at the same moment, so {@code isStoppedByErrorPolicy() || isRecoveringFromErrorPolicyStop()} can read the
+     * first before that moment and the second after it, and answer false for a subscription that is stuck. The
+     * subscriptions governed by a {@code SubscriptionErrorPolicy} answer this from a single read of their state.
+     * <p>
+     * The default combines the two, for subscriptions whose state does not change underneath the call.
+     *
+     * @return true while the subscription is stopped by its error policy, or resumed and not yet past the failed event
+     */
+    default boolean isStoppedOrRecoveringFromErrorPolicyStop() {
+        return isStoppedByErrorPolicy() || isRecoveringFromErrorPolicyStop();
+    }
+
+    /**
      * Resume a subscription that its
      * {@link dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.subscription.SubscriptionErrorPolicy}
      * stopped ({@link #isStoppedByErrorPolicy()}), without restarting the application: typically once the cause of the

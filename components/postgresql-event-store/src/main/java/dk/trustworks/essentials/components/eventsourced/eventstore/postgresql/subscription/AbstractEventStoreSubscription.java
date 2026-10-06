@@ -137,6 +137,14 @@ public abstract class AbstractEventStoreSubscription implements EventStoreSubscr
     }
 
     @Override
+    public boolean isStoppedOrRecoveringFromErrorPolicyStop() {
+        // Reads the stopped flag once. Awaiting recovery holds from each stop through every resume until the subscription
+        // gets past the failed event, so a resumed subscriber stopping again between the two reads cannot make this false -
+        // which isStoppedByErrorPolicy() || isRecoveringFromErrorPolicyStop(), reading the flag twice, can
+        return isStoppedByErrorPolicy() || autoResumer.isAwaitingRecovery();
+    }
+
+    @Override
     public void shutdownStarting(ShutdownContext shutdown) {
         this.shutdown = requireNonNull(shutdown, "No shutdown provided");
         autoResumer.subscriptionStopped();

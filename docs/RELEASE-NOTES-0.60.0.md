@@ -819,7 +819,8 @@ retries carry on. See
   `EventStoreSubscription#isStoppedByErrorPolicy()` (default `false`), the observer callback
   `subscriptionStoppedByErrorPolicy(GlobalEventOrder, Throwable, EventStoreSubscription)` (default no-op), the gauge
   `essentials.eventstore.subscription.stopped` (`1` while stopped, and through every resume until the failed event is
-  handled - `EventStoreSubscription#isRecoveringFromErrorPolicyStop()`, default `false`, is that second half - published by the new
+  handled - `EventStoreSubscription#isRecoveringFromErrorPolicyStop()`, default `false`, is that second half, and
+  `isStoppedOrRecoveringFromErrorPolicyStop()` is the gauge's value, read consistently - published by the new
   `SubscriptionStoppedMicrometerMonitor`; the Spring Boot starter wires it whenever a `MeterRegistry` is present), the
   counter `essentials.eventstore.subscription.stopped_by_error_policy` (one per stop, so one more for every automatic
   resume that fails again), or the admin API field

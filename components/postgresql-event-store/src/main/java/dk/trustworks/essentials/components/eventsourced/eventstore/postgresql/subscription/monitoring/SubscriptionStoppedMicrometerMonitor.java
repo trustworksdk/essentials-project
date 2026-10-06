@@ -37,7 +37,9 @@ import static dk.trustworks.essentials.shared.MessageFormatter.msg;
  * but not yet got past the event it stopped at ({@link EventStoreSubscription#isRecoveringFromErrorPolicyStop()}),
  * {@code 0} otherwise. A subscription resumed automatically at a poison event retries it for a moment before it stops
  * again, so the gauge stays at {@code 1} through every resume until the event is handled, handed off or skipped - an
- * alert with a {@code for:} duration is not reset by the resumes.
+ * alert with a {@code for:} duration is not reset by the resumes. The value is
+ * {@link EventStoreSubscription#isStoppedOrRecoveringFromErrorPolicyStop()}, which answers both from one read of the
+ * subscription's state: combining the two calls could read {@code 0} at the moment a resumed subscription stops again.
  * <p>
  * This is the signal to alert on for a halted projection, e.g. {@code max by (subscriber_id, aggregate_type) (essentials_eventstore_subscription_stopped) == 1}.
  * The {@value MeasurementEventStoreSubscriptionObserver#SUBSCRIPTION_STOPPED_BY_ERROR_POLICY_METRIC} counter only
@@ -118,7 +120,7 @@ public class SubscriptionStoppedMicrometerMonitor implements EventStoreSubscript
 
     private boolean reportsStopped(SubscriberId subscriberId, AggregateType aggregateType) {
         return eventStoreSubscriptionManager.getSubscription(subscriberId, aggregateType)
-                                            .map(subscription -> subscription.isStoppedByErrorPolicy() || subscription.isRecoveringFromErrorPolicyStop())
+                                            .map(EventStoreSubscription::isStoppedOrRecoveringFromErrorPolicyStop)
                                             .orElse(false);
     }
 }
