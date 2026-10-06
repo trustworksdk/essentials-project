@@ -15,6 +15,7 @@ This module enables seamless use of `SingleValueType` implementations as `@PathV
 - [WebFlux Configuration](#webflux-configuration)
 - [Kotlin semantic types](#kotlin-semantic-types)
 - [JSR-310 Temporal Types](#jsr-310-temporal-types)
+- [OpenAPI with springdoc](#openapi-with-springdoc)
 - [Gotchas](#gotchas)
 
 ## What this module ships
@@ -25,9 +26,10 @@ This module enables seamless use of `SingleValueType` implementations as `@PathV
 | `KotlinValueTypeConverter` | production | Converts to **Kotlin** semantic types — see [Kotlin semantic types](#kotlin-semantic-types) for the narrow case this covers |
 | `EssentialsWebMvcConfigurer` | production | Registers both, for a servlet application |
 | `EssentialsWebFluxConfigurer` | production | Registers both, for a reactive application |
+| `SingleValueTypeModelConverter` | production | springdoc `ModelConverter`: the OpenAPI document describes semantic types as the JSON they are written as — see [OpenAPI with springdoc](#openapi-with-springdoc) |
 
-Neither configurer is auto-configuration: declaring the dependency changes nothing until you
-`@Import` one. Neither touches HTTP message converters or codecs, so adding this module cannot
+Nothing here is auto-configuration: declaring the dependency changes nothing until you
+`@Import` a configurer (or declare the model converter as a bean). Neither touches HTTP message converters or codecs, so adding this module cannot
 change how your request and response bodies are serialised.
 
 ## Installation
@@ -299,6 +301,26 @@ public List<Order> findByDueDateParam(@RequestParam("dueDate") DueDate dueDate) 
     return orderService.findByDueDate(dueDate);
 }
 ```
+
+## OpenAPI with springdoc
+
+Out of the box springdoc describes a semantic type as the Java object it is, not as the JSON it is written
+as: a `CharSequenceType` id becomes a component with `bytes`, `empty` and `value`, a Kotlin value-class
+property is published under its mangled getter name (`orderId-nb-kci0`), and, with `kotlin-reflect` on the
+classpath, a `String`-backed value-class `@PathVariable`/`@RequestParam` gets an arbitrary type that changes
+between JDK versions. Clients generated from that document are typed wrong, with no error anywhere.
+
+`SingleValueTypeModelConverter` fixes all three. Register it as a bean in the application that runs springdoc
+(springdoc is a `provided` dependency, so the application brings its own):
+
+```java
+@Bean
+SingleValueTypeModelConverter singleValueTypeModelConverter() {
+    return new SingleValueTypeModelConverter();
+}
+```
+
+What each type is published as: [LLM-types-spring-web.md § OpenAPI with springdoc](../LLM/LLM-types-spring-web.md#openapi-with-springdoc).
 
 ## Gotchas
 

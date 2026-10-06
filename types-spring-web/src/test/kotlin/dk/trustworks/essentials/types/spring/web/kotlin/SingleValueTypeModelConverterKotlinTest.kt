@@ -124,6 +124,28 @@ class SingleValueTypeModelConverterKotlinTest {
         assertThat(schema.required).containsExactly("orderId")
     }
 
+    /**
+     * What springdoc 3.1 hands over for `@PathVariable orderId: KtOrderId` when kotlin-reflect is present: the value
+     * class's own annotations as context annotations, next to the source type of whichever Spring converter to `String`
+     * its lookup found first. The types are the ones that lookup produced on JDK 26 and 27.
+     */
+    @ParameterizedTest(name = "{0}")
+    @ValueSource(classes = [java.math.BigInteger::class, Regex::class, java.time.ZonedDateTime::class])
+    fun `a value-class handler parameter is published as the string it is bound from`(springdocType: Class<*>) {
+        listOf(false, true).forEach { openapi31 ->
+            val converters = ModelConverters(openapi31)
+            converters.addConverter(SingleValueTypeModelConverter())
+
+            val resolved = converters.resolveAsResolvedSchema(
+                AnnotatedType(springdocType).ctxAnnotations(KtOrderId::class.java.annotations).resolveAsRef(true)
+            )
+
+            val schema = webMapper.readTree((if (openapi31) Json31.mapper() else Json.mapper()).writeValueAsString(resolved.schema))
+            assertThat(schemaOf(schema)).`as`("openapi31=%s", openapi31).isEqualTo("string")
+            assertThat(resolved.referencedSchemas).`as`("openapi31=%s", openapi31).isEmpty()
+        }
+    }
+
     @ParameterizedTest(name = "openapi31={0}")
     @ValueSource(booleans = [false, true])
     fun `the published document agrees with the json written`(openapi31: Boolean) {

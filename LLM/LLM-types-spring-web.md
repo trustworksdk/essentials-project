@@ -213,6 +213,12 @@ Kotlin property names are restored to the Kotlin name, `required` entries includ
 `kotlin-reflect` or Jackson 2's Kotlin module. A property name springdoc has already put through a
 `PropertyNamingStrategy` (snake_case, say) is left mangled.
 
+A `@PathVariable`/`@RequestParam` declared as a `@JvmInline` value class over a `String` (`orderId: KtOrderId`)
+is published as `string`. Without the converter, and with `kotlin-reflect` on the classpath, springdoc 3.1
+publishes such a parameter as the source type of an arbitrary Spring converter to `String` — `integer`,
+`string`/`date-time`, a `$ref` to a stray `Regex` component — picked by hash order, so it differs between JDK
+versions and looks stable on any one of them.
+
 #### Kotlin handler methods: set the operationId
 
 springdoc takes each operation's `operationId` from the JVM method name, and the converter cannot change it.

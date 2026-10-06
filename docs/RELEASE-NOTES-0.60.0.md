@@ -706,8 +706,9 @@ Two related corrections:
 springdoc publishes a `CharSequenceType` id as an object with `bytes`, `empty` and `value`, and a Kotlin
 value-class property under its mangled getter name (`orderId-nb-kci0`), so every client generated from the
 OpenAPI document is typed wrong. With it each semantic type the web mapper writes as a bare scalar is published as
-its value's schema (`string`, `integer`/`int64`, `string`/`date-time`, ...), and Kotlin property names are the
-real ones.
+its value's schema (`string`, `integer`/`int64`, `string`/`date-time`, ...), Kotlin property names are the
+real ones, and a `String`-backed Kotlin value-class `@PathVariable`/`@RequestParam` is published as `string`
+(springdoc 3.1 alone, with `kotlin-reflect` present, picks an arbitrary type for it that differs between JDKs).
 
 It is **not auto-configured**, so upgrading changes nothing. To opt in, declare it as a bean in the application
 that runs springdoc; springdoc is a `provided` dependency, so the application supplies its own:

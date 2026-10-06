@@ -52,7 +52,9 @@ import java.util.*;
  *     {@code string}/{@code partial-time}: swagger-core would describe the {@code LocalTime} as an object with
  *     {@code hour}, {@code minute}, ... properties, where Jackson 3 writes {@code "10:15:30"}</li>
  *     <li>A Kotlin {@code @JvmInline value class}, Essentials interface or not &rarr; the schema of the value it wraps,
- *     which is what {@code jackson-module-kotlin} writes</li>
+ *     which is what {@code jackson-module-kotlin} writes. A handler parameter of such a type over a {@code String}
+ *     &rarr; {@code string}: the JVM signature carries the {@code String} it wraps, and that is what the request
+ *     supplies. springdoc would otherwise publish whichever type a hash-order lookup in Spring's converters hands it</li>
  * </ul>
  * Any other {@link SingleValueType} (a {@link BooleanType}, say) is left alone, because the Jackson module has no
  * scalar serializer for it and it really is written as {@code {"value": ...}}. {@link Money} stays a component, trimmed to
@@ -97,6 +99,9 @@ public final class SingleValueTypeModelConverter implements ModelConverter {
         }
         var rawClass = rawClassOf(type.getType());
         var wireType = rawClass != null ? wireValueTypeOf(rawClass) : null;
+        if (wireType == null && isKotlinValueClassParameter(type)) {
+            wireType = String.class;
+        }
         if (wireType != null) {
             // Same hand-over springdoc's own Kotlin inline-class converter does: the value type, with the context
             // annotations kept so a @Schema(description = ...) on the property still applies, resolved inline.
@@ -202,8 +207,25 @@ public final class SingleValueTypeModelConverter implements ModelConverter {
     }
 
     private static boolean isKotlinValueClass(Class<?> type) {
+        return containsJvmInline(type.getDeclaredAnnotations());
+    }
+
+    /**
+     * Whether springdoc is resolving a handler parameter declared as a Kotlin value class. With kotlin-reflect present,
+     * springdoc 3.1 restores such a parameter, which the JVM signature carries as the <code>String</code> it wraps, to
+     * the value class, and adds the class's own annotations to the context annotations. It then swaps the type for the
+     * source type of whichever Spring converter it finds first that targets <code>String</code> (it looks up the JVM
+     * parameter type, not the restored one): <code>BigInteger</code>, <code>Regex</code>, a <code>java.time</code> type,
+     * depending on hash order. The parameter really is the <code>String</code> path segment, query value or header.
+     * <code>@JvmInline</code> targets classes only, so it reaches the context annotations by this route alone.
+     */
+    private static boolean isKotlinValueClassParameter(AnnotatedType type) {
+        return type.getCtxAnnotations() != null && containsJvmInline(type.getCtxAnnotations());
+    }
+
+    private static boolean containsJvmInline(Annotation[] annotations) {
         // By name, so a Java-only application needs no Kotlin on its classpath
-        for (Annotation annotation : type.getDeclaredAnnotations()) {
+        for (Annotation annotation : annotations) {
             if (annotation.annotationType().getName().equals(KOTLIN_JVM_INLINE)) {
                 return true;
             }
