@@ -20,11 +20,15 @@ import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.cd
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.types.GlobalEventOrder;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.gap.*;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.internal.GapMiddlesAwaitedAcrossSubscribes;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.serializer.json.*;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.test_data.OrderId;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.types.*;
 import dk.trustworks.essentials.components.foundation.types.*;
 import dk.trustworks.essentials.types.LongRange;
 import org.junit.jupiter.api.Test;
 
-import java.time.Duration;
+import java.time.*;
 import java.util.*;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.stream.LongStream;
@@ -32,7 +36,9 @@ import java.util.stream.LongStream;
 import static org.assertj.core.api.Assertions.assertThat;
 
 class CdcDeliveryTrackerTest {
-    private static final Duration GAP_TIMEOUT = Duration.ofSeconds(120);
+    private static final Duration      GAP_TIMEOUT = Duration.ofSeconds(120);
+    private static final SubscriberId  SUBSCRIBER  = SubscriberId.of("subscriber");
+    private static final AggregateType ORDERS      = AggregateType.of("Orders");
 
     private final AtomicLong nanoTime = new AtomicLong(1_000);
 
@@ -494,6 +500,102 @@ class CdcDeliveryTrackerTest {
 
     private static List<Long> orders(List<LongRange> ranges) {
         return ranges.stream().flatMap(range -> range.stream().boxed()).toList();
+    }
+
+    @Test
+    void an_order_in_a_middle_an_earlier_subscription_awaited_is_delivered_once_although_below_the_watermark() {
+        var acrossSubscribes = new GapMiddlesAwaitedAcrossSubscribes(nanoTime::get);
+        var earlier          = acrossSubscribes.subscribe(SUBSCRIBER, ORDERS, 1, GAP_TIMEOUT);
+        earlier.await(LongRange.between(100, 200));
+        acrossSubscribes.subscribeEnded(earlier);
+        // Resumed at 1 001: the earlier subscription's resume point, above the middle
+        var tracker = tracker(1_000, 100);
+        tracker.seedEarlierMiddles(acrossSubscribes.subscribe(SUBSCRIBER, ORDERS, 1_001, GAP_TIMEOUT));
+
+        assertThat(tracker.isAtOrBelowWatermarkAndNotAwaited(150)).isFalse();
+        assertThat(tracker.isAtOrBelowWatermarkAndNotAwaited(99)).isTrue();
+        assertThat(tracker.isDelivered(150)).isFalse();
+        assertThat(tracker.markDelivered(150).kind()).isEqualTo(Kind.FILLED_GAP);
+        assertThat(tracker.isDelivered(150)).isTrue();
+        assertThat(tracker.markDelivered(150).isNew()).as("once").isFalse();
+        assertThat(tracker.markDelivered(99).isNew()).isFalse();
+
+        // Owed to a later subscription until the subscriber is done with it
+        assertThat(tracker.earlierMiddles().isAwaited(150)).isTrue();
+        tracker.doneWith(List.of(event(150)));
+        assertThat(tracker.earlierMiddles().isAwaited(150)).isFalse();
+        assertThat(tracker.markDelivered(150).isNew()).isFalse();
+        assertThat(tracker.markDelivered(151).kind()).isEqualTo(Kind.FILLED_GAP);
+        assertThat(tracker.watermark()).as("the watermark does not move for an earlier middle").isEqualTo(1_000);
+    }
+
+    @Test
+    void a_middle_an_earlier_subscription_awaited_is_given_up_at_its_original_timeout() {
+        var acrossSubscribes = new GapMiddlesAwaitedAcrossSubscribes(nanoTime::get);
+        var earlier          = acrossSubscribes.subscribe(SUBSCRIBER, ORDERS, 1, GAP_TIMEOUT);
+        earlier.await(LongRange.between(100, 200));
+        advanceClock(Duration.ofSeconds(100));
+        acrossSubscribes.subscribeEnded(earlier);
+        var tracker = tracker(1_000, 100);
+        tracker.seedEarlierMiddles(acrossSubscribes.subscribe(SUBSCRIBER, ORDERS, 1_001, GAP_TIMEOUT));
+
+        advanceClock(Duration.ofSeconds(20));
+
+        assertThat(tracker.markDelivered(150).isNew()).isFalse();
+        assertThat(tracker.isAtOrBelowWatermarkAndNotAwaited(150)).isTrue();
+        assertThat(tracker.earlierMiddles().isEmpty()).isTrue();
+    }
+
+    @Test
+    void a_subscription_hands_the_middles_it_awaits_on_as_it_ends_with_the_fills_its_subscriber_is_not_done_with() {
+        var acrossSubscribes = new GapMiddlesAwaitedAcrossSubscribes(nanoTime::get);
+        var tracker          = tracker(0, 100);
+        tracker.seedEarlierMiddles(acrossSubscribes.subscribe(SUBSCRIBER, ORDERS, 1, GAP_TIMEOUT));
+        tracker.markDelivered(1);
+        long end    = CdcDeliveryTracker.MAX_AWAITED_ORDERS_PER_GAP_END;
+        long jumped = 1 + 4 * end;
+        var  middle = tracker.markDelivered(jumped).awaitedInMemoryOnly().orElseThrow();
+        advanceClock(Duration.ofSeconds(10));
+        // Two late commits into the middle: the subscriber handles one, and is stopped before it handles the other
+        long handled     = middle.fromInclusive + 10;
+        long notDoneWith = middle.fromInclusive + 20;
+        assertThat(tracker.markDelivered(handled).kind()).isEqualTo(Kind.FILLED_GAP);
+        assertThat(tracker.markDelivered(notDoneWith).kind()).isEqualTo(Kind.FILLED_GAP);
+        tracker.doneWith(List.of(event(handled)));
+
+        tracker.handOverMiddlesAwaitedInMemoryOnly();
+        acrossSubscribes.subscribeEnded(tracker.earlierMiddles());
+        // The next subscription starts at the resume point, above the gap
+        var next = tracker(jumped, 100);
+        next.seedEarlierMiddles(acrossSubscribes.subscribe(SUBSCRIBER, ORDERS, jumped + 1, GAP_TIMEOUT));
+
+        assertThat(next.earlierMiddles().awaited()).containsExactly(LongRange.between(middle.fromInclusive, handled - 1),
+                                                                    LongRange.between(handled + 1, notDoneWith - 1),
+                                                                    LongRange.only(notDoneWith),
+                                                                    LongRange.between(notDoneWith + 1, middle.getToInclusive()));
+        assertThat(next.markDelivered(notDoneWith).kind()).as("delivered again: the subscriber never handled it").isEqualTo(Kind.FILLED_GAP);
+        assertThat(next.markDelivered(handled).isNew()).isFalse();
+        assertThat(next.markDelivered(middle.fromInclusive - 1).isNew()).as("an end of the gap: awaited durably, as a transient gap - not one of the middles").isFalse();
+
+        // Awaited until the gap timeout counted from when the first subscription found the gap
+        advanceClock(GAP_TIMEOUT.minusSeconds(10));
+        assertThat(next.markDelivered(middle.fromInclusive).isNew()).isFalse();
+        assertThat(next.earlierMiddles().isEmpty()).isTrue();
+    }
+
+    private static PersistedEvent event(long globalOrder) {
+        return PersistedEvent.from(EventId.random(),
+                                   ORDERS,
+                                   OrderId.random(),
+                                   new EventJSON(EssentialsJSONEventSerializers.create(), EventType.of("TestEvent"), "{}"),
+                                   EventOrder.of(1L),
+                                   EventRevision.of(1),
+                                   GlobalEventOrder.of(globalOrder),
+                                   new EventMetaDataJSON(EssentialsJSONEventSerializers.create(), "", ""),
+                                   OffsetDateTime.now(),
+                                   Optional.empty(),
+                                   Optional.empty(),
+                                   Optional.empty());
     }
 
     private record StubGapHandler(Optional<Duration> threshold) implements SubscriptionGapHandler {

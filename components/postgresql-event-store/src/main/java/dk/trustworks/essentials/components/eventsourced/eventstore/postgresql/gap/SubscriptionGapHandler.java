@@ -48,7 +48,9 @@ public interface SubscriptionGapHandler {
      * until {@link #transientGapGiveUpThreshold()} (120 seconds when that is empty) has passed: the CDC event store is
      * handed every commit, and a polling subscription re-queries the middle by range on every poll. An event that commits
      * there within that window is delivered like any gap fill; afterwards the middle is dropped without writing anything.
-     * A restart or crash inside the window loses it - the resume point moved past it with the event that revealed it. The
+     * It survives a re-subscribe of the subscriber on the same event store instance (a resume after a
+     * {@code SubscriptionErrorPolicy} stop, a stop and start); a restart, a crash, a {@code resetFrom}, an unsubscribe or a
+     * fenced-lock release inside the window loses it - the resume point moved past it with the event that revealed it. The
      * {@link PostgresqlEventStreamGapHandler} applies this bound when it reconciles, a poll or a CDC back-fill page alike.
      */
     int MAX_AWAITED_ORDERS_PER_GAP_END = 5_000;

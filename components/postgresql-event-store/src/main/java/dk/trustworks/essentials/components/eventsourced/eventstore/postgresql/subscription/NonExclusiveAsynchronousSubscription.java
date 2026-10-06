@@ -253,6 +253,8 @@ public class NonExclusiveAsynchronousSubscription extends AbstractEventStoreSubs
                 subscribeFromAndIncludingGlobalOrder);
         resumePoint.setResumeFromAndIncluding(subscribeFromAndIncludingGlobalOrder);
         durableSubscriptionRepository.saveResumePoint(resumePoint);
+        // The resume point moved deliberately: a middle of a wide gap awaited below it must not be delivered after the reset
+        eventStore.forgetGapMiddlesAwaitedInMemory(subscriberId, aggregateType);
         try {
             eventHandler.onResetFrom(this, subscribeFromAndIncludingGlobalOrder);
         } catch (Exception e) {

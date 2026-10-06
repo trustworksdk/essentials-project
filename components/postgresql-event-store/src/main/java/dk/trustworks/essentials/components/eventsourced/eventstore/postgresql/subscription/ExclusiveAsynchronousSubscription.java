@@ -252,6 +252,10 @@ public class ExclusiveAsynchronousSubscription extends AbstractEventStoreSubscri
                     aggregateType), e);
         }
 
+        // A fenced-lock hand-over loses the middles of wide gaps awaited in memory: whoever holds the lock next - another
+        // node, or this one later, after another node may have delivered them - starts afresh from the saved resume point
+        eventStore.forgetGapMiddlesAwaitedInMemory(subscriberId, aggregateType);
+
         try {
             fencedLockAwareSubscriber.onLockReleased(fencedLock);
         } catch (Exception e) {
@@ -402,6 +406,8 @@ public class ExclusiveAsynchronousSubscription extends AbstractEventStoreSubscri
                 subscribeFromAndIncludingGlobalOrder);
         resumePoint.setResumeFromAndIncluding(subscribeFromAndIncludingGlobalOrder);
         durableSubscriptionRepository.saveResumePoint(resumePoint);
+        // The resume point moved deliberately: a middle of a wide gap awaited below it must not be delivered after the reset
+        eventStore.forgetGapMiddlesAwaitedInMemory(subscriberId, aggregateType);
         try {
             eventHandler.onResetFrom(this, subscribeFromAndIncludingGlobalOrder);
         } catch (Exception e) {

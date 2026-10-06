@@ -115,4 +115,20 @@ class GapMiddlesAwaitedInMemoryTest {
         assertThat(middles.isEmpty()).isTrue();
         assertThat(middles.delivered(1_500)).isFalse();
     }
+
+    @Test
+    void a_middle_awaited_since_earlier_adds_only_the_orders_not_awaited_yet_and_times_out_from_then() {
+        long since = nanoTime.get();
+        middles.await(LongRange.between(100, 200));
+        nanoTime.addAndGet(Duration.ofSeconds(5).toNanos());
+
+        // Handed on by a CDC subscription as it ends, awaited since it found it
+        middles.await(LongRange.between(50, 300), since);
+        assertThat(middles.awaited()).containsExactly(LongRange.between(50, 99), LongRange.between(100, 200), LongRange.between(201, 300));
+        assertThat(middles.span()).contains(LongRange.between(50, 300));
+
+        nanoTime.addAndGet(Duration.ofSeconds(5).toNanos());
+        assertThat(middles.dropTimedOut()).containsExactly(LongRange.between(50, 99), LongRange.between(100, 200), LongRange.between(201, 300));
+        assertThat(middles.span()).isEmpty();
+    }
 }

@@ -771,7 +771,10 @@ A poll records a new gap (a hole below the highest event it read) as transient g
 transaction normally holds. The middle of a wider gap (sequence `setval` forward, restore, a huge append overtaken by a
 concurrent commit) is awaited in memory only, as on CDC: each poll re-queries it with one indexed lookup, a late commit there
 within `transientGapGiveUpThreshold()` (120 s by default) is delivered once as a gap fill, and then it is given up writing no
-rows. A restart or crash inside that window loses it. A custom `AggregateEventStreamPersistenceStrategy` should override
+rows. The middle survives a re-subscribe of the same subscriber and aggregate type on the same event store instance - the
+resume after a `SubscriptionErrorPolicy` stop, a stop and start - keeping its original timeout; a restart, crash,
+`resetFrom`, unsubscribe or fenced-lock release (hand-over) inside that window loses it. An `EventStore` decorating one of
+Essentials' must forward `forgetGapMiddlesAwaitedInMemory`. A custom `AggregateEventStreamPersistenceStrategy` should override
 `findLowestGlobalEventOrderPersisted(uow, aggregateType, LongRange)` with an index lookup (the default loads the range):
 a poll after an empty one also uses it to read straight from the lowest order persisted at or above its read position, so
 events after a sequence jump arrive at the next poll instead of after hours of empty polls widening the range.
@@ -809,7 +812,9 @@ skips it), so the caller must have waited at least `transientGapGiveUpThreshold(
 because > 10,000 are waited for at once stay transient, and a restarted subscription waits for them again.
 CDC records at most 5,000 orders at each end of a new gap as transient gaps (what in-flight transactions can hold); the
 middle of a wider gap (sequence `setval` forward, restore, big rollback) is awaited in memory only - a late commit there
-within the timeout is delivered, then it is given up writing no rows; a restart or crash inside that window loses it. The
+within the timeout is delivered, then it is given up writing no rows. It survives a re-subscribe on the same instance (the
+subscription hands it to the next one as it ends, with its original timeout; a late commit is then delivered from the bus);
+a restart, crash, `resetFrom`, unsubscribe or fenced-lock release (hand-over) inside that window loses it. The
 lower end is recorded via `addTransientGaps(AggregateType, LongRange)` - default records nothing, so a custom handler's
 restart skips it.
 `PostgresqlEventStreamGapHandler` promotes given-up gaps immediately

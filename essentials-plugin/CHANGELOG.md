@@ -35,7 +35,10 @@ targets, with a `-N` suffix for plugin-only releases.
   The `essentials.eventstore.subscription.stopped` gauge stays at `1` through the automatic resumes until the failed
   event is handled (new `EventStoreSubscription#isRecoveringFromErrorPolicyStop()`), so an alert's `for:` duration is
   not reset by each resume. `skippingAfter(...)`'s count is documented as in memory per instance (a restart,
-  redeploy or lock hand-over starts it over), and a resume that throws no longer counts toward it.
+  redeploy or lock hand-over starts it over), and a resume that throws no longer counts toward it. The middle of a wide
+  gap, awaited in memory only, now survives such a resume - any re-subscribe on the same event store instance, polling
+  and CDC - with its original timeout, so a late commit into it is still delivered once; a restart, `resetFrom`,
+  unsubscribe or fenced-lock release loses it (new `EventStore#forgetGapMiddlesAwaitedInMemory`).
 - **Framework docs: bounded polling gaps** — a poll now records a new gap only
   `SubscriptionGapHandler.MAX_AWAITED_ORDERS_PER_GAP_END` (5,000) orders deep from each end and awaits
   the middle of a wider one (sequence `setval`, restore) in memory only, as CDC does, instead of writing a

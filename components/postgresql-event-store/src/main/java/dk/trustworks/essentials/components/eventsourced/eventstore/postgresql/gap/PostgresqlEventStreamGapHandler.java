@@ -435,7 +435,8 @@ public final class PostgresqlEventStreamGapHandler<CONFIG extends AggregateEvent
          * orders deep from each end ({@link GapEnds}); the middle of a wider hole is recorded nowhere - no transient gap,
          * so never a permanent gap either. The subscription awaits it in memory only: the polling event store re-queries
          * it by range on every poll until the gap handler's give-up threshold has passed, and the CDC event store's
-         * delivery tracker is handed it with every commit. A restart or crash inside that window loses it. Finding the
+         * delivery tracker is handed it with every commit - also after a re-subscribe on the same instance. A restart or
+         * crash, a {@code resetFrom}, an unsubscribe or a fenced-lock release inside that window loses it. Finding the
          * holes walks the events, never the orders of the range, so a reconciliation costs as much as the events and the
          * bounded ends, whatever the width of a hole: a {@code setval} that moved the sequence a million forward under a
          * running polling subscription used to write a million transient-gap rows, which every later poll loaded, sorted

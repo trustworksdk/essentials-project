@@ -593,6 +593,8 @@ public class DefaultEventStoreSubscriptionManager implements EventStoreSubscript
         if (removedSubscription != null) {
             log.info("[{}-{}] Unsubscribing", removedSubscription.subscriberId(), removedSubscription.aggregateType());
             stopEventStoreSubscriber(eventStoreSubscription);
+            // Nothing is owed to a subscription that is gone - see EventStore#forgetGapMiddlesAwaitedInMemory
+            eventStore.forgetGapMiddlesAwaitedInMemory(removedSubscription.subscriberId(), removedSubscription.aggregateType());
         }
     }
 

@@ -235,6 +235,11 @@ now holds up its subscription (visible on the `essentials.eventstore.subscriptio
 Spring Boot: `essentials.eventstore.subscription-manager.error-policy.mode` defaults to `retry-n-then-stop`. To keep
 0.50's behaviour set `error-policy.mode=skip` (Java: `SubscriptionErrorPolicy.skip()`). See
 [§2.10](#210-choose-what-an-async-subscription-does-with-a-failing-event).
+The middle of a wide gap (more than 2 × 5,000 orders, e.g. after a sequence `setval`), which is awaited in memory only,
+now survives a re-subscribe of the same subscriber on the same event store instance (polling and CDC) and keeps its
+original timeout, so the automatic resume does not lose an event committed late into it. `resetFrom`, unsubscribe and a
+fenced-lock release drop it, through the new additive `EventStore#forgetGapMiddlesAwaitedInMemory` (a no-op by default);
+an `EventStore` that decorates `PostgresqlEventStore` or `CdcEventStore` must forward it.
 → [MIGRATION-0.60 § A failing event is retried and stops the subscription instead of being skipped](MIGRATION-0.60.md#a-failing-event-is-retried-and-stops-the-subscription-instead-of-being-skipped-subscriptionerrorpolicy)
 
 ---

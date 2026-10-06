@@ -1120,6 +1120,28 @@ public interface EventStore {
     }
 
     /**
+     * Stop awaiting the middles of wide gaps the polls of {@code subscriberId} for {@code aggregateType} await in memory
+     * only. A gap wider than twice {@code SubscriptionGapHandler.MAX_AWAITED_ORDERS_PER_GAP_END} - a global order sequence
+     * moved forward, or an append of more than that many events overtaken by a concurrent commit - is recorded as
+     * transient gaps only at its two ends; its middle is awaited in memory, by this event store instance, for the gap
+     * handler's give-up threshold, and survives a re-subscribe of the same subscriber and aggregate type on this instance
+     * (the resume after a {@code SubscriptionErrorPolicy} stop, a stop and start of the subscription). Called by the
+     * subscriptions of an {@code EventStoreSubscriptionManager} when the subscriber's resume point moves deliberately
+     * ({@code resetFrom}), when it is unsubscribed, and when it loses its fenced lock: an event committed late in such a
+     * middle is then not delivered to it.
+     * <p>
+     * The default implementation does nothing - an event store that awaits no such middles has none to forget. The event
+     * stores Essentials provides ({@link PostgresqlEventStore},
+     * {@link dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.cdc.CdcEventStore}) implement it; an
+     * event store that decorates one of them must forward it.
+     *
+     * @param subscriberId  the subscriber
+     * @param aggregateType the aggregate type it subscribes to
+     */
+    default void forgetGapMiddlesAwaitedInMemory(SubscriberId subscriberId, AggregateType aggregateType) {
+    }
+
+    /**
      * Find the highest {@link GlobalEventOrder} persisted in relation to the given aggregateType
      *
      * @param aggregateType the aggregate type that the underlying {@link AggregateEventStream} is associated with

@@ -16,8 +16,9 @@
 
 package dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.cdc;
 
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.PersistedEvent;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.gap.*;
-import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.internal.GapMiddlesAwaitedInMemory;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.internal.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.types.GlobalEventOrder;
 import dk.trustworks.essentials.types.LongRange;
 import org.slf4j.*;
@@ -45,9 +46,12 @@ import static dk.trustworks.essentials.shared.FailFast.*;
  *     in a run is a <b>gap</b>: an order a transaction holds without having committed it yet, or one a rolled-back
  *     transaction burned and that never commits;</li>
  *     <li><b>earlier gaps</b>: orders at or below the starting point that the subscriber's gap handler still has recorded
- *     as transient gaps from before this subscription started (see {@link #seedEarlierGaps}).</li>
+ *     as transient gaps from before this subscription started (see {@link #seedEarlierGaps});</li>
+ *     <li><b>earlier middles</b>: the middles of wide gaps, awaited in memory only, that an earlier subscription of the
+ *     subscriber in this event store instance still awaited below the starting point (see {@link #seedEarlierMiddles}).</li>
  * </ul>
- * An event passes ({@link #markDelivered}) iff its order is above W and not in a run, or is an earlier gap; delivering
+ * An event passes ({@link #markDelivered}) iff its order is above W and not in a run, or is an earlier gap or in an
+ * earlier middle and not delivered by this subscription yet; delivering
  * it advances W across contiguous runs. A gap is waited for until it is older than {@code gapTimeout} - the oldest
  * first, measured from when a delivered order above it revealed it - and then given up: W moves past it, and an event
  * for it that shows up later is dropped as a duplicate would be. That is the polling path's rule too: its gap handler
@@ -70,9 +74,10 @@ import static dk.trustworks.essentials.shared.FailFast.*;
  * ({@code SubscriptionResumePoint.advanceResumeFromAndIncluding}).
  * <p>
  * Thread-safety: every method that reads or changes the runs is {@code synchronized} - one subscription's delivery
- * threads (its {@code Cdc-*} thread, a polling {@code Publish-*} thread, a back-fill thread) may touch it in turn. The
- * bus thread uses only {@link #isAtOrBelowWatermarkAndNotAwaited}, which takes no lock: the shared dispatcher thread
- * must never wait for a subscription.
+ * threads (its {@code Cdc-*} thread, a polling {@code Publish-*} thread, a back-fill thread) may touch it in turn, and the
+ * subscriber reports what it is done with ({@link #doneWith}) on its own. The earlier middles have a monitor of their own,
+ * only ever taken inside this one. The bus thread uses only {@link #isAtOrBelowWatermarkAndNotAwaited}, which takes no
+ * lock: the shared dispatcher thread must never wait for a subscription.
  */
 final class CdcDeliveryTracker {
     private static final Logger log = LoggerFactory.getLogger(CdcDeliveryTracker.class);
@@ -95,9 +100,12 @@ final class CdcDeliveryTracker {
      * before it, and the highest ones, right below the event. The orders between the two ends of a gap wider than twice
      * this are awaited <b>in memory only</b>: an event for one of them that arrives within {@code gapTimeout} is delivered
      * like any gap fill, but nothing records them, and once {@code gapTimeout} passed they are given up without writing
-     * anything ({@link #drainTimedOutGapsAwaitedInMemoryOnly()}). A restart, crash or fenced-lock hand-over inside that
-     * window loses them - the subscriber's resume point moved past them with the event - the same contract as a gap given
-     * up because of the cap.
+     * anything ({@link #drainTimedOutGapsAwaitedInMemoryOnly()}). They survive a re-subscribe of the subscriber on this
+     * event store instance - the resume after a {@code SubscriptionErrorPolicy} stop, a stop and start: the subscription
+     * hands the ones it still awaits on as it ends ({@link #handOverMiddlesAwaitedInMemoryOnly()}), each with its original
+     * timeout, and the next one awaits them as earlier middles ({@link #seedEarlierMiddles}). A restart, crash,
+     * {@code resetFrom}, unsubscribe or fenced-lock hand-over inside that window loses them - the subscriber's resume point
+     * moved past them with the event - the same contract as a gap given up because of the cap.
      * <p>
      * Why the ends are the ones recorded: {@code global_event_order} comes from the event table's sequence. {@code nextval} hands out
      * orders in increasing order when a row is inserted and never takes one back, so an order in a gap is either
@@ -205,6 +213,32 @@ final class CdcDeliveryTracker {
      * {@link #drainTimedOutGapsAwaitedInMemoryOnly()} - null while they are not collected
      */
     private List<LongRange>                         timedOutInMemoryOnly;
+    /**
+     * The orders of {@link #awaitedInMemoryOnly} delivered as gap fills that the subscriber is not done with yet, and since
+     * when (in {@link #nanoClock} time) their gap had been awaited: handed on with the ranges still awaited, so a
+     * subscription that ends before the subscriber handled one leaves it to the next
+     */
+    private final Map<Long, Long>                   inMemoryOnlyFillsNotDoneWith = new HashMap<>();
+    /**
+     * The middles an earlier subscription of the subscriber awaited below the watermark, awaited until their original
+     * timeout - a standalone, empty instance until {@link #seedEarlierMiddles}. An order delivered from one stays in it
+     * until the subscriber is done with it ({@link #doneWith}), so a subscription that ends first leaves it to the next
+     */
+    private GapMiddlesAwaitedInMemory               earlierMiddles;
+    /**
+     * The orders delivered from {@link #earlierMiddles} that the subscriber is not done with yet - not delivered again
+     */
+    private final Set<Long>                         earlierMiddleFillsNotDoneWith = new HashSet<>();
+    /**
+     * Whether either of the two above holds an order - read lock-free by {@link #doneWith}
+     */
+    private volatile boolean                        hasMiddleFillsNotDoneWith;
+    /**
+     * The lowest and highest order of {@link #earlierMiddles} - read lock-free by the bus thread, see
+     * {@link #isAtOrBelowWatermarkAndNotAwaited}. Possibly wider than what is still awaited, never narrower
+     */
+    private volatile long                           earlierMiddlesFrom = Long.MAX_VALUE;
+    private volatile long                           earlierMiddlesTo   = Long.MIN_VALUE;
 
     /**
      * @param name                    used in log statements, e.g. {@code subscriber-aggregateType}
@@ -224,6 +258,7 @@ final class CdcDeliveryTracker {
         this.nanoClock = requireNonNull(nanoClock, "No nanoClock provided");
         this.watermark = watermarkInclusive;
         this.highestDelivered = watermarkInclusive;
+        this.earlierMiddles = GapMiddlesAwaitedInMemory.awaitedFor(gapTimeout, nanoClock);
     }
 
     /**
@@ -278,6 +313,87 @@ final class CdcDeliveryTracker {
             log.warn("[{}] {} transient gaps were recorded before this subscription started - waiting only for the {} highest of them, the {} lowest are given up",
                      name, earlierGaps.size() + skipped, maxTrackedGaps, skipped);
         }
+    }
+
+    /**
+     * Wait for the orders of {@code middles} too, although they are at or below the watermark: the middles of wide gaps,
+     * awaited in memory only, that an earlier subscription of the subscriber in this event store instance still awaited
+     * when it ended - its resume point, where this one starts, lies above them (see {@link GapMiddlesAwaitedAcrossSubscribes},
+     * which dropped those at or above it). Each is awaited until its original timeout. An event that fills one is
+     * delivered as a gap fill, once; the order stays in {@code middles} until the subscriber is done with it
+     * ({@link #doneWith}), so should this subscription end first, the next one waits for it again. Called once, before
+     * anything is delivered.
+     */
+    synchronized void seedEarlierMiddles(GapMiddlesAwaitedInMemory middles) {
+        earlierMiddles = requireNonNull(middles, "No middles provided");
+        earlierMiddleFillsNotDoneWith.clear();
+        middlesChanged();
+        fillsNotDoneWithChanged();
+        if (!middles.isEmpty()) {
+            log.debug("[{}] Awaiting the middle(s) {} of wide gaps an earlier subscription awaited in memory, until their timeout", name, middles.awaited());
+        }
+    }
+
+    /**
+     * @return the earlier middles - see {@link #seedEarlierMiddles}
+     */
+    synchronized GapMiddlesAwaitedInMemory earlierMiddles() {
+        return earlierMiddles;
+    }
+
+    /**
+     * The subscriber is done with {@code events} - it handled them, gave up on them, or was handed them without
+     * acknowledging: a middle fill among them is no longer owed to a later subscription
+     */
+    void doneWith(Collection<PersistedEvent> events) {
+        requireNonNull(events, "No events provided");
+        if (!hasMiddleFillsNotDoneWith) {
+            // Read lock-free: called for every event the subscriber is done with, from its own thread
+            return;
+        }
+        synchronized (this) {
+            if (!inMemoryOnlyFillsNotDoneWith.isEmpty()) {
+                events.forEach(event -> inMemoryOnlyFillsNotDoneWith.remove(event.globalEventOrder().longValue()));
+            }
+            if (!earlierMiddleFillsNotDoneWith.isEmpty()) {
+                earlierMiddles.handled(events);
+                events.forEach(event -> earlierMiddleFillsNotDoneWith.remove(event.globalEventOrder().longValue()));
+                middlesChanged();
+            }
+            fillsNotDoneWithChanged();
+        }
+    }
+
+    /**
+     * After {@link #inMemoryOnlyFillsNotDoneWith} or {@link #earlierMiddleFillsNotDoneWith} changed
+     */
+    private void fillsNotDoneWithChanged() {
+        hasMiddleFillsNotDoneWith = !inMemoryOnlyFillsNotDoneWith.isEmpty() || !earlierMiddleFillsNotDoneWith.isEmpty();
+    }
+
+    /**
+     * The subscription ends: hand the middles of wide gaps it still awaits in memory only on to the subscriber's next
+     * subscription, by adding them to the {@link #earlierMiddles} - the parts of each no event filled yet, and the fills
+     * the subscriber is not done with - each with its original timeout. Gives up first on what timed out.
+     */
+    synchronized void handOverMiddlesAwaitedInMemoryOnly() {
+        giveUpExpiredGaps();
+        for (var inMemoryOnly : awaitedInMemoryOnly.entrySet()) {
+            long from = Math.max(inMemoryOnly.getKey(), watermark + 1);
+            long to   = inMemoryOnly.getValue();
+            var  in   = runsAboveWatermark.floorEntry(from);
+            if (in != null && in.getValue().end >= from) {
+                from = in.getValue().end + 1;
+            }
+            for (var above = runsAboveWatermark.ceilingEntry(from); from <= to && above != null; above = runsAboveWatermark.higherEntry(above.getKey())) {
+                // The orders from 'from' up to the run above them were not delivered - awaited since that run revealed them
+                if (above.getKey() > from) {
+                    earlierMiddles.await(LongRange.between(from, Math.min(above.getKey() - 1, to)), above.getValue().gapBelowSince);
+                }
+                from = above.getValue().end + 1;
+            }
+        }
+        inMemoryOnlyFillsNotDoneWith.forEach((order, awaitedSince) -> earlierMiddles.await(LongRange.only(order), awaitedSince));
     }
 
     /**
@@ -349,7 +465,7 @@ final class CdcDeliveryTracker {
         giveUpExpiredGaps();
         Delivery delivery;
         if (order <= watermark) {
-            delivery = earlierGaps.remove(order) ? new Delivery(Kind.FILLED_GAP, order) : Delivery.DUPLICATE;
+            delivery = earlierGaps.remove(order) || deliversEarlierMiddle(order) ? new Delivery(Kind.FILLED_GAP, order) : Delivery.DUPLICATE;
         } else if (order > highestDelivered) {
             delivery = deliverAboveHighest(order);
         } else {
@@ -391,6 +507,18 @@ final class CdcDeliveryTracker {
     }
 
     /**
+     * @return true when {@code order} - at or below the watermark - is in an earlier middle and not delivered from it yet;
+     * it is then delivered from now on
+     */
+    private boolean deliversEarlierMiddle(long order) {
+        if (earlierMiddles.isAwaited(order) && earlierMiddleFillsNotDoneWith.add(order)) {
+            hasMiddleFillsNotDoneWith = true;
+            return true;
+        }
+        return false;
+    }
+
+    /**
      * {@code watermark < order <= highestDelivered}: either in a run (a duplicate) or in a gap, which always has a run
      * above it
      */
@@ -400,6 +528,10 @@ final class CdcDeliveryTracker {
             return Delivery.DUPLICATE;
         }
         var above           = runsAboveWatermark.higherEntry(order);
+        if (isAwaitedInMemoryOnly(order)) {
+            inMemoryOnlyFillsNotDoneWith.put(order, above.getValue().gapBelowSince);
+            hasMiddleFillsNotDoneWith = true;
+        }
         var adjacentToBelow = below == null ? order == watermark + 1 : below.getValue().end == order - 1;
         var adjacentToAbove = above.getKey() == order + 1;
         if (below == null && adjacentToBelow) {
@@ -427,7 +559,7 @@ final class CdcDeliveryTracker {
     synchronized boolean isDelivered(long order) {
         giveUpExpiredGaps();
         if (order <= watermark) {
-            return !earlierGaps.contains(order);
+            return !earlierGaps.contains(order) && !(earlierMiddles.isAwaited(order) && !earlierMiddleFillsNotDoneWith.contains(order));
         }
         if (order > highestDelivered) {
             return false;
@@ -441,7 +573,7 @@ final class CdcDeliveryTracker {
      * delivered again. False for an order above the watermark that was delivered - that is the delivery thread's call
      */
     boolean isAtOrBelowWatermarkAndNotAwaited(long order) {
-        return order <= watermark && !earlierGaps.contains(order);
+        return order <= watermark && !earlierGaps.contains(order) && (order < earlierMiddlesFrom || order > earlierMiddlesTo);
     }
 
     /**
@@ -496,6 +628,13 @@ final class CdcDeliveryTracker {
         long now = nanoClock.getAsLong();
         while (!runsAboveWatermark.isEmpty() && now - runsAboveWatermark.firstEntry().getValue().gapBelowSince >= gapTimeoutNanos) {
             giveUpLowestGap("it was not delivered within " + Duration.ofNanos(gapTimeoutNanos) + " - most likely its transaction rolled back", true);
+        }
+        if (!earlierMiddles.isEmpty()) {
+            var givenUp = earlierMiddles.dropTimedOut();
+            if (!givenUp.isEmpty()) {
+                log.debug("[{}] Gave up waiting for the middle(s) {} of wide gaps an earlier subscription awaited in memory - nothing to record", name, givenUp);
+                middlesChanged();
+            }
         }
         if (!earlierGaps.isEmpty() && now - earlierGapsSince >= gapTimeoutNanos) {
             log.debug("[{}] Gave up waiting for {} transient gap(s) recorded before this subscription started", name, earlierGaps.size());
@@ -562,6 +701,24 @@ final class CdcDeliveryTracker {
         }
     }
 
+    private boolean isAwaitedInMemoryOnly(long order) {
+        var inMemoryOnly = awaitedInMemoryOnly.floorEntry(order);
+        return inMemoryOnly != null && inMemoryOnly.getValue() >= order;
+    }
+
+    /**
+     * After {@link #earlierMiddles} changed: the span the bus thread checks against
+     */
+    private void middlesChanged() {
+        var span = earlierMiddles.span();
+        earlierMiddlesFrom = span.map(range -> range.fromInclusive).orElse(Long.MAX_VALUE);
+        earlierMiddlesTo = span.map(LongRange::getToInclusive).orElse(Long.MIN_VALUE);
+        if (span.isEmpty()) {
+            earlierMiddleFillsNotDoneWith.clear();
+            fillsNotDoneWithChanged();
+        }
+    }
+
     /**
      * {@code orders} as the fewest ranges that cover exactly them, lowest first
      */
@@ -590,6 +747,6 @@ final class CdcDeliveryTracker {
     public synchronized String toString() {
         return "CdcDeliveryTracker{" + name + ", watermark=" + watermark + ", highestDelivered=" + highestDelivered +
                 ", runsAboveWatermark=" + runsAboveWatermark.size() + ", earlierGaps=" + earlierGaps.size() +
-                ", awaitedInMemoryOnly=" + awaitedInMemoryOnly.size() + '}';
+                ", awaitedInMemoryOnly=" + awaitedInMemoryOnly.size() + ", earlierMiddles=" + earlierMiddles.awaited().size() + '}';
     }
 }

@@ -157,6 +157,11 @@ public class CdcEventStore<CONFIG extends AggregateEventStreamConfiguration> imp
      * aggregate case.
      */
     private final AtomicInteger                                               backfillLiveBufferSize = new AtomicInteger(0);
+    /**
+     * The middles of wide gaps the subscriptions' delivery trackers await in memory only, handed from a subscription that
+     * ends to the next one of the same subscriber and aggregate type - see {@code newDeliveryTracker}
+     */
+    private final GapMiddlesAwaitedAcrossSubscribes                           gapMiddlesAwaitedAcrossSubscribes = new GapMiddlesAwaitedAcrossSubscribes();
 
     /**
      * Create a {@link CdcEventStoreBuilder} that names every argument and accepts both plain values and
@@ -412,6 +417,10 @@ public class CdcEventStore<CONFIG extends AggregateEventStreamConfiguration> imp
      * advances past a gap - a gap-filled event is delivered after later ones - so an event filling one of them after a
      * restart (or a fenced-lock hand-over to another node) must still get through. Read on the subscribing thread, once
      * per subscription; failing to read them only costs that, so it is logged and the subscription goes ahead.
+     * <p>
+     * Seeded too with the middles of wide gaps, awaited in memory only, that the subscriber's previous subscription on
+     * this instance still awaited when it ended ({@link GapMiddlesAwaitedAcrossSubscribes}) - the resume after a
+     * {@code SubscriptionErrorPolicy} stop starts above them. No row records them, so a restart loses them.
      */
     private CdcDeliveryTracker newDeliveryTracker(AggregateType aggregateType,
                                                   long fromInclusiveGlobalOrder,
@@ -421,6 +430,7 @@ public class CdcEventStore<CONFIG extends AggregateEventStreamConfiguration> imp
         // Gives up on a gap when the subscriber's gap handler would: its own threshold if it states one, else the default
         var gapTimeout = CdcDeliveryTracker.gapTimeoutFor(gapHandler);
         var tracker = CdcDeliveryTracker.startingAfter(name, fromInclusiveGlobalOrder - 1, gapTimeout);
+        subscriptionId.ifPresent(subscriberId -> tracker.seedEarlierMiddles(gapMiddlesAwaitedAcrossSubscribes.subscribe(subscriberId, aggregateType, fromInclusiveGlobalOrder, gapTimeout)));
         if (gapHandler.isPresent() && recordsGaps()) {
             try {
                 tracker.seedEarlierGaps(gapHandler.get().getTransientGapsFor(aggregateType));
@@ -997,6 +1007,8 @@ public class CdcEventStore<CONFIG extends AggregateEventStreamConfiguration> imp
                 }
                 throw e;
             }
+            // A middle fill among them - awaited in memory only - is no longer owed to the next subscription
+            tracker.doneWith(events);
             delegateAcknowledgement.acknowledge(events);
         }
 
@@ -1035,9 +1047,17 @@ public class CdcEventStore<CONFIG extends AggregateEventStreamConfiguration> imp
          * delivered are recorded now ({@link #recordGivenUpGaps()}), or a subscription stopped while idle left them to a
          * later one to wait for again. Runs on the thread that ends it - for a cancel, the one that stops the
          * subscription. Should a unit of work be current there, they are left unrecorded rather than written in a unit
-         * of work the gate does not own: a later subscription then waits for those gaps once more, which is safe
+         * of work the gate does not own: a later subscription then waits for those gaps once more, which is safe.
+         * <p>
+         * First, and always, the middles of wide gaps the tracker still awaits in memory only - and the fills from them
+         * the subscriber is not done with - are left for the subscriber's next subscription on this instance
+         * ({@link CdcDeliveryTracker#handOverMiddlesAwaitedInMemoryOnly()}), which starts at the resume point, above them.
+         * A cancel runs this before the subscription that is stopped or resumed subscribes again.
          */
         void subscriptionEnded() {
+            // In memory only, so whatever the thread: the middles of wide gaps still awaited, for the next subscription
+            tracker.handOverMiddlesAwaitedInMemoryOnly();
+            gapMiddlesAwaitedAcrossSubscribes.subscribeEnded(tracker.earlierMiddles());
             if (gapHandler.isEmpty()) return;
             if (unitOfWorkFactory.getCurrentUnitOfWork().isPresent()) {
                 log.debug("[{}-{}] Subscription ended inside a unit of work - not recording the gaps given up on since the last event delivered",
@@ -1599,6 +1619,16 @@ public class CdcEventStore<CONFIG extends AggregateEventStreamConfiguration> imp
     @Override
     public Stream<PersistedEvent> loadEventsByGlobalOrder(LoadEventsByGlobalOrder operation) {
         return eventStore.loadEventsByGlobalOrder(operation);
+    }
+
+    /**
+     * Forgets the middles of wide gaps the subscriber's CDC subscriptions await in memory only, and those of the delegate's
+     * polls - see {@link GapMiddlesAwaitedAcrossSubscribes}
+     */
+    @Override
+    public void forgetGapMiddlesAwaitedInMemory(SubscriberId subscriberId, AggregateType aggregateType) {
+        gapMiddlesAwaitedAcrossSubscribes.forget(subscriberId, aggregateType);
+        eventStore.forgetGapMiddlesAwaitedInMemory(subscriberId, aggregateType);
     }
 
     @Override

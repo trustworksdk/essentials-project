@@ -83,6 +83,11 @@ public final class PostgresqlEventStore<CONFIG extends AggregateEventStreamConfi
     private final List<EventStoreInterceptor>                eventStoreInterceptors;
     private final EventStoreEventBus                         eventStoreEventBus;
     private final EventStreamGapHandler<CONFIG>              eventStreamGapHandler;
+    /**
+     * The middles of wide gaps every polling subscription awaits in memory only, kept per subscriber and aggregate type
+     * so they outlive one subscribe of the subscription - see {@link GapMiddlesAwaitedAcrossSubscribes}
+     */
+    private final GapMiddlesAwaitedAcrossSubscribes          gapMiddlesAwaitedAcrossSubscribes = new GapMiddlesAwaitedAcrossSubscribes();
 
     /**
      * Create a {@link PostgresqlEventStoreBuilder} that names every argument and accepts both plain values and
@@ -211,6 +216,15 @@ public final class PostgresqlEventStore<CONFIG extends AggregateEventStreamConfi
 
     public EventStreamGapHandler<CONFIG> getEventStreamGapHandler() {
         return eventStreamGapHandler;
+    }
+
+    /**
+     * Drops the middles of wide gaps the subscriber's polls awaited in memory only - see
+     * {@link GapMiddlesAwaitedAcrossSubscribes}
+     */
+    @Override
+    public void forgetGapMiddlesAwaitedInMemory(SubscriberId subscriberId, AggregateType aggregateType) {
+        gapMiddlesAwaitedAcrossSubscribes.forget(subscriberId, aggregateType);
     }
 
     @Override
@@ -533,13 +547,12 @@ public final class PostgresqlEventStore<CONFIG extends AggregateEventStreamConfi
         var lastBatchSizeForThisQuery            = new AtomicLong(batchFetchSize);
         var nextFromInclusiveGlobalOrder         = new AtomicLong(fromInclusiveGlobalOrder);
         var subscriptionGapHandler               = subscriberId.map(eventStreamGapHandler::gapHandlerFor);
-        // Like the read position, shared by every subscribe of the flux
-        var gapMiddlesAwaitedInMemory            = subscriptionGapHandler.map(GapMiddlesAwaitedInMemory::awaitedAsLongAs);
 
         var eventStoreOptimizer = eventStorePollingOptimizerFactory.map(pollingOptimizerFactory -> pollingOptimizerFactory.apply(eventStreamLogName)).orElse(EventStorePollingOptimizer.None());
 
-        // One awaitingAcknowledgement per subscribe, registered before the first request, so the subscriber can acknowledge whatever it is handed
-        return registeredWithAcknowledgement(acknowledgement, subscriptionGapHandler, aggregateType, eventStreamLogName, awaitingAcknowledgement -> Flux.create((FluxSink<PersistedEvent> sink) -> {
+        // One awaitingAcknowledgement per subscribe, registered before the first request, so the subscriber can acknowledge
+        // whatever it is handed - and the middles of wide gaps the subscriber's earlier subscribes still await
+        return registeredWithAcknowledgement(acknowledgement, subscriptionGapHandler, aggregateType, eventStreamLogName, nextFromInclusiveGlobalOrder, (awaitingAcknowledgement, gapMiddlesAwaitedInMemory) -> Flux.create((FluxSink<PersistedEvent> sink) -> {
             var actualSubscriberId      = subscriberId.orElse(NO_SUBSCRIBER_ID);
             var scheduler               = Schedulers.newSingle("Publish-" + actualSubscriberId + "-" + aggregateType, true);
             sink.onRequest(eventDemandSize -> {
@@ -632,12 +645,10 @@ public final class PostgresqlEventStore<CONFIG extends AggregateEventStreamConfi
         var lastBatchSizeForThisQuery            = new AtomicLong(batchFetchSize);
         var nextFromInclusiveGlobalOrder         = new AtomicLong(fromInclusiveGlobalOrder);
         var subscriptionGapHandler               = subscriberId.map(eventStreamGapHandler::gapHandlerFor);
-        // Like the read position, shared by every subscribe of the flux
-        var gapMiddlesAwaitedInMemory            = subscriptionGapHandler.map(GapMiddlesAwaitedInMemory::awaitedAsLongAs);
         var actualSubscriberId                   = subscriberId.orElse(NO_SUBSCRIBER_ID);
 
         // One per subscription (each subscribe gets its own), as in pollEvents
-        Function<Optional<GapFillsAwaitingAcknowledgement>, Flux<PersistedEvent>> pollingWith = awaitingAcknowledgement -> {
+        BiFunction<Optional<GapFillsAwaitingAcknowledgement>, Optional<GapMiddlesAwaitedInMemory>, Flux<PersistedEvent>> pollingWith = (awaitingAcknowledgement, gapMiddlesAwaitedInMemory) -> {
             var persistedEventsFlux = Flux.defer(() -> {
                 // The first poll runs on the subscribing thread, which may already be inside a UnitOfWork. The poll then
                 // joins it, and must leave ending it to its owner.
@@ -706,7 +717,8 @@ public final class PostgresqlEventStore<CONFIG extends AggregateEventStreamConfi
                     var gapMiddleFills = loadGapMiddleFills(gapMiddlesAwaitedInMemory, unitOfWork, aggregateType, batchFetchSize, onlyIncludeEventIfItBelongsToTenant, eventStreamLogName);
                     var loadedEvents   = withGapMiddleFills(gapMiddleFills, loadEventsForPoll(aggregateType, rangeWithEvents, globalOrderRange, transientGapsToIncludeInQuery, onlyIncludeEventIfItBelongsToTenant));
                     // Without the gap fills handed on before and not acknowledged yet: their gap is open, so they are read again
-                    var persistedEvents = notAwaitingAcknowledgement(eventsBelongingToTenant(loadedEvents, tenantFilter(aggregateType, onlyIncludeEventIfItBelongsToTenant)), awaitingAcknowledgement);
+                    var tenantFilter    = tenantFilter(aggregateType, onlyIncludeEventIfItBelongsToTenant);
+                    var persistedEvents = notAwaitingAcknowledgement(eventsBelongingToTenant(loadedEvents, tenantFilter), awaitingAcknowledgement);
                     eventStoreSubscriptionObserver.eventStorePolled(actualSubscriberId,
                                                                     aggregateType,
                                                                     globalOrderRange,
@@ -763,15 +775,18 @@ public final class PostgresqlEventStore<CONFIG extends AggregateEventStreamConfi
                     }
 
                     // Once the reconciliation committed: the middles of the wide gaps it found, and the middle fills read
-                    trackGapMiddles(gapMiddlesAwaitedInMemory, globalOrderRange, loadedEvents, eventStreamLogName);
+                    trackGapMiddles(gapMiddlesAwaitedInMemory, globalOrderRange, loadedEvents, tenantFilter, eventStreamLogName);
                     // Right before they are emitted - once the reconciliation committed - so the subscriber can acknowledge them
                     awaitingAcknowledgement.ifPresent(awaiting -> awaiting.awaitAcknowledgement(gapFillsToEmit));
                     var emitted = Flux.fromIterable(persistedEvents);
                     if (awaitingAcknowledgement.isEmpty() && subscriptionGapHandler.isPresent() && !gapFillsToEmit.isEmpty()) {
                         // Subscribed only once every event was emitted, and not at all when the subscriber cancels first:
-                        // then the gaps stay open, and the next subscription asks for them again
+                        // then the gaps stay open - and the middle fills awaited - and the next subscription asks for them again
                         var gapHandler = subscriptionGapHandler.get();
-                        emitted = emitted.concatWith(Mono.fromRunnable(() -> resolveGapsFilledByPublishedEvents(gapHandler, actualSubscriberId, aggregateType, gapFillsToEmit, eventStreamLogName)));
+                        emitted = emitted.concatWith(Mono.fromRunnable(() -> {
+                            gapMiddlesAwaitedInMemory.ifPresent(middles -> middles.handled(gapFillsToEmit));
+                            resolveGapsFilledByPublishedEvents(gapHandler, actualSubscriberId, aggregateType, gapFillsToEmit, eventStreamLogName);
+                        }));
                     }
                     return emitted.doOnComplete(() -> nextFromInclusiveGlobalOrder.accumulateAndGet(nextGlobalOrderAfterThisPoll, Math::max));
                 } catch (RuntimeException e) {
@@ -821,7 +836,7 @@ public final class PostgresqlEventStore<CONFIG extends AggregateEventStreamConfi
             return polling;
         };
         // Registered when subscribed, before the first poll
-        return registeredWithAcknowledgement(acknowledgement, subscriptionGapHandler, aggregateType, eventStreamLogName, pollingWith);
+        return registeredWithAcknowledgement(acknowledgement, subscriptionGapHandler, aggregateType, eventStreamLogName, nextFromInclusiveGlobalOrder, pollingWith);
     }
 
     /**
@@ -829,19 +844,53 @@ public final class PostgresqlEventStore<CONFIG extends AggregateEventStreamConfi
      * every subscribe and before anything is polled, so the subscriber can acknowledge whatever it is handed. Every
      * subscribe gets its own gap fills awaiting acknowledgement; a subscribe of the flux again once the previous one ended
      * ({@code retry()}, {@code repeat()}) replaces the previous registration - see {@link AcknowledgementRegistrations}.
+     * <p>
+     * Every subscribe also takes over the middles of wide gaps the subscriber's earlier subscribes - of this flux or of
+     * another one, such as the one a resume after a {@code SubscriptionErrorPolicy} stop replaces - still await below the
+     * read position it starts at, and leaves what it still awaits for the next once it ends (see
+     * {@link GapMiddlesAwaitedAcrossSubscribes}).
+     *
+     * @param readPosition where the flux reads from next - where a subscribe starts reading
      */
     private Flux<PersistedEvent> registeredWithAcknowledgement(Optional<SubscriberAcknowledgement> acknowledgement,
                                                                Optional<SubscriptionGapHandler> subscriptionGapHandler,
                                                                AggregateType aggregateType,
                                                                String eventStreamLogName,
-                                                               Function<Optional<GapFillsAwaitingAcknowledgement>, Flux<PersistedEvent>> pollingWith) {
+                                                               AtomicLong readPosition,
+                                                               BiFunction<Optional<GapFillsAwaitingAcknowledgement>, Optional<GapMiddlesAwaitedInMemory>, Flux<PersistedEvent>> pollingWith) {
         if (acknowledgement.isEmpty()) {
-            return pollingWith.apply(Optional.empty());
+            return Flux.defer(() -> {
+                var gapMiddlesAwaitedInMemory = gapMiddlesAwaitedBy(subscriptionGapHandler, aggregateType, readPosition.get());
+                return handingOnGapMiddlesWhenEnded(pollingWith.apply(Optional.empty(), gapMiddlesAwaitedInMemory), gapMiddlesAwaitedInMemory);
+            });
         }
         return new AcknowledgementRegistrations(acknowledgement.get()).registeredOnEverySubscribe(() -> {
-            var awaitingAcknowledgement = awaitingAcknowledgement(acknowledgement, subscriptionGapHandler, aggregateType, eventStreamLogName);
-            return new AcknowledgementRegistrations.PerSubscribe(acknowledgementListener(awaitingAcknowledgement), pollingWith.apply(awaitingAcknowledgement));
+            var gapMiddlesAwaitedInMemory = gapMiddlesAwaitedBy(subscriptionGapHandler, aggregateType, readPosition.get());
+            var awaitingAcknowledgement   = awaitingAcknowledgement(acknowledgement, subscriptionGapHandler, aggregateType, eventStreamLogName);
+            return new AcknowledgementRegistrations.PerSubscribe(acknowledgementListener(awaitingAcknowledgement, gapMiddlesAwaitedInMemory),
+                                                                 handingOnGapMiddlesWhenEnded(pollingWith.apply(awaitingAcknowledgement, gapMiddlesAwaitedInMemory), gapMiddlesAwaitedInMemory));
         });
+    }
+
+    /**
+     * @return the middles of wide gaps one subscribe of a subscription with a gap handler awaits in memory only - starting
+     * with those the subscriber's earlier subscribes still await below {@code fromInclusive}, where it starts reading
+     */
+    private Optional<GapMiddlesAwaitedInMemory> gapMiddlesAwaitedBy(Optional<SubscriptionGapHandler> subscriptionGapHandler, AggregateType aggregateType, long fromInclusive) {
+        return subscriptionGapHandler.map(gapHandler -> gapMiddlesAwaitedAcrossSubscribes.subscribe(gapHandler.subscriberId(),
+                                                                                                   aggregateType,
+                                                                                                   fromInclusive,
+                                                                                                   GapMiddlesAwaitedInMemory.timeoutFor(gapHandler)));
+    }
+
+    /**
+     * {@code events}, leaving the middles the subscribe still awaits for the subscriber's next subscribe once it ends -
+     * when it is cancelled, which a stop, a resume, a fenced-lock release does, synchronously, before the subscription
+     * subscribes again
+     */
+    private Flux<PersistedEvent> handingOnGapMiddlesWhenEnded(Flux<PersistedEvent> events, Optional<GapMiddlesAwaitedInMemory> gapMiddlesAwaitedInMemory) {
+        return gapMiddlesAwaitedInMemory.map(middles -> events.doFinally(signal -> gapMiddlesAwaitedAcrossSubscribes.subscribeEnded(middles)))
+                                        .orElse(events);
     }
 
     /**
@@ -1274,7 +1323,7 @@ public final class PostgresqlEventStore<CONFIG extends AggregateEventStreamConfi
 
                     // Right before they are published - once the reconciliation committed - so the subscriber can acknowledge them
                     // Only the consumed events: a middle fill beyond the demand stays awaited, and is read again
-                    trackGapMiddles(gapMiddlesAwaitedInMemory, globalOrderRange, consumedEvents, eventStreamLogName);
+                    trackGapMiddles(gapMiddlesAwaitedInMemory, globalOrderRange, consumedEvents, tenantFilter, eventStreamLogName);
                     awaitingAcknowledgement.ifPresent(awaiting -> awaiting.awaitAcknowledgement(gapFillsToPublish));
                     for (int index = 0; index < eventsToPublish.size(); index++) {
                         if (sink.isCancelled()) {
@@ -1290,6 +1339,7 @@ public final class PostgresqlEventStore<CONFIG extends AggregateEventStreamConfi
                     if (awaitingAcknowledgement.isPresent()) {
                         // Resolved as the subscriber acknowledges them
                     } else if (!sink.isCancelled()) {
+                        gapMiddlesAwaitedInMemory.ifPresent(middles -> middles.handled(gapFillsToPublish));
                         subscriptionGapHandler.ifPresent(gapHandler -> resolveGapsFilledByPublishedEvents(gapHandler, subscriberId, aggregateType, gapFillsToPublish, eventStreamLogName));
                     } else if (!gapFillsToPublish.isEmpty()) {
                         eventStoreStreamLog.debug("[{}] Polling worker - Is Cancelled: true. Leaving the gaps filled by {} open - the subscriber may not have handled them",
@@ -1470,7 +1520,8 @@ public final class PostgresqlEventStore<CONFIG extends AggregateEventStreamConfi
      * One indexed lookup per awaited middle ({@link AggregateEventStreamPersistenceStrategy#findLowestGlobalEventOrderPersisted(EventStoreUnitOfWork, AggregateType, LongRange)})
      * finds the lowest event committed in it - in practice there is none, and nothing else is read. From the first middle
      * that has one, at most {@code maxEvents} orders are loaded, so a middle a large transaction filled is read a batch per
-     * poll, never at once; every order loaded is awaited, so none is read twice.
+     * poll, never at once. Every order loaded is awaited, so none is handed on twice: one stays awaited until the
+     * subscriber is done with it, and a poll that reads it again before then leaves it out (see {@link #trackGapMiddles}).
      *
      * @return the events found, lowest first - none when nothing is awaited
      */
@@ -1480,6 +1531,8 @@ public final class PostgresqlEventStore<CONFIG extends AggregateEventStreamConfi
                                                     long maxEvents,
                                                     Optional<Tenant> onlyIncludeEventIfItBelongsToTenant,
                                                     String eventStreamLogName) {
+        // What ended subscribes left behind and no later subscribe took over is forgotten once it timed out
+        gapMiddlesAwaitedAcrossSubscribes.forgetTimedOut();
         if (gapMiddlesAwaitedInMemory.isEmpty() || gapMiddlesAwaitedInMemory.get().isEmpty()) {
             return List.of();
         }
@@ -1538,23 +1591,34 @@ public final class PostgresqlEventStore<CONFIG extends AggregateEventStreamConfi
     }
 
     /**
-     * Once a poll's reconciliation committed, and before it hands anything on: every event it consumed stops being awaited
-     * in a middle - whichever query read it, and whether or not it belongs to the subscriber's tenant - so it is never read
-     * as a middle fill again; and the middles of the wide gaps its reconciliation found are awaited from now on. The
-     * reconciliation recorded only their ends as transient gaps (see {@link GapEnds}).
+     * Once a poll's reconciliation committed, and before it hands anything on: every event it consumed that the subscriber
+     * is not handed - another tenant's - stops being awaited in a middle, so it is never read as a middle fill again; and
+     * the middles of the wide gaps its reconciliation found are awaited from now on. The reconciliation recorded only their
+     * ends as transient gaps (see {@link GapEnds}).
+     * <p>
+     * A middle fill handed to the subscriber stays awaited until the subscriber is done with it, as the transient gap of
+     * any other gap fill stays open: once it acknowledged it, or - when it does not acknowledge - once the poll handed it
+     * on without being cancelled ({@link GapMiddlesAwaitedInMemory#handled}). This subscribe does not hand it on twice:
+     * a later poll that reads it again leaves it out while it awaits acknowledgement, and without acknowledgement it was
+     * done with before the next poll. A subscribe cancelled first leaves it awaited for the next subscribe, which hands it
+     * on again.
      *
      * @param consumedEvents the events the poll consumed - the ones it gave the reconciliation, apart from the gap fills
      *                       awaiting acknowledgement
+     * @param tenantFilter   which of them the subscriber is handed - see {@link #tenantFilter}
      */
     private static void trackGapMiddles(Optional<GapMiddlesAwaitedInMemory> gapMiddlesAwaitedInMemory,
                                         LongRange globalOrderRange,
                                         List<PersistedEvent> consumedEvents,
+                                        Optional<Predicate<PersistedEvent>> tenantFilter,
                                         String eventStreamLogName) {
         if (gapMiddlesAwaitedInMemory.isEmpty() || consumedEvents.isEmpty()) {
             return;
         }
         var awaited = gapMiddlesAwaitedInMemory.get();
-        consumedEvents.forEach(event -> awaited.delivered(event.globalEventOrder().longValue()));
+        tenantFilter.ifPresent(belongsToTenant -> consumedEvents.stream()
+                                                                .filter(belongsToTenant.negate())
+                                                                .forEach(event -> awaited.delivered(event.globalEventOrder().longValue())));
         var gapEnds = GapEnds.below(globalOrderRange.fromInclusive, consumedEvents.stream().mapToLong(event -> event.globalEventOrder().longValue()));
         for (var middle : gapEnds.awaitedInMemoryOnly()) {
             awaited.await(middle);
@@ -1696,8 +1760,13 @@ public final class PostgresqlEventStore<CONFIG extends AggregateEventStreamConfi
      * to resolve), so {@link SubscriberAcknowledgement#isHonoured()} tells the subscriber that handing on does not
      * resolve anything here. See {@link AcknowledgementRegistrations} for how long the registration lives.
      */
-    private static Consumer<List<PersistedEvent>> acknowledgementListener(Optional<GapFillsAwaitingAcknowledgement> awaitingAcknowledgement) {
-        return awaitingAcknowledgement.<Consumer<List<PersistedEvent>>>map(awaiting -> awaiting::acknowledged)
+    private static Consumer<List<PersistedEvent>> acknowledgementListener(Optional<GapFillsAwaitingAcknowledgement> awaitingAcknowledgement,
+                                                                          Optional<GapMiddlesAwaitedInMemory> gapMiddlesAwaitedInMemory) {
+        return awaitingAcknowledgement.<Consumer<List<PersistedEvent>>>map(awaiting -> events -> {
+                                          awaiting.acknowledged(events);
+                                          // A middle fill among them is no longer owed - also if the subscribe that handed it on has ended since
+                                          gapMiddlesAwaitedInMemory.ifPresent(middles -> middles.handled(events));
+                                      })
                                       .orElse(events -> {
                                       });
     }
