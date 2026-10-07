@@ -128,6 +128,10 @@ jobs:
               xargs -r docker stop <<< "$left" > /dev/null
               failed=1
             fi
+            # spring-boot:stop only stops the services (Boot's default lifecycle), so the containers stay behind in the
+            # shared Compose project. Remove them: a later `down` from a cell with other services deletes the project
+            # network under them, and the next `up` that reuses one fails with "network … not found".
+            docker compose -f "$dir/project/backend/compose.yml" down --remove-orphans > /dev/null 2>&1 || true
           done
           exit $failed
 
@@ -175,10 +179,13 @@ jobs:
             profile=()
             grep -q '<id>skip-frontend</id>' "$dir/project/pom.xml" "$pom" && profile=(-Pskip-frontend)
             mvn=(mvn -B -ntp "-Dessentials.version=$version" -pl backend "${profile[@]}")
+            # Every cell shares one Compose project name, so start each row from an empty project: --remove-orphans also
+            # removes the other database's container, which would otherwise outlive its network (see the dev loop).
+            docker compose -f "$dir/project/backend/compose.yml" down --remove-orphans > /dev/null 2>&1 || true
             status=0
             (cd "$dir/project" && "${mvn[@]}" compile spring-boot:start -Dspring-boot.start.maxAttempts=60) > "$dir/start.log" 2>&1 || status=$?
             (cd "$dir/project" && "${mvn[@]}" spring-boot:stop) >> "$dir/start.log" 2>&1 || true
-            docker compose -f "$dir/project/backend/compose.yml" down > /dev/null 2>&1 || true
+            docker compose -f "$dir/project/backend/compose.yml" down --remove-orphans > /dev/null 2>&1 || true
             if grep -qE 'COMPILATION ERROR|Compilation failure' "$dir/start.log"; then
               echo "::error::S2.1 $row: without $remove, $cell does not compile; the section says none of these fails at compile time"
               grep -m 5 -E '\[ERROR\] .*\.(java|kt)' "$dir/start.log" || true
@@ -189,6 +196,10 @@ jobs:
             elif ! grep -qE ' Starting .+ using Java ' "$dir/start.log"; then
               echo "::error::S2.1 $row: the application was never launched (harness problem, not a finding)"
               tail -n 20 "$dir/start.log"
+              failed=1
+            elif grep -qF 'docker compose up failed' "$dir/start.log"; then
+              echo "::error::S2.1 $row: Docker Compose did not start $cell's services, so the row was not tested (harness problem, not a finding)"
+              grep -m 5 -E '^Error response from daemon|ProcessExitException' "$dir/start.log" || true
               failed=1
             elif grep -qF -- "$expect" "$dir/start.log"; then
               if grep -qF -- "$expect" <<< "$contract"; then
