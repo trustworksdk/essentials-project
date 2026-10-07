@@ -97,6 +97,9 @@ jobs:
       - name: Review signatures (review-scan.py)
         run: scripts/plugin-check.sh step review-scan
 
+      - name: Release-move notes (migration-plan.py)
+        run: scripts/plugin-check.sh step migration-plan
+
       - name: Docs search (search.sh)
         run: scripts/plugin-check.sh step docs-search
 

@@ -174,5 +174,65 @@ class GitMode(unittest.TestCase):
         self.assertIn("git", err)
 
 
+class TreeMode(unittest.TestCase):
+    """--tree scans every file as added lines — the empty-tree diff — in and outside a git work tree."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name)
+        res = self.root / "backend" / "src" / "main" / "resources"
+        res.mkdir(parents=True)
+        (res / "application.yml").write_text(
+            "essentials:\n  durable-queues:\n    use-ordered-unordered-query: false\n", encoding="utf-8")
+        skipped = self.root / "backend" / "target" / "classes"
+        skipped.mkdir(parents=True)
+        (skipped / "application.properties").write_text(
+            "essentials.durable-queues.transactional-mode=fully-transactional\n", encoding="utf-8")
+        (self.root / "logo.png").write_bytes(b"\x89PNG\x00\x01")
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def found(self, out: str):
+        doc = json.loads(out)
+        return doc, [(f["file"], f["line"], f["check"]) for f in doc["findings"]]
+
+    def test_outside_git_walks_the_tree_and_skips_build_output(self):
+        code, out, _ = run("--tree", str(self.root), "--json")
+        doc, found = self.found(out)
+        self.assertEqual(code, 1, out)
+        self.assertEqual(doc["source"]["mode"], "tree")
+        if doc["source"]["lister"] == "walk":
+            self.assertEqual(found, [("backend/src/main/resources/application.yml", 3, "ess-122-ordered-unordered-query")])
+
+    def test_equals_the_empty_tree_diff_in_a_git_work_tree(self):
+        if shutil.which("git") is None:
+            self.skipTest("git not installed")
+        git(self.root, "init", "-q")
+        (self.root / ".gitignore").write_text("target/\n", encoding="utf-8")
+        git(self.root, "add", "-A")
+        _, tree_out, _ = run("--tree", str(self.root), "--json")
+        empty = subprocess.run(["git", "-C", str(self.root), "hash-object", "-t", "tree", "/dev/null"],
+                               capture_output=True, text=True, check=True).stdout.strip()
+        diff = subprocess.run(["git", "-C", str(self.root), "diff", "--no-color", "--cached", empty],
+                              capture_output=True, text=True, check=True).stdout
+        _, diff_out, _ = run("--diff", "-", "--root", str(self.root), "--json", stdin=diff)
+        tree_doc, tree_found = self.found(tree_out)
+        _, diff_found = self.found(diff_out)
+        self.assertEqual(tree_doc["source"]["lister"], "git")
+        self.assertEqual(tree_found, diff_found)
+        self.assertEqual(tree_found, [("backend/src/main/resources/application.yml", 3, "ess-122-ordered-unordered-query")])
+
+    def test_root_does_not_apply(self):
+        code, _, err = run("--tree", str(self.root), "--root", str(self.root))
+        self.assertEqual(code, 2)
+        self.assertIn("--root does not apply", err)
+
+    def test_not_a_directory_cannot_run(self):
+        code, _, err = run("--tree", str(self.root / "missing"))
+        self.assertEqual(code, 2)
+        self.assertIn("not a directory", err)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -156,7 +156,7 @@ default_merge_base() {
 # One function per plugin-docs step, in the job's order. Each runs in the directory that CI step ran in.
 
 steps=(llm-sync citations ess-ids plugin-version symlinks slice-lint lint-hook render-slice slice-source slice-index slice-law stack-lint
-    init-render review-scan docs-search doctor check-patches check-expected eval-graders eval-flags slice-compile-table render-check)
+    init-render review-scan migration-plan docs-search doctor check-patches check-expected eval-graders eval-flags slice-compile-table render-check)
 declare -A step_desc=(
     [llm-sync]="regenerate references/llm/ from LLM/ (sync-plugin-llm.sh) and fail on drift"
     [citations]="only stack-pins.md / stack-contract.md state a pin or an S-requirement; every slice-law § cite resolves (check-citations.py)"
@@ -172,6 +172,7 @@ declare -A step_desc=(
     [stack-lint]="stack contract lint (stack-lint.py --self-test + unit tests)"
     [init-render]="every answer set renders and lints; the nine cells match their goldens (init-render.py)"
     [review-scan]="review signatures (review-scan.py --self-test + unit tests)"
+    [migration-plan]="release-move notes resolve (ids, slugs, pins, citations) and plan the sample projects to their goldens (migration-plan.py --self-test + unit tests)"
     [docs-search]="the essentials-docs search script (test_search.py)"
     [doctor]="doctor.sh's requirement lines, JSON and exit codes per profile on stubbed tools (test_doctor.py)"
     [check-patches]="review judgement cases, deterministic half (check-patches.py)"
@@ -327,6 +328,11 @@ step_init-render() {
 step_review-scan() {
     x "$plugin" uv run --script scripts/review-scan.py --self-test &&
         x "$plugin" uv run python -m unittest discover -s tests/scripts -p 'test_review_scan.py'
+}
+
+step_migration-plan() {
+    x "$plugin" uv run --script scripts/migration-plan.py --self-test &&
+        x "$plugin" uv run python -m unittest tests/migration-plan/test_migration_plan.py
 }
 
 step_docs-search() {
@@ -589,6 +595,8 @@ classify() {
             printf 'quick\tdefines or runs a plugin-docs step\n' ;;
         .claude-plugin/*)
             printf 'quick\tthe marketplace manifest (claude plugin validate . before a release)\n' ;;
+        docs/MIGRATION-*.md | docs/RELEASE-NOTES-*.md)
+            printf 'quick\tcited at path:line by essentials-plugin/references/stack/migrations/*.json (migration-plan)\n' ;;
         essentials-plugin/*)
             rel=${p#essentials-plugin/}
             printf 'quick\t%s\n' "$plugin_row"

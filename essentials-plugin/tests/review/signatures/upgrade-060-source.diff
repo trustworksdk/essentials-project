@@ -1,0 +1,158 @@
+# review-scan signature fixture: ESS-121 / ESS-122 / ESS-123 / ESS-119 / ESS-095 0.50 API the 0.60 move removes
+# A removed type's import and a removed member's call are confirmed; the call is mechanical only where the migration
+# guide's replacement is a pure token swap. Call sites whose replacement depends on what is passed are candidates.
+# Replacements, declarations, comments, strings and other files' look-alikes do not fire.
+# expect: backend/src/main/java/com/example/shop/JsonWiring.java:3 ess-121-jackson-api-removed confirmed Blocking manual
+# expect-not: backend/src/main/java/com/example/shop/JsonWiring.java:4 ess-121-jackson-api-removed
+# expect: backend/src/main/java/com/example/shop/JsonWiring.java:5 ess-121-jackson-api-removed confirmed Blocking mechanical
+# expect: backend/src/main/java/com/example/shop/JsonWiring.java:6 ess-121-jackson-api-removed confirmed Blocking manual
+# expect: backend/src/main/java/com/example/shop/JsonWiring.java:10 ess-121-jackson-api-removed confirmed Blocking mechanical
+# expect: backend/src/main/java/com/example/shop/JsonWiring.java:11 ess-121-jackson-api-removed confirmed Blocking mechanical
+# expect: backend/src/main/java/com/example/shop/JsonWiring.java:12 ess-121-jackson-api-removed confirmed Blocking manual
+# expect: backend/src/main/java/com/example/shop/JsonWiring.java:13 ess-121-jackson-api-removed confirmed Blocking mechanical
+# expect-not: backend/src/main/java/com/example/shop/JsonWiring.java:14 ess-121-jackson-api-removed
+# expect-not: backend/src/main/java/com/example/shop/JsonWiring.java:15 ess-121-jackson-api-removed
+# expect-not: backend/src/main/java/com/example/shop/JsonWiring.java:16 ess-121-jackson-api-removed
+# expect: backend/src/main/java/com/example/shop/ShopQueues.java:5 ess-122-ordered-unordered-query confirmed Blocking manual
+# expect: backend/src/main/java/com/example/shop/ShopQueues.java:8 ess-122-ordered-unordered-query confirmed Blocking mechanical
+# expect: backend/src/main/java/com/example/shop/ShopQueues.java:13 ess-122-ordered-unordered-query confirmed Blocking manual
+# expect-not: backend/src/main/java/com/example/shop/ShopQueues.java:14 ess-122-ordered-unordered-query
+# expect-not: backend/src/main/java/com/example/shop/ShopQueues.java:16 ess-122-ordered-unordered-query
+# expect: backend/src/main/java/com/example/shop/CdcWiring.java:5 ess-123-removed-constructor confirmed Blocking mechanical
+# expect: backend/src/main/java/com/example/shop/CdcWiring.java:6 ess-123-removed-constructor candidate Blocking manual
+# expect-not: backend/src/main/java/com/example/shop/CdcWiring.java:7 ess-123-removed-constructor
+# expect: backend/src/main/java/com/example/shop/CdcWiring.java:8 ess-123-removed-constructor candidate Blocking manual
+# expect-not: backend/src/main/java/com/example/shop/CdcWiring.java:9 ess-123-removed-constructor
+# expect: backend/src/main/java/com/example/shop/TenantFilter.java:3 ess-121-jackson2-at-essentials-api candidate Blocking manual
+# expect-not: backend/src/main/java/com/example/shop/TenantFilter.java:4 ess-121-jackson2-at-essentials-api
+# expect: backend/src/main/java/com/example/shop/TenantFilter.java:8 ess-121-jackson2-at-essentials-api candidate Blocking manual
+# expect-not: backend/src/main/java/com/example/shop/WebJson.java:3 ess-121-jackson2-at-essentials-api
+# expect-not: backend/src/main/java/com/example/shop/WebJson.java:7 ess-121-jackson2-at-essentials-api
+# expect: backend/src/test/java/com/example/shop/QueueCountsTest.java:5 ess-119-queued-message-counts candidate Should-fix manual
+# expect-not: backend/src/test/java/com/example/shop/QueueCountsTest.java:6 ess-119-queued-message-counts
+# expect-not: backend/src/test/java/com/example/shop/QueueCountsTest.java:7 ess-119-queued-message-counts
+# expect-not: backend/src/main/kotlin/com/example/shop/JacksonConfig.kt:6 ess-095-jackson-module-bean
+# expect: backend/src/main/kotlin/com/example/shop/JacksonConfig.kt:9 ess-095-jackson-module-bean candidate Should-fix manual
+# expect-not: backend/src/main/kotlin/com/example/shop/JacksonConfig.kt:12 ess-095-jackson-module-bean
+diff --git a/backend/src/main/java/com/example/shop/JsonWiring.java b/backend/src/main/java/com/example/shop/JsonWiring.java
+new file mode 100644
+--- /dev/null
++++ b/backend/src/main/java/com/example/shop/JsonWiring.java
+@@ -0,0 +1,18 @@
++package com.example.shop;
++
++import dk.trustworks.essentials.components.foundation.json.JacksonJSONSerializer;
++import dk.trustworks.essentials.components.foundation.json.Jackson3JSONSerializer;
++import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.cdc.filter.WalMessageFilters;
++import static dk.trustworks.essentials.components.foundation.json.EssentialsJacksonModules.jackson2Modules;
++
++class JsonWiring {
++    Object wire(Supplier<Collection<String>> tables) {
++        var serializer = EssentialsJSONEventSerializers.createForActiveJacksonFlavor();
++        var modules = EssentialsJacksonModules.jackson3Modules();
++        var mapper = EssentialsObjectMappers.createJackson2ObjectMapper();
++        var filter = WalMessageFilters.createForActiveJacksonFlavor(tables);
++        var ok = EssentialsJSONEventSerializers.create();
++        // var old = EssentialsJacksonModules.jackson3Modules();
++        return describe("EssentialsJacksonModules.jackson3Modules()");
++    }
++}
+diff --git a/backend/src/main/java/com/example/shop/ShopQueues.java b/backend/src/main/java/com/example/shop/ShopQueues.java
+new file mode 100644
+--- /dev/null
++++ b/backend/src/main/java/com/example/shop/ShopQueues.java
+@@ -0,0 +1,17 @@
++package com.example.shop;
++
++class ShopQueues {
++    DurableQueues queues(PostgresqlDurableQueues existing) {
++        var flag = existing.isUseOrderedUnorderedQuery();
++        return PostgresqlDurableQueues.builder()
++                                      .setSharedQueueTableName("queues")
++                                      .setUseOrderedUnorderedQuery(true)
++                                      .build();
++    }
++
++    void configure(PostgresqlDurableQueuesBuilder builder, boolean flag) {
++        builder.setUseOrderedUnorderedQuery(flag);
++        builder.setUseCentralizedMessageFetcher(true);
++    }
++    boolean isUseOrderedUnorderedQuery() { return true; }
++}
+diff --git a/backend/src/main/java/com/example/shop/CdcWiring.java b/backend/src/main/java/com/example/shop/CdcWiring.java
+new file mode 100644
+--- /dev/null
++++ b/backend/src/main/java/com/example/shop/CdcWiring.java
+@@ -0,0 +1,11 @@
++package com.example.shop;
++
++class CdcWiring {
++    void wire(JSONEventSerializer serializer, PostgresqlEventStore eventStore, EventStoreUnitOfWorkFactory<?> uow, Map<String, AggregateType> tables) {
++        var a = new DefaultWalMessageFilter(serializer, () -> strategy.tableNames());
++        var b = new DefaultWalMessageFilter(serializer, tables);
++        var c = new DefaultWalMessageFilter(() -> strategy.tableNames());
++        var d = new PostgresqlEventStreamGapHandler(eventStore, uow);
++        var e = new PostgresqlEventStreamGapHandler(uow, schemaOwnership);
++    }
++}
+diff --git a/backend/src/main/java/com/example/shop/TenantFilter.java b/backend/src/main/java/com/example/shop/TenantFilter.java
+new file mode 100644
+--- /dev/null
++++ b/backend/src/main/java/com/example/shop/TenantFilter.java
+@@ -0,0 +1,10 @@
++package com.example.shop;
++
++import com.fasterxml.jackson.databind.JsonNode;
++import com.fasterxml.jackson.annotation.JsonProperty;
++
++class TenantFilter implements NotificationDuplicationFilter {
++    public Optional<String> extractDuplicationKey(JsonNode json) {
++        return Optional.ofNullable(json.get("tenant")).map(n -> n.asText());
++    }
++}
+diff --git a/backend/src/main/java/com/example/shop/WebJson.java b/backend/src/main/java/com/example/shop/WebJson.java
+new file mode 100644
+--- /dev/null
++++ b/backend/src/main/java/com/example/shop/WebJson.java
+@@ -0,0 +1,9 @@
++package com.example.shop;
++
++import com.fasterxml.jackson.databind.JsonNode;
++
++class WebJson {
++    String tenant(JsonNode body) {
++        return body.get("tenant").asText();
++    }
++}
+diff --git a/backend/src/test/java/com/example/shop/QueueCountsTest.java b/backend/src/test/java/com/example/shop/QueueCountsTest.java
+new file mode 100644
+--- /dev/null
++++ b/backend/src/test/java/com/example/shop/QueueCountsTest.java
+@@ -0,0 +1,9 @@
++package com.example.shop;
++
++class QueueCountsTest {
++    void counts() {
++        assertThat(queues.getQueuedMessageCountsFor(QUEUE)).isEqualTo(new QueuedMessageCounts(QUEUE, 1, 0));
++        if (counts instanceof QueuedMessageCounts(var name, var queued, var dead, var delivering, var oldest)) { }
++        var expected = new QueuedMessageCounts(QUEUE, 1, 0, 2L, OLDEST);
++    }
++}
+diff --git a/backend/src/main/kotlin/com/example/shop/JacksonConfig.kt b/backend/src/main/kotlin/com/example/shop/JacksonConfig.kt
+new file mode 100644
+--- /dev/null
++++ b/backend/src/main/kotlin/com/example/shop/JacksonConfig.kt
+@@ -0,0 +1,13 @@
++package com.example.shop
++
++import org.springframework.context.annotation.Bean
++
++class JacksonConfig {
++    fun helperModule(): SimpleModule = SimpleModule()
++
++    @Bean
++    fun moneyModule(): SimpleModule = SimpleModule().addSerializer(Money::class.java, MoneySerializer())
++
++    @Bean
++    fun mapperCustomizer(): JsonMapperBuilderCustomizer = JsonMapperBuilderCustomizer { }
++}

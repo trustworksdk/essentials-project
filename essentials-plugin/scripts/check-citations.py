@@ -76,6 +76,12 @@ tests/citations/**                   this script's own self-test samples, which 
 tests/golden/**                      renderer output (scripts/init-render.py --update-golden): it
                                      carries every pin it rendered by design, and init-render.py
                                      --check fails it the moment it differs from a fresh render
+references/stack/migrations/**       release-move notes (scripts/migration-plan.py): they name the release
+                                     pair and cite its notes by path, line and quoted token, all of which
+                                     carry versions; a pin appears there by name only, which
+                                     migration-plan.py --check enforces
+tests/migration-plan/**              that script's sample projects and golden plans: the projects pin what a
+                                     user's project pinned, the goldens hold the plan's targets
 references/init-assets/project/contracts/openapi.json.template, the `"openapi"` line only
                                      the OpenAPI document-format version springdoc writes, which
                                      equals the springdoc pin by coincidence; JSON has no comment
@@ -133,7 +139,8 @@ BINDINGS = {
 # Not scanned at all: the two sources (S1 names the baseline on purpose) and the files the module
 # docstring justifies.
 EXEMPT_FILES = {PINS, CONTRACT, "CHANGELOG.md"}
-EXEMPT_DIRS = ("references/llm/", "tests/fixtures/", "tests/citations/", "tests/golden/")
+EXEMPT_DIRS = ("references/llm/", "tests/fixtures/", "tests/citations/", "tests/golden/",
+               "references/stack/migrations/", "tests/migration-plan/")
 # Single lines that hold a version which is not a pin, by file (see the module docstring).
 NOT_A_PIN = {
     "references/init-assets/project/contracts/openapi.json.template":
@@ -608,7 +615,8 @@ rules:
 output:  path:line: rule: message   (path relative to ROOT)
 allow:   <!-- cite-ok: reason --> on the flagged line or the line above it
 exempt:  stack-pins.md, stack-contract.md, CHANGELOG.md, references/llm/**,
-         tests/fixtures/**, tests/citations/**, tests/golden/**, the seed spec's
+         tests/fixtures/**, tests/citations/**, tests/golden/**, references/stack/migrations/**,
+         tests/migration-plan/**, the seed spec's
          "openapi" line, plugin.json's "version" line; the three binding docs in references/stack/ are exempt
          from restated-requirement only. law-section exempts only CHANGELOG.md,
          references/llm/** and tests/citations/**

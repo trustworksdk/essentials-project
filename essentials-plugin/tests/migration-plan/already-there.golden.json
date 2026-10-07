@@ -1,0 +1,14 @@
+{
+  "tool": "migration-plan",
+  "project": "already-there",
+  "from": "0.60.0",
+  "fromSource": "pom.xml:8",
+  "to": "0.60.0",
+  "notes": [],
+  "upToDate": true,
+  "pins": [],
+  "steps": [],
+  "fixedIn": [],
+  "scanned": false,
+  "outside": null
+}

@@ -1,0 +1,7 @@
+spring:
+  application:
+    name: orders
+essentials:
+  durable-queues:
+    transactional-mode: single-operation-transaction
+    use-ordered-unordered-query: true
