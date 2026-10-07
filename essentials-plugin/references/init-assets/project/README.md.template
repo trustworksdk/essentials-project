@@ -134,6 +134,32 @@ The backend is organised by **vertical slice** within bounded contexts, not by t
 ```
 
 For a fast inner loop, see `CLAUDE.md` → "Inner-loop integration tests".
+<!-- IF lintGate=hook|script -->
+
+### Slice-manifest lint gate
+
+Nothing in the Maven build reads `slice.yaml`, so a broken manifest compiles and ships while the slice drops out of every tool that reads manifests. `scripts/slice-lint.py` (with its schema beside it) is the gate; run it in CI from this directory:
+
+```bash
+uv run --script scripts/slice-lint.py . --schema scripts/slice-yaml.schema.json   # or python3 with pyyaml and jsonschema installed
+```
+
+Exit 0 is clean, 1 is findings, 2 is that it could not validate (a missing `jsonschema` included) — fail the build on anything but 0.
+<!-- END lintGate -->
+<!-- IF lintGate=hook -->
+
+`.githooks/pre-commit` runs the same check on every commit that stages a `slice.yaml` in this project. Git never activates a hook from a clone, so **every clone runs this once**, from this directory:
+
+```bash
+git config core.hooksPath "$(git rev-parse --show-prefix).githooks"
+```
+
+If the repository already sets `core.hooksPath` (a hook manager such as husky) or has a `.git/hooks/pre-commit`, do not run that: `core.hooksPath` replaces every hook in `.git/hooks`. Call this project's hook from the existing pre-commit hook instead, where `<prefix>` is what `git rev-parse --show-prefix` prints in this directory (empty at the repository root):
+
+```bash
+"$(git rev-parse --show-toplevel)/<prefix>.githooks/pre-commit" || exit 1
+```
+<!-- END lintGate -->
 
 ## Working with Claude Code
 

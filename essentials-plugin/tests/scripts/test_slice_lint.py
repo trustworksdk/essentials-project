@@ -43,6 +43,28 @@ def lint(root, *args, script=SCRIPT, cwd=PLUGIN):
     return r.returncode, doc
 
 
+# Runs the script with `jsonschema` unimportable, as on a machine with pyyaml alone (the hook's
+# python3 branch). A meta_path finder refuses the import before any installed copy is consulted.
+BLOCK_JSONSCHEMA = """
+import runpy, sys
+class Block:
+    def find_spec(self, name, path=None, target=None):
+        if name == "jsonschema" or name.startswith("jsonschema."):
+            raise ImportError("blocked for the test: " + name)
+        return None
+sys.meta_path.insert(0, Block())
+script = sys.argv[1]
+sys.argv = sys.argv[1:]
+runpy.run_path(script, run_name="__main__")
+"""
+
+
+def lint_without_jsonschema(root, *args):
+    r = subprocess.run([sys.executable, "-c", BLOCK_JSONSCHEMA, str(SCRIPT), str(root), *args],
+                       cwd=PLUGIN, capture_output=True, text=True, timeout=60)
+    return r.returncode, r.stdout, r.stderr
+
+
 def found(doc, root):
     """(gate, id, path relative to root) per finding."""
     return sorted((f["gate"], f["id"], str(Path(f["file"]).relative_to(Path(root).resolve())))
@@ -126,7 +148,81 @@ class SliceLint(unittest.TestCase):
             code, doc = lint(tmp)
         self.assertEqual(code, 1)
         self.assertEqual([(f["gate"], f["hint"]) for f in doc["findings"]],
-                         [("14 tier", "tier: cqrs-es + lane: decider")])
+                         [("14 tier", "lane: decider; tier: cqrs-es if the BC is event-sourced, else "
+                                      "remove tier (absent ⇒ project default)")])
+
+    def test_skipped_schema_is_exit_2_unless_allowed(self):
+        clean = PLUGIN / "tests" / "fixtures" / "service-entity"
+        code, out, err = lint_without_jsonschema(clean)
+        self.assertEqual(code, 2, err)
+        self.assertIn("SCHEMA VALIDATION SKIPPED", out)
+        code, out, _ = lint_without_jsonschema(clean, "--allow-skip-schema")
+        self.assertEqual(code, 0)
+        self.assertIn("SCHEMA VALIDATION SKIPPED", out)
+        # An installed hook or CI line written for an older copy still parses, and still fails.
+        code, _, _ = lint_without_jsonschema(clean, "--require-schema")
+        self.assertEqual(code, 2)
+        code, out, err = lint_without_jsonschema(clean, "--json", "--quiet")
+        self.assertEqual(code, 2)
+        self.assertFalse(json.loads(out)["schemaValidated"])
+        self.assertIn("SCHEMA VALIDATION SKIPPED", err)
+        code, _, _ = lint_without_jsonschema(clean, "--allow-skip-schema", "--require-schema")
+        self.assertEqual(code, 2)  # contradictory flags are a usage error
+
+    def test_findings_win_over_a_skipped_schema(self):
+        code, out, _ = lint_without_jsonschema(PLUGIN / "tests" / "fixtures" / "multi-lane", "--json")
+        doc = json.loads(out)
+        self.assertEqual((code, doc["schemaValidated"]), (1, False))
+        self.assertEqual([f["gate"] for f in doc["findings"]], ["14 tier"])
+
+    def test_baseline_reports_only_new_findings(self):
+        fixture = PLUGIN / "tests" / "fixtures" / "multi-lane"
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp) / "base.json"
+            _, doc = lint(fixture)
+            base.write_text(json.dumps(doc))
+            code, doc = lint(fixture, "--baseline", str(base))
+            self.assertEqual((code, doc["findings"], doc["baseline"]["suppressed"]), (0, [], 1))
+
+            project = Path(tmp) / "project"
+            shutil.copytree(fixture, project)
+            manifest = next(p for p in project.rglob("slice.yaml")
+                            if "tier: aggregate" not in p.read_text() and "tier:" in p.read_text())
+            text = manifest.read_text()
+            manifest.write_text(text[:text.index("tier:")] + "tier: decider\n"
+                                + text[text.index("\n", text.index("tier:")) + 1:])
+            code, doc = lint(project, "--baseline", str(base))
+            self.assertEqual(code, 1)
+            self.assertEqual(found(doc, project),
+                             [("14 tier", "ESS-G14", str(manifest.relative_to(project)))])
+            self.assertEqual(doc["baseline"]["suppressed"], 1)
+
+    def test_baseline_matches_across_checkouts_and_older_copies(self):
+        # Gate 3's message names manifests by absolute path; the root is cut out on both sides.
+        golden = PLUGIN / "tests" / "slice-golden"
+        with tempfile.TemporaryDirectory() as tmp:
+            for checkout in ("a", "b"):
+                for name in ("java-decider", "kotlin-decider"):
+                    shutil.copytree(golden / name / "src", Path(tmp) / checkout / name)
+            code, doc = lint(Path(tmp) / "a")
+            self.assertEqual(code, 1)
+            self.assertTrue(any(f["gate"] == "3 uniqueness" for f in doc["findings"]))
+            for f in doc["findings"]:
+                del f["id"]  # a copy predating finding ids
+            base = Path(tmp) / "base.json"
+            base.write_text(json.dumps(doc))
+            code, doc = lint(Path(tmp) / "b", "--baseline", str(base))
+        self.assertEqual((code, doc["findings"]), (0, []))
+        self.assertGreater(doc["baseline"]["suppressed"], 0)
+
+    def test_unreadable_baseline_is_exit_2(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            bad = Path(tmp) / "bad.json"
+            bad.write_text("{}")
+            r = subprocess.run([sys.executable, str(SCRIPT), str(PLUGIN / "tests" / "fixtures" / "multi-lane"),
+                                "--baseline", str(bad)], capture_output=True, text=True, timeout=60)
+        self.assertEqual(r.returncode, 2)
+        self.assertIn("cannot read baseline", r.stderr)
 
     def test_project_installed_copy_finds_its_schema_beside_it(self):
         # /essentials:init copies the script and the schema into <project>/scripts/.

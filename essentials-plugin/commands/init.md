@@ -254,14 +254,20 @@ gate that makes it loud, and it is only worth anything if the project runs it wi
 | Option | `lintGate` | What the render adds |
 |---|---|---|
 | **Pre-commit hook (recommended)** | `hook` | `scripts/slice-lint.py`, `scripts/slice-yaml.schema.json` and `.githooks/pre-commit` |
-| **Script only** | `script` | `scripts/slice-lint.py` and `scripts/slice-yaml.schema.json`, for the user to wire into their own CI |
+| **Script only** | `script` | `scripts/slice-lint.py` and `scripts/slice-yaml.schema.json`, for the user to wire into their own CI (the project README gives the command) |
 | **Neither** | `none` | Nothing. Say once that `/essentials:slice-check` still runs the same checks on demand |
 
 The schema copy is required: installed into a project, the script has no plugin root to resolve
 its schema from, so the project keeps its own copy beside it and the hook passes `--schema`. The
-hook (`references/init-assets/project/.githooks/pre-commit.template`) runs the script with `uv run`
-when uv is installed, else with `python3`, and **fails open** when neither can run it, so a
-contributor without the tooling can still commit.
+hook (`references/init-assets/project/.githooks/pre-commit.template`) locates its project from its
+own path, so it works with the project in a subdirectory of the repository: it lints only that
+project, and only when a `slice.yaml` inside it is staged. It runs the script with `uv run` when uv
+is installed, else with `python3`. It **blocks** the commit on findings, when the script or schema is
+missing, and when the script cannot validate (exit 2 — a `python3` without `pyyaml` or `jsonschema`),
+naming the install line and `git commit --no-verify`. It lets the commit through only when neither uv
+nor python3 exists. A hook is inert until git is told about it, and `core.hooksPath` is local
+configuration that a clone does not carry: Step 12 activates it here, and the README the render
+writes gives every other clone the command.
 
 **This is the second file set this plugin copies into a project, and the only one besides the
 rules pointer.** That is a deliberate exception to the one-copy invariant, taken because a gate that
@@ -369,9 +375,36 @@ in order, and record each outcome for Step 14:
   costs: the embedded build's `npm ci` fails until a `package-lock.json` exists, so until then the
   backend builds with `-Pskip-frontend`.
 
-If `lintGate == "hook"` and `${TARGET_DIR}` is inside a git repository whose `core.hooksPath` is
-unset, set it: `git -C "${TARGET_DIR}" config core.hooksPath .githooks`. Otherwise tell the user
-that one command, to run after `git init`.
+If `lintGate == "hook"`, activate the hook. A relative `core.hooksPath` resolves against the
+repository's **top level**, not against `${TARGET_DIR}`, so in subdirectory mode — and in "current
+directory" mode inside a larger repository — a bare `.githooks` names a directory that does not exist
+and the hook never runs. Use the project's path from the top level:
+
+```bash
+git -C "${TARGET_DIR}" rev-parse --is-inside-work-tree     # not a repository ⇒ case 4
+PREFIX="$(git -C "${TARGET_DIR}" rev-parse --show-prefix)"  # "" at the top level, "orders-service/" below it
+git -C "${TARGET_DIR}" config --get core.hooksPath          # set ⇒ case 2
+test -e "$(git -C "${TARGET_DIR}" rev-parse --git-path hooks/pre-commit)"   # exists ⇒ case 3
+```
+
+1. **`core.hooksPath` unset and no existing `pre-commit` hook**: set it,
+   `git -C "${TARGET_DIR}" config core.hooksPath "${PREFIX}.githooks"`, and say it is local to this
+   clone — every other clone runs the README's command once.
+2. **`core.hooksPath` already set** — to `${PREFIX}.githooks`, nothing to do; to anything else (a
+   hook manager such as husky): leave it. Changing it would
+   silence every hook the manager runs, and leaving the gate unwired installs it dead. Offer
+   (`AskUserQuestion`) to add one forwarder line to the pre-commit hook that setting points at —
+   for husky, `.husky/pre-commit` — before any `exit` in it:
+   `"$(git rev-parse --show-toplevel)/${PREFIX}.githooks/pre-commit" || exit 1`.
+   On no, print the line for the user to add.
+3. **`core.hooksPath` unset, but `.git/hooks/pre-commit` exists**: setting `core.hooksPath` would
+   disable that hook and every other one in `.git/hooks`. Offer the same forwarder line in that
+   file instead, and state the trade-off: the forwarder keeps the existing hook running but, being
+   in `.git/`, is local to this clone exactly like `core.hooksPath`. On no, print the line.
+4. **Not a git repository yet**: tell the user to run the README's command from the project
+   directory after `git init` — `git config core.hooksPath "$(git rev-parse --show-prefix).githooks"`.
+
+Record which case applied for Step 14.
 
 ## Step 13 — Merge what the user already had
 
@@ -528,7 +561,7 @@ Configuration:
   Web stack:       ${WEB}
   DB profile:      ${DB_PROFILE}
   Docker Compose:  ${COMPOSE}
-  Lint gate:       ${LINT_GATE}         # hook | script | none
+  Lint gate:       ${LINT_GATE}         # hook | script | none; for hook, its Step 12 activation case
   Project name:    ${displayName}
   groupId:         ${groupId}
   artifactId:      ${artifactId}
@@ -561,6 +594,9 @@ If `FRONTEND == "none"`, drop the frontend lines from "Next steps". Use `mvn` in
 when no wrapper was created, and say how to create it (the Step 12 command).
 
 Say plainly that `config/SecurityConfig` permits everything: a starting point, not a posture (S9).
+
+If `LINT_GATE == "hook"` and Step 12 did not activate it (a forwarder declined, or no repository
+yet), say the hook is installed but **inactive**, and give the line or command that activates it.
 
 If `SMOKE_RESULT` is `compiled-only`, say that the context was never started and that
 `./mvnw verify` with Docker running is the check that was skipped. If the frontend lockfile hook

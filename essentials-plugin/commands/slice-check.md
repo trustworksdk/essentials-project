@@ -58,7 +58,7 @@ missing, so the audit runs, each slice without a manifest is a **Should-fix** (S
 ## Step 1.5 — Run the two scripts, before reading a single source file
 
 ```bash
-uv run --script ${CLAUDE_PLUGIN_ROOT}/scripts/slice-lint.py <project-root> --require-schema --json
+uv run --script ${CLAUDE_PLUGIN_ROOT}/scripts/slice-lint.py <project-root> --json
 uv run --script ${CLAUDE_PLUGIN_ROOT}/scripts/slice-source.py <project-root> --check --json
 ```
 
@@ -88,8 +88,8 @@ Exit codes decide what the report may claim:
 | Script | Exit | Meaning | Report |
 |---|---|---|---|
 | either | 0 | ran, nothing found | the gates it covers passed |
-| either | 1 | findings | take them verbatim |
-| slice-lint | 2 | could not run (no `pyyaml`/`jsonschema`, unreadable schema) | gates 1, 3, 4 and `14 tier` **not run**, at the top, with the install line |
+| either | 1 | findings | take them verbatim. slice-lint: if its JSON says `schemaValidated: false`, gate 1(b) is also **not run** — findings win the exit code over a skipped validation |
+| slice-lint | 2 | could not run (no `pyyaml`, unreadable schema: no JSON), or ran without `jsonschema` and found nothing (JSON with `schemaValidated: false`) | no JSON: gates 1, 3, 4 and `14 tier` **not run**. `schemaValidated: false`: gate 1(b) **not run**, the rest passed. Either at the top, with the install line. Never pass `--allow-skip-schema` here: it turns a parse-only run into exit 0 |
 | slice-source | 2 | could not run (no `pyyaml`, bad root) | the script's halves of gates 6, 11(b) and 14 **not run**, at the top |
 | slice-source | 3 | incomplete: nothing found, but `unparsed` or `unverified` is non-empty | list every `unparsed` file and every `unverified` check as **not checked**, never as passed |
 
@@ -143,7 +143,7 @@ hand, gates 10 and 17 included.
 | <a id="g9"></a>9 | **Wiring** | Every `*Decider` has a matching `@Bean` in its BC's `config/` |
 | <a id="g10"></a>10 | **Projection idempotency** | A `@MessageHandler` that writes a versioned read model (`save`/`update` on a `DocumentDbRepository`) takes `OrderedMessage` as its 2nd parameter and passes its order to the write. The parameter is **optional** to the dispatcher — a single-argument handler is invoked normally — so flag it **only** where the handler mutates versioned state, never on handlers with no versioned state (a translation publisher, a stateless automation step) |
 | <a id="g11"></a>11 | **Manifest ↔ code** | Both directions. (a) `handles` / `publishes` / `serves` names resolve to types in or adjacent to the slice. This half is yours. (b) **Every event type the slice's handlers actually handle is declared.** This half is **`slice-source.py`'s** (`11(b) handled events`, Step 1.5), taken verbatim. The rule it implements: take the parameter types of the slice's `@MessageHandler` / `@Handler` methods on an `EventProcessor`, `ViewEventProcessor` or `InTransactionEventProcessor`, and of its Spring `@EventListener` methods, which service-entity-lane automations use (`@EventListener` on an `org.springframework.*` or `java.*` type is framework plumbing and is ignored). Resolve each to the declared type through imports, Kotlin `import … as` aliases, typealiases and fully-qualified names, so a handler taking `Placed` under `import …OrderPlaced as Placed` handles `OrderPlaced`. A handler typed as a sealed parent declared in the project stands for its concrete subtypes. A `@Handler` method on an `AnnotatedCommandHandler` is a command handler, not an event handler. Look for them in the field that kind uses: **`projections[].from` for a view**, `consumes` for an automation or translation (`manifest-guide.md` §3). An undeclared handled event is **Should-fix** — the code is right and the manifest is stale, so the repair is `--fix-manifests`, never a source edit. This is the most common drift in a mature project: a projector gains one more `@MessageHandler` and the manifest is not touched, so the slice silently reads as reacting to fewer events than it does |
-| <a id="g12"></a>12 | **Project-copy freshness** | Two files, and only these two ever leave the plugin. (a) `.claude/rules/essentials-slices.md` exists and its `<!-- essentials-slices-rules: vN -->` stamp is not older than the plugin's — compare the integer after `v` numerically, never as strings (`v10` is newer than `v9`). (b) If the project installed the lint gate (`scripts/slice-lint.py` + `scripts/slice-yaml.schema.json`, `/essentials:init` Step 9), neither differs from the plugin's current copy — **Advisory**, and `diff` says it in one line. A project running a stale schema validates against yesterday's contract and reports a clean pass it has not earned. (c) If the gate is **absent entirely** — the case for every project scaffolded before it shipped — say so once as **Advisory** and name `/essentials:upgrade`, which offers the install. Do not offer it here: this is a slice audit, and clause (b) staying silent on a project that never had the gate is exactly how a shipped capability never reaches an existing project. **Offer** a refresh for (a) and (b); never overwrite silently |
+| <a id="g12"></a>12 | **Project-copy freshness** | Two files, and only these two ever leave the plugin. (a) `.claude/rules/essentials-slices.md` exists and its `<!-- essentials-slices-rules: vN -->` stamp is not older than the plugin's — compare the integer after `v` numerically, never as strings (`v10` is newer than `v9`). (b) If the project installed the lint gate (`scripts/slice-lint.py` + `scripts/slice-yaml.schema.json`, `/essentials:init` Step 9), neither differs from the plugin's current copy — **Advisory**, and `diff` says it in one line. A project running a stale schema validates against yesterday's contract and reports a clean pass it has not earned. **Before offering that refresh, measure what it costs** — see § Refreshing the lint gate at the end of Step 2: a newer copy can fail the project's hook and CI on manifests the installed copy passed, and an offer that does not say so turns the gate red on the user's next commit. (c) If the gate is **absent entirely** — the case for every project scaffolded before it shipped — say so once as **Advisory** and name `/essentials:upgrade`, which offers the install. Do not offer it here: this is a slice audit, and clause (b) staying silent on a project that never had the gate is exactly how a shipped capability never reaches an existing project. **Offer** a refresh for (a) and (b); never overwrite silently |
 | <a id="g13"></a>13 | **View duplication / migration twins** | Two view slices whose `projections.from` sets and read-model shapes coincide. Resolve against `supersedes` + `status` — see the table below. Also flag a `supersedes` pointing at a slice that no longer exists (stale link — drop the field) |
 | <a id="g14"></a>14 | **Write-style lane (§R5)** | Per BC, detect one of three lanes — see the detection table below. Report a BC holding **any two** of per-slice deciders, `<bc>/aggregates/`, and `<bc>/entities/` as **Blocking** — two write designs over one consistency boundary. The detected lane selects which of gates 2, 4, 5, 9, 10, 13, 15 and 17 apply and how. **The signal-count rows are `slice-source.py`'s** (Step 1.5), taken verbatim: `14 two write styles` and `14 entities with event store` (Blocking), `14 declared lanes` (Blocking), and `14 stale lane` (Should-fix). Its `lanes[]` lists each BC's signals with `path:line`. `14 tier` is **slice-lint's**. What stays yours: the service-entity criterion "state loaded, mutated and saved in place" (the script says `service-entity?` and stops), the bus-deviation table, and deciding whether an undetermined BC is simply new |
 | <a id="g15"></a>15 | **Write-repository purity and placement** (service-entity lane only) | Identify the BC's write repositories **by mutation surface, not by path and not by base interface**: any type through which an entity declared in `<bc>/entities/` is persisted — it declares or inherits `save`/`delete`/`update`/`saveAll`. Spring Data is one vehicle (`CrudRepository`/`JpaRepository`/`MongoRepository`, or a bare `Repository` declaring the methods itself); Essentials' own document repository, a JDBI DAO, and any other store are others, and **the gate must find all of them** (§R5, "identify the write repository by its mutation surface"). Two ways this gate silently stops working: keying on the CRUD-family interfaces alone misses every repository that took gate 18's advice, and keying on Spring Data at all misses every project that uses none — the purity rules below are framework-agnostic and were the valuable part all along. For each: (a) a mutating call (`save`, `delete`, `saveAll`) on it from outside `use_cases/*` — **Blocking**; (b) a finder on it whose only callers are view slices or API handlers — **Should-fix**, the read side served from the write model (§ The read side on this lane); (c) **its file is not in `<bc>/entities/`** — **Should-fix**, it must sit beside the entity it persists (§R5, the `<bc>/entities/` tree). A `repositories/`, `persistence/`, `dao/` or `store/` folder is the common form and gate 2 catches only the first; a repository at the BC root or beside one slice is the same violation and only this check sees it. The fix is a file move, never a rewrite |
@@ -252,8 +252,10 @@ whatever the manifest claims, including when the manifest is the thing that is w
 carrying `tier: aggregate` is a **Should-fix**: `aggregate` is a write style, not an `architectureTier`
 value, and the schema requires a reader to treat an unrecognised tier as `custom`, which silently
 drops the slice's tier-specific handling.
-The repair is `tier: cqrs-es` + `lane: aggregate`. `tier: decider` is the same mistake, repaired to
-`tier: cqrs-es` + `lane: decider`. slice-lint reports both as `14 tier`, from the manifest alone.
+The repair is `tier: cqrs-es` + `lane: aggregate`. `tier: decider` is the same mistake, but its repair
+is `lane: decider` plus `tier: cqrs-es` **only if the BC is event-sourced** — otherwise remove `tier`,
+which falls back to the project default: a wrong tier is worse than an absent one. slice-lint reports
+both as `14 tier`, from the manifest alone, with that repair as its hint.
 
 **Also do not require Spring Data to classify.** Criterion 1 is *state is stored and mutated in
 place*, whatever persists it. A BC using Essentials' own document repository or JDBI is on this lane;
@@ -351,6 +353,40 @@ Extending the bare `Repository` marker does **not** protect against this — it 
 
 **Migrating a BC between write styles is out of scope for `--fix-source` on all three lanes** — see
 Step 4.
+
+### Refreshing the lint gate
+
+Gate 12(b)'s offer replaces the project's `scripts/slice-lint.py` and `scripts/slice-yaml.schema.json`.
+A newer copy can report what the installed one did not — a tightened schema, a new check — and every
+finding it reports fails the project's hook and CI. Never offer the refresh blind. From the project
+root, with the runner Step 1.5 chose:
+
+```bash
+mkdir -p /tmp/essentials-slice-check
+uv run --script scripts/slice-lint.py . --schema scripts/slice-yaml.schema.json --json > /tmp/essentials-slice-check/installed.json
+uv run --script ${CLAUDE_PLUGIN_ROOT}/scripts/slice-lint.py . --json --baseline /tmp/essentials-slice-check/installed.json
+```
+
+The first line runs the **project's** copy against its own schema; pass it nothing newer, since an
+older copy rejects flags it does not know. The second runs the plugin's copy and keeps only the
+findings the installed copy did not report, matched on id, file and message: exactly what the refresh
+adds. If the first line printed no JSON, say the cost could not be measured and why, and treat every
+Step 1.5 slice-lint finding as possibly new.
+
+1. **No new findings** — offer the refresh, saying it adds none.
+2. **New findings** — state them in the offer: "the refresh adds N findings in <files>; the hook and
+   CI fail on them until they are fixed". Then offer the manifest fixes **before** the refresh, one
+   file at a time, each shown and applied only on a yes, so the gate never goes red:
+   - `14 tier` — the hint's repair as a per-file edit: `tier: cqrs-es` if the BC is event-sourced
+     (gate 14's detected lane and the BC's store say so), otherwise delete the `tier` line. A deleted
+     tier is not a defect (Step 3); `--adopt-tier` can backfill it later from the BC's resolved value.
+   - `1(a) parse` — the quoting text fix of Step 4's `--fix-manifests`.
+   - `1(b) schema`, `1(c) stream vs event` — the finding's hint, as a per-file edit; where the field
+     is machine-derived, `--fix-manifests` instead.
+   - `3` and `4` — a design defect, not a manifest typo: report it and leave it. The refresh still
+     fails the gate on it, so say that in the offer.
+
+   Rerun the second line after the fixes, and offer the refresh with what is left.
 
 ## Step 3 — Report
 

@@ -187,7 +187,7 @@ a command slice always writes `publishes` and a view slice always writes `projec
 
   | `lane` | `tier` |
   |---|---|
-  | `decider` | `cqrs-es` |
+  | `decider` | `cqrs-es` if the BC is event-sourced; otherwise leave `tier` absent (the project default) |
   | `aggregate` | `cqrs-es` |
   | `service-entity` | `service-entity` |
 
@@ -276,17 +276,25 @@ a command slice always writes `publishes` and a view slice always writes `projec
 ### Validating a manifest
 
 ```bash
-uv run --script <plugin>/scripts/slice-lint.py .                    # every slice.yaml under the current directory
-uv run --script <plugin>/scripts/slice-lint.py . --require-schema   # what CI should run
+uv run --script <plugin>/scripts/slice-lint.py .                              # every slice.yaml under the current directory; what CI should run
+uv run --script <plugin>/scripts/slice-lint.py . --json --baseline old.json   # only the findings a previous --json run did not report
 ```
 
 The script pins `pyyaml` and `jsonschema` in inline script metadata, so `uv run --script` needs nothing
 installed first; `python3 <plugin>/scripts/slice-lint.py` works where both are installed. It parses,
 validates against the schema, checks the three sole-ownership properties across manifests (a declared
 `supersedes` twin is not an ownership clash), and reports a write style written into `tier`. Exit 0
-clean, 1 findings, 2 could not run. With `--json`, each finding carries its gate label and its
-`ESS-G<gate><clause>` id. `/essentials:init` offers to install a project copy (the script plus the
-schema beside it, in `scripts/`) and a pre-commit hook. Wire one of them up, because nothing in a Maven
+clean, 1 findings, 2 could not run — including a run without `jsonschema` that found nothing, because
+a parse-only pass is not a pass (`--allow-skip-schema` accepts one, with its banner; never in CI).
+Findings win the exit code over a skipped validation, so read `schemaValidated` in the JSON. The
+script emits Blocking and Should-fix only, and both exit 1. `--require-schema` is accepted and does
+nothing: failing on a skipped validation is the default. With `--json`, each finding carries its
+gate label and its `ESS-G<gate><clause>` id. `--baseline` takes a previous `--json` output and drops
+every finding it holds (matched on id, file and message, relative to each run's root), which is how
+`/essentials:slice-check` measures what refreshing a project's installed copy would add, and how a
+project can ratchet: commit a baseline, pass it in CI, and only new findings fail the build. `/essentials:init` offers to install a project copy (the script plus the
+schema beside it, in `scripts/`) and a pre-commit hook, which every clone activates once with the
+command in the project README. Wire one of them up, because nothing in a Maven
 or Gradle build reads `slice.yaml` and an unparseable manifest is otherwise invisible rather than loud.
 
 Whether the manifests still describe the *code* is a separate check, over the Java and Kotlin sources:

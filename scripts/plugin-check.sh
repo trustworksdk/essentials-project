@@ -155,7 +155,7 @@ default_merge_base() {
 # ---- steps ------------------------------------------------------------------------------------------------------
 # One function per plugin-docs step, in the job's order. Each runs in the directory that CI step ran in.
 
-steps=(llm-sync citations ess-ids plugin-version symlinks slice-lint render-slice slice-source slice-index slice-law stack-lint
+steps=(llm-sync citations ess-ids plugin-version symlinks slice-lint lint-hook render-slice slice-source slice-index slice-law stack-lint
     init-render review-scan docs-search doctor check-patches check-expected eval-graders eval-flags slice-compile-table render-check)
 declare -A step_desc=(
     [llm-sync]="regenerate references/llm/ from LLM/ (sync-plugin-llm.sh) and fail on drift"
@@ -164,6 +164,7 @@ declare -A step_desc=(
     [plugin-version]="a change under essentials-plugin/ moves plugin.json's version, to the pin with an optional -N"
     [symlinks]="no tracked symlinks under essentials-plugin/"
     [slice-lint]="every fixture, golden and script case through slice-lint.py (test_slice_lint.py)"
+    [lint-hook]="the slice-manifest pre-commit hook template in a temp repo, project in a subdirectory (test_pre_commit_hook.py)"
     [render-slice]="slice templates render to the committed goldens (render-slice.py check + unit tests)"
     [slice-source]="slice source facts (test_slice_source.py)"
     [slice-index]="slice index and graph (test_slice_index.py)"
@@ -289,6 +290,10 @@ step_symlinks() {
 
 step_slice-lint() {
     x "$plugin" uv run --script tests/scripts/test_slice_lint.py
+}
+
+step_lint-hook() {
+    x "$plugin" uv run --script tests/scripts/test_pre_commit_hook.py
 }
 
 step_render-slice() {

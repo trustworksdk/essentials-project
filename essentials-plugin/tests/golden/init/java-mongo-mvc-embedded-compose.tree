@@ -3,17 +3,29 @@
 === FILE .githooks/pre-commit (755) ===
 #!/usr/bin/env bash
 # Slice manifest gate: see the essentials plugin, /essentials:slice-check.
-# Fails open when the tooling is missing, so a contributor without it can still commit.
-git diff --cached --name-only --diff-filter=ACM | grep -q 'slice\.yaml$' || exit 0
-if command -v uv >/dev/null; then
+# Self-locating: it lints the project it sits in (the directory above .githooks/), which need not
+# be the repository's top level, and only when a slice.yaml inside that project is staged.
+# Not active until each clone runs the activation command in the project README.
+# Blocks the commit when the linter cannot run (exit 2: install uv, or pyyaml and jsonschema), and
+# when its own script is missing. It lets the commit through only when neither uv nor python3 exists.
+proj="$(cd "$(dirname "$0")/.." && pwd)" || exit 1
+cd "$proj" || exit 1
+git diff --cached --name-only --relative --diff-filter=ACM -- . | grep -q 'slice\.yaml$' || exit 0
+if [ ! -f scripts/slice-lint.py ] || [ ! -f scripts/slice-yaml.schema.json ]; then
+    echo "slice-lint: scripts/slice-lint.py or scripts/slice-yaml.schema.json is missing in $proj." >&2
+    echo "  Restore them (/essentials:upgrade reinstalls both), or remove .githooks/pre-commit." >&2
+    exit 1
+fi
+if command -v uv >/dev/null 2>&1; then
     uv run --script scripts/slice-lint.py . --schema scripts/slice-yaml.schema.json
-elif command -v python3 >/dev/null; then
+elif command -v python3 >/dev/null 2>&1; then
     python3 scripts/slice-lint.py . --schema scripts/slice-yaml.schema.json
 else
+    echo "slice-lint: neither uv nor python3 is installed; slice.yaml not checked, not blocking." >&2
     exit 0
 fi
 status=$?
-[ $status -eq 2 ] && { echo "slice-lint could not run (install uv, or: pip install pyyaml jsonschema); not blocking"; exit 0; }
+[ $status -eq 2 ] && echo "slice-lint could not validate the manifests (install uv, or: pip install pyyaml jsonschema). To commit anyway: git commit --no-verify" >&2
 exit $status
 === FILE .gitignore (644) ===
 target/
@@ -319,6 +331,28 @@ golden/
 ```
 
 For a fast inner loop, see `CLAUDE.md` → "Inner-loop integration tests".
+
+### Slice-manifest lint gate
+
+Nothing in the Maven build reads `slice.yaml`, so a broken manifest compiles and ships while the slice drops out of every tool that reads manifests. `scripts/slice-lint.py` (with its schema beside it) is the gate; run it in CI from this directory:
+
+```bash
+uv run --script scripts/slice-lint.py . --schema scripts/slice-yaml.schema.json   # or python3 with pyyaml and jsonschema installed
+```
+
+Exit 0 is clean, 1 is findings, 2 is that it could not validate (a missing `jsonschema` included) — fail the build on anything but 0.
+
+`.githooks/pre-commit` runs the same check on every commit that stages a `slice.yaml` in this project. Git never activates a hook from a clone, so **every clone runs this once**, from this directory:
+
+```bash
+git config core.hooksPath "$(git rev-parse --show-prefix).githooks"
+```
+
+If the repository already sets `core.hooksPath` (a hook manager such as husky) or has a `.git/hooks/pre-commit`, do not run that: `core.hooksPath` replaces every hook in `.git/hooks`. Call this project's hook from the existing pre-commit hook instead, where `<prefix>` is what `git rev-parse --show-prefix` prints in this directory (empty at the repository root):
+
+```bash
+"$(git rev-parse --show-toplevel)/<prefix>.githooks/pre-commit" || exit 1
+```
 
 ## Working with Claude Code
 

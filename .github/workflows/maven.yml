@@ -72,6 +72,9 @@ jobs:
       - name: Slice manifest lint (slice-lint.py)
         run: scripts/plugin-check.sh step slice-lint
 
+      - name: Slice manifest pre-commit hook (test_pre_commit_hook.py)
+        run: scripts/plugin-check.sh step lint-hook
+
       - name: Slice templates render to the committed goldens (render-slice.py)
         run: scripts/plugin-check.sh step render-slice
 

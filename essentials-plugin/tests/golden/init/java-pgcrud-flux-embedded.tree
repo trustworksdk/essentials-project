@@ -304,6 +304,16 @@ golden/
 
 For a fast inner loop, see `CLAUDE.md` → "Inner-loop integration tests".
 
+### Slice-manifest lint gate
+
+Nothing in the Maven build reads `slice.yaml`, so a broken manifest compiles and ships while the slice drops out of every tool that reads manifests. `scripts/slice-lint.py` (with its schema beside it) is the gate; run it in CI from this directory:
+
+```bash
+uv run --script scripts/slice-lint.py . --schema scripts/slice-yaml.schema.json   # or python3 with pyyaml and jsonschema installed
+```
+
+Exit 0 is clean, 1 is findings, 2 is that it could not validate (a missing `jsonschema` included) — fail the build on anything but 0.
+
 ## Working with Claude Code
 
 `CLAUDE.md` in this repo tells Claude Code to use the **`essentials` plugin's `essentials-docs` skill** for any framework questions. The skill auto-loads on Essentials-related queries and on code signals (imports, type names) and proactively consults the plugin's design guide before editing code.

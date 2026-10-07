@@ -27,24 +27,50 @@ Usage
                          to this script: ../references/slice/slice-yaml.schema.json in
                          the plugin, else slice-yaml.schema.json beside it, which is
                          where a project's installed copy keeps it)
-    --require-schema     fail if schema validation could not run (use this in CI)
+    --allow-skip-schema  exit 0, not 2, when schema validation could not run; the
+                         SKIPPED banner still prints. For a caller that has decided a
+                         parse-only pass is enough — never for CI
+    --require-schema     accepted for compatibility, does nothing: failing on a skipped
+                         validation is the default (hooks and CI written for older
+                         copies pass it)
+    --baseline JSON      a document a previous `--json` run printed; report only the
+                         findings it does not contain (see Baseline below)
     --json               emit findings as JSON on stdout; each finding carries its
                          `ESS-G<gate><clause>` id beside the gate label
     --quiet              print only findings, no summary
 
 Exit codes
 ----------
-    0   no findings
-    1   findings (Blocking or Should-fix)
-    2   could not run at all — bad arguments, unreadable schema, no YAML parser
+    0   no findings, and every parsed manifest was schema-validated
+    1   findings (Blocking or Should-fix — the script never emits Advisory). With
+        --baseline, only findings absent from the baseline count
+    2   could not run at all — bad arguments, unreadable schema or baseline, no YAML
+        parser — or ran without schema validation (`jsonschema` missing) and found
+        nothing; --allow-skip-schema turns that last case into 0
+
+Findings win over a skipped validation: a run that found something exits 1 even when the
+schema did not run, so read `schemaValidated` in the JSON rather than inferring it from the
+exit code. A tree with no slice.yaml exits 0 — there was nothing to validate.
+
+Baseline
+--------
+`--baseline previous.json` drops every finding the baseline already holds, matched on
+(id, file, message) with the file, and any path inside the message, taken relative to each
+run's own `root`, so a baseline taken in another checkout still matches. A baseline written
+by an older copy without `id` fields is matched on the id its `gate` label gives. Two uses:
+run a project's installed copy with `--json`, then this copy with `--baseline` over the same
+tree, and what remains is exactly what refreshing the installed copy would add; or commit a
+baseline and pass it in CI as a ratchet, so existing findings stop failing the build and new
+ones still do. A reworded message counts as a new finding. The JSON carries
+`baseline: {"path", "suppressed"}` when one was applied.
 
 Dependencies
 ------------
 `pyyaml` is required for parsing; `jsonschema` is required for schema validation. Both are
 pinned in the inline script metadata above, so `uv run --script slice-lint.py` brings them
 (this works from a project's installed copy too). When
-`jsonschema` is absent the parse gate still runs and the script says loudly that
-validation was skipped — silence is never allowed to read as a pass. When `pyyaml` is
+`jsonschema` is absent the parse gate still runs, the script says loudly that
+validation was skipped, and it exits 2 — silence is never allowed to read as a pass. When `pyyaml` is
 absent nothing can be parsed, so the script falls back to scanning for the known-lethal
 authoring mistakes it can find with a regex and exits 2.
 
@@ -68,8 +94,15 @@ UNQUOTED_BRACED_PATH = re.compile(r"""^\s*-?\s*.*?\bpath:\s*(?!["'])[^"'\n]*\{""
 SEVERITY_ORDER = {"Blocking": 0, "Should-fix": 1, "Advisory": 2}
 
 # The write styles of §R5. They belong in `lane`; in `tier` they are an unrecognised value, which
-# a reader must treat as `custom` — silently dropping the slice's tier-specific handling.
-LANE_ONLY_TIERS = {"aggregate": "cqrs-es", "decider": "cqrs-es"}
+# a reader must treat as `custom` — silently dropping the slice's tier-specific handling. Each maps
+# to its repair, which names `cqrs-es` only where the lane guarantees it: an aggregate-lane BC is
+# event-sourced by definition, a decider BC not necessarily, and a wrong tier is worse than an absent
+# one (the schema's `tier` description), so there the fallback is to drop the field.
+LANE_ONLY_TIERS = {
+    "aggregate": "lane: aggregate; tier: cqrs-es (an aggregate-lane BC is event-sourced)",
+    "decider": "lane: decider; tier: cqrs-es if the BC is event-sourced, else remove tier "
+    "(absent ⇒ project default)",
+}
 
 GATE_ID = re.compile(r"^(\d+)(?:\(([a-z])\))?")
 
@@ -400,7 +433,7 @@ def tier_checks(parsed, findings):
                 f"tier: {tier} is a write style (§R5 lane), not an architectureTier value; a reader "
                 f"treats it as `custom` and silently drops the slice's tier-specific handling",
                 line=line,
-                hint=f"tier: {LANE_ONLY_TIERS[tier]} + lane: {tier}",
+                hint=LANE_ONLY_TIERS[tier],
             )
         )
 
@@ -454,7 +487,40 @@ def stream_vs_event_checks(parsed, findings):
                     )
 
 
-def report(findings, manifests, parsed, schema_ran, quiet):
+def baseline_key(finding, root):
+    """(id, file, message) with `root` cut out of the file and the message, so a baseline taken in
+    another checkout of the same tree still matches. Accepts a Finding or a `--json` finding."""
+    if isinstance(finding, Finding):
+        fid, file, message = finding_id(finding.gate), str(finding.path), finding.message
+    else:
+        fid = finding.get("id") or finding_id(str(finding.get("gate", "")))
+        file, message = str(finding.get("file", "")), str(finding.get("message", ""))
+    if root:
+        prefix = str(root).rstrip("/\\") + os.sep
+        if file.startswith(prefix):
+            file = file[len(prefix):]
+        message = message.replace(prefix, "")
+    return fid, Path(file).as_posix(), message
+
+
+def load_baseline(path: Path):
+    """The (id, file, message) keys of a previous `--json` run. Raises ValueError when the file is
+    not one — a baseline that silently matched nothing would report every finding as new."""
+    doc = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(doc, dict) or not isinstance(doc.get("findings"), list):
+        raise ValueError("not a slice-lint --json document (no `findings` list)")
+    root = doc.get("root") or ""
+    return {baseline_key(f, root) for f in doc["findings"] if isinstance(f, dict)}
+
+
+SKIPPED_BANNER = (
+    "SCHEMA VALIDATION SKIPPED — `jsonschema` is not installed, so only the parse "
+    "gate ran. This is NOT a clean bill of health, and exits 2 unless --allow-skip-schema.\n"
+    "  uv run --script slice-lint.py …   (or: pip install jsonschema)"
+)
+
+
+def report(findings, manifests, parsed, schema_ran, quiet, suppressed=None):
     out = sys.stdout
     findings.sort(key=Finding.sort_key)
 
@@ -478,18 +544,15 @@ def report(findings, manifests, parsed, schema_ran, quiet):
 
     if not quiet:
         print(
-            f"{len(manifests)} manifest(s) found, {len(parsed)} parsed, {len(findings)} finding(s).",
+            f"{len(manifests)} manifest(s) found, {len(parsed)} parsed, {len(findings)} finding(s)"
+            + (f" not in the baseline ({suppressed} in it, not shown)." if suppressed is not None
+               else "."),
             file=out,
         )
-        if not schema_ran:
-            print(
-                "SCHEMA VALIDATION SKIPPED — `jsonschema` is not installed, so only the parse "
-                "gate ran. This is NOT a clean bill of health.\n"
-                "  uv run --script slice-lint.py …   (or: pip install jsonschema)",
-                file=out,
-            )
-        if not findings and schema_ran:
+        if not findings and schema_ran and suppressed is None:
             print("Every manifest parses and validates.", file=out)
+    if not schema_ran:
+        print(SKIPPED_BANNER, file=sys.stderr if quiet else out)
 
 
 def main(argv=None):
@@ -499,10 +562,21 @@ def main(argv=None):
     )
     parser.add_argument("root", nargs="?", default=".", help="directory to scan (default: .)")
     parser.add_argument("--schema", help="path to slice-yaml.schema.json")
-    parser.add_argument(
+    skip = parser.add_mutually_exclusive_group()
+    skip.add_argument(
+        "--allow-skip-schema",
+        action="store_true",
+        help="exit 0, not 2, when schema validation could not run (the banner still prints)",
+    )
+    skip.add_argument(
         "--require-schema",
         action="store_true",
-        help="exit non-zero if schema validation could not run (use in CI)",
+        help="accepted for compatibility; failing on a skipped validation is the default",
+    )
+    parser.add_argument(
+        "--baseline",
+        metavar="JSON",
+        help="a previous --json output; report only findings it does not contain",
     )
     parser.add_argument("--json", action="store_true", help="emit findings as JSON")
     parser.add_argument("--quiet", action="store_true", help="print findings only")
@@ -525,6 +599,14 @@ def main(argv=None):
     except (OSError, ValueError) as exc:
         print(f"slice-lint: cannot read schema {schema_path}: {exc}", file=sys.stderr)
         return 2
+
+    baseline = None
+    if args.baseline:
+        try:
+            baseline = load_baseline(Path(args.baseline))
+        except (OSError, ValueError) as exc:
+            print(f"slice-lint: cannot read baseline {args.baseline}: {exc}", file=sys.stderr)
+            return 2
 
     manifests = find_manifests(root)
     if not manifests:
@@ -565,26 +647,35 @@ def main(argv=None):
     cross_manifest_checks(parsed, findings)
     tier_checks(parsed, findings)
 
-    if args.json:
-        json.dump(
-            {
-                "root": str(root),
-                "manifests": len(manifests),
-                "parsed": len(parsed),
-                "schemaValidated": schema_ran,
-                "findings": [f.as_dict() for f in sorted(findings, key=Finding.sort_key)],
-            },
-            sys.stdout,
-            indent=2,
-        )
-        sys.stdout.write("\n")
-    else:
-        report(findings, manifests, parsed, schema_ran, args.quiet)
+    suppressed = None
+    if baseline is not None:
+        kept = [f for f in findings if baseline_key(f, root) not in baseline]
+        suppressed = len(findings) - len(kept)
+        findings = kept
 
+    if args.json:
+        doc = {
+            "root": str(root),
+            "manifests": len(manifests),
+            "parsed": len(parsed),
+            "schemaValidated": schema_ran,
+            "findings": [f.as_dict() for f in sorted(findings, key=Finding.sort_key)],
+        }
+        if suppressed is not None:
+            doc["baseline"] = {"path": str(Path(args.baseline).resolve()), "suppressed": suppressed}
+        json.dump(doc, sys.stdout, indent=2)
+        sys.stdout.write("\n")
+        if not schema_ran:
+            print(SKIPPED_BANNER, file=sys.stderr)
+    else:
+        report(findings, manifests, parsed, schema_ran, args.quiet, suppressed)
+
+    # Findings first: a skipped validation never hides one. Otherwise a run that could not validate
+    # is not a pass, and says so with 2 — the code a hook or CI already treats as "did not run".
     if findings:
         return 1
-    if args.require_schema and not schema_ran:
-        return 1
+    if not schema_ran and not args.allow_skip_schema:
+        return 2
     return 0
 
 
