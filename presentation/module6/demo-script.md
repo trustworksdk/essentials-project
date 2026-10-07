@@ -106,7 +106,7 @@ docker run --rm --network host apache/kafka:4.3.1 \
 Say: *one local transaction wrote the event; a subscription published it afterwards. That is the dual
 write, answered.*
 
-**Fallback:** skip the consumer command and point at the dual-write pair instead (slides 30–31). The Kafka
+**Fallback:** skip the consumer command and point at the dual-write slide instead (slide 30). The Kafka
 image pull is the slowest thing in this runbook — pull it before the talk.
 
 ## Beat 3 — look behind it (about 45 seconds)

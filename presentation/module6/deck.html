@@ -27,6 +27,10 @@
   --code-type: #7FB6D6;
   --code-ann:  #F2A33C;
   --code-com:  #5C6879;
+  --em-cmd:    #5B9BE0;
+  --em-evt:    #F2A33C;
+  --em-view:   #5FBF7F;
+  --em-ext:    #5C6879;
 
   --f-display: "Archivo", "Helvetica Neue", Arial, sans-serif;
   --f-body:    "Newsreader", Georgia, "Times New Roman", serif;
@@ -63,6 +67,10 @@
   --code-type: #1C5D85;
   --code-ann:  #B06A11;
   --code-com:  #8D97A4;
+  --em-cmd:    #1F5FA8;
+  --em-evt:    #B06A11;
+  --em-view:   #2F6F48;
+  --em-ext:    #8D97A4;
 }
 
 * { box-sizing: border-box; }
@@ -368,6 +376,26 @@ ol.questions li .n { flex: 0 0 5.5em; font-size: var(--t-label); font-weight: 70
 .chain .node b { display: block; font-weight: 700; font-size: var(--t-label); color: var(--ink-faint); letter-spacing: 0.1em; text-transform: uppercase; margin-bottom: 0.35em; }
 .chain .arrow { color: var(--accent); }
 
+/* four-pattern slide: one row per pattern, words left, picture right; nodes coloured like the event-model legend */
+.patterns { display: grid; grid-template-rows: repeat(4, 1fr); gap: 1.6cqh; }
+.pattern { border: 1px solid var(--rule); background: var(--surface-2); padding: 1.4cqh 1.6cqw; display: grid; grid-template-columns: 42fr 58fr; gap: 2.4cqw; align-items: center; min-height: 0; }
+.pattern .say { display: flex; flex-direction: column; gap: 0.8cqh; min-width: 0; }
+.pattern h3 { font-size: var(--t-small); letter-spacing: 0.08em; color: var(--ink); }
+.pattern h3 .tag { text-transform: none; letter-spacing: 0; font-weight: 500; color: var(--ink-dim); }
+.pattern h3 .pn { color: var(--accent); margin-right: 0.6em; }
+.pattern p { font-size: var(--t-small); line-height: 1.35; max-width: none; }
+.chain.big { font-size: 2.5cqh; gap: 0.8cqw; flex-wrap: nowrap; align-items: stretch; min-width: 0; }
+.chain.big .node { flex: 0 1 auto; min-width: 0; padding: 1.1cqh 1cqw; border-top: 0.6cqh solid var(--em-ext); line-height: 1.15; }
+.chain.big .arrow { align-self: center; }
+.chain.big.long { font-size: 2.1cqh; gap: 0.5cqw; }
+.chain.big.long .node { padding: 1cqh 0.8cqw; }
+.chain .node.cmd { border-top-color: var(--em-cmd); }
+.chain .node.evt { border-top-color: var(--em-evt); }
+.chain .node.view { border-top-color: var(--em-view); }
+.chain .node.cmd b { color: var(--em-cmd); }
+.chain .node.evt b { color: var(--em-evt); }
+.chain .node.view b { color: var(--em-view); }
+
 /* ---- rail ---------------------------------------------------------------- */
 #rail {
   position: absolute;
@@ -526,6 +554,23 @@ svg .dgm-edge { stroke: var(--ink-faint); stroke-width: 1.4; fill: none; }
 svg .dgm-hi   { stroke: var(--accent); stroke-width: 1.7; fill: none; }
 svg .ah-dim   { fill: var(--ink-faint); }
 svg .ah-hi    { fill: var(--accent); }
+
+/* The transaction timeline on the blocking-call slide: the bar is the transaction,
+   the dashed line is the moment the process dies, and its colour says whether
+   that moment is recoverable. */
+svg .tl-h   { font-family: var(--f-display); font-weight: 700; font-size: 15px; letter-spacing: 1.4px; fill: var(--ink-dim); }
+svg .tl-t   { font-family: var(--f-mono); font-size: 18px; fill: var(--ink); }
+svg .tl-bar { font-family: var(--f-mono); font-size: 14px; fill: var(--ink); }
+svg .tl-bad { fill: color-mix(in srgb, var(--cost) 22%, transparent); stroke: var(--cost); stroke-width: 1.2; }
+svg .tl-ok  { fill: color-mix(in srgb, var(--gain) 22%, transparent); stroke: var(--gain); stroke-width: 1.2; }
+svg .dgm-box.tl-gw-bad { stroke: var(--cost); }
+svg .tl-crash { stroke-width: 1.6; stroke-dasharray: 5 4; fill: none; }
+svg .tl-crash.tl-cost { stroke: var(--cost); }
+svg .tl-crash.tl-gain { stroke: var(--gain); }
+svg .tl-x   { font-family: var(--f-display); font-weight: 800; font-size: 20px; }
+svg .tl-c   { font-family: var(--f-mono); font-size: 15px; }
+svg .tl-x.tl-cost, svg .tl-c.tl-cost { fill: var(--cost); }
+svg .tl-x.tl-gain, svg .tl-c.tl-gain { fill: var(--gain); }
 
 /* The lane diagram adds: a nested block inside a card, a small all-caps label for
    it, a lane name painted in the lane's own colour, and the refused-call marker. */
@@ -719,26 +764,60 @@ data class ProductPriceChanged(
 </section>
 
 <!-- =================================================================== 07 — C3 concept -->
-<section class="slide" data-side="concept" data-act="3/13 &mdash; The three patterns" data-min="0.75"
-  data-note-en="The module's central teaching device, and worth saying the number out loud: three. Everything in a system is one of these. The automation one is the unfamiliar one - an event lands, becomes a piece of outstanding work, and something picks that work up. Note that the something can be a person."
-  data-note-da="Modulets centrale undervisningsredskab, og tallet er vaerd at sige hoejt: tre. Alt i et system er ét af dem. Automation-moenstret er det ukendte - et event lander, bliver et stykke udestaaende arbejde, og noget tager det op. Bemaerk at det noget kan vaere et menneske.">
+<section class="slide" data-side="concept" data-act="3/13 &mdash; The four patterns" data-min="0.75"
+  data-note-en="The module's central teaching device, and worth saying the number out loud: four. Everything in a system is one of these, and the colours are the legend from the last slide - blue command, orange event, green view. Take them in order. Command: a person decides something and the system records it as a fact. View: facts already recorded are folded into something a screen can show - nothing is decided there. Automation is the unfamiliar one - an event lands, becomes a piece of outstanding work on a to-do list, and something picks that work up and issues a command. Note that the something can be a person. Translation is the boundary: another system tells us something in its own words, and we turn it into our own command before anything inside sees it. The example is the demo's own payment gateway webhook. It works the other way too: the demo also translates our OrderShipped into the order-management system's own message on the way out - same boundary, opposite direction."
+  data-note-da="Modulets centrale undervisningsredskab, og tallet er vaerd at sige hoejt: fire. Alt i et system er ét af dem, og farverne er legenden fra forrige slide - blaa command, orange event, groen view. Command: et menneske beslutter noget, og systemet registrerer det som en kendsgerning. View: registrerede kendsgerninger foldes til noget en skaerm kan vise - intet besluttes der. Automation er det ukendte - et event lander, bliver et stykke udestaaende arbejde paa en to-do-liste, og noget tager det op og sender en command. Bemaerk at det noget kan vaere et menneske. Translation er graensen: et andet system fortaeller os noget med sine egne ord, og vi oversaetter det til vores egen command foer noget indenfor ser det. Eksemplet er demoens egen payment gateway-webhook. Det virker ogsaa den anden vej: demoen oversaetter ogsaa vores OrderShipped til ordresystemets egen besked paa vej ud - samme graense, modsat retning.">
   <div class="eyebrow concept"><span class="num">3 / 13</span><span class="sep">&middot;</span><span lang="en">The concept</span><span lang="da">Begrebet</span></div>
-  <h2><span lang="en">Three patterns, and everything is one of them</span><span lang="da">Tre mønstre, og alt er ét af dem</span></h2>
-  <div class="row grow" style="align-items:stretch">
-    <div class="col" style="flex:1 1 0">
-      <h3><span lang="en">Command &mdash; a user action changes state</span><span lang="da">Command &mdash; en brugerhandling ændrer tilstand</span></h3>
-      <div class="chain"><span class="node">Place Order</span><span class="arrow">&rarr;</span><span class="node">PlaceOrder</span><span class="arrow">&rarr;</span><span class="node">OrderPlaced</span></div>
-      <h3><span lang="en">View &mdash; events become information</span><span lang="da">View &mdash; events bliver information</span></h3>
-      <div class="chain"><span class="node">OrderPlaced</span><span class="arrow">&rarr;</span><span class="node"><span lang="en">Order history</span><span lang="da">Ordrehistorik</span></span></div>
+  <h2><span lang="en">Four patterns, and everything is one of them</span><span lang="da">Fire mønstre, og alt er ét af dem</span></h2>
+  <div class="patterns grow">
+    <div class="pattern">
+      <div class="say">
+        <h3><span class="pn">1</span>Command <span class="tag" lang="en">&mdash; a user action changes state</span><span class="tag" lang="da">&mdash; en brugerhandling ændrer tilstand</span></h3>
+        <p lang="en">Someone decides something. The command is checked against what already happened and, if allowed, <strong>recorded as a new event</strong>.</p>
+        <p lang="da">Nogen beslutter noget. Commanden tjekkes mod det der allerede er sket og, hvis tilladt, <strong>registreres som et nyt event</strong>.</p>
+      </div>
+      <div class="chain big">
+        <span class="node ext"><b>UI</b>Place Order</span><span class="arrow">&rarr;</span>
+        <span class="node cmd"><b>Command</b>Place<wbr>Order</span><span class="arrow">&rarr;</span>
+        <span class="node evt"><b>Event</b>Order<wbr>Placed</span>
+      </div>
     </div>
-    <div class="col" style="flex:1 1 0">
-      <h3><span lang="en">Automation &mdash; the system acts on its own</span><span lang="da">Automation &mdash; systemet handler selv</span></h3>
-      <div class="chain" style="flex-direction:column; align-items:stretch">
-        <div class="node"><b>EVENT</b>OrderPlaced</div>
-        <div class="node"><b>TO-DO VIEW</b>Pending Shipments</div>
-        <div class="node"><b>TRIGGER</b>Shipment Processor</div>
-        <div class="node"><b>COMMAND</b>ShipOrder</div>
-        <div class="node"><b>EVENT</b>OrderShipped</div>
+    <div class="pattern">
+      <div class="say">
+        <h3><span class="pn">2</span>View <span class="tag" lang="en">&mdash; events become information</span><span class="tag" lang="da">&mdash; events bliver information</span></h3>
+        <p lang="en">Recorded events are <strong>folded into a read model</strong> a screen can show. Nothing is decided here &mdash; it can be rebuilt from the events at any time.</p>
+        <p lang="da">Registrerede events <strong>foldes til en læsemodel</strong> en skærm kan vise. Intet besluttes her &mdash; den kan genopbygges fra eventene når som helst.</p>
+      </div>
+      <div class="chain big">
+        <span class="node evt"><b>Event</b>Order<wbr>Placed</span><span class="arrow">&rarr;</span>
+        <span class="node view"><b>View</b><span lang="en">Order history</span><span lang="da">Ordrehistorik</span></span><span class="arrow">&rarr;</span>
+        <span class="node ext"><b>UI</b><span lang="en">My orders</span><span lang="da">Mine ordrer</span></span>
+      </div>
+    </div>
+    <div class="pattern">
+      <div class="say">
+        <h3><span class="pn">3</span>Automation <span class="tag" lang="en">&mdash; the system acts on its own</span><span class="tag" lang="da">&mdash; systemet handler selv</span></h3>
+        <p lang="en">An event becomes <strong>work on a to-do list</strong>; a processor &mdash; or a person &mdash; picks it up and sends the next command, calls out to other systems included.</p>
+        <p lang="da">Et event bliver <strong>arbejde på en to-do-liste</strong>; en processor &mdash; eller et menneske &mdash; tager det op og sender den næste command, kald ud til andre systemer inklusive.</p>
+      </div>
+      <div class="chain big long">
+        <span class="node evt"><b>Event</b>Order<wbr>Placed</span><span class="arrow">&rarr;</span>
+        <span class="node view"><b>To-do</b>Pending Shipments</span><span class="arrow">&rarr;</span>
+        <span class="node ext"><b>Processor</b>Shipping</span><span class="arrow">&rarr;</span>
+        <span class="node cmd"><b>Command</b>Ship<wbr>Order</span><span class="arrow">&rarr;</span>
+        <span class="node evt"><b>Event</b>Order<wbr>Shipped</span>
+      </div>
+    </div>
+    <div class="pattern">
+      <div class="say">
+        <h3><span class="pn">4</span>Translation <span class="tag" lang="en">&mdash; the outside world speaks, we translate</span><span class="tag" lang="da">&mdash; omverdenen taler, vi oversætter</span></h3>
+        <p lang="en">Another system tells us something <strong>in its own vocabulary</strong>; at the boundary it becomes our own command, so nothing inside sees their shape.</p>
+        <p lang="da">Et andet system fortæller os noget <strong>med sit eget ordforråd</strong>; ved grænsen bliver det vores egen command, så intet indenfor ser deres format.</p>
+      </div>
+      <div class="chain big">
+        <span class="node ext"><b>External</b><span lang="en">Payment gateway webhook</span><span lang="da">Payment gateway-webhook</span></span><span class="arrow">&rarr;</span>
+        <span class="node cmd"><b>Command</b>Record<wbr>Capture<wbr>Outcome</span><span class="arrow">&rarr;</span>
+        <span class="node evt"><b>Event</b>Funds<wbr>Captured</span>
       </div>
     </div>
   </div>
@@ -770,8 +849,8 @@ data class ProductPriceChanged(
 
 <!-- =================================================================== 09 — C2 + C3 answer -->
 <section class="slide" data-side="answer" data-act="2&ndash;3/13 &mdash; From the model to the code" data-min="2"
-  data-note-en="One answer for the model and its patterns. Left: one slice is one directory, and the model's boxes are its files - point at each: the command is also the request body, the decider is the decision, the API is the trigger. Twenty-four of these in the demo, and not one folder called service or repository. Right: the pattern you drew decides the directory and the base type. Then the gloss - each base type brings only the machinery its pattern needs: a decider is a pure function, a view processor brings an ordered replayable subscription, an automation adds an Inbox because it may call the outside world."
-  data-note-da="Ét svar for modellen og dens moenstre. Venstre: én slice er én mappe, og modellens kasser er dens filer. Fireogtyve af dem i demoen, og ikke én mappe der hedder service eller repository. Hoejre: det moenster du tegnede bestemmer mappen og basistypen. Derefter glossen - hver basistype bringer kun det maskineri dens moenster har brug for.">
+  data-note-en="One answer for the model and its patterns. Left: one slice is one directory, and the model's boxes are its files - point at each: the command is also the request body, the decider is the decision, the API is the trigger. Twenty-four of these in the demo, and not one folder called service or repository. Right: the pattern you drew decides the directory and the base type. Then the gloss - each base type brings only the machinery its pattern needs: a decider is a pure function, a view processor brings an ordered replayable subscription, an automation adds an Inbox because it may call the outside world. Last row: translations live under external_systems, one per direction. Incoming, the payment gateway webhook is a plain controller that turns the gateway's body into RecordCaptureOutcome and drops it into an Inbox, so the gateway gets its 202 at once and the command is retried with backoff if it briefly fails. Outgoing, OrderShippedKafkaPublisher is an EventProcessor that turns our OrderShipped into the order-management system's own message and publishes it to Kafka."
+  data-note-da="Ét svar for modellen og dens moenstre. Venstre: én slice er én mappe, og modellens kasser er dens filer. Fireogtyve af dem i demoen, og ikke én mappe der hedder service eller repository. Hoejre: det moenster du tegnede bestemmer mappen og basistypen. Derefter glossen - hver basistype bringer kun det maskineri dens moenster har brug for. Sidste raekke: translations bor under external_systems, én per retning. Ind: payment gateway-webhooken er en almindelig controller der oversaetter gatewayens body til RecordCaptureOutcome og laegger den i en Inbox, saa gatewayen faar sit 202 med det samme og commanden proeves igen med backoff hvis den fejler kortvarigt. Ud: OrderShippedKafkaPublisher er en EventProcessor der oversaetter vores OrderShipped til ordresystemets egen besked og udgiver den paa Kafka.">
   <div class="eyebrow"><span lang="en">With Essentials</span><span lang="da">Med Essentials</span></div>
   <h2><span lang="en">The pattern you drew is <em>the directory you open</em> &mdash; and the type you extend</span><span lang="da">Mønstret du tegnede er <em>mappen du åbner</em> &mdash; og typen du extender</span></h2>
   <div class="row grow" style="align-items:stretch">
@@ -798,13 +877,14 @@ sales/views/products_for_sale/ <span class="tok-com">← the view, its own slice
             <tr><td>Command</td><td><code>use_cases/</code></td><td><code>Decider</code></td><td class="num">14</td></tr>
             <tr><td>View</td><td><code>views/</code></td><td><code>ViewEventProcessor</code></td><td class="num">5</td></tr>
             <tr><td>Automation</td><td><code>automations/</code></td><td><code>EventProcessor</code></td><td class="num">3</td></tr>
+            <tr><td>Translation</td><td><code>external_systems/</code></td><td><code>Inbox</code> <span lang="en">(in)</span><span lang="da">(ind)</span> &middot; <code>EventProcessor</code> <span lang="en">(out)</span><span lang="da">(ud)</span></td><td class="num">2</td></tr>
           </tbody>
         </table>
       </div>
       <div class="gloss">
         <b><span lang="en">Why the base type matters</span><span lang="da">Hvorfor basistypen betyder noget</span></b>
-        <span lang="en">Each brings only what its pattern needs. A <code>Decider</code> is a pure function. A <code>ViewEventProcessor</code> brings an ordered, replayable subscription. An <code>EventProcessor</code> adds an Inbox, because an automation may call the outside world.</span>
-        <span lang="da">Hver bringer kun det dens mønster har brug for. En <code>Decider</code> er en ren funktion. En <code>ViewEventProcessor</code> bringer et ordnet, replaybart subscription. En <code>EventProcessor</code> tilføjer en Inbox, fordi en automatisering kan kalde omverdenen.</span>
+        <span lang="en">Each brings only what its pattern needs. A <code>Decider</code> is a pure function. A <code>ViewEventProcessor</code> brings an ordered, replayable subscription. An <code>EventProcessor</code> adds an Inbox, because an automation may call the outside world. A translation works both ways: inbound it hands our command to an <code>Inbox</code>, so the gateway gets its answer at once and the command is retried if it briefly fails; outbound an <code>EventProcessor</code> publishes our events in their shape.</span>
+        <span lang="da">Hver bringer kun det dens mønster har brug for. En <code>Decider</code> er en ren funktion. En <code>ViewEventProcessor</code> bringer et ordnet, replaybart subscription. En <code>EventProcessor</code> tilføjer en Inbox, fordi en automatisering kan kalde omverdenen. En translation virker begge veje: ind afleverer den vores command til en <code>Inbox</code>, så gatewayen får sit svar med det samme og commanden prøves igen hvis den fejler kortvarigt; ud udgiver en <code>EventProcessor</code> vores events i deres format.</span>
       </div>
     </div>
   </div>
@@ -1735,51 +1815,21 @@ private fun updateThenAct(orderId: OrderId, change: (OrderAwaitingHold) -&gt; Un
   </div>
 </section>
 
-<!-- =================================================================== 28 — dual write concept -->
-<section class="slide" data-side="concept" data-act="Bonus &mdash; the dual write" data-min="1"
-  data-note-en="The module ends here, and so do we. Set the trap first: two systems, no shared transaction, and neither order of the two writes is safe. Then show its own diagram, which already names the Essentials components - EventStore, SubscriptionManager, Outbox, Kafka - and read its benefit list."
-  data-note-da="Modulet slutter her, og det goer vi ogsaa. Stil faelden op foerst: to systemer, ingen faelles transaktion, og ingen af de to skriverekkefoelger er sikre. Vis derefter dets eget diagram, som allerede navngiver Essentials-komponenterne.">
-  <div class="eyebrow concept"><span class="num">Bonus</span><span class="sep">&middot;</span><span lang="en">The concept</span><span lang="da">Begrebet</span></div>
-  <h2><span lang="en">The dual write problem</span><span lang="da">Dual write-problemet</span></h2>
+<!-- =================================================================== 28 — dual write, problem and answer -->
+<section class="slide" data-side="answer" data-act="Bonus &mdash; the dual write" data-min="2.5"
+  data-note-en="The module ends here, and so do we. Set the trap first, top right: save the order and tell Kafka - two systems, no shared transaction, and neither order of the two writes is safe. Then the picture, which is the module's own diagram and already names the Essentials components: event store, subscription manager, outbox, Kafka - every box is something you get. Then the code is that picture: ShipOrder writes only the event store in one local transaction, and this processor reads the committed stream afterwards and publishes. Point at the eventOrder line - at least once means consumers must dedupe, and this is what they dedupe on. Point at stopRedeliveryOn: some failures are permanent and retrying them twenty times only delays everything behind them. Then the proof from the demo - stop the Kafka container, ship an order, it still ships. Close on the operational commitment - somebody watches the dead letter queue."
+  data-note-da="Modulet slutter her, og det goer vi ogsaa. Stil faelden op foerst, oeverst til hoejre: gem ordren og fortael Kafka - to systemer, ingen faelles transaktion, og ingen af de to skriverekkefoelger er sikre. Derefter billedet, modulets eget diagram, som allerede navngiver Essentials-komponenterne - hver kasse er noget du faar. Koden er det billede: ShipOrder skriver kun event store'en i én lokal transaktion, og denne processor laeser den committede stream bagefter og publicerer. Peg paa eventOrder - mindst én gang betyder at consumere skal deduplikere, og det er det de deduplikerer paa. Peg paa stopRedeliveryOn: nogle fejl er permanente. Derefter beviset fra demoen - stop Kafka, send en ordre, den sendes stadig. Afslut paa driftsforpligtelsen - nogen holder oeje med dead letter-koeen.">
+  <div class="eyebrow"><span class="num">Bonus</span><span class="sep">&middot;</span><span lang="en">With Essentials</span><span lang="da">Med Essentials</span></div>
+  <h2><span lang="en">The dual write: one local transaction, <em>then a subscription publishes</em></span><span lang="da">Dual write: én lokal transaktion, <em>så publicerer et subscription</em></span></h2>
   <div class="row grow" style="align-items:stretch">
-    <figure class="shot-wrap" style="flex:1.2 1 0">
-      <img class="shot" src="images/dual-write.png" alt="EventStore to SubscriptionManager to Outbox to a Kafka topic, with PostgreSQL under both">
-      <figcaption><span lang="en">The answer in one picture &mdash; and every box in it is a component you get</span><span lang="da">Svaret i ét billede &mdash; og hver kasse i det er en komponent du får</span></figcaption>
-    </figure>
-    <div class="col" style="flex:0.8 1 0">
-      <p lang="en">Save the order <em>and</em> send the invoice: two transaction boundaries, no shared transaction. Crash in between and one of the two never happened.</p>
-      <p lang="da">Gem ordren <em>og</em> send fakturaen: to transaktionsgrænser, ingen fælles transaktion. Gå ned imellem, og én af de to skete aldrig.</p>
-      <ul class="tight">
-        <li lang="en">Requires only <strong>local</strong> transactions</li>
-        <li lang="da">Kræver kun <strong>lokale</strong> transaktioner</li>
-        <li lang="en">Natively event driven &mdash; the service consumes and produces events</li>
-        <li lang="da">Naturligt event-drevet &mdash; servicen forbruger og producerer events</li>
-        <li lang="en">Proven audit trail, and captures business intentions</li>
-        <li lang="da">Bevist revisionsspor, og fanger forretningsintentioner</li>
-        <li lang="en"><strong>Requires idempotent operations</strong></li>
-        <li lang="da"><strong>Kræver idempotente operationer</strong></li>
-      </ul>
-    </div>
-  </div>
-</section>
-
-<!-- =================================================================== 29 — dual write answer -->
-<section class="slide" data-side="answer" data-act="Bonus &mdash; the dual write" data-min="1.5"
-  data-note-en="The module's diagram, as code. One local transaction writes the event; a subscription publishes afterwards. Point at stopRedeliveryOn: some failures are permanent and retrying them twenty times only delays everything behind them. Close the act on the operational commitment - somebody watches the dead letter queue."
-  data-note-da="Modulets diagram, som kode. Én lokal transaktion skriver eventet; et subscription publicerer bagefter. Peg paa stopRedeliveryOn: nogle fejl er permanente. Afslut paa driftsforpligtelsen - nogen holder oeje med dead letter-koeen.">
-  <div class="eyebrow"><span lang="en">With Essentials</span><span lang="da">Med Essentials</span></div>
-  <h2><span lang="en">One local transaction, <em>then a subscription publishes</em></span><span lang="da">Én lokal transaktion, <em>så publicerer et subscription</em></span></h2>
-  <div class="row grow" style="align-items:stretch">
-    <figure class="panel sm" style="flex:1.3 1 0">
-      <figcaption><span>the publisher</span><span class="path">shipping/external_systems/order_management/outgoing/OrderShippedKafkaPublisher.kt</span></figcaption>
-      <pre><code class="kotlin">@Service
-class OrderShippedKafkaPublisher(…) : EventProcessor(dependencies) {
+    <figure class="panel sm" style="flex:1.05 1 0">
+      <figcaption><span>the publisher</span><span class="path">shipping/external_systems/order_management/outgoing/</span></figcaption>
+      <pre><code class="kotlin">class OrderShippedKafkaPublisher(…) : EventProcessor(dependencies) {
 
     override fun reactsToEventsRelatedToAggregateTypes() = listOf(SHIPPING_ORDERS)
 
-    override fun getInboxRedeliveryPolicy(): RedeliveryPolicy =
+    override fun getInboxRedeliveryPolicy() =
         RedeliveryPolicy.exponentialBackoff()
-            .setInitialRedeliveryDelay(Duration.ofMillis(200))
             .setMaximumNumberOfRedeliveries(20)
             .setDeliveryErrorHandler(
                 MessageDeliveryErrorHandler.stopRedeliveryOn(IllegalArgumentException::class.java))
@@ -1790,52 +1840,79 @@ class OrderShippedKafkaPublisher(…) : EventProcessor(dependencies) {
         val externalEvent = ExternalOrderShipped(
             orderId = e.id.toString(),                    // typed inside,
             trackingNumber = e.trackingNumber.toString(),  // plain outside
-            eventOrder = eventMessage.order)               // so consumers can dedupe
-        kafkaTemplate.send(ProducerRecord(topic, externalEvent.orderId, externalEvent))
+            eventOrder = eventMessage.order)               // consumers dedupe on it
+        kafkaTemplate.send(
+            ProducerRecord(topic, externalEvent.orderId, externalEvent))
     }
 }</code></pre>
     </figure>
-    <div class="col" style="flex:0.7 1 0">
-      <p lang="en"><code>ShipOrder</code> writes <strong>only</strong> the event store, in one local transaction. This processor then reads the committed stream and publishes &mdash; at least once, with a resume point, so a broker outage delays the message rather than losing it.</p>
-      <p lang="da"><code>ShipOrder</code> skriver <strong>kun</strong> event store'en, i én lokal transaktion. Denne processor læser derefter den committede stream og publicerer &mdash; mindst én gang, med et resume-punkt, så et broker-nedbrud udskyder beskeden frem for at miste den.</p>
-      <p lang="en"><strong>Verified in the demo:</strong> stop the Kafka container, ship an order, and it still ships. Start the broker again and the external event goes out.</p>
-      <p lang="da"><strong>Verificeret i demoen:</strong> stop Kafka-containeren, send en ordre, og den sendes stadig. Start brokeren igen, og det eksterne event går ud.</p>
-      <p class="small" lang="en">And the commitment that &ldquo;at least once&rdquo; implies: <strong>somebody has to watch the dead letter queue.</strong> A dead letter is one log line, and the business outcome simply never happens.</p>
-      <p class="small" lang="da">Og den forpligtelse &ldquo;mindst én gang&rdquo; medfører: <strong>nogen skal holde øje med dead letter-køen.</strong> En dead letter er én log-linje, og forretningsresultatet udebliver bare.</p>
+    <div class="col" style="flex:0.95 1 0; gap:1.6cqh">
+      <p class="small" lang="en"><strong>The trap:</strong> save the order <em>and</em> publish it. Crash in between and one of the two never happened &mdash; and neither order of the two writes is safe.</p>
+      <p class="small" lang="da"><strong>Fælden:</strong> gem ordren <em>og</em> publicér den. Gå ned imellem, og én af de to skete aldrig &mdash; og ingen af de to rækkefølger er sikker.</p>
+      <figure class="shot-wrap" style="margin:0">
+        <img class="shot" style="max-height:18cqh" src="images/dual-write.png" alt="EventStore to SubscriptionManager to Outbox to a Kafka topic, with PostgreSQL under both">
+        <figcaption><span lang="en">The module&rsquo;s answer &mdash; every box is a component you get</span><span lang="da">Modulets svar &mdash; hver kasse er en komponent du får</span></figcaption>
+      </figure>
+      <p class="small" lang="en"><strong>The answer:</strong> <code>ShipOrder</code> writes <em>only</em> the event store, in one local transaction. This processor then reads the committed stream and publishes at least once, from a resume point &mdash; a broker outage delays the message, it never loses it.</p>
+      <p class="small" lang="da"><strong>Svaret:</strong> <code>ShipOrder</code> skriver <em>kun</em> event store&rsquo;en, i én lokal transaktion. Denne processor læser derefter den committede stream og publicerer mindst én gang, fra et resume-punkt &mdash; et broker-nedbrud udskyder beskeden, det mister den aldrig.</p>
+      <ul class="tight">
+        <li class="small" lang="en"><strong>Verified in the demo:</strong> stop Kafka, ship an order &mdash; it still ships, and goes out when the broker is back</li>
+        <li class="small" lang="da"><strong>Verificeret i demoen:</strong> stop Kafka, send en ordre &mdash; den sendes stadig, og går ud når brokeren er tilbage</li>
+        <li class="small" lang="en">At least once means <strong>idempotent consumers</strong> &mdash; that is what <code>eventOrder</code> is for</li>
+        <li class="small" lang="da">Mindst én gang betyder <strong>idempotente consumere</strong> &mdash; det er det <code>eventOrder</code> er til</li>
+        <li class="small" lang="en">And <strong>somebody has to watch the dead letter queue</strong> &mdash; a dead letter is one log line, and the outcome simply never happens</li>
+        <li class="small" lang="da">Og <strong>nogen skal holde øje med dead letter-køen</strong> &mdash; en dead letter er én log-linje, og resultatet udebliver bare</li>
+      </ul>
     </div>
   </div>
 </section>
 
 <!-- =================================================================== 29a — blocking call concept -->
 <section class="slide" data-side="concept" data-act="Bonus &mdash; a blocking call in a handler" data-min="0.75"
-  data-note-en="Same family as the dual write: our database plus someone else's system, and no transaction that covers both. Packing an order charges the card. The rule from the payment context is: record the request, then call the gateway - a call made before the request is recorded is a charge nothing can reconcile. Then the trap: by default the whole handler is one transaction. The request is written first but committed last, after the gateway has answered. And the connection sits idle in transaction for the whole call."
-  data-note-da="Samme familie som dual write: vores database plus et andet system, og ingen transaktion der dækker begge. At pakke en ordre trækker kortet. Reglen i payment er: registrér anmodningen, kald derefter gatewayen - et kald før anmodningen er registreret er en betaling intet kan afstemme. Så fælden: som standard er hele handleren én transaktion. Anmodningen skrives først men committes sidst, efter gatewayen har svaret. Og forbindelsen står idle in transaction under hele kaldet.">
+  data-note-en="Same family as the dual write: our database plus someone else's system, and no transaction that covers both. Packing an order charges the card. The rule from the payment context is: record the request, then call the gateway - a call made before the request is recorded is a charge nothing can reconcile. Then the trap: by default the whole handler is one transaction. The request is written first but committed last, after the gateway has answered. And the connection sits idle in transaction for the whole call. Walk the picture top to bottom: the same three steps in both lines, only the order of the gateway call and the commit is swapped. The coloured bar is the transaction. Then the dashed line - the process dies right after the gateway answered. Top: the card is charged but the request rolls back, so there is no record of a charge that happened. Bottom: the request was committed before the call, so redelivery finds it and the reconciler asks the gateway what happened."
+  data-note-da="Samme familie som dual write: vores database plus et andet system, og ingen transaktion der dækker begge. At pakke en ordre trækker kortet. Reglen i payment er: registrér anmodningen, kald derefter gatewayen - et kald før anmodningen er registreret er en betaling intet kan afstemme. Så fælden: som standard er hele handleren én transaktion. Anmodningen skrives først men committes sidst, efter gatewayen har svaret. Og forbindelsen står idle in transaction under hele kaldet. Gå billedet igennem oppefra: samme tre trin i begge linjer, kun rækkefølgen af gateway-kaldet og commit er byttet om. Den farvede bjælke er transaktionen. Så den stiplede linje - processen dør lige efter gatewayen svarede. Øverst: kortet er trukket men anmodningen rulles tilbage, så der findes ingen registrering af en betaling der skete. Nederst: anmodningen blev committet før kaldet, så genudsendelse finder den og reconcileren spørger gatewayen hvad der skete.">
   <div class="eyebrow concept"><span class="num">Bonus</span><span class="sep">&middot;</span><span lang="en">The concept</span><span lang="da">Begrebet</span></div>
   <h2><span lang="en">&ldquo;Record, then call&rdquo; &mdash; <em>committed</em> is a transaction boundary</span><span lang="da">&ldquo;Registrér, kald så&rdquo; &mdash; <em>committet</em> er en transaktionsgrænse</span></h2>
-  <div class="col grow" style="justify-content:center; gap:3cqh">
-    <div>
-      <p class="small" lang="en"><strong>Default &mdash; one transaction around the whole handler</strong></p>
-      <p class="small" lang="da"><strong>Standard &mdash; én transaktion om hele handleren</strong></p>
-      <div class="chain">
-        <span class="node"><b>BEGIN</b>&nbsp;</span><span class="arrow">&rarr;</span>
-        <span class="node"><b>WRITE</b>FundsCaptureRequested</span><span class="arrow">&rarr;</span>
-        <span class="node"><b><span lang="en">GATEWAY &middot; 800 ms</span><span lang="da">GATEWAY &middot; 800 ms</span></b><span lang="en">connection idle in transaction</span><span lang="da">forbindelse idle in transaction</span></span><span class="arrow">&rarr;</span>
-        <span class="node"><b>COMMIT</b><span lang="en">the request, only now</span><span lang="da">anmodningen, først nu</span></span>
-      </div>
-    </div>
-    <div>
-      <p class="small" lang="en"><strong>What the rule means &mdash; the handler draws the boundary itself</strong></p>
-      <p class="small" lang="da"><strong>Hvad reglen betyder &mdash; handleren trækker selv grænsen</strong></p>
-      <div class="chain">
-        <span class="node"><b>BEGIN</b>&nbsp;</span><span class="arrow">&rarr;</span>
-        <span class="node"><b>WRITE</b>FundsCaptureRequested</span><span class="arrow">&rarr;</span>
-        <span class="node"><b>COMMIT</b><span lang="en">the request, first</span><span lang="da">anmodningen, først</span></span><span class="arrow">&rarr;</span>
-        <span class="node"><b><span lang="en">GATEWAY &middot; 800 ms</span><span lang="da">GATEWAY &middot; 800 ms</span></b><span lang="en">nothing held</span><span lang="da">intet holdt</span></span>
-      </div>
-    </div>
-    <p lang="en">In the first line the rule holds in the source code and not in the database &mdash; and every parallel consumer parks a pooled connection for as long as the other system takes to answer.</p>
-    <p lang="da">I første linje holder reglen i kildekoden og ikke i databasen &mdash; og hver parallel consumer parkerer en pool-forbindelse så længe det andet system er om at svare.</p>
-  </div>
+  <figure class="dgm grow" style="justify-content:center">
+    <svg viewBox="0 0 1200 405" role="img" style="max-height:60cqh"
+         aria-label="Two timelines with the same steps. Top, the default: BEGIN, write FundsCaptureRequested, call the gateway which charges the card, then COMMIT, all inside one transaction that holds a pooled connection for the whole call. A crash after the call leaves the card charged and the request rolled back. Bottom, the rule: BEGIN, write, COMMIT, then call the gateway with no transaction open. A crash after the call leaves the request committed, so redelivery finds it and the reconciler asks the gateway.">
+      <defs>
+        <marker id="ahtl" viewBox="0 0 8 8" refX="7.5" refY="4" markerWidth="6.5" markerHeight="6.5" orient="auto">
+          <path d="M0 0 L8 4 L0 8 Z" class="ah-dim"/>
+        </marker>
+      </defs>
+      <g lang="en"><text class="tl-h" x="40" y="26">DEFAULT — ONE TRANSACTION AROUND THE WHOLE HANDLER</text></g><g lang="da"><text class="tl-h" x="40" y="26">STANDARD — ÉN TRANSAKTION OM HELE HANDLEREN</text></g>
+      <rect class="dgm-box" x="40" y="42" width="100" height="64"/><text class="tl-t" x="90" y="82" text-anchor="middle">BEGIN</text>
+      <rect class="dgm-box" x="170" y="42" width="300" height="64"/><text class="dgm-col" x="184" y="64">WRITE</text><text class="tl-t" x="184" y="92">FundsCaptureRequested</text>
+      <rect class="dgm-box tl-gw-bad" x="500" y="42" width="360" height="64"/><g lang="en"><text class="dgm-col" x="514" y="64">CALL THE GATEWAY · ~800 MS</text><text class="tl-t" x="514" y="92">the card is charged</text></g><g lang="da"><text class="dgm-col" x="514" y="64">KALD GATEWAYEN · ~800 MS</text><text class="tl-t" x="514" y="92">kortet trækkes</text></g>
+      <rect class="dgm-box" x="890" y="42" width="110" height="64"/><text class="tl-t" x="945" y="82" text-anchor="middle">COMMIT</text>
+      <path class="dgm-edge" d="M140 74 H168" marker-end="url(#ahtl)"/>
+      <path class="dgm-edge" d="M470 74 H498" marker-end="url(#ahtl)"/>
+      <path class="dgm-edge" d="M860 74 H888" marker-end="url(#ahtl)"/>
+      <rect class="tl-bad" x="40" y="118" width="960" height="26"/>
+      <g lang="en"><text class="tl-bar" x="52" y="136">one transaction · a pooled connection idle for the whole call · the request is not recorded yet</text></g><g lang="da"><text class="tl-bar" x="52" y="136">én transaktion · en pool-forbindelse idle under hele kaldet · anmodningen er ikke registreret endnu</text></g>
+      <path class="tl-crash tl-cost" d="M875 38 V162"/>
+      <text class="tl-x tl-cost" x="875" y="34" text-anchor="middle">✕</text>
+      <g lang="en"><text class="tl-c tl-cost" x="1160" y="182" text-anchor="end">crash after the call → the card is charged, the request rolls back: nothing can reconcile it</text></g><g lang="da"><text class="tl-c tl-cost" x="1160" y="182" text-anchor="end">nedbrud efter kaldet → kortet er trukket, anmodningen rulles tilbage: intet kan afstemme det</text></g>
+      <path class="dgm-edge" style="stroke-dasharray:2 6" d="M40 214 H1160"/>
+      <g lang="en"><text class="tl-h" x="40" y="236">THE RULE — THE HANDLER DRAWS THE BOUNDARY ITSELF</text></g><g lang="da"><text class="tl-h" x="40" y="236">REGLEN — HANDLEREN TRÆKKER SELV GRÆNSEN</text></g>
+      <rect class="dgm-box" x="40" y="252" width="100" height="64"/><text class="tl-t" x="90" y="292" text-anchor="middle">BEGIN</text>
+      <rect class="dgm-box" x="170" y="252" width="300" height="64"/><text class="dgm-col" x="184" y="274">WRITE</text><text class="tl-t" x="184" y="302">FundsCaptureRequested</text>
+      <rect class="dgm-box" x="500" y="252" width="110" height="64"/><text class="tl-t" x="555" y="292" text-anchor="middle">COMMIT</text>
+      <rect class="dgm-box" x="650" y="252" width="360" height="64"/><g lang="en"><text class="dgm-col" x="664" y="274">CALL THE GATEWAY · ~800 MS</text><text class="tl-t" x="664" y="302">the card is charged</text></g><g lang="da"><text class="dgm-col" x="664" y="274">KALD GATEWAYEN · ~800 MS</text><text class="tl-t" x="664" y="302">kortet trækkes</text></g>
+      <path class="dgm-edge" d="M140 284 H168" marker-end="url(#ahtl)"/>
+      <path class="dgm-edge" d="M470 284 H498" marker-end="url(#ahtl)"/>
+      <path class="dgm-edge" d="M610 284 H648" marker-end="url(#ahtl)"/>
+      <rect class="tl-ok" x="40" y="328" width="570" height="26"/>
+      <g lang="en"><text class="tl-bar" x="52" y="346">short transaction · the request is recorded first</text></g><g lang="da"><text class="tl-bar" x="52" y="346">kort transaktion · anmodningen registreres først</text></g>
+      <g lang="en"><text class="dgm-s" x="664" y="346">no transaction, no connection held</text></g><g lang="da"><text class="dgm-s" x="664" y="346">ingen transaktion, ingen forbindelse holdt</text></g>
+      <path class="tl-crash tl-gain" d="M1030 248 V372"/>
+      <text class="tl-x tl-gain" x="1030" y="244" text-anchor="middle">✕</text>
+      <g lang="en"><text class="tl-c tl-gain" x="1160" y="392" text-anchor="end">crash after the call → the request is committed: redelivery finds it, the reconciler asks the gateway</text></g><g lang="da"><text class="tl-c tl-gain" x="1160" y="392" text-anchor="end">nedbrud efter kaldet → anmodningen er committet: genudsendelse finder den, reconcileren spørger gatewayen</text></g>
+    </svg>
+  </figure>
+  <p class="small" lang="en">Same three steps &mdash; only the call and the commit swap places. In the top line the rule holds in the source code and not in the database, and every parallel consumer parks a pooled connection for as long as the other system takes to answer.</p>
+  <p class="small" lang="da">Samme tre trin &mdash; kun kaldet og commit bytter plads. I øverste linje holder reglen i kildekoden og ikke i databasen, og hver parallel consumer parkerer en pool-forbindelse så længe det andet system er om at svare.</p>
 </section>
 
 <!-- =================================================================== 29b — blocking call answer -->

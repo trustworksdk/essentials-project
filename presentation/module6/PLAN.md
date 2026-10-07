@@ -162,7 +162,7 @@ the half they know. **Rebuilt as fourteen concept/answer pairs**, which is the s
 asked for — introduce each concept as the module teaches it, then show the Essentials code that implements
 it.
 
-39 slides, 48.5 minutes. Act and minute budgets live in `data-act` and `data-min` on each slide and the
+38 slides, 48.5 minutes. Act and minute budgets live in `data-act` and `data-min` on each slide and the
 on-screen timer reads them, so this table and the deck cannot drift.
 
 | Slides | Content | Min |
@@ -171,7 +171,7 @@ on-screen timer reads them, so this table and the deck cannot drift.
 | 2 | The question: why is this monitor 1,999.50? — the row cannot say, the events can | 1 |
 | 3 | The roadmap: four questions in the order you hit them | 0.5 |
 | 4–5 | **1** An event is a fact → sealed family, `events/` as contract | 2.25 |
-| 6–8 | **2–4** Discovering and modeling, the three patterns, slices and capabilities — three concept slides as one story | 2.25 |
+| 6–8 | **2–4** Discovering and modeling, the four patterns, slices and capabilities — three concept slides as one story | 2.25 |
 | 9 | **2–3** answer: one slice = one directory, the pattern you drew = the base type you extend | 2 |
 | 10 | **4** answer: the lanes are the top-level directories; only `events/` and `types/` cross | 1.5 |
 | 11 | The map of the app, as the payoff of 2–4: buttons → streams → read models → panels | 1.5 |
@@ -184,10 +184,10 @@ on-screen timer reads them, so this table and the deck cannot drift.
 | 24–25 | **11** Order, delivery, idempotence → two theirs, one yours | 2.25 |
 | 26–27 | **12** CQRS and stale data → the query never touches the domain | 2.5 |
 | 28–29 | **13** Composite UI and automations → one row, four streams | 2.75 |
-| 30–31 | **Bonus** The dual write → one local transaction, then publish | 2.5 |
-| 32–33 | **Bonus** A blocking call in a handler → `UnitOfWorkMode.NONE`, commit then block | 2.25 |
-| 34–37 | **Going deeper** Snapshots, closing the books, change data capture, the admin console — one slide each | 10 |
-| 38–39 | Left out on purpose, and the close | 1 |
+| 30 | **Bonus** The dual write — the problem, the module's diagram and the publisher on one slide | 2.5 |
+| 31–32 | **Bonus** A blocking call in a handler → `UnitOfWorkMode.NONE`, commit then block | 2.25 |
+| 33–36 | **Going deeper** Snapshots, closing the books, change data capture, the admin console — one slide each | 10 |
+| 37–38 | Left out on purpose, and the close | 1 |
 
 ### Two structural consequences
 

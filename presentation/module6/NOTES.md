@@ -50,7 +50,7 @@ the module's own pptx (see `images/README.md`). The two web fonts degrade to sys
 | # | Pair | Concept, from the module | The answer | Min |
 |---|---|---|---|---|
 | 1 | An event is a fact | slide 2 — non-prescriptive, past tense, publisher does not know its subscribers | `sealed interface ProductEvent`, `events/` as the exported contract | 2.5 |
-| 2–4 | Discovering and modeling → the three patterns → slices and capabilities | slides 3–18 — told as one story, three grey slides back to back | one answer for 2–3 (one slice = one directory, pattern = base type), one for 4 (the lanes) | 5.75 |
+| 2–4 | Discovering and modeling → the four patterns → slices and capabilities | slides 3–18 — told as one story, three grey slides back to back | one answer for 2–3 (one slice = one directory, pattern = base type), one for 4 (the lanes) | 5.75 |
 | 5 | Command + state = event | slides 24–25 — the formula, and "aggregates used less and less" | the formula *is* `handle(cmd, events)`; the whole decider | 2.75 |
 | 6 | The decider | slide 26 — the pattern, defined, with the module's Kotlin | one bean per aggregate type, `@Service` on the decider, nothing else | 2.25 |
 | 7 | Tests come from the model | slides 14, 20 — Given/When/Then, written before the code | `GivenWhenThenScenario`; 43 tests, 0.3 s, no Docker | 2.25 |
@@ -129,7 +129,7 @@ two packages another context may import, and — the one nobody warns you about 
 
 **2–4 — One story, then the code.** Three grey slides back to back, told as one progression: storming finds
 the events and modeling puts them on a timeline (walk the module's legend left to right); every box on
-that model is one of three patterns; and a slice of the model, living in a capability's lane, is the unit
+that model is one of four patterns; and a slice of the model, living in a capability's lane, is the unit
 you build. Do not stop for code between them — that is what made the old version feel like a checklist.
 
 Then two answers. **From the model to the code** (pairs 2 and 3): one slice is one directory whose files

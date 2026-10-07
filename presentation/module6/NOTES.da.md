@@ -47,7 +47,7 @@ modulets egen pptx (se `images/README.md`).
 | # | Par | Begrebet, fra modulet | Svaret | Min |
 |---|---|---|---|---|
 | 1 | Et event er et faktum | slide 2 — ikke-foreskrivende, datid, publisher kender ikke sine subscribers | `sealed interface ProductEvent`, `events/` som eksporteret kontrakt | 2,5 |
-| 2–4 | At opdage og modellere → de tre mønstre → slices og capabilities | slides 3–18 — fortalt som én historie, tre grå slides i træk | ét svar for 2–3 (én slice = én mappe, mønster = basistype), ét for 4 (banerne) | 5,75 |
+| 2–4 | At opdage og modellere → de fire mønstre → slices og capabilities | slides 3–18 — fortalt som én historie, tre grå slides i træk | ét svar for 2–3 (én slice = én mappe, mønster = basistype), ét for 4 (banerne) | 5,75 |
 | 5 | Command + tilstand = event | slides 24–25 — formlen, og "aggregates bruges mindre og mindre" | formlen *er* `handle(cmd, events)`; hele decideren | 2,75 |
 | 6 | Decideren | slide 26 — mønstret, defineret, med modulets Kotlin | én bean pr. aggregate type, `@Service` på decideren, intet andet | 2,25 |
 | 7 | Test kommer fra modellen | slides 14, 20 — Given/When/Then, skrevet før koden | `GivenWhenThenScenario`; 43 tests, 0,3 s, ingen Docker | 2,25 |
@@ -122,7 +122,7 @@ hvert gemt event.
 
 **2–4 — Én historie, derefter koden.** Tre grå slides i træk, fortalt som én udvikling: storming finder
 eventene og modeling sætter dem på en tidslinje (gennemgå modulets legende fra venstre); hver kasse i
-modellen er ét af tre mønstre; og en slice af modellen, i en capabilitys bane, er enheden man bygger. Stop
+modellen er ét af fire mønstre; og en slice af modellen, i en capabilitys bane, er enheden man bygger. Stop
 ikke for kode imellem dem.
 
 Derefter to svar. **Fra modellen til koden** (par 2 og 3): én slice er én mappe hvis filer er modellens
