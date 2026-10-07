@@ -1,6 +1,7 @@
 # Essentials 0.60.0 — Release Notes
 
-_Covers everything on `release/0.60` since `0.50.1`: 144 commits, 767 files, +63k/−14k lines._
+_Covers everything on `release/0.60` since `0.50.0`: 345 commits, 2,577 files, +230k/−16k lines. The framework
+modules account for 891 files, +89k/−14k; most of the rest is the new `essentials-plugin`._
 
 0.60.0 is the breaking major that 0.50.0 announced. It raises the platform to **Java 25, Spring Boot 4.1 and
 Jackson 3 only**. It removes every member 0.50 marked `@Deprecated(forRemoval = true)` and retires
@@ -19,7 +20,7 @@ It is also the first release to ship the **`essentials` Claude Code plugin** fro
 unchanged. Jackson 3 writes byte-identical JSON to 0.50's Jackson 2 mapper, and golden documents written by the
 old mapper guard that.
 
-| | 0.50.1 | 0.60.0 |
+| | 0.50.0 | 0.60.0 |
 |---|---|---|
 | Java | 21+ | **25+** (`--release 25`; build on JDK 25–27) |
 | Spring Boot | 4.0.x | **4.1.1** |
@@ -986,6 +987,7 @@ bound on the events actually handled.
 | **A fenced lock whose `lockAcquired` callback threw stayed held forever.** The instance owned a lock it was not serving, no other instance could take it, and the callback never ran again. The lock is now released, and the next tick retries. This was easy to hit through an `Inbox` in `SingleGlobalConsumer` mode, which wires its consumer inside the callback | Fenced-lock users, Inbox/Outbox |
 | **A lost fenced lock's failed release rolled back the other locks confirmed in the same tick.** The best-effort database release of a lock that failed confirmation ran inside the confirmation's unit of work, so its failure rolled back every confirmation made in that tick. It now runs after the confirmation, each release in its own unit of work, and a lost lock is released locally before the database is tried. Known limit on MongoDB: when the confirmation's commit itself fails during an outage, the server can keep the lock document write-locked in an abandoned transaction until `transactionLifetimeLimitSeconds` (60 s by default), so a hand-over after such an outage can take that long instead of `lockTimeOut`. It recovers by itself | Fenced-lock users, MongoDB in particular |
 | **One bean's failure to stop abandoned the rest of the shutdown.** `DefaultLifecycleManager` now logs the failure and carries on stopping the other beans. The typical trigger was a database that had gone away | Everyone using the Spring lifecycle manager |
+| **A Spring Boot DevTools restart did not update the Jackson 3 serializer.** After a restart the starters point the `JSONSerializer` at the restarted context's class loader, but this only worked for the Jackson 2 serializer, so with Jackson 3 payloads deserialized into the previous generation of application classes and failed with `ClassCastException: X cannot be cast to X`. It now works for any `JSONSerializer` | Applications running Spring Boot DevTools |
 | **`CentralizedMessageFetcher` threw a guaranteed NPE** for a message claimed just before its consumer was cancelled. That message is now retried after one polling interval | `postgresql-queue` with the centralized fetcher |
 | **`EventStore.appendToStream(…, Optional<Long>, Object...)` appended the wrong events**: the `Optional` and the array, as two events. This had been the case since at least 0.40. It now appends the events it is given. Streams it already wrote to hold malformed events | Callers of that overload (nothing in Essentials called it) |
 | **`QueueMessage.builder().setMessage(…)` dropped ordering**, see [§1.1.3](#113-queuemessagebuildersetmessageorderedmessage-now-keeps-the-ordering) | Ordered-message producers |
@@ -1008,6 +1010,7 @@ bound on the events actually handled.
 | **A gap whose event existed could be promoted to permanent.** With more than 50 open gaps, a reconciler whose query did not include a gap - another node with the same subscriber id, or under CDC the delegate's poll - promoted it once it was old enough, even when its event had committed and was waiting to be acknowledged. A gap is now promoted only when the poll asked for it and its event was missing, and every poll also asks for the gaps old enough to promote | Subscriptions with a gap handler and many open gaps |
 | **A gap handler on a different `UnitOfWorkFactory` than the event store's failed** with `NoActiveUnitOfWorkException`. It now resolves and records gaps in a unit of work of its own and logs a one-time WARN | Custom `PostgresqlEventStreamGapHandler` wiring |
 | **Polling with no optimizer busy-looped.** `pollEvents(...)` without an `EventStorePollingOptimizer`, or with `None()`, re-polled at once after an empty poll. It now waits the polling interval | Direct `pollEvents` callers |
+| **A polling subscription left its transaction open when it was disposed after an idle poll.** An idle, caught-up subscriber skips a poll when nothing was persisted since the last one (checked with `SELECT MAX(global_order)` on every 100th empty poll), and that skip neither committed nor rolled back the poll's `UnitOfWork`. A subscription unsubscribed, stopped or losing its fenced lock right after it left a connection `idle in transaction`, holding a lock on the event table that makes a later `DROP`, `TRUNCATE`, `ALTER TABLE`, `VACUUM FULL` or `REINDEX` wait forever, with no error. Every exit of a poll now ends its unit of work. The first poll of `unboundedPollForEvents` also joined a `UnitOfWork` already active on the subscribing thread and committed it; it now leaves a unit of work it did not start to its owner. To find a leaked session before upgrading, look in `pg_stat_activity` for `state = 'idle in transaction'` with a query starting `SELECT MAX(`; terminating it releases the lock | Asynchronous event-store subscriptions, direct `pollEvents` / `unboundedPollForEvents` callers |
 | **A polling subscription with batch size 1 stalled for seconds** on a hole of rolled-back appends at its read position, because the batch size grew only every tenth empty poll and `1 * 1.5` truncated back to 1. Every growth is now at least one, and the range doubles on each empty poll | Polling subscriptions with a small batch size |
 | **Tenant-filtered polling read other tenants' payloads.** Since loading every tenant's events to detect gaps correctly, a poll fetched the payload and metadata of every tenant's events. Other tenants' events now come without, so those columns are never read or transferred | Tenant-filtered polling subscriptions |
 | **A CDC subscription could hang on a live-source failure.** A failure of the live source while a started-while-ACTIVE subscription was handing on an event was emitted concurrently with that event, rejected as non-serialized and dropped, so the subscription never saw the error. All emissions now go through one drain. A concurrent CDC availability change could likewise be dropped and leave a stale state; that is serialized too | Hybrid CDC |
@@ -1021,10 +1024,6 @@ bound on the events actually handled.
 | **The starter's README said CDC was enabled by default.** It is disabled unless `essentials.eventstore.cdc.enabled=true`; the README now says so, and gained a Gap Handling section | `spring-boot-starter-postgresql-event-store` |
 | **An aggregate saved by an in-transaction handler could be silently lost.** The commit only made another `beforeCommit` pass when a callback asked for one, so a resource registered during the last pass - by an in-transaction subscription handler, after an event appended directly with `appendToStream` - was committed without ever being written. The commit now makes another pass whenever resources were registered during one, and works on a snapshot of the callbacks so a callback registering more cannot fail it | In-transaction subscriptions and `InTransactionEventProcessor` handlers that change aggregates through a repository |
 | **A decider command and a stateful-repository change in one UnitOfWork failed the transaction.** The decider `CommandHandler` appended its events again on every commit pass, and a `StatefulAggregateRepository` append always asks for one. It now appends each command's events once | Decider `CommandHandler` users |
-
-**The 0.50.1 fixes are all in 0.60,** either merged directly or made unnecessary by other work. The polling
-unit-of-work leak fix came in unchanged. The Jackson 2-specific fixes are no longer needed now that Jackson 2
-is gone. The Jackson 3 `MismatchedInputException` fix and the DevTools fix were already covered by 0.60 work.
 
 ---
 
@@ -1044,7 +1043,7 @@ The following are deprecated in 0.60 and planned for removal in the next major:
 
 ## 5. Recommended upgrade order
 
-1. **Upgrade to 0.50.1 first and clear every deprecation warning.** Each removed member's replacement already
+1. **Start from 0.50.0 and clear every deprecation warning.** Each removed member's replacement already
    exists in 0.50, so this step can be done and deployed on its own.
 2. **Move to the Jackson 3 flavour on 0.50** if you were still on Jackson 2. Check your own types against
    [§1.1.5](#115-jackson-3-reads-your-constructors-differently) while the old mapper is still available to
@@ -1101,7 +1100,7 @@ test utility, and the `examples/` modules are not released. 0.50.0 published the
 | [`docs/durable-queue-shard-owned.md`](durable-queue-shard-owned.md) | How the shard-owned engine works |
 | [`docs/durable-queue-ordered-routing-design.md`](durable-queue-ordered-routing-design.md) | The ordered lane's routing, as built |
 | [`docs/durable-queue-measurements.md`](durable-queue-measurements.md) | Every measured figure, with its conditions |
-| [`docs/RELEASE-NOTES-0.50.0.md`](RELEASE-NOTES-0.50.0.md), [`0.50.1`](RELEASE-NOTES-0.50.1.md) | The previous releases |
+| [`docs/RELEASE-NOTES-0.50.0.md`](RELEASE-NOTES-0.50.0.md) | The previous release |
 | [`LLM/LLM.md`](../LLM/LLM.md) | Entry point for the per-module consumer references |
 | [`essentials-plugin/README.md`](../essentials-plugin/README.md) | The `essentials` Claude Code plugin: install, commands, skills and requirements |
 

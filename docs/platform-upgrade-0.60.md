@@ -339,7 +339,8 @@ Still open: deciding for each of the four `main`-targeting branches in the last-
 
 ## 5. Bugs found on the way (fix on `main` for 0.50.x, forward-merge into `release/0.60`)
 
-**Status:** 1, 2, 3, 4 and 6 shipped in 0.50.1 (`docs/RELEASE-NOTES-0.50.1.md`, PR #48). `main` was merged into
+**Status:** 1, 2, 3, 4 and 6 were fixed on `main` for a 0.50.1 (PR #48) that was never released; the fixes that still
+apply reach users in 0.60.0 and are in its release notes. `main` was merged into
 `upgrade/0.60-platform` in `079ee345`, and that commit's message records the conflict resolution. Where each fix
 stands in 0.60:
 

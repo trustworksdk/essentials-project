@@ -90,7 +90,7 @@ Sections in this order, separated by `---`. Emoji appear on section headings onl
 - **Anchors** are GitHub slugs of the target heading, taken from the source's own table of contents or links
   where it has one. `check.py` verifies every one.
 - **Length.** Budget in words (`wc -w`), not lines — each paragraph is one line. It scales with the release:
-  0.50.0 (three silent changes) is about 1,100 words, 0.60.0 (eleven silent changes, 38 fixes) about 2,500. Past
+  0.50.0 (three silent changes) is about 1,100 words, 0.60.0 (eleven silent changes, 40 fixes) about 2,500. Past
   that, cut words inside items, never items from the silent-changes list.
 - **No marketing.** No "we're excited", no "huge", no "blazing". Numbers make the case.
 

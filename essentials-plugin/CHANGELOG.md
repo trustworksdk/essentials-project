@@ -3,6 +3,11 @@
 Each entry is a release, headed by its `plugin.json` version: the Essentials release the plugin
 targets, with a `-N` suffix for plugin-only releases.
 
+## 0.60.0-5 — targets Essentials 0.60.0
+- **Framework docs: 0.50.1 was never released** — the event-store reference now says the polling
+  transaction leak (a connection left `idle in transaction` when a subscription was disposed after an
+  idle poll) is fixed in 0.60.0, not 0.50.1. No skill, rule or script changed.
+
 ## 0.60.0-3 — targets Essentials 0.60.0
 - **Licence** — the plugin now states its licence: Apache-2.0, the same as the Essentials repository.
   `LICENSE` ships in the plugin directory and `plugin.json` carries `"license": "Apache-2.0"`, so an

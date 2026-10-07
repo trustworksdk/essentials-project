@@ -1336,7 +1336,7 @@ thread is already inside a `UnitOfWork`, the poll joins it and leaves ending it 
 it rollback-only). Up to and including 0.50.0 both methods could leave a poll's transaction open when the subscription
 was disposed right after an idle poll — the connection stayed `idle in transaction` and held a lock that blocks
 `DROP`/`TRUNCATE`/`ALTER TABLE` on the event table — and the unbounded variant committed a joined `UnitOfWork`. Fixed in
-0.50.1.
+0.60.0.
 
 ## Gotchas
 
