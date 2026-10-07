@@ -208,22 +208,6 @@ The `UnitOfWork`/`EventStoreUnitOfWork` defaults throw `UnsupportedOperationExce
 reads as "state present"; every Essentials implementation overrides them.
 → [MIGRATION-0.60 § A failed `ViewEventProcessor` handler that changed state is queued only after a rollback](MIGRATION-0.60.md#a-failed-vieweventprocessor-handler-that-changed-state-is-queued-only-after-a-rollback)
 
-#### 1.1.7 Events start recording their cause
-
-With the Spring Boot event-store starter, every event appended in reaction to another event now records that event's
-id in `caused_by_event_id`, and every message queued while a cause is bound carries one more `MessageMetaData`
-entry, `essentials.causedByEventId`. Nothing changes for a `PersistableEventMapper` that sets a cause itself. No
-schema change, and existing rows keep their nulls. `essentials.eventstore.causation.enabled=false` restores the old
-behaviour. See [§2.9](#29-event-causation).
-
-#### 1.1.8 Spring saves subscription resume points every second, not every 10 seconds
-
-`essentials.eventstore.subscription-manager.snapshot-resume-points-every` now defaults to `1s`, the default
-`EventStoreSubscriptionManager.builder()` already used. After a crash, a subscriber now redelivers about one
-second of already-handled events instead of up to ten. Only resume points that changed since the last save are
-written, in one batched `UPDATE`, so an idle subscriber still causes no database writes. A busy one costs at most
-one statement per second. Set the property to `10s` to restore the old behaviour.
-
 #### 1.1.9 A failing event is retried and stops its subscription instead of being skipped
 
 In 0.50 a direct asynchronous subscription (and the forward step of an `EventProcessor`) skipped an event whose handler
@@ -235,12 +219,29 @@ now holds up its subscription (visible on the `essentials.eventstore.subscriptio
 Spring Boot: `essentials.eventstore.subscription-manager.error-policy.mode` defaults to `retry-n-then-stop`. To keep
 0.50's behaviour set `error-policy.mode=skip` (Java: `SubscriptionErrorPolicy.skip()`). See
 [§2.10](#210-choose-what-an-async-subscription-does-with-a-failing-event).
+
 The middle of a wide gap (more than 2 × 5,000 orders, e.g. after a sequence `setval`), which is awaited in memory only,
 now survives a re-subscribe of the same subscriber on the same event store instance (polling and CDC) and keeps its
 original timeout, so the automatic resume does not lose an event committed late into it. `resetFrom`, unsubscribe and a
 fenced-lock release drop it, through the new additive `EventStore#forgetGapMiddlesAwaitedInMemory` (a no-op by default);
 an `EventStore` that decorates `PostgresqlEventStore` or `CdcEventStore` must forward it.
 → [MIGRATION-0.60 § A failing event is retried and stops the subscription instead of being skipped](MIGRATION-0.60.md#a-failing-event-is-retried-and-stops-the-subscription-instead-of-being-skipped-subscriptionerrorpolicy)
+
+#### 1.1.10 Events start recording their cause
+
+With the Spring Boot event-store starter, every event appended in reaction to another event now records that event's
+id in `caused_by_event_id`, and every message queued while a cause is bound carries one more `MessageMetaData`
+entry, `essentials.causedByEventId`. Nothing changes for a `PersistableEventMapper` that sets a cause itself. No
+schema change, and existing rows keep their nulls. `essentials.eventstore.causation.enabled=false` restores the old
+behaviour. See [§2.14](#214-event-causation).
+
+#### 1.1.11 Spring saves subscription resume points every second, not every 10 seconds
+
+`essentials.eventstore.subscription-manager.snapshot-resume-points-every` now defaults to `1s`, the default
+`EventStoreSubscriptionManager.builder()` already used. After a crash, a subscriber now redelivers about one
+second of already-handled events instead of up to ten. Only resume points that changed since the last save are
+written, in one batched `UPDATE`, so an idle subscriber still causes no database writes. A busy one costs at most
+one statement per second. Set the property to `10s` to restore the old behaviour.
 
 ---
 
@@ -416,7 +417,7 @@ constructor takes three more arguments. Only code that builds it itself is affec
 of `DurableQueuesApi`; pass `null, null, null` for an unordered message. The admin API response only gains three
 optional fields. `referencedAggregateType` is set for messages that refer to a persisted event - an `EventProcessor`'s
 inbox messages - and is what lets the console link a stuck or dead-lettered event message to its causation (see
-[§2.9](#29-event-causation)). It is routing information, not payload, so it is present without the payload role.
+[§2.14](#214-event-causation)). It is routing information, not payload, so it is present without the payload role.
 
 ### 1.9 Resume-point saves carry a reposition epoch
 
@@ -747,7 +748,8 @@ alert on.
 An event handler can override the manager's policy for its own subscription - `PersistedEventHandler` /
 `BatchedPersistedEventHandler#subscriptionErrorPolicy()`, or `getSubscriptionErrorPolicy()` on a `ViewEventProcessor` /
 `EventProcessor` - so projections and side-effect subscribers on one manager can differ.
-A batched subscription applies the policy to the batch as a whole. In-transaction subscriptions and subscriptions
+A batched subscription applies the policy to the batch as a whole. In-transaction subscriptions are not governed by
+the policy: a handler exception propagates and rolls back the `UnitOfWork` that appended the events.
 For a subscription that forwards to an `Inbox` (`EventProcessor`) the policy governs only the forward step - deserializing
 the event and adding it to the `Inbox`; the Inbox's `RedeliveryPolicy` governs the message. **Upgrading changes the
 default** - see [§1.1.9](#119-a-failing-event-is-retried-and-stops-its-subscription-instead-of-being-skipped).
@@ -924,7 +926,7 @@ Six additions let a custom gap setup and polling optimizer keep what the default
 [§ CDC gives up waiting for a gap at the gap handler's threshold](MIGRATION-0.60.md#cdc-gives-up-waiting-for-a-gap-at-the-gap-handlers-threshold),
 [`spring-boot-starter-postgresql-event-store` README § Gap Handling](../components/spring-boot-starter-postgresql-event-store/README.md#gap-handling)
 
-### 2.9 Event causation
+### 2.14 Event causation
 
 Every persisted event can now record which event caused it, so "why did this happen?" is a lookup. The event store
 always had the `caused_by_event_id` column, and the starter's default mapper claimed to fill it, but nothing did.
@@ -951,7 +953,7 @@ always had the `caused_by_event_id` column, and the starter's default mapper cla
 Correlation ids are still not populated; trace context covers "what did this request do". Design and measurements:
 [event-causation.md](./event-causation.md). How to configure it: [LLM-postgresql-event-store.md](../LLM/LLM-postgresql-event-store.md#event-causation).
 
-### 2.10 Save a busy subscriber's resume point early (opt-in)
+### 2.15 Save a busy subscriber's resume point early (opt-in)
 
 Resume points are saved every `snapshotResumePointsEvery`, so after a crash a subscriber redelivers whatever it handled
 since the last tick. On a high-throughput subscriber that can be many events. `snapshotResumePointsAfterEvents` adds a
@@ -1003,7 +1005,6 @@ bound on the events actually handled.
 | **Polling could miss a late commit behind rolled-back appends for good.** The default `PostgresqlEventStreamGapHandler` asked each poll for only the 2 lowest open gaps, so with rolled-back appends below it a late commit was not looked for until those were promoted to permanent after 120 s - and when it had been found in the same poll as them, it was promoted with them and never delivered. The default now asks for every open gap up to 50, and beyond that for the 20 highest, the 10 lowest and a rotating window of 20 in between. A gap handler built with your own `ResolveTransientGapsToIncludeInQueryStrategy` is unchanged | Polling subscriptions with the default gap handler, the Spring Boot starter included |
 | **A tenant-filtered polling subscription recorded other tenants' events as gaps.** The tenant was filtered in SQL, so their global orders looked missing; they were recorded as transient gaps, promoted to permanent gaps, which every subscriber of the aggregate type shares, and counted in the gap statistics. Polling now loads every tenant's events in its range, reconciles gaps against all of them, and filters by tenant in memory, as the CDC path does. Permanent gaps recorded this way before the upgrade stay until `resetPermanentGapsFor(aggregateType)` is called. A tenant filter on a store without a tenant column used to fail every poll; it now delivers every event, since an event without a tenant belongs to every tenant | Polling subscriptions with `onlyIncludeEventIfItBelongsToTenant` |
 | **A subscription that stopped or crashed could lose a gap fill it had not handled yet.** A gap fill arrives after higher global orders, so the subscriber's resume point is already past it, and the open gap is the only durable record that its event is still owed. Polling and CDC resolved that gap when they loaded the event, before handing it to the subscriber, so a stop (shutdown, fenced-lock hand-over, `resetFrom`, unsubscribe) or a crash in between lost the event for good: the rest of a poll or back-fill page a stop cut short, a fill still waiting in a batched subscription's batch, or a fill whose handler had not committed when the process died. A gap is now resolved only once its event has been handled: for a subscription the `EventStoreSubscriptionManager` creates, inside the handler's own unit of work, so a fill still waiting for its batch, for an I/O retry or for demand is delivered again after a stop or crash, and nothing else is. A caller of `pollEvents` that passes no `SubscriberAcknowledgement` gets the fill resolved once it is handed on, and a stopped batched subscriber built without one keeps its resume point at the lowest fill it had queued, so the events between it and the old resume point are delivered again too. See [2.12](#212-subscribers-acknowledge-the-gap-fills-they-handled) | Subscriptions with a gap handler, on polling and under Hybrid CDC |
-
 | **A gap whose event existed could be promoted to permanent.** With more than 50 open gaps, a reconciler whose query did not include a gap - another node with the same subscriber id, or under CDC the delegate's poll - promoted it once it was old enough, even when its event had committed and was waiting to be acknowledged. A gap is now promoted only when the poll asked for it and its event was missing, and every poll also asks for the gaps old enough to promote | Subscriptions with a gap handler and many open gaps |
 | **A gap handler on a different `UnitOfWorkFactory` than the event store's failed** with `NoActiveUnitOfWorkException`. It now resolves and records gaps in a unit of work of its own and logs a one-time WARN | Custom `PostgresqlEventStreamGapHandler` wiring |
 | **Polling with no optimizer busy-looped.** `pollEvents(...)` without an `EventStorePollingOptimizer`, or with `None()`, re-polled at once after an empty poll. It now waits the polling interval | Direct `pollEvents` callers |
@@ -1018,7 +1019,6 @@ bound on the events actually handled.
 | **A default gap selection wrapped by a decorator or called from a custom strategy shared one rotation across subscriptions.** Each subscription now keeps its own, per `defaultSelection()` instance, so a strategy composing two instances keeps a rotation for each. It holds only while the selection is called on the gap handler's own thread; called from an executor or a `CompletableFuture`, an instance rotates with its own rotation, shared by every subscription that reaches it that way | Custom `ResolveTransientGapsToIncludeInQueryStrategy` |
 | **Re-subscribing an acknowledged polling flux left the previous subscribe's registration behind,** and a `SubscriberAcknowledgement` reused for a second subscription went unnoticed. Subscribing the flux of `pollEvents` or `unboundedPollForEvents` again (`retry()`, `repeat()`), on `PostgresqlEventStore` and `CdcEventStore` alike, now gives each subscribe its own state and disposes the previous subscribe's registration once that subscribe has ended: no listener is left behind and no WARN is logged. A gap fill the previous subscribe handed on and that was not acknowledged keeps its gap, and the next subscribe hands it on again - at least once, so possibly twice, never lost. A one-time WARN is logged only while more than one registration on an instance is active at once, i.e. one acknowledgement shared by two subscriptions | Direct `pollEvents` / `unboundedPollForEvents` callers |
 | **The starter's README said CDC was enabled by default.** It is disabled unless `essentials.eventstore.cdc.enabled=true`; the README now says so, and gained a Gap Handling section | `spring-boot-starter-postgresql-event-store` |
-
 | **An aggregate saved by an in-transaction handler could be silently lost.** The commit only made another `beforeCommit` pass when a callback asked for one, so a resource registered during the last pass - by an in-transaction subscription handler, after an event appended directly with `appendToStream` - was committed without ever being written. The commit now makes another pass whenever resources were registered during one, and works on a snapshot of the callbacks so a callback registering more cannot fail it | In-transaction subscriptions and `InTransactionEventProcessor` handlers that change aggregates through a repository |
 | **A decider command and a stateful-repository change in one UnitOfWork failed the transaction.** The decider `CommandHandler` appended its events again on every commit pass, and a `StatefulAggregateRepository` append always asks for one. It now appends each command's events once | Decider `CommandHandler` users |
 

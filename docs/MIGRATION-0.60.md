@@ -1107,7 +1107,7 @@ compile clean, and so are easy to miss:
 
 ## Event causation
 
-Events now record which event caused them - see the [release notes](./RELEASE-NOTES-0.60.0.md#29-event-causation)
+Events now record which event caused them - see the [release notes](./RELEASE-NOTES-0.60.0.md#214-event-causation)
 and [event-causation.md](./event-causation.md).
 
 ### On by default with the starter
