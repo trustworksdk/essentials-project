@@ -193,16 +193,16 @@ parse): **Not run: stack contract S1–S11**, with the script's reason. Its `not
 ### 3c — Slice law (`slice-lint.py`, `slice-source.py`) — on the law only
 
 ```bash
-uv run --script ${CLAUDE_PLUGIN_ROOT}/scripts/slice-lint.py   "$HEAD_TREE" --require-schema --json > "$WORK/lint.head.json"
-uv run --script ${CLAUDE_PLUGIN_ROOT}/scripts/slice-source.py "$HEAD_TREE" --check --json         > "$WORK/source.head.json"
+uv run --script ${CLAUDE_PLUGIN_ROOT}/scripts/slice-lint.py   "$HEAD_TREE" --json         > "$WORK/lint.head.json"
+uv run --script ${CLAUDE_PLUGIN_ROOT}/scripts/slice-source.py "$HEAD_TREE" --check --json > "$WORK/source.head.json"
 ```
 
 and the same two over `BASE_TREE` into `lint.base.json` / `source.base.json`.
 
 | Script | Exit | Meaning here |
 |---|---|---|
-| `slice-lint.py` | 0, 1 | gates 1, 3 and 4 ran |
-| | 2 | **Not run: ESS-G1, ESS-G3, ESS-G4**, naming the missing dependency. Never read the manifests yourself instead: an unvalidated manifest set reported as clean is the failure gate 1 exists to prevent |
+| `slice-lint.py` | 0, 1 | gates 1, 3 and 4 ran — except that `schemaValidated: false` in its JSON means gate 1(b) did not: **Not run: ESS-G1b** (findings win the exit code over a skipped validation) |
+| | 2 | No JSON (no `pyyaml`, unreadable schema): **Not run: ESS-G1, ESS-G3, ESS-G4**, naming the missing dependency. JSON with `schemaValidated: false` (no `jsonschema`): **Not run: ESS-G1b**, and the rest ran clean. Never read the manifests yourself instead: an unvalidated manifest set reported as clean is the failure gate 1 exists to prevent |
 | `slice-source.py` | 0, 1 | gates 6 (mappings, raw ids), 11(b) and 14 ran |
 | | 3 | incomplete, not a pass: each `unverified` entry for an in-scope slice goes under **Not run** with its reason; `unparsed` files likewise |
 | | 2 | **Not run: ESS-G6, ESS-G11b, ESS-G14** |
@@ -392,6 +392,7 @@ this command applies is Step 6's eligibility rule above, not this table.
 | `set-dependency-scope` `{pom, line, groupId, artifactId, from, to}` | Change that element's `<scope>` from `from` to `to`; `to: null` deletes `<scope>` |
 | `set-artifact-id` `{pom, line, groupId, from, to}` | In the `<dependency>` element whose first line is `line`, change `<artifactId>` from `from` to `to` |
 | `set-dependency-version` `{pom, line, groupId, artifactId, from, to}` | In the `<dependency>` element whose first line is `line`, change `<version>` from `from` to `to` |
+| `set-parent-version` `{pom, line, groupId, artifactId, from, to}` | In the `<parent>` element whose first line is `line`, with that `groupId`/`artifactId`, change `<version>` from `from` to `to` |
 | `set-property` `{pom, name, from, to}` | Set `<properties><name>` from `from` to `to`; `from: null` = add the property |
 | `add-compiler-arg` `{pom, plugin, arg}` | Add `arg` to that plugin's `<compilerArgs>` (`maven-compiler-plugin`) or `<args>` (`kotlin-maven-plugin`), creating the element when absent |
 | `add-kotlin-compiler-plugin` `{pom, name}` | Add `<plugin>name</plugin>` to `kotlin-maven-plugin`'s `<compilerPlugins>`, and the `kotlin-maven-allopen` dependency to that plugin when absent |

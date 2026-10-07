@@ -356,6 +356,21 @@ The one rule that belongs here: **pick a mode explicitly and configure only that
 A project carrying both a SPA-forwarding filter and a permissive CORS policy has not chosen; it
 has accumulated — see `frontend-react.md` § "Two half-choices to check for".
 
+The rules belong to the mode, not to the frontend tooling, and hold for any TypeScript or
+JavaScript frontend. A standalone frontend's API base URL is a build-time variable that the
+fetch mutator Orval's config names reads and prefixes onto every request URL — declared but not
+prefixed, the generated client's relative paths resolve against the static host. The variable's
+spelling is the tooling's: `VITE_*` through `import.meta.env` on Vite, `NEXT_PUBLIC_*` through
+`process.env` on Next.js, `REACT_APP_*` through `process.env` on Create React App.
+`frontend-react.md` states each rule once, with Vite — the tooling the template ships — as its
+example.
+
+> Proof: build configuration, in the generated frontend's `custom-fetch.ts` and
+> `custom-fetch.test.ts` (the base URL read per call and prefixed), the backend's `CorsConfig`
+> and `CorsPreflightIT` (the origins as a bound list, the preflight through the security chain),
+> and `SpaWebFilter` (embedded deep links). How a browser resolves a relative URL and refuses a
+> credentialed wildcard origin is the Fetch standard's, not Essentials'.
+
 ## S9 — Security posture (MUST decide, MUST NOT inherit)
 
 The scaffolded security configuration permits everything. That is a deliberate starting point for

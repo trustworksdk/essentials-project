@@ -7,3 +7,4 @@ server:
 springdoc:
   api-docs:
     path: /v3/api-docs
+  writer-with-order-by-keys: true

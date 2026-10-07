@@ -46,12 +46,17 @@ src/shared/api/model/           ← typed DTOs,   never hand-edited
 src/shared/api/custom-fetch.ts  ← auth headers, error shape, base URL
 ```
 
+Those paths are the template's. A project's own are whatever its `orval.config.*` names —
+`output.target`, `output.schemas` and `output.override.mutator.path` — and every rule below is
+about those, under whichever name. Likewise the tooling: the examples are Vite's, the build tool
+the template ships, and the rules hold for Next.js, Create React App or any other.
+
 Rules that hold in both modes:
 
 - **`generated/` and `model/` are build output.** Editing them is a defect: the next `orval` run
   discards it. If a shape is wrong, the endpoint is wrong — fix the backend and regenerate.
-- **`custom-fetch.ts` is the one place you own** in that chain. Auth headers, error normalisation
-  and base URL live there and nowhere else.
+- **The mutator (`custom-fetch.ts` in the template) is the one place you own** in that chain. Auth
+  headers, error normalisation and base URL live there and nowhere else.
 - **The spec is generated, never authored** (S7). A hand-edited `openapi.json` is a lie the
   frontend then compiles against.
 - **Regeneration is part of the change, not a follow-up.** An endpoint change that does not
@@ -70,15 +75,16 @@ export default defineConfig({ api: {
               path: './src/shared/api/custom-fetch.ts', name: 'customFetch' } } } } })
 
 // vite.config.ts — dev only; this is what hides a standalone deployment's CORS bugs
+// (on Next.js the same proxy is a rewrites() entry in next.config.*)
 server: { port: 5173, proxy: { '/api': { target: 'http://localhost:8080', changeOrigin: true } } }
 ```
 
-**`generated/` and `model/` must not be committed.** They are build output; `orval` runs in the
-build (Mode A) or before it (Mode B). Committing them means a stale client can be shipped against a
+**`generated/` and `model/` must not be committed** — whichever directories `output.target` and
+`output.schemas` name. They are build output; `orval` runs in the build (Mode A) or before it (Mode B). Committing them means a stale client can be shipped against a
 changed API, and reviewers diff machine-written code.
 
-**Dev-time proxying makes both modes look identical, and that is a trap.** The Vite dev server
-proxies `/api` to the backend, so during development the browser sees one origin whichever mode
+**Dev-time proxying makes both modes look identical, and that is a trap.** The dev server (Vite's
+`server.proxy`, a Next.js rewrite) proxies `/api` to the backend, so during development the browser sees one origin whichever mode
 you are targeting. A standalone deployment's CORS and base-URL configuration is therefore
 **never exercised until it is deployed**. Test standalone against a non-proxied origin before
 believing it works.
@@ -240,8 +246,10 @@ calling the backend across an origin boundary.
    **Bind the origin list with `@ConfigurationProperties`, never `@Value`.** A YAML sequence
    becomes indexed keys (`app.cors.allowed-origins[0]`), and `@Value` resolves a single property
    placeholder — so `@Value("\${app.cors.allowed-origins}")` on a `List<String>` fails to resolve
-   at startup. Either bind the list properly, or flatten it to a comma-separated scalar; the first
-   is the idiom:
+   at startup, and with a default (`${app.cors.allowed-origins:http://localhost:3000}`) it silently
+   binds the default instead. Either bind the list properly, or flatten it to a comma-separated
+   scalar; the first is the idiom, because a scalar bound by `@Value` breaks the day someone
+   writes it as a list:
 
    ```kotlin
    @ConfigurationProperties("app.cors")
@@ -253,10 +261,20 @@ calling the backend across an origin boundary.
        allowed-origins:
          - https://app.example.com
    ```
-2. **An API base URL that is configured *and consumed*.** A build-time variable (`VITE_API_BASE_URL`
-   or equivalent) is read in `custom-fetch.ts` and prefixed onto the request URL. **Declaring the
-   variable is not enough** — the generated client emits relative paths, which otherwise resolve
-   against the *static host*:
+2. **An API base URL that is configured *and consumed*.** A build-time variable is read in the
+   mutator and prefixed onto the request URL. **Declaring the variable is not enough** — the
+   generated client emits relative paths, which otherwise resolve against the *static host*. The
+   variable is spelled the way the tooling exposes it to the browser bundle:
+
+   | Tooling | Variable, as the mutator reads it |
+   |---|---|
+   | Vite (the template) | `import.meta.env.VITE_API_BASE_URL` |
+   | Next.js | `process.env.NEXT_PUBLIC_API_BASE_URL` |
+   | Create React App | `process.env.REACT_APP_API_BASE_URL` |
+
+   Next.js and Create React App inline the value at build time only where the code reads it as
+   written above; a computed key (`process.env[name]`) stays undefined in the browser. The Vite
+   form:
 
    ```ts
    export const customFetch = async <T>(url: string, options: RequestInit = {}): Promise<T> => {
@@ -271,7 +289,7 @@ calling the backend across an origin boundary.
    returns `{ data, status, headers }` — the shape Orval's fetch client expects of a mutator. Its
    `custom-fetch.test.ts` pins the behaviour: with the variable set the request goes to
    `${VITE_API_BASE_URL}/api/…`, unset it stays relative. That test is what keeps "declared but not
-   consumed" from coming back.
+   consumed" from coming back; on other tooling, the same test against its variable.
 3. **SPA rewrite at the static host.** The backend has no part in serving the SPA, so the deep-link
    fallback moves to nginx `try_files`, a CDN rewrite rule, or the host's SPA setting. A backend
    SPA filter is dead code in this mode.
@@ -305,20 +323,20 @@ Neither mode fails loudly when it is half-configured. Check any project for both
 | Symptom | Why it is wrong | Mode it belongs to |
 |---|---|---|
 | A CORS policy allowing `localhost:5173` / `localhost:3000` in an **embedded** deployment | Same origin means it never fires. It is dead configuration that reads as intent, and gets copied into a service where it *is* live | Standalone (or dev convenience only) |
-| `VITE_API_BASE_URL` declared in `.env.example` but **no source file reads `import.meta.env`** | Harmless while embedded — relative URLs are correct by construction — and a silent failure the moment someone goes standalone believing the variable works | Standalone, and only if consumed |
+| The base-URL variable (`VITE_API_BASE_URL`, `NEXT_PUBLIC_API_BASE_URL`, …) declared in `.env.example` but **the mutator never reads it** | Harmless while embedded — relative URLs are correct by construction — and a silent failure the moment someone goes standalone believing the variable works | Standalone, and only if consumed |
 
 The second is the sharper one: the generated client emits **relative** paths, so without the base
-URL prefixed in `custom-fetch.ts` they resolve against the *static host* rather than the API. The
+URL prefixed in the mutator they resolve against the *static host* rather than the API. The
 requests 404 against your own SPA, which looks like a routing bug rather than a configuration gap.
 
-Declaring a variable is not wiring it. Grep for `import.meta.env` before believing a standalone
-build is configured — or run `scripts/stack-lint.py`, which checks both half-choices (`ESS-S8`).
+Declaring a variable is not wiring it. Grep the mutator for `import.meta.env` / `process.env`
+before believing a standalone build is configured — or run `scripts/stack-lint.py`, which checks both half-choices (`ESS-S8`).
 
 ---
 
 ## Migrating between modes
 
-**Embedded → standalone:** wire the base URL into `custom-fetch.ts`; add real CORS; move the
+**Embedded → standalone:** wire the base URL into the mutator; add real CORS; move the
 deep-link fallback to the static host; remove the SPA filter, `frontend-maven-plugin` and the
 resource copy from the reactor; publish the contract; decide the auth story; then test against a
 non-proxied origin.
@@ -337,7 +355,8 @@ a different generator (or `openapi-typescript`) slots into the same position aga
 `contracts/openapi.json`.
 
 What changes: the generated hooks' shape, and the state library the mutator integrates with. What
-does not: the spec is generated, the client is generated, `custom-fetch.ts` is yours, and the mode
-decides CORS, routing and base URL.
+does not: the spec is generated, the client is generated, the mutator is yours, and the mode
+decides CORS, routing and base URL. The same holds across build tools — Vite, Next.js, Create
+React App: only the base-URL variable's spelling (Mode B) and the dev proxy's syntax change.
 
 The template ships React only.

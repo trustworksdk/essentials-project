@@ -3,17 +3,26 @@
   "fixtures": {
     "clean/kotlin-pges-flux-embedded": {
       "exit": 0,
-      "expectFacts": {"language": "kotlin", "db": "pg-event-sourced", "web": "webflux", "frontend": "embedded", "appPom": "backend/pom.xml"},
+      "expectFacts": {"language": "kotlin", "db": "pg-event-sourced", "web": "webflux", "frontend": "embedded",
+                      "frontendTooling": "vite", "appPom": "backend/pom.xml"},
       "findings": []
     },
     "clean/java-mongo-mvc-standalone": {
       "exit": 0,
-      "expectFacts": {"language": "java", "db": "mongo", "web": "webmvc", "frontend": "standalone", "appPom": "backend/pom.xml"},
+      "expectFacts": {"language": "java", "db": "mongo", "web": "webmvc", "frontend": "standalone",
+                      "frontendTooling": "vite", "appPom": "backend/pom.xml"},
+      "findings": []
+    },
+    "clean/java-mongo-mvc-standalone-next": {
+      "exit": 0,
+      "expectFacts": {"language": "java", "db": "mongo", "web": "webmvc", "frontend": "standalone",
+                      "frontendTooling": "next", "appPom": "backend/pom.xml"},
       "findings": []
     },
     "clean/java-pgcrud-headless": {
       "exit": 0,
-      "expectFacts": {"language": "java", "db": "pg-crud", "web": "none", "frontend": "none", "appPom": "pom.xml"},
+      "expectFacts": {"language": "java", "db": "pg-crud", "web": "none", "frontend": "none", "frontendTooling": null,
+                      "appPom": "pom.xml"},
       "findings": []
     },
     "violating/kotlin-pg-legacy": {
@@ -49,6 +58,7 @@
         {"check": "s5-transactional-mode", "file": "backend/src/main/resources/application.yml", "line": 6},
         {"check": "s5-aggregate-declarations", "file": "backend/src/main/kotlin/com/example/legacy/orders/Order.kt", "line": 5},
         {"check": "s7-spec-generation", "file": "backend/pom.xml", "line": null},
+        {"check": "s7-key-order", "file": "backend/src/main/resources/application.yml", "line": null},
         {"check": "s7-contract-file", "file": "frontend/orval.config.ts", "line": 4},
         {"check": "s8-embedded-cors", "file": "backend/src/main/kotlin/com/example/legacy/config/CorsConfig.kt", "line": 12},
         {"check": "s8-embedded-base-url", "file": "frontend/.env", "line": 2},
@@ -64,7 +74,8 @@
     },
     "violating/java-mongo-standalone": {
       "exit": 1,
-      "expectFacts": {"language": "java", "db": "mongo", "web": "webmvc", "frontend": "standalone", "bootVersion": "4.1.0"},
+      "expectFacts": {"language": "java", "db": "mongo", "web": "webmvc", "frontend": "standalone", "bootVersion": "4.1.0",
+                      "frontendTooling": "other"},
       "findings": [
         {"check": "s1-java-baseline", "file": "pom.xml", "line": 12},
         {"check": "s2-mongo-keys", "file": "backend/src/main/resources/application.yml", "line": 6},
@@ -78,6 +89,10 @@
         {"check": "s4-types-spring-web-missing", "file": "backend/pom.xml", "line": null},
         {"check": "s5-mongo-document-db", "file": "backend/pom.xml", "line": 20},
         {"check": "s7-spec-generation", "file": "backend/pom.xml", "line": null},
+        {"check": "s7-forked-pipeline", "file": "backend/pom.xml", "line": 42},
+        {"check": "s7-forked-pipeline", "file": "backend/pom.xml", "line": 43},
+        {"check": "s7-forked-pipeline", "file": "backend/pom.xml", "line": 46},
+        {"check": "s7-forked-pipeline", "file": "backend/src/main/resources/application-openapi.yml", "line": null},
         {"check": "s7-frontend-input", "file": "frontend/orval.config.ts", "line": 1},
         {"check": "s8-standalone-base-url", "file": "frontend/src/shared/api/custom-fetch.ts", "line": null},
         {"check": "s8-standalone-cors-source", "file": "backend/src/main", "line": null},
@@ -88,6 +103,19 @@
         {"check": "s9-admin-spi", "file": "backend/pom.xml", "line": 25},
         {"check": "s10-tc-package", "file": "backend/src/test/java/com/example/store/StoreIT.java", "line": 6},
         {"check": "s11-boot-parent", "file": "pom.xml", "line": null}
+      ]
+    },
+    "violating/java-mvc-standalone-next": {
+      "exit": 1,
+      "expectFacts": {"language": "java", "db": "mongo", "web": "webmvc", "frontend": "standalone",
+                      "frontendTooling": "next"},
+      "findings": [
+        {"check": "s8-standalone-base-url", "file": "frontend/lib/api/mutator.ts", "line": null},
+        {"check": "s8-standalone-cors-value", "file": "backend/src/main/java/com/example/shop/config/OriginsConfig.java", "line": 9},
+        {"check": "s8-standalone-cors-value", "file": "backend/src/main/java/com/example/shop/config/OriginsConfig.java", "line": 12},
+        {"check": "s8-standalone-cors-value-scalar", "file": "backend/src/main/java/com/example/shop/config/OriginsConfig.java", "line": 15},
+        {"check": "s8-standalone-cors-value-scalar", "file": "backend/src/main/java/com/example/shop/config/OriginsConfig.java", "line": 18},
+        {"check": "s8-generated-gitignore", "file": "frontend/.gitignore", "line": null}
       ]
     },
     "violating/java-pgcrud-bare": {
@@ -117,6 +145,8 @@
         {"check": "s2-one-starter", "file": "pom.xml", "line": 26},
         {"check": "s4-configurer-missing", "file": "pom.xml", "line": 31},
         {"check": "s7-spec-generation", "file": "pom.xml", "line": null},
+        {"check": "s7-forked-pipeline", "file": "pom.xml", "line": 43},
+        {"check": "s7-forked-pipeline", "file": "src/main/resources/application-openapi.properties", "line": null},
         {"check": "s7-contract-file", "file": "contracts/openapi.json", "line": null}
       ]
     },
@@ -159,7 +189,8 @@
       "findings": [
         {"check": "s4-typed-edge-unregistered", "file": "backend/src/main/kotlin/com/example/golden/shipping/ShipmentLookup.kt", "line": 13},
         {"check": "s4-typed-edge-convention", "file": "backend/src/main/kotlin/com/example/golden/shipping/ShipmentLookup.kt", "line": 13},
-        {"check": "s7-model-converter", "file": "backend/pom.xml", "line": 64}
+        {"check": "s7-model-converter", "file": "backend/pom.xml", "line": 64},
+        {"check": "s7-key-order", "file": "backend/src/main/resources/application.yml", "line": 10}
       ]
     },
     "violating/not-essentials": {

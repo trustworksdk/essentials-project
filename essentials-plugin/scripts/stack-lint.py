@@ -26,6 +26,11 @@ project's release is `facts.essentialsVersion` (its `essentials.version` propert
 Essentials dependency's version, else `--essentials-version`), and `facts.essentialsBehind` is
 null when that release is unknown or not a version number.
 
+The frontend checks (S7, S8) read the paths `orval.config.*` names — output target, schemas and mutator —
+and accept any tooling's build-time variable read. `facts.frontendTooling` (`vite`, `next`, `cra`, `other`;
+null without a frontend) only chooses the variable spelling a fix text names. A config whose paths are
+computed rather than written leaves the checks that need them in `notRun`.
+
 Usage
 -----
     stack-lint.py [ROOT] [options]
@@ -56,6 +61,7 @@ Standard library only.
 from __future__ import annotations
 
 import argparse
+import fnmatch
 import json
 import os
 import re
@@ -294,8 +300,16 @@ RULES_LIST = [
          "no committed spec: the frontend generator's input, or contracts/openapi.json, does not exist"),
     Rule("s7-frontend-input", "S7", "Advisory",
          [("C", 319, "checked-in `contracts/openapi.json`"),
-          ("F", 66, "target: '../contracts/openapi.json'")],
+          ("F", 71, "target: '../contracts/openapi.json'")],
          "the frontend generator reads a live /v3/api-docs URL instead of the committed spec"),
+    Rule("s7-forked-pipeline", "S7", "Advisory",
+         [("C", 329, "The forked-app shape fails"), ("C", 328, "a DB-less spec-export profile")],
+         "left over from the forked-app spec pipeline: springdoc-openapi-maven-plugin, a spring-boot-maven-plugin "
+         "start/stop execution, or an application-openapi config"),
+    Rule("s7-key-order", "S7", "Advisory",
+         [("C", 320, "keys sorted (`springdoc.writer-with-order-by-keys:")],
+         "springdoc runs without springdoc.writer-with-order-by-keys: true, so the committed spec's key order "
+         "follows the code"),
     # 0.50.0: types-spring-web has no SingleValueTypeModelConverter (jar listing; the tag's source tree).
     Rule("s7-model-converter", "S7", "Advisory", [("C", 337, "`SingleValueTypeModelConverter` as a bean")],
          "springdoc runs but SingleValueTypeModelConverter is not registered: the spec types semantic ids as objects",
@@ -304,78 +318,84 @@ RULES_LIST = [
     # S8 ---------------------------------------------------------------------------------------
     Rule("s8-embedded-cors", "S8", "Should-fix",
          [("C", 355, "pick a mode explicitly and configure only that mode's pieces"),
-          ("F", 191, "Do not configure CORS")],
+          ("F", 197, "Do not configure CORS")],
          "embedded frontend with a CORS configuration"),
     Rule("s8-embedded-base-url", "S8", "Should-fix",
          [("C", 355, "pick a mode explicitly and configure only that mode's pieces"),
-          ("F", 194, "Do not set an API base URL")],
+          ("F", 200, "Do not set an API base URL")],
          "embedded frontend with an API base URL set"),
     Rule("s8-embedded-spa-filter", "S8", "Should-fix",
          [("C", 355, "pick a mode explicitly and configure only that mode's pieces"),
-          ("F", 145, "A SPA fallback filter")],
+          ("F", 151, "A SPA fallback filter")],
          "embedded frontend without a SPA fallback to index.html"),
     Rule("s8-embedded-static-copy", "S8", "Should-fix",
          [("C", 355, "pick a mode explicitly and configure only that mode's pieces"),
-          ("F", 135, "`maven-resources-plugin` copies `frontend/dist`")],
+          ("F", 141, "`maven-resources-plugin` copies `frontend/dist`")],
          "embedded frontend whose build output is not copied into static resources"),
     Rule("s8-standalone-base-url", "S8", "Blocking",
-         [("C", 355, "pick a mode explicitly and configure only that mode's pieces"),
-          ("F", 256, "configured *and consumed*")],
-         "standalone frontend whose fetch mutator does not prefix VITE_API_BASE_URL"),
+         [("C", 361, "fetch mutator Orval's config names reads and prefixes"),
+          ("F", 264, "configured *and consumed*")],
+         "standalone frontend whose fetch mutator does not prefix a build-time base-URL variable onto the request"),
     Rule("s8-standalone-cors-source", "S8", "Blocking",
          [("C", 355, "pick a mode explicitly and configure only that mode's pieces"),
-          ("F", 208, "expressed as a `CorsConfigurationSource` bean")],
+          ("F", 214, "expressed as a `CorsConfigurationSource` bean")],
          "standalone frontend and no CorsConfigurationSource bean"),
     Rule("s8-standalone-cors-webfilter", "S8", "Should-fix",
          [("C", 355, "pick a mode explicitly and configure only that mode's pieces"),
-          ("F", 212, "Expose the source, not a standalone `CorsWebFilter`")],
+          ("F", 218, "Expose the source, not a standalone `CorsWebFilter`")],
          "CORS applied by a standalone CorsWebFilter/CorsFilter bean"),
     Rule("s8-standalone-cors-value", "S8", "Blocking",
          [("C", 355, "pick a mode explicitly and configure only that mode's pieces"),
-          ("F", 240, "Bind the origin list with `@ConfigurationProperties`, never `@Value`")],
-         "CORS origins bound with @Value"),
+          ("F", 246, "Bind the origin list with `@ConfigurationProperties`, never `@Value`")],
+         "CORS origins bound with @Value to a key configured as a list"),
+    Rule("s8-standalone-cors-value-scalar", "S8", "Should-fix",
+         [("C", 355, "pick a mode explicitly and configure only that mode's pieces"),
+          ("F", 246, "Bind the origin list with `@ConfigurationProperties`, never `@Value`"),
+          ("F", 251, "breaks the day someone")],
+         "CORS origins bound with @Value to a scalar, or to a key no application* file sets"),
     Rule("s8-standalone-cors-wildcard", "S8", "Blocking",
          [("C", 355, "pick a mode explicitly and configure only that mode's pieces"),
-          ("F", 209, "`allowCredentials = true` **cannot**")],
+          ("F", 215, "`allowCredentials = true` **cannot**")],
          "wildcard origin combined with allowCredentials"),
     Rule("s8-standalone-dead-spa", "S8", "Advisory",
          [("C", 355, "pick a mode explicitly and configure only that mode's pieces"),
-          ("F", 277, "SPA filter is dead code in this mode")],
+          ("F", 295, "SPA filter is dead code in this mode")],
          "standalone frontend with a backend SPA fallback"),
     Rule("s8-generated-gitignore", "S8", "Should-fix",
          [("C", 351, "contract-first pipeline of S7"),
-          ("F", 76, "`generated/` and `model/` must not be committed")],
+          ("F", 82, "`generated/` and `model/` must not be committed")],
          "the generated API client is not git-ignored"),
     # S9 ---------------------------------------------------------------------------------------
     Rule("s9-admin-spi", "S9", "Should-fix",
-         [("C", 368, "`EssentialsAuthenticatedUser` and `EssentialsSecurityProvider`")],
+         [("C", 383, "`EssentialsAuthenticatedUser` and `EssentialsSecurityProvider`")],
          "an admin starter without the two security SPIs",
          "shared/src/main/java/dk/trustworks/essentials/shared/security/"
          "{EssentialsSecurityProvider,EssentialsAuthenticatedUser}.java"),
     # S10 --------------------------------------------------------------------------------------
-    Rule("s10-tc1-coordinates", "S10", "Advisory", [("C", 383, "The 1.x coordinates no longer resolve")],
+    Rule("s10-tc1-coordinates", "S10", "Advisory", [("C", 398, "The 1.x coordinates no longer resolve")],
          "a Testcontainers 1.x artifact coordinate",
          "~/.m2 org/testcontainers/testcontainers-{postgresql,mongodb} at the testcontainers-bom pin"),
-    Rule("s10-tc-package", "S10", "Advisory", [("C", 408, "`org.testcontainers.postgresql.PostgreSQLContainer`")],
+    Rule("s10-tc-package", "S10", "Advisory", [("C", 423, "`org.testcontainers.postgresql.PostgreSQLContainer`")],
          "a container class imported from the deprecated org.testcontainers.containers package",
          "testcontainers-postgresql jar at the pin: org.testcontainers.containers.PostgreSQLContainer is "
          "@Deprecated, org.testcontainers.postgresql.PostgreSQLContainer is not generic (javap); "
          "likewise testcontainers-mongodb MongoDBContainer"),
     Rule("s10-webtestclient-package", "S10", "Advisory",
-         [("C", 400, "`@AutoConfigureWebTestClient` is no longer in")],
+         [("C", 415, "`@AutoConfigureWebTestClient` is no longer in")],
          "@AutoConfigureWebTestClient imported from its Boot 3 package"),
-    Rule("s10-failsafe", "S10", "Advisory", [("C", 381, "Failsafe runs those during `verify`")],
+    Rule("s10-failsafe", "S10", "Advisory", [("C", 396, "Failsafe runs those during `verify`")],
          "integration tests present but maven-failsafe-plugin is not bound",
          "spring-boot-starter-parent pom: failsafe is in pluginManagement only"),
     # S11 --------------------------------------------------------------------------------------
-    Rule("s11-skip-frontend", "S11", "Should-fix", [("C", 432, "**`skip-frontend` profile** must exist")],
+    Rule("s11-skip-frontend", "S11", "Should-fix", [("C", 447, "**`skip-frontend` profile** must exist")],
          "frontend-maven-plugin without a skip-frontend profile"),
-    Rule("s11-boot-parent", "S11", "Advisory", [("C", 425, "`spring-boot-starter-parent` is the parent POM")],
+    Rule("s11-boot-parent", "S11", "Advisory", [("C", 440, "`spring-boot-starter-parent` is the parent POM")],
          "the reactor does not inherit spring-boot-starter-parent"),
 ]
 RULES = {r.check: r for r in RULES_LIST}
 # Slugs that were emitted once and are retired: never reuse one for a different check. The forked-app
-# spec pipeline they checked is no longer a contract shape (S7 generates the spec from an integration test).
+# spec pipeline they checked is no longer a contract shape (S7 generates the spec from an integration test);
+# s7-forked-pipeline reports what a project still carries of it.
 RETIRED_CHECKS = {"s7-start-stop", "s7-openapi-profile"}
 
 
@@ -716,23 +736,180 @@ def strip_comments(text: str, hash_comments=False):
     return "".join(out)
 
 
+# A build-time environment read, in any frontend tooling's spelling: Vite's `import.meta.env.VITE_…`, Next.js's
+# `process.env.NEXT_PUBLIC_…`, Create React App's `process.env.REACT_APP_…`, dot or bracket form.
+ENV_READ = r"(?:import\.meta\.env|process\.env)(?:\.\w+|\[\s*['\"]\w+['\"]\s*\])"
+
+
 def base_url_consumed(ts_text: str):
-    """True when VITE_API_BASE_URL is read and the read prefixes a request URL.
+    """True when a build-time environment variable is read and the read prefixes a request URL.
 
     Accepts the read inline (`${import.meta.env.VITE_API_BASE_URL}…`), through a constant
-    (`const BASE = import.meta.env.VITE_API_BASE_URL ?? ''` … `${BASE}${url}`), or through a function
+    (`const BASE = process.env.NEXT_PUBLIC_API_BASE_URL ?? ''` … `${BASE}${url}`), or through a function
     (`const baseUrl = (): string => import.meta.env.VITE_API_BASE_URL ?? ''` … `${baseUrl()}${url}`,
-    `function baseUrl() { return import.meta.env.VITE_API_BASE_URL }`); the use is `${X}`/`${X()}` or `X + …`."""
+    `function baseUrl() { return process.env['REACT_APP_API_BASE_URL'] }`); the use is `${X}`/`${X()}` or
+    `X + …`. Which variable is read is the tooling's business (ENV_READ); a read that prefixes nothing is not
+    consumption."""
     text = strip_comments(ts_text)
-    if re.search(r"\$\{\s*import\.meta\.env\.VITE_API_BASE_URL", text):
+    if re.search(r"\$\{\s*" + ENV_READ, text):
         return True
     decl = re.compile(r"\b(?:const|let|var|function)\s+(\w+)"
-                      r"((?:(?!\b(?:const|let|var|function)\s)[\s\S]){0,200}?)"
-                      r"import\.meta\.env\.VITE_API_BASE_URL\b")
+                      r"((?:(?!\b(?:const|let|var|function)\s)[\s\S]){0,200}?)" + ENV_READ)
     for m in decl.finditer(text):
         v = re.escape(m.group(1))
         use = rf"\$\{{\s*{v}\s*(?:\(\s*\))?\s*\}}|\b{v}\s*(?:\(\s*\))?\s*\+"
         if re.search(use, text[m.end():]):
+            return True
+    return False
+
+
+# The base-URL variable each frontend tooling's convention names, read the way that tooling inlines it at build
+# time. Only fix texts use it: the check itself accepts any ENV_READ.
+BASE_URL_ENV = {
+    "vite": ("Vite", "import.meta.env.VITE_API_BASE_URL"),
+    "next": ("Next.js", "process.env.NEXT_PUBLIC_API_BASE_URL"),
+    "cra": ("Create React App", "process.env.REACT_APP_API_BASE_URL"),
+}
+
+
+def frontend_tooling(d: Path):
+    """'next' | 'cra' | 'vite' | 'other' for a frontend directory, from package.json's dependencies and the
+    tooling's own config file. Next first: a Next.js app may carry vite for its tests (vitest)."""
+    deps = {}
+    try:
+        pkg = json.loads((d / "package.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        pkg = {}
+    if isinstance(pkg, dict):
+        for k in ("dependencies", "devDependencies"):
+            if isinstance(pkg.get(k), dict):
+                deps.update(pkg[k])
+    try:
+        names = {f.name for f in d.iterdir()}
+    except OSError:
+        names = set()
+    if "next" in deps or any(n.startswith("next.config.") for n in names):
+        return "next"
+    if "react-scripts" in deps:
+        return "cra"
+    if "vite" in deps or any(n.startswith("vite.config.") for n in names):
+        return "vite"
+    return "other"
+
+
+def _own_keys(text, lb):
+    """The object literal opening at `lb`, with everything nested inside it masked by NULs (offsets and newlines
+    kept, and never read as whitespace), so a key search finds only that object's own keys."""
+    rb = _balanced(text, lb, "{", "}")
+    out, depth = [], 0
+    for c in text[lb:rb]:
+        if c == "{":
+            depth += 1
+        keep = depth <= 1 or c == "\n"
+        if c == "}":
+            depth -= 1
+        out.append(c if keep else "\0")
+    return "".join(out), rb
+
+
+_LITERAL = r"(['\"`])([^'\"`\n$]+)\1"
+
+
+def orval_config(raw: str):
+    """{'inputs', 'targets', 'schemas', 'mutators': [(value, line)], 'readable': bool} — the string literals of an
+    Orval config's input target, output target, output schemas and output.override.mutator path (or a mutator
+    given as a bare string). `readable` is False when the outputs cannot be read that way: none at all, or a
+    target, schemas or mutator that is computed rather than written (`path.join(…)`, an imported constant),
+    which only running the config resolves. The inputs are read either way."""
+    text = strip_comments(raw)
+    literal = re.compile(_LITERAL)
+    got = {"inputs": [], "targets": [], "schemas": [], "mutators": [], "readable": True}
+
+    def line(i):
+        return text.count("\n", 0, i) + 1
+
+    def key_at(lb, key):
+        """Offset of the value of `key` among the own keys of the object opening at `lb`, or None."""
+        own, _ = _own_keys(text, lb)
+        m = re.search(rf"\b{key}\s*:\s*", own)
+        return lb + m.end() if m else None
+
+    def literal_at(at, nested_key=None):
+        """(value, line) of the literal at `at` — or, for an object there, of its `nested_key` — else None."""
+        lm = literal.match(text, at)
+        if lm:
+            return lm.group(2), line(lm.start(2))
+        if nested_key and text.startswith("{", at):
+            inner = key_at(at, nested_key)
+            return literal_at(inner) if inner is not None else None
+        return None
+
+    for kind in ("input", "output"):
+        end = 0
+        for m in re.finditer(rf"\b{kind}\s*:\s*", text):
+            if m.start() < end:
+                continue
+            lb = m.end()
+            if not text.startswith("{", lb):
+                value = literal_at(lb)
+                if value:
+                    got["inputs" if kind == "input" else "targets"].append(value)
+                elif kind == "output":
+                    got["readable"] = False
+                continue
+            end = _balanced(text, lb, "{", "}")
+            at = key_at(lb, "target")
+            target = literal_at(at) if at is not None else None
+            if kind == "input":
+                if target:
+                    got["inputs"].append(target)
+                continue
+            if target is None:
+                got["readable"] = False
+                continue
+            got["targets"].append(target)
+            at = key_at(lb, "schemas")
+            if at is not None:
+                schemas = literal_at(at, "path")
+                if schemas is None:
+                    got["readable"] = False
+                    continue
+                got["schemas"].append(schemas)
+            ov = key_at(lb, "override")
+            at = key_at(ov, "mutator") if ov is not None and text.startswith("{", ov) else None
+            if at is not None:
+                mutator = literal_at(at, "path")
+                if mutator is None:
+                    got["readable"] = False
+                    continue
+                got["mutators"].append(mutator)
+    got["readable"] = got["readable"] and bool(got["targets"])
+    return got
+
+
+def gitignore_covers(rel: str, patterns):
+    """True when a .gitignore holding `patterns` ignores the path `rel` (posix, relative to that .gitignore's
+    directory) or a directory above it. As git reads them: a pattern with a slash before its end (`/p`,
+    `src/p`) is anchored to the .gitignore's directory, one without (`p`, `p/`) matches a name at any depth,
+    and globs are fnmatch's. A trailing `/` is dropped — the outputs checked are directories. Negations
+    (`!p`) are not evaluated: a path re-included by one still counts as ignored."""
+    parts = [x for x in rel.split("/") if x not in ("", ".")]
+    prefixes = ["/".join(parts[:i]) for i in range(1, len(parts) + 1)]
+    for raw in patterns:
+        p = raw.strip()
+        if not p or p.startswith(("#", "!")):
+            continue
+        p = p.rstrip("/")
+        if p.startswith("**/"):
+            p = p[3:]
+            if "/" in p and any(fnmatch.fnmatchcase(x, p) or fnmatch.fnmatchcase(x, "*/" + p) for x in prefixes):
+                return True
+        if not p:
+            continue
+        if "/" in p:
+            if any(fnmatch.fnmatchcase(x, p.lstrip("/")) for x in prefixes):
+                return True
+        elif any(fnmatch.fnmatchcase(x, p) for x in parts):
             return True
     return False
 
@@ -826,6 +1003,43 @@ def config_keys(path: Path):
     except (OSError, UnicodeDecodeError):
         return []
     return properties_keys(text) if path.suffix == ".properties" else yaml_keys(text)
+
+
+def config_shapes(path: Path):
+    """{relaxed-binding key: ('sequence' | 'scalar' | 'mapping', line)} for one configuration file.
+
+    A key is a sequence when its value is a flow sequence (`[a, b]`), when it has no value and the next content
+    line is a `- ` item at its indentation or deeper (a YAML block sequence), or when it is written indexed
+    (`key[0]`, as `.properties` spells a list). Spring binds a sequence as indexed keys only, so `@Value` on the
+    bare key does not see it."""
+    try:
+        text = path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return {}
+    yaml = path.suffix != ".properties"
+    lines = text.splitlines()
+    out = {}
+    for key, value, no, own in (yaml_keys(text) if yaml else properties_keys(text)):
+        indexed = re.match(r"^(.*?)\[\d+\]", key)
+        if indexed:
+            out.setdefault(norm_key(indexed.group(1)), ("sequence", no))
+            continue
+        if value is not None:
+            out.setdefault(norm_key(key), ("sequence" if value.startswith("[") else "scalar", no))
+            continue
+        shape = "mapping"
+        if yaml:
+            raw = lines[no - 1]
+            indent = raw.find(own) if own in raw else len(raw) - len(raw.lstrip())
+            for nxt in lines[no:]:
+                body = re.sub(r"(^|\s)#.*$", "", nxt).rstrip()
+                if not body.strip():
+                    continue
+                if re.match(r"^\s*-(\s|$)", body) and len(body) - len(body.lstrip()) >= indent:
+                    shape = "sequence"
+                break
+        out.setdefault(norm_key(key), (shape, no))
+    return out
 
 
 # ---------------------------------------------------------------------------------------------
@@ -1011,6 +1225,7 @@ class Lint:
         self.app = starter_poms[0] if starter_poms else ess[0].pom
         self.app_deps = [d for d in self.app.deps if d.scope != "import"]
         self.facts, self.fact_source = {}, {}
+        self._orval = {}
         self._facts(overrides)
         self.main = [s for s in self._sources(self.app.dir, "main")]
         self.tests = [s for s in self._sources(self.root, "test")]
@@ -1059,6 +1274,13 @@ class Lint:
                 out.append(f)
         return out
 
+    def orval(self, d: Path):
+        """[(config path, orval_config(...))] for each orval.config.* in a frontend directory."""
+        if d not in self._orval:
+            self._orval[d] = [(cfg, orval_config(cfg.read_text(encoding="utf-8", errors="replace")))
+                              for cfg in sorted(d.glob("orval.config.*"))]
+        return self._orval[d]
+
     def _facts(self, ov):
         plugins = {p.val("artifactId") for pom in self.p.poms for p in pom.plugins}
         if ov.get("language"):
@@ -1093,6 +1315,12 @@ class Lint:
             fe = ("embedded" if "frontend-maven-plugin" in plugins
                   else "standalone" if self.frontend_dirs else "none")
             self.facts["frontend"], self.fact_source["frontend"] = fe, "detected"
+        # The tooling of the frontend Orval generates into (else the first package.json): it names the base-URL
+        # variable's convention in fix texts; no check depends on it.
+        orval_dirs = [d for d in self.frontend_dirs if self.orval(d)]
+        fe_dir = (orval_dirs or self.frontend_dirs or [None])[0]
+        self.facts["frontendTooling"] = (frontend_tooling(fe_dir) if fe_dir is not None
+                                         and self.facts["frontend"] != "none" else None)
         # The Essentials release the project pins, against the one stack-pins.md targets. Unresolvable here
         # (inherited from a parent outside the project, or a BOM) is None: pass --essentials-version.
         if ov.get("essentials_version"):
@@ -1122,14 +1350,25 @@ class Lint:
         pom = self.app
         ext = self.p.external_parent(pom)
         boot_parent = ext if ext and ext[0] == BOOT and ext[1] == "spring-boot-starter-parent" else None
-        boot_version, boot_where = None, None
+        boot_version, boot_where, boot_ops = None, None, None
+        target = self.pins["spring-boot-starter-parent"]
         if boot_parent:
             top = self.p.chain(pom)[-1]
             boot_version, boot_where = self.p.resolve(top, boot_parent[2]), (top.rel, top.parent[3])
+            if boot_parent[2] and "${" not in boot_parent[2]:
+                boot_ops = [{"op": "set-parent-version", "pom": top.rel, "line": top.parent[3], "groupId": BOOT,
+                             "artifactId": "spring-boot-starter-parent", "from": boot_parent[2], "to": target}]
         else:
             for d in self.p.all_deps(managed=True):
                 if d.g == BOOT and d.a == "spring-boot-dependencies" and d.scope == "import":
                     boot_version, boot_where = self.p.resolve(d.pom, d.v), (d.pom.rel, d.line)
+                    ref = re.fullmatch(r"\$\{([^}]+)\}", (d.v or "").strip())
+                    pv, ppom, _ = self.p.prop(d.pom, ref.group(1)) if ref else (None, None, None)
+                    boot_ops = ([{"op": "set-property", "pom": ppom.rel, "name": ref.group(1), "from": pv,
+                                  "to": target}] if ref and ppom is not None and pv and "${" not in pv
+                                else [{"op": "set-dependency-version", "pom": d.pom.rel, "line": d.line,
+                                       "groupId": BOOT, "artifactId": d.a, "from": d.v, "to": target}]
+                                if d.v and "${" not in d.v else None)
             self.add("s11-boot-parent", self.p.chain(pom)[-1].rel, None,
                      "the reactor does not inherit spring-boot-starter-parent, so the Boot plugin and compiler "
                      "defaults the contract assumes are absent",
@@ -1141,7 +1380,8 @@ class Lint:
         elif ".".join(boot_version.split(".")[:2]) != want:
             self.add("s1-boot-line", boot_where[0], boot_where[1],
                      f"Spring Boot {boot_version} — Essentials targets the {want}.x line; other lines are unsupported",
-                     f"move the Boot version to the {want}.x line (stack-pins.md), as a deliberate upgrade")
+                     f"move the Boot version to the {want}.x line (stack-pins.md), as a deliberate upgrade",
+                     boot_ops)
         # Java baseline: java.version (spring-boot-starter-parent feeds maven.compiler.release from it)
         floor_m = re.match(r"\d+", self.pins["java.version"])
         if floor_m is None:
@@ -1737,24 +1977,24 @@ class Lint:
                      "client generated from contracts/openapi.json types the ids wrongly",
                      "register types-spring-web's SingleValueTypeModelConverter as a @Bean (e.g. in "
                      "config/EssentialsWebConfig)", mechanical=False)
-        configs = [cfg for d in self.frontend_dirs for cfg in sorted(d.glob("orval.config.*"))]
-        for cfg in configs:
-            text = strip_comments(cfg.read_text(encoding="utf-8", errors="replace"))
-            m = re.search(r"input\s*:\s*\{[^}]*?target\s*:\s*['\"]([^'\"]+)['\"]", text, re.S) or \
-                re.search(r"input\s*:\s*['\"]([^'\"]+)['\"]", text)
-            if not m:
+        if springdoc:
+            self._key_order(springdoc[0])
+        self._forked_pipeline()
+        configs = [(cfg, parsed) for d in self.frontend_dirs for cfg, parsed in self.orval(d)]
+        for cfg, parsed in configs:
+            if not parsed["inputs"]:
                 continue
-            line = text.count("\n", 0, m.start(1)) + 1
-            if re.match(r"https?://", m.group(1)):
+            target, line = parsed["inputs"][0]
+            if re.match(r"https?://", target):
                 self.add("s7-frontend-input", self.p.rel(cfg), line,
-                         f"orval reads {m.group(1)} — the client is built from whatever backend is running, not "
+                         f"orval reads {target} — the client is built from whatever backend is running, not "
                          "from the committed spec",
                          "point input.target at the committed ../contracts/openapi.json",
-                         [{"op": "replace-text", "file": self.p.rel(cfg), "line": line, "from": m.group(1),
+                         [{"op": "replace-text", "file": self.p.rel(cfg), "line": line, "from": target,
                            "to": "../contracts/openapi.json"}], mechanical=False)
-            elif not (cfg.parent / m.group(1)).exists():
+            elif not (cfg.parent / target).exists():
                 self.add("s7-contract-file", self.p.rel(cfg), line,
-                         f"orval reads {m.group(1)}, which does not exist — the frontend build has no contract",
+                         f"orval reads {target}, which does not exist — the frontend build has no contract",
                          "run the backend's verify once and commit the generated contracts/openapi.json",
                          mechanical=False)
         if not configs and self.facts["web"] not in ("none", None):
@@ -1762,6 +2002,65 @@ class Lint:
                 self.add("s7-contract-file", "contracts/openapi.json", None,
                          "no committed contracts/openapi.json — other components have no contract to consume",
                          "run verify once and commit the generated contracts/openapi.json", mechanical=False)
+
+    def _key_order(self, springdoc):
+        """springdoc.writer-with-order-by-keys: true in the application's main configuration."""
+        found, main_cfg = None, None
+        for f in self.config_files(include_test=False):
+            if re.fullmatch(r"application\.(ya?ml|properties)", f.name) and main_cfg is None:
+                main_cfg = f
+            for key, value, line, _ in config_keys(f):
+                if norm_key(key) == norm_key("springdoc.writer-with-order-by-keys"):
+                    found = found or (f, line, value or "")
+        if found and found[2].strip("'\" ").lower() == "true":
+            return
+        why = ("springdoc writes contracts/openapi.json in declaration order, so the committed spec changes when "
+               "code moves rather than when the API does")
+        if found:
+            f, line, value = found
+            self.add("s7-key-order", self.p.rel(f), line, f"springdoc.writer-with-order-by-keys is {value!r} — {why}",
+                     "set it to true",
+                     [{"op": "replace-text", "file": self.p.rel(f), "line": line, "from": value, "to": "true"}]
+                     if value else None)
+        elif main_cfg is not None:
+            self.add("s7-key-order", self.p.rel(main_cfg), None,
+                     f"springdoc.writer-with-order-by-keys is not set — {why}",
+                     f"add springdoc.writer-with-order-by-keys: true to {self.p.rel(main_cfg)}", mechanical=False)
+        else:
+            self.add("s7-key-order", self.app.rel, springdoc.line,
+                     f"springdoc.writer-with-order-by-keys is not set — {why}",
+                     "add springdoc.writer-with-order-by-keys: true to application.yml", mechanical=False)
+
+    def _forked_pipeline(self):
+        """What is left of the forked-app spec pipeline S7 replaced, whether or not a test now writes the spec:
+        left in the build, it still starts the application around a fetch and overwrites the committed file."""
+        for pom in self.p.poms:
+            for pl in pom.plugins:
+                artifact = pl.val("artifactId")
+                if artifact == "springdoc-openapi-maven-plugin":
+                    self.add("s7-forked-pipeline", pom.rel, pl.line,
+                             "springdoc-openapi-maven-plugin fetches /v3/api-docs from an application the build forks; "
+                             "it cannot serve the spec once an endpoint's beans need the database, and the build "
+                             "stays green on the previous one",
+                             "remove the plugin; the integration test that writes contracts/openapi.json replaces it",
+                             mechanical=False)
+                elif artifact == "spring-boot-maven-plugin":
+                    for ex in pl.all("executions/execution"):
+                        goals = sorted({g.text.strip() for g in ex.all("goals/goal")} & {"start", "stop"})
+                        if goals:
+                            self.add("s7-forked-pipeline", pom.rel, ex.line,
+                                     f"spring-boot-maven-plugin execution {ex.val('id') or '(no id)'} runs "
+                                     f"{'/'.join(goals)}: it forks the application around the build's spec fetch",
+                                     "remove the execution, and any execution whose output only it read (e.g. a "
+                                     "build-helper reserve-network-port)", mechanical=False)
+        for f in self.p.files:
+            parts = f.relative_to(self.root).parts
+            if re.fullmatch(r"application-openapi\.(ya?ml|properties)", f.name) and "resources" in parts:
+                self.add("s7-forked-pipeline", self.p.rel(f), None,
+                         "an `openapi` profile configuration — the database-less spec-export profile the forked app "
+                         "was started with",
+                         "delete it, and every activation of the profile (@Profile(\"openapi\"), "
+                         "spring.profiles.active=openapi)", mechanical=False)
 
     # -- S8 / S11 --------------------------------------------------------------------------------
 
@@ -1789,10 +2088,11 @@ class Lint:
             for d in fe_dirs:
                 for env in sorted(d.glob(".env*")):
                     for no, raw in enumerate(env.read_text(encoding="utf-8", errors="replace").splitlines(), 1):
-                        m = re.match(r"^\s*(?:export\s+)?VITE_API_BASE_URL\s*=\s*(.*)$", raw)
-                        if m and m.group(1).strip().strip("'\""):
+                        m = re.match(r"^\s*(?:export\s+)?((?:VITE|NEXT_PUBLIC|REACT_APP)_\w*API_(?:BASE_)?URL)"
+                                     r"\s*=\s*(.*)$", raw)
+                        if m and m.group(2).strip().strip("'\""):
                             self.add("s8-embedded-base-url", self.p.rel(env), no,
-                                     "VITE_API_BASE_URL is set in an embedded build; relative /api paths are "
+                                     f"{m.group(1)} is set in an embedded build; relative /api paths are "
                                      "correct by construction", "delete the line",
                                      [{"op": "replace-text", "file": self.p.rel(env), "line": no,
                                        "from": raw, "to": ""}], mechanical=False)
@@ -1826,6 +2126,11 @@ class Lint:
                      "standalone frontend and no CorsConfigurationSource bean — cross-origin calls are refused",
                      "publish a CorsConfigurationSource bean with the frontend's real origins, and http.cors {}",
                      mechanical=False)
+        shapes = {}
+        for f in self.config_files(include_test=False):
+            for key, (shape, line) in config_shapes(f).items():
+                if key not in shapes or (shape == "sequence" and shapes[key][0] != "sequence"):
+                    shapes[key] = (shape, self.p.rel(f), line)
         for s in self.main:
             for line, m in s.find(r"\b(?:new\s+)?(CorsWebFilter|CorsFilter)\s*\("):
                 self.add("s8-standalone-cors-webfilter", s.rel, line,
@@ -1833,9 +2138,7 @@ class Lint:
                          "publish the CorsConfigurationSource instead and enable http.cors {}", mechanical=False)
             for line, m in s.find(r"@(?:field:)?Value\s*\(\s*\"\\?\$\{([^}\"]*)\}"):
                 if re.search(r"cors|origin", m.group(1), re.I):
-                    self.add("s8-standalone-cors-value", s.rel, line,
-                             f"@Value(\"${{{m.group(1)}}}\") cannot bind a YAML list — startup fails to resolve it",
-                             "bind the origins with a @ConfigurationProperties class", mechanical=False)
+                    self._cors_value(s, line, m.group(1), shapes)
             if s.has(r"allowCredentials\s*=\s*true|setAllowCredentials\s*\(\s*true\s*\)|allowCredentials\s*\(\s*true"):
                 for line, _ in s.find(r"(?:allowedOrigins\s*=\s*\w*\(?\s*|[Aa]llowedOrigins?\s*\(\s*"
                                       r"(?:\w+\.of\s*\(\s*|listOf\s*\(\s*)?)\"\*\""):
@@ -1846,39 +2149,101 @@ class Lint:
             self.add("s8-standalone-dead-spa", s.rel, line,
                      "backend SPA fallback in a standalone build — the static host serves the SPA; this is dead code",
                      "remove the SPA filter; configure the rewrite on the static host", mechanical=False)
-        consumed = False
-        mutators = []
+        self._base_url()
+
+    def _base_url(self):
+        """The Orval mutator — the path each orval.config.* names, else a custom-fetch.ts by name — prefixes a
+        build-time environment read onto the request URL."""
+        mutators, computed = [], []
         for d in self.frontend_dirs:
-            mutators += [f for f in self.p.files if f.name == "custom-fetch.ts" and d in f.parents]
-        for f in mutators:
-            consumed = consumed or base_url_consumed(f.read_text(encoding="utf-8", errors="replace"))
-        if not consumed:
-            where = self.p.rel(mutators[0]) if mutators else (
-                self.p.rel(self.frontend_dirs[0]) if self.frontend_dirs else None)
-            self.add("s8-standalone-base-url", where, None,
-                     "no fetch mutator prefixes import.meta.env.VITE_API_BASE_URL — the generated client's relative "
-                     "paths resolve against the static host and 404",
-                     "in custom-fetch.ts: const BASE = import.meta.env.VITE_API_BASE_URL ?? ''; fetch(`${BASE}${url}`)",
-                     mechanical=False)
+            for cfg, parsed in self.orval(d):
+                if not parsed["readable"]:
+                    computed.append(self.p.rel(cfg))
+                for value, _ in parsed["mutators"]:
+                    base = os.path.normpath(cfg.parent / value)
+                    hit = next((Path(base + ext) for ext in ("", ".ts", ".tsx", ".js") if Path(base + ext).is_file()),
+                               None)
+                    if hit is not None and hit not in mutators:
+                        mutators.append(hit)
+        if not mutators:
+            mutators = [f for d in self.frontend_dirs for f in self.p.files
+                        if f.name == "custom-fetch.ts" and d in f.parents]
+        if not mutators and computed:
+            self.skip(["s8-standalone-base-url"],
+                      f"{', '.join(computed)}: the mutator path is computed, not written as a string, and no "
+                      "custom-fetch.ts exists — only running the config finds the mutator")
+            return
+        if any(base_url_consumed(f.read_text(encoding="utf-8", errors="replace")) for f in mutators):
+            return
+        where = self.p.rel(mutators[0]) if mutators else (
+            self.p.rel(self.frontend_dirs[0]) if self.frontend_dirs else None)
+        tooling = self.facts.get("frontendTooling")
+        convention = BASE_URL_ENV.get(tooling or "")
+        name = mutators[0].name if mutators else "the Orval mutator"
+        self.add("s8-standalone-base-url", where, None,
+                 "no fetch mutator prefixes a build-time API base URL (an import.meta.env.* / process.env.* read) "
+                 "onto the request URL — the generated client's relative paths resolve against the static host "
+                 "and 404",
+                 (f"in {name}: const BASE = {convention[1]} ?? ''; fetch(`${{BASE}}${{url}}`) "
+                  f"({convention[0]}'s spelling of the variable)" if convention else f"in {name}: read the API base URL from the build-time variable your tooling inlines "
+                  "and prefix it: fetch(`${BASE}${url}`)"),
+                 mechanical=False)
+
+    def _cors_value(self, s, line, placeholder, shapes):
+        """@Value on a CORS origins key: Blocking when the key is a sequence in configuration (it binds as indexed
+        keys only), Should-fix when it is a scalar or set in no application* file."""
+        key, _, default = placeholder.partition(":")
+        shape = shapes.get(norm_key(key.strip()))
+        if shape and shape[0] == "sequence":
+            where = f"{shape[1]}:{shape[2]}"
+            consequence = (f"so the placeholder silently binds its default {default!r}" if ":" in placeholder
+                           else "so startup fails to resolve the placeholder")
+            self.add("s8-standalone-cors-value", s.rel, line,
+                     f"@Value(\"${{{placeholder}}}\"): {key} is a list ({where}), which binds only as indexed keys "
+                     f"({key}[0]) — {consequence}",
+                     "bind the origins with a @ConfigurationProperties class", mechanical=False)
+            return
+        found = (f"a scalar at {shape[1]}:{shape[2]}" if shape and shape[0] == "scalar"
+                 else "set in no application* file")
+        self.add("s8-standalone-cors-value-scalar", s.rel, line,
+                 f"@Value(\"${{{placeholder}}}\"): {key} is {found}. A comma-separated scalar binds, but the "
+                 "day it is written as a YAML list the placeholder stops resolving",
+                 "bind the origins with a @ConfigurationProperties class", mechanical=False)
 
     def _gitignore(self, fe_dirs):
         for d in fe_dirs:
-            if not list(d.glob("orval.config.*")):
+            outputs = []
+            for cfg, parsed in self.orval(d):
+                if not parsed["readable"]:
+                    self.skip(["s8-generated-gitignore"],
+                              f"{self.p.rel(cfg)}: an output path is computed, not written as a string — only "
+                              "running the config resolves it")
+                    continue
+                for value, _ in parsed["targets"] + parsed["schemas"]:
+                    out = Path(os.path.normpath(cfg.parent / value))
+                    if (self.root in out.parents) and out not in outputs:
+                        outputs.append(out)
+            if not outputs:
                 continue
-            patterns = []
+            ignores = []
             for g in [d] + [p for p in d.parents if self.root in p.parents or p == self.root]:
                 gi = g / ".gitignore"
                 if gi.is_file():
-                    patterns += [l.strip() for l in gi.read_text(encoding="utf-8", errors="replace").splitlines()]
-            for sub in ("generated", "model"):
-                # `src/shared/api/<sub>/` (any prefix), or a bare `<sub>/` that ignores every such directory
-                if not any(re.search(rf"(^|/)src/shared/api/{sub}/?$", p) or p.strip("/") == sub
-                           for p in patterns if p and not p.startswith("#")):
-                    self.add("s8-generated-gitignore", self.p.rel(d / ".gitignore"), None,
-                             f"src/shared/api/{sub}/ is not git-ignored — generated client code gets committed",
-                             f"add src/shared/api/{sub}/ to {self.p.rel(d / '.gitignore')}",
-                             [{"op": "append-line", "file": self.p.rel(d / ".gitignore"),
-                               "text": f"src/shared/api/{sub}/"}])
+                    ignores.append((g, gi.read_text(encoding="utf-8", errors="replace").splitlines()))
+            for out in outputs:
+                if any(gitignore_covers(out.relative_to(g).as_posix(), pats) for g, pats in ignores if g in out.parents):
+                    continue
+                gi_rel = self.p.rel(d / ".gitignore")
+                # A file target (Orval's single mode) is ignored as the file; a directory with a trailing slash.
+                entry = (out.relative_to(d).as_posix() if d in out.parents else None)
+                if entry is not None and out.suffix not in (".ts", ".tsx", ".js", ".mjs", ".cjs"):
+                    entry += "/"
+                shown = entry or self.p.rel(out)
+                self.add("s8-generated-gitignore", gi_rel, None,
+                         f"{shown} is not git-ignored — generated client code gets committed",
+                         f"add {shown} to {gi_rel}" if entry else
+                         f"git-ignore {shown} (it lies outside {self.p.rel(d)})",
+                         [{"op": "append-line", "file": gi_rel, "text": entry}] if entry else None)
 
     # -- S9 / S10 --------------------------------------------------------------------------------
 
@@ -1963,7 +2328,9 @@ def report_text(lint, anchors, quiet, out):
         print(f"stack-lint {lint.root}", file=out)
         print("  facts: " + " · ".join(
             f"{k}={f.get(k) or 'unknown'}{'' if src.get(k) != 'flag' else ' (flag)'}"
-            for k in ("language", "db", "web", "frontend")) + f" · app={f.get('appPom')}", file=out)
+            for k in ("language", "db", "web", "frontend"))
+              + (f" · tooling={f['frontendTooling']}" if f.get("frontendTooling") else "")
+              + f" · app={f.get('appPom')}", file=out)
         print(f"  essentials: {f.get('essentialsVersion') or 'unknown'}"
               f"{' (flag)' if src.get('essentialsVersion') == 'flag' else ''}"
               f" · target {f.get('targetEssentialsVersion')}"
