@@ -220,4 +220,5 @@ already declares `flow:`, a present-but-empty field, and a projection in flow st
 `tests/scripts/test_slice_enrich.py` byte-diffs `propose` against goldens in `tests/slice-enrich/golden/`
 and checks that `apply` writes only absent fields, keeps bytes and comments, quotes paths, stamps 1.4,
 refuses a field that became present and an invalid result, writes nothing under `--dry-run`, and is
-idempotent on a second run.
+idempotent on a second run. The eval case `evals/slice-enrich-library/` scores this command's drafting
+against the fixture's `expected.yaml`.

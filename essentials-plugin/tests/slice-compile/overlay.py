@@ -57,6 +57,8 @@ NOT_COMPILED = {
     "brownfield-layered": "a plain layered Spring application with no Essentials code; slice-discover's input, not a build",
     "slice-map": "JSON sample data for the slice-map page, no sources",
     "change-router": "prompts and cases for the change-router evals, no application sources",
+    "enrich": "slice-enrich's input: sources and tests read for evidence, written to be parsed rather than built "
+              "(Java and Kotlin in one tree, a deliberately unparseable manifest)",
 }
 
 

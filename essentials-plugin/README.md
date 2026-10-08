@@ -243,11 +243,14 @@ essentials-plugin/
 │   │                             input; slice-map — the html page's data and render-check.py,
 │   │                             which also renders the Atlas pages; atlas — the Slice Atlas
 │   │                             input (three contexts, two journeys, scenarios, Java and JUnit
-│   │                             stubs, one unparseable manifest); slice-atlas — sample.json, a
+│   │                             stubs, one unparseable manifest); atlas-multi — two applications
+│   │                             sharing slice ids, for the per-application pages; enrich — the
+│   │                             slice-enrich input (manifests lacking the human-owned fields,
+│   │                             evidence and traps in sources and tests); slice-atlas — sample.json, a
 │   │                             hand-written Atlas data + layout sample; change-router — the
 │   │                             change router's cases. Only service-entity,
-│   │                             brownfield-layered and change-router/essentials-not-on-law carry
-│   │                             a pom.xml, so the commands can detect the stack from it; the
+│   │                             brownfield-layered, atlas-multi and change-router/essentials-not-on-law
+│   │                             carry a pom.xml, so the commands can detect the stack from it; the
 │   │                             first and last pin no dependency version, and brownfield-layered's
 │   │                             Spring Boot 3 parent is part of the legacy code it models)
 │   ├── golden/init/             (the nine answer cells as rendered .tree goldens, and the six

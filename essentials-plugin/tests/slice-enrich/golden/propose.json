@@ -120,7 +120,7 @@
           "evidence": [
             {
               "path": "src/main/kotlin/com/example/library/accounts/use_cases/open_account/OpenAccountHandler.kt",
-              "line": 5,
+              "line": 6,
               "text": "Registers a new member so they can borrow."
             }
           ]

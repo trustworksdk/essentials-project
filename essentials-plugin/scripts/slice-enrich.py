@@ -316,7 +316,12 @@ def javadoc(f, text, td):
         z = text.count("\n", 0, m.end()) + 1
         if a < prev or z > start or any(x.strip() for x in lines[z:start - 1]):
             continue
-        best = (m.group(1), a)
+        skip = 0  # the evidence line is the comment's first line of text, not its `/**`
+        for row in m.group(1).split("\n"):
+            if row.strip().lstrip("*").strip():
+                break
+            skip += 1
+        best = (m.group(1), a + skip)
     if best is None:
         return None
     sentence = first_sentence(doc_body(best[0]))
