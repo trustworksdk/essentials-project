@@ -180,6 +180,15 @@ int rows = unitOfWorkFactory.withUnitOfWork(uow -> uow.handle()
 ```
 `withUnitOfWork(uow -> …)` gives the same UnitOfWork `getRequiredUnitOfWork()` would return inside a transaction, and opens one where `getRequiredUnitOfWork()` would throw `NoActiveUnitOfWorkException`.
 
+### Hand-opened `Jdbi` handles (PostgreSQL starter)
+
+The `Jdbi` bean of `spring-boot-starter-postgresql` wraps the `DataSource` in Spring's `TransactionAwareDataSourceProxy`, and the starter's Spring-aware UnitOfWork factories open their handles from that same `Jdbi`. A handle you open yourself (`jdbi.useHandle(...)`, `jdbi.withHandle(...)`, `jdbi.open()`) therefore behaves like this:
+
+- **Inside an active UnitOfWork or Spring transaction** it gets the transaction's connection and joins it: its writes commit or roll back with the transaction.
+- **With no UnitOfWork or Spring transaction active** it gets its own pooled connection and every statement auto-commits. Such a write is not atomic with any queue, inbox or outbox operation, so it gets none of their guarantees.
+
+Prefer `unitOfWorkFactory.usingUnitOfWork(uow -> uow.handle()…)`: it joins an active transaction and opens one when none is active.
+
 ## DurableQueues (Messaging)
 
 **Package**: `dk.trustworks.essentials.components.foundation.messaging.queue`
