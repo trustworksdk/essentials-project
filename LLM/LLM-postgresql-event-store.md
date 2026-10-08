@@ -840,6 +840,30 @@ void placing_an_order_shows_it_in_the_order_view() {
 
 Await the **last** event the assertion depends on, on the processor that writes the read model you assert on.
 
+### Testing asynchronous projections
+
+An `EventProcessor` or `ViewEventProcessor` handles events after the appending `UnitOfWork` commits, so a test that
+appends and then reads its read model at once races it. Rules:
+
+- **Await the last event you appended**, not an earlier one: a processor past the first event may not have reached
+  the third. Use `eventStore.appendToStream(...).lastEvent()`, or `AppendedEvents.recordDuring(...)` around a
+  `commandBus.send(...)` and its `lastAppendedEvent()`. When the command appended to several aggregate types, await
+  per type with `recorded.highestGlobalEventOrder(aggregateType)` and `awaitProcessed(aggregateType, order, timeout)`.
+- **Await the seam the code under test actually reads.** If the assertion reads a view, await the processor that
+  writes that view, with [`awaitProcessed`](#awaiting-a-processor-awaitprocessed). If it reads something a processor
+  only starts - an aggregate a policy updates through `sendAndDontWait`, a cache refreshed by a listener - the
+  processor being done does not mean that seam is; await the seam itself.
+- **An existence check that must not lag asks the write side.** An idempotency probe ("does this order already
+  exist?") reads the aggregate - a repository's `findX`, `tryLoad(id)` or `eventStore.fetchStream(...)` - never an
+  eventually consistent view.
+- **`awaitProcessed` sees only the processor in this JVM.** When another instance holds the processor's lock (a
+  second application on the same test database, a reused container), a `ViewEventProcessor` times out and an
+  `EventProcessor` reads a resume point that lags by the snapshot interval.
+
+For the seams `awaitProcessed` cannot cover - an aggregate fold or a cache downstream of a processor, or a processor
+whose lock another instance holds - poll with an assertion and a deadline (e.g. Awaitility's
+`await().atMost(Duration.ofSeconds(10)).untilAsserted(...)`, test scope).
+
 ### Unhandled event types
 
 Since 0.60.1 (CB-4). Every processor allows unmatched messages, so an event type without a `@MessageHandler` was dropped

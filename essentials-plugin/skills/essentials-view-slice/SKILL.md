@@ -226,6 +226,16 @@ behind the dead letter. Say in the report that the team alerts on `essentials.me
 (or `DurableQueuesHealthIndicator`), fixes the cause and calls `resurrectDeadLetterMessage`. See
 `references/llm/LLM-postgresql-event-store.md` § Handler failures.
 
+### 2i. Testing the projection
+
+When filling the projector IT's "await the projection" TODO, call `awaitProcessed` on the projector with the **last**
+event the test appended (`appendToStream(...).lastEvent()`, or `AppendedEvents.recordDuring(...)` around the
+`commandBus.send`), then read the row once. Do not poll the view under a guessed timeout. `awaitProcessed` sees only
+the projector in this JVM; poll with an assertion and a deadline only for what it cannot see — a seam downstream of the
+projector, or a projector whose lock another instance holds. An existence check that must not lag (an idempotency
+probe) reads the write side, never this view. See `references/llm/LLM-postgresql-event-store.md` § Testing
+asynchronous projections.
+
 ## Step 3 — Check or scaffold the bounded context
 
 `Glob <sourceRoot>/<packageDir>/<bc>/`. **If absent, stop:** a bounded context starts with its first
