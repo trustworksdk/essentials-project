@@ -1940,9 +1940,20 @@ eventBus.addAsyncSubscriber(notification -> {
 });
 ```
 
+#### The LISTEN Connection
+
+A LISTEN lasts as long as its database session, so the listener holds one connection for as long as it polls:
+
+- It is opened from the `Jdbi` given to `setJdbi(...)` - normally borrowed from the application's pool - unless `setListenerJdbi(...)` or `setListenerDataSource(...)` gives the listener a connection source of its own (in the Spring Boot starter: `essentials.multi-table-change-listener.dedicated-connection=true`).
+- Every `setLivenessCheckInterval(...)` (default 10 seconds) it is probed with `Connection.isValid()`. A non-blocking read for notifications never fails on a half-open connection, so the probe is what detects one.
+- A lost connection is logged at WARN (`setConnectionLossLogLevel(...)`), at most once per `setConnectionLossLogInterval(...)` (default 1 minute), and reopened on the next poll. A new connection LISTENs to every registered table again.
+- Delivery is **at most once**: a notification sent while no connection is listening is lost. Use notifications as wake-up hints, never as the data itself.
+- Polling starts in `start()`. `stop()` closes the connection (after `UNLISTEN *`), and a later `start()` resumes. A listener that is never `start()`ed starts polling on its first `listenToNotificationsFor(...)`.
+- Table names are lower-cased (`Locale.ROOT`) to form the channel name, because `LISTEN` folds an unquoted name to lower case while `pg_notify` does not.
+
 #### Duplicate Notification Filtering
 
-When `filterDuplicateNotifications` is enabled, the listener can filter duplicate notifications within the same poll batch using `NotificationDuplicationFilter`:
+When `filterDuplicateNotifications` is enabled, the listener can filter duplicate notifications within the same poll batch using `NotificationDuplicationFilter`. Duplicates are detected **per channel**: notifications on different tables never collapse into one. A notification without a key - including one whose payload is not JSON - is never treated as a duplicate. `setChannelDeduplicationPolicy(ChannelDeduplicationPolicy.onlyTables(...))` limits de-duplication to some tables:
 
 ```java
 // Add a custom duplication filter

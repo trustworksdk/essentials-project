@@ -78,6 +78,8 @@ import org.springframework.context.event.*;
 import org.springframework.context.event.EventListener;
 import org.springframework.core.env.Environment;
 import org.springframework.jdbc.datasource.TransactionAwareDataSourceProxy;
+import org.springframework.boot.jdbc.autoconfigure.JdbcConnectionDetails;
+import org.springframework.jdbc.datasource.DriverManagerDataSource;
 import org.springframework.transaction.PlatformTransactionManager;
 
 import javax.sql.DataSource;
@@ -376,17 +378,38 @@ public class EssentialsComponentsConfiguration {
                                                           health.getCacheTimeToLive());
     }
 
+    /**
+     * The {@link MultiTableChangeListener} that fans PostgreSQL LISTEN/NOTIFY out to the event store and the queues.<br>
+     * Its LISTEN connection is borrowed from the application's pool for as long as it polls, unless
+     * {@code essentials.multi-table-change-listener.dedicated-connection=true}: then it opens its own, outside the pool,
+     * from the same {@link JdbcConnectionDetails} (URL, user name and password) Spring Boot built the pool from.
+     */
     @Bean
     @ConditionalOnMissingBean
     public MultiTableChangeListener<TableChangeNotification> multiTableChangeListener(Jdbi jdbi,
                                                                                       JSONSerializer jsonSerializer,
                                                                                       EventBus eventBus,
-                                                                                      EssentialsComponentsProperties properties) {
-        return new MultiTableChangeListener<>(jdbi,
-                                              properties.getMultiTableChangeListener().getPollingInterval(),
-                                              jsonSerializer,
-                                              eventBus,
-                                              properties.getMultiTableChangeListener().isFilterDuplicateNotifications());
+                                                                                      EssentialsComponentsProperties properties,
+                                                                                      ObjectProvider<JdbcConnectionDetails> jdbcConnectionDetails) {
+        var listenerProperties = properties.getMultiTableChangeListener();
+        var builder = MultiTableChangeListener.builder()
+                                              .setJdbi(jdbi)
+                                              .setJsonSerializer(jsonSerializer)
+                                              .setEventBus(eventBus)
+                                              .setPollingInterval(listenerProperties.getPollingInterval())
+                                              .setFilterDuplicateNotifications(listenerProperties.isFilterDuplicateNotifications());
+        if (listenerProperties.isDedicatedConnection()) {
+            var connectionDetails = jdbcConnectionDetails.getIfAvailable();
+            if (connectionDetails == null) {
+                throw new IllegalStateException("essentials.multi-table-change-listener.dedicated-connection=true needs the database's JDBC URL, " +
+                                                        "but there is no JdbcConnectionDetails bean (normally created from spring.datasource.url). " +
+                                                        "Set spring.datasource.url, or define your own MultiTableChangeListener bean using MultiTableChangeListener.builder().setListenerDataSource(...)");
+            }
+            builder.setListenerDataSource(new DriverManagerDataSource(connectionDetails.getJdbcUrl(),
+                                                                      connectionDetails.getUsername(),
+                                                                      connectionDetails.getPassword()));
+        }
+        return builder.build();
     }
 
     /**

@@ -250,6 +250,7 @@ public class EssentialsComponentsProperties {
     public static class MultiTableChangeListenerProperties {
         private Duration pollingInterval              = Duration.ofMillis(50);
         private boolean  filterDuplicateNotifications = true;
+        private boolean  dedicatedConnection          = false;
 
         /**
          * Get the interval with which the {@link MultiTableChangeListener} is polling Postgresql for notification
@@ -287,6 +288,28 @@ public class EssentialsComponentsProperties {
          */
         public void setFilterDuplicateNotifications(boolean filterDuplicateNotifications) {
             this.filterDuplicateNotifications = filterDuplicateNotifications;
+        }
+
+        /**
+         * Whether the {@link MultiTableChangeListener} opens its LISTEN connection outside the application's connection pool
+         *
+         * @return true if the {@link MultiTableChangeListener} opens its own LISTEN connection, outside the pool
+         */
+        public boolean isDedicatedConnection() {
+            return dedicatedConnection;
+        }
+
+        /**
+         * Whether the {@link MultiTableChangeListener} opens its LISTEN connection outside the application's connection pool.<br>
+         * A LISTEN lasts as long as its database session, so the listener holds its connection for as long as it polls.
+         * By default ({@code false}) that connection is borrowed from the application's pool, which then has one connection
+         * fewer for everything else. With {@code true} the listener opens its own connection, not pooled, from the same JDBC
+         * URL, user name and password as the pool ({@code spring.datasource.*}).
+         *
+         * @param dedicatedConnection true to give the {@link MultiTableChangeListener} its own LISTEN connection, outside the pool
+         */
+        public void setDedicatedConnection(boolean dedicatedConnection) {
+            this.dedicatedConnection = dedicatedConnection;
         }
     }
 

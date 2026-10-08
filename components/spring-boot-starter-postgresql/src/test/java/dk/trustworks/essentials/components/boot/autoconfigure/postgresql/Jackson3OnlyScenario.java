@@ -48,10 +48,12 @@ public final class Jackson3OnlyScenario {
 
     /** The notification listener the starter wires with that serializer. Creating it does not connect. */
     public static void createTheMultiTableChangeListener() {
-        new MultiTableChangeListener<>(Jdbi.create("jdbc:postgresql://localhost:1/never-connected"),
-                                       Duration.ofSeconds(1),
-                                       EssentialsObjectMappers.createJSONSerializer(),
-                                       LocalEventBus.builder().busName("jackson3-only").build(),
-                                       true);
+        MultiTableChangeListener.builder()
+                                .setJdbi(Jdbi.create("jdbc:postgresql://localhost:1/never-connected"))
+                                .setPollingInterval(Duration.ofSeconds(1))
+                                .setJsonSerializer(EssentialsObjectMappers.createJSONSerializer())
+                                .setEventBus(LocalEventBus.builder().busName("jackson3-only").build())
+                                .setFilterDuplicateNotifications(true)
+                                .build();
     }
 }

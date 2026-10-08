@@ -201,7 +201,12 @@ class MultiTableChangeListenerRobustnessIT {
     void a_half_open_connection_is_detected_and_replaced() throws Exception {
         proxy = new FreezableTcpProxy(postgreSQLContainer.getHost(), postgreSQLContainer.getMappedPort(PostgreSQLContainer.POSTGRESQL_PORT));
         var proxiedJdbi = Jdbi.create(proxy.jdbcUrl(postgreSQLContainer.getDatabaseName()), postgreSQLContainer.getUsername(), postgreSQLContainer.getPassword());
-        listener = new MultiTableChangeListener<>(proxiedJdbi, Duration.ofMillis(50), jsonSerializer, eventBus, false);
+        listener = MultiTableChangeListener.builder()
+                                           .setJdbi(proxiedJdbi)
+                                           .setJsonSerializer(jsonSerializer)
+                                           .setEventBus(eventBus)
+                                           .setLivenessCheckInterval(Duration.ofMillis(500))
+                                           .build();
         listener.start();
         listener.listenToNotificationsFor(TABLE_1, Table1Notification.class);
         insertInto(TABLE_1);
@@ -210,7 +215,7 @@ class MultiTableChangeListenerRobustnessIT {
 
         proxy.freezeOpenConnections();
 
-        Awaitility.waitAtMost(Duration.ofSeconds(30))
+        Awaitility.waitAtMost(Duration.ofSeconds(15))
                   .pollInterval(Duration.ofMillis(250))
                   .untilAsserted(() -> {
                       insertInto(TABLE_1);
@@ -312,6 +317,31 @@ class MultiTableChangeListenerRobustnessIT {
 
         Awaitility.waitAtMost(Duration.ofSeconds(5))
                   .untilAsserted(() -> assertThat(received).hasSize(1));
+    }
+
+    @Test
+    void a_channel_the_deduplication_policy_excludes_is_never_deduplicated() {
+        listener = MultiTableChangeListener.builder()
+                                           .setJdbi(jdbi)
+                                           .setJsonSerializer(jsonSerializer)
+                                           .setEventBus(eventBus)
+                                           .setChannelDeduplicationPolicy(ChannelDeduplicationPolicy.onlyTables(TABLE_2))
+                                           .build();
+        listener.addDuplicationFilterAsLast(new NotificationDuplicationFilter.TableNameDuplicationFilter());
+        listener.start();
+        listener.listenToNotificationsFor(TABLE_1, Table1Notification.class);
+        listener.listenToNotificationsFor(TABLE_2, Table2Notification.class);
+
+        jdbi.useTransaction(handle -> {
+            for (var i = 0; i < 5; i++) {
+                handle.execute("INSERT INTO table1 (column1, column2) VALUES ('a', 'b')");
+                handle.execute("INSERT INTO table2 (column3, column4) VALUES ('c', 'd')");
+            }
+        });
+
+        Awaitility.waitAtMost(Duration.ofSeconds(5))
+                  .untilAsserted(() -> assertThat(countReceived(Table1Notification.class)).isEqualTo(5));
+        assertThat(countReceived(Table2Notification.class)).isEqualTo(1);
     }
 
     // -------------------------------------------------------------------------------------------------------------

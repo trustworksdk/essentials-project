@@ -49,7 +49,7 @@ Cross-cutting infrastructure abstractions: transactions, distributed locking, du
 | `DurableQueuesHealthIndicator` | Per-queue dead-letter counts on `/actuator/health` under `durableQueues`. Reports `UP` until an opt-in per-queue threshold is set; caches its result. Lives here (not in a starter) because both starters register it; `spring-boot-health` is an `optional` dependency, like Micrometer |
 | `Outbox` / `Inbox` | Transactional store-and-forward EIP patterns; forward to `DurableQueues` internally |
 | `PatternMatchingMessageHandler` | Reflective message dispatch by payload type (used by Inbox/Outbox consumers) |
-| `MultiTableChangeListener` | Single poll thread for multiple PG LISTEN/NOTIFY channels; fan-out via `EventBus` |
+| `MultiTableChangeListener` | Single poll thread for multiple PG LISTEN/NOTIFY channels; fan-out via `EventBus`. Built by `MultiTableChangeListenerBuilder` (`builder()`, 0.60.1 - home for every new option; 5-arg ctor kept, delegates to it). `ChannelDeduplicationPolicy` = which channels get de-duplicated |
 | `ListenNotify` | Low-level helper for wiring PG triggers + NOTIFY; installs trigger functions |
 | `TTLManager` | SPI for registering TTL delete jobs; backed by `EssentialsScheduler` |
 | `EssentialsScheduler` | Thin scheduler abstraction over `pg_cron` or `ScheduledExecutorService` |

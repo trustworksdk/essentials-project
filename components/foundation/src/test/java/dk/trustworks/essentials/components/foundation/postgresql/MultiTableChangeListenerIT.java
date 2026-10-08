@@ -96,7 +96,12 @@ class MultiTableChangeListenerIT {
             ListenNotify.addChangeNotificationTriggerToTable(handle, TABLE_3, List.of(ListenNotify.SqlOperation.INSERT), "id", "column5", "column6");
         });
 
-        listener = new MultiTableChangeListener<>(jdbi, Duration.ofMillis(50), new Jackson3JSONSerializer(objectMapper), localEventBus, false);
+        listener = MultiTableChangeListener.builder()
+                                           .setJdbi(jdbi)
+                                           .setJsonSerializer(new Jackson3JSONSerializer(objectMapper))
+                                           .setEventBus(localEventBus)
+                                           .setFilterDuplicateNotifications(false)
+                                           .build();
         listener.listenToNotificationsFor(TABLE_1, Table1Notification.class);
         listener.listenToNotificationsFor(TABLE_2, Table2Notification.class);
         listener.listenToNotificationsFor(TABLE_3, Table3Notification.class);
@@ -211,7 +216,12 @@ class MultiTableChangeListenerIT {
 
     @Test
     void test_with_filterDuplicateNotifications_but_without_duplication_filters() {
-        listener = new MultiTableChangeListener<>(jdbi, Duration.ofMillis(50), new Jackson3JSONSerializer(objectMapper), localEventBus, true);
+        listener = MultiTableChangeListener.builder()
+                                           .setJdbi(jdbi)
+                                           .setJsonSerializer(new Jackson3JSONSerializer(objectMapper))
+                                           .setEventBus(localEventBus)
+                                           .setFilterDuplicateNotifications(true)
+                                           .build();
         var result = testSingleTableNotificationDuplication();
         Awaitility.waitAtMost(Duration.ofMillis(2000))
                   .untilAsserted(() -> {
@@ -222,7 +232,12 @@ class MultiTableChangeListenerIT {
 
     @Test
     void test_with_filterDuplicateNotifications_with_duplication_filters() {
-        listener = new MultiTableChangeListener<>(jdbi, Duration.ofMillis(50), new Jackson3JSONSerializer(objectMapper), localEventBus, true);
+        listener = MultiTableChangeListener.builder()
+                                           .setJdbi(jdbi)
+                                           .setJsonSerializer(new Jackson3JSONSerializer(objectMapper))
+                                           .setEventBus(localEventBus)
+                                           .setFilterDuplicateNotifications(true)
+                                           .build();
         listener.addDuplicationFilterAsFirst(new QueueNameNotificationDuplicationFilter());
         listener.addDuplicationFilterAsLast(new NotificationDuplicationFilter.TableNameDuplicationFilter()); // Our filter
         var result = testSingleTableNotificationDuplication();
@@ -273,7 +288,12 @@ class MultiTableChangeListenerIT {
 
     @Test
     void test_multiple_tables_with_duplicate_filtering_but_without_duplication_filters() {
-        listener = new MultiTableChangeListener<>(jdbi, Duration.ofMillis(50), new Jackson3JSONSerializer(objectMapper), localEventBus, true);
+        listener = MultiTableChangeListener.builder()
+                                           .setJdbi(jdbi)
+                                           .setJsonSerializer(new Jackson3JSONSerializer(objectMapper))
+                                           .setEventBus(localEventBus)
+                                           .setFilterDuplicateNotifications(true)
+                                           .build();
         var result = testMultiTableNotificationDuplication();
 
         Awaitility.waitAtMost(Duration.ofMillis(2000))
@@ -292,7 +312,12 @@ class MultiTableChangeListenerIT {
 
     @Test
     void test_multiple_tables_with_duplicate_filtering_with_duplication_filters() {
-        listener = new MultiTableChangeListener<>(jdbi, Duration.ofMillis(50), new Jackson3JSONSerializer(objectMapper), localEventBus, true);
+        listener = MultiTableChangeListener.builder()
+                                           .setJdbi(jdbi)
+                                           .setJsonSerializer(new Jackson3JSONSerializer(objectMapper))
+                                           .setEventBus(localEventBus)
+                                           .setFilterDuplicateNotifications(true)
+                                           .build();
         listener.addDuplicationFilterAsFirst(new QueueNameNotificationDuplicationFilter());
         listener.addDuplicationFilterAsLast(new NotificationDuplicationFilter.TableNameDuplicationFilter()); // Our filter
         var result = testMultiTableNotificationDuplication();

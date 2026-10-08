@@ -215,6 +215,7 @@ Prefix: `essentials.multi-table-change-listener`
 |----------|---------|
 | `polling-interval` | `50ms` |
 | `filter-duplicate-notifications` | `true` |
+| `dedicated-connection` | `false` - `true` opens the LISTEN connection outside the pool, from the same `spring.datasource.*` URL/credentials (since 0.60.1) |
 
 #### EventBus
 

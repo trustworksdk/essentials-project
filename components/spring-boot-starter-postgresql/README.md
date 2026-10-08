@@ -226,12 +226,16 @@ essentials.durable-queues.verbose-tracing=false
 ```properties
 essentials.multi-table-change-listener.polling-interval=50ms
 essentials.multi-table-change-listener.filter-duplicate-notifications=true
+essentials.multi-table-change-listener.dedicated-connection=false
 ```
 
 | Property | Default | Description |
 |----------|---------|-------------|
 | `polling-interval` | `50ms` | Interval for polling PostgreSQL NOTIFY channel |
-| `filter-duplicate-notifications` | `true` | Filter duplicate notifications using registered filters |
+| `filter-duplicate-notifications` | `true` | Filter duplicate notifications (per channel) using registered filters |
+| `dedicated-connection` | `false` | A LISTEN lasts as long as its session, so the listener holds its connection for as long as it polls. By default it is borrowed from the application's pool; `true` opens it outside the pool, from the same `spring.datasource.*` URL, user name and password (since 0.60.1) |
+
+The listener probes its connection every 10 seconds with `Connection.isValid()`, logs a lost connection at WARN (at most once a minute) and re-establishes the LISTEN for every table on a new connection. Notifications sent while it reconnects are lost - they are wake-up hints, and the queues and the event store fall back to polling.
 
 ### EventBus Configuration
 

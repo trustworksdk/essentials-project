@@ -26,7 +26,7 @@ Single package: `dk.trustworks.essentials.components.boot.autoconfigure.postgres
 3. `Jdbi` — wraps datasource in `TransactionAwareDataSourceProxy` + installs `PostgresPlugin`; optionally attaches `RecordSqlExecutionTimeLogger`
 4. `HandleAwareUnitOfWorkFactory` (`SpringTransactionAwareJdbiUnitOfWorkFactory`) — skipped if EventStore variant on classpath
 5. `FencedLockManager` (`PostgresqlFencedLockManager`) — distributed lock coordination
-6. `MultiTableChangeListener` — LISTEN/NOTIFY bridge for queue wake-ups
+6. `MultiTableChangeListener` — LISTEN/NOTIFY bridge for queue wake-ups; built with `MultiTableChangeListener.builder()`. `essentials.multi-table-change-listener.dedicated-connection=true` → `setListenerDataSource(DriverManagerDataSource)` from `JdbcConnectionDetails` (outside the pool); no `JdbcConnectionDetails` bean → startup fails naming the property
 7. `QueueStatisticsRegistry` + `StatisticsCollectingDurableQueueMessageObserver` — per-JVM delivery statistics; created *before* `DurableQueues` so the queue receives the observer, reversing the pre-0.60 direction where statistics received the queue and ran `CREATE TRIGGER` on its table
 8. `DurableQueues` (`PostgresqlDurableQueues`) — message storage; centralized fetcher enabled by default; collects every `DurableQueueMessageObserver` bean via `composite(...)`
 9. `Inboxes` / `Outboxes` — EIP patterns backed by `DurableQueues` + `FencedLockManager`
@@ -43,7 +43,7 @@ Single package: `dk.trustworks.essentials.components.boot.autoconfigure.postgres
 
 ## Test Structure
 
-- Single integration test: `StarterAutoConfigurationIT`
+- Integration tests: `StarterAutoConfigurationIT`; `MultiTableChangeListenerAutoConfigurationIT` (tells pooled from dedicated LISTEN connection by Hikari `ApplicationName` in `pg_stat_activity`)
 - Uses `@Testcontainers` + `PostgreSQLContainer` (postgres:latest)
 - Tests use `ApplicationContextRunner` (no full Spring Boot app) — fast wiring validation
 - Verifies: API beans present and functional, `EssentialsComponentsProperties` bindings

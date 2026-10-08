@@ -46,13 +46,13 @@ import static dk.trustworks.essentials.shared.MessageFormatter.msg;
  * {@link MultiTableChangeListener} should typically be started/stopped using the {@link Lifecycle} methods, BUT it can also be used with try/using:<br>
  * Example:
  * <pre>{@code
- * try (var listener = new MultiTableChangeListener<SomeNotification>(
- *                 jdbi,
- *                 pollInterval,
- *                 jsonSerializer,
- *                 eventBus,
- *                 false
- *         )) {
+ * try (MultiTableChangeListener<SomeNotification> listener = MultiTableChangeListener.builder()
+ *                 .setJdbi(jdbi)
+ *                 .setPollingInterval(pollInterval)
+ *                 .setJsonSerializer(jsonSerializer)
+ *                 .setEventBus(eventBus)
+ *                 .setFilterDuplicateNotifications(false)
+ *                 .build()) {
  *             listener.listenToNotificationsFor("SomeTable", SomeNotification.class));
  *             ....
  *         }
@@ -73,12 +73,15 @@ import static dk.trustworks.essentials.shared.MessageFormatter.msg;
  * <p>
  * <u>The LISTEN connection</u><br>
  * A LISTEN lasts as long as its database session, so the listener holds one connection open for as long as it polls.
- * It is opened from the {@link Jdbi} given to the listener, i.e. normally borrowed from the application's pool.
+ * It is opened from the {@link Jdbi} given to the listener, i.e. normally borrowed from the application's pool - or
+ * from a connection source of its own, see {@link MultiTableChangeListenerBuilder#setListenerDataSource(javax.sql.DataSource)}.
  * <ul>
- *     <li>Every {@link #DEFAULT_LIVENESS_CHECK_INTERVAL} the connection is probed with {@link Connection#isValid(int)}:
+ *     <li>Every {@link MultiTableChangeListenerBuilder#setLivenessCheckInterval(Duration) liveness-check interval}
+ *     (default {@link #DEFAULT_LIVENESS_CHECK_INTERVAL}) the connection is probed with {@link Connection#isValid(int)}:
  *     a non-blocking read for notifications never fails on a half-open connection, so without the probe a listener whose
  *     peer has silently gone would receive nothing, for ever, with no error.</li>
- *     <li>A lost connection is reported at WARN, at most once per {@link #DEFAULT_CONNECTION_LOSS_LOG_INTERVAL} (the
+ *     <li>A lost connection is reported at WARN, at most once per {@link #DEFAULT_CONNECTION_LOSS_LOG_INTERVAL} - both
+ *     adjustable on the {@link MultiTableChangeListenerBuilder} - (the
  *     failures in between are counted, and logged at DEBUG), and a new connection is opened on the next poll. A new
  *     connection LISTENs to <b>every</b> registered table again. Notifications sent while no connection was listening are
  *     lost: delivery is at most once, so a consumer must not depend on receiving every notification.</li>
@@ -117,16 +120,17 @@ public final class MultiTableChangeListener<T extends TableChangeNotification> i
     private static final Duration LISTEN_CONNECTION_NETWORK_TIMEOUT = Duration.ofSeconds(10);
     private static final Duration POLL_THREAD_TERMINATION_TIMEOUT   = Duration.ofSeconds(5);
 
-    private final Jdbi                    listenerJdbi;
-    private final Duration                pollingInterval;
-    private final JSONSerializer          jsonSerializer;
-    private final EventBus                eventBus;
-    private final boolean                 filterDuplicateNotifications;
-    private final Duration                livenessCheckInterval;
-    private final Level                   connectionLossLogLevel;
-    private final Duration                connectionLossLogInterval;
-    private final String                  pollThreadName;
-    private final NotificationFilterChain notificationFilterChain;
+    private final Jdbi                       listenerJdbi;
+    private final Duration                   pollingInterval;
+    private final JSONSerializer             jsonSerializer;
+    private final EventBus                   eventBus;
+    private final boolean                    filterDuplicateNotifications;
+    private final ChannelDeduplicationPolicy channelDeduplicationPolicy;
+    private final Duration                   livenessCheckInterval;
+    private final Level                      connectionLossLogLevel;
+    private final Duration                   connectionLossLogInterval;
+    private final String                     pollThreadName;
+    private final NotificationFilterChain    notificationFilterChain;
     /**
      * Key: The channel name, i.e. the table name normalised by {@link ListenNotify#resolveTableChangeChannelName(String)} (lower case)<br>
      * Value: The {@link TableChangeNotification} subclass that the notification string payload should be mapped to using the {@link #jsonSerializer}
@@ -166,7 +170,9 @@ public final class MultiTableChangeListener<T extends TableChangeNotification> i
     /**
      * Create a {@link MultiTableChangeListener} that takes its LISTEN connection from {@code jdbi}, probes it every
      * {@link #DEFAULT_LIVENESS_CHECK_INTERVAL} and reports a lost connection at WARN at most once per
-     * {@link #DEFAULT_CONNECTION_LOSS_LOG_INTERVAL}.
+     * {@link #DEFAULT_CONNECTION_LOSS_LOG_INTERVAL}.<br>
+     * {@link #builder()} offers every other option - a connection source of its own, the liveness-check interval, the
+     * connection-loss logging, the per-channel de-duplication policy and the poll thread name.
      *
      * @param jdbi                         the {@link Jdbi} the LISTEN connection is opened from
      * @param pollingInterval              how often the LISTEN connection is polled for notifications
@@ -179,38 +185,28 @@ public final class MultiTableChangeListener<T extends TableChangeNotification> i
                                     JSONSerializer jsonSerializer,
                                     EventBus eventBus,
                                     boolean filterDuplicateNotifications) {
-        this(jdbi,
-             pollingInterval,
-             jsonSerializer,
-             eventBus,
-             filterDuplicateNotifications,
-             DEFAULT_LIVENESS_CHECK_INTERVAL,
-             Level.WARN,
-             DEFAULT_CONNECTION_LOSS_LOG_INTERVAL,
-             DEFAULT_POLL_THREAD_NAME);
+        this(builder().setJdbi(requireNonNull(jdbi, "No jdbi provided"))
+                      .setPollingInterval(requireNonNull(pollingInterval, "No pollingInterval provided"))
+                      .setJsonSerializer(requireNonNull(jsonSerializer, "No jsonSerializer provided"))
+                      .setEventBus(requireNonNull(eventBus, "No localEventBus instance provided"))
+                      .setFilterDuplicateNotifications(filterDuplicateNotifications));
     }
 
-    private MultiTableChangeListener(Jdbi listenerJdbi,
-                                     Duration pollingInterval,
-                                     JSONSerializer jsonSerializer,
-                                     EventBus eventBus,
-                                     boolean filterDuplicateNotifications,
-                                     Duration livenessCheckInterval,
-                                     Level connectionLossLogLevel,
-                                     Duration connectionLossLogInterval,
-                                     String pollThreadName) {
-        this.listenerJdbi = requireNonNull(listenerJdbi, "No jdbi provided");
-        this.pollingInterval = requireNonNull(pollingInterval, "No pollingInterval provided");
-        requireTrue(pollingInterval.toMillis() > 0, "pollingInterval must be at least 1 millisecond");
-        this.jsonSerializer = requireNonNull(jsonSerializer, "No jsonSerializer provided");
-        this.eventBus = requireNonNull(eventBus, "No localEventBus instance provided");
-        this.filterDuplicateNotifications = filterDuplicateNotifications;
-        this.livenessCheckInterval = requireNonNull(livenessCheckInterval, "No livenessCheckInterval provided");
-        requireFalse(livenessCheckInterval.isNegative(), "livenessCheckInterval must not be negative");
-        this.connectionLossLogLevel = requireNonNull(connectionLossLogLevel, "No connectionLossLogLevel provided");
-        this.connectionLossLogInterval = requireNonNull(connectionLossLogInterval, "No connectionLossLogInterval provided");
-        requireFalse(connectionLossLogInterval.isNegative(), "connectionLossLogInterval must not be negative");
-        this.pollThreadName = requireNonBlank(pollThreadName, "No pollThreadName provided");
+    /**
+     * Use {@link MultiTableChangeListenerBuilder#build()}
+     */
+    MultiTableChangeListener(MultiTableChangeListenerBuilder builder) {
+        requireNonNull(builder, "No builder provided");
+        this.listenerJdbi = builder.listenConnectionJdbi();
+        this.pollingInterval = builder.pollingInterval();
+        this.jsonSerializer = builder.jsonSerializer();
+        this.eventBus = builder.eventBus();
+        this.filterDuplicateNotifications = builder.filterDuplicateNotifications();
+        this.channelDeduplicationPolicy = builder.channelDeduplicationPolicy();
+        this.livenessCheckInterval = builder.livenessCheckInterval();
+        this.connectionLossLogLevel = builder.connectionLossLogLevel();
+        this.connectionLossLogInterval = builder.connectionLossLogInterval();
+        this.pollThreadName = builder.pollThreadName();
         if (jsonSerializer instanceof Jackson3JSONSerializer jackson3JSONSerializer) {
             this.notificationFilterChain = new NotificationFilterChain(jackson3JSONSerializer.getObjectMapper());
         } else {
@@ -218,6 +214,26 @@ public final class MultiTableChangeListener<T extends TableChangeNotification> i
             // mapper configuration: a plain mapper is enough for any other JSONSerializer implementation.
             this.notificationFilterChain = new NotificationFilterChain(JsonMapper.builder().build());
         }
+    }
+
+    /**
+     * Create a {@link MultiTableChangeListenerBuilder}. Required: {@link MultiTableChangeListenerBuilder#setJdbi(Jdbi)},
+     * {@link MultiTableChangeListenerBuilder#setJsonSerializer(JSONSerializer)} and
+     * {@link MultiTableChangeListenerBuilder#setEventBus(EventBus)}:
+     * <pre>{@code
+     * MultiTableChangeListener<TableChangeNotification> listener = MultiTableChangeListener.builder()
+     *     .setJdbi(jdbi)
+     *     .setPollingInterval(Duration.ofMillis(100))
+     *     .setJsonSerializer(jsonSerializer)
+     *     .setEventBus(eventBus)
+     *     .setFilterDuplicateNotifications(true)
+     *     .build();
+     * }</pre>
+     *
+     * @return a new {@link MultiTableChangeListenerBuilder}
+     */
+    public static MultiTableChangeListenerBuilder builder() {
+        return new MultiTableChangeListenerBuilder();
     }
 
     public boolean isFilterDuplicateNotifications() {
@@ -597,7 +613,8 @@ public final class MultiTableChangeListener<T extends TableChangeNotification> i
      * Removes duplicate notifications from one poll batch.<br>
      * Duplicates are detected <b>per channel</b>: two notifications are duplicates only when they arrived on the same channel and
      * the {@link NotificationDuplicationFilter}'s extract the same key from both. A notification for which no key can be
-     * extracted - including one whose payload is not JSON - is never treated as a duplicate and is always kept.
+     * extracted - including one whose payload is not JSON - is never treated as a duplicate and is always kept, as is every
+     * notification on a channel the {@link ChannelDeduplicationPolicy} does not de-duplicate.
      */
     private Stream<PGNotification> filterDuplicateNotifications(PGNotification[] notifications) {
         if (filterDuplicateNotifications && notifications.length > 1 && notificationFilterChain.hasDuplicationFilters()) {
@@ -605,9 +622,14 @@ public final class MultiTableChangeListener<T extends TableChangeNotification> i
             var filteredNotifications     = new ArrayList<PGNotification>();
 
             for (var notification : notifications) {
+                var channel = channelNameOf(notification);
+                if (!channelDeduplicationPolicy.isDeduplicated(channel)) {
+                    filteredNotifications.add(notification);
+                    continue;
+                }
                 var duplicationKey = extractDuplicationKey(notification);
                 if (duplicationKey.isEmpty() ||
-                        duplicationKeysPerChannel.computeIfAbsent(channelNameOf(notification), channel -> new HashSet<>())
+                        duplicationKeysPerChannel.computeIfAbsent(channel, _channel -> new HashSet<>())
                                                  .add(duplicationKey.get())) {
                     filteredNotifications.add(notification);
                 }

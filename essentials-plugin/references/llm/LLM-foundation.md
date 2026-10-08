@@ -1141,6 +1141,17 @@ listener.listenToNotificationsFor("orders", OrderNotification.class);
 listener.start();
 ```
 
+Required: `setJdbi`, `setJsonSerializer`, `setEventBus`. Optional (default): `setPollingInterval` (50 ms), `setFilterDuplicateNotifications` (true), `setChannelDeduplicationPolicy` (`ChannelDeduplicationPolicy.allChannels()`), `setLivenessCheckInterval` (10 s, `Duration.ZERO` disables), `setConnectionLossLogLevel` (WARN), `setConnectionLossLogInterval` (1 min), `setPollThreadName`, `setListenerJdbi(Jdbi)` / `setListenerDataSource(DataSource)` (LISTEN connection outside the app pool). The 5-argument constructor still works.
+
+Behaviour (0.60.1+):
+- Holds one LISTEN connection for as long as it polls, borrowed from `setJdbi`'s pool unless a listener `Jdbi`/`DataSource` is set (starter: `essentials.multi-table-change-listener.dedicated-connection=true`).
+- Probes it with `Connection.isValid()` every liveness interval - catches a half-open socket. A lost connection logs at WARN (rate-limited) and is reopened on the next poll; the new connection re-LISTENs every registered table.
+- Delivery is **at most once**: notifications sent while no connection listens are lost. Treat them as wake-up hints, never as the data.
+- Polling starts in `start()`; `stop()` closes the connection and `start()` resumes. A listener never `start()`ed polls from its first `listenToNotificationsFor`.
+- Channel names are lower-cased (`Locale.ROOT`): `"Orders"` and `"orders"` are the same channel.
+- Duplicates are filtered per channel, only when a `NotificationDuplicationFilter` is registered; a payload with no key (or not JSON) is never dropped as a duplicate.
+- `TableChangeNotification.equals` compares class, table name and operation only - a subclass with state must override `equals`/`hashCode`.
+
 ### MongoDB Utilities
 
 **Class**: `dk.trustworks.essentials.components.foundation.mongo.MongoUtil`
