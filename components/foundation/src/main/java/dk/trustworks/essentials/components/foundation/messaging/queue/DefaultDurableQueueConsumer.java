@@ -434,6 +434,26 @@ public abstract class DefaultDurableQueueConsumer<DURABLE_QUEUES extends Durable
             }
         } catch (Throwable e) {
             rethrowIfCriticalError(e);
+            if (!started) {
+                // stop() interrupts the delivery threads, so this failure may be that interrupt rather than anything the
+                // message did. Classifying it could dead-letter a message that never had a fair attempt: hand it back, and
+                // let whichever consumer takes it next classify its next failure. Same rule as CentralizedMessageFetcher.
+                // The write runs with the interrupt flag cleared: a handler usually re-sets it (Kafka does), and the
+                // MongoDB driver refuses a connection on an interrupted thread, leaving the message stuck "being delivered".
+                LOG.info("[{}:{}] {} - Handler failed after the consumer began stopping; returning the message for redelivery. Error: {}",
+                         queueName,
+                         queuedMessage.getId(),
+                         consumeFromQueue.consumerName,
+                         e.getMessage());
+                var wasInterrupted = Thread.interrupted();
+                try {
+                    return retryMessage(queuedMessage, e, Duration.ZERO);
+                } finally {
+                    if (wasInterrupted) {
+                        Thread.currentThread().interrupt();
+                    }
+                }
+            }
             var decision         = MessageDeliveryClassifier.classify(queuedMessage, e, consumeFromQueue.getRedeliveryPolicy());
             var isPermanentError = decision.outcome() == MessageDeliveryOutcome.PERMANENT_ERROR;
             if (decision.isDeadLetter()) {

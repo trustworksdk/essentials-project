@@ -290,6 +290,55 @@ public abstract class DurableQueuesIT<DURABLE_QUEUES extends DurableQueues, UOW 
         assertThat(durableQueues.getQueueNames()).isEqualTo(Set.of(queueName));
     }
 
+    /**
+     * Stopping a consumer interrupts the handler threads. A handler blocked in I/O then fails with an interrupt it did
+     * not cause - a Kafka send throws {@code InterruptException} and re-sets the interrupt flag, which is what this
+     * handler imitates. The redelivery policy allows no redeliveries, so classifying that failure would dead-letter
+     * the message on its first attempt; the centralized fetcher used to do so on every policy. The message must
+     * instead be handed back and reach the next consumer.
+     */
+    @Test
+    void a_message_whose_handler_is_interrupted_by_the_consumer_stopping_is_redelivered_not_dead_lettered() {
+        // Given
+        var queueName = QueueName.of("TestQueue");
+        var message   = Message.of(new OrderEvent.OrderAdded(OrderId.random(), CustomerId.random(), 1234));
+        withDurableQueue(() -> durableQueues.queueMessage(queueName, message));
+
+        var handlerStarted  = new CountDownLatch(1);
+        var handlerFinished = new CountDownLatch(1);
+        var consumer = durableQueues.consumeFromQueue(queueName, RedeliveryPolicy.fixedBackoff(Duration.ofMillis(100), 0), 1, queuedMessage -> {
+            handlerStarted.countDown();
+            try {
+                Thread.sleep(Duration.ofSeconds(60));
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                throw new RuntimeException("Interrupted while sending", e);
+            } finally {
+                handlerFinished.countDown();
+            }
+        });
+        Awaitility.await().atMost(Duration.ofSeconds(30)).until(() -> handlerStarted.getCount() == 0);
+
+        // When
+        consumer.cancel();
+
+        // Then
+        Awaitility.await().atMost(Duration.ofSeconds(30)).until(() -> handlerFinished.getCount() == 0);
+        Awaitility.await()
+                  .during(Duration.ofMillis(500))
+                  .atMost(Duration.ofSeconds(10))
+                  .until(() -> durableQueues.getTotalDeadLetterMessagesQueuedFor(queueName) == 0);
+
+        var recordingQueueMessageHandler = new RecordingQueuedMessageHandler();
+        var nextConsumer                 = durableQueues.consumeFromQueue(queueName, RedeliveryPolicy.fixedBackoff(Duration.ofMillis(100), 0), 1, recordingQueueMessageHandler);
+        Awaitility.await()
+                  .atMost(Duration.ofSeconds(30))
+                  .untilAsserted(() -> assertThat(recordingQueueMessageHandler.messages).hasSize(1));
+        assertThat(recordingQueueMessageHandler.messages.peek()).usingRecursiveComparison().isEqualTo(message);
+        assertThat(durableQueues.getTotalDeadLetterMessagesQueuedFor(queueName)).isEqualTo(0);
+        nextConsumer.cancel();
+    }
+
     @Test
     void verify_a_that_as_long_as_an_ordered_message_with_same_key_and_a_lower_key_order_exists_as_a_dead_letter_message_then_no_further_messages_with_the_same_key_will_be_delivered() {
         // Given

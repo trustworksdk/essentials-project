@@ -392,7 +392,11 @@ public class CentralizedMessageFetcher implements Lifecycle {
                 rethrowIfCriticalError(e);
 
                 try {
-                    var decision = classify(message, e);
+                    if (!registration.consumer.isStarted()) {
+                        handBackAfterConsumerStopped(queueName, message, e);
+                        return;
+                    }
+                    var decision = classify(registration, message, e);
                     if (decision.isDeadLetter()) {
                         log.error("[{}:{}] Marking message as dead letter. {}. Error: {}",
                                   queueName,
@@ -478,23 +482,41 @@ public class CentralizedMessageFetcher implements Lifecycle {
 
     /**
      * Decide what to do with a message whose handler threw, delegating to {@link MessageDeliveryClassifier} so
-     * this fetcher and {@link DefaultDurableQueueConsumer} cannot drift apart.
-     * <p>
-     * The one thing that is decided here rather than there: if the consumer registration has gone, there is no
-     * {@link dk.trustworks.essentials.components.foundation.messaging.RedeliveryPolicy} to classify against, and
-     * the message is dead-lettered rather than left stuck.
+     * this fetcher and {@link DefaultDurableQueueConsumer} cannot drift apart. The policy is the one of the
+     * registration the message was delivered under, which the worker holds even after the consumer unregisters.
      */
-    private MessageDeliveryDecision classify(QueuedMessage queuedMessage, Throwable e) {
-        DurableQueueConsumerRegistration registration = consumerRegistrations.get(queuedMessage.getQueueName());
-        if (registration == null) {
-            return new MessageDeliveryDecision(MessageDeliveryOutcome.PERMANENT_ERROR,
-                                               MessageDeliveryDecision.MessageDeliveryRule.POLICY_VERDICT,
-                                               "",
-                                               -1,
-                                               queuedMessage.getTotalDeliveryAttempts(),
-                                               0);
-        }
+    private MessageDeliveryDecision classify(DurableQueueConsumerRegistration registration, QueuedMessage queuedMessage, Throwable e) {
         return MessageDeliveryClassifier.classify(queuedMessage, e, registration.consumer.getRedeliveryPolicy());
+    }
+
+    /**
+     * Return a message whose handler failed after its consumer began stopping, without classifying the failure.
+     * <p>
+     * Stopping a consumer interrupts its worker pool, so a handler in the middle of I/O fails with an interrupt it
+     * did nothing to cause (a Kafka send, for instance, throws {@code InterruptException}). Classifying that failure
+     * could dead-letter a message that never had a fair attempt: the consumer used to do exactly that, because it
+     * classified after unregistering and treated the missing registration as a permanent error. The message is
+     * handed back for immediate redelivery instead, and whichever consumer takes it next classifies its next
+     * failure as usual. The hand-back counts as a redelivery attempt, because {@code retryMessage} always counts one.
+     * <p>
+     * The write runs with the thread's interrupt flag cleared and restores it afterwards: a handler that caught the
+     * interrupt usually re-sets the flag (Kafka does), and the MongoDB driver refuses to check out a connection on an
+     * interrupted thread, which would leave the message marked as being delivered until the stuck-message reset.
+     */
+    private void handBackAfterConsumerStopped(QueueName queueName, QueuedMessage message, Throwable e) {
+        log.info("[{}:{}] Handler failed after its consumer began stopping; returning the message for redelivery. Error: {}",
+                 queueName,
+                 message.getId(),
+                 e.getMessage());
+        var wasInterrupted = Thread.interrupted();
+        try {
+            durableQueues.retryMessage(message.getId(), e, Duration.ZERO);
+            durableQueues.getMessageObserver().messageRetried(message, e, Duration.ZERO);
+        } finally {
+            if (wasInterrupted) {
+                Thread.currentThread().interrupt();
+            }
+        }
     }
 
     public boolean containsConsumerFor(QueueName queueName) {
