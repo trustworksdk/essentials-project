@@ -269,11 +269,16 @@ interface DocumentDbRepository<ENTITY : VersionedEntity<ID, ENTITY>, ID> {
 
     /**
      * Get an entity by its ID
+     *
+     * Use [findById] where a missing entity is a normal case - e.g. in a projection, where an event can arrive before the
+     * row it updates exists.
      * @param id The ID of the entity to get
-     * @return the entity with the given ID or throws an exception if not found
+     * @return the entity with the given ID
+     * @throws DocumentEntityNotFoundException if no entity with the given ID exists (a [NullPointerException] subtype,
+     * so code written against the bare `NullPointerException` this method threw before 0.60.1 still catches it)
      */
     fun getById(id: ID): ENTITY {
-        return findById(id)!!
+        return findById(id) ?: throw DocumentEntityNotFoundException(entityConfiguration().entityClass().java, id)
     }
 
     /**
@@ -501,6 +506,19 @@ interface DocumentDbRepository<ENTITY : VersionedEntity<ID, ENTITY>, ID> {
  * which declare no `throws` clause, and so a Spring `@Transactional` boundary rolls back on it by default.
  */
 class OptimisticLockingException(message: String) : RuntimeException(message)
+
+/**
+ * Thrown by [DocumentDbRepository.getById] when no entity with the requested id exists.
+ *
+ * It extends [NullPointerException] only for compatibility: before 0.60.1 `getById` was `findById(id)!!` and threw a bare
+ * `NullPointerException`, so code that caught that keeps working. Catch [DocumentEntityNotFoundException] in new code, or
+ * use [DocumentDbRepository.findById], which returns `null`.
+ *
+ * @param entityType the entity class that was looked up
+ * @param id the id that was not found
+ */
+class DocumentEntityNotFoundException(val entityType: Class<*>, val id: Any?) :
+    NullPointerException("No '${entityType.name}' entity with id '$id' exists")
 
 /**
  * Serializer for an [Id] annotated property within a [VersionedEntity],

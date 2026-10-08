@@ -650,7 +650,7 @@ Multiple methods for retrieving entities, depending on your needs:
 | Method | Returns | When to Use |
 |--------|---------|-------------|
 | `findById(id)` | `Entity?` | When the entity might not exist (returns `null` if not found) |
-| `getById(id)` | `Entity` | When the entity must exist (throws exception if not found) |
+| `getById(id)` | `Entity` | When the entity must exist (throws `DocumentEntityNotFoundException`, naming entity type and id, if not found) |
 | `existsById(id)` | `Boolean` | When you only need to check existence without loading the entity |
 | `findAll()` | `List<Entity>` | Load all entities (use with caution on large tables) |
 | `findAllById(ids)` | `List<Entity>` | Load multiple entities by their IDs in a single query |

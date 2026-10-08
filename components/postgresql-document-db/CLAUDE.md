@@ -8,7 +8,7 @@ Written in Kotlin. No Spring dependency — pure Jdbi + `HandleAwareUnitOfWorkFa
 
 | Package | Contents |
 |---|---|
-| `document_db` | Core interfaces/types: `DocumentDbRepository`, `DocumentDbRepositoryFactory`, `VersionedEntity`, `Version`, `DelegatingDocumentDbRepository`, `OptimisticLockingException`, `IdSerializer` |
+| `document_db` | Core interfaces/types: `DocumentDbRepository`, `DocumentDbRepositoryFactory`, `VersionedEntity`, `Version`, `DelegatingDocumentDbRepository`, `OptimisticLockingException`, `DocumentEntityNotFoundException` (`getById` miss; extends NPE for compat), `IdSerializer` |
 | `document_db.annotations` | `@DocumentEntity(tableName)`, `@Id`, `@Indexed` |
 | `document_db.postgresql` | Impl: `PostgresqlDocumentDbRepository`, `EntityConfiguration`, `QueryBuilder`, `Condition`, `Property`, `SingleProperty`, `NestedProperty` |
 

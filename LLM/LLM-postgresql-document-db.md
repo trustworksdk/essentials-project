@@ -229,7 +229,7 @@ class DocumentDbConfig {
 | `update(entity)` | Modify existing | Entity w/ `version++` | Checks version, throws `OptimisticLockingException` |
 | `update(entity, nextVersion)` | Update with explicit version | Entity w/ specified version | Alternative to auto-increment |
 | `findById(id)` | Nullable lookup | `Entity?` | Safe when might not exist |
-| `getById(id)` | Required lookup | `Entity` | Throws if missing |
+| `getById(id)` | Required lookup | `Entity` | Throws `DocumentEntityNotFoundException` if missing |
 | `existsById(id)` | Existence check | `Boolean` | No entity loading |
 | `deleteById(id)` | Delete by ID | `Unit` | No-op if missing |
 | `delete(entity)` | Delete by entity | `Unit` | Uses entity ID |
@@ -255,7 +255,7 @@ val updated = repo.update(saved)  // version=1
 
 // Read
 val found = repo.findById(orderId)  // null if missing
-val required = repo.getById(orderId)  // throws if missing
+val required = repo.getById(orderId)  // throws DocumentEntityNotFoundException if missing
 
 // Batch operations
 val orders = listOf(order1, order2, order3)
@@ -693,7 +693,7 @@ class DocumentsRepository(factory: DocumentDbRepositoryFactory)
   ```
 - ⚠️ **`Version` has no `of()`**: it is a Kotlin value class — construct it, `Version(message.order)`. From Java use the `long` overloads and `Version.NOT_SAVED_YET_VALUE` / `Version.ZERO_VALUE`.
 - ⚠️ **Path-string queries compare as text**: `lt("price", "1000.00")` compares the JSON value as text, so numeric and temporal ranges (and `orderBy(path, …)`) order wrongly. Pass a `DbType` — `lt("price", "1000.00", DbType.NUMERIC)`, `orderBy("price", DbType.NUMERIC, Order.ASC)` — to emit a `CAST`.
-- ⚠️ **findById vs getById**: `findById()` returns `null` when not found; `getById()` is `findById(id)!!` and throws `NullPointerException`. In a projector whose view may not exist yet (created by an event from another stream, or not yet created), use `findById()` and handle the `null`.
+- ⚠️ **findById vs getById**: `findById()` returns `null` when not found; `getById()` throws `DocumentEntityNotFoundException`, which names the entity class and the id (since 0.60.1; before that a bare `NullPointerException` from `findById(id)!!`). It extends `NullPointerException`, so a `catch` for the old NPE still matches. In a projector whose view may not exist yet (created by an event from another stream, or not yet created), use `findById()` and handle the `null`.
 
 ## Security
 
