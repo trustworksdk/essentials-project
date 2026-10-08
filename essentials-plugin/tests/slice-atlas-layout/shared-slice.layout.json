@@ -271,7 +271,7 @@
   "links": [],
   "scenarioBoxes": [
    {
-    "h": 0,
+    "h": 64,
     "segment": "checkout@orders",
     "slice": "orders.place_order",
     "w": 192,
@@ -287,7 +287,7 @@
     "y": 448
    },
    {
-    "h": 0,
+    "h": 64,
     "segment": "returns@orders",
     "slice": "orders.return_order",
     "w": 192,
@@ -295,7 +295,7 @@
     "y": 956
    },
    {
-    "h": 0,
+    "h": 64,
     "segment": "returns@orders",
     "slice": "orders.refund_on_return",
     "w": 192,
@@ -303,7 +303,7 @@
     "y": 956
    },
    {
-    "h": 0,
+    "h": 64,
     "segment": "returns@orders",
     "slice": "orders.refund_order",
     "w": 192,

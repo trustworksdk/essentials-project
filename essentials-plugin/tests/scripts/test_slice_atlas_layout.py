@@ -372,8 +372,19 @@ def check_geometry(test, layout, label):
         test.assertTrue(inside(ctx[a], atlas["bounds"]), f"{label}: context {a} outside the bounds")
         for b in ids[i + 1:]:
             test.assertFalse(overlaps(ctx[a], ctx[b]), f"{label}: contexts {a} and {b} overlap")
-    for b in atlas["scenarioBoxes"]:
+    boxes = atlas["scenarioBoxes"]
+    for b in boxes:
         test.assertTrue(inside(b, segs[b["segment"]]), f"{label}: scenario box of {b['slice']} outside its segment")
+        # The page draws under every full column (scenario stacks, else the invariants box), so a
+        # zero-height box would leave that drawing outside any reserved space.
+        test.assertGreaterEqual(b["h"], L.NO_SCENARIO_H, f"{label}: scenario box of {b['slice']} reserves no room")
+        for c in by_seg.get(b["segment"], []):
+            test.assertFalse(overlaps(b, c), f"{label}: scenario box of {b['slice']} overlaps card {c['id']}")
+    for i, a in enumerate(boxes):
+        for b in boxes[i + 1:]:
+            test.assertFalse(overlaps(a, b), f"{label}: scenario boxes of {a['slice']} and {b['slice']} overlap")
+    full = sorted((s["id"], col["slice"]) for s in atlas["segments"] for col in s["columns"] if not col["portal"])
+    test.assertEqual(full, sorted((b["segment"], b["slice"]) for b in boxes), f"{label}: one box per full column")
     for st in layout["metro"]["stations"]:
         test.assertTrue(0 <= st["x"] <= layout["metro"]["bounds"]["w"] and 0 <= st["y"] <= layout["metro"]["bounds"]["h"])
     nr, nc = len(layout["matrix"]["rows"]), len(layout["matrix"]["cols"])

@@ -501,7 +501,7 @@
   ],
   "scenarioBoxes": [
    {
-    "h": 0,
+    "h": 64,
     "segment": "checkout@billing",
     "slice": "billing.invoice_on_order",
     "w": 192,
@@ -517,7 +517,7 @@
     "y": 532
    },
    {
-    "h": 0,
+    "h": 64,
     "segment": "~billing.dunning@billing",
     "slice": "billing.dunning",
     "w": 192,
@@ -525,7 +525,7 @@
     "y": 1084
    },
    {
-    "h": 0,
+    "h": 64,
     "segment": "~billing.psp_webhook@billing",
     "slice": "billing.psp_webhook",
     "w": 192,
@@ -533,7 +533,7 @@
     "y": 1524
    },
    {
-    "h": 0,
+    "h": 64,
     "segment": "~unattached:billing@billing",
     "slice": "billing.invoice_list",
     "w": 192,
@@ -549,7 +549,7 @@
     "y": 448
    },
    {
-    "h": 0,
+    "h": 64,
     "segment": "~unattached:orders@orders",
     "slice": "orders.order_list",
     "w": 192,
@@ -557,7 +557,7 @@
     "y": 860
    },
    {
-    "h": 0,
+    "h": 64,
     "segment": "checkout@shipping",
     "slice": "shipping.ship_on_invoice",
     "w": 192,
@@ -565,7 +565,7 @@
     "y": 448
    },
    {
-    "h": 0,
+    "h": 64,
     "segment": "checkout@shipping",
     "slice": "shipping.ship_order",
     "w": 192,
@@ -573,7 +573,7 @@
     "y": 448
    },
    {
-    "h": 0,
+    "h": 64,
     "segment": "~unattached:shipping@shipping",
     "slice": "shipping.notify_carrier",
     "w": 192,

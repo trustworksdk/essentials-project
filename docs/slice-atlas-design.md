@@ -404,10 +404,10 @@ the extent of its board, so zooming in opens a box in place instead of jumping t
 
 | Level | Scale (tuned on fixtures) | Draws |
 |---|---|---|
-| L0 Contexts | < ~0.08 | contexts as regions sized by slice count; cross-context event links as bridges, width = number of events, label on hover |
-| L1 Processes | ~0.08–0.3 | process boxes (name, slice count, issue counts), links between processes labelled with the events; a cross-context process's segments share a colour |
-| L2 Board | ~0.3–0.9 | §8 board, compact: sticky names only, edges between stickies |
-| L3 Board, detail | > ~0.9 | §8 board with payload fields on stickies and scenario stacks under columns |
+| L0 Contexts | < 0.12 | contexts as regions sized by slice count; cross-context event links as bridges, width = number of events, label on hover |
+| L1 Processes | 0.12–0.5 | process boxes (name, slice count, issue counts), links between processes labelled with the events; a cross-context process's segments share a colour |
+| L2 Board | 0.5–0.9 | §8 board, compact: sticky names only, edges between stickies |
+| L3 Board, detail | ≥ 0.9 | §8 board with payload fields on stickies and scenario stacks under columns |
 
 Labels at L0/L1 are drawn at constant screen size. Elements outside the viewport are not drawn. A slice
 in several processes is drawn in full in the first (by process id) and as a dashed portal sticky in the

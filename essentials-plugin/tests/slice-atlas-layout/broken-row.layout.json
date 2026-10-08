@@ -132,7 +132,7 @@
   "links": [],
   "scenarioBoxes": [
    {
-    "h": 0,
+    "h": 64,
     "segment": "~unattached:?@?",
     "slice": "misc/oddly_placed",
     "w": 192,
@@ -140,7 +140,7 @@
     "y": 352
    },
    {
-    "h": 0,
+    "h": 64,
     "segment": "~orders.place_order@orders",
     "slice": "orders.place_order",
     "w": 192,
@@ -148,7 +148,7 @@
     "y": 448
    },
    {
-    "h": 0,
+    "h": 64,
     "segment": "~orders.place_order@orders",
     "slice": "orders.order_list",
     "w": 192,
@@ -156,7 +156,7 @@
     "y": 448
    },
    {
-    "h": 0,
+    "h": 64,
     "segment": "~unattached:orders@orders",
     "slice": "orders/use_cases/cancel_order",
     "w": 192,

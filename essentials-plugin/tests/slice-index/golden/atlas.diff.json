@@ -82,6 +82,21 @@
       "scenario-none:shipping.shipment_list"
     ]
   },
+  "messages": {
+    "commands": {
+      "added": [
+        "AmendOrder"
+      ],
+      "removed": []
+    },
+    "events": {
+      "added": [
+        "OrderAmended",
+        "ShipmentLabelled"
+      ],
+      "removed": []
+    }
+  },
   "slices": {
     "added": [
       "orders.amend_order",

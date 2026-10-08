@@ -496,6 +496,8 @@ class Diff(unittest.TestCase):
                       d["edges"]["added"])
         self.assertIn({"from": "slice:shipping.nightly_reship", "to": "cmd:ShipOrder", "kind": "dispatches"},
                       d["edges"]["removed"])
+        self.assertEqual(d["messages"]["events"], {"added": ["OrderAmended", "ShipmentLabelled"], "removed": []})
+        self.assertEqual(d["messages"]["commands"], {"added": ["AmendOrder"], "removed": []})
         self.assertIn("diff vs HEAD", r.stdout)
         d["before"]["sha"] = "<sha>"
         golden(self, GOLDEN / "atlas.diff.json", json.dumps(d, indent=2, ensure_ascii=False, sort_keys=True) + "\n")
@@ -517,6 +519,11 @@ class Diff(unittest.TestCase):
         self.assertEqual(d["issues"], {"new": [], "fixed": []})
         self.assertIn("shipping.shipment_list", d["slices"]["added"])
         self.assertEqual(d["slices"]["removed"][0]["flows"], [])  # a pre-Atlas row still carries `flows`
+        # only real changes: a key the pre-Atlas row lacks (flows, scenarios, schedule, doc) is not compared
+        self.assertEqual({c["id"]: [f["field"] for f in c["fields"]] for c in d["slices"]["changed"]},
+                         {"shipping.ship_order": ["publishes"]})
+        self.assertEqual(d["messages"], {"events": {"added": ["OrderAmended", "ShipmentLabelled"], "removed": []},
+                                         "commands": {"added": ["AmendOrder"], "removed": []}})
 
     def test_bad_ref_exits_2(self):
         r = run("atlas", self.app, "--out", self.tmp / "p.html", "--template", self.tpl, "--before-ref", "nope")

@@ -496,7 +496,7 @@
     "y": 448
    },
    {
-    "h": 0,
+    "h": 64,
     "segment": "~unattached:orders@orders",
     "slice": "orders.cancel_order",
     "w": 192,
@@ -504,7 +504,7 @@
     "y": 1096
    },
    {
-    "h": 0,
+    "h": 64,
     "segment": "~payments.refund_payment@payments",
     "slice": "payments.refund_payment",
     "w": 192,
@@ -512,7 +512,7 @@
     "y": 448
    },
    {
-    "h": 0,
+    "h": 64,
     "segment": "~unattached:payments@payments",
     "slice": "payments.start_payment",
     "w": 192,
@@ -528,7 +528,7 @@
     "y": 972
    },
    {
-    "h": 0,
+    "h": 64,
     "segment": "~unattached:payments@payments",
     "slice": "payments.payment_list",
     "w": 192,
@@ -536,7 +536,7 @@
     "y": 972
    },
    {
-    "h": 0,
+    "h": 64,
     "segment": "~unattached:payments@payments",
     "slice": "payments.retry_payment",
     "w": 192,
@@ -544,7 +544,7 @@
     "y": 972
    },
    {
-    "h": 0,
+    "h": 64,
     "segment": "~unattached:reminders@reminders",
     "slice": "reminders.send_reminder",
     "w": 192,
@@ -552,7 +552,7 @@
     "y": 448
    },
    {
-    "h": 0,
+    "h": 64,
     "segment": "~unattached:reminders@reminders",
     "slice": "reminders.schedule_next",
     "w": 192,

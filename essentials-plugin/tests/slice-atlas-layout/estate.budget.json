@@ -18,12 +18,12 @@
   "L0": 120,
   "L1": 374,
   "L2": 2269,
-  "L3": 2389,
+  "L3": 2696,
   "matrixCells": 354,
   "metro": 603
  },
- "layoutBytes": 614684,
- "layoutSha256": "d6469e46a4df8379990c1cd9591944195edb5ce48d4a16ff9a294c377258d290",
+ "layoutBytes": 614991,
+ "layoutSha256": "ebf59aeed4331e3a74f31857d2f15e63087b30ee722fac84cc2a730e5add5ce3",
  "oneSliceAdditions": {
   "cellGrewPastAStep": [
    "c00",

@@ -728,8 +728,9 @@ def _values(row, field):
 
 def diff(before, after):
     """Before and after maps matched by stable ids (design §10.2): slice id, (from, to, kind) for an
-    edge, issue id. A removed slice carries its whole before-row. `issuesKnown` is false when the
-    before map predates `issues` — then no issue is called new or fixed."""
+    edge, issue id. A removed slice carries its whole before-row. A before map that predates the
+    Atlas lacks some keys (`flows`, `scenarios`, `schedule`, `doc`, `issues`): a field the before row
+    does not carry is not compared, and `issuesKnown` is false — then no issue is called new or fixed."""
     b_rows, a_rows = {}, {}
     for s in before.get("slices") or []:
         b_rows.setdefault(s["id"], s)
@@ -739,8 +740,10 @@ def diff(before, after):
     for sid in sorted(set(a_rows) & set(b_rows)):
         a, b = a_rows[sid], b_rows[sid]
         fields = [{"field": f, "added": [], "removed": [], "from": b.get(f), "to": a.get(f)}
-                  for f in DIFF_SCALARS if b.get(f) != a.get(f)]
+                  for f in DIFF_SCALARS if (f in b or f == "error") and b.get(f) != a.get(f)]
         for f in DIFF_LISTS:
+            if f not in b:
+                continue
             bv, av = _values(b, f), _values(a, f)
             if bv != av or (f == "scenarios" and b.get(f) != a.get(f)):
                 fields.append({"field": f, "added": sorted(set(av) - set(bv)), "removed": sorted(set(bv) - set(av)),
@@ -751,6 +754,14 @@ def diff(before, after):
 
     def as_json(es):
         return [{"from": f, "to": t, "kind": k} for f, t, k in sorted(es)]
+
+    def names(es, prefix):
+        return {n[len(prefix):] for e in es for n in e[:2] if n.startswith(prefix)}
+
+    messages = {}
+    for key, prefix in (("events", "evt:"), ("commands", "cmd:")):
+        bn, an = names(b_edges, prefix), names(a_edges, prefix)
+        messages[key] = {"added": sorted(an - bn), "removed": sorted(bn - an)}
 
     known = isinstance(before.get("issues"), list)
     b_issues = {i["id"]: i for i in before.get("issues") or []}
@@ -763,6 +774,7 @@ def diff(before, after):
                                for i in sorted(set(b_rows) - set(a_rows))],
                    "changed": changed},
         "edges": {"added": as_json(a_edges - b_edges), "removed": as_json(b_edges - a_edges)},
+        "messages": messages,
         "issues": {"new": sorted(a_ids - set(b_issues)) if known else [],
                    "fixed": sort_issues([b_issues[i] for i in set(b_issues) - a_ids]) if known else []},
     }

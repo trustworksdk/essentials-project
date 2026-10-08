@@ -73,8 +73,10 @@ atlas — the board (design §8, §10.1)
     `links` aggregate the cross-segment `feeds` edges per (from segment, to segment) with the event
     names; `bridges` aggregate `flows[]` per (publishing context, consuming context).
     `scenarioBoxes` reserve the space under each full column for its scenario stacks: height from
-    the scenario count, 0 when there are none — the page shows invariants there, inside the band's
-    floor NO_SCENARIO_H.
+    the scenario count; NO_SCENARIO_H when there are none, the box in which the page draws
+    "no scenarios declared", the invariants and the test kinds (design §8). Every full column gets
+    a box of positive height, so whatever the page draws under a column is inside its box and
+    inside the segment.
 
 metro (design §10.5)
     One line per process, one station per slice, x by the global causal rank (the same rank over
@@ -121,7 +123,8 @@ SEG_GAP = 24           # between stacked segments of one context
 SCENARIO_H = 132       # one scenario stack
 SCENARIO_GAP = 8
 BAND_GAP = 12          # lanes to band
-NO_SCENARIO_H = 64     # band floor when a column declares none: "no scenarios declared" + invariants
+NO_SCENARIO_H = 64     # box of a column that declares none: "no scenarios declared", then invariants
+                       # and test kinds — three 12.5-unit lines at the page's 1.42 line height, plus padding
 
 # -- contexts
 CTX_HEADER_H = 48
@@ -584,10 +587,10 @@ class _Segment:
             if not portal:
                 scen = by_id[sid].get("scenarios")
                 n = len(scen) if isinstance(scen, list) else 0
-                h = n * SCENARIO_H + max(0, n - 1) * SCENARIO_GAP
+                h = n * SCENARIO_H + (n - 1) * SCENARIO_GAP if n else NO_SCENARIO_H
                 self.boxes.append({"slice": sid, "segment": seg_id, "x": cx, "y": lanes_bottom + BAND_GAP,
                                    "w": COL_W, "h": h})
-                band = max(band, h if n else NO_SCENARIO_H)
+                band = max(band, h)
 
         width = LANE_LABEL_W + 2 * SEG_PAD + len(plan) * COL_W + max(0, len(plan) - 1) * COL_GAP
         height = (lanes_bottom + BAND_GAP + band if band else lanes_bottom) + SEG_PAD
