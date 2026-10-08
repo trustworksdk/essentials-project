@@ -11,9 +11,9 @@
 
    Palette: Trustworks visual style. Aqua 100/80/60/40 #96B7B9 #AAC5C7 #BFD4D5 #D5E2E3,
    Gul 100/80/60/40 #F3D4A1 #F5DCB4 #F3E4CD #FAEDDA, Lys grå #EAEAEA, Mørk grå #666672.
-   Event Modeling on the palette: events Gul, commands Aqua 100, views Aqua 40 fill with an
-   Aqua 100 rule (told apart from commands by fill weight, not by a new hue), triggers Lys grå
-   with a Mørk grå rule. The only off-palette hues are the muted status colours.
+   Event Modeling keeps its own hues, toned to the palette (--evt / --cmd / --view below):
+   events orange, commands blue, views green; triggers Lys grå with a Mørk grå rule. Those three
+   and the muted status colours are the only off-palette hues.
 
    Token                     role
    --surface                 page and stage ground
@@ -23,9 +23,14 @@
    --rule / --rule-strong    hairlines / control borders, region outlines
    --accent                  focus ring, selection, links (an Aqua shade)
    --on-sticky               text drawn on any sticky
-   --evt / --evt-rule        event sticky fill / rule              (Gul)
-   --cmd / --cmd-rule        command sticky fill / rule            (Aqua 100)
-   --view / --view-rule      view sticky fill / rule               (Aqua 40 + Aqua 100)
+   --evt / --evt-rule        event sticky fill / rule              (Event Modeling orange)
+   --cmd / --cmd-rule        command sticky fill / rule            (Event Modeling blue)
+   --view / --view-rule      view sticky fill / rule               (Event Modeling green)
+                             The one deliberate departure from the palette: the three Event
+                             Modeling roles keep the method's own hues so a board reads like
+                             every other event model, toned to the brand — orange is Gul 100
+                             turned 8° towards red at the same saturation, blue and green take
+                             Aqua's muted weight. Text on each passes 6.4:1 in both themes.
    --trg / --trg-rule        trigger, automation, schedule sticky  (Lys grå + Mørk grå)
    --ext                     external-system sticky fill (dashed --trg-rule)
    --ctx-fill                bounded-context region fill
@@ -60,9 +65,9 @@
   --surface: #FFFFFF; --panel: #F5F5F5; --panel-2: #FFFFFF; --panel-strong: #EAEAEA;
   --text: #2E2E33; --text-muted: #666672; --rule: #DCDCE0; --rule-strong: #B5B5BC;
   --accent: #4F7F83; --on-sticky: #2E2E33;
-  --evt: #F3D4A1; --evt-rule: #C9A15F;
-  --cmd: #96B7B9; --cmd-rule: #5E8F93;
-  --view: #D5E2E3; --view-rule: #96B7B9;
+  --evt: #F2BE8C; --evt-rule: #B97A3D;
+  --cmd: #A9C3DB; --cmd-rule: #5F86A8;
+  --view: #B9D3AE; --view-rule: #6F9963;
   --trg: #EAEAEA; --trg-rule: #666672; --ext: #FFFFFF;
   --ctx-fill: #FAFAFA; --lane-fill: #F7F7F8;
   --err: #B3473D; --err-bg: #F6E3E1; --warn: #9A6B14; --warn-bg: #F8EED9;
@@ -77,9 +82,9 @@
     --surface: #1E1E22; --panel: #26262B; --panel-2: #2E2E34; --panel-strong: #3A3A41;
     --text: #EAEAEA; --text-muted: #A9A9B3; --rule: #3A3A41; --rule-strong: #55555E;
     --accent: #AAC5C7; --on-sticky: #F2F2F2;
-    --evt: #6E5A37; --evt-rule: #C9A15F;
-    --cmd: #45676A; --cmd-rule: #96B7B9;
-    --view: #2E4446; --view-rule: #6E9497;
+    --evt: #6E4E30; --evt-rule: #E0A66E;
+    --cmd: #3E5A73; --cmd-rule: #A9C3DB;
+    --view: #3F5A3A; --view-rule: #9BC08D;
     --trg: #3A3A41; --trg-rule: #8D8D99; --ext: #26262B;
     --ctx-fill: #232328; --lane-fill: #29292F;
     --err: #E08A80; --err-bg: #3A2523; --warn: #D9B05E; --warn-bg: #3A3020;
@@ -94,9 +99,9 @@
   --surface: #1E1E22; --panel: #26262B; --panel-2: #2E2E34; --panel-strong: #3A3A41;
   --text: #EAEAEA; --text-muted: #A9A9B3; --rule: #3A3A41; --rule-strong: #55555E;
   --accent: #AAC5C7; --on-sticky: #F2F2F2;
-  --evt: #6E5A37; --evt-rule: #C9A15F;
-  --cmd: #45676A; --cmd-rule: #96B7B9;
-  --view: #2E4446; --view-rule: #6E9497;
+  --evt: #6E4E30; --evt-rule: #E0A66E;
+  --cmd: #3E5A73; --cmd-rule: #A9C3DB;
+  --view: #3F5A3A; --view-rule: #9BC08D;
   --trg: #3A3A41; --trg-rule: #8D8D99; --ext: #26262B;
   --ctx-fill: #232328; --lane-fill: #29292F;
   --err: #E08A80; --err-bg: #3A2523; --warn: #D9B05E; --warn-bg: #3A3020;
@@ -201,7 +206,8 @@ button, input, select { font: inherit; color: inherit; }
                cursor: pointer; color: var(--text-muted); padding: 4px 6px; }
 #card .body { overflow-y: auto; padding: 4px 16px 24px; flex: 1 1 auto; overscroll-behavior: contain; }
 #card section { margin-top: 14px; }
-#card h3 { font-size: 11.5px; text-transform: uppercase; letter-spacing: .05em; color: var(--text-muted); margin: 0 0 6px; font-weight: 600; }
+#tip.rich section { margin-top: 10px; }
+#card h3, #tip.rich h3 { font-size: 11.5px; text-transform: uppercase; letter-spacing: .05em; color: var(--text-muted); margin: 0 0 6px; font-weight: 600; }
 .badge { display: inline-block; font-size: 11.5px; padding: 1px 7px; border-radius: 4px; border: 1px solid var(--rule-strong);
          margin: 2px 4px 2px 0; white-space: nowrap; }
 .badge.err { color: var(--err); border-color: var(--err); background: var(--err-bg); }
@@ -286,6 +292,16 @@ dl.kv dd { margin: 0; font-family: var(--mono); font-size: 12px; overflow-wrap: 
   white-space: pre-wrap; overflow-wrap: anywhere;
 }
 #tip[hidden] { display: none; }
+#tip.rich { width: 420px; max-width: calc(100% - 16px); max-height: 72vh; overflow: hidden; white-space: normal; padding: 10px 12px; }
+#tip .rhead { display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; }
+#tip .rhead b { font-size: 13px; }
+#tip .rsub .badge { margin: 4px 4px 0 0; }
+#tip .rnote { margin-top: 10px; padding-top: 6px; border-top: 1px solid var(--rule); color: var(--text-muted); font-size: 11.5px; }
+#tip .sum { font-size: 12.5px; }
+#tip .scn { margin: 8px 0 0; }
+.scl { font-size: 12px; margin-bottom: 4px; }
+.scl b { font-family: var(--font); margin-right: 6px; }
+.scl .mono { color: var(--text-muted); overflow-wrap: anywhere; }
 #tip b { font-family: var(--mono); }
 #toast {
   position: absolute; left: 50%; bottom: 24px; transform: translateX(-50%); z-index: 50; background: var(--text);
@@ -518,6 +534,10 @@ const ATLAS = /* __ATLAS_DATA__ */ null;
                             zoom buttons, the + − 0 keys, the minimap and hash at= drive it.
    ctx.tip(event, content) / ctx.hideTip()
                             hover card at the pointer; content: a string (set as text) or a Node.
+   ctx.preview(target, note?) → Node | null
+                            the detail pane's content for a focus target, compact, for ctx.tip;
+                            also { kind: 'scenario', slice, name }. note: a line under it (what a
+                            click does). Cached per (target, note); null for an unknown target.
    ctx.toast(text)
    ctx.match(query, ...strings) → bool
                             the shared matcher: every whitespace-separated term of query occurs,
@@ -609,6 +629,8 @@ const ATLAS = /* __ATLAS_DATA__ */ null;
 
 const Atlas = (() => {
   const MIN_TEXT_PX = 11;
+  const PREVIEW_ISSUES = 3;        // issues a hover preview lists before "· 3 of N"
+  const plural = (n, one, many) => n + ' ' + (n === 1 ? one : (many || one + 's'));
   const SHELL_KEYS = ['lens', 'z', 'at', 'focus', 'issue', 'q', 'theme'];
   const LEVELS = ['error', 'warn', 'info'];
   const LEVEL_LABEL = { error: 'Errors', warn: 'Warnings', info: 'Info' };
@@ -1086,6 +1108,7 @@ const Atlas = (() => {
     t.textContent = '';
     if (content == null) { t.hidden = true; return; }
     if (typeof content === 'string') t.textContent = content; else t.append(content);
+    t.classList.toggle('rich', !!(content.classList && content.classList.contains('rich')));
     t.hidden = false;
     const r = stage.getBoundingClientRect();
     let x = ((ev && ev.clientX) || 0) - r.left + 14, y = ((ev && ev.clientY) || 0) - r.top + 14;
@@ -1140,7 +1163,7 @@ const Atlas = (() => {
       markIssue: (id) => selectIssue(id, {}), focusTarget: (t) => focusTarget(t, {}),
       setHash, getHash: () => Object.assign({}, hashState),
       onHash: (fn) => { st.hashFns.push(fn); },
-      createViewport, tip, hideTip, toast, match, sliceHay, svg, html,
+      createViewport, tip, hideTip, preview, toast, match, sliceHay, svg, html,
       util: { arr, clamp, trunc, humanise, nameOf, fmtSchedule, MIN_TEXT_PX },
       procColor: (p) => 'var(--p' + (((((p && p.color) | 0) % 12) + 12) % 12) + ')',
       theme: resolvedTheme, onTheme: (fn) => { st.themeFns.push(fn); }
@@ -1357,8 +1380,8 @@ const Atlas = (() => {
     return f;
   }
   const sliceLinks = (ids) => ids.length ? linkList(ids, id => link(id, { kind: 'slice', id })) : null;
-  function issueRows(list) {
-    const s = section('Issues');
+  function issueRows(list, total) {
+    const s = section('Issues' + (total > list.length ? ' · ' + list.length + ' of ' + total : ''));
     list.forEach(i => {
       const r = html('div', 'issue-row lvl-' + i.level);
       r.dataset.issue = i.id;
@@ -1426,6 +1449,19 @@ const Atlas = (() => {
     if (sc.note) b.append(html('div', 'note', sc.note));
     return b;
   }
+  /** One scenario as a line: its name, then given → when → then by step name. */
+  function scenarioLine(sc) {
+    const d = html('div', 'scl');
+    const step = (st) => st && st.type === 'schedule' ? '⏱' : (st && st.name) || '?';
+    const th = sc.then || { kind: 'nothing' };
+    const then = th.kind === 'steps' ? arr(th.steps).map(step).join(', ')
+      : th.kind === 'error' ? '✗ ' + (th.error || 'error')
+      : th.kind === 'readModel' ? (th.readModel || 'read model') + ' · ' + plural(arr(th.rows).length, 'row')
+      : 'nothing';
+    const given = arr(sc.given).length ? arr(sc.given).map(step).join(', ') : '∅';
+    d.append(html('b', null, sc.name), html('span', 'mono', given + ' → ' + (sc.when ? step(sc.when) : '?') + ' → ' + then));
+    return d;
+  }
   function messageBlock(type, name, role) {
     const m = index.message(type, name);
     const b = html('div', 'msg t-' + type);
@@ -1465,9 +1501,12 @@ const Atlas = (() => {
     return c.field + ': ' + parts.join(' ');
   }
 
-  function sliceCard(s, body) {
+  /* The detail renderers write into any (body, sub) pair: the pane, or a hover preview (o.compact),
+     which keeps the facts and drops what only a reader of the pane needs — the CLAUDE.md, every
+     scenario in full, the location beyond its path. */
+  function sliceCard(s, body, sub, o) {
+    o = o || {};
     const ghost = index.isGhost(s.id);
-    const sub = $('#card-sub');
     [s.kind, s.status, s.bc, s.lane, s.language, s.tier].filter(Boolean).forEach(t => sub.append(html('span', 'badge', t)));
     arr(s.flows).forEach(f => sub.append(html('span', 'badge', 'flow: ' + f)));
     if (s.error) sub.append(html('span', 'badge err', 'manifest did not parse'));
@@ -1482,7 +1521,7 @@ const Atlas = (() => {
       body.append(sec);
     }
     const iss = issuesFor({ kind: 'slice', id: s.id });
-    if (iss.length) body.append(issueRows(iss));
+    if (iss.length) body.append(issueRows(o.compact ? iss.slice(0, PREVIEW_ISSUES) : iss, iss.length));
     if (ds === 'changed') {
       const sec = section('Changed in this change');
       const ul = html('ul', 'changes');
@@ -1517,7 +1556,7 @@ const Atlas = (() => {
     }
     const scs = arr(s.scenarios);
     const scSec = section(scs.length ? 'Scenarios · ' + scs.length : 'Scenarios');
-    if (scs.length) scs.forEach(sc => scSec.append(scenarioBlock(sc)));
+    if (scs.length) scs.forEach(sc => scSec.append(o.compact ? scenarioLine(sc) : scenarioBlock(sc)));
     else scSec.append(html('p', 'sum', 'No scenarios declared.'));
     body.append(scSec);
     if (arr(s.invariants).length || arr(s.tests).length) {
@@ -1526,20 +1565,20 @@ const Atlas = (() => {
         ['tests', arr(s.tests).join(', ')]]));
       body.append(sec);
     }
-    if (s.doc) {
+    if (s.doc && !o.compact) {
       const sec = section('CLAUDE.md');
       const d = html('div', 'doc');
       d.innerHTML = s.doc;   // the one innerHTML: converted and escaped in Python to the design §9.4 subset
       sec.append(d); body.append(sec);
     }
     const loc = section('Location');
-    loc.append(kv([['path', s.path], ['package', s.package], ['files', arr(s.files)], ['owner', s.owner], ['supersedes', s.supersedes]]));
+    loc.append(kv(o.compact ? [['path', s.path], ['owner', s.owner]]
+      : [['path', s.path], ['package', s.package], ['files', arr(s.files)], ['owner', s.owner], ['supersedes', s.supersedes]]));
     body.append(loc);
   }
-  function messageCard(t, body) {
+  function messageCard(t, body, sub) {
     const [type, name] = splitMsg(t.id);
     const m = index.message(type, name);
-    const sub = $('#card-sub');
     sub.append(html('span', 'badge', type));
     if (m && m.version != null) sub.append(html('span', 'badge', 'v' + m.version));
     if (m && m.summary) body.append(html('p', 'sum', m.summary));
@@ -1557,8 +1596,7 @@ const Atlas = (() => {
       : kv([['published by', sliceLinks(index.publishers(name)) || 'no publisher — dangling'], ['consumed by', sliceLinks(index.consumers(name))]]));
     body.append(sec);
   }
-  function processCard(p, body) {
-    const sub = $('#card-sub');
+  function processCard(p, body, sub) {
     sub.append(html('span', 'badge', p.declared ? 'declared flow' : 'derived'));
     arr(p.bcs).forEach(b => sub.append(html('span', 'badge', b)));
     const sw = html('span', 'badge', 'colour ' + ((p.color | 0) % 12));
@@ -1583,8 +1621,7 @@ const Atlas = (() => {
       body.append(ls);
     }
   }
-  function contextCard(c, body) {
-    const sub = $('#card-sub');
+  function contextCard(c, body, sub) {
     [c.lane, c.language, c.tier].filter(Boolean).forEach(t => sub.append(html('span', 'badge', t)));
     arr(c.owners).forEach(o => sub.append(html('span', 'badge', o)));
     const iss = issuesFor({ kind: 'context', id: c.id }, { deep: true });
@@ -1610,10 +1647,7 @@ const Atlas = (() => {
     $('#card-title').textContent = t.kind === 'slice' ? t.id : targetLabel(t);
     $('#card-sub').textContent = '';
     body.textContent = '';
-    if (t.kind === 'slice') sliceCard(index.slice(t.id), body);
-    else if (t.kind === 'message') messageCard(t, body);
-    else if (t.kind === 'process') processCard(index.process(t.id), body);
-    else if (t.kind === 'context') contextCard(index.context(t.id), body);
+    renderTarget(t, body, $('#card-sub'), {});
     if (active && typeof active.lens.cardExtra === 'function') {
       try { const x = active.lens.cardExtra(t); if (x) body.append(x); } catch (e) { console.error(e); }
     }
@@ -1627,6 +1661,42 @@ const Atlas = (() => {
     } else body.scrollTop = 0;
   }
   function closeCard() { $('#card').hidden = true; }
+  function renderTarget(t, body, sub, o) {
+    if (t.kind === 'slice') sliceCard(index.slice(t.id), body, sub, o);
+    else if (t.kind === 'message') messageCard(t, body, sub, o);
+    else if (t.kind === 'process') processCard(index.process(t.id), body, sub, o);
+    else if (t.kind === 'context') contextCard(index.context(t.id), body, sub, o);
+  }
+  /* Hover previews: the detail pane's content, compact, for ctx.tip. t is a focus target, or
+     { kind: 'scenario', slice, name } for one scenario's given / when / then. note is the lens's
+     line under it (what a click does). Built once per (target, note) — the data never changes
+     under a page — so a mousemove only repositions. */
+  const previews = new Map();
+  function preview(t, note) {
+    if (!t) return null;
+    const key = t.kind + '|' + (t.id || t.slice + '|' + t.name) + '|' + (note || '');
+    if (previews.has(key)) return previews.get(key);
+    let out = null;
+    if (t.kind === 'scenario') {
+      const s = index.slice(t.slice);
+      const sc = s && arr(s.scenarios).find(x => x.name === t.name);
+      if (sc) {
+        out = html('div', 'rich');
+        const head = html('div', 'rhead');
+        head.append(html('b', null, t.slice), html('span', 'badge', 'scenario'));
+        out.append(head, scenarioBlock(sc));
+      }
+    } else if (targetExists(t)) {
+      out = html('div', 'rich');
+      const head = html('div', 'rhead'), sub = html('div', 'rsub'), body = html('div', 'rbody');
+      head.append(html('b', null, t.kind === 'slice' ? t.id : targetLabel(t)));
+      renderTarget(t, body, sub, { compact: true });
+      out.append(head, sub, body);
+    }
+    if (out && note) out.append(html('div', 'rnote', note));
+    previews.set(key, out);
+    return out;
+  }
 
   /* ---------------- search ---------------- */
   function runSearch(q, write) {

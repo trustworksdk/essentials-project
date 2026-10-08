@@ -427,7 +427,8 @@
       });
       r.addEventListener('mousemove', (ev) => {
         if (S.level !== 0) return;
-        ctx.tip(ev, c.id + '\n' + ctx.index.slicesOf(c.id).length + ' slices · ' + (segsByCtx.get(c.id) || []).length + ' process segments\nclick to open');
+        ctx.tip(ev, ctx.preview({ kind: 'context', id: c.id }, plural((segsByCtx.get(c.id) || []).length, 'process segment') + ' · click to zoom in') ||
+          c.id + '\n' + ctx.index.slicesOf(c.id).length + ' slices · ' + (segsByCtx.get(c.id) || []).length + ' process segments\nclick to open');
       });
       r.addEventListener('mouseleave', () => ctx.hideTip());
       return r;
@@ -490,7 +491,8 @@
           if (vp.wasDrag()) return;
           vp.flyTo(seg, { pad: FOCUS_PAD, minScale: LOD_L2 * 1.02 });
         });
-        box.addEventListener('mousemove', (ev) => ctx.tip(ev, p.name + (p.declared ? '' : ' (derived)') + ' · ' + seg.bc + '\n' + ids.join('\n')));
+        box.addEventListener('mousemove', (ev) => ctx.tip(ev, ctx.preview({ kind: 'process', id: p.id }, 'segment in ' + seg.bc + ' · click to zoom in') ||
+          p.name + (p.declared ? '' : ' (derived)') + ' · ' + seg.bc + '\n' + ids.join('\n')));
         box.addEventListener('mouseleave', () => ctx.hideTip());
         const cx = seg.x + seg.w / 2, cy = seg.y + seg.h / 2;
         const maxChars = Math.floor(seg.w * k / (CHAR_W * LABEL_PX)) - 1;
@@ -676,7 +678,17 @@
       g.addEventListener('mousemove', (ev) => ctx.tip(ev, cardTip(c)));
       return g;
     }
+    /** A card's hover: the detail pane's preview — of the message for a command or event card
+        (payload, who dispatches or publishes it, who handles or consumes it), else of the slice. */
     function cardTip(c) {
+      const st = diffState(c.slice, c);
+      const note = (c.portal ? 'portal — click to fly to the full column' : 'click for the slice') + (st ? ' · ' + st + ' in this change' : '');
+      const rich = c.role === 'command' || c.role === 'event'
+        ? ctx.preview({ kind: 'message', id: c.role + ':' + c.name }, c.role + ' card in ' + c.slice + ' · ' + note)
+        : ctx.preview({ kind: 'slice', id: c.slice }, c.role + ' card · ' + note);
+      return rich || cardTipText(c);
+    }
+    function cardTipText(c) {
       const f = document.createDocumentFragment();
       const b = document.createElement('b');
       b.textContent = c.name;
@@ -837,7 +849,7 @@
         }
         if (clipped) { const t = wtext(x1, bottom - 3, '…', WORLD_SMALL, k, 'atlas-muted', 'end'); if (t) sg.append(t); }
         sg.addEventListener('click', (ev) => { ev.stopPropagation(); if (!vp.wasDrag()) ctx.openCard({ kind: 'slice', id }, { anchor: 'scenario:' + sc.name }); });
-        sg.addEventListener('mousemove', (ev) => ctx.tip(ev, scenarioText(sc)));
+        sg.addEventListener('mousemove', (ev) => ctx.tip(ev, ctx.preview({ kind: 'scenario', slice: id, name: sc.name }, 'click for the slice') || scenarioText(sc)));
         sg.addEventListener('mouseleave', () => ctx.hideTip());
         g.append(sg);
       });

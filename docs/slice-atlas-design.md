@@ -237,9 +237,12 @@ come from the Trustworks palette (the `tw-brand` plugin's `visual-style` skill):
 `#96B7B9 #AAC5C7 #BFD4D5 #D5E2E3`, Gul 100/80/60/40 `#F3D4A1 #F5DCB4 #F3E4CD #FAEDDA`, Lys grå
 `#EAEAEA`, Mørk grå `#666672`; font stack `"Neue Haas Grotesk Display Pro", "Neue Haas Grotesk Text
 Pro", Arial, sans-serif`. Light is the default surface (white, Lys grå panels, Mørk grå text). Event
-Modeling's colours map onto the palette: **events Gul** (the warm sticky), **commands Aqua 100**,
-**views Aqua 40 with an Aqua 100 rule** — distinct from commands by fill weight, not by a new hue. The
-only off-palette hues are muted status colours (error, warn), as the brand allows for status. Dark mode
+Modeling keeps the method's own hues so a board reads like any other event model — **events orange,
+commands blue, views green** — toned to the palette: the orange is Gul 100 turned towards red at the
+same saturation, the blue and green take Aqua's muted weight (`atlas.html`'s token block has the
+values). This is the one deliberate departure from the brand's "no off-palette hues" rule, decided by
+the maintainer after a first version that mapped the roles onto Aqua and Gul read as unfamiliar.
+Otherwise the only off-palette hues are muted status colours (error, warn), as the brand allows. Dark mode
 keeps the same hues on a surface derived from Mørk grå, with stickies at reduced lightness so they do
 not glare. No gradients on working surfaces.
 

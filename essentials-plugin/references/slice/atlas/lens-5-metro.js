@@ -158,6 +158,10 @@
     });
 
     function stationTip(s) {
+      const on = (s.interchange ? 'interchange of ' : 'on ') + arr(s.lines).map(procName).join(', ');
+      return ctx.preview({ kind: 'slice', id: s.slice }, on + ' · click for details') || stationTipText(s);
+    }
+    function stationTipText(s) {
       const f = document.createDocumentFragment();
       const b = document.createElement('b');
       b.textContent = s.slice;
