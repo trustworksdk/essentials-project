@@ -17,7 +17,7 @@ The open fixes and improvements planned for the 0.6x line. Every item here was c
 **Scope of 0.60.1** (decided 2026-10-08): everything in section 0 and P1, plus three P2 items: ES-4
 (`awaitProcessed`), DD-2 (the reserved-word check) and CB-4 (unhandled event types). Two P1 items ship softened,
 because a patch must not reject a setup that works today:
-- 0.2's "builder requires a UnitOfWork factory" becomes a WARN.
+- N-15's "the shard-owned builder requires a UnitOfWork factory" becomes a WARN.
 - QL-3's redelivery-policy validation WARNs in 0.60.1 and fails from 0.61.
 
 ---
@@ -46,20 +46,7 @@ mapper, so a hand-built one can drift without any signal.
 - Control it with `essentials.json.wire-format-check=warn|fail|off`, default `warn`. Consider `fail` as the default
   in the next major.
 
-### 0.2 The shard-owned queue engine does not join a Spring transaction on enqueue (N-15, RN-2)
-
-`ShardOwnedDurableQueues.currentTransactionConnection()` joins only an Essentials `UnitOfWork` that is already bound.
-Under a plain Spring `@Transactional` or `TransactionTemplate`, nothing is bound. `Outbox.sendMessage`,
-`sendAndDontWait` and `queueMessage` then commit on their own connection, and a rollback of the business transaction
-does not undo the enqueue. On this engine the transactional outbox is not transactional. 0.60.0 did not ship the
-known-limitation note the plan called for either.
-
-**Fix:**
-- Run the enqueue inside `withUnitOfWork`, as `PostgresqlDurableQueues` does, so it joins the Spring transaction. Do
-  not call the manual `getOrCreateNewUnitOfWork()`/`getRequiredUnitOfWork()` methods.
-- Make the builder require a UnitOfWork factory.
-
-### 0.3 Removed properties are silently ignored (N-18, RN-6)
+### 0.2 Removed properties are silently ignored (N-18, RN-6)
 
 The 0.60.0 release notes document the removed properties, but nothing warns when an application still sets one. The
 only `additional-spring-configuration-metadata.json` is in the event-store starter, and it has one warning-level
@@ -71,16 +58,6 @@ without any signal.
 - Add `additional-spring-configuration-metadata.json` entries with error-level deprecations for every removed
   property.
 - Add a startup check that logs an ERROR for any removed `essentials.*` key that is still set.
-
-### 0.4 The documentation still makes ordering and retry claims that are wrong (RN-4, RN-3, RN-5)
-
-`components/postgresql-queue-shard-owned/README.md` still says "a retry never reorders", which is false across a
-shard handover (see P1, "Shard-owned retry blocking survives a handover").
-
-**Fix:** correct the claim in the README, the module `CLAUDE.md` and the design doc. Re-check the remaining 0.60.0
-release-note corrections against the release notes; the 2026-10-08 check did not verify them one by one:
-- RN-3: section 1.1.6.
-- RN-5: the schema `emit` step.
 
 ---
 
@@ -102,24 +79,6 @@ Bug fixes only; no API breaks.
 - **Acceptance:** a new `ShardOwnedOrderedRetryHandoverIT` covers rebalance, graceful stop and crash, both directly
   and through the `DurableQueues` adapter, plus the `postgresql-queue` and MongoDB counterparts. It must fail on the
   current code and pass after the fix.
-
-**Opt-in guard against enqueueing outside a unit of work (RN-2).**
-- **Problem:** since `TransactionalMode` was removed, an enqueue outside a unit of work silently commits on its own.
-  Code that relied on "the entity change and the enqueue commit together" breaks without any signal.
-- **Fix:** add an opt-in property, e.g. `essentials.durable-queues.require-active-unit-of-work-for-enqueue`, that
-  makes such an enqueue fail. With the guard off, log a one-time WARN when it happens.
-- **Tests:** add enqueue-rollback ITs for all three engines (PostgreSQL, MongoDB, shard-owned), each under an
-  Essentials `UnitOfWork` and under a Spring `TransactionTemplate`.
-
-**Validate redelivery policies when they are built (QL-3).** The backoff formula was fixed in 0.60.0, but
-`RedeliveryPolicy.exponentialBackoff()...build()` still accepts an incomplete policy:
-- an unset multiplier silently means no growth;
-- an unset `maximumNumberOfRedeliveries` silently means zero redeliveries;
-- a missing delay fails late, during Spring bean creation, with a message that reads like a wiring problem.
-
-**Fix:** `ExponentialBackoffBuilder.build()` validates every required setting up front: the delays are set, the
-multiplier is at least 1.0, and the maximum number of redeliveries is set explicitly. Each error message names the
-missing setter.
 
 ### Schema harness
 
@@ -240,6 +199,15 @@ property if it cannot apply.
 ## P2: next 0.6x minor
 
 Additive features.
+
+### Turn the 0.60.1 warnings into failures
+
+0.60.1 shipped two checks as a WARN, because a patch must not reject a setup that works today. In 0.61 they fail:
+- **The shard-owned queue builder requires a UnitOfWork factory (N-15).** Without one, every enqueue commits on its
+  own, outside the caller's transaction. 0.60.1 logs a WARN at build time.
+- **Redelivery-policy builders reject an incomplete policy (QL-3).** Unset delays, a multiplier below 1.0 or unset,
+  and a `maximumNumberOfRedeliveries` never set explicitly. 0.60.1 logs one WARN naming each setter; 0.61 throws
+  `IllegalArgumentException`.
 
 ### Event store
 

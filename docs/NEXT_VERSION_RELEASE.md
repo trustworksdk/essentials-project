@@ -125,6 +125,25 @@ longer appear as the same owner. The lock table, the admin API and the log lines
 Mutual exclusion has always come from the fence token, so a rolling upgrade that mixes old and new instances is
 safe. To keep a fixed id, set `essentials.fenced-lock-manager.instance-id` (see §2). (N-8, `206c7e58`)
 
+#### 1.1.5 New warnings: enqueue outside a transaction, and incomplete redelivery policies
+
+Three new WARN log lines. Nothing else changes, but each points at a setup that does not do what it appears to:
+
+- **A `DurableQueues` enqueue outside a unit of work.** The first `queueMessage`/`queueMessages` per
+  `DurableQueues` instance that runs with no Essentials `UnitOfWork` and no Spring transaction logs a WARN with its
+  call site. The enqueue commits on its own, so a later rollback of your business change does not undo it. This
+  covers `Outbox.sendMessage` and `DurableLocalCommandBus.sendAndDontWait` called outside a transaction. To make it
+  fail instead, set `essentials.durable-queues.require-active-unit-of-work-for-enqueue=true` (§2).
+  (RN-2, `3c783626`)
+- **A shard-owned queue built without a UnitOfWork factory.** Building `ShardOwnedDurableQueues` without
+  `setUnitOfWorkFactory(...)` logs a WARN that every enqueue commits on its own. The 0.61 release will refuse to
+  build it. The starters always set one. (N-15, `4248f0b3`)
+- **An incomplete redelivery policy.** `build()` on `RedeliveryPolicy.exponentialBackoff()`, `linearBackoff()`,
+  `fixedBackoff()` and `RedeliveryPolicy.builder()` logs one WARN naming each setter left out or out of range:
+  unset delays, a multiplier below 1.0 or unset, or `setMaximumNumberOfRedeliveries` never called. Unset means 0
+  redeliveries, so the first failure dead-letters the message. The 0.61 release will throw
+  `IllegalArgumentException`. (QL-3, `5537eae3`)
+
 ---
 
 ## 2. New features
@@ -135,6 +154,12 @@ safe. To keep a fixed id, set `essentials.fenced-lock-manager.instance-id` (see 
 - **`DocumentDbRepositoryFactory.createForCharSequenceTypeId(Class|KClass)`** creates a repository for an entity
   whose id is a Java `CharSequenceType`. Until now only a raw-typed `create(...)` compiled from Java, and it failed
   at runtime. (DD-3, `47285813`)
+
+- **`essentials.durable-queues.require-active-unit-of-work-for-enqueue`** (default `false`), also
+  `setRequireActiveUnitOfWorkForEnqueue(...)` on the PostgreSQL, MongoDB and shard-owned builders. When `true`, an
+  enqueue with no active `UnitOfWork` or Spring transaction throws `NoActiveUnitOfWorkException`, so an `Outbox`
+  send can no longer silently commit outside the business transaction. `Inbox.addMessageReceived` is unaffected:
+  it opens its own unit of work. (RN-2, `3c783626`)
 
 The plugin's features are in [§4](#4-the-essentials-claude-code-plugin).
 
@@ -149,6 +174,7 @@ The plugin's features are in [§4](#4-the-essentials-claude-code-plugin).
 | Document DB | An entity with a non-public `@Id` field (Java `@Id private OrderId id`) failed every save, update and delete with `IllegalCallableAccessException`, which dead-lettered every projection message while startup looked fine. The field is now made accessible when the repository is created; if the JVM refuses, creation fails naming the entity and the field | DD-3, `47285813` |
 | Document DB | `getById` threw a bare `NullPointerException` when nothing was found. It now throws `DocumentEntityNotFoundException`, naming the entity class and the id. It extends `NullPointerException`, so code that caught the old NPE still works | DD-5, `1b828ae2` |
 | Document DB | Entity property names and JSON path segments were checked against the SQL reserved-keyword list, recursively and into JDK types, so ordinary names (`order`, `user`, `key`, `path`, `Optional.value`, `URI.path`) were rejected without saying why. They are now checked only for allowed characters and a 63-character maximum; they reach SQL only quoted or bound. Table names still reject reserved words, and that error now says "is a reserved SQL keyword" | DD-2, `ca2b2662` |
+| Durable queues (shard-owned) | `ShardOwnedDurableQueues` joined only an Essentials `UnitOfWork` that was already bound. Under a plain Spring `@Transactional` or `TransactionTemplate`, `Outbox.sendMessage`, `sendAndDontWait` and `queueMessage` committed on their own connection and survived a rollback, so the transactional outbox was not transactional on this engine. The enqueue now joins the Spring transaction | N-15, `4248f0b3` |
 | Durable queues (MongoDB) | Handing such a message back on an interrupted thread used to fail silently: the MongoDB driver refuses a connection on an interrupted thread (`Interrupted waiting for lock`), the failure was logged at DEBUG, and the message stayed marked as being delivered until the stuck-message reset. The hand-back now clears the interrupt flag for its write and restores it afterwards | `6ba568b5` |
 
 ---
@@ -218,6 +244,24 @@ Not published; listed because they are the reference for how to use the framewor
 - **Fenced-lock ownership is per lock-manager instance**, not per caller or thread: a second `tryAcquireLock` in
   the same JVM returns the same lock, and `release()` by either caller releases it for both. Javadoc and
   `LLM-foundation.md` say so, and the Singleton Worker Pattern gains an in-process guard. (QL-1, `9e211beb`)
+- **Shard-owned per-key ordering across a handover.** The shard-owned README, module `CLAUDE.md`,
+  `docs/durable-queue-shard-owned.md` and the LLM doc said "a retry never reorders". A retry keeps per-key order
+  only while the key stays with one owner: after a rebalance, a graceful stop or a crash, a later message for the
+  same key can overtake one waiting out its retry backoff. The docs now say so. (RN-4, `4eaf055d`)
+- **Corrections to the 0.60.0 release notes:**
+  - §1.1.6 (`use-ordered-unordered-query`): "is now ignored" is true only for the Spring property
+    `essentials.durable-queues.use-ordered-unordered-query`. `PostgresqlDurableQueuesBuilder.setUseOrderedUnorderedQuery`,
+    `isUseOrderedUnorderedQuery()` and the constructor parameter were removed, so Java callers get a compile error,
+    as `MIGRATION-0.60` says. (RN-3)
+  - The schema `emit` step (RN-5):
+    - `emit` exits on `ApplicationStartedEvent`, before any `ApplicationRunner`/`CommandLineRunner` runs. An
+      `AggregateType` registered from a runner, a ready-event listener, a `@Lazy` bean or on first use is missing
+      from the script, and `validate` then fails at runtime.
+    - "It runs as one transaction" holds for the main block only. A contributor that registers after the harness
+      ran, but before the exit, is appended as a separate `BEGIN…COMMIT` block, also under the bootstrap lock.
+      Rerunning the script is still safe.
+    - The script goes to `essentials-schema.sql` in the working directory by default; set
+      `essentials.schema.emit.script-file` to change it.
 - **Design documents:** `docs/slice-atlas-design.md` and `docs/slice-enrich-design.md` (`764af560`, `73d1993f`).
 
 ---
