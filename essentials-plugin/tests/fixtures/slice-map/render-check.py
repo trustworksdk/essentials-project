@@ -479,6 +479,19 @@ PROBE = """<script>
     }).join(' '));
     return original.apply(console, arguments);
   };
+  // The pages draw in requestAnimationFrame, and under --virtual-time-budget headless Chrome runs
+  // next to none: virtual time jumps from timer to timer with no frame in between, so whether the
+  // frame that draws a click's result came before the dump was luck. That was the old issue-click
+  // flake: the camera had landed (a transform set synchronously), and the board had not been
+  // redrawn at its new level. A frame here is a 16 ms virtual-time timer, so frames advance with
+  // virtual time like everything else, deterministically.
+  var frames = {}, lastFrame = 0;
+  window.requestAnimationFrame = function (cb) {
+    var id = ++lastFrame;
+    frames[id] = setTimeout(function () { delete frames[id]; cb(performance.now()); }, 16);
+    return id;
+  };
+  window.cancelAnimationFrame = function (id) { clearTimeout(frames[id]); delete frames[id]; };
   var click = __RC_CLICK__;
   window.addEventListener('load', function () {
     setTimeout(function () {
