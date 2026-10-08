@@ -187,6 +187,27 @@ class Fixture(unittest.TestCase):
         self.assertEqual([i for i in self.issues if i.startswith("completeness-")],
                          ["completeness-unsourced-column:orders.order_list:readModel:OrderListView.discount"])
 
+    def test_fix_routes(self):
+        want = {
+            "map-parse-error:src/main/java/com/example/orders/use_cases/amend_order": ("repair", "orders"),
+            "map-dangling-consume:shipping.carrier_webhook:event:DeliveryNotice": ("audit", "shipping"),
+            "completeness-unsourced-column:orders.order_list:readModel:OrderListView.discount": ("audit", "orders"),
+            "scenario-test-missing:orders.cancel_order:scenario:cancelling twice is a no-op": ("author", "orders"),
+            "flow-undeclared:orders": ("author", "orders"),
+        }
+        for iid, (route, bc) in want.items():
+            with self.subTest(iid):
+                self.assertEqual(self.issues[iid]["fix"], {"route": route, "bc": bc})
+        for i in self.data["issues"]:
+            self.assertIn(i["fix"]["route"], ("repair", "audit", "author"))
+
+    def test_every_code_has_a_fix_route(self):
+        """A new issue code needs a deliberate route, not the `audit` fallback."""
+        text = (SCRIPTS / "slice_atlas.py").read_text(encoding="utf-8") + \
+            (SCRIPTS / "slice-index.py").read_text(encoding="utf-8")
+        codes = set(re.findall(r'"((?:map|scenario|completeness|flow)-[a-z-]+)"', text))
+        self.assertEqual(codes, set(slice_atlas.FIX_ROUTES))
+
     def test_aggregation(self):
         """orders: 3 of 5 slices declare no flow — one context issue; shipping: 2 of 4 — per slice."""
         agg = self.issues["flow-undeclared:orders"]

@@ -854,7 +854,8 @@ def build_map(index, args):
     issues = [i for s in index.slices for i in slice_atlas.flag_issues(s, s["_codes"])]
     issues += slice_atlas.atlas_issues(index.slices, index.slices, messages, tests,
                                        any("messages" in d for d in docs))
-    issues = slice_atlas.sort_issues(slice_atlas.aggregate(issues, index.slices))
+    issues = slice_atlas.with_fixes(slice_atlas.sort_issues(slice_atlas.aggregate(issues, index.slices)),
+                                    index.slices)
 
     slices = []
     for s in index.slices:

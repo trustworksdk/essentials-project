@@ -312,6 +312,15 @@ dl.kv dd { margin: 0; font-family: var(--mono); font-size: 12px; overflow-wrap: 
   position: absolute; inset: 0; z-index: 60; background: rgba(0, 0, 0, .35); display: flex; align-items: center; justify-content: center; padding: 16px;
 }
 #help[hidden] { display: none; }
+#copybox { position: absolute; inset: 0; z-index: 61; background: rgba(0, 0, 0, .35); display: flex; align-items: center; justify-content: center; padding: 16px; }
+#copybox[hidden] { display: none; }
+#copybox > div { background: var(--panel-2); border-radius: 10px; padding: 16px 20px; max-width: 720px; width: 100%; box-shadow: var(--shadow); display: flex; flex-direction: column; gap: 10px; max-height: 90%; }
+#copybox h2 { margin: 0; font-size: 15px; }
+#copybox p { margin: 0; font-size: 13px; color: var(--text-muted); }
+#copybox textarea { font-family: var(--mono); font-size: 12px; min-height: 280px; flex: 1 1 auto; resize: vertical; background: var(--surface); color: var(--text); border: 1px solid var(--rule-strong); border-radius: 6px; padding: 8px; }
+#copybox .btn { align-self: flex-end; }
+#copyfix .lbl { font-size: 12px; color: var(--text-muted); margin-right: 2px; }
+#copyfix .btn { font-size: 12px; padding: 2px 8px; }
 #help > div { background: var(--panel-2); border-radius: 10px; padding: 16px 20px; max-width: 460px; width: 100%; box-shadow: var(--shadow); max-height: 90%; overflow: auto; }
 #help h2 { margin: 0 0 10px; font-size: 15px; }
 #help p { font-size: 13px; color: var(--text-muted); }
@@ -401,6 +410,7 @@ svg.lens-svg text.mark-badge-t { fill: var(--surface); font-weight: 700; }
         <div class="row"><h2>Issues</h2><button class="btn" id="dock-close" aria-label="Close issues">✕</button></div>
         <div class="row" id="levels"></div>
         <div class="row"><select id="codes" aria-label="Filter by code"></select></div>
+        <div class="row" id="copyfix"></div>
       </div>
       <div id="issues" role="listbox" aria-label="Issues"></div>
     </aside>
@@ -423,6 +433,12 @@ svg.lens-svg text.mark-badge-t { fill: var(--surface); font-weight: 700; }
     </aside>
   </div>
   <div id="toast" role="status" hidden></div>
+  <div id="copybox" hidden><div role="dialog" aria-label="Fix prompt">
+    <h2>Fix prompt</h2>
+    <p>The clipboard is not reachable from this page. Select the text and copy it, then paste it into Claude Code.</p>
+    <textarea id="copybox-text" readonly spellcheck="false"></textarea>
+    <button class="btn" id="copybox-close">Close</button>
+  </div></div>
   <div id="help" hidden><div role="dialog" aria-label="Keyboard shortcuts">
     <h2>Keyboard</h2>
     <table>
@@ -433,6 +449,8 @@ svg.lens-svg text.mark-badge-t { fill: var(--surface); font-weight: 700; }
       <tr><td><kbd>Esc</kbd></td><td>release focus, close the card</td></tr>
       <tr><td><kbd>l</kbd> <kbd>t</kbd> <kbd>f</kbd></td><td>legend, theme, full screen</td></tr>
       <tr><td><kbd>c</kbd> <kbd>v</kbd> <kbd>n</kbd></td><td>Diff lens: changes + 1 hop, change list, next changed slice</td></tr>
+      <tr><td>Copy</td><td>issues dock: a prompt for Claude Code that hands each issue to the essentials command owning its fix</td></tr>
+      <tr><td><kbd>Shift</kbd>+<kbd>Enter</kbd></td><td>Metro lens: show the focused station or line on the Atlas (or double-click it)</td></tr>
     </table>
     <p>The address bar holds the whole view: copy it to share exactly what you see.</p>
     <button class="btn" id="help-close">Close</button>
@@ -519,7 +537,8 @@ const ATLAS = /* __ATLAS_DATA__ */ null;
    ctx.markIssue(issueId)   selects the issue exactly as a click in the dock does: the dock row,
                             hash issue=, focus(target, {issue}) on this lens (or the first lens that
                             can show it), and the card opened at the issue text.
-   ctx.focusTarget(target)  as a click on a link in the card: hash focus=, lens focus, card.
+   ctx.focusTarget(target, {lens}?)  as a click on a link in the card: hash focus=, lens focus, card.
+                            lens: switch to that lens first (Metro's double-click → Atlas).
                             A target the data does not hold — here, in openCard, from the hash, the
                             dock or search Enter — toasts "Not in this map: <targetKey>", and nothing
                             is focused or opened.
@@ -1160,7 +1179,7 @@ const Atlas = (() => {
       data: D, layout: D.layout || null, el: host, index, diff: index.diff,
       issuesFor, levelOf,
       openCard: (t, o) => { if (!notInMap(t)) openCard(t, o); }, closeCard: () => closeCard(),
-      markIssue: (id) => selectIssue(id, {}), focusTarget: (t) => focusTarget(t, {}),
+      markIssue: (id) => selectIssue(id, {}), focusTarget: (t, o) => focusTarget(t, { lens: o && o.lens }),
       setHash, getHash: () => Object.assign({}, hashState),
       onHash: (fn) => { st.hashFns.push(fn); },
       createViewport, tip, hideTip, preview, toast, match, sliceHay, svg, html,
@@ -1237,6 +1256,7 @@ const Atlas = (() => {
     o = o || {};
     if (!t) return;
     if (notInMap(t)) { setHash({ focus: null }); return; }
+    if (o.lens && getLens(o.lens) && (!active || active.lens.id !== o.lens)) mountLens(o.lens, {});
     setHash({ focus: targetKey(t), issue: null });
     selectDockRow(null);
     const ok = focusOnSomeLens(t, { issue: null, level: o.level != null ? o.level : null, animate: o.animate !== false, noSwitch: o.noSwitch });
@@ -1284,6 +1304,98 @@ const Atlas = (() => {
     Array.from(codes.keys()).sort().forEach(c => { const o = html('option', null, c + ' (' + codes.get(c) + ')'); o.value = c; sel.append(o); });
     sel.value = dock.code;
     sel.addEventListener('change', () => { dock.code = sel.value; renderDockList(); });
+    renderCopyFix(counts);
+  }
+  /* ---------------- fix prompt (the dock's Copy) ----------------
+     The map repairs nothing; Copy hands each issue to the command that owns its repair, as a prompt
+     for Claude Code. The route comes from the data (issue.fix, slice_atlas.py FIX_ROUTES); this only
+     words it. The prompt opens with prose, so a paste never runs its first line as a slash command. */
+  const FIX_GROUPS = [
+    { route: 'repair', title: 'Repair the manifests — YAML that does not parse and machine-derived fields.',
+      cmd: (bc) => ['/essentials:slice-check', bc, '--fix-manifests'].filter(Boolean).join(' ') },
+    { route: 'audit', title: 'Audit — these need a judgement (a stale manifest or code that is wrong). Run the audit and act on its findings for them.',
+      cmd: (bc) => ['/essentials:slice-check', bc].filter(Boolean).join(' ') },
+    { route: 'author', title: 'Author the human-owned manifest fields `flow:` and `scenarios:`, which `--fix-manifests` never writes. ' +
+      'Draft each change in the slice\'s slice.yaml following the essentials manifest guide (§3, flow and scenarios) and show me the drafts before saving. ' +
+      'For a test that does not resolve, write the test or correct `test:`; for a `given` event nothing publishes, say whether a slice is missing or the scenario is wrong.' }
+  ];
+  function fixOf(i) {
+    const f = i.fix || {};
+    let bc = f.bc;
+    if (!bc && i.target && i.target.kind === 'slice') { const s = index.slice(i.target.id); bc = s && s.bc; }
+    if (!bc && i.target && i.target.kind === 'context') bc = i.target.id;
+    return { route: f.route || 'audit', bc: bc || null };
+  }
+  function fixPrompt(levels) {
+    const list = arr(D.issues).filter(i => levels.includes(i.level));
+    if (!list.length) return '';
+    const meta = D.meta || {};
+    const counts = LEVELS.map(l => [l, list.filter(i => i.level === l).length]).filter(x => x[1]);
+    const word = { error: ['error', 'errors'], warn: ['warning', 'warnings'], info: ['info', 'info'] };
+    const lines = ['Resolve these ' + plural(list.length, 'Slice Atlas issue') + ' (' +
+      counts.map(([l, n]) => n + ' ' + word[l][n === 1 ? 0 : 1]).join(', ') + ') in ' + (meta.root || '.') +
+      (meta.sha ? ' @ ' + meta.sha : '') + ', using the essentials plugin. Each group names the command that owns the fix. ' +
+      'Work through the groups in order: a repaired manifest can clear later issues.', ''];
+    const line = (i) => {
+      const t = i.target || {};
+      return '   - ' + i.level + ' · ' + (t.id || '?') + (t.part ? ' [' + t.part + ']' : '') + ' — ' + i.text + '  (' + i.code + ')';
+    };
+    let n = 0;
+    FIX_GROUPS.forEach(g => {
+      const mine = list.filter(i => fixOf(i).route === g.route);
+      if (!mine.length) return;
+      lines.push(++n + '. ' + g.title);
+      if (g.cmd) {
+        const byBc = new Map();
+        mine.forEach(i => { const bc = fixOf(i).bc || ''; if (!byBc.has(bc)) byBc.set(bc, []); byBc.get(bc).push(i); });
+        Array.from(byBc.keys()).sort().forEach(bc => {
+          lines.push('   Run `' + g.cmd(bc) + '` for:');
+          byBc.get(bc).forEach(i => lines.push(line(i)));
+        });
+      } else mine.forEach(i => lines.push(line(i)));
+      lines.push('');
+    });
+    lines.push('Then run `/essentials:slice-map-html` again and confirm these issues are gone.');
+    return lines.join('\n');
+  }
+  function copyText(text, what) {
+    const done = () => toast('Copied ' + what + ' — paste it into Claude Code');
+    const legacy = () => {
+      try {
+        const ta = document.createElement('textarea');
+        ta.value = text; ta.setAttribute('readonly', ''); ta.style.position = 'fixed'; ta.style.opacity = '0';
+        document.body.append(ta); ta.select();
+        const ok = !!(document.execCommand && document.execCommand('copy'));
+        ta.remove();
+        return ok;
+      } catch (e) { return false; }
+    };
+    const box = () => {
+      $('#copybox-text').value = text;
+      $('#copybox').hidden = false;
+      $('#copybox-text').focus(); $('#copybox-text').select();
+    };
+    const fallback = () => { if (legacy()) done(); else box(); };
+    try {
+      if (navigator.clipboard && navigator.clipboard.writeText) { navigator.clipboard.writeText(text).then(done, fallback); return; }
+    } catch (e) { /* fall through */ }
+    fallback();
+  }
+  function renderCopyFix(counts) {
+    const row = $('#copyfix');
+    row.textContent = '';
+    const total = counts.error + counts.warn + counts.info;
+    if (!total) return;
+    row.append(html('span', 'lbl', 'Copy fix prompt'));
+    const sets = [['All', LEVELS, total], ['Errors', ['error'], counts.error], ['Warnings', ['warn'], counts.warn], ['Info', ['info'], counts.info]];
+    sets.forEach(([label, levels, n]) => {
+      const b = html('button', 'btn', label + ' ' + n);
+      b.disabled = !n;
+      b.title = n ? 'Copy a prompt for Claude Code that hands ' + (n === 1 ? 'this issue' : 'these ' + n + ' issues') +
+        ' to the essentials command owning each fix' : 'nothing at this level';
+      b.addEventListener('click', () => copyText(fixPrompt(levels), 'a fix prompt for ' + plural(n, 'issue')));
+      row.append(b);
+    });
   }
   function renderDockList() {
     const list = $('#issues');
@@ -1796,6 +1908,8 @@ const Atlas = (() => {
     $('#btn-theme').addEventListener('click', cycleTheme);
     $('#btn-help').addEventListener('click', () => { $('#help').hidden = false; $('#help-close').focus(); });
     $('#help-close').addEventListener('click', () => { $('#help').hidden = true; });
+    $('#copybox-close').addEventListener('click', () => { $('#copybox').hidden = true; });
+    $('#copybox').addEventListener('click', (e) => { if (e.target === $('#copybox')) $('#copybox').hidden = true; });
     $('#help').addEventListener('click', (e) => { if (e.target === $('#help')) $('#help').hidden = true; });
     $('#card-close').addEventListener('click', releaseFocus);
     document.querySelectorAll('#zoomtools .btn').forEach(b => b.addEventListener('click', () => {
@@ -1823,7 +1937,11 @@ const Atlas = (() => {
       if (tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA') return;
       const k = e.key;
       if (k === '/') { e.preventDefault(); q.focus(); q.select(); return; }
-      if (k === 'Escape') { if (!$('#help').hidden) { $('#help').hidden = true; return; } releaseFocus(); return; }
+      if (k === 'Escape') {
+        if (!$('#copybox').hidden) { $('#copybox').hidden = true; return; }
+        if (!$('#help').hidden) { $('#help').hidden = true; return; }
+        releaseFocus(); return;
+      }
       if (k === '?') { $('#help').hidden = !$('#help').hidden; return; }
       if (/^[1-9]$/.test(k)) { const l = lenses.find(x => x.key === k); if (l && (!active || active.lens.id !== l.id)) switchLens(l.id); return; }
       if (k === 'i') { toggleDock(); return; }

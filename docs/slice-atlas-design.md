@@ -201,6 +201,16 @@ issue switches to the lens and zoom where its target is drawn, flies the camera 
 marker on the target (on the column, cell, sticky or scenario card named by `target.part`), and opens the
 detail card scrolled to the issue text. ↑/↓ walk the list. The header carries counts per level.
 
+**Copy fix prompt** (all, errors, warnings, info) copies a prompt for Claude Code that hands each issue to
+the command owning its repair. The route is data, not page logic: each issue carries `fix: {route, bc}`
+from `slice_atlas.py` `FIX_ROUTES`, and a test fails when an issue code has no route. `repair` →
+`/essentials:slice-check <bc> --fix-manifests` (unparsed YAML, machine-derived fields); `audit` →
+`/essentials:slice-check <bc>` (a divergence that needs a judgement); `author` → a draft of the
+human-owned `flow:` / `scenarios:` for the user to review, since no command writes them. The prompt
+opens with prose, so a paste never runs its first line as a slash command. This keeps the map's
+invariant: it still repairs and grades nothing — it names who does. Where the clipboard is not
+reachable, a dialog shows the text selected.
+
 ### 9.2 Deep links
 
 The hash is the whole view state: `#lens=atlas&z=2&focus=orders.place_order&issue=<id>&q=Order`.
@@ -226,6 +236,10 @@ Manifest fields, payloads with the identity property first, read-model table, sc
 the slice's `CLAUDE.md`. The Markdown is converted in Python to a fixed subset — headings, paragraphs,
 lists, emphasis, inline and fenced code, tables; links rendered as text — with **every character
 escaped first**. No raw HTML from a manifest or `CLAUDE.md` ever reaches the page.
+
+Hovering any card, box or station shows the same content, compact (`ctx.preview`): the renderers take
+their container as a parameter, so the pane and the hover cannot drift. A double-click on a Metro station
+or line name (Shift+Enter) switches to the Atlas, focused on it.
 
 ### 9.5 Everywhere
 

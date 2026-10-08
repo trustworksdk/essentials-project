@@ -40,6 +40,10 @@
     "fixed": [
       {
         "code": "map-parse-error",
+        "fix": {
+          "bc": "orders",
+          "route": "repair"
+        },
         "id": "map-parse-error:src/main/java/com/example/orders/use_cases/amend_order",
         "level": "error",
         "source": "map",
@@ -52,6 +56,10 @@
       },
       {
         "code": "scenario-test-missing",
+        "fix": {
+          "bc": "orders",
+          "route": "author"
+        },
         "id": "scenario-test-missing:orders.cancel_order:scenario:cancelling twice is a no-op",
         "level": "warn",
         "source": "atlas",
@@ -64,6 +72,10 @@
       },
       {
         "code": "flow-undeclared",
+        "fix": {
+          "bc": "shipping",
+          "route": "author"
+        },
         "id": "flow-undeclared:shipping.nightly_reship",
         "level": "info",
         "source": "atlas",

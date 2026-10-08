@@ -28,6 +28,9 @@ Issue codes and levels (an issue annotates; the map grades nothing):
     scenario-test-missing            warn  `test:` resolves to no test in slice-source's test index
     scenario-malformed               warn  a scenario that does not have the schema's shape
     completeness-unsourced-column    info  a read-model column no inbound event carries a field for
+
+Each issue carries `fix: {route, bc}` — which command owns its repair (FIX_ROUTES), and the context to
+run it on. The page turns the routes into a prompt (the dock's Copy); the map itself repairs nothing.
 """
 
 from __future__ import annotations
@@ -57,6 +60,30 @@ STEP_TYPES = ("event", "command", "query", "state", "external", "schedule")
 FLOW_NAME = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
 KIND_DIRS = ("use_cases", "views", "automations", "external_systems")
 SOURCE_CODES = ("map-handled-undeclared", "map-endpoint-missing", "map-not-checked")
+
+# Who owns the repair of each issue code. `repair`: a machine-derived manifest field or the YAML itself,
+# which `/essentials:slice-check <bc> --fix-manifests` regenerates. `audit`: a divergence that needs a
+# judgement — stale manifest or wrong code, which slice to move, which twin is live — so
+# `/essentials:slice-check <bc>`, whose gates decide and offer the fix. `author`: the human-owned
+# `flow:` and `scenarios:` (manifest-guide.md §3), which no command writes: a model drafts them for
+# review. A code missing here routes to `audit`.
+FIX_ROUTES = {
+    "map-parse-error": "repair",
+    "map-handled-undeclared": "repair",
+    "map-duplicate-id": "audit",
+    "map-kind-location": "audit",
+    "map-twin-broken": "audit",
+    "map-dangling-consume": "audit",
+    "map-endpoint-missing": "audit",
+    "map-not-checked": "audit",
+    "completeness-unsourced-column": "audit",
+    "flow-undeclared": "author",
+    "scenario-none": "author",
+    "scenario-given-unpublished": "author",
+    "scenario-unknown-field": "author",
+    "scenario-test-missing": "author",
+    "scenario-malformed": "author",
+}
 
 # The manifest fields the diff compares, in the order a changed card lists them.
 DIFF_SCALARS = ("kind", "bc", "status", "owner", "summary", "tier", "lane", "language", "externalSystem",
@@ -520,6 +547,17 @@ def sort_issues(issues):
     for i in issues:
         by_id.setdefault(i["id"], i)
     return sorted(by_id.values(), key=lambda i: (LEVEL_RANK[i["level"]], i["id"]))
+
+
+def with_fixes(issues, rows):
+    """Each issue with `fix: {route, bc}` (FIX_ROUTES); bc is the context of its slice or context, or
+    None for another target."""
+    bc_of = {s["id"]: context_of(s) for s in rows}
+    for i in issues:
+        t = i["target"]
+        bc = t["id"] if t["kind"] == "context" else bc_of.get(t["id"]) if t["kind"] == "slice" else None
+        i["fix"] = {"route": FIX_ROUTES.get(i["code"], "audit"), "bc": bc}
+    return issues
 
 
 def aggregate(issues, rows):

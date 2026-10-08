@@ -127,7 +127,12 @@ So the report can answer a question about it. Lenses switch with `1`–`5`:
 A journey is the manifest's `flow:` where one is declared, and is otherwise derived from the declared
 cause and effect; the dock says which slices declare none. Scenarios are the manifest's `scenarios:`.
 Both fields, and the checks on them, are `references/slice/manifest-guide.md` §3. The page also has an
-issues dock (selecting an issue flies to its target), search (`/`), a minimap, a legend per lens, light
+issues dock (selecting an issue flies to its target; **Copy fix prompt** — all, errors, warnings or
+info — copies a prompt for Claude Code that hands each issue to the command owning its repair:
+`/essentials:slice-check <bc> --fix-manifests` for unparsed YAML and machine-derived fields,
+`/essentials:slice-check <bc>` for what needs a judgement, and a reviewed draft for the human-owned
+`flow:` and `scenarios:`), search (`/`), hover previews of the detail pane, a double-click on a Metro
+station or line name that shows it on the Atlas, a minimap, a legend per lens, light
 and dark themes, and the whole view state in the URL hash, so a link pasted into a pull request reopens
 the same view. It is self-contained — no CDN, no fonts, no fetch — and opens from `file://`.
 

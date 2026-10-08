@@ -1681,7 +1681,11 @@
         "id": "src/main/java/com/example/orders/use_cases/amend_order",
         "part": null
       },
-      "source": "map"
+      "source": "map",
+      "fix": {
+        "route": "repair",
+        "bc": "orders"
+      }
     },
     {
       "id": "map-dangling-consume:shipping.carrier_webhook:event:DeliveryNotice",
@@ -1693,7 +1697,11 @@
         "id": "shipping.carrier_webhook",
         "part": "event:DeliveryNotice"
       },
-      "source": "map"
+      "source": "map",
+      "fix": {
+        "route": "audit",
+        "bc": "shipping"
+      }
     },
     {
       "id": "scenario-given-unpublished:billing.refund_payment:scenario:refunds a returned order:OrderReturned",
@@ -1705,7 +1713,11 @@
         "id": "billing.refund_payment",
         "part": "scenario:refunds a returned order:OrderReturned"
       },
-      "source": "atlas"
+      "source": "atlas",
+      "fix": {
+        "route": "author",
+        "bc": "billing"
+      }
     },
     {
       "id": "scenario-test-missing:orders.cancel_order:scenario:cancelling twice is a no-op",
@@ -1717,7 +1729,11 @@
         "id": "orders.cancel_order",
         "part": "scenario:cancelling twice is a no-op"
       },
-      "source": "atlas"
+      "source": "atlas",
+      "fix": {
+        "route": "author",
+        "bc": "orders"
+      }
     },
     {
       "id": "completeness-unsourced-column:orders.order_list:readModel:OrderListView.discount",
@@ -1729,7 +1745,11 @@
         "id": "orders.order_list",
         "part": "readModel:OrderListView.discount"
       },
-      "source": "atlas"
+      "source": "atlas",
+      "fix": {
+        "route": "audit",
+        "bc": "orders"
+      }
     },
     {
       "id": "flow-undeclared:orders",
@@ -1741,7 +1761,11 @@
         "id": "orders",
         "part": null
       },
-      "source": "atlas"
+      "source": "atlas",
+      "fix": {
+        "route": "author",
+        "bc": "orders"
+      }
     },
     {
       "id": "flow-undeclared:shipping.carrier_webhook",
@@ -1753,7 +1777,11 @@
         "id": "shipping.carrier_webhook",
         "part": null
       },
-      "source": "atlas"
+      "source": "atlas",
+      "fix": {
+        "route": "author",
+        "bc": "shipping"
+      }
     },
     {
       "id": "flow-undeclared:shipping.nightly_reship",
@@ -1765,7 +1793,11 @@
         "id": "shipping.nightly_reship",
         "part": null
       },
-      "source": "atlas"
+      "source": "atlas",
+      "fix": {
+        "route": "author",
+        "bc": "shipping"
+      }
     },
     {
       "id": "map-not-checked:orders.cancellation_mailer:11(b) handled events",
@@ -1777,7 +1809,11 @@
         "id": "orders.cancellation_mailer",
         "part": "11(b) handled events"
       },
-      "source": "source"
+      "source": "source",
+      "fix": {
+        "route": "audit",
+        "bc": "orders"
+      }
     },
     {
       "id": "scenario-none:billing.charge_payment",
@@ -1789,7 +1825,11 @@
         "id": "billing.charge_payment",
         "part": null
       },
-      "source": "atlas"
+      "source": "atlas",
+      "fix": {
+        "route": "author",
+        "bc": "billing"
+      }
     },
     {
       "id": "scenario-none:billing.payment_list",
@@ -1801,7 +1841,11 @@
         "id": "billing.payment_list",
         "part": null
       },
-      "source": "atlas"
+      "source": "atlas",
+      "fix": {
+        "route": "author",
+        "bc": "billing"
+      }
     },
     {
       "id": "scenario-none:orders.cancellation_mailer",
@@ -1813,7 +1857,11 @@
         "id": "orders.cancellation_mailer",
         "part": null
       },
-      "source": "atlas"
+      "source": "atlas",
+      "fix": {
+        "route": "author",
+        "bc": "orders"
+      }
     },
     {
       "id": "scenario-none:orders.order_history",
@@ -1825,7 +1873,11 @@
         "id": "orders.order_history",
         "part": null
       },
-      "source": "atlas"
+      "source": "atlas",
+      "fix": {
+        "route": "author",
+        "bc": "orders"
+      }
     },
     {
       "id": "scenario-none:shipping.ship_order",
@@ -1837,7 +1889,11 @@
         "id": "shipping.ship_order",
         "part": null
       },
-      "source": "atlas"
+      "source": "atlas",
+      "fix": {
+        "route": "author",
+        "bc": "shipping"
+      }
     },
     {
       "id": "scenario-unknown-field:orders.cancel_order:scenario:rejects an unknown order:CancelOrder.priority",
@@ -1849,7 +1905,11 @@
         "id": "orders.cancel_order",
         "part": "scenario:rejects an unknown order:CancelOrder.priority"
       },
-      "source": "atlas"
+      "source": "atlas",
+      "fix": {
+        "route": "author",
+        "bc": "orders"
+      }
     }
   ],
   "lineage": {

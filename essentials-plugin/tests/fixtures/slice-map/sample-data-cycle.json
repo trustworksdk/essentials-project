@@ -629,7 +629,11 @@
         "id": "orders.place_order",
         "part": null
       },
-      "source": "atlas"
+      "source": "atlas",
+      "fix": {
+        "route": "author",
+        "bc": "orders"
+      }
     },
     {
       "id": "flow-undeclared:payments",
@@ -641,7 +645,11 @@
         "id": "payments",
         "part": null
       },
-      "source": "atlas"
+      "source": "atlas",
+      "fix": {
+        "route": "author",
+        "bc": "payments"
+      }
     },
     {
       "id": "flow-undeclared:reminders.schedule_next",
@@ -653,7 +661,11 @@
         "id": "reminders.schedule_next",
         "part": null
       },
-      "source": "atlas"
+      "source": "atlas",
+      "fix": {
+        "route": "author",
+        "bc": "reminders"
+      }
     },
     {
       "id": "flow-undeclared:reminders.send_reminder",
@@ -665,7 +677,11 @@
         "id": "reminders.send_reminder",
         "part": null
       },
-      "source": "atlas"
+      "source": "atlas",
+      "fix": {
+        "route": "author",
+        "bc": "reminders"
+      }
     },
     {
       "id": "scenario-none:orders.place_order",
@@ -677,7 +693,11 @@
         "id": "orders.place_order",
         "part": null
       },
-      "source": "atlas"
+      "source": "atlas",
+      "fix": {
+        "route": "author",
+        "bc": "orders"
+      }
     },
     {
       "id": "scenario-none:payments",
@@ -689,7 +709,11 @@
         "id": "payments",
         "part": null
       },
-      "source": "atlas"
+      "source": "atlas",
+      "fix": {
+        "route": "author",
+        "bc": "payments"
+      }
     },
     {
       "id": "scenario-none:reminders.schedule_next",
@@ -701,7 +725,11 @@
         "id": "reminders.schedule_next",
         "part": null
       },
-      "source": "atlas"
+      "source": "atlas",
+      "fix": {
+        "route": "author",
+        "bc": "reminders"
+      }
     },
     {
       "id": "scenario-none:reminders.send_reminder",
@@ -713,7 +741,11 @@
         "id": "reminders.send_reminder",
         "part": null
       },
-      "source": "atlas"
+      "source": "atlas",
+      "fix": {
+        "route": "author",
+        "bc": "reminders"
+      }
     }
   ],
   "lineage": {

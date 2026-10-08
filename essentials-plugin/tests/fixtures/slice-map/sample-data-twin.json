@@ -917,7 +917,11 @@
         "id": "billing.settle_refund",
         "part": "event:PaymentSettled"
       },
-      "source": "map"
+      "source": "map",
+      "fix": {
+        "route": "audit",
+        "bc": "billing"
+      }
     },
     {
       "id": "map-twin-broken:orders.customer_summary:supersededBy:orders.customer_summary_v2",
@@ -929,7 +933,11 @@
         "id": "orders.customer_summary",
         "part": "supersededBy:orders.customer_summary_v2"
       },
-      "source": "map"
+      "source": "map",
+      "fix": {
+        "route": "audit",
+        "bc": "orders"
+      }
     },
     {
       "id": "map-twin-broken:orders.shipment_board_v2:supersedes:orders.shipment_board",
@@ -941,7 +949,11 @@
         "id": "orders.shipment_board_v2",
         "part": "supersedes:orders.shipment_board"
       },
-      "source": "map"
+      "source": "map",
+      "fix": {
+        "route": "audit",
+        "bc": "orders"
+      }
     },
     {
       "id": "flow-undeclared:billing.refund_order",
@@ -953,7 +965,11 @@
         "id": "billing.refund_order",
         "part": null
       },
-      "source": "atlas"
+      "source": "atlas",
+      "fix": {
+        "route": "author",
+        "bc": "billing"
+      }
     },
     {
       "id": "flow-undeclared:billing.settle_refund",
@@ -965,7 +981,11 @@
         "id": "billing.settle_refund",
         "part": null
       },
-      "source": "atlas"
+      "source": "atlas",
+      "fix": {
+        "route": "author",
+        "bc": "billing"
+      }
     },
     {
       "id": "flow-undeclared:orders",
@@ -977,7 +997,11 @@
         "id": "orders",
         "part": null
       },
-      "source": "atlas"
+      "source": "atlas",
+      "fix": {
+        "route": "author",
+        "bc": "orders"
+      }
     },
     {
       "id": "map-twin-broken:orders.order_list:supersededBy:orders.order_list_v2",
@@ -989,7 +1013,11 @@
         "id": "orders.order_list",
         "part": "supersededBy:orders.order_list_v2"
       },
-      "source": "map"
+      "source": "map",
+      "fix": {
+        "route": "audit",
+        "bc": "orders"
+      }
     },
     {
       "id": "scenario-none:billing.refund_order",
@@ -1001,7 +1029,11 @@
         "id": "billing.refund_order",
         "part": null
       },
-      "source": "atlas"
+      "source": "atlas",
+      "fix": {
+        "route": "author",
+        "bc": "billing"
+      }
     },
     {
       "id": "scenario-none:billing.settle_refund",
@@ -1013,7 +1045,11 @@
         "id": "billing.settle_refund",
         "part": null
       },
-      "source": "atlas"
+      "source": "atlas",
+      "fix": {
+        "route": "author",
+        "bc": "billing"
+      }
     },
     {
       "id": "scenario-none:orders",
@@ -1025,7 +1061,11 @@
         "id": "orders",
         "part": null
       },
-      "source": "atlas"
+      "source": "atlas",
+      "fix": {
+        "route": "author",
+        "bc": "orders"
+      }
     }
   ],
   "lineage": {

@@ -148,8 +148,13 @@
       const dot = lv ? svg('circle', { cx: s.x, cy: s.y, r: 1, class: 'dot-' + lv }) : null;
       if (dot) { dot.style.pointerEvents = 'none'; g.append(dot); }
       const open = () => ctx.focusTarget({ kind: 'slice', id: s.slice });
+      const onAtlas = () => { ctx.hideTip(); ctx.focusTarget({ kind: 'slice', id: s.slice }, { lens: 'atlas' }); };
       g.addEventListener('click', (ev) => { ev.stopPropagation(); if (!vp.wasDrag()) open(); });
-      g.addEventListener('keydown', (ev) => { if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); open(); } });
+      g.addEventListener('dblclick', (ev) => { ev.stopPropagation(); ev.preventDefault(); if (!vp.wasDrag()) onAtlas(); });
+      g.addEventListener('keydown', (ev) => {
+        if (ev.key === 'Enter' && ev.shiftKey) { ev.preventDefault(); onAtlas(); }
+        else if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); open(); }
+      });
       g.addEventListener('focus', () => { const v = vp.view(); if (s.x < v.x || s.x > v.x + v.w || s.y < v.y || s.y > v.y + v.h) vp.centerOn(s.x, s.y); });
       g.addEventListener('mousemove', (ev) => ctx.tip(ev, stationTip(s)));
       g.addEventListener('mouseleave', () => ctx.hideTip());
@@ -159,7 +164,7 @@
 
     function stationTip(s) {
       const on = (s.interchange ? 'interchange of ' : 'on ') + arr(s.lines).map(procName).join(', ');
-      return ctx.preview({ kind: 'slice', id: s.slice }, on + ' · click for details') || stationTipText(s);
+      return ctx.preview({ kind: 'slice', id: s.slice }, on + ' · click for details · double-click to show it on the Atlas') || stationTipText(s);
     }
     function stationTipText(s) {
       const f = document.createDocumentFragment();
@@ -178,7 +183,7 @@
       const p = ctx.index.process(l.process);
       const n = stations.filter(s => arr(s.lines).includes(l.process)).length;
       return procName(l.process) + (l.derived ? '  (derived — no flow: declares it)' : '  (declared flow)') + '\n' + n + ' station' + (n === 1 ? '' : 's') +
-        (p && arr(p.bcs).length ? ' · ' + arr(p.bcs).join(', ') : '') + '\nclick for details';
+        (p && arr(p.bcs).length ? ' · ' + arr(p.bcs).join(', ') : '') + '\nclick for details · double-click a line name to show it on the Atlas';
     }
 
     const vp = ctx.createViewport({ svg: root, world, bounds, onChange: () => render() });
@@ -327,8 +332,13 @@
         if (pi) g.append(svg('circle', { cx: (x + w).toFixed(2), cy: (i.y - h / 2).toFixed(2), r: (DOT_PX / k).toFixed(3), class: 'dot-' + pi }));
         if ((S.selLine && S.selLine !== i.l.process) || (S.match && !S.match.lines.has(i.l.process))) g.classList.add('mt-faded');
         const open = () => ctx.focusTarget({ kind: 'process', id: i.l.process });
+        const onAtlas = () => { ctx.hideTip(); ctx.focusTarget({ kind: 'process', id: i.l.process }, { lens: 'atlas' }); };
         g.addEventListener('click', (ev) => { ev.stopPropagation(); if (!vp.wasDrag()) open(); });
-        g.addEventListener('keydown', (ev) => { if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); open(); } });
+        g.addEventListener('dblclick', (ev) => { ev.stopPropagation(); ev.preventDefault(); if (!vp.wasDrag()) onAtlas(); });
+        g.addEventListener('keydown', (ev) => {
+          if (ev.key === 'Enter' && ev.shiftKey) { ev.preventDefault(); onAtlas(); }
+          else if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); open(); }
+        });
         g.addEventListener('mousemove', (ev) => ctx.tip(ev, lineTip(i.l)));
         g.addEventListener('mouseleave', () => ctx.hideTip());
         L.pill.append(g);
@@ -419,6 +429,7 @@
       r.append(sw, document.createTextNode(text));
       f.append(r);
     };
+    const note = (text) => { const r = document.createElement('div'); r.className = 'lg'; r.textContent = text; f.append(r); };
     h('Lines');
     row('ln', { borderTopColor: 'var(--p0)', borderTopWidth: '5px' }, 'declared process (flow: in the manifests)');
     row('ln', { borderTopColor: 'var(--p0)', borderTopWidth: '2px', borderTopStyle: 'dashed' }, 'derived process — declare it with flow:');
@@ -432,6 +443,8 @@
       row('dt', { background: 'var(--surface)', border: '3px solid var(--ok)' }, 'added in this change');
       row('dt', { background: 'var(--surface)', border: '3px solid var(--warn)' }, 'changed in this change');
     }
+    h('Navigate');
+    note('click: details · double-click a station or a line name (Shift+Enter): show it on the Atlas');
     const procs = ctx ? ctx.util.arr(ctx.data.processes) : [];
     const M = ctx && ctx.layout && ctx.layout.metro;
     const drawn = new Set(M ? ctx.util.arr(M.lines).map(l => l.process) : []);

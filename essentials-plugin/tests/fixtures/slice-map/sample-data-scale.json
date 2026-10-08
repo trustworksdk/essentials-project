@@ -4600,7 +4600,11 @@
         "id": "bc04.partner_feed",
         "part": "event:PartnerThing04"
       },
-      "source": "map"
+      "source": "map",
+      "fix": {
+        "route": "audit",
+        "bc": "bc04"
+      }
     },
     {
       "id": "map-dangling-consume:bc08.partner_feed:event:PartnerThing08",
@@ -4612,7 +4616,11 @@
         "id": "bc08.partner_feed",
         "part": "event:PartnerThing08"
       },
-      "source": "map"
+      "source": "map",
+      "fix": {
+        "route": "audit",
+        "bc": "bc08"
+      }
     },
     {
       "id": "map-dangling-consume:bc12.partner_feed:event:PartnerThing12",
@@ -4624,7 +4632,11 @@
         "id": "bc12.partner_feed",
         "part": "event:PartnerThing12"
       },
-      "source": "map"
+      "source": "map",
+      "fix": {
+        "route": "audit",
+        "bc": "bc12"
+      }
     },
     {
       "id": "flow-undeclared:bc01",
@@ -4636,7 +4648,11 @@
         "id": "bc01",
         "part": null
       },
-      "source": "atlas"
+      "source": "atlas",
+      "fix": {
+        "route": "author",
+        "bc": "bc01"
+      }
     },
     {
       "id": "flow-undeclared:bc02",
@@ -4648,7 +4664,11 @@
         "id": "bc02",
         "part": null
       },
-      "source": "atlas"
+      "source": "atlas",
+      "fix": {
+        "route": "author",
+        "bc": "bc02"
+      }
     },
     {
       "id": "flow-undeclared:bc03",
@@ -4660,7 +4680,11 @@
         "id": "bc03",
         "part": null
       },
-      "source": "atlas"
+      "source": "atlas",
+      "fix": {
+        "route": "author",
+        "bc": "bc03"
+      }
     },
     {
       "id": "flow-undeclared:bc04",
@@ -4672,7 +4696,11 @@
         "id": "bc04",
         "part": null
       },
-      "source": "atlas"
+      "source": "atlas",
+      "fix": {
+        "route": "author",
+        "bc": "bc04"
+      }
     },
     {
       "id": "flow-undeclared:bc05",
@@ -4684,7 +4712,11 @@
         "id": "bc05",
         "part": null
       },
-      "source": "atlas"
+      "source": "atlas",
+      "fix": {
+        "route": "author",
+        "bc": "bc05"
+      }
     },
     {
       "id": "flow-undeclared:bc06",
@@ -4696,7 +4728,11 @@
         "id": "bc06",
         "part": null
       },
-      "source": "atlas"
+      "source": "atlas",
+      "fix": {
+        "route": "author",
+        "bc": "bc06"
+      }
     },
     {
       "id": "flow-undeclared:bc07",
@@ -4708,7 +4744,11 @@
         "id": "bc07",
         "part": null
       },
-      "source": "atlas"
+      "source": "atlas",
+      "fix": {
+        "route": "author",
+        "bc": "bc07"
+      }
     },
     {
       "id": "flow-undeclared:bc08",
@@ -4720,7 +4760,11 @@
         "id": "bc08",
         "part": null
       },
-      "source": "atlas"
+      "source": "atlas",
+      "fix": {
+        "route": "author",
+        "bc": "bc08"
+      }
     },
     {
       "id": "flow-undeclared:bc09",
@@ -4732,7 +4776,11 @@
         "id": "bc09",
         "part": null
       },
-      "source": "atlas"
+      "source": "atlas",
+      "fix": {
+        "route": "author",
+        "bc": "bc09"
+      }
     },
     {
       "id": "flow-undeclared:bc10",
@@ -4744,7 +4792,11 @@
         "id": "bc10",
         "part": null
       },
-      "source": "atlas"
+      "source": "atlas",
+      "fix": {
+        "route": "author",
+        "bc": "bc10"
+      }
     },
     {
       "id": "flow-undeclared:bc11",
@@ -4756,7 +4808,11 @@
         "id": "bc11",
         "part": null
       },
-      "source": "atlas"
+      "source": "atlas",
+      "fix": {
+        "route": "author",
+        "bc": "bc11"
+      }
     },
     {
       "id": "flow-undeclared:bc12",
@@ -4768,7 +4824,11 @@
         "id": "bc12",
         "part": null
       },
-      "source": "atlas"
+      "source": "atlas",
+      "fix": {
+        "route": "author",
+        "bc": "bc12"
+      }
     },
     {
       "id": "scenario-none:bc01",
@@ -4780,7 +4840,11 @@
         "id": "bc01",
         "part": null
       },
-      "source": "atlas"
+      "source": "atlas",
+      "fix": {
+        "route": "author",
+        "bc": "bc01"
+      }
     },
     {
       "id": "scenario-none:bc02",
@@ -4792,7 +4856,11 @@
         "id": "bc02",
         "part": null
       },
-      "source": "atlas"
+      "source": "atlas",
+      "fix": {
+        "route": "author",
+        "bc": "bc02"
+      }
     },
     {
       "id": "scenario-none:bc03",
@@ -4804,7 +4872,11 @@
         "id": "bc03",
         "part": null
       },
-      "source": "atlas"
+      "source": "atlas",
+      "fix": {
+        "route": "author",
+        "bc": "bc03"
+      }
     },
     {
       "id": "scenario-none:bc04",
@@ -4816,7 +4888,11 @@
         "id": "bc04",
         "part": null
       },
-      "source": "atlas"
+      "source": "atlas",
+      "fix": {
+        "route": "author",
+        "bc": "bc04"
+      }
     },
     {
       "id": "scenario-none:bc05",
@@ -4828,7 +4904,11 @@
         "id": "bc05",
         "part": null
       },
-      "source": "atlas"
+      "source": "atlas",
+      "fix": {
+        "route": "author",
+        "bc": "bc05"
+      }
     },
     {
       "id": "scenario-none:bc06",
@@ -4840,7 +4920,11 @@
         "id": "bc06",
         "part": null
       },
-      "source": "atlas"
+      "source": "atlas",
+      "fix": {
+        "route": "author",
+        "bc": "bc06"
+      }
     },
     {
       "id": "scenario-none:bc07",
@@ -4852,7 +4936,11 @@
         "id": "bc07",
         "part": null
       },
-      "source": "atlas"
+      "source": "atlas",
+      "fix": {
+        "route": "author",
+        "bc": "bc07"
+      }
     },
     {
       "id": "scenario-none:bc08",
@@ -4864,7 +4952,11 @@
         "id": "bc08",
         "part": null
       },
-      "source": "atlas"
+      "source": "atlas",
+      "fix": {
+        "route": "author",
+        "bc": "bc08"
+      }
     },
     {
       "id": "scenario-none:bc09",
@@ -4876,7 +4968,11 @@
         "id": "bc09",
         "part": null
       },
-      "source": "atlas"
+      "source": "atlas",
+      "fix": {
+        "route": "author",
+        "bc": "bc09"
+      }
     },
     {
       "id": "scenario-none:bc10",
@@ -4888,7 +4984,11 @@
         "id": "bc10",
         "part": null
       },
-      "source": "atlas"
+      "source": "atlas",
+      "fix": {
+        "route": "author",
+        "bc": "bc10"
+      }
     },
     {
       "id": "scenario-none:bc11",
@@ -4900,7 +5000,11 @@
         "id": "bc11",
         "part": null
       },
-      "source": "atlas"
+      "source": "atlas",
+      "fix": {
+        "route": "author",
+        "bc": "bc11"
+      }
     },
     {
       "id": "scenario-none:bc12",
@@ -4912,7 +5016,11 @@
         "id": "bc12",
         "part": null
       },
-      "source": "atlas"
+      "source": "atlas",
+      "fix": {
+        "route": "author",
+        "bc": "bc12"
+      }
     }
   ],
   "lineage": {
