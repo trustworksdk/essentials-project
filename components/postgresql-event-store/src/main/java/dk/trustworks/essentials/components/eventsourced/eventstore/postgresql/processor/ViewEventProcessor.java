@@ -442,6 +442,28 @@ public abstract class ViewEventProcessor extends AbstractEventProcessor {
     }
 
     /**
+     * The durable queue that failed events are queued on - see {@link #awaitProcessed(AggregateType, GlobalEventOrder, java.time.Duration)}
+     */
+    @Override
+    protected boolean hasQueuedMessagesForAggregate(AggregateType aggregateType, String serializedAggregateId) {
+        var queueName = durableQueueName;
+        if (queueName == null) {
+            // Not started: no subscription exists to be past the event
+            return true;
+        }
+        return durableQueues.hasOrderedMessageQueuedForKey(queueName, serializedAggregateId);
+    }
+
+    @Override
+    protected Optional<QueuedMessageCounts> getQueuedMessageCountsForAwaitProcessed() {
+        var queueName = durableQueueName;
+        if (queueName == null) {
+            return Optional.empty();
+        }
+        return Optional.of(durableQueues.getQueuedMessageCountsFor(queueName));
+    }
+
+    /**
      * Reset all event store subscriptions and purge the durable queue.
      *
      * @see AbstractEventProcessor#resetAllSubscriptions(Consumer)

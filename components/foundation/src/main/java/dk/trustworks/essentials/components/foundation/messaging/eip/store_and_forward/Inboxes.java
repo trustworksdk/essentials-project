@@ -474,6 +474,17 @@ public interface Inboxes {
             }
 
             @Override
+            public boolean hasOrderedMessageQueuedForKey(String key) {
+                requireNonNull(key, "No key provided");
+                return durableQueues.hasOrderedMessageQueuedForKey(inboxQueueName, key);
+            }
+
+            @Override
+            public long getNumberOfDeadLetterMessages() {
+                return durableQueues.getTotalDeadLetterMessagesQueuedFor(inboxQueueName);
+            }
+
+            @Override
             public String toString() {
                 return "DurableQueueBasedInbox{" +
                         "config=" + config + ", " +

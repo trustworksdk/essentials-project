@@ -232,6 +232,22 @@ public class OrderService {
 }
 ```
 
+**Getting the appended `GlobalEventOrder`** (since 0.60.1): `send` returns the event, not the `PersistedEvent`. Wrap
+the send in `AppendedEvents.recordDuring(...)` (package `...aggregates.eventstream.adapters`) to receive the
+`PersistedEvent`s the decider adapter appended - e.g. to await a processor with `awaitProcessed` (see
+`LLM-postgresql-event-store.md`, *Awaiting a processor*):
+
+```java
+var recorded = AppendedEvents.recordDuring(() -> commandBus.send(new CreateOrder(orderId, customerId)));
+OrderCreated event = (OrderCreated) recorded.result();                    // what send returned
+orderViewProcessor.awaitProcessed(recorded.lastAppendedEvent().orElseThrow(), Duration.ofSeconds(10));
+```
+
+Scoped to the calling thread (a `ScopedValue`): it sees `send`, not `sendAsync`/`sendAndDontWait` (their handler runs
+on another thread), and only appends made by `EventStreamDeciderCommandHandlerAdapter`. Recordings nest. With the
+`UnitOfWorkControllingCommandBusInterceptor` the events are committed when `send` returns; inside an outer
+`UnitOfWork`, await only after it commits.
+
 ### Testing with GivenWhenThenScenario
 
 **Class**: `dk.trustworks.essentials.components.eventsourced.aggregates.eventstream.test.GivenWhenThenScenario`

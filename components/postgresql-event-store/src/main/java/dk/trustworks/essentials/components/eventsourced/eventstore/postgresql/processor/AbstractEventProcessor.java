@@ -17,11 +17,13 @@
 package dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.processor;
 
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.*;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.cdc.CdcEventStore;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.serializer.AggregateIdSerializer;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.subscription.EventStoreSubscriptionManager;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.subscription.PersistedEventHandler;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.subscription.SubscriptionErrorPolicy;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.subscription.SubscriptionResumePoint;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.types.*;
 import dk.trustworks.essentials.components.foundation.causation.CausationContext;
 import dk.trustworks.essentials.components.foundation.json.JSONDeserializationException;
@@ -37,11 +39,13 @@ import dk.trustworks.essentials.shared.Lifecycle;
 import dk.trustworks.essentials.shared.functional.*;
 import dk.trustworks.essentials.types.LongRange;
 import org.slf4j.*;
+import reactor.core.publisher.Mono;
+import reactor.core.scheduler.Schedulers;
 
 import java.time.Duration;
 import java.util.*;
 import java.util.concurrent.CopyOnWriteArrayList;
-import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.*;
 import java.util.function.*;
 
 import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
@@ -547,6 +551,250 @@ public abstract class AbstractEventProcessor implements Lifecycle {
      */
     protected final DurableLocalCommandBus getCommandBus() {
         return commandBus;
+    }
+
+    // ------------------------------------------------------------------------------------------------------------------
+    // awaitProcessed (ES-4)
+    // ------------------------------------------------------------------------------------------------------------------
+
+    /**
+     * How often {@link #awaitProcessed(AggregateType, GlobalEventOrder, Duration)} re-checks whether the event has been processed
+     */
+    static final Duration AWAIT_PROCESSED_POLL_INTERVAL = Duration.ofMillis(25);
+
+    /**
+     * Wait until this processor has processed the event with the given {@link GlobalEventOrder} - a barrier for
+     * read-your-writes flows and integration tests, in place of polling a read model under a guessed timeout.
+     * <pre>{@code
+     * var appended = eventStore.appendToStream(ORDERS, orderId, new OrderPlaced(orderId));   // inside a UnitOfWork that then commits
+     * orderViewProcessor.awaitProcessed(ORDERS, appended.firstEvent().globalEventOrder(), Duration.ofSeconds(10));
+     * assertThat(orderView.find(orderId)).isPresent();                                       // no polling needed
+     * }</pre>
+     * The event counts as processed when <b>both</b> hold:
+     * <ol>
+     *     <li>the processor's subscription for the aggregate type has moved its resume point past the event, and has not
+     *     skipped it as a transient gap that it still has to handle - so the subscription is done with it</li>
+     *     <li>no message for the event's aggregate is queued in the processor's queue - an {@link EventProcessor} only
+     *     forwards the event to its Inbox, and a {@link ViewEventProcessor} queues an event whose direct handling failed
+     *     (and every later event of the same aggregate behind it). Dead letters count as queued, so an event that was
+     *     dead-lettered is never reported as processed</li>
+     * </ol>
+     * Both are checked against this JVM's view of the processor: the barrier is for the instance that runs the
+     * processor. An exclusive subscription held by another instance is read from its last saved resume point, which
+     * trails the in-memory one by up to the subscription manager's snapshot interval; a {@link ViewEventProcessor} whose
+     * lock another instance holds has no subscription here, and the barrier times out.
+     * <p>
+     * The check is conservative: a later event of the same aggregate that is still queued holds the barrier too, and so
+     * does an event of a type the processor has no handler for while other messages for its aggregate are queued.
+     * <p>
+     * Call it after the {@link UnitOfWork} that appended the event has committed - inside it, the subscription cannot see
+     * the event yet.
+     *
+     * @param aggregateType    the aggregate type the event belongs to - one this processor {@link #reactsToEventsRelatedToAggregateTypes() reacts to}
+     * @param globalEventOrder the event's {@link GlobalEventOrder}, e.g. {@link PersistedEvent#globalEventOrder()} as returned by
+     *                         {@link EventStore#appendToStream}
+     * @param timeout          how long to wait at most
+     * @throws AwaitProcessedTimeoutException if the event was not processed within the timeout - naming the processor, the
+     *                                        event, the processor's current resume point and the number of queued messages
+     * @throws IllegalArgumentException       if this processor doesn't react to events of the aggregate type
+     * @see #awaitProcessedAsync(AggregateType, GlobalEventOrder, Duration)
+     */
+    public void awaitProcessed(AggregateType aggregateType, GlobalEventOrder globalEventOrder, Duration timeout) {
+        var barrier  = newProcessedEventBarrier(aggregateType, globalEventOrder, timeout);
+        var deadline = System.nanoTime() + timeout.toNanos();
+        while (true) {
+            var progress = barrier.check();
+            if (progress.processed()) {
+                return;
+            }
+            var remainingNanos = deadline - System.nanoTime();
+            if (remainingNanos <= 0) {
+                throw barrier.timedOut(progress);
+            }
+            try {
+                Thread.sleep(Duration.ofNanos(Math.min(remainingNanos, AWAIT_PROCESSED_POLL_INTERVAL.toNanos())));
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                throw new IllegalStateException(msg("[{}] Interrupted while awaiting the processing of the '{}' event with global-event-order {}",
+                                                    getProcessorName(), aggregateType, globalEventOrder), e);
+            }
+        }
+    }
+
+    /**
+     * Wait until this processor has processed the given event - see {@link #awaitProcessed(AggregateType, GlobalEventOrder, Duration)}
+     *
+     * @param event   the event, e.g. one returned by {@link EventStore#appendToStream}
+     * @param timeout how long to wait at most
+     * @throws AwaitProcessedTimeoutException if the event was not processed within the timeout
+     */
+    public void awaitProcessed(PersistedEvent event, Duration timeout) {
+        requireNonNull(event, "No event provided");
+        awaitProcessed(event.aggregateType(), event.globalEventOrder(), timeout);
+    }
+
+    /**
+     * Non-blocking variant of {@link #awaitProcessed(AggregateType, GlobalEventOrder, Duration)}: completes empty once
+     * this processor has processed the event, or signals an {@link AwaitProcessedTimeoutException} when the timeout
+     * elapses first. Each check runs on {@link Schedulers#boundedElastic()} (it queries the database); no thread is held
+     * between checks.
+     *
+     * @param aggregateType    the aggregate type the event belongs to
+     * @param globalEventOrder the event's {@link GlobalEventOrder}
+     * @param timeout          how long to wait at most
+     * @return a {@link Mono} that completes once the event has been processed
+     * @throws IllegalArgumentException if this processor doesn't react to events of the aggregate type (thrown on call, not signalled)
+     */
+    public Mono<Void> awaitProcessedAsync(AggregateType aggregateType, GlobalEventOrder globalEventOrder, Duration timeout) {
+        var barrier = newProcessedEventBarrier(aggregateType, globalEventOrder, timeout);
+        return Mono.defer(() -> {
+                       var lastProgress = new AtomicReference<ProcessedEventBarrier.Progress>();
+                       return Mono.fromCallable(barrier::check)
+                                  .subscribeOn(Schedulers.boundedElastic())
+                                  .doOnNext(lastProgress::set)
+                                  .filter(ProcessedEventBarrier.Progress::processed)
+                                  .repeatWhenEmpty(Integer.MAX_VALUE, emptyChecks -> emptyChecks.delayElements(AWAIT_PROCESSED_POLL_INTERVAL))
+                                  .timeout(timeout, Mono.defer(() -> {
+                                      var progress = lastProgress.get();
+                                      return Mono.error(barrier.timedOut(progress != null ? progress : ProcessedEventBarrier.Progress.notYetChecked()));
+                                  }))
+                                  .then();
+                   });
+    }
+
+    private ProcessedEventBarrier newProcessedEventBarrier(AggregateType aggregateType, GlobalEventOrder globalEventOrder, Duration timeout) {
+        requireNonNull(aggregateType, "No aggregateType provided");
+        requireNonNull(globalEventOrder, "No globalEventOrder provided");
+        requireNonNull(timeout, "No timeout provided");
+        if (timeout.isNegative()) {
+            throw new IllegalArgumentException(msg("timeout must not be negative: {}", timeout));
+        }
+        var reactsTo = reactsToEventsRelatedToAggregateTypes();
+        if (reactsTo == null || !reactsTo.contains(aggregateType)) {
+            throw new IllegalArgumentException(msg("[{}] Cannot await the processing of a '{}' event: the processor reacts to events of {}, not of '{}'",
+                                                   getProcessorName(), aggregateType, reactsTo, aggregateType));
+        }
+        return new ProcessedEventBarrier(aggregateType, globalEventOrder, timeout);
+    }
+
+    /**
+     * Used by {@link #awaitProcessed(AggregateType, GlobalEventOrder, Duration)}: is a message for the given aggregate
+     * still queued in this processor's queue (Dead Letter Messages included)?<br>
+     * {@link EventProcessor} and {@link ViewEventProcessor} implement it; the default throws
+     * {@link UnsupportedOperationException}, as a processor that doesn't tell can't be awaited.
+     *
+     * @param aggregateType         the aggregate type
+     * @param serializedAggregateId the aggregate id, serialized by the aggregate type's {@link AggregateIdSerializer} -
+     *                              the key of the {@link OrderedMessage}s the processor queues for it
+     * @return true if at least one message for the aggregate is queued
+     */
+    protected boolean hasQueuedMessagesForAggregate(AggregateType aggregateType, String serializedAggregateId) {
+        throw new UnsupportedOperationException(msg("{} '{}' can't tell whether messages are queued for an aggregate, so it doesn't support awaitProcessed",
+                                                    getClass().getName(), getProcessorName()));
+    }
+
+    /**
+     * Used for the {@link AwaitProcessedTimeoutException} message: the number of queued and dead-letter messages in this
+     * processor's queue. Default: unknown
+     *
+     * @return the processor's queue counts, or empty if unknown
+     */
+    protected Optional<QueuedMessageCounts> getQueuedMessageCountsForAwaitProcessed() {
+        return Optional.empty();
+    }
+
+    /**
+     * One {@link #awaitProcessed(AggregateType, GlobalEventOrder, Duration)} call's checks. Caches the awaited event's
+     * aggregate id once it has been loaded
+     */
+    private final class ProcessedEventBarrier {
+        private final AggregateType    aggregateType;
+        private final GlobalEventOrder globalEventOrder;
+        private final Duration         timeout;
+        private volatile String        serializedAggregateId;
+
+        private ProcessedEventBarrier(AggregateType aggregateType, GlobalEventOrder globalEventOrder, Duration timeout) {
+            this.aggregateType = aggregateType;
+            this.globalEventOrder = globalEventOrder;
+            this.timeout = timeout;
+        }
+
+        Progress check() {
+            var subscriptions = eventStoreSubscriptions;
+            var subscription = subscriptions == null ? Optional.<EventStoreSubscription>empty() :
+                               subscriptions.stream().filter(candidate -> candidate.aggregateType().equals(aggregateType)).findFirst();
+            if (subscription.isEmpty()) {
+                return Progress.notYet(Optional.empty(), "the processor has no subscription for the aggregate type in this JVM - it isn't started, or another instance holds its lock");
+            }
+            var resumeFromAndIncluding = subscription.get().currentResumePoint().map(SubscriptionResumePoint::getResumeFromAndIncluding);
+            if (resumeFromAndIncluding.isEmpty() || resumeFromAndIncluding.get().longValue() <= globalEventOrder.longValue()) {
+                return Progress.notYet(resumeFromAndIncluding, "the subscription hasn't moved past the event yet");
+            }
+            if (isAwaitedAsTransientGap(subscription.get())) {
+                return Progress.notYet(resumeFromAndIncluding, "the subscription moved past the event while it was uncommitted and still has to handle it (transient gap)");
+            }
+            var aggregateId = serializedAggregateId;
+            if (aggregateId == null) {
+                var resolved = withUnitOfWork(() -> eventStore.loadEventsByGlobalOrder(aggregateType, LongRange.only(globalEventOrder.longValue()))
+                                                              .findFirst()
+                                                              .map(event -> resolveAggregateIdSerializer(aggregateType).serialize(event.aggregateId())));
+                if (resolved.isEmpty()) {
+                    var insideUnitOfWork = eventStore.getUnitOfWorkFactory().getCurrentUnitOfWork().isPresent();
+                    return Progress.notYet(resumeFromAndIncluding, insideUnitOfWork ?
+                                                                   "no committed event with that global-event-order exists - awaitProcessed was called inside an active UnitOfWork, so an event appended in it isn't committed yet" :
+                                                                   "no event with that global-event-order exists");
+                }
+                aggregateId = resolved.get();
+                serializedAggregateId = aggregateId;
+            }
+            if (hasQueuedMessagesForAggregate(aggregateType, aggregateId)) {
+                return Progress.notYet(resumeFromAndIncluding, msg("a message for aggregate '{}' is still queued (waiting, being handled, awaiting redelivery or dead-lettered)", aggregateId));
+            }
+            return Progress.PROCESSED;
+        }
+
+        private boolean isAwaitedAsTransientGap(EventStoreSubscription subscription) {
+            EventStore candidate = eventStore;
+            while (candidate != null) {
+                if (candidate instanceof PostgresqlEventStore<?> postgresqlEventStore) {
+                    return postgresqlEventStore.getEventStreamGapHandler()
+                                               .gapHandlerFor(subscription.subscriberId())
+                                               .getTransientGapsFor(aggregateType)
+                                               .contains(globalEventOrder);
+                }
+                candidate = candidate instanceof CdcEventStore<?> cdcEventStore ? cdcEventStore.getDelegate() : null;
+            }
+            return false;
+        }
+
+        AwaitProcessedTimeoutException timedOut(Progress progress) {
+            Optional<QueuedMessageCounts> queuedMessageCounts;
+            try {
+                queuedMessageCounts = getQueuedMessageCountsForAwaitProcessed();
+            } catch (RuntimeException e) {
+                log.debug("[{}] Could not count the queued messages", getProcessorName(), e);
+                queuedMessageCounts = Optional.empty();
+            }
+            return new AwaitProcessedTimeoutException(getProcessorName(),
+                                                      aggregateType,
+                                                      globalEventOrder,
+                                                      timeout,
+                                                      progress.resumeFromAndIncluding(),
+                                                      progress.reason(),
+                                                      queuedMessageCounts);
+        }
+
+        record Progress(boolean processed, Optional<GlobalEventOrder> resumeFromAndIncluding, String reason) {
+            static final Progress PROCESSED = new Progress(true, Optional.empty(), "processed");
+
+            static Progress notYet(Optional<GlobalEventOrder> resumeFromAndIncluding, String reason) {
+                return new Progress(false, resumeFromAndIncluding, reason);
+            }
+
+            static Progress notYetChecked() {
+                return new Progress(false, Optional.empty(), "the first check had not completed");
+            }
+        }
     }
 
     /**

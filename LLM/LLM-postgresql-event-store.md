@@ -702,6 +702,58 @@ Attributes:
 |-----------|--------|-------------|
 | `unitOfWork` | `REQUIRED` (default), `NONE` | `REQUIRED` invokes the method inside a `UnitOfWork`. `NONE` invokes it with none active, for blocking I/O — `EventProcessor` only, and the handler wraps its own transactional tail. See [Blocking I/O in a handler](#blocking-io-in-a-handler-unitofworkmodenone) |
 
+### Awaiting a processor (`awaitProcessed`)
+
+Since 0.60.1. A barrier that returns once a processor has processed a given event — for read-your-writes flows and
+integration tests, in place of polling a read model under a guessed timeout.
+
+```java
+// Blocking - EventProcessor, ViewEventProcessor (AbstractEventProcessor) and InTransactionEventProcessor
+processor.awaitProcessed(AggregateType aggregateType, GlobalEventOrder globalEventOrder, Duration timeout);
+processor.awaitProcessed(PersistedEvent event, Duration timeout);
+// Non-blocking: completes empty, or signals AwaitProcessedTimeoutException
+Mono<Void> processor.awaitProcessedAsync(AggregateType aggregateType, GlobalEventOrder globalEventOrder, Duration timeout);
+```
+
+What "processed" means per processor type:
+
+| Processor | Released when |
+|-----------|---------------|
+| `EventProcessor` | its subscription's resume point is past the event **and** no message for the event's aggregate id is queued in its `Inbox` (the subscription only forwards the event there) |
+| `ViewEventProcessor` | its subscription's resume point is past the event **and** no message for the event's aggregate id is queued in its durable queue (a failed direct handling queues the event, and later events of that aggregate behind it) |
+| `InTransactionEventProcessor` | at once — it handles the event inside the appending `UnitOfWork`, so a committed event has been handled |
+
+- A transient gap counts as not processed: a subscription that moved past the event while it was still uncommitted
+  handles it later as a gap fill, and the barrier waits for that.
+- Dead letters count as queued, so a dead-lettered event is **never** reported processed — the call times out.
+- Conservative: a later event of the same aggregate still queued holds the barrier too.
+- On timeout it throws `AwaitProcessedTimeoutException` naming the processor, aggregate type, global event order, the
+  current resume point, why the event does not count yet and the queue's queued/dead-letter counts (also as accessors).
+- It reads this JVM's processor. An exclusive subscription held by another instance is read from its last saved resume
+  point (lags by the snapshot interval); a `ViewEventProcessor` whose lock another instance holds times out.
+- Call it **after** the appending `UnitOfWork` committed; inside it the subscription cannot see the event.
+- `IllegalArgumentException` for an aggregate type the processor does not react to.
+
+Where N comes from: `eventStore.appendToStream(...)` returns the `PersistedEvent`s; a command sent to an
+`EventStreamDecider` through `commandBus.send(...)` hands them out via `AppendedEvents.recordDuring(...)` (see
+`LLM-eventsourced-aggregates.md`).
+
+**Integration-test example:**
+
+```java
+@Test
+void placing_an_order_shows_it_in_the_order_view() {
+    var placed = unitOfWorkFactory.withUnitOfWork(() ->
+            eventStore.startStream(ORDERS, orderId, List.of(new OrderPlaced(orderId))).firstEvent());
+
+    orderViewProcessor.awaitProcessed(placed, Duration.ofSeconds(10));   // no Awaitility, no guessed timeout
+
+    assertThat(orderView.find(orderId)).isPresent();                    // read once
+}
+```
+
+Await the **last** event the assertion depends on, on the processor that writes the read model you assert on.
+
 ## In-Memory Projections
 
 ```java

@@ -487,6 +487,32 @@ public abstract class EventProcessor extends AbstractEventProcessor {
     }
 
     /**
+     * The {@link Inbox} the events are forwarded to - see {@link #awaitProcessed(AggregateType, GlobalEventOrder, Duration)}
+     */
+    @Override
+    protected boolean hasQueuedMessagesForAggregate(AggregateType aggregateType, String serializedAggregateId) {
+        var currentInbox = inbox;
+        if (currentInbox == null) {
+            // Not started: nothing can have been forwarded by this instance, and no subscription exists to be past the event
+            return true;
+        }
+        return currentInbox.hasOrderedMessageQueuedForKey(serializedAggregateId);
+    }
+
+    @Override
+    protected Optional<QueuedMessageCounts> getQueuedMessageCountsForAwaitProcessed() {
+        var currentInbox = inbox;
+        if (currentInbox == null) {
+            return Optional.empty();
+        }
+        return Optional.of(new QueuedMessageCounts(currentInbox.name().asQueueName(),
+                                                   currentInbox.getNumberOfUndeliveredMessages(),
+                                                   currentInbox.getNumberOfDeadLetterMessages(),
+                                                   null,
+                                                   null));
+    }
+
+    /**
      * Retrieves the underlying {@link Inbox} associated with the {@link EventProcessor}.
      *
      * @return the {@link Inbox} instance used for managing messages within the {@link EventProcessor}.

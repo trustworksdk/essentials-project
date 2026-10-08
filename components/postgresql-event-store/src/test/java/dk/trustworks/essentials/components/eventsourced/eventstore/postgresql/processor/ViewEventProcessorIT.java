@@ -61,7 +61,7 @@ import java.util.stream.IntStream;
 import static dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.persistence.table_per_aggregate_type.SeparateTablePerAggregateTypeEventStreamConfigurationFactory.standardSingleTenantConfiguration;
 import static dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.processor.EventProcessorIT.createObjectMapper;
 import static dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.processor.ViewEventProcessorIT.TestOrderViewEventProcessor.TEST_ORDERS;
-import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.*;
 
 @Testcontainers
 public class ViewEventProcessorIT {
@@ -379,6 +379,72 @@ public class ViewEventProcessorIT {
         assertThat(testProcessor.getSqlFailureAttempts(orderId)).isEqualTo(2);
         assertThat(durableQueues.getTotalMessagesQueuedFor(queueName)).isZero();
         assertThat(durableQueues.getTotalDeadLetterMessagesQueuedFor(queueName)).isZero();
+    }
+
+    /**
+     * ES-4: the subscription moves its resume point past an event whose direct handling failed as soon as the event is
+     * queued, so the resume point alone would release the barrier before the redelivery has updated the view. The
+     * barrier also waits for the queued message to be handled
+     */
+    @Test
+    public void awaitProcessed_waits_for_the_redelivery_of_an_event_whose_direct_handling_failed() {
+        var orderId = EventProcessorIT.OrderId.random();
+        var appended = unitOfWorkFactory.withUnitOfWork(() -> eventStore.appendToStream(TEST_ORDERS, orderId, List.of(new EventProcessorIT.OrderPlacedEvent(orderId, SQL_FAILS_ON_FIRST_ATTEMPT)))
+                                                                       .firstEvent());
+
+        testProcessor.awaitProcessed(TEST_ORDERS, appended.globalEventOrder(), Duration.ofSeconds(10));
+
+        // No polling: the barrier only returns once the queued redelivery has written the view row
+        assertThat(testProcessor.getSqlFailureAttempts(orderId)).isEqualTo(2);
+        assertThat(orderViewStatuses(orderId)).containsExactly("done");
+        assertThat(durableQueues.hasOrderedMessageQueuedForKey(testProcessor.getDurableQueueName(), orderId.toString())).isFalse();
+    }
+
+    @Test
+    public void awaitProcessedAsync_completes_once_the_event_has_been_handled_directly() {
+        var orderId = EventProcessorIT.OrderId.random();
+        var appended = unitOfWorkFactory.withUnitOfWork(() -> eventStore.appendToStream(TEST_ORDERS, orderId, List.of(new EventProcessorIT.OrderPlacedEvent(orderId, "Load order details")))
+                                                                       .firstEvent());
+
+        testProcessor.awaitProcessedAsync(TEST_ORDERS, appended.globalEventOrder(), Duration.ofSeconds(10))
+                     .block(Duration.ofSeconds(15));
+
+        assertThat(testProcessor.getOrderPlacedEventCounter().get()).isEqualTo(1);
+    }
+
+    /**
+     * ES-4: an event that was dead-lettered never counts as processed, and the timeout says why - naming the processor,
+     * the event, the resume point and the queue
+     */
+    @Test
+    public void awaitProcessed_times_out_with_a_description_of_how_far_the_processor_got_when_the_event_was_dead_lettered() {
+        var orderId = EventProcessorIT.OrderId.random();
+        var appended = unitOfWorkFactory.withUnitOfWork(() -> eventStore.appendToStream(TEST_ORDERS, orderId, List.of(new EventProcessorIT.OrderPlacedEvent(orderId, "Fail order details")))
+                                                                       .firstEvent());
+        var queueName = testProcessor.getDurableQueueName();
+        Awaitility.waitAtMost(Duration.ofSeconds(10))
+                  .untilAsserted(() -> assertThat(durableQueues.getTotalDeadLetterMessagesQueuedFor(queueName)).isEqualTo(1));
+
+        assertThatThrownBy(() -> testProcessor.awaitProcessed(TEST_ORDERS, appended.globalEventOrder(), Duration.ofMillis(500)))
+                .isInstanceOfSatisfying(AwaitProcessedTimeoutException.class, e -> {
+                    assertThat(e.getProcessorName()).isEqualTo("TestOrderViewEventProcessor");
+                    assertThat((Object) e.getAggregateType()).isEqualTo(TEST_ORDERS);
+                    assertThat((Object) e.getGlobalEventOrder()).isEqualTo(appended.globalEventOrder());
+                    assertThat(e.getResumeFromAndIncluding()).hasValueSatisfying(resumePoint -> assertThat(resumePoint.longValue()).isGreaterThan(appended.globalEventOrder().longValue()));
+                    assertThat(e.getQueuedMessageCounts()).hasValueSatisfying(counts -> assertThat(counts.numberOfQueuedDeadLetterMessages()).isEqualTo(1));
+                    assertThat(e.getMessage()).contains("TestOrderViewEventProcessor")
+                                              .contains("'TestOrders'")
+                                              .contains("global-event-order " + appended.globalEventOrder())
+                                              .contains("a message for aggregate '" + orderId + "' is still queued")
+                                              .contains("1 dead-letter message(s)");
+                });
+    }
+
+    @Test
+    public void awaitProcessed_rejects_an_aggregate_type_the_processor_does_not_react_to() {
+        assertThatThrownBy(() -> testProcessor.awaitProcessed(AggregateType.of("Unknown"), GlobalEventOrder.of(1), Duration.ofSeconds(1)))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("'Unknown'");
     }
 
     /**

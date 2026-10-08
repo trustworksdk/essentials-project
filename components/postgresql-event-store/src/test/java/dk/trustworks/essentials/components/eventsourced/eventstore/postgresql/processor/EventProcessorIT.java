@@ -56,7 +56,7 @@ import java.util.stream.IntStream;
 
 import static dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.persistence.table_per_aggregate_type.SeparateTablePerAggregateTypeEventStreamConfigurationFactory.standardSingleTenantConfiguration;
 import static dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.processor.EventProcessorIT.TestOrderEventProcessor.TEST_ORDERS;
-import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.*;
 
 /**
  * Integration test for the EventProcessor using the following scenarios:
@@ -191,23 +191,74 @@ public class EventProcessorIT {
         var orderDetails = "Test order details";
         var placeCmd     = new PlaceOrderCommand(orderId, orderDetails);
 
-        // Send the command via the command bus
+        // Send the command via the command bus - the command bus' UnitOfWork has committed the OrderPlacedEvent when send returns
         commandBus.send(placeCmd);
+        var orderPlaced = unitOfWorkFactory.withUnitOfWork(() -> eventStore.fetchStream(TEST_ORDERS, orderId).get().eventList().get(0));
 
-        // Fetch the aggregate event stream for this order
-        Awaitility.waitAtMost(Duration.ofSeconds(2))
-                  .until(() -> unitOfWorkFactory.withUnitOfWork(() -> {
-                      var streamOpt = eventStore.fetchStream(TEST_ORDERS, orderId);
-                      return streamOpt.isPresent() && streamOpt.get().eventList().size() == 2;
-                  }));
+        // ES-4: wait for the processor instead of polling the event stream under a guessed timeout. The subscription only
+        // forwards the event to the Inbox, so the barrier also waits for the Inbox to have handled it
+        testProcessor.awaitProcessed(orderPlaced, Duration.ofSeconds(10));
 
-        // We expect two events: first the OrderPlacedEvent then the OrderConfirmedEvent
+        // We expect two events: first the OrderPlacedEvent then the OrderConfirmedEvent, appended by the Inbox handler
         var events = unitOfWorkFactory.withUnitOfWork(() -> eventStore.fetchStream(TEST_ORDERS, orderId).get().eventList());
         assertThat(events).hasSize(2);
         var event0 = events.get(0);
         var event1 = events.get(1);
         assertThat(event0.event().getEventTypeAsJavaClass()).isPresent().isEqualTo(Optional.of(OrderPlacedEvent.class));
         assertThat(event1.event().getEventTypeAsJavaClass()).isPresent().isEqualTo(Optional.of(OrderConfirmedEvent.class));
+        assertThat(testProcessor.getOrderPlacedEventCounter().get()).isEqualTo(1);
+        assertThat(testProcessor.getInboxForTesting().hasOrderedMessageQueuedForKey(orderId.toString())).isFalse();
+    }
+
+    /**
+     * ES-4: the processor has no handler for {@link OrderConfirmedEvent} and never forwards it. The barrier still releases for it
+     */
+    @Test
+    void awaitProcessedAsync_releases_for_an_event_type_the_processor_ignores() {
+        var orderId = OrderId.random();
+        var placed = unitOfWorkFactory.withUnitOfWork(() -> eventStore.startStream(TEST_ORDERS, orderId, List.of(new OrderPlacedEvent(orderId, "Test order details")))
+                                                                      .firstEvent());
+        testProcessor.awaitProcessedAsync(TEST_ORDERS, placed.globalEventOrder(), Duration.ofSeconds(10)).block(Duration.ofSeconds(15));
+        var confirmed = unitOfWorkFactory.withUnitOfWork(() -> eventStore.fetchStream(TEST_ORDERS, orderId).get().eventList().get(1));
+
+        testProcessor.awaitProcessedAsync(TEST_ORDERS, confirmed.globalEventOrder(), Duration.ofSeconds(10)).block(Duration.ofSeconds(15));
+    }
+
+    @Test
+    void awaitProcessed_times_out_naming_the_processor_the_event_and_the_resume_point() {
+        var orderId = OrderId.random();
+        var placed = unitOfWorkFactory.withUnitOfWork(() -> eventStore.startStream(TEST_ORDERS, orderId, List.of(new OrderPlacedEvent(orderId, "Test order details")))
+                                                                      .firstEvent());
+        testProcessor.awaitProcessed(placed, Duration.ofSeconds(10));
+        var neverAppended = GlobalEventOrder.of(placed.globalEventOrder().longValue() + 100);
+
+        assertThatThrownBy(() -> testProcessor.awaitProcessed(TEST_ORDERS, neverAppended, Duration.ofMillis(300)))
+                .isInstanceOf(AwaitProcessedTimeoutException.class)
+                .hasMessageContaining("Processor 'TestOrderEventProcessor' had not processed the 'TestOrders' event with global-event-order " + neverAppended)
+                .hasMessageContaining("the subscription hasn't moved past the event yet")
+                .hasMessageContaining("Resume point (next global-event-order to handle): ")
+                .hasMessageContaining("0 queued message(s) and 0 dead-letter message(s)");
+    }
+
+    /**
+     * ES-4: an {@link InTransactionEventProcessor} handles the event in the appending UnitOfWork, so the barrier is
+     * satisfied as soon as that UnitOfWork has committed
+     */
+    @Test
+    void an_in_transaction_processor_has_processed_the_event_once_the_appending_unit_of_work_committed() {
+        var inTransactionProcessor = new TestInTransactionOrderProcessor(new EventProcessorDependencies(eventStoreSubscriptionManager, inboxes, commandBus, List.of()));
+        inTransactionProcessor.start();
+        try {
+            var orderId = OrderId.random();
+            var placed = unitOfWorkFactory.withUnitOfWork(() -> eventStore.startStream(TEST_ORDERS, orderId, List.of(new OrderPlacedEvent(orderId, "Test order details")))
+                                                                          .firstEvent());
+
+            inTransactionProcessor.awaitProcessed(placed, Duration.ZERO);
+            inTransactionProcessor.awaitProcessedAsync(TEST_ORDERS, placed.globalEventOrder(), Duration.ZERO).block(Duration.ofSeconds(1));
+            assertThat(inTransactionProcessor.ordersPlaced).containsExactly(orderId);
+        } finally {
+            inTransactionProcessor.stop();
+        }
     }
 
     /**
@@ -444,6 +495,29 @@ public class EventProcessorIT {
      *     <li>Handles FailingCommand by throwing an exception</li>
      * </ul>
      */
+    public static class TestInTransactionOrderProcessor extends InTransactionEventProcessor {
+        final List<OrderId> ordersPlaced = new CopyOnWriteArrayList<>();
+
+        public TestInTransactionOrderProcessor(EventProcessorDependencies eventProcessorDependencies) {
+            super(eventProcessorDependencies);
+        }
+
+        @Override
+        public String getProcessorName() {
+            return "TestInTransactionOrderProcessor";
+        }
+
+        @Override
+        protected List<AggregateType> reactsToEventsRelatedToAggregateTypes() {
+            return List.of(TEST_ORDERS);
+        }
+
+        @MessageHandler
+        void onOrderPlaced(OrderPlacedEvent event) {
+            ordersPlaced.add(event.orderId);
+        }
+    }
+
     public static class TestOrderEventProcessor extends EventProcessor {
         public static final AggregateType TEST_ORDERS = AggregateType.of("TestOrders");
 

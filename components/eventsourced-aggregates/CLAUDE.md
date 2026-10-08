@@ -37,6 +37,7 @@ Aggregate patterns (stateful, flex, decider, event-stream) layered on top of the
 | `HandlerResult<ERR,E>` | Sealed: `Success(List<EVENT>)` or `Error(ERR)` |
 | `EventStreamDecider<CMD,E>` | EXPERIMENTAL — stateless decider operating on raw event list; designed for Event Modeling slices |
 | `EventStreamEvolver<E,STATE>` | Companion to `EventStreamDecider`; folds events into STATE when needed |
+| `AppendedEvents` | `ScopedValue` recorder: `EventStreamDeciderCommandHandlerAdapter.persistEvent` hands it each `PersistedEvent`, `recordDuring(() -> commandBus.send(cmd))` gives them to the caller (ES-4). Chosen over a result wrapper because `send` returns the event to existing callers, and over UoW metadata because `UnitOfWork` has none and the bus interceptor's UoW is gone when `send` returns. Caller thread only |
 | `AggregateSnapshotRepository` | SPI: `loadSnapshot`, `aggregateUpdated`, `deleteSnapshots` |
 | `PostgresqlAggregateSnapshotRepository` | JSONB-backed snapshot table; uses `DelayedAddAndDeleteAggregateSnapshotDelegate` to defer writes |
 | `AddNewAggregateSnapshotStrategy` | Decides when to snapshot (e.g. every N events) |
