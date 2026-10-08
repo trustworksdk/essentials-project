@@ -320,6 +320,13 @@ type `int` …``, names no field. To read a missing primitive as `0`/`false` (Ja
 `spring.jackson.deserialization.fail-on-null-for-primitives=false`; or use a boxed type and validate it with
 `@NotNull`.
 
+⚠️ **A hand-built test client does not use the web mapper.** `WebTestClient.bindToServer()` (or any client built
+with `builder()`) uses default codecs, without `EssentialTypesJacksonModule`, so a value type in a request body is
+written as a bean — a `CharSequenceType` id becomes `{"bytes":"…","empty":false,"value":"o-1"}` instead of `"o-1"` —
+and the test exercises a wire format the application never sees. Inject the context's client instead:
+`@AutoConfigureWebTestClient` (`spring-boot-webtestclient`) plus `@Autowired WebTestClient`. That client is built with
+Boot's `CodecCustomizer`s, so it encodes with the same `JsonMapper` and `JacksonModule` beans as the application.
+
 ### Complete Type Definition
 
 ```java
