@@ -346,7 +346,8 @@ same script one step at a time, so the two cannot drift. Each step exits 0. `scr
 steps and `step <name>` reruns one. It needs `git` and `uv` (uv fetches Python 3.11, the scripts' declared minimum, and
 the PEP 723 pins). Locally `ess-ids` compares with HEAD and `plugin-version` with the merge base with `origin/main`
 (CI: `HEAD^1`), so an unbumped plugin change fails before the push. `render-check` shows SKIPPED without a headless
-Chrome (the arm64 devcontainer): nothing was checked, which is not a pass; pass `--chrome PATH` where one runs.
+Chrome: nothing was checked, which is not a pass; pass `--chrome PATH` where one runs. The devcontainer
+(`INSTALL_PLAYWRIGHT`) puts Playwright's headless shell on PATH as `chrome-headless-shell`.
 
 `scripts/plugin-check.sh changed [BASE]` maps every changed path to its row in the companion table above and prints
 what else the change needs, with the commands.

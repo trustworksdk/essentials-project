@@ -340,6 +340,59 @@ if [ "${INSTALL_GRAPHIFY:-false}" = "true" ]; then
 fi
 
 # =============================================================================
+# Headless Chromium for render-check (Conditional)
+# The system libraries are baked into the image (Dockerfile, INSTALL_PLAYWRIGHT).
+# Here Playwright's chromium-headless-shell, at the pinned PLAYWRIGHT_VERSION, is
+# put into the persisted ~/.cache/ms-playwright volume and linked as
+# ~/.local/bin/chrome-headless-shell — the first name
+# essentials-plugin/tests/fixtures/slice-map/render-check.py looks for, so
+# `scripts/plugin-check.sh` runs render-check instead of reporting SKIPPED.
+# Playwright runs through npx: the repository declares no Node dependency.
+# Only its `--dry-run` is used, to resolve the build's download URL and location;
+# the archive is fetched with curl and unpacked with unzip, because `playwright
+# install`'s own extraction hangs under this image's Node (seen with 1.55.0 on
+# Node 26: download complete, extraction never finishes). Headless shell only,
+# no `--with-deps`: that needs root, and the libraries are already in the image.
+# =============================================================================
+if [ "${INSTALL_PLAYWRIGHT:-false}" = "true" ]; then
+    echo "Setting up headless Chromium (Playwright ${PLAYWRIGHT_VERSION:-?})..."
+    PW_CACHE="$HOME/.cache/ms-playwright"
+    if [ -d "$PW_CACHE" ] && find "$PW_CACHE" -maxdepth 1 ! -user vscode -print -quit 2>/dev/null | grep -q .; then
+        fix_owner "$PW_CACHE"
+    fi
+    PW_PLAN=""
+    if [ -z "${PLAYWRIGHT_VERSION:-}" ]; then
+        setup_problem "PLAYWRIGHT_VERSION is not set (Dockerfile ARG not applied?) — headless Chromium not installed"
+    else
+        PW_PLAN="$(PLAYWRIGHT_BROWSERS_PATH="$PW_CACHE" npx -y "playwright@${PLAYWRIGHT_VERSION}" install --dry-run chromium-headless-shell 2>/dev/null \
+            | awk '/^browser: chromium-headless-shell/ {on=1; next} /^browser:/ {on=0} on' || true)"
+    fi
+    PW_DIR="$(printf '%s\n' "$PW_PLAN" | sed -n 's/^ *Install location: *//p' | head -1)"
+    PW_URL="$(printf '%s\n' "$PW_PLAN" | sed -n 's/^ *Download url: *//p' | head -1)"
+    if [ -n "${PLAYWRIGHT_VERSION:-}" ] && { [ -z "$PW_DIR" ] || [ -z "$PW_URL" ]; }; then
+        setup_problem "'npx playwright@${PLAYWRIGHT_VERSION} install --dry-run chromium-headless-shell' named no download — render-check will report SKIPPED"
+    elif [ -n "$PW_DIR" ]; then
+        # x64 builds name it chrome-headless-shell, Linux arm64 builds headless_shell.
+        find_hs() { find "$PW_DIR" -maxdepth 2 -type f \( -name chrome-headless-shell -o -name headless_shell \) 2>/dev/null | head -1; }
+        HS="$(find_hs)"
+        if [ -z "$HS" ]; then
+            PW_ZIP="$(mktemp --suffix=.zip)"
+            if curl -fsSL --retry 3 -o "$PW_ZIP" "$PW_URL" && rm -rf "$PW_DIR" && mkdir -p "$PW_DIR" && unzip -q "$PW_ZIP" -d "$PW_DIR"; then
+                HS="$(find_hs)"
+            fi
+            rm -f "$PW_ZIP"
+        fi
+        if [ -n "$HS" ]; then
+            mkdir -p "$HOME/.local/bin"
+            ln -sf "$HS" "$HOME/.local/bin/chrome-headless-shell"
+            echo "  chrome-headless-shell -> $HS"
+        else
+            setup_problem "headless Chromium download or unpack failed ($PW_URL) — render-check will report SKIPPED"
+        fi
+    fi
+fi
+
+# =============================================================================
 # Repository git hooks — always on, not an optional tool
 # .githooks/pre-commit keeps essentials-plugin/references/llm/ in step with LLM/.
 # The installer writes a small wrapper into .git/hooks rather than setting

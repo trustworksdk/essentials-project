@@ -29,6 +29,14 @@
             // JetBrains Gateway support
             "INSTALL_JETBRAINS": "true",
 
+            // Headless Chromium (Playwright's chromium-headless-shell) for the
+            // essentials plugin's render-check, which renders the slice-map and
+            // Slice Atlas pages: system libraries baked into the image, the
+            // browser binary downloaded by post-create.sh into the
+            // devcontainer-playwright-cache volume and linked onto PATH as
+            // chrome-headless-shell. The version is PLAYWRIGHT_VERSION in the Dockerfile.
+            "INSTALL_PLAYWRIGHT": "true",
+
             // Git identity is in containerEnv (not here) to avoid leaking PII into image layers.
 
             // Version configuration
@@ -277,6 +285,8 @@
         // Python/UV/pip
         "source=devcontainer-uv-cache-v2-${devcontainerId},target=/home/vscode/.uv-cache,type=volume",
         "source=devcontainer-pip-cache-${devcontainerId},target=/home/vscode/.cache/pip,type=volume",
+        // Playwright browser binaries (~100 MB) — downloaded once, kept across rebuilds.
+        "source=devcontainer-playwright-cache-${devcontainerId},target=/home/vscode/.cache/ms-playwright,type=volume",
 
         // Claude Code config and cache (named volumes — NOT bind-mounted to avoid host-path conflicts)
         "source=devcontainer-claude-config-${devcontainerId},target=/home/vscode/.claude,type=volume",

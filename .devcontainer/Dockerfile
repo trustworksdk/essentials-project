@@ -31,6 +31,10 @@ ARG INSTALL_HEADROOM="false"
 # rtk integration is proxy-based; this is the lean, proxy-free path).
 ARG INSTALL_RTK="false"
 ARG INSTALL_JETBRAINS="false"
+# Headless Chromium for the essentials plugin's render-check (the slice-map and Slice
+# Atlas pages, tests/fixtures/slice-map/render-check.py) and any browser check. The
+# system libraries are baked in here; post-create.sh downloads the browser binary.
+ARG INSTALL_PLAYWRIGHT="false"
 
 # Git identity is passed via containerEnv in devcontainer.json (not build args)
 # to avoid leaking PII into image layers. post-create.sh reads it at runtime.
@@ -58,8 +62,8 @@ ARG JDTLS_SHA256="338e7e73d61836651ba2453919a0d34fa763eb4e7c03342092309bffb8934c
 # JetBrains' CDN (the GitHub release page just links out). Each tarball ships a
 # sibling .sha256 file; values below were captured at the pinned version.
 # Refresh recipe:
-#   curl -fsSL https://download-cdn.jetbrains.com/language-server/kotlin-server/<ver>/kotlin-server-<ver>.tar.gz.sha256
-#   curl -fsSL https://download-cdn.jetbrains.com/language-server/kotlin-server/<ver>/kotlin-server-<ver>-aarch64.tar.gz.sha256
+#   curl -fsSL https://download.jetbrains.com/language-server/kotlin-server/<ver>/kotlin-server-<ver>.tar.gz.sha256
+#   curl -fsSL https://download.jetbrains.com/language-server/kotlin-server/<ver>/kotlin-server-<ver>-aarch64.tar.gz.sha256
 ARG KOTLIN_LS_VERSION="263.4702.0"
 ARG KOTLIN_LS_SHA256_AMD64="1e11d2e5fefbf9ea215ad8dd6be95f2222897cd086e8cb7a661a52084a590405"
 ARG KOTLIN_LS_SHA256_ARM64="ec7cb254a6662a07fff9f10e4365226afab6c40008f8a974c10ac5e785d6510f"
@@ -71,6 +75,9 @@ ARG KOTLIN_LS_SHA256_ARM64="ec7cb254a6662a07fff9f10e4365226afab6c40008f8a974c10a
 #     | python3 -c "import sys,json;[print(a['name'],a.get('digest')) for a in json.load(sys.stdin)['assets']]"
 ARG RTK_VERSION="0.50.0"
 ARG RTK_SHA256_AMD64="bc2b8902b0d9c796c82ef45f16ae2307e17757afeca5ee156235a3dc7bda5f89"
+# Playwright release whose chromium-headless-shell post-create.sh downloads. Run with
+# npx, never added to the project: the Essentials build stays JVM-only.
+ARG PLAYWRIGHT_VERSION="1.55.0"
 ARG RTK_SHA256_ARM64="d1cc49dfa2cd443fc32625444b59fe616b6c80478cca210985118347174dd758"
 
 # -----------------------------------------------------------------------------
@@ -92,6 +99,8 @@ ARG INSTALL_GRAPHIFY
 ARG INSTALL_HEADROOM
 ARG INSTALL_RTK
 ARG INSTALL_JETBRAINS
+ARG INSTALL_PLAYWRIGHT
+ARG PLAYWRIGHT_VERSION
 ARG JAVA_VERSION
 ARG ADDITIONAL_JAVA_VERSIONS
 ARG MAVEN_VERSION
@@ -119,6 +128,8 @@ ENV PROJECT_NAME=${PROJECT_NAME} \
     INSTALL_HEADROOM=${INSTALL_HEADROOM} \
     INSTALL_RTK=${INSTALL_RTK} \
     INSTALL_JETBRAINS=${INSTALL_JETBRAINS} \
+    INSTALL_PLAYWRIGHT=${INSTALL_PLAYWRIGHT} \
+    PLAYWRIGHT_VERSION=${PLAYWRIGHT_VERSION} \
     JETBRAINS_BACKEND=${JETBRAINS_BACKEND}
 
 # -----------------------------------------------------------------------------
@@ -272,7 +283,7 @@ RUN if [ "${INSTALL_KOTLIN_LSP}" = "true" ]; then \
     *) echo "ERROR: unsupported architecture for Kotlin LSP: $ARCH" >&2; exit 1 ;; \
     esac && \
     echo "Installing official Kotlin LSP ${KOTLIN_LS_VERSION} (${ARCH})..." && \
-    curl -fsSL "https://download-cdn.jetbrains.com/language-server/kotlin-server/${KOTLIN_LS_VERSION}/kotlin-server-${KOTLIN_LS_VERSION}${ARCH_SUFFIX}.tar.gz" -o /tmp/kotlin-lsp.tar.gz && \
+    curl -fsSL "https://download.jetbrains.com/language-server/kotlin-server/${KOTLIN_LS_VERSION}/kotlin-server-${KOTLIN_LS_VERSION}${ARCH_SUFFIX}.tar.gz" -o /tmp/kotlin-lsp.tar.gz && \
     echo "${KOTLIN_LS_SHA256}  /tmp/kotlin-lsp.tar.gz" | sha256sum -c - && \
     mkdir -p /opt/kotlin-lsp && \
     tar -xzf /tmp/kotlin-lsp.tar.gz -C /opt/kotlin-lsp --strip-components=1 && \
@@ -351,6 +362,28 @@ RUN if [ "${INSTALL_CLAUDE}" = "true" ]; then \
     fi
 
 # -----------------------------------------------------------------------------
+# Playwright / Headless Chromium System Libraries (Conditional)
+# Headless Chromium needs shared libraries the base image does not ship. Baked in
+# here (root, cached) so the browser binary post-create.sh downloads as vscode runs.
+# Chromium only: it bundles ICU, libvpx and libavif, so libicu*/libvpx*/libavif* are
+# deliberately absent. Package names are Debian 13 "trixie" (t64 suffixes); a base
+# without them fails the build loudly — refresh against
+# `npx playwright install-deps --dry-run chromium`.
+# -----------------------------------------------------------------------------
+RUN if [ "${INSTALL_PLAYWRIGHT}" = "true" ]; then \
+    set -eux && \
+    apt-get update && \
+    apt-get install -y --no-install-recommends \
+    libnss3 libnspr4 libdbus-1-3 \
+    libatk1.0-0t64 libatk-bridge2.0-0t64 libatspi2.0-0t64 libcups2t64 \
+    libdrm2 libgbm1 libxkbcommon0 libxcomposite1 libxdamage1 libxfixes3 \
+    libxrandr2 libxshmfence1 libasound2t64 fonts-liberation && \
+    apt-get clean -y && rm -rf /var/lib/apt/lists/* && \
+    echo 'export PLAYWRIGHT_BROWSERS_PATH=/home/vscode/.cache/ms-playwright' > /etc/profile.d/playwright.sh && \
+    chmod +x /etc/profile.d/playwright.sh; \
+    fi
+
+# -----------------------------------------------------------------------------
 # Plugin Marketplace Seed Directory
 # Private Marketplaces can be cloned on the host by local-init.sh (initializeCommand)
 # and LIVE bind-mounted into the container at /opt/claude-seed/marketplaces at
@@ -392,6 +425,11 @@ RUN mkdir -p \
     # savings ledger, logs) inherits vscode ownership instead of root:root.
     if [ "${INSTALL_HEADROOM}" = "true" ]; then \
     mkdir -p /home/vscode/.headroom; \
+    fi && \
+    # Playwright browser cache (conditional) — pre-created so the named volume
+    # mounted at ~/.cache/ms-playwright inherits vscode ownership, not root:root.
+    if [ "${INSTALL_PLAYWRIGHT}" = "true" ]; then \
+    mkdir -p /home/vscode/.cache/ms-playwright; \
     fi && \
     chown -R vscode:vscode /home/vscode /workspace
 
