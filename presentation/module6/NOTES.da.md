@@ -64,8 +64,8 @@ modulets egen pptx (se `images/README.md`).
 | D3 | Dybere: change data capture | — | subscriptions får besked fra WAL'en, polling som fallback | 2,5 |
 | D4 | Dybere: admin-konsollen | — | to afhængigheder, `/essentials/admin`, to sikkerheds-SPI'er | 2,5 |
 
-Omkring parrene: titlen, **spørgsmålet** (1 min), kortet ("fire spørgsmål, i den rækkefølge man møder dem"
-— læs de fire og intet andet), **kortet over appen** efter par 4 (1,5 min, se nedenfor), og til sidst
+Omkring parrene: titlen, **spørgsmålet** (1 min), kortet ("tretten begreber, i fire grupper"
+— læs de fire gruppeoverskrifter og intet andet), **kortet over appen** efter par 4 (1,5 min, se nedenfor), og til sidst
 "udeladt med vilje" og afslutningen. 4 minutter i alt, 34,5 i parrene, og 10 i de dybere slides. 48:30
 indhold efterlader cirka ti minutter af det 60 minutters slot til spørgsmål.
 

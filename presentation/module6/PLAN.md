@@ -169,7 +169,7 @@ on-screen timer reads them, so this table and the deck cannot drift.
 |---|---|---|
 | 1 | Title | 0 |
 | 2 | The question: why is this monitor 1,999.50? — the row cannot say, the events can | 1 |
-| 3 | The roadmap: four questions in the order you hit them | 0.5 |
+| 3 | The roadmap: four groups in the order you meet them (modeling, deciding and recording, reading, putting it together), each over its numbered concepts; says the numbers are the rail's `n/13` | 0.5 |
 | 4–5 | **1** An event is a fact → sealed family, `events/` as contract | 2.25 |
 | 6–8 | **2–4** Discovering and modeling, the four patterns, slices and capabilities — three concept slides as one story | 2.25 |
 | 9 | **2–3** answer: one slice = one directory, the pattern you drew = the base type you extend | 2 |
@@ -207,6 +207,13 @@ concept now has **its own line, numbered with the same number the rail shows**, 
 as plain descriptions rather than labels: the bonus is "saving to our own database *and* telling another
 system, without a transaction that covers both" rather than "the dual write, and Kafka". A name on the
 roadmap that only makes sense after you have seen the slide it names is not a roadmap.
+
+The third rewrite turned the four group headings from questions into statements. A question above a list
+of things we will cover reads like a quiz, two of them were vague ("How does a write happen?", "How does
+anyone read it back?"), and the last ("How does it reach the rest of the world?") did not match concept 13,
+which is a composite screen and automation, not integration. The groups are now *modeling the system
+together*, *making a decision and recording it*, *reading what was recorded*, and *putting it together:
+screens and automation*; the questions survive as the speaker's framing, not on the slide.
 
 **No live demo.** Fifteen pairs, the map and the going-deeper slides fill 48.5 minutes. The close tells the room how to run the app themselves,
 and `demo-script.md` remains the runbook for a longer slot. That is a real loss — watching the order

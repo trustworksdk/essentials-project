@@ -67,8 +67,8 @@ the module's own pptx (see `images/README.md`). The two web fonts degrade to sys
 | D3 | Going deeper: change data capture | — | subscriptions told by the WAL, polling as fallback | 2.5 |
 | D4 | Going deeper: the admin console | — | two dependencies, `/essentials/admin`, two security SPIs | 2.5 |
 
-Around the pairs: the title, **the question** (1 min), the roadmap ("four questions, in the order you hit
-them" — read the four and nothing else), **the map of the app** after pair 4 (1.5 min, see below), and at
+Around the pairs: the title, **the question** (1 min), the roadmap ("thirteen concepts, in four groups" —
+read the four group headings and nothing else), **the map of the app** after pair 4 (1.5 min, see below), and at
 the end "left out on purpose" and the close. 4 minutes in total, 34.5 in the pairs, and 10 in the
 going-deeper slides. 48:30 of content leaves about ten minutes of the 60-minute slot for questions.
 

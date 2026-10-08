@@ -346,11 +346,16 @@ ul.steps li .n {
 /* The bonus is not one of the thirteen, and the rail does not number it either. */
 ul.steps li.bonus .n { color: var(--ink-faint); }
 
-/* ---- roadmap: four questions ------------------------------------------ */
-ol.questions { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; justify-content: center; gap: 3.2cqh; }
-ol.questions li { display: flex; align-items: baseline; gap: 2cqw; max-width: none;
-  font-family: var(--f-display); font-weight: 500; font-size: var(--t-lede); line-height: 1.2; letter-spacing: -0.01em; }
-ol.questions li .n { flex: 0 0 5.5em; font-size: var(--t-label); font-weight: 700; letter-spacing: 0.12em; color: var(--accent); text-align: right; }
+/* ---- roadmap: four groups, each over the concepts it holds --------------
+   Each concept gets its own line with the number the rail shows; names run
+   together on one line read as a sentence, not a list (see PLAN.md). */
+.roadmap { display: grid; grid-template-columns: 1fr 1fr; gap: 2cqh 2.4cqw; align-content: center; }
+.rq { border: 1px solid var(--rule); background: var(--surface-2); padding: 1.8cqh 1.6cqw; display: flex; flex-direction: column; gap: 0.9cqh; min-width: 0; }
+.rq-n { font-family: var(--f-display); font-size: var(--t-label); font-weight: 700; letter-spacing: 0.12em; text-transform: uppercase; color: var(--accent); }
+.rq-q { font-size: var(--t-body); letter-spacing: -0.01em; text-transform: none; font-weight: 500; color: var(--ink); line-height: 1.2; }
+.rq-list { list-style: none; margin: 0.4cqh 0 0; padding: 0; display: flex; flex-direction: column; gap: 0.5cqh; }
+.rq-list li { display: flex; align-items: baseline; gap: 0.8cqw; font-size: var(--t-small); line-height: 1.3; max-width: none; color: var(--ink-dim); }
+.rq-list .cn { flex: 0 0 1.8em; text-align: right; font-family: var(--f-display); font-weight: 700; font-size: var(--t-label); color: var(--accent); }
 
 /* ---- ticker / big statement --------------------------------------------- */
 .statement {
@@ -636,18 +641,51 @@ PRD-7f3a     LG Superview   <span class="tok-num">1999.50</span></code></pre>
 
 <!-- =================================================================== 03 — roadmap -->
 <section class="slide" data-act="Where we are going" data-min="0.5"
-  data-note-en="Thirty seconds. Read the four questions, one breath each, in the order you actually hit them when building something. The numbers are the concept numbers the rail shows all talk. Then one line: every concept gets a slide, and then the code that implements it."
-  data-note-da="Tredive sekunder. Laes de fire spoergsmaal, ét aandedrag hver, i den raekkefoelge man faktisk moeder dem. Tallene er de begrebsnumre skinnen viser hele oplaegget. Derefter én linje: hvert begreb faar en slide, og derefter koden der implementerer det.">
+  data-note-en="Thirty seconds. Read the four group headings, one breath each - modeling, deciding and recording, reading, putting it together - and say that this is the order you actually meet them when building something. Do not read the thirteen lines under them; they are there for the room to scan. Then explain the numbers once, because the room will see them all talk: they are the module's thirteen concepts, and the rail at the bottom of every slide shows the one we are on as n of 13. Then one line: every concept gets a grey slide in the module's words, then an orange slide with the code that implements it."
+  data-note-da="Tredive sekunder. Laes de fire gruppeoverskrifter, ét aandedrag hver - modellering, beslutning og registrering, laesning, at saette det sammen - og sig at det er den raekkefoelge man faktisk moeder dem. Laes ikke de tretten linjer under dem op; de er til at skimme. Forklar derefter tallene én gang, for salen vil se dem hele oplaegget: de er modulets tretten begreber, og skinnen nederst paa hver slide viser hvilket vi er ved som n af 13. Derefter én linje: hvert begreb faar en graa slide med modulets ord, og derefter en orange slide med koden der implementerer det.">
   <div class="eyebrow"><span lang="en">Where we are going</span><span lang="da">Hvor vi skal hen</span></div>
-  <h2><span lang="en">Four questions, in the order you hit them</span><span lang="da">Fire spørgsmål, i den rækkefølge man møder dem</span></h2>
-  <ol class="questions grow">
-    <li><span class="n">1&ndash;4</span><span lang="en">How do we agree what the system does?</span><span lang="da">Hvordan bliver vi enige om hvad systemet gør?</span></li>
-    <li><span class="n">5&ndash;9</span><span lang="en">How does a write happen?</span><span lang="da">Hvordan sker en skrivning?</span></li>
-    <li><span class="n">10&ndash;12</span><span lang="en">How does anyone read it back?</span><span lang="da">Hvordan læser nogen det tilbage?</span></li>
-    <li><span class="n">13</span><span lang="en">How does it reach the rest of the world?</span><span lang="da">Hvordan når det ud til resten af verden?</span></li>
-  </ol>
-  <p class="small" lang="en">Each concept gets a slide, then the code that implements it. After them: two bonus pairs, and four features in more depth.</p>
-  <p class="small" lang="da">Hvert begreb får en slide, derefter koden der implementerer det. Efter dem: to bonuspar, og fire features i mere dybde.</p>
+  <h2><span lang="en">Thirteen concepts, in four groups, <em>in the order you meet them</em></span><span lang="da">Tretten begreber, i fire grupper, <em>i den rækkefølge man møder dem</em></span></h2>
+  <div class="roadmap grow">
+    <div class="rq">
+      <div class="rq-n"><span lang="en">Concepts</span><span lang="da">Begreber</span> 1&ndash;4</div>
+      <h3 class="rq-q"><span lang="en">Modeling the system together</span><span lang="da">At modellere systemet sammen</span></h3>
+      <ol class="rq-list">
+          <li><span class="cn">1</span><span lang="en">An event is a fact: it happened, and it never changes</span><span lang="da">Et event er en kendsgerning: det skete, og det ændres aldrig</span></li>
+          <li><span class="cn">2</span><span lang="en">Finding the events, then putting them on a timeline</span><span lang="da">At finde eventene og sætte dem på en tidslinje</span></li>
+          <li><span class="cn">3</span><span lang="en">Four patterns, and every part of a system is one of them</span><span lang="da">Fire mønstre, og hver del af et system er ét af dem</span></li>
+          <li><span class="cn">4</span><span lang="en">Slices built one at a time, in lanes that own their data</span><span lang="da">Slices bygget én ad gangen, i baner der ejer deres data</span></li>
+      </ol>
+    </div>
+    <div class="rq">
+      <div class="rq-n"><span lang="en">Concepts</span><span lang="da">Begreber</span> 5&ndash;9</div>
+      <h3 class="rq-q"><span lang="en">Making a decision and recording it</span><span lang="da">At træffe en beslutning og registrere den</span></h3>
+      <ol class="rq-list">
+          <li><span class="cn">5</span><span lang="en">A command plus what already happened gives a new event</span><span lang="da">En command plus det der allerede er sket giver et nyt event</span></li>
+          <li><span class="cn">6</span><span lang="en">The decider: the one place a decision is made</span><span lang="da">Decideren: det ene sted en beslutning træffes</span></li>
+          <li><span class="cn">7</span><span lang="en">Tests written straight from the model</span><span lang="da">Tests skrevet direkte ud fra modellen</span></li>
+          <li><span class="cn">8</span><span lang="en">Storing events, and replaying them to get state back</span><span lang="da">At gemme events og replaye dem for at få tilstanden tilbage</span></li>
+          <li><span class="cn">9</span><span lang="en">The state a decision needs, and nothing more</span><span lang="da">Den tilstand en beslutning har brug for, og intet mere</span></li>
+      </ol>
+    </div>
+    <div class="rq">
+      <div class="rq-n"><span lang="en">Concepts</span><span lang="da">Begreber</span> 10&ndash;12</div>
+      <h3 class="rq-q"><span lang="en">Reading what was recorded</span><span lang="da">At læse det der er registreret</span></h3>
+      <ol class="rq-list">
+          <li><span class="cn">10</span><span lang="en">Why screens read from projections, not from the events</span><span lang="da">Hvorfor skærme læser fra projektioner og ikke fra eventene</span></li>
+          <li><span class="cn">11</span><span lang="en">Order and delivery are guaranteed; idempotence is our job</span><span lang="da">Rækkefølge og levering er garanteret; idempotens er vores opgave</span></li>
+          <li><span class="cn">12</span><span lang="en">Reads are separate from writes, and may be a moment behind</span><span lang="da">Læsninger er adskilt fra skrivninger og kan være et øjeblik bagud</span></li>
+      </ol>
+    </div>
+    <div class="rq">
+      <div class="rq-n"><span lang="en">Concepts</span><span lang="da">Begreber</span> 13</div>
+      <h3 class="rq-q"><span lang="en">Putting it together: screens and automation</span><span lang="da">At sætte det sammen: skærme og automatisering</span></h3>
+      <ol class="rq-list">
+          <li><span class="cn">13</span><span lang="en">One screen built from many views, and work the system does on its own</span><span lang="da">Én skærm bygget af mange views, og arbejde systemet udfører selv</span></li>
+      </ol>
+    </div>
+  </div>
+  <p class="small" lang="en"><strong>The numbers are the module&rsquo;s concepts</strong> &mdash; the rail at the bottom shows where we are as <code>n/13</code>. Each concept gets a grey slide in the module&rsquo;s own words, then an orange slide with the code. After them: two bonus problems, and four features in more depth.</p>
+  <p class="small" lang="da"><strong>Tallene er modulets begreber</strong> &mdash; skinnen nederst viser hvor vi er som <code>n/13</code>. Hvert begreb får en grå slide med modulets egne ord, derefter en orange slide med koden. Efter dem: to bonusproblemer, og fire features i mere dybde.</p>
 </section>
 
 <!-- =================================================================== 04 — C1 concept -->
