@@ -245,6 +245,23 @@ public class OrderService {
 }
 ```
 
+**Rejections.** A decider that throws rolls back: `UnitOfWorkControllingCommandBusInterceptor` runs the handler in
+`withUnitOfWork`, so its own writes are discarded, an outer `UnitOfWork` it joined is marked rollback-only even if the
+caller catches the exception, and under `sendAndDontWait` the command is redelivered (details:
+[LLM-reactive.md § When a handler throws](./LLM-reactive.md#when-a-handler-throws-rejections)). Throw for a failure.
+A business rejection that must persist is an outcome: emit a rejection event, which is appended and which `send()`
+returns.
+
+```java
+public Optional<OrderEvent> handle(ConfirmOrder cmd, List<OrderEvent> events) {
+    if (/* not confirmable */) return Optional.of(new OrderConfirmationRejected(cmd.orderId(), "no lines"));
+    return Optional.of(new OrderConfirmed(cmd.orderId()));
+}
+
+var result = (OrderEvent) commandBus.send(new ConfirmOrder(orderId));
+if (result instanceof OrderConfirmationRejected rejected) { /* 409/422 with rejected.reason() */ }
+```
+
 **Getting the appended `GlobalEventOrder`** (since 0.60.1): `send` returns the event, not the `PersistedEvent`. Wrap
 the send in `AppendedEvents.recordDuring(...)` (package `...aggregates.eventstream.adapters`) to receive the
 `PersistedEvent`s the decider adapter appended - e.g. to await a processor with `awaitProcessed` (see
@@ -445,6 +462,10 @@ unitOfWorkFactory.usingUnitOfWork(unitOfWork -> {
     result.fold(error -> handleError(error), events -> handleSuccess(events));
 });
 ```
+
+⚠️ A `HandlerResult.error(...)` does not throw, but the `CommandHandler` marks the active `UnitOfWork` rollback-only
+(ignored for a transaction Spring manages), so every other write in that `UnitOfWork` is discarded too. A rejection that must persist is returned as an event
+(`HandlerResult.events(new OrderRejected(...))`), not as an error.
 
 **Test refs**: `DeciderTest`, `DeciderBasedCommandHandlerIT`
 

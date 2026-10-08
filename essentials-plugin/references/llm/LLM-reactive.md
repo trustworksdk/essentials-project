@@ -253,6 +253,33 @@ commandBus.addContextPropagator(myPropagator);   // AbstractCommandBus; first ad
 The propagator captures at *send*, so a `sendAsync` `Mono` subscribed later still carries the sender's context.
 [foundation](./LLM-foundation.md#event-causation) supplies `CausationCommandContextPropagator`.
 
+### When a handler throws (rejections)
+
+With foundation's `UnitOfWorkControllingCommandBusInterceptor` (both Spring Boot starters add it to their
+`DurableLocalCommandBus`), `send`, `sendAsync` and `sendAndDontWait` each run the handler inside
+`unitOfWorkFactory.withUnitOfWork(...)`. A throw from the handler therefore:
+
+- **rolls back the handler's own writes** when the interceptor opened the `UnitOfWork` (none was active).
+- **marks an outer `UnitOfWork` rollback-only** when `send` joined one the caller opened with
+  `withUnitOfWork`/`usingUnitOfWork` - even if the caller catches the exception. That `UnitOfWork` then rolls back
+  instead of committing, with no error. Not so under a Spring `@Transactional`: `SpringTransactionAwareUnitOfWork`
+  ignores the mark for a transaction Spring manages, so a caller that catches the exception commits whatever the
+  handler wrote before it threw.
+- under `sendAsync` never touches the caller's `UnitOfWork`: the handler runs on another thread in its own, and the
+  `Mono` signals the error.
+- under `sendAndDontWait` on a `DurableLocalCommandBus` (default `RethrowingSendAndDontWaitErrorHandler`) rolls back
+  and **redelivers** the queued command per its `RedeliveryPolicy` (default `DEFAULT_REDELIVERY_POLICY`: linear
+  backoff 150 ms, capped at 1 s, 20 redeliveries), then dead-letters it. The queue's built-in permanent-error list
+  applies, so an `IllegalArgumentException` dead-letters at once (see
+  [LLM-foundation.md § The built-in permanent-error list](./LLM-foundation.md#the-built-in-permanent-error-list)). On a
+  plain `LocalCommandBus` the default `FallbackSendAndDontWaitErrorHandler` logs and drops the failure, and because it
+  catches inside the interceptor chain, the `UnitOfWork` commits what the handler wrote before it threw.
+
+So a throw is for a failure, not for a business rejection that must persist (an audit row, a "rejected" status): the
+rollback discards it, and `sendAndDontWait` retries it. Return an outcome instead - an `EventStreamDecider` emits a
+rejection event (e.g. `OrderRejected`), which is appended and which `send()` returns (see
+[LLM-eventsourced-aggregates.md § Command Sending](./LLM-eventsourced-aggregates.md#command-sending)).
+
 ### CommandHandler Types
 
 **Package:** `dk.trustworks.essentials.reactive.command`
