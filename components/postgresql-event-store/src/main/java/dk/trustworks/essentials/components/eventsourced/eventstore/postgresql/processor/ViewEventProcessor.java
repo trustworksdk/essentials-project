@@ -87,6 +87,7 @@ public abstract class ViewEventProcessor extends AbstractEventProcessor {
     private final Consumer<Message>             queuedMessageConsumer;
     private       DurableQueueConsumer          durableQueueConsumer;
     private       LockName                      lockName;
+    private       UnhandledEventTypes           unhandledEventTypes;
 
     /**
      * Constructs a {@code ViewEventProcessor} using the provided dependencies.
@@ -148,6 +149,8 @@ public abstract class ViewEventProcessor extends AbstractEventProcessor {
                     subscribeToEventsRelatedTo);
         this.durableQueueName = QueueName.of(processorName + ":queue");
         this.lockName = LockName.of(processorName + ":lock");
+        UnhandledEventTypes.logHandledMessageTypes(processorName, this);
+        this.unhandledEventTypes = new UnhandledEventTypes(processorName, eventStore, patternMatchingMessageHandlerDelegate);
         fencedLockManager.acquireLockAsync(lockName,
                                            LockCallback.builder()
                                                        .onLockAcquired(lock -> {
@@ -266,6 +269,10 @@ public abstract class ViewEventProcessor extends AbstractEventProcessor {
         var             order         = event.eventOrder().longValue();
         MessageMetaData meta          = null;
 
+        if (unhandledEventTypes != null) {
+            // Reported only: an ignored event is still handed to the delegate, which ignores it, exactly as before
+            unhandledEventTypes.reportIfUnhandled(event);
+        }
         try {
             meta = new MessageMetaData(event.metaData().deserialize());
             if (durableQueues.hasOrderedMessageQueuedForKey(durableQueueName, key)) {

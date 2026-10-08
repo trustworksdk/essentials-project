@@ -79,6 +79,14 @@ public class MeasurementEventStoreSubscriptionObserver implements EventStoreSubs
      * {@code increase(...) > 0}
      */
     public static final  String           SUBSCRIPTION_SKIPPED_EVENT_AFTER_AUTO_RESUMES_METRIC = "essentials.eventstore.subscription.skipped_after_auto_resumes";
+    /**
+     * Counter of events an event processor received and ignored because none of its {@code @MessageHandler} methods
+     * accepts their type - see {@link EventStoreSubscriptionObserver#eventTypeNotHandledByProcessor(String, PersistedEvent)}.
+     * Tags: {@code processor}, {@code aggregate_type}, {@code event_type} and the optional {@value #MODULE_TAG_NAME}.
+     * A processor that deliberately ignores a type counts it too, so read it per {@code event_type}: a type that keeps
+     * counting on a processor that should handle it is a missing handler
+     */
+    public static final  String           PROCESSOR_UNHANDLED_EVENT_TYPE_METRIC = "essentials.eventstore.processor.unhandled_event_type";
 
     private final MeasurementTaker measurementTaker;
     private final boolean          recordExecutionTimeEnabled;
@@ -402,6 +410,27 @@ public class MeasurementEventStoreSubscriptionObserver implements EventStoreSubs
         } catch (RuntimeException e) {
             log.warn(msg("Failed to count the skip of subscription '{}' at {} event #{} in '{}'",
                          eventStoreSubscription.subscriberId(), eventStoreSubscription.aggregateType(), skippedGlobalEventOrder, SUBSCRIPTION_SKIPPED_EVENT_AFTER_AUTO_RESUMES_METRIC), e);
+        }
+    }
+
+    @Override
+    public void eventTypeNotHandledByProcessor(String processorName, PersistedEvent event) {
+        if (meterRegistry == null) {
+            return;
+        }
+        // Never throws: this runs on the subscription's delivery thread
+        try {
+            var builder = Counter.builder(PROCESSOR_UNHANDLED_EVENT_TYPE_METRIC)
+                                 .description("Events an event processor ignored because none of its @MessageHandler methods accepts their type")
+                                 .tag("processor", String.valueOf(processorName))
+                                 .tag("aggregate_type", event.aggregateType().toString())
+                                 .tag("event_type", event.event().getEventTypeOrNamePersistenceValue());
+            if (moduleTag != null) {
+                builder.tag(MODULE_TAG_NAME, moduleTag);
+            }
+            builder.register(meterRegistry).increment();
+        } catch (RuntimeException e) {
+            log.warn(msg("Failed to count an event processor '{}' ignored in '{}'", processorName, PROCESSOR_UNHANDLED_EVENT_TYPE_METRIC), e);
         }
     }
 

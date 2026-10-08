@@ -169,6 +169,7 @@ public abstract class InTransactionEventProcessor implements Lifecycle {
     private PatternMatchingMessageHandler   patternMatchingHandlerDelegate;
     private List<MessageHandlerInterceptor> messageHandlerInterceptors;
     private boolean                         useExclusively;
+    private UnhandledEventTypes             unhandledEventTypes;
 
     /**
      * Create a new {@link InTransactionEventProcessor} instance
@@ -272,6 +273,8 @@ public abstract class InTransactionEventProcessor implements Lifecycle {
                      processorName,
                      useExclusively ? "exclusively" : "non-exclusively",
                      subscribeToEventsRelatedTo);
+            UnhandledEventTypes.logHandledMessageTypes(processorName, this);
+            unhandledEventTypes = new UnhandledEventTypes(processorName, eventStore, patternMatchingHandlerDelegate);
 
             subscribeInTransaction(subscribeToEventsRelatedTo);
         }
@@ -327,6 +330,10 @@ public abstract class InTransactionEventProcessor implements Lifecycle {
     }
 
     private void invokeHandler(PersistedEvent event, UnitOfWork unitOfWork, AggregateType aggregateType, SubscriberId subscriberId) {
+        if (unhandledEventTypes != null) {
+            // Reported only: an ignored event is still handed to the delegate, which ignores it, exactly as before
+            unhandledEventTypes.reportIfUnhandled(event);
+        }
         try {
             log.debug("[{}-{}] Processing event: {} using unit of work '{}'", subscriberId, aggregateType, event, unitOfWork.info());
             var message = OrderedMessage.of(event.event().deserialize(),

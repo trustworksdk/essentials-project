@@ -212,6 +212,13 @@ concrete permitted subtypes of a sealed one) is already handled - by another ada
 on the same bus, or by a second decider of the same adapter. It does not fail: an overlap that is never sent keeps
 working. The adapter's `toString()` names its `AggregateType` and deciders, so the exception's handler list is readable.
 
+Since 0.60.1 the configurator also WARNs at construction for every concrete command a **sealed** command type permits
+(walked recursively via `getPermittedSubclasses()`) that no `EventStreamDecider` on the bus handles - every send of it
+would fail with `NoCommandHandlerFoundException`. Checked: the command type of a `HandlesCommandsThatInheritFromCommandType`
+aggregate configuration, and a decider's own `COMMAND` type argument when sealed. Only decider adapters can be checked,
+so a command handled elsewhere (an `@CmdHandler`, a later configurator) is reported too. Seal the command root type
+(`sealed interface OrderCommand permits ...`) to get the check.
+
 ### Command Sending
 
 **Dependencies from other modules**:

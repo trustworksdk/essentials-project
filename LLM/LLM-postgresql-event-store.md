@@ -690,7 +690,8 @@ void on(OrderConfirmed event, OrderedMessage message) {
 
 > ⚠️ **Two different requirements, often conflated.**
 > - `@MessageHandler` is **mandatory**: an un-annotated method is not a handler. A `ViewEventProcessor` allows unmatched
->   messages, so the event is skipped silently — no exception, the handler just never runs.
+>   messages, so the event is skipped — no exception, the handler just never runs. Since 0.60.1 the skip is visible: see
+>   [Unhandled event types](#unhandled-event-types).
 > - `OrderedMessage` is **optional to the dispatcher** (single-argument handlers are invoked normally) but **required for a
 >   versioned projection**: `message.getOrder()` is the `EventOrder` your update compares against the stored version (see
 >   *Version = EventOrder Pattern* above). Without it, a redelivered event is applied twice. A handler with no versioned
@@ -753,6 +754,20 @@ void placing_an_order_shows_it_in_the_order_view() {
 ```
 
 Await the **last** event the assertion depends on, on the processor that writes the read model you assert on.
+
+### Unhandled event types
+
+Since 0.60.1 (CB-4). Every processor allows unmatched messages, so an event type without a `@MessageHandler` was dropped
+without a trace. Now:
+
+- At `start()` each processor logs one INFO line listing the event/message types its `@MessageHandler`s accept.
+- Each ignored event is reported to `EventStoreSubscriptionObserver.eventTypeNotHandledByProcessor(processorName, event)`
+  (default no-op). `MeasurementEventStoreSubscriptionObserver` counts it as
+  `essentials.eventstore.processor.unhandled_event_type` (tags `processor`, `aggregate_type`, `event_type`, optional
+  `Module`) whenever it has a `MeterRegistry` — the starter wires that when one is present.
+- A WARN per processor and event type, at most once per hour, with the number ignored since the last one. Logger
+  `dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.processor.UnhandledEventTypes` — turn it down
+  in the logging configuration when processors ignore types on purpose. There is no per-type opt-out annotation.
 
 ## In-Memory Projections
 

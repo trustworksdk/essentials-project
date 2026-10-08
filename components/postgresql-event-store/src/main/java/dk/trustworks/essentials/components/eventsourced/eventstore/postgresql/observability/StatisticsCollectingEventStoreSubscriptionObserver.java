@@ -292,6 +292,12 @@ public class StatisticsCollectingEventStoreSubscriptionObserver implements Event
     }
 
     @Override
+    public void eventTypeNotHandledByProcessor(String processorName, PersistedEvent event) {
+        // Forward only: an ignored event is neither a handled nor a failed one
+        delegate.eventTypeNotHandledByProcessor(processorName, event);
+    }
+
+    @Override
     public void resolveResumePoint(SubscriptionResumePoint resumePoint,
                                    GlobalEventOrder onFirstSubscriptionSubscribeFromAndIncludingGlobalOrder,
                                    EventStoreSubscription eventStoreSubscription,

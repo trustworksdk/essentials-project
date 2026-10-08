@@ -216,6 +216,8 @@ public class EventStreamDeciderAndAggregateTypeConfigurator {
 
         // Before registering: a command type handled twice otherwise surfaces only at its first send
         warnAboutCommandTypesHandledMoreThanOnce(adapters);
+        // Likewise: a permitted command of a sealed command type that no decider handles fails only at its first send
+        warnAboutCommandsOfSealedCommandTypesThatNoDeciderHandles(adapters);
 
         // Register the command handler adapters
         for (var adapter : adapters) {
@@ -249,16 +251,7 @@ public class EventStreamDeciderAndAggregateTypeConfigurator {
      */
     private void warnAboutCommandTypesHandledMoreThanOnce(List<EventStreamDeciderCommandHandlerAdapter> newAdapters) {
         try {
-            var allAdapters = new ArrayList<CommandHandler>();
-            synchronized (ADAPTERS_REGISTERED_PER_COMMAND_BUS) {
-                var earlier = ADAPTERS_REGISTERED_PER_COMMAND_BUS.get(commandBus);
-                if (earlier != null) {
-                    // An adapter removed from the bus since no longer handles anything
-                    earlier.removeIf(adapter -> !commandBus.hasCommandHandler(adapter));
-                    allAdapters.addAll(earlier);
-                }
-            }
-            allAdapters.addAll(newAdapters);
+            var allAdapters = adaptersOnTheCommandBusIncluding(newAdapters);
 
             var commandTypesChecked = new HashSet<Class<?>>();
             for (var adapter : newAdapters) {
@@ -273,6 +266,85 @@ public class EventStreamDeciderAndAggregateTypeConfigurator {
         } catch (RuntimeException e) {
             // A diagnostic must never fail the configuration
             log.debug("Could not check the command types of the EventStreamDeciders for duplicate registrations", e);
+        }
+    }
+
+    /**
+     * @return the {@link EventStreamDeciderCommandHandlerAdapter}s any configurator registered on this configurator's
+     * {@link CommandBus} that are still registered there, plus the <code>newAdapters</code>
+     */
+    private List<CommandHandler> adaptersOnTheCommandBusIncluding(List<EventStreamDeciderCommandHandlerAdapter> newAdapters) {
+        var allAdapters = new ArrayList<CommandHandler>();
+        synchronized (ADAPTERS_REGISTERED_PER_COMMAND_BUS) {
+            var earlier = ADAPTERS_REGISTERED_PER_COMMAND_BUS.get(commandBus);
+            if (earlier != null) {
+                // An adapter removed from the bus since no longer handles anything
+                earlier.removeIf(adapter -> !commandBus.hasCommandHandler(adapter));
+                allAdapters.addAll(earlier);
+            }
+        }
+        allAdapters.addAll(newAdapters);
+        return allAdapters;
+    }
+
+    /**
+     * WARN, per sealed command type, for the concrete commands it permits that no {@link EventStreamDecider} on the
+     * {@link CommandBus} handles (CB-4). Sending one fails with a {@link NoCommandHandlerFoundException} - at its first
+     * send, which may be long after startup.
+     * <p>
+     * The sealed command types checked are the command root type of an {@link EventStreamAggregateTypeConfiguration}
+     * whose checker is a {@link EventStreamDeciderSupportsAggregateTypeChecker.HandlesCommandsThatInheritFromCommandType}
+     * (e.g. {@code sealed interface OrderCommand}), and a decider's own {@code COMMAND} type argument when it is sealed.
+     * Their permitted subtypes are walked recursively ({@link Class#getPermittedSubclasses()}); a command counts as handled
+     * when one of the {@link EventStreamDeciderCommandHandlerAdapter}s registered on the {@link CommandBus} - by this or
+     * an earlier configurator - {@link CommandHandler#canHandle(Class) can handle} it.
+     * <p>
+     * A WARN, not a failure: the {@link CommandBus} API cannot list other command handlers, so a command handled by e.g.
+     * an {@code @CmdHandler} method elsewhere is reported too, as is one handled by a configurator created later.
+     *
+     * @param newAdapters the adapters about to be registered
+     */
+    private void warnAboutCommandsOfSealedCommandTypesThatNoDeciderHandles(List<EventStreamDeciderCommandHandlerAdapter> newAdapters) {
+        try {
+            var sealedCommandTypes = new LinkedHashMap<Class<?>, String>();
+            for (var adapter : newAdapters) {
+                if (adapter.getConfiguration().deciderSupportsAggregateTypeChecker() instanceof EventStreamDeciderSupportsAggregateTypeChecker.HandlesCommandsThatInheritFromCommandType checker &&
+                        checker.getCommandType().isSealed()) {
+                    sealedCommandTypes.putIfAbsent(checker.getCommandType(), "the command type of AggregateType '" + adapter.getConfiguration().aggregateType() + "'");
+                }
+                for (var decider : adapter.getDeciders()) {
+                    resolveCommandTypeArgument(decider.getClass()).filter(Class::isSealed)
+                                                                  .ifPresent(commandType -> sealedCommandTypes.putIfAbsent(commandType, "the command type of decider '" + decider.getClass().getName() + "'"));
+                }
+            }
+            if (sealedCommandTypes.isEmpty()) {
+                return;
+            }
+
+            var allAdapters = adaptersOnTheCommandBusIncluding(newAdapters);
+            sealedCommandTypes.forEach((sealedCommandType, declaredAs) -> {
+                var permittedCommands = new LinkedHashSet<Class<?>>();
+                collectConcreteTypes(sealedCommandType, permittedCommands, new HashSet<>());
+                var unhandled = permittedCommands.stream()
+                                                 .filter(commandType -> allAdapters.stream().noneMatch(adapter -> adapter.canHandle(commandType)))
+                                                 .map(Class::getName)
+                                                 .toList();
+                if (!unhandled.isEmpty()) {
+                    log.warn("Sealed command type '{}' ({}) permits {} command type(s) that no EventStreamDecider handles: {}. The {} fails every send of them with a {} - " +
+                                     "add an EventStreamDecider for each, unless another command handler on the CommandBus handles it (only EventStreamDecider adapters can be checked)",
+                             sealedCommandType.getName(),
+                             declaredAs,
+                             unhandled.size(),
+                             unhandled,
+                             commandBus.getClass().getSimpleName(),
+                             NoCommandHandlerFoundException.class.getSimpleName());
+                } else {
+                    log.debug("Every command type that sealed command type '{}' permits is handled by an EventStreamDecider", sealedCommandType.getName());
+                }
+            });
+        } catch (RuntimeException e) {
+            // A diagnostic must never fail the configuration
+            log.debug("Could not check the sealed command types of the EventStreamDeciders for commands no decider handles", e);
         }
     }
 

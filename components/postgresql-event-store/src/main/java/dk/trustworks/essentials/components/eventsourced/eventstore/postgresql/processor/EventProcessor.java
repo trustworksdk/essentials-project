@@ -217,6 +217,7 @@ public abstract class EventProcessor extends AbstractEventProcessor {
     private       Consumer<Message>             inboxMessageHandlerDelegate;
     private       Inbox                         inbox;
     private       PatternMatchingMessageHandler patternMatchingInboxMessageHandlerDelegate;
+    private       UnhandledEventTypes           unhandledEventTypes;
 
     /**
      * Create a new {@link EventProcessor} instance
@@ -299,6 +300,8 @@ public abstract class EventProcessor extends AbstractEventProcessor {
                      subscribeToEventsRelatedTo);
 
             setupMessageHandlerDelegate();
+            UnhandledEventTypes.logHandledMessageTypes(processorName, this);
+            unhandledEventTypes = new UnhandledEventTypes(processorName, eventStore, patternMatchingInboxMessageHandlerDelegate);
             inbox = inboxes.getOrCreateInbox(InboxConfig.builder()
                                                         .inboxName(InboxName.of(processorName))
                                                         .messageConsumptionMode(getInboxMessageConsumptionMode())
@@ -402,7 +405,8 @@ public abstract class EventProcessor extends AbstractEventProcessor {
      * Forward the event to the <code>forwardToInbox</code> as an {@link OrderedMessage}<br>
      * The default implementation checks if the concrete {@link EventProcessor} class has an {@literal @MessageHandler} annotated method that
      * handles the event. Only events with a corresponding {@link MessageHandler} annotated method will be forwarded to the {@link Inbox} and thereby delegates to the
-     * {@link MessageHandler} annotated method
+     * {@link MessageHandler} annotated method. An event it doesn't forward is reported as an ignored event type: a
+     * rate-limited WARN and {@code EventStoreSubscriptionObserver#eventTypeNotHandledByProcessor}
      *
      * @param event          the event to forward
      * @param forwardToInbox the {@link Inbox} the event should be forwarded to
@@ -417,6 +421,8 @@ public abstract class EventProcessor extends AbstractEventProcessor {
                                                                                                       aggregateIdSerializer.serialize(event.aggregateId()),
                                                                                                       event.eventOrder(),
                                                                                                       new MessageMetaData(event.metaData().deserialize())));
+        } else if (unhandledEventTypes != null) {
+            unhandledEventTypes.report(event);
         }
     }
 

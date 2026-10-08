@@ -89,6 +89,10 @@ public class EventProcessorIT {
     private Inboxes.DurableQueueBasedInboxes inboxes;
     private DurableLocalCommandBus           commandBus;
     private DurableSubscriptionRepository    durableSubscriptionRepository;
+    /**
+     * "processorName:EventType" per {@link EventStoreSubscriptionObserver#eventTypeNotHandledByProcessor} call
+     */
+    private final List<String>               eventsNotHandledByProcessor = new CopyOnWriteArrayList<>();
 
     @BeforeEach
     void setup() {
@@ -112,7 +116,12 @@ public class EventProcessorIT {
                                          .setUnitOfWorkFactory(unitOfWorkFactory)
                                          .setPersistenceStrategy(persistenceStrategy)
                                          .setEventStreamGapHandlerFactory(eventStore -> new PostgresqlEventStreamGapHandler<>(unitOfWorkFactory))
-                                         .setEventStoreSubscriptionObserver(new EventStoreSubscriptionObserver.NoOpEventStoreSubscriptionObserver())
+                                         .setEventStoreSubscriptionObserver(new EventStoreSubscriptionObserver.NoOpEventStoreSubscriptionObserver() {
+                                             @Override
+                                             public void eventTypeNotHandledByProcessor(String processorName, PersistedEvent event) {
+                                                 eventsNotHandledByProcessor.add(processorName + ":" + event.event().getEventTypeAsJavaClass().map(Class::getSimpleName).orElse("?"));
+                                             }
+                                         })
                                          .build();
 
         fencedLockManager = PostgresqlFencedLockManager.builder()
@@ -211,10 +220,11 @@ public class EventProcessorIT {
     }
 
     /**
-     * ES-4: the processor has no handler for {@link OrderConfirmedEvent} and never forwards it. The barrier still releases for it
+     * ES-4 + CB-4: the processor has no handler for {@link OrderConfirmedEvent}. The barrier still releases for it, and the
+     * ignored event is reported to the {@link EventStoreSubscriptionObserver}
      */
     @Test
-    void awaitProcessedAsync_releases_for_an_event_type_the_processor_ignores() {
+    void awaitProcessedAsync_releases_for_an_event_type_the_processor_ignores_and_the_ignored_type_is_reported() {
         var orderId = OrderId.random();
         var placed = unitOfWorkFactory.withUnitOfWork(() -> eventStore.startStream(TEST_ORDERS, orderId, List.of(new OrderPlacedEvent(orderId, "Test order details")))
                                                                       .firstEvent());
@@ -222,6 +232,8 @@ public class EventProcessorIT {
         var confirmed = unitOfWorkFactory.withUnitOfWork(() -> eventStore.fetchStream(TEST_ORDERS, orderId).get().eventList().get(1));
 
         testProcessor.awaitProcessedAsync(TEST_ORDERS, confirmed.globalEventOrder(), Duration.ofSeconds(10)).block(Duration.ofSeconds(15));
+
+        assertThat(eventsNotHandledByProcessor).containsExactly("TestOrderEventProcessor:OrderConfirmedEvent");
     }
 
     @Test
@@ -242,7 +254,7 @@ public class EventProcessorIT {
 
     /**
      * ES-4: an {@link InTransactionEventProcessor} handles the event in the appending UnitOfWork, so the barrier is
-     * satisfied as soon as that UnitOfWork has committed
+     * satisfied as soon as that UnitOfWork has committed. CB-4: an event type it ignores is reported
      */
     @Test
     void an_in_transaction_processor_has_processed_the_event_once_the_appending_unit_of_work_committed() {
@@ -256,6 +268,9 @@ public class EventProcessorIT {
             inTransactionProcessor.awaitProcessed(placed, Duration.ZERO);
             inTransactionProcessor.awaitProcessedAsync(TEST_ORDERS, placed.globalEventOrder(), Duration.ZERO).block(Duration.ofSeconds(1));
             assertThat(inTransactionProcessor.ordersPlaced).containsExactly(orderId);
+
+            unitOfWorkFactory.usingUnitOfWork(() -> eventStore.appendToStream(TEST_ORDERS, orderId, new OrderConfirmedEvent(orderId)));
+            assertThat(eventsNotHandledByProcessor).contains("TestInTransactionOrderProcessor:OrderConfirmedEvent");
         } finally {
             inTransactionProcessor.stop();
         }
