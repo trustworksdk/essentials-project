@@ -38,6 +38,25 @@
 - Event Store includes PostgreSQL starter transitively
 - Admin UI includes Event Store starter transitively
 
+### Web stack: WebMvc, not WebFlux
+
+The PostgreSQL and MongoDB starters are **blocking**: their components use JDBC (through `Jdbi`) and a blocking `MongoTemplate`. A `UnitOfWork` and a Spring transaction are bound to the thread that started them (`ThreadLocal`/`TransactionSynchronizationManager`), so they do not follow a reactive chain from one thread to the next.
+
+**Default: Spring WebMvc with virtual threads** (`spring.threads.virtual.enabled=true`). Request handling is then plain blocking code, and `@Transactional`/`usingUnitOfWork(...)` work as everywhere else in these docs.
+
+**Under WebFlux**, run the whole UnitOfWork as one blocking call on `boundedElastic`, never split it across operators:
+
+```java
+@PostMapping("/orders/{id}/confirm")
+Mono<OrderConfirmation> confirm(@PathVariable OrderId id) {
+    return Mono.fromCallable(() -> unitOfWorkFactory.withUnitOfWork(() ->
+                   orders.confirm(id)))                         // repository, event store, queue: one thread, one transaction
+               .subscribeOn(Schedulers.boundedElastic());
+}
+```
+
+A UnitOfWork opened in one operator and used in another (`flatMap`, `publishOn`, a second `fromCallable`) runs on another thread, where the UnitOfWork is not active: work there opens its own transaction or fails with `NoActiveUnitOfWorkException`. The Admin API starter requires WebMvc.
+
 ---
 
 ## Auto-Configured Beans
