@@ -633,9 +633,10 @@ public class EventStoreConfiguration {
      * this backs off from.
      * <p>
      * The mapper is the one {@link EssentialsJSONEventSerializers#create()} builds, except that
-     * {@code essentials.immutable-jackson-module-enabled=false} leaves {@code EssentialsImmutableJacksonModule} out of it,
-     * as it does out of the web mapper. That changes nothing that is written, only what can be read: a type Jackson cannot
-     * construct then fails to deserialize instead of being instantiated through Objenesis.
+     * {@code essentials.immutable-jackson-module-enabled=false} (default {@code true}) leaves {@code EssentialsImmutableJacksonModule}
+     * out of it. That changes nothing that is written, only what can be read: a type Jackson cannot construct then fails
+     * to deserialize instead of being instantiated through Objenesis. Spring Boot's web mapper is separate: it gets the
+     * module only with an explicit {@code true}.
      *
      * @param properties the Essentials components properties
      * @return the {@link JSONEventSerializer} responsible for serializing/deserializing the raw Java events to and from JSON

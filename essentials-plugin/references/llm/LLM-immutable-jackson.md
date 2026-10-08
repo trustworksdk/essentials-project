@@ -84,7 +84,9 @@ ObjectMapper mapper = EssentialsImmutableJacksonModule.createObjectMapper(
 
 For persistence use `EssentialsObjectMappers.createJackson3ObjectMapper(...)` / `createJSONSerializer()` (foundation),
 which registers this module and carries the frozen wire-format configuration. The Essentials Spring Boot starters
-already define the module bean.
+register it on their persistence serializer by default (`essentials.immutable-jackson-module-enabled=false` turns that
+off) and define the module bean - which puts it on Boot's web mapper - only when that property is set to `true`
+explicitly.
 
 ### ImmutableObjectsValueInstantiator
 

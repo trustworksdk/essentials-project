@@ -85,26 +85,33 @@ public class EssentialsComponentsProperties {
     private final DurableQueues                         durableQueues                    = new DurableQueues();
     private final LifeCycleProperties                   lifeCycles                       = new LifeCycleProperties();
     private final MicrometerTaggingProperties           tracingProperties                = new MicrometerTaggingProperties();
+    /**
+     * Register EssentialsImmutableJacksonModule (Objenesis fallback for types Jackson cannot construct; reading only). The
+     * default true applies to the Essentials persistence serializer; Spring Boot's web JsonMapper gets the module only
+     * when this is set to true explicitly. false leaves it out of both.
+     */
     private       boolean                               immutableJacksonModuleEnabled    = true;
     private final ReactiveProperties                    reactive                         = new ReactiveProperties();
     private       boolean                               reactiveBeanPostProcessorEnabled = true;
     private final EssentialsComponentsMetricsProperties metrics                          = new EssentialsComponentsMetricsProperties();
 
     /**
-     * Should the EssentialsImmutableJacksonModule be included in the ObjectMapper configuration - default is true<br>
-     * Setting this value to false will not include the EssentialsImmutableJacksonModule, in the ObjectMapper configuration, even if Objenesis is on the classpath
+     * Should the EssentialsImmutableJacksonModule (Objenesis fallback for types Jackson cannot construct) be registered -
+     * default is true for the persistence mapper (the Essentials {@code JSONSerializer}/{@code JSONEventSerializer}).<br>
+     * Spring Boot's web {@code JsonMapper} gets the module only when this is set to {@code true} explicitly, because there
+     * it changes HTTP request binding. {@code false} leaves it out of both, even if Objenesis is on the classpath; only
+     * reading changes, the JSON written is identical.
      *
-     * @return Should the EssentialsImmutableJacksonModule be included in the ObjectMapper configuration
+     * @return Should the EssentialsImmutableJacksonModule be registered (persistence mapper; web mapper only when set explicitly)
      */
     public boolean isImmutableJacksonModuleEnabled() {
         return immutableJacksonModuleEnabled;
     }
 
     /**
-     * Should the EssentialsImmutableJacksonModule be included in the ObjectMapper configuration - default is true<br>
-     * Setting this value to false will not include the EssentialsImmutableJacksonModule, in the ObjectMapper configuration, even if Objenesis is on the classpath
+     * Should the EssentialsImmutableJacksonModule be registered - see {@link #isImmutableJacksonModuleEnabled()}
      *
-     * @param immutableJacksonModuleEnabled Should the EssentialsImmutableJacksonModule be included in the ObjectMapper configuration
+     * @param immutableJacksonModuleEnabled Should the EssentialsImmutableJacksonModule be registered (persistence mapper; web mapper only when set explicitly)
      */
     public void setImmutableJacksonModuleEnabled(boolean immutableJacksonModuleEnabled) {
         this.immutableJacksonModuleEnabled = immutableJacksonModuleEnabled;

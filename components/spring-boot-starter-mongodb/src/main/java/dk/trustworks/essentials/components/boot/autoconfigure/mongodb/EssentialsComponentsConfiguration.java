@@ -170,12 +170,19 @@ public class EssentialsComponentsConfiguration {
 
     /**
      * Essential Immutable Jackson module which adds support for serializing and deserializing objects with no {@link JsonCreator} or a default constructor
+     * <p>
+     * Published as a bean so Spring Boot adds it to the application's auto-configured (web) {@code JsonMapper}, and
+     * therefore created only when {@code essentials.immutable-jackson-module-enabled=true} is set <em>explicitly</em>
+     * (the 0.60.0 behaviour). On the web mapper the module changes HTTP request binding: a request body Jackson cannot
+     * construct gets its fields left {@code null} through Objenesis instead of failing with a 400. The property's
+     * default {@code true} applies to the persistence {@link JSONSerializer} only - see {@link #jsonSerializer(EssentialsComponentsProperties)}.
      *
      * @return the Essential Immutable Jackson module which adds support for serializing and deserializing objects with no {@link JsonCreator} or a default constructor
      */
     @Bean
     @ConditionalOnClass(name = "org.objenesis.ObjenesisStd")
-    @ConditionalOnProperty(prefix = "essentials", name = "immutable-jackson-module-enabled", havingValue = "true", matchIfMissing = true)
+    // No matchIfMissing: the default true is the persistence mapper's, not the web mapper's (N-11)
+    @ConditionalOnProperty(prefix = "essentials", name = "immutable-jackson-module-enabled", havingValue = "true")
     @ConditionalOnMissingBean
     public EssentialsImmutableJacksonModule essentialsImmutableJacksonModule() {
         return new EssentialsImmutableJacksonModule();
@@ -447,9 +454,11 @@ public class EssentialsComponentsConfiguration {
      * application that needs extra modules for persistence defines its own {@link JSONSerializer} bean, which this
      * backs off from.
      * <p>
-     * {@code essentials.immutable-jackson-module-enabled=false} leaves {@code EssentialsImmutableJacksonModule} out of
-     * this mapper too, not only out of the web mapper. That changes nothing that is written, only what can be read: a
-     * type Jackson cannot construct then fails to deserialize instead of being instantiated through Objenesis.
+     * {@code EssentialsImmutableJacksonModule} is registered on this mapper unless
+     * {@code essentials.immutable-jackson-module-enabled=false} (default {@code true}). That changes nothing that is
+     * written, only what can be read: without it a type Jackson cannot construct fails to deserialize instead of being
+     * instantiated through Objenesis. The web mapper gets the module only with an explicit {@code true} - see
+     * {@link #essentialsImmutableJacksonModule()}.
      *
      * @param properties the auto configure properties
      * @return the {@link JSONSerializer} responsible for serializing/deserializing the raw Java events to and from JSON

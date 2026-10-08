@@ -67,7 +67,7 @@ See [spring-boot-starter-postgresql README](../components/spring-boot-starter-po
 
 **Serialization:**
 - `EssentialTypesJacksonModule` - Jackson 3 support for types (bean, so Spring Boot also registers it on its **web** `JsonMapper`)
-- `EssentialsImmutableJacksonModule` - Immutable support; a bean (so also on the web mapper) unless `essentials.immutable-jackson-module-enabled=false`, which removes it from the persistence mapper too (0.60.1)
+- `EssentialsImmutableJacksonModule` - Immutable support. On the persistence mapper by default (`essentials.immutable-jackson-module-enabled=false` removes it); a bean - and so on Boot's web mapper - only with an explicit `essentials.immutable-jackson-module-enabled=true`, because on the web mapper it changes HTTP request binding (0.60.1)
 - `JSONSerializer` - `EssentialsObjectMappers.createJSONSerializer()` (Jackson 3; when JSONEventSerializer not on classpath). Deliberately does **not** collect `JacksonModule` beans from the context — those are usually web-layer modules and would silently change the persisted format. Need extra persistence modules? Define your own `JSONSerializer` bean; the starter backs off
 - Wire-format check (0.60.1): every `JSONSerializer`/`JSONEventSerializer` bean backed by a `Jackson3JSONSerializer`, yours included, is probed at creation with `EssentialsObjectMappers.findWireFormatDeviations(mapper)`; a mapper that does not reproduce the persisted format logs one ERROR banner per bean naming each deviation. `essentials.json.wire-format-check=warn|fail|off` (default `warn`) - see [JSON Wire-Format Check](#json-wire-format-check). Build your mapper with `EssentialsObjectMappers.createJackson3ObjectMapper(extraModules...)` and it passes
 
@@ -286,7 +286,7 @@ Prefix: `essentials`
 | `life-cycles.start-life-cycles` | `true` | Auto-start Lifecycle beans |
 | `life-cycles.shutdown-timeout` | `10s` | Shutdown budget for stopping Lifecycle beans; bounded, best-effort DB cleanup during shutdown |
 | `reactive-bean-post-processor-enabled` | `true` | Auto-register handlers |
-| `immutable-jackson-module-enabled` | `true` | `EssentialsImmutableJacksonModule` (Objenesis fallback for types Jackson cannot construct) in both the web `JsonMapper` (as a bean, when Objenesis is present) and the persistence `JSONSerializer`/`JSONEventSerializer`. `false` removes it from both; reading only - the JSON written is identical. Before 0.60.1 the default did not apply (bean only when set explicitly) and the persistence mapper ignored the property |
+| `immutable-jackson-module-enabled` | `true` | `EssentialsImmutableJacksonModule` (Objenesis fallback for types Jackson cannot construct; reading only - the JSON written is identical). The default `true` applies to the persistence `JSONSerializer`/`JSONEventSerializer` only. Boot's web `JsonMapper` gets the module (as a bean, when Objenesis is present) only when the property is set to `true` explicitly - there it makes a request body Jackson cannot construct bind with `null` fields instead of failing with a 400. `false` leaves it out of both. Before 0.60.1 the persistence mapper ignored the property |
 
 #### JSON Wire-Format Check
 

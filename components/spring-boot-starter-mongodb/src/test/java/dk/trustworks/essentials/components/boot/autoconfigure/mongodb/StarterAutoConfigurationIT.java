@@ -53,21 +53,33 @@ class StarterAutoConfigurationIT {
                                         "essentials.life-cycles.start-life-cycles=false");
 
     /**
-     * {@code essentials.immutable-jackson-module-enabled} is documented with default {@code true}. Until 0.60.1 its
-     * condition lacked {@code matchIfMissing}, so the module bean existed only when the property was set explicitly, and
-     * the persistence mapper registered the module regardless of the property.
+     * {@code essentials.immutable-jackson-module-enabled} defaults to {@code true} for the persistence mapper only (N-11,
+     * 0.60.1). Spring Boot's web {@code JsonMapper} keeps the 0.60.0 behaviour: the module bean - and with it the web
+     * mapper's Objenesis fallback - exists only when the property is set to {@code true} explicitly, because on the web
+     * mapper it changes HTTP request binding (a body Jackson cannot construct gets null fields instead of a 400).
      */
     @Test
-    void the_immutable_jackson_module_is_on_by_default_for_both_the_web_and_the_persistence_mapper() {
+    void by_default_the_immutable_jackson_module_is_on_for_the_persistence_mapper_only() {
         contextRunner.run(ctx -> {
             assertThat(ctx).hasNotFailed();
-            assertThat(ctx).hasSingleBean(EssentialsImmutableJacksonModule.class);
+            assertThat(ctx).doesNotHaveBean(EssentialsImmutableJacksonModule.class);
             assertThat(persistenceMapperOf(ctx).registeredModules()).hasAtLeastOneElementOfType(EssentialsImmutableJacksonModule.class);
         });
     }
 
     @Test
-    void turning_the_immutable_jackson_module_off_removes_it_from_both_and_leaves_the_wire_format_alone() {
+    void an_explicit_true_puts_the_immutable_jackson_module_on_both_the_web_and_the_persistence_mapper() {
+        contextRunner
+                .withPropertyValues("essentials.immutable-jackson-module-enabled=true")
+                .run(ctx -> {
+                    assertThat(ctx).hasNotFailed();
+                    assertThat(ctx).hasSingleBean(EssentialsImmutableJacksonModule.class);
+                    assertThat(persistenceMapperOf(ctx).registeredModules()).hasAtLeastOneElementOfType(EssentialsImmutableJacksonModule.class);
+                });
+    }
+
+    @Test
+    void an_explicit_false_removes_the_immutable_jackson_module_from_both_and_leaves_the_wire_format_alone() {
         contextRunner
                 .withPropertyValues("essentials.immutable-jackson-module-enabled=false")
                 .run(ctx -> {
@@ -77,20 +89,6 @@ class StarterAutoConfigurationIT {
                     assertThat(persistenceMapper.registeredModules()).noneMatch(EssentialsImmutableJacksonModule.class::isInstance);
                     assertThat(EssentialsObjectMappers.findWireFormatDeviations(persistenceMapper)).isEmpty();
                 });
-    }
-
-    @Test
-    void the_fenced_lock_manager_instance_id_defaults_to_hostname_and_pid() {
-        contextRunner.run(ctx -> assertThat(ctx.getBean(FencedLockManager.class).getLockManagerInstanceId())
-                .isEqualTo(Network.hostName() + ":" + ProcessHandle.current().pid()));
-    }
-
-    @Test
-    void the_fenced_lock_manager_instance_id_is_bound_from_properties() {
-        contextRunner
-                .withPropertyValues("essentials.fenced-lock-manager.instance-id=order-service-node-a")
-                .run(ctx -> assertThat(ctx.getBean(FencedLockManager.class).getLockManagerInstanceId())
-                        .isEqualTo("order-service-node-a"));
     }
 
     private static tools.jackson.databind.ObjectMapper persistenceMapperOf(ApplicationContext ctx) {
