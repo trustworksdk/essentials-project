@@ -205,6 +205,13 @@ public class EventSourcingConfig {
 }
 ```
 
+Each command type must be handled by exactly one decider on the `CommandBus`, or every send of it fails
+(`MultipleCommandHandlersFoundException`, or the adapter's "Multiple deciders found"). Since 0.60.1 the configurator
+WARNs at construction when a command type a decider declares (`implements EventStreamDecider<CreateOrder, …>`, or the
+concrete permitted subtypes of a sealed one) is already handled - by another adapter of this or an earlier configurator
+on the same bus, or by a second decider of the same adapter. It does not fail: an overlap that is never sent keeps
+working. The adapter's `toString()` names its `AggregateType` and deciders, so the exception's handler list is readable.
+
 ### Command Sending
 
 **Dependencies from other modules**:

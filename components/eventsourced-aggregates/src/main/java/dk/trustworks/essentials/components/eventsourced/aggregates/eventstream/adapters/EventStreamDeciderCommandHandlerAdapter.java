@@ -18,6 +18,7 @@ package dk.trustworks.essentials.components.eventsourced.aggregates.eventstream.
 
 import dk.trustworks.essentials.components.eventsourced.aggregates.eventstream.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.*;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.AggregateType;
 import dk.trustworks.essentials.reactive.command.CommandHandler;
 import org.slf4j.*;
 
@@ -272,5 +273,15 @@ public class EventStreamDeciderCommandHandlerAdapter implements CommandHandler {
      */
     public List<EventStreamDecider<?, ?>> getDeciders() {
         return Collections.unmodifiableList(deciders);
+    }
+
+    /**
+     * Names the {@link AggregateType} and the deciders - this is what a {@code MultipleCommandHandlersFoundException}
+     * or {@code NoCommandHandlerFoundException} from the {@code CommandBus} lists
+     */
+    @Override
+    public String toString() {
+        return "EventStreamDeciderCommandHandlerAdapter{aggregateType=" + configuration.aggregateType() +
+                ", deciders=" + deciders.stream().map(decider -> decider.getClass().getName()).toList() + "}";
     }
 }

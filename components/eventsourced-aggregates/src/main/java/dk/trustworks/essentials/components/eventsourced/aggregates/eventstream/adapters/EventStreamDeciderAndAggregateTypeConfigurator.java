@@ -19,9 +19,10 @@ package dk.trustworks.essentials.components.eventsourced.aggregates.eventstream.
 import dk.trustworks.essentials.components.eventsourced.aggregates.eventstream.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.AggregateType;
-import dk.trustworks.essentials.reactive.command.CommandBus;
+import dk.trustworks.essentials.reactive.command.*;
 import org.slf4j.*;
 
+import java.lang.reflect.*;
 import java.util.*;
 import java.util.stream.Collectors;
 
@@ -109,6 +110,13 @@ import static dk.trustworks.essentials.shared.MessageFormatter.msg;
 public class EventStreamDeciderAndAggregateTypeConfigurator {
 
     private static final Logger log = LoggerFactory.getLogger(EventStreamDeciderAndAggregateTypeConfigurator.class);
+    /**
+     * The adapters every configurator registered, per {@link CommandBus} (by identity, weakly held) - so a configurator
+     * can tell that a command type it registers is already handled by an adapter another configurator registered. The
+     * {@link CommandBus} API cannot list its handlers
+     */
+    private static final Map<CommandBus, List<EventStreamDeciderCommandHandlerAdapter>> ADAPTERS_REGISTERED_PER_COMMAND_BUS =
+            Collections.synchronizedMap(new WeakHashMap<>());
 
     private final ConfigurableEventStore<?>                     eventStore;
     private final CommandBus                                    commandBus;
@@ -192,7 +200,8 @@ public class EventStreamDeciderAndAggregateTypeConfigurator {
         // Group deciders by aggregate type configuration
         var decidersByAggregateType = groupDecidersByAggregateType();
 
-        // Create and register command handler adapters for each aggregate type
+        // Create a command handler adapter for each aggregate type
+        var adapters = new ArrayList<EventStreamDeciderCommandHandlerAdapter>();
         for (var entry : decidersByAggregateType.entrySet()) {
             var configuration = entry.getKey();
             var typeDeciders  = entry.getValue();
@@ -202,15 +211,136 @@ public class EventStreamDeciderAndAggregateTypeConfigurator {
                      typeDeciders.size(),
                      typeDeciders.stream().map(d -> d.getClass().getSimpleName()).collect(Collectors.joining(", ")));
 
-            var adapter = new EventStreamDeciderCommandHandlerAdapter(eventStore, configuration, typeDeciders);
+            adapters.add(new EventStreamDeciderCommandHandlerAdapter(eventStore, configuration, typeDeciders));
+        }
+
+        // Before registering: a command type handled twice otherwise surfaces only at its first send
+        warnAboutCommandTypesHandledMoreThanOnce(adapters);
+
+        // Register the command handler adapters
+        for (var adapter : adapters) {
             createdAdapters.add(adapter);
             commandBus.addCommandHandler(adapter);
+            ADAPTERS_REGISTERED_PER_COMMAND_BUS.computeIfAbsent(commandBus, bus -> new ArrayList<>()).add(adapter);
 
             log.info("Successfully registered EventStreamDeciderCommandHandlerAdapter for aggregate type '{}'",
-                     configuration.aggregateType());
+                     adapter.getConfiguration().aggregateType());
         }
 
         log.info("============================================================================================================================================================================================");
+    }
+
+    /**
+     * WARN for every command type one of the new adapters' deciders declares that more than one command handler would
+     * handle: two adapters (of this configurator, or of another configurator on the same {@link CommandBus}, still
+     * registered there), or two deciders within one adapter. Every send of such a command fails - with a
+     * {@link MultipleCommandHandlersFoundException} from the {@link CommandBus}, or the adapter's "Multiple deciders found".
+     * <p>
+     * A WARN, not a failure: an overlap that is never sent works today, and rejecting it at startup would break such a
+     * setup in a patch release.
+     * <p>
+     * The command types checked are those a decider declares as its {@code COMMAND} type argument
+     * ({@code implements EventStreamDecider<CreateOrder, OrderEvent>}), or - for a sealed one - its concrete permitted
+     * subtypes, as far as the decider {@link EventStreamDecider#canHandle(Class) can handle} them. A decider whose type
+     * argument cannot be resolved (a lambda, a generic base class) is not checked; neither are command handlers other
+     * than {@link EventStreamDeciderCommandHandlerAdapter}s, which the {@link CommandBus} API cannot list.
+     *
+     * @param newAdapters the adapters about to be registered
+     */
+    private void warnAboutCommandTypesHandledMoreThanOnce(List<EventStreamDeciderCommandHandlerAdapter> newAdapters) {
+        try {
+            var allAdapters = new ArrayList<CommandHandler>();
+            synchronized (ADAPTERS_REGISTERED_PER_COMMAND_BUS) {
+                var earlier = ADAPTERS_REGISTERED_PER_COMMAND_BUS.get(commandBus);
+                if (earlier != null) {
+                    // An adapter removed from the bus since no longer handles anything
+                    earlier.removeIf(adapter -> !commandBus.hasCommandHandler(adapter));
+                    allAdapters.addAll(earlier);
+                }
+            }
+            allAdapters.addAll(newAdapters);
+
+            var commandTypesChecked = new HashSet<Class<?>>();
+            for (var adapter : newAdapters) {
+                for (var decider : adapter.getDeciders()) {
+                    for (var commandType : declaredCommandTypes(decider)) {
+                        if (commandTypesChecked.add(commandType)) {
+                            warnIfHandledMoreThanOnce(commandType, adapter, allAdapters);
+                        }
+                    }
+                }
+            }
+        } catch (RuntimeException e) {
+            // A diagnostic must never fail the configuration
+            log.debug("Could not check the command types of the EventStreamDeciders for duplicate registrations", e);
+        }
+    }
+
+    private void warnIfHandledMoreThanOnce(Class<?> commandType, EventStreamDeciderCommandHandlerAdapter adapter, List<CommandHandler> allAdapters) {
+        var handlers = allAdapters.stream().filter(handler -> handler.canHandle(commandType)).toList();
+        if (handlers.size() > 1) {
+            log.warn("Command type '{}' would be handled by {} command handlers: {}. The {} fails every send of it with a {} - " +
+                             "register each command type with exactly one EventStreamDecider (check the deciders' canHandle and the " +
+                             "EventStreamDeciderAndAggregateTypeConfigurators sharing this CommandBus)",
+                     commandType.getName(),
+                     handlers.size(),
+                     handlers,
+                     commandBus.getClass().getSimpleName(),
+                     MultipleCommandHandlersFoundException.class.getSimpleName());
+            return;
+        }
+        var deciders = adapter.getDeciders().stream().filter(candidate -> candidate.canHandle(commandType)).toList();
+        if (deciders.size() > 1) {
+            log.warn("Command type '{}' would be handled by {} deciders of {}: {}. Every send of it fails with 'Multiple deciders found' - " +
+                             "register each command type with exactly one EventStreamDecider",
+                     commandType.getName(),
+                     deciders.size(),
+                     adapter,
+                     deciders.stream().map(candidate -> candidate.getClass().getName()).toList());
+        }
+    }
+
+    /**
+     * @return the concrete command types the decider declares and {@link EventStreamDecider#canHandle(Class) can handle} -
+     * see {@link #warnAboutCommandTypesHandledMoreThanOnce(List)}; empty when its {@code COMMAND} type argument cannot be resolved
+     */
+    static Set<Class<?>> declaredCommandTypes(EventStreamDecider<?, ?> decider) {
+        var commandTypes = new LinkedHashSet<Class<?>>();
+        resolveCommandTypeArgument(decider.getClass()).ifPresent(declared -> collectConcreteTypes(declared, commandTypes, new HashSet<>()));
+        commandTypes.removeIf(commandType -> !decider.canHandle(commandType));
+        return commandTypes;
+    }
+
+    private static Optional<Class<?>> resolveCommandTypeArgument(Class<?> deciderType) {
+        for (Class<?> type = deciderType; type != null && type != Object.class; type = type.getSuperclass()) {
+            for (var genericInterface : type.getGenericInterfaces()) {
+                if (genericInterface instanceof ParameterizedType parameterized && parameterized.getRawType() == EventStreamDecider.class) {
+                    var commandTypeArgument = parameterized.getActualTypeArguments()[0];
+                    if (commandTypeArgument instanceof Class<?> commandType) {
+                        return Optional.of(commandType);
+                    }
+                    if (commandTypeArgument instanceof ParameterizedType parameterizedCommandType && parameterizedCommandType.getRawType() instanceof Class<?> commandType) {
+                        return Optional.of(commandType);
+                    }
+                    return Optional.empty();
+                }
+            }
+        }
+        return Optional.empty();
+    }
+
+    private static void collectConcreteTypes(Class<?> type, Set<Class<?>> concreteTypes, Set<Class<?>> visited) {
+        if (type == Object.class || !visited.add(type)) {
+            return;
+        }
+        if (!type.isInterface() && !Modifier.isAbstract(type.getModifiers())) {
+            concreteTypes.add(type);
+        }
+        if (type.isSealed()) {
+            for (var permittedSubclass : type.getPermittedSubclasses()) {
+                collectConcreteTypes(permittedSubclass, concreteTypes, visited);
+            }
+        }
     }
 
     /**
