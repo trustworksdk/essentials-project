@@ -9,8 +9,8 @@ _Add an entry in the same commit as the change. Cite the commit or PR. Write it 
 changes for them, and what they must do, if anything. Purely internal refactors, test-only changes and CI
 plumbing that no user sees go in §7 at most, as one line._
 
-**So far:** no breaking change, four framework changes with a behaviour change (§1.1), two additive features
-(§2), plugin releases `0.60.0-6` and `0.60.0-7`, and example and tooling updates. Nothing here requires a migration
+**So far:** no breaking change, seven framework changes with a behaviour change (§1.1), additive features
+(§2), bug fixes (§3), plugin releases `0.60.0-6` and `0.60.0-7`, and example and tooling updates. Nothing here requires a migration
 step. The persisted
 format changes for one shape only, back to what 0.50 wrote: a type with a public `is`-getter (§1.1.2).
 
@@ -144,6 +144,29 @@ Three new WARN log lines. Nothing else changes, but each points at a setup that 
   redeliveries, so the first failure dead-letters the message. The 0.61 release will throw
   `IllegalArgumentException`. (QL-3, `5537eae3`)
 
+#### 1.1.6 An empty `LongRange` reads nothing
+
+`LongRange.EMPTY_RANGE` / `LongRange.empty()` was `(0,0)`, which covers order 0. Passed to `fetchStream` or
+`loadEventsByGlobalOrder`, it returned the first event. It is now `(0,-1)` and covers nothing, and an empty range
+returns `Optional.empty()` / `Stream.empty()` with no database round trip. The check runs after the interceptors, so
+an interceptor can still replace the range. Extra global orders passed together with an empty range are still read.
+New: `LongRange.isEmpty()`, true for any closed range whose end is below its start. (N-10, `2dd7f81b`)
+
+#### 1.1.7 The subscriber lag gauge is recorded without tracing, and reads one higher
+
+`DurableSubscriptions_EventOrder_Diff` (`SubscriberGlobalOrderMicrometerMonitor`):
+
+- **Registered whenever a `MeterRegistry` bean is present.** Before, only with `management.tracing.enabled=true`,
+  so most deployments never had it.
+- **Off by one, fixed.** It now reads head − resume point + 1, so one unread event reads 1; it read 0. An empty
+  table reads 0. Alert thresholds tuned to the old value move up by one.
+- **A resume point ahead of the head** (the sign of a reset or restored database, where the subscriber silently
+  skips events) still reads 0, and now logs a WARN once per episode.
+- The monitor no longer throws; an escaping exception used to cancel every monitor's schedule. The per-interval
+  "Subscriber lag found" line moved from INFO to DEBUG.
+
+(N-9, ES-4, ES-7, `75076149`)
+
 ---
 
 ## 2. New features
@@ -155,6 +178,10 @@ Three new WARN log lines. Nothing else changes, but each points at a setup that 
   whose id is a Java `CharSequenceType`. Until now only a raw-typed `create(...)` compiled from Java, and it failed
   at runtime. (DD-3, `47285813`)
 
+- **Schema descriptions:** `SchemaChange.describedAs(String)`, `description()` and `describeObject()`,
+  `SchemaChangeSet.describe()`/`describeObjects()`, and `PostgresqlEmitSchemaApplier.exitTriggered()`/
+  `isExitTriggered()`. A `SchemaChange` built with the 4-argument constructor keeps working; the description is not
+  part of the checksum, so no recorded schema history changes. (RN-5, `07d23d7d`)
 - **`essentials.durable-queues.require-active-unit-of-work-for-enqueue`** (default `false`), also
   `setRequireActiveUnitOfWorkForEnqueue(...)` on the PostgreSQL, MongoDB and shard-owned builders. When `true`, an
   enqueue with no active `UnitOfWork` or Spring transaction throws `NoActiveUnitOfWorkException`, so an `Outbox`
@@ -175,6 +202,9 @@ The plugin's features are in [§4](#4-the-essentials-claude-code-plugin).
 | Document DB | `getById` threw a bare `NullPointerException` when nothing was found. It now throws `DocumentEntityNotFoundException`, naming the entity class and the id. It extends `NullPointerException`, so code that caught the old NPE still works | DD-5, `1b828ae2` |
 | Document DB | Entity property names and JSON path segments were checked against the SQL reserved-keyword list, recursively and into JDK types, so ordinary names (`order`, `user`, `key`, `path`, `Optional.value`, `URI.path`) were rejected without saying why. They are now checked only for allowed characters and a 63-character maximum; they reach SQL only quoted or bound. Table names still reject reserved words, and that error now says "is a reserved SQL keyword" | DD-2, `ca2b2662` |
 | Durable queues (shard-owned) | `ShardOwnedDurableQueues` joined only an Essentials `UnitOfWork` that was already bound. Under a plain Spring `@Transactional` or `TransactionTemplate`, `Outbox.sendMessage`, `sendAndDontWait` and `queueMessage` committed on their own connection and survived a rollback, so the transactional outbox was not transactional on this engine. The enqueue now joins the Spring transaction | N-15, `4248f0b3` |
+| Event store | When creating or validating an aggregate type's event-stream table failed, the type stayed registered without a table: a retry did nothing and later appends failed with a bare "relation does not exist". The type is now registered only once its table is ready; the exception propagates and a retry runs initialisation again. Concurrent registrations of one type initialise it once | N-17, `0b572aaa` |
+| Schema harness | In `essentials.schema.mode=validate`, an event-stream table error now names the `AggregateType` as well as the table, and says to register the type at startup and re-run `emit`. The `emit` script starts with a `-- Contents:` header listing each module's tables and their aggregate types, the emit log line lists the same, and a registration that arrives after the emit exit was triggered logs a WARN | RN-5, `07d23d7d` |
+| Command bus | Two configurators registering the same command type failed only at the first `send`, with a `MultipleCommandHandlersFoundException` listing `EventStreamDeciderCommandHandlerAdapter@hash` entries. The adapter's `toString()` now names its `AggregateType` and deciders, and `EventStreamDeciderAndAggregateTypeConfigurator` WARNs at construction when a command type it registers is already handled by one of its adapters on that bus | CB-3, `7c0183fa` |
 | Durable queues (MongoDB) | Handing such a message back on an interrupted thread used to fail silently: the MongoDB driver refuses a connection on an interrupted thread (`Interrupted waiting for lock`), the failure was logged at DEBUG, and the message stayed marked as being delivered until the stuck-message reset. The hand-back now clears the interrupt flag for its write and restores it afterwards | `6ba568b5` |
 
 ---

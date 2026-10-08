@@ -80,68 +80,6 @@ Bug fixes only; no API breaks.
   and through the `DurableQueues` adapter, plus the `postgresql-queue` and MongoDB counterparts. It must fail on the
   current code and pass after the fix.
 
-### Schema harness
-
-**Register an aggregate type only after its storage is initialised (N-17, RN-5).**
-- **Problem:** `SeparateTablePerAggregateTypePersistenceStrategy.addAggregateEventStreamConfiguration` stores the
-  configuration before it creates or validates the event-stream table. The check-then-put is also not atomic under
-  concurrent registration.
-- **Consequence:** if initialisation throws (a schema mismatch in `validate` mode, a DDL error), the type stays
-  registered without a table. A retry then does nothing, and later appends fail with a bare "relation does not
-  exist".
-- **Fix:** register the type only once initialisation succeeds, using `computeIfAbsent` or removing the entry on
-  failure.
-
-**Name the `AggregateType` in the validate error (RN-5).** In `essentials.schema.mode=validate`, an aggregate type
-that was missing from the emitted script fails with a message that names only the table. The operator cannot tell
-which type was registered too late, for example from an `ApplicationRunner` or a lazy bean. **Fix:** name the
-`AggregateType` and its table, and say to register the type at startup and re-run `emit`.
-
-**List the aggregate types in the `emit` output (RN-5).** The script written by `essentials.schema.mode=emit` and
-its log line do not say which aggregate types and tables they include. Types registered after the singleton phase
-(runners, `@Lazy` beans, on-demand repositories) are silently missing. **Fix:** list the types and tables in the
-script header and in the log line, and WARN when a registration arrives after the exit has been triggered.
-
-**Test the real `emit` exit path (RN-5).** Every schema-mode IT sets `essentials.schema.emit.exit=false`. So the real
-"write the script and exit with code 0" path, and the default output file `essentials-schema.sql` in the working
-directory, are untested. **Fix:** add an IT that runs the real exit path, for example in a forked JVM, and asserts
-the exit code and where the file lands.
-
-### Event store
-
-**Subscriber lag gauge (N-9, ES-4, ES-7).** `SubscriberGlobalOrderMicrometerMonitor` computes lag as
-`max(0, highestPersisted - resumeFrom)`. It has three problems:
-- It is off by one, because the resume point is the next order to read. One unprocessed event reads as lag 0.
-- The clamp hides a subscriber whose resume point is *ahead* of the head. That is the sign of a reset or restored
-  database, and such a subscriber silently skips events.
-- It is registered only when `management.tracing.enabled=true`, so most deployments never get it.
-
-**Fix:** correct the arithmetic, register the monitor whenever a `MeterRegistry` bean is present, and WARN when a
-resume point is ahead of the head.
-
-**An "empty" `LongRange` returns the first event (N-10).**
-- **Problem:** `LongRange.EMPTY_RANGE` is `(0,0)`. It covers order 0, the first event, and it equals
-  `LongRange.only(0)`, which the event store itself uses for "only the first event".
-- **Consequence:** an empty range passed to `fetchStream` or `loadEventsByGlobalOrder` returns the first event
-  instead of nothing.
-- **Fix:**
-  - Represent empty as `toInclusive < fromInclusive` (`EMPTY_RANGE = (0, -1)`), and add `LongRange.isEmpty()`.
-  - Short-circuit an empty range where the `FetchStream`/`LoadEventsByGlobalOrder` operation is executed, after the
-    interceptors have run (an interceptor can replace the range). Return `Optional.empty()` or `Stream.empty()` with
-    no database round trip.
-  - Update `LongRangeTest.test_empty_range` and add a release-note line.
-- The typed ranges in P2 build on this.
-
-### Command bus
-
-**A duplicate command registration fails only at first send (CB-3).**
-- **Problem:** when two `EventStreamDeciderAndAggregateTypeConfigurator`s register handlers for the same command
-  type, nothing fails until the first `send`.
-- **Consequence:** that `send` throws `MultipleCommandHandlersFoundException`, listing two unhelpful
-  `EventStreamDeciderCommandHandlerAdapter@hash` entries.
-- **Fix:** give the adapter a `toString()` that names its aggregate type and deciders. Make the configurator fail at
-  construction when a command type it would register is already handled.
-
 ### `MultiTableChangeListener`
 
 **Robustness fixes (LN-2 to LN-6, N-6, N-7).** `MultiTableChangeListener` fans PostgreSQL LISTEN/NOTIFY out to the
@@ -208,6 +146,11 @@ Additive features.
 - **Redelivery-policy builders reject an incomplete policy (QL-3).** Unset delays, a multiplier below 1.0 or unset,
   and a `maximumNumberOfRedeliveries` never set explicitly. 0.60.1 logs one WARN naming each setter; 0.61 throws
   `IllegalArgumentException`.
+- **A command type registered twice fails at construction (CB-3).** 0.60.1 WARNs when an
+  `EventStreamDeciderAndAggregateTypeConfigurator` registers a command type that another of its adapters already
+  handles. A complete check needs a way to list a `CommandBus`'s handlers, e.g. a
+  `findCommandHandlersCapableOfHandling(Class)` default method; today the configurator tracks its own adapters per
+  bus.
 
 ### Event store
 
@@ -233,7 +176,7 @@ timeout. Under load, every such timeout becomes a source of flakiness that nothi
   - Mark the `LongRange` consumer entry points and `GlobalEventOrder.rangeFrom(...)` `@Deprecated`, not
     `forRemoval`.
   - The interceptor SPI stays on `LongRange` until the next major.
-- Builds on the empty-range fix in P1.
+- Builds on the empty-range fix (`LongRange.isEmpty()`, shipped in 0.60.1).
 
 **A state-based decider with snapshots (ES-9).** `EventStreamDeciderCommandHandlerAdapter` fetches and replays an
 aggregate's whole event stream on every command and cannot use snapshots. Long-lived streams therefore get slower
