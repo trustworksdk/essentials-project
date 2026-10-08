@@ -32,6 +32,7 @@ public final class LinearBackoffBuilder {
     private Duration                    redeliveryDelay;
     private Duration                    maximumFollowupRedeliveryDelayThreshold;
     private int                         maximumNumberOfRedeliveries;
+    private boolean                     maximumNumberOfRedeliveriesSet;
     private MessageDeliveryErrorHandler deliveryErrorHandler = MessageDeliveryErrorHandler.alwaysRetry();
 
 
@@ -47,6 +48,7 @@ public final class LinearBackoffBuilder {
 
     public LinearBackoffBuilder setMaximumNumberOfRedeliveries(int maximumNumberOfRedeliveries) {
         this.maximumNumberOfRedeliveries = maximumNumberOfRedeliveries;
+        this.maximumNumberOfRedeliveriesSet = true;
         return this;
     }
 
@@ -55,10 +57,28 @@ public final class LinearBackoffBuilder {
         return this;
     }
 
+    /**
+     * Build the policy.
+     * <p>
+     * A setting that was never given is logged in one WARN naming the setter to call (QL-3): an unset delay (which
+     * still fails, as before), {@code setMaximumNumberOfRedeliveries} not called (it silently means 0 redeliveries).
+     * <b>From 0.61 these make {@code build()} throw an {@link IllegalArgumentException}</b>; in 0.60.x the policy is
+     * built exactly as before.
+     *
+     * @return the policy
+     */
     public RedeliveryPolicy build() {
+        checks().warnIfIncomplete();
         return RedeliveryPolicy.linear(redeliveryDelay,
                                        maximumFollowupRedeliveryDelayThreshold,
                                        maximumNumberOfRedeliveries,
                                        deliveryErrorHandler);
+    }
+
+    RedeliveryPolicyBuilderChecks checks() {
+        return new RedeliveryPolicyBuilderChecks(LinearBackoffBuilder.class)
+                .delay(redeliveryDelay, "setRedeliveryDelay")
+                .delay(maximumFollowupRedeliveryDelayThreshold, "setMaximumFollowupRedeliveryDelayThreshold")
+                .maximumNumberOfRedeliveries(maximumNumberOfRedeliveriesSet);
     }
 }

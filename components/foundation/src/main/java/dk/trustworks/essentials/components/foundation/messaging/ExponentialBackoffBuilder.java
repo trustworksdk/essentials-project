@@ -25,6 +25,9 @@ import java.time.Duration;
  * {@code followupRedeliveryDelay × followupRedeliveryDelayMultiplier^(n-1)}, capped at {@code maximumFollowupRedeliveryDelayThreshold}.
  * {@code (500ms, 500ms, 2.0, 1min)} waits 500ms, 500ms, 1s, 2s, 4s … up to 1min.
  * A multiplier left unset (or below {@code 1.0}) means no growth.
+ * <p>
+ * Every setter except {@link #setDeliveryErrorHandler(MessageDeliveryErrorHandler)} is required: {@link #build()} WARNs,
+ * naming the setter, for each one left out or out of range - and from 0.61 will throw instead.
  *
  * @see RedeliveryPolicy#calculateNextRedeliveryDelay(int)
  * @see RedeliveryPolicy#builder()
@@ -38,6 +41,7 @@ public final class ExponentialBackoffBuilder {
     private double                      followupRedeliveryDelayMultiplier;
     private Duration                    maximumFollowupRedeliveryDelayThreshold;
     private int                         maximumNumberOfRedeliveries;
+    private boolean                     maximumNumberOfRedeliveriesSet;
     private MessageDeliveryErrorHandler deliveryErrorHandler = MessageDeliveryErrorHandler.alwaysRetry();
 
     public ExponentialBackoffBuilder setInitialRedeliveryDelay(Duration initialRedeliveryDelay) {
@@ -62,6 +66,7 @@ public final class ExponentialBackoffBuilder {
 
     public ExponentialBackoffBuilder setMaximumNumberOfRedeliveries(int maximumNumberOfRedeliveries) {
         this.maximumNumberOfRedeliveries = maximumNumberOfRedeliveries;
+        this.maximumNumberOfRedeliveriesSet = true;
         return this;
     }
 
@@ -70,14 +75,33 @@ public final class ExponentialBackoffBuilder {
         return this;
     }
 
+    /**
+     * Build the policy.
+     * <p>
+     * A setting that was never given is logged in one WARN naming the setter to call (QL-3): an unset delay (which
+     * still fails, as before), {@code setMaximumNumberOfRedeliveries} not called (it silently means 0 redeliveries), and a multiplier below 1.0 or not set (it silently means no growth).
+     * <b>From 0.61 these make {@code build()} throw an {@link IllegalArgumentException}</b>; in 0.60.x the policy is
+     * built exactly as before.
+     *
+     * @return the policy
+     */
     public RedeliveryPolicy build() {
-        return RedeliveryPolicy.builder()
-                               .setInitialRedeliveryDelay(initialRedeliveryDelay)
-                               .setFollowupRedeliveryDelay(followupRedeliveryDelay)
-                               .setFollowupRedeliveryDelayMultiplier(followupRedeliveryDelayMultiplier)
-                               .setMaximumFollowupRedeliveryDelayThreshold(maximumFollowupRedeliveryDelayThreshold)
-                               .setMaximumNumberOfRedeliveries(maximumNumberOfRedeliveries)
-                               .setDeliveryErrorHandler(deliveryErrorHandler)
-                               .build();
+        checks().warnIfIncomplete();
+        // The constructor, not RedeliveryPolicy.builder(): that builder runs the same checks and would WARN a second time
+        return new RedeliveryPolicy(initialRedeliveryDelay,
+                                    followupRedeliveryDelay,
+                                    followupRedeliveryDelayMultiplier,
+                                    maximumFollowupRedeliveryDelayThreshold,
+                                    maximumNumberOfRedeliveries,
+                                    deliveryErrorHandler);
+    }
+
+    RedeliveryPolicyBuilderChecks checks() {
+        return new RedeliveryPolicyBuilderChecks(ExponentialBackoffBuilder.class)
+                .delay(initialRedeliveryDelay, "setInitialRedeliveryDelay")
+                .delay(followupRedeliveryDelay, "setFollowupRedeliveryDelay")
+                .multiplier(followupRedeliveryDelayMultiplier)
+                .delay(maximumFollowupRedeliveryDelayThreshold, "setMaximumFollowupRedeliveryDelayThreshold")
+                .maximumNumberOfRedeliveries(maximumNumberOfRedeliveriesSet);
     }
 }

@@ -264,6 +264,12 @@ RedeliveryPolicy.exponentialBackoff(
 )
 ```
 
+**With a builder (`RedeliveryPolicy.exponentialBackoff()`, `.linearBackoff()`, `.fixedBackoff()`, `.builder()`), call
+every setter except `setDeliveryErrorHandler`.** An unset `setMaximumNumberOfRedeliveries` silently means **0**
+redeliveries (the first failure dead-letters the message) and an unset multiplier means no growth. Since 0.60.1
+`build()` logs one WARN naming each missing or out-of-range setter (delays, multiplier < 1.0, maximum redeliveries not
+set explicitly - pass `0` if you mean it); from 0.61 it throws `IllegalArgumentException` instead.
+
 ### MessageDeliveryErrorHandler
 
 **Interface**: `dk.trustworks.essentials.components.foundation.messaging.MessageDeliveryErrorHandler`
