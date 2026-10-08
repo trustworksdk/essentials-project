@@ -267,11 +267,12 @@ var durableQueues = PostgresqlDurableQueues.builder()
 For instant response when messages arrive (instead of waiting for next poll cycle), configure a `MultiTableChangeListener`:
 
 ```java
-var multiTableChangeListener = new MultiTableChangeListener<>(
-    jdbi,
-    Duration.ofMillis(100),
-    jsonSerializer
-);
+var multiTableChangeListener = MultiTableChangeListener.builder()
+    .setJdbi(jdbi)
+    .setJsonSerializer(jsonSerializer)
+    .setEventBus(eventBus)
+    .setPollingInterval(Duration.ofMillis(100))
+    .build();
 
 var durableQueues = PostgresqlDurableQueues.builder()
     .setUnitOfWorkFactory(unitOfWorkFactory)

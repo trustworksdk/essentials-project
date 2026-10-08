@@ -230,11 +230,12 @@ PostgreSQL NOTIFY triggers immediate polling when messages arrive.
 ```java
 import dk.trustworks.essentials.components.foundation.postgresql.MultiTableChangeListener;
 
-var multiTableChangeListener = new MultiTableChangeListener<>(
-    jdbi,
-    Duration.ofMillis(100),
-    jsonSerializer
-);
+var multiTableChangeListener = MultiTableChangeListener.builder()
+    .setJdbi(jdbi)
+    .setJsonSerializer(jsonSerializer)
+    .setEventBus(eventBus)
+    .setPollingInterval(Duration.ofMillis(100))
+    .build();
 
 var durableQueues = PostgresqlDurableQueues.builder()
     .setUnitOfWorkFactory(unitOfWorkFactory)

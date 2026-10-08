@@ -121,6 +121,7 @@ the number they have where they are defined, never renumbered: `ESS-S<n>` for a 
 - <a id="ess-051"></a>`ESS-051` Deserialized object has `null` fields or fails its own `requireNonNull` — constructor parameter name differs from the JSON property; shows on replay → [LLM-foundation.md § JSONSerializer](LLM-foundation.md#jsonserializer)
 - <a id="ess-052"></a>`ESS-052` Replay fails or reads wrong values after persisting with a hand-built `ObjectMapper` — use `EssentialsObjectMappers` → [LLM-foundation.md § JSONSerializer](LLM-foundation.md#jsonserializer)
 - <a id="ess-053"></a>`ESS-053` Queued `sendAndDontWait` commands fail after a deploy — the command is persisted JSON, a serialized contract → [LLM-foundation.md § Commands are persisted](LLM-foundation.md#commands-are-persisted)
+- <a id="ess-124"></a>`ESS-124` Two callers in one JVM both "hold" the same fenced lock, and one `release()` frees it under the other — ownership is per lock-manager instance, not per caller or thread → [LLM-foundation.md § Ownership is per lock-manager instance, not per caller or thread](LLM-foundation.md#ownership-is-per-lock-manager-instance-not-per-caller-or-thread)
 
 ### foundation-test ([LLM-foundation-test.md](LLM-foundation-test.md))
 - <a id="ess-054"></a>`ESS-054` Queue/lock tests fail — the component was never `start()`ed → [LLM-foundation-test.md § Common Pitfalls](LLM-foundation-test.md#common-pitfalls)
