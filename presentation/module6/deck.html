@@ -560,6 +560,26 @@ svg .dgm-hi   { stroke: var(--accent); stroke-width: 1.7; fill: none; }
 svg .ah-dim   { fill: var(--ink-faint); }
 svg .ah-hi    { fill: var(--accent); }
 
+/* The slice diagram: lanes are capabilities, columns are slices; the notes use
+   the event-model legend colours from the four-patterns slide. */
+svg .sl-lane { fill: var(--surface); stroke: var(--rule); stroke-width: 1; }
+svg .sl-lane.sl-lane-dim { fill: var(--surface-2); }
+svg .sl-lbl  { font-family: var(--f-display); font-weight: 700; font-size: 13px; letter-spacing: 1.4px; fill: var(--ink-dim); }
+svg .sl-note { stroke-width: 1.4; }
+svg .sl-ui   { fill: var(--surface-2); stroke: var(--em-ext); }
+svg .sl-cmd  { fill: color-mix(in srgb, var(--em-cmd) 22%, transparent); stroke: var(--em-cmd); }
+svg .sl-evt  { fill: color-mix(in srgb, var(--em-evt) 22%, transparent); stroke: var(--em-evt); }
+svg .sl-view { fill: color-mix(in srgb, var(--em-view) 22%, transparent); stroke: var(--em-view); }
+svg .sl-t    { font-family: var(--f-mono); font-size: 13.5px; fill: var(--ink); }
+svg .sl-cut  { fill: none; stroke: var(--ink-faint); stroke-width: 1.4; stroke-dasharray: 6 4; }
+svg .sl-cut.sl-cut-hi { stroke: var(--accent); stroke-width: 2; }
+svg .sl-cap  { font-family: var(--f-display); font-weight: 700; font-size: 12px; letter-spacing: 1.4px; fill: var(--ink-faint); }
+svg .sl-path { font-family: var(--f-mono); font-size: 14px; fill: var(--ink-dim); }
+svg .sl-hi   { fill: var(--accent); }
+svg .sl-fade { opacity: 0.4; }
+.wires { display: flex; gap: 1.2cqw; justify-content: center; min-height: 0; }
+.wires .shot { max-height: 21cqh; width: auto; max-width: 31%; margin: 0; object-fit: contain; }
+
 /* The transaction timeline on the blocking-call slide: the bar is the transaction,
    the dashed line is the moment the process dies, and its colour says whether
    that moment is recoverable. */
@@ -752,7 +772,19 @@ PRD-7f3a     LG Superview   <span class="tok-num">1999.50</span></code></pre>
   </div>
 </section>
 
-<!-- =================================================================== 05 — C1 answer -->
+<!-- =================================================================== 05 — C2 concept -->
+<section class="slide" data-side="concept" data-act="2/13 &mdash; Discovering and modeling" data-min="0.75"
+  data-note-en="This is the module's own event model, legend and all. Walk the legend left to right: UI slash API slash job, blue command, orange event, green view. Then the four pattern boxes at the bottom - state change, state view, external input, external output - each written as Given When Then. Say that storming is how the orange stickies get discovered and modeling is how they get ordered in time. Then the storming line from the module: invite people with questions and people with answers, give them a wall, write only what has happened - the disagreements are context boundaries, found on day one. This slide starts a three-slide story: the model, its patterns, and the slices and lanes. The code for all three comes after it, not between."
+  data-note-da="Dette er modulets eget event model, med legende. Gennemgaa legenden fra venstre: UI/API/job, blaa command, orange event, groen view. Derefter de fire moensterkasser nederst - hver skrevet som Given When Then. Sig at storming er hvordan de orange sedler opdages, og modeling er hvordan de ordnes i tid. Denne slide starter en historie over tre slides: modellen, dens moenstre, og slices og baner. Koden til alle tre kommer bagefter, ikke imellem.">
+  <div class="eyebrow concept"><span class="num">2 / 13</span><span class="sep">&middot;</span><span lang="en">The concept</span><span lang="da">Begrebet</span></div>
+  <h2><span lang="en">Storming finds the events. Modeling puts them on a timeline.</span><span lang="da">Storming finder eventene. Modeling sætter dem på en tidslinje.</span></h2>
+  <figure class="shot-wrap grow">
+    <img class="shot tall" src="images/event-model-legend.jpg" alt="A complete event model with its legend: UI/API/job triggers, blue commands, orange events, green views, and the four patterns as Given/When/Then">
+    <figcaption><span lang="en">One complete event model &mdash; the legend, bottom left, is the whole vocabulary</span><span lang="da">Ét komplet event model &mdash; legenden nederst til venstre er hele ordforrådet</span></figcaption>
+  </figure>
+</section>
+
+<!-- =================================================================== 06 — C1 answer -->
 <section class="slide" data-side="answer" data-act="1/13 &mdash; An event is a fact" data-min="1.5"
   data-note-en="Two things to point at, and neither is about the language. The package: events/ and types/ are the only ones another context may import, which is what makes these names a published contract rather than an internal detail. And permanence: the store keeps the concrete class name with every event and does no upcasting, so renaming an event type is a data migration."
   data-note-da="To ting at pege paa, og ingen af dem handler om sproget. Pakken: events/ og types/ er de eneste en anden kontekst maa importere, hvilket goer navnene til en publiceret kontrakt. Og permanens: store'en gemmer det konkrete klassenavn med hvert event og laver ingen upcasting, saa at omdoebe en event-type er en datamigrering.">
@@ -787,18 +819,6 @@ data class ProductPriceChanged(
       <p lang="da"><code>events/</code> og <code>types/</code> er de <strong>eneste pakker en anden kontekst må importere</strong>.</p>
     </div>
   </div>
-</section>
-
-<!-- =================================================================== 06 — C2 concept -->
-<section class="slide" data-side="concept" data-act="2/13 &mdash; Discovering and modeling" data-min="0.75"
-  data-note-en="This is the module's own event model, legend and all. Walk the legend left to right: UI slash API slash job, blue command, orange event, green view. Then the four pattern boxes at the bottom - state change, state view, external input, external output - each written as Given When Then. Say that storming is how the orange stickies get discovered and modeling is how they get ordered in time. Then the storming line from the module: invite people with questions and people with answers, give them a wall, write only what has happened - the disagreements are context boundaries, found on day one. This slide starts a three-slide story: the model, its patterns, and the slices and lanes. The code for all three comes after it, not between."
-  data-note-da="Dette er modulets eget event model, med legende. Gennemgaa legenden fra venstre: UI/API/job, blaa command, orange event, groen view. Derefter de fire moensterkasser nederst - hver skrevet som Given When Then. Sig at storming er hvordan de orange sedler opdages, og modeling er hvordan de ordnes i tid. Denne slide starter en historie over tre slides: modellen, dens moenstre, og slices og baner. Koden til alle tre kommer bagefter, ikke imellem.">
-  <div class="eyebrow concept"><span class="num">2 / 13</span><span class="sep">&middot;</span><span lang="en">The concept</span><span lang="da">Begrebet</span></div>
-  <h2><span lang="en">Storming finds the events. Modeling puts them on a timeline.</span><span lang="da">Storming finder eventene. Modeling sætter dem på en tidslinje.</span></h2>
-  <figure class="shot-wrap grow">
-    <img class="shot tall" src="images/event-model-legend.jpg" alt="A complete event model with its legend: UI/API/job triggers, blue commands, orange events, green views, and the four patterns as Given/When/Then">
-    <figcaption><span lang="en">One complete event model &mdash; the legend, bottom left, is the whole vocabulary</span><span lang="da">Ét komplet event model &mdash; legenden nederst til venstre er hele ordforrådet</span></figcaption>
-  </figure>
 </section>
 
 <!-- =================================================================== 07 — C3 concept -->
@@ -863,26 +883,66 @@ data class ProductPriceChanged(
 
 <!-- =================================================================== 08 — C4 concept -->
 <section class="slide" data-side="concept" data-act="4/13 &mdash; Slices and capabilities" data-min="0.75"
-  data-note-en="Two of the module's ideas on one slide because they are the same idea at two scales: a slice is a vertical unit of value, a capability is the swimlane it lives in. The four wireframes are the module's own webshop screens - the UI lane of its event model. Point out that the lanes own their data and their rules and can be deployed separately. This closes the three-slide story; the next two slides are the code for all of it."
-  data-note-da="To af modulets idéer paa én slide, fordi det er samme idé paa to skalaer: en slice er en vertikal vaerdienhed, en capability er den svoemmebane den bor i. De fire wireframes er modulets egne webshop-skaerme - UI-banen i dets event model. Dette afslutter historien over tre slides; de naeste to slides er koden til det hele.">
+  data-note-en="Two of the module's ideas on one slide because they are the same idea at two scales: a slice is a vertical unit of value, a capability is the swimlane it lives in. Start with the picture: the rows are the lanes - Web App on top, then sales, shipping and payment - and each lane is a capability that owns its data and its rules. The columns are slices: the highlighted one is add_item_to_shopping_basket, from the button to the stored event, and next to it is shopping_basket, which reads that event back into the basket screen. Each column is one directory in the code. The three wireframes underneath are the module's own webshop screens - the Web App lane of its event model. Point out that the lanes own their data and their rules and can be deployed separately. This closes the three-slide story; the next two slides are the code for all of it."
+  data-note-da="To af modulets idéer paa én slide, fordi det er samme idé paa to skalaer: en slice er en vertikal vaerdienhed, en capability er den svoemmebane den bor i. Start med billedet: raekkerne er banerne - Web App oeverst, derefter sales, shipping og payment - og hver bane er en capability der ejer sine data og regler. Kolonnerne er slices: den fremhaevede er add_item_to_shopping_basket, fra knappen til det gemte event, og ved siden af er shopping_basket, som laeser eventet tilbage til kurv-skaermen. Hver kolonne er én mappe i koden. De tre wireframes nederst er modulets egne webshop-skaerme - Web App-banen i dets event model. Dette afslutter historien over tre slides; de naeste to slides er koden til det hele.">
   <div class="eyebrow concept"><span class="num">4 / 13</span><span class="sep">&middot;</span><span lang="en">The concept</span><span lang="da">Begrebet</span></div>
   <h2><span lang="en">Slices are the unit of work. Capabilities are the swimlanes.</span><span lang="da">Slices er arbejdsenheden. Capabilities er svømmebanerne.</span></h2>
-  <div class="row grow" style="align-items:stretch">
-    <div class="col" style="flex:0.9 1 0; justify-content:center">
-      <p lang="en"><strong>A slice</strong> goes from user action to stored data and back &mdash; built, tested and shipped on its own.</p>
-      <p lang="da"><strong>En slice</strong> går fra brugerhandling til gemte data og tilbage &mdash; bygget, testet og leveret for sig.</p>
-      <p lang="en"><strong>A capability</strong> owns its data and its rules. In a webshop: <strong>Sales, Shipping, Payment</strong>.</p>
-      <p lang="da"><strong>En capability</strong> ejer sine data og sine regler. I en webshop: <strong>Sales, Shipping, Payment</strong>.</p>
+  <div class="row" style="align-items:center; gap:2.4cqw">
+    <div class="col" style="flex:0.8 1 0; gap:1.6cqh">
+      <p lang="en"><strong>A slice</strong> is one <em>column</em> of the model: from a user action to stored data and back &mdash; built, tested and shipped on its own, and one directory in the code.</p>
+      <p lang="da"><strong>En slice</strong> er én <em>kolonne</em> i modellen: fra en brugerhandling til gemte data og tilbage &mdash; bygget, testet og leveret for sig, og én mappe i koden.</p>
+      <p lang="en"><strong>A capability</strong> is one <em>lane</em>: it owns its data and its rules. In a webshop: <strong>Sales, Shipping, Payment</strong>.</p>
+      <p lang="da"><strong>En capability</strong> er én <em>bane</em>: den ejer sine data og sine regler. I en webshop: <strong>Sales, Shipping, Payment</strong>.</p>
     </div>
-    <figure class="shot-wrap" style="flex:1.1 1 0">
-      <div class="row" style="gap:0.8cqw; align-items:flex-start">
-        <img class="shot" style="max-height:34cqh" src="images/wireframe-products.png" alt="A product list wireframe with Add to cart">
-        <img class="shot" style="max-height:34cqh" src="images/wireframe-basket.png" alt="A shopping basket wireframe: product, quantity, price, total">
-        <img class="shot" style="max-height:34cqh" src="images/wireframe-checkout.png" alt="A Complete Order wireframe: invoice address and payment details">
-      </div>
-      <figcaption><span lang="en">The Web App lane: catalogue, basket, checkout</span><span lang="da">Web App-banen: katalog, kurv, checkout</span></figcaption>
+    <figure class="dgm" style="flex:1.2 1 0">
+      <svg viewBox="0 0 800 316" role="img" style="max-height:33cqh"
+           aria-label="An event model drawn as lanes and columns. The lanes, top to bottom, are Web App, Sales, Shipping and Payment. One highlighted column is the add_item_to_shopping_basket slice: the Add to cart button on the product page, the AddItemToShoppingBasket command and the ItemAddedToShoppingBasket event, all in the Sales lane. Next to it, the shopping_basket slice reads that event into the ShoppingBasket view and shows it on the Basket screen. A faded third column, Checkout, shows the timeline continuing.">
+        <defs>
+          <marker id="ahsl" viewBox="0 0 8 8" refX="7.5" refY="4" markerWidth="6.5" markerHeight="6.5" orient="auto">
+            <path d="M0 0 L8 4 L0 8 Z" class="ah-dim"/>
+          </marker>
+        </defs>
+      <rect class="sl-lane" x="0" y="28" width="800" height="60"/>
+      <text class="sl-lbl" x="12" y="63">WEB APP</text>
+      <rect class="sl-lane" x="0" y="88" width="800" height="120"/>
+      <text class="sl-lbl" x="12" y="153">SALES</text>
+      <rect class="sl-lane sl-lane-dim" x="0" y="208" width="800" height="40"/>
+      <text class="sl-lbl sl-fade" x="12" y="233">SHIPPING</text>
+      <rect class="sl-lane sl-lane-dim" x="0" y="248" width="800" height="40"/>
+      <text class="sl-lbl sl-fade" x="12" y="273">PAYMENT</text>
+      <g lang="en"><text class="dgm-s" x="150" y="233">its own commands, events and views</text></g><g lang="da"><text class="dgm-s" x="150" y="233">sine egne commands, events og views</text></g>
+      <g lang="en"><text class="dgm-s" x="150" y="273">its own commands, events and views</text></g><g lang="da"><text class="dgm-s" x="150" y="273">sine egne commands, events og views</text></g>
+      <rect class="sl-cut sl-cut-hi" x="130" y="22" width="190" height="192"/>
+      <g lang="en"><text class="sl-cap sl-hi" x="130" y="16">ONE SLICE</text></g><g lang="da"><text class="sl-cap sl-hi" x="130" y="16">ÉN SLICE</text></g>
+      <g lang="en"><rect class="sl-note sl-ui" x="140" y="36" width="170" height="44" rx="2"/><text class="sl-t" x="225" y="55" text-anchor="middle">Products</text><text class="sl-t" x="225" y="72" text-anchor="middle">“Add to cart”</text></g><g lang="da"><rect class="sl-note sl-ui" x="140" y="36" width="170" height="44" rx="2"/><text class="sl-t" x="225" y="55" text-anchor="middle">Produkter</text><text class="sl-t" x="225" y="72" text-anchor="middle">“Læg i kurv”</text></g>
+      <rect class="sl-note sl-cmd" x="140" y="96" width="170" height="44" rx="2"/><text class="sl-t" x="225" y="115" text-anchor="middle">AddItemTo</text><text class="sl-t" x="225" y="132" text-anchor="middle">ShoppingBasket</text>
+      <rect class="sl-note sl-evt" x="140" y="156" width="170" height="44" rx="2"/><text class="sl-t" x="225" y="175" text-anchor="middle">ItemAddedTo</text><text class="sl-t" x="225" y="192" text-anchor="middle">ShoppingBasket</text>
+      <path class="dgm-edge" d="M225 80 V94" marker-end="url(#ahsl)"/>
+      <path class="dgm-edge" d="M225 140 V154" marker-end="url(#ahsl)"/>
+      <rect class="sl-cut" x="350" y="22" width="190" height="192"/>
+      <g lang="en"><text class="sl-cap" x="350" y="16">ANOTHER SLICE</text></g><g lang="da"><text class="sl-cap" x="350" y="16">EN ANDEN SLICE</text></g>
+      <g lang="en"><rect class="sl-note sl-ui" x="360" y="36" width="170" height="44" rx="2"/><text class="sl-t" x="445" y="63" text-anchor="middle">Basket</text></g><g lang="da"><rect class="sl-note sl-ui" x="360" y="36" width="170" height="44" rx="2"/><text class="sl-t" x="445" y="63" text-anchor="middle">Kurv</text></g>
+      <rect class="sl-note sl-view" x="360" y="96" width="170" height="44" rx="2"/><text class="sl-t" x="445" y="123" text-anchor="middle">ShoppingBasket</text>
+      <path class="dgm-edge" d="M310 178 C355 178 400 168 445 142" marker-end="url(#ahsl)"/>
+      <path class="dgm-edge" d="M445 94 V82" marker-end="url(#ahsl)"/>
+      <rect class="sl-cut sl-fade" x="570" y="22" width="190" height="192"/>
+      <rect class="sl-note sl-ui sl-fade" x="580" y="36" width="170" height="44" rx="2"/><text class="sl-t sl-fade" x="665" y="63" text-anchor="middle">Checkout</text>
+      <rect class="sl-note sl-cmd sl-fade" x="580" y="96" width="170" height="44" rx="2"/><text class="sl-t sl-fade" x="665" y="123" text-anchor="middle">RequestCheckOut</text>
+      <rect class="sl-note sl-evt sl-fade" x="580" y="156" width="170" height="44" rx="2"/><text class="sl-t sl-fade" x="665" y="183" text-anchor="middle">…</text>
+      <text class="sl-path sl-hi" x="130" y="310">add_item_to_shopping_basket/</text>
+      <text class="sl-path" x="540" y="310" text-anchor="end">shopping_basket/</text>
+      </svg>
+      <figcaption><span lang="en">Lanes are capabilities, columns are slices</span><span lang="da">Baner er capabilities, kolonner er slices</span></figcaption>
     </figure>
   </div>
+  <figure class="shot-wrap grow" style="justify-content:flex-end">
+    <div class="wires">
+      <img class="shot" src="images/wireframe-products.png" alt="A product list wireframe with Add to cart">
+      <img class="shot" src="images/wireframe-basket.png" alt="A shopping basket wireframe: product, quantity, price, total">
+      <img class="shot" src="images/wireframe-checkout.png" alt="A Complete Order wireframe: invoice address and payment details">
+    </div>
+    <figcaption><span lang="en">The Web App lane, drawn: catalogue, basket, checkout</span><span lang="da">Web App-banen, tegnet: katalog, kurv, checkout</span></figcaption>
+  </figure>
 </section>
 
 <!-- =================================================================== 09 — C2 + C3 answer -->

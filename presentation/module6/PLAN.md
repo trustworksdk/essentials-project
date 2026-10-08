@@ -170,8 +170,8 @@ on-screen timer reads them, so this table and the deck cannot drift.
 | 1 | Title | 0 |
 | 2 | The question: why is this monitor 1,999.50? — the row cannot say, the events can | 1 |
 | 3 | The roadmap: four groups in the order you meet them (modeling, deciding and recording, reading, putting it together), each over its numbered concepts; says the numbers are the rail's `n/13` | 0.5 |
-| 4–5 | **1** An event is a fact → sealed family, `events/` as contract | 2.25 |
-| 6–8 | **2–4** Discovering and modeling, the four patterns, slices and capabilities — three concept slides as one story | 2.25 |
+| 4, 6 | **1** An event is a fact → sealed family, `events/` as contract (the event model, slide 5, sits between the two) | 2.25 |
+| 5, 7–8 | **2–4** Discovering and modeling, the four patterns, slices and capabilities — three concept slides as one story | 2.25 |
 | 9 | **2–3** answer: one slice = one directory, the pattern you drew = the base type you extend | 2 |
 | 10 | **4** answer: the lanes are the top-level directories; only `events/` and `types/` cross | 1.5 |
 | 11 | The map of the app, as the payoff of 2–4: buttons → streams → read models → panels | 1.5 |
