@@ -1,0 +1,186 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Slice Atlas — applications</title>
+<style>
+/* Brand tokens: copied from atlas.html (between its __TOKENS_BEGIN__ / __TOKENS_END__ markers) by
+   slice_atlas.assemble_index, so the palette exists once. Every colour below is one of them. */
+/* __ATLAS_TOKENS__ */
+
+* { box-sizing: border-box; }
+body {
+  margin: 0; background: var(--surface); color: var(--text);
+  font: 14px/1.45 var(--font); -webkit-text-size-adjust: 100%;
+  padding: env(safe-area-inset-top, 0px) 0 env(safe-area-inset-bottom, 0px);
+}
+button { font: inherit; color: inherit; }
+.mono { font-family: var(--mono); }
+#bar {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; padding: 10px 16px;
+  background: var(--panel); border-bottom: 1px solid var(--rule);
+}
+#bar .brand { display: flex; flex-direction: column; min-width: 0; margin-right: auto; }
+#bar .brand b { font-family: var(--font-display); font-size: 16px; letter-spacing: -0.01em; }
+#prov { font-size: 12px; color: var(--text-muted); overflow-wrap: anywhere; }
+.btn {
+  border: 1px solid var(--rule-strong); background: var(--panel-2); border-radius: 6px; padding: 4px 10px;
+  cursor: pointer;
+}
+.btn:hover { background: var(--panel-strong); }
+.btn:focus-visible, a:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+main { padding: 16px; max-width: 1200px; margin: 0 auto; }
+main > p { color: var(--text-muted); margin: 0 0 12px; }
+.scroll { overflow-x: auto; border: 1px solid var(--rule); border-radius: 8px; background: var(--panel-2); }
+table { border-collapse: collapse; width: 100%; }
+th, td { text-align: left; padding: 8px 12px; border-bottom: 1px solid var(--rule); vertical-align: top; }
+tbody tr:last-child td { border-bottom: 0; }
+th { background: var(--panel-strong); font-weight: 600; font-size: 12px; white-space: nowrap; }
+td.num { white-space: nowrap; }
+a { color: var(--accent); }
+td .name { font-family: var(--font-display); font-size: 15px; font-weight: 600; }
+td .root { display: block; font-size: 12px; color: var(--text-muted); }
+.lvl { display: inline-flex; align-items: center; gap: 3px; font-size: 12px; margin-right: 8px; white-space: nowrap; }
+.lvl i { width: 9px; height: 9px; border-radius: 50%; display: inline-block; }
+.lvl-error i { background: var(--err); } .lvl-warn i { background: var(--warn); } .lvl-info i { background: var(--info); }
+.none { color: var(--text-muted); }
+.badge { display: inline-block; font-size: 12px; border-radius: 4px; padding: 1px 6px; margin-top: 4px; }
+.badge.err { color: var(--err); background: var(--err-bg); }
+.diff .add { color: var(--ok); } .diff .rem { color: var(--err); } .diff .chg { color: var(--warn); }
+.diff span { margin-right: 6px; white-space: nowrap; }
+.notice { max-width: 640px; margin: 48px auto; padding: 0 16px; }
+</style>
+</head>
+<body>
+<header id="bar">
+  <div class="brand"><b id="title">Slice Atlas</b><span id="prov" class="mono"></span></div>
+  <button class="btn" id="btn-theme" title="Theme (t)">Theme: auto</button>
+</header>
+<main>
+  <p id="lede"></p>
+  <div class="scroll"><table id="apps"></table></div>
+</main>
+<script>
+const INDEX = /* __ATLAS_INDEX_DATA__ */ null;
+</script>
+<script>
+(function () {
+  'use strict';
+  const D = INDEX;
+  const $ = (s) => document.querySelector(s);
+  const LEVELS = ['error', 'warn', 'info'];
+  const LEVEL_LABEL = { error: 'errors', warn: 'warnings', info: 'info' };
+  const plural = (n, one, many) => n + ' ' + (n === 1 ? one : many);
+  function el(tag, cls, text) {
+    const e = document.createElement(tag);
+    if (cls) e.className = cls;
+    if (text != null) e.textContent = text;
+    return e;
+  }
+
+  /* theme: as the Atlas — prefers-color-scheme, overridden by data-theme from the hash (theme=light|dark) */
+  let theme = 'auto';
+  const links = [];                      // each application's link, re-pointed when the theme changes
+  function hashTheme() {
+    const m = /(?:^|&)theme=(light|dark)(?:&|$)/.exec((location.hash || '').replace(/^#/, ''));
+    return m ? m[1] : 'auto';
+  }
+  function applyTheme(mode, write) {
+    theme = mode === 'light' || mode === 'dark' ? mode : 'auto';
+    if (theme === 'auto') document.documentElement.removeAttribute('data-theme');
+    else document.documentElement.setAttribute('data-theme', theme);
+    $('#btn-theme').textContent = 'Theme: ' + theme;
+    if (write) history.replaceState(null, '', theme === 'auto' ? location.pathname + location.search : '#theme=' + theme);
+    links.forEach(([a, href]) => { a.href = href + (theme === 'auto' ? '' : '#theme=' + theme); });  // the page opens in the same theme
+  }
+  function cycleTheme() { applyTheme(theme === 'auto' ? 'light' : theme === 'light' ? 'dark' : 'auto', true); }
+
+  function issuesCell(issues) {
+    const td = el('td', 'num');
+    if (!issues) { td.append(el('span', 'none', '—')); return td; }
+    const any = LEVELS.filter(l => issues[l]);
+    if (!any.length) { td.append(el('span', 'none', 'none')); return td; }
+    any.forEach(l => {
+      const s = el('span', 'lvl lvl-' + l);
+      s.append(el('i'), document.createTextNode(String(issues[l])));
+      s.title = issues[l] + ' ' + LEVEL_LABEL[l];
+      td.append(s);
+    });
+    return td;
+  }
+  function diffCell(d) {
+    const td = el('td', 'diff');
+    if (!d) { td.append(el('span', 'none', 'no baseline')); return td; }
+    const s = d.slices || {};
+    td.append(el('span', 'add', '+' + (s.added || 0)), el('span', 'rem', '−' + (s.removed || 0)),
+      el('span', 'chg', '~' + (s.changed || 0)), document.createTextNode('slices'));
+    if (d.issuesKnown && d.issues) {
+      td.append(el('br'), el('span', null, plural(d.issues.new || 0, 'new issue', 'new issues')),
+        el('span', null, (d.issues.fixed || 0) + ' fixed'));
+    }
+    return td;
+  }
+
+  function render() {
+    const meta = D.meta || {};
+    const apps = Array.isArray(D.apps) ? D.apps : [];
+    const title = 'Slice Atlas' + (meta.project ? ' — ' + meta.project : '');
+    $('#title').textContent = title;
+    document.title = title;
+    const prov = [(meta.root || '.') + ' @ ' + (meta.sha || 'not-versioned'), plural(apps.length, 'application', 'applications')];
+    if (meta.baseline) prov.push('diff vs ' + meta.baseline);
+    $('#prov').textContent = prov.join(' · ');
+    $('#lede').textContent = 'Each application is its own slice-id namespace, so each has its own page. ' +
+      'Open one to see its contexts, journeys and issues.';
+    const withDiff = apps.some(a => a.diff);
+    const table = $('#apps');
+    const head = el('tr');
+    ['Application', 'Slices · contexts · processes', 'Issues'].concat(withDiff ? ['Diff'] : [])
+      .forEach(h => { const th = el('th', null, h); th.scope = 'col'; head.append(th); });
+    const thead = el('thead'); thead.append(head);
+    const tbody = el('tbody');
+    apps.forEach(a => {
+      const tr = el('tr');
+      const name = el('td');
+      if (a.href) {
+        const link = el('a', 'name', a.id);
+        link.href = encodeURIComponent(a.href);
+        links.push([link, link.href]);
+        name.append(link);
+      } else name.append(el('span', 'name', a.id));
+      name.append(el('span', 'root mono', a.root === '.' ? './' : a.root + '/'));
+      if (a.error) name.append(el('span', 'badge err', 'page not written: ' + a.error));
+      if (a.incomplete) name.append(el('span', 'badge err', 'map incomplete: ' + plural(a.incomplete, 'manifest', 'manifests') + ' did not parse'));
+      const counts = el('td', 'num', a.sliceCount == null ? '—' :
+        [plural(a.sliceCount, 'slice', 'slices'), plural(a.bcCount, 'context', 'contexts'),
+          plural(a.processCount, 'process', 'processes')].join(' · '));
+      tr.append(name, counts, issuesCell(a.issues));
+      if (withDiff) tr.append(diffCell(a.diff));
+      tbody.append(tr);
+    });
+    table.append(thead, tbody);
+  }
+
+  function boot() {
+    if (!D) {
+      document.body.textContent = '';
+      const n = el('div', 'notice');
+      n.append(el('h1', null, 'Slice Atlas'),
+        el('p', null, 'This index has not been rendered: slice-index.py atlas --per-app writes it beside one page per application, and /essentials:slice-map-html runs it.'));
+      document.body.append(n);
+      return;
+    }
+    render();
+    applyTheme(hashTheme(), false);
+    $('#btn-theme').addEventListener('click', cycleTheme);
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 't' && !e.metaKey && !e.ctrlKey && !e.altKey) cycleTheme();
+    });
+    window.addEventListener('hashchange', () => applyTheme(hashTheme(), false));
+  }
+  boot();
+})();
+</script>
+</body>
+</html>

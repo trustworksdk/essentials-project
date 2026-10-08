@@ -33,7 +33,7 @@ checkout).
 |---|---|
 | `<path>` | Module or source root. Default: the resolved package root (`slice-map.md` Step 1) |
 | `--bc <name>` | Open the page on this bounded context. The page still maps every context: a page cut to one context would hide the events that cross into it |
-| `--out <file>` | Write the page here. Without it, propose a path and ask (Step 2) |
+| `--out <file>` | Write the page here — a directory when the root holds several applications (Step 1). Without it, propose a path and ask (Step 2) |
 | `--diff <ref>` | Baseline for the Diff lens. Without it, the merge base with the default branch on a feature branch, else none (Step 3) |
 
 ## Step 1 — Terrain and the redirect
@@ -42,6 +42,19 @@ checkout).
 anywhere stop and redirect to `/essentials:slice-discover`. When `use_cases/` or `views/` exist without
 manifests, point at `/essentials:slice-check --fix-manifests`.
 
+Then ask the script how many applications the root holds:
+
+```bash
+uv run --script ${CLAUDE_PLUGIN_ROOT}/scripts/slice-index.py apps <root>
+```
+
+It prints `[{"id", "root", "slices"}]`, one entry per application: a build root (`pom.xml`,
+`build.gradle`, `build.gradle.kts`) owning at least one manifest, each manifest belonging to the nearest
+build root above it. An aggregating parent build owns none and is not an application. Slice ids are unique
+per application, not per folder, so a folder holding several gets **one page per application plus an
+index page** (Steps 2 and 4); one page over all of them would report every reused id as a duplicate. With
+one application, carry on as below.
+
 ## Step 2 — The output path
 
 With `--out`, use it. Without it, propose `target/slice-map.html` — `build/slice-map.html` when the
@@ -49,6 +62,10 @@ project builds with Gradle — and **ask once** before writing, offering the pro
 user's choice. A build directory is already git-ignored, which suits a page you regenerate rather than
 commit. Never choose the path silently: this plugin owns no directory (`CLAUDE.md` design invariants).
 Once the user has agreed, create the parent directory if it is missing (`mkdir -p`); write nothing else.
+
+With several applications (Step 1) the output is a directory, not a file: propose `target/slice-map/` —
+`build/slice-map/` with Gradle — name the applications and say it will hold one `<id>.html` per
+application and an `index.html` linking them, and ask the same way. The script creates the directory.
 
 ## Step 3 — The Diff baseline
 
@@ -84,6 +101,12 @@ uv run --script ${CLAUDE_PLUGIN_ROOT}/scripts/slice-index.py atlas <root> --out 
     [--before-ref <baseline>] [--bc <name>]
 ```
 
+With several applications, pass `--per-app <dir>` in place of `--out <file>`, with the same flags. Run
+`slice-source.py` once, at `<root>` as above: each page takes the facts under its own application,
+re-rooted on it, and `--before-ref` reads each application's subtree from the baseline (an application
+the baseline does not hold is diffed against nothing). `--bc` opens every page that has that context on
+it; the others open as default.
+
 The `slice-source.py` exit codes mean what `slice-map.md` Step 2 says: 0, 1 and 3 wrote JSON; 2 wrote
 none, so drop that `--source-…` flag and say that payloads, columns and the source checks read **not
 checked** on the page.
@@ -92,7 +115,7 @@ checked** on the page.
 |---|---|
 | 0 | the page is written and the map is complete |
 | 1 | the page is written, and at least one manifest did not parse. The page draws each one as a red error card in its context under a "map incomplete" banner — an omitted slice would be invisible, a red card is not. Say so, and apply the braced-path check of `slice-map.md` Step 2: when every failure is an unquoted path containing `{`, offer one rerun with `--repair-braced-paths`, and name `/essentials:slice-check --fix-manifests` as the repair |
-| 2 | could not run (no `pyyaml`, a bad root, an unreadable baseline, an unwritable `--out`). Stop and say why. Never build a page by hand |
+| 2 | could not run (no `pyyaml`, a bad root, an unreadable baseline, an unwritable `--out`), or `--out` over a root holding several applications — the message names them; rerun with `--per-app` (Step 1). With `--per-app`, a page that could not be written: the others are, the index lists it as not written, and stderr says why. Stop and say why. Never build a page by hand |
 | 3 | no `slice.yaml` under the root: the Step 1 redirect |
 
 A baseline `git archive` cannot read — a shallow clone without the merge base, a mistyped ref — is exit
@@ -106,6 +129,16 @@ Print the one summary line the script wrote to stdout, verbatim, then the baseli
 ```
 slice-index: wrote target/slice-map.html — 14 slices in 3 contexts · 6 processes · issues 1 error, 3 warn, 11 info · …
 baseline: merge base with origin/main (3ef75e1c)
+```
+
+With `--per-app`, print every line it wrote — one per page, then the index line — verbatim, then the
+baseline, and name the index as the page to open:
+
+```
+slice-index: wrote target/slice-map/orders.html — 9 slices in 2 contexts · 4 processes · issues 0 error, 1 warn, 6 info
+slice-index: wrote target/slice-map/billing.html — 5 slices in 1 context · 3 processes · issues 0 error, 0 warn, 4 info
+slice-index: wrote target/slice-map/index.html — 2 applications · 14 slices · issues 0 error, 1 warn, 10 info
+open: target/slice-map/index.html
 ```
 
 Then stop. No report sections — contexts, chains, flows and endpoints as text are
@@ -130,11 +163,17 @@ Both fields, and the checks on them, are `references/slice/manifest-guide.md` §
 issues dock (selecting an issue flies to its target; **Copy fix prompt** — all, errors, warnings or
 info — copies a prompt for Claude Code that hands each issue to the command owning its repair:
 `/essentials:slice-check <bc> --fix-manifests` for unparsed YAML and machine-derived fields,
-`/essentials:slice-check <bc>` for what needs a judgement, and a reviewed draft for the human-owned
-`flow:` and `scenarios:`), search (`/`), hover previews of the detail pane, a double-click on a Metro
+`/essentials:slice-check <bc>` for what needs a judgement, and `/essentials:slice-enrich --bc <bc>` for the
+human-owned `flow:` and `scenarios:`, which it drafts from evidence and writes only once confirmed), search (`/`), hover previews of the detail pane, a double-click on a Metro
 station or line name that shows it on the Atlas, a minimap, a legend per lens, light
 and dark themes, and the whole view state in the URL hash, so a link pasted into a pull request reopens
 the same view. It is self-contained — no CDN, no fonts, no fetch — and opens from `file://`.
+
+With several applications there is one such page per application, each with a link back to an **index
+page**: one row per application — its name (linking to its page) and root, slices · contexts ·
+processes, issues per level, "map incomplete" when a manifest did not parse, and with a baseline the
+diff summary (slices added, removed and changed; new and fixed issues). The index is self-contained too,
+in the same palette and themes.
 
 ## Without the model
 
@@ -149,9 +188,21 @@ uv run --script scripts/slice-index.py map <root> > base-map.json
 uv run --script scripts/slice-index.py atlas <root> --out slice-map.html --before-map base-map.json
 ```
 
+For a root holding several applications (Step 1), the same recipe one level up: `map --per-app` writes
+one baseline per application, and `--before-map-dir` diffs each page against its own (an application
+with no baseline file gets no diff):
+
+```bash
+# on the default branch
+uv run --script scripts/slice-index.py map <root> --per-app base-maps/
+# on the pull request
+uv run --script scripts/slice-index.py atlas <root> --per-app slice-map/ --before-map-dir base-maps/
+```
+
 Add the two `--source-…` flags of Step 4 for payloads, columns and the source checks. `--lens` and
-`--focus` set the view the page opens on. Exit 1 still writes the page: a CI step that publishes it
-should accept 1 and let the page's banner carry the news.
+`--focus` set the view the page opens on (with `--per-app`, on every page that has the target). Exit 1
+still writes the page: a CI step that publishes it should accept 1 and let the page's banner carry the
+news.
 
 ## Out of scope — state these if asked
 
@@ -164,7 +215,7 @@ should accept 1 and let the page's banner carry the news.
 ## Verification fixture
 
 `tests/scripts/test_slice_atlas.py` pins the data (processes, issues, lineage, the diff) against goldens
-over `tests/fixtures/atlas/`, `tests/scripts/test_slice_atlas_layout.py` pins the layout, and
+over `tests/fixtures/atlas/`, and the per-application pages and index over `tests/fixtures/atlas-multi/`, `tests/scripts/test_slice_atlas_layout.py` pins the layout, and
 `tests/fixtures/slice-map/render-check.py` renders the fixture's page and a hand-written sample in
 headless Chrome: every lens mounts with no console error, selecting an issue focuses its target, a deep
 link restores the view, and the broken manifest is drawn as an error card.

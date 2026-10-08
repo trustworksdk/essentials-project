@@ -72,7 +72,7 @@ def found(doc, root):
 
 
 class SliceLint(unittest.TestCase):
-    def test_fixtures_clean_except_multi_lane_tier_and_atlas_breakage(self):
+    def test_fixtures_clean_except_deliberate_breakage(self):
         for fixture in sorted((PLUGIN / "tests" / "fixtures").iterdir()):
             if not fixture.is_dir():
                 continue
@@ -94,6 +94,21 @@ class SliceLint(unittest.TestCase):
                     self.assertTrue(doc["findings"])
                     self.assertEqual({f["gate"] for f in doc["findings"]} - {"1(a) parse", "1(b) schema"},
                                      set(), [f["message"] for f in doc["findings"]])
+                elif fixture.name == "atlas-multi":
+                    # Two applications reusing slice ids: one folder is not one slice-id namespace, so the
+                    # folder fails uniqueness and sole-handler while each application root is clean.
+                    self.assertEqual(code, 1)
+                    self.assertEqual({f["gate"] for f in doc["findings"]}, {"3 uniqueness", "4(a) sole handler"})
+                    for app in ("alpha", "beta"):
+                        app_code, app_doc = lint(fixture / app)
+                        self.assertEqual((app_code, app_doc["findings"]), (0, []))
+                elif fixture.name == "enrich":
+                    # Manifests from before schema 1.4 on purpose: one does not parse, two lack a required
+                    # field slice-enrich backfills (tests/scripts/test_slice_enrich.py).
+                    self.assertEqual(code, 1)
+                    self.assertEqual(sorted((f["gate"], Path(f["file"]).parent.name) for f in doc["findings"]),
+                                     [("1(a) parse", "waitlist"), ("1(b) schema", "catalogue_feed"),
+                                      ("1(b) schema", "loans_on_shelf")])
                 else:
                     self.assertEqual((code, doc["findings"]), (0, []))
 

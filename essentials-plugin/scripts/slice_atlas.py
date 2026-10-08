@@ -65,8 +65,10 @@ SOURCE_CODES = ("map-handled-undeclared", "map-endpoint-missing", "map-not-check
 # which `/essentials:slice-check <bc> --fix-manifests` regenerates. `audit`: a divergence that needs a
 # judgement — stale manifest or wrong code, which slice to move, which twin is live — so
 # `/essentials:slice-check <bc>`, whose gates decide and offer the fix. `author`: the human-owned
-# `flow:` and `scenarios:` (manifest-guide.md §3), which no command writes: a model drafts them for
-# review. A code missing here routes to `audit`.
+# `flow:` and `scenarios:` (manifest-guide.md §3), which `--fix-manifests` never writes:
+# `/essentials:slice-enrich --bc <bc>` drafts an absent one from evidence in the code and tests and writes
+# only what a person accepts; a scenario that is present but wrong is the person's to edit. A code
+# missing here routes to `audit`.
 FIX_ROUTES = {
     "map-parse-error": "repair",
     "map-handled-undeclared": "repair",
@@ -578,9 +580,9 @@ def aggregate(issues, rows):
         if len(group) >= AGGREGATE_MIN and 2 * len(group) > total[bc]:
             folded |= {id(i) for i in group}
             text = (f"{len(group)} of {total[bc]} slices in `{bc}` declare no flow — grouped into processes "
-                    "by cause and effect" if code == "flow-undeclared" else
-                    f"{len(group)} of {total[bc]} slices in `{bc}` declare no scenarios — their boards show "
-                    "invariants and test kinds instead")
+                    "by cause and effect; /essentials:slice-enrich drafts their journeys" if code == "flow-undeclared"
+                    else f"{len(group)} of {total[bc]} slices in `{bc}` declare no scenarios — their boards show "
+                    "invariants and test kinds instead; /essentials:slice-enrich drafts scenarios from their tests")
             out.append(issue(code, group[0]["level"], text, "context", bc))
     return [i for i in issues if id(i) not in folded] + out
 
@@ -644,10 +646,10 @@ def atlas_issues(rows, scope, messages, tests, facts_given):
         sid = s["id"]
         if not s["flows"]:
             out.append(issue("flow-undeclared", "info", "declares no `flow:` — grouped into a process by cause "
-                             "and effect", "slice", sid))
+                             "and effect; /essentials:slice-enrich drafts its journey", "slice", sid))
         if not s["scenarios"]:
             out.append(issue("scenario-none", "info", "declares no scenarios — its board shows invariants and "
-                             "test kinds instead", "slice", sid))
+                             "test kinds instead; /essentials:slice-enrich drafts them from its tests", "slice", sid))
         for name, problem in s.get("_scenario_problems") or []:
             out.append(issue("scenario-malformed", "warn",
                              (f"scenario `{name}` " if name else "") + problem + " — kept as far as it parses",
@@ -818,9 +820,11 @@ def diff(before, after):
     }
 
 
-def extract_ref(root: Path, ref: str, dest: Path):
+def extract_ref(root: Path, ref: str, dest: Path, missing_ok: bool = False):
     """`git archive REF -- <root>` unpacked under dest. Returns (ROOT's copy inside dest, short sha).
-    Touches neither the working tree nor .git. Raises ValueError carrying git's message."""
+    Touches neither the working tree nor .git. Raises ValueError carrying git's message. With
+    `missing_ok`, a ROOT that REF does not hold (an application added since) extracts nothing, and the
+    returned path does not exist."""
     def git(*args, cwd=root):
         r = subprocess.run(["git", "-C", str(cwd), *args], capture_output=True, timeout=300)
         if r.returncode != 0:
@@ -830,6 +834,9 @@ def extract_ref(root: Path, ref: str, dest: Path):
     top = Path(git("rev-parse", "--show-toplevel").decode("utf-8").strip()).resolve()
     sha = git("rev-parse", "--short", ref + "^{commit}").decode("utf-8").strip()
     rel = root.resolve().relative_to(top).as_posix()
+    if missing_ok and rel != "." and subprocess.run(["git", "-C", str(top), "cat-file", "-e", f"{sha}:{rel}"],
+                                                    capture_output=True, timeout=60).returncode != 0:
+        return dest / rel, sha
     data = git("archive", "--format=tar", sha, *(["--", rel] if rel != "." else []), cwd=top)
     with tarfile.open(fileobj=io.BytesIO(data)) as tar:
         tar.extractall(dest, filter="data")
@@ -869,3 +876,29 @@ def assemble(template: Path, data) -> str:
         lenses.append(f"/* ---- {lens.name} ---- */\n{code.rstrip()}\n")
     page = page.replace(DATA_LINE, "const ATLAS = " + script_json(data) + ";")
     return page.replace(LENS_LINE, "\n".join(lenses))
+
+
+INDEX_DATA_LINE = "const INDEX = /* __ATLAS_INDEX_DATA__ */ null;"
+TOKENS_LINE = "/* __ATLAS_TOKENS__ */"
+TOKENS_BEGIN, TOKENS_END = "/* __TOKENS_BEGIN__ */", "/* __TOKENS_END__ */"
+
+
+def assemble_index(template: Path, atlas: Path, data) -> str:
+    """The per-application index page: the data into its one data line, and the brand tokens — the CSS
+    between atlas.html's __TOKENS_BEGIN__ and __TOKENS_END__ markers — into its one token line, so the
+    palette exists once. ValueError when a placeholder or marker is not there exactly once."""
+    page = template.read_text(encoding="utf-8")
+    for token in (INDEX_DATA_LINE, TOKENS_LINE):
+        n = page.count(token)
+        if n != 1:
+            raise ValueError(f"template {template} must carry `{token}` exactly once, not {n} times")
+    source = atlas.read_text(encoding="utf-8")
+    for marker in (TOKENS_BEGIN, TOKENS_END):
+        n = source.count(marker)
+        if n != 1:
+            raise ValueError(f"{atlas} must carry `{marker}` exactly once, not {n} times")
+    tokens = source[source.index(TOKENS_BEGIN) + len(TOKENS_BEGIN):source.index(TOKENS_END)].strip("\n")
+    if "</style" in tokens.lower():
+        raise ValueError(f"the token block of {atlas} contains `</style`")
+    page = page.replace(TOKENS_LINE, tokens)  # first: the data cannot then be mistaken for the token line
+    return page.replace(INDEX_DATA_LINE, "const INDEX = " + script_json(data) + ";")

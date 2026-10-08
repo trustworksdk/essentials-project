@@ -1755,7 +1755,7 @@
       "id": "flow-undeclared:orders",
       "code": "flow-undeclared",
       "level": "info",
-      "text": "3 of 5 slices in `orders` declare no flow — grouped into processes by cause and effect",
+      "text": "3 of 5 slices in `orders` declare no flow — grouped into processes by cause and effect; /essentials:slice-enrich drafts their journeys",
       "target": {
         "kind": "context",
         "id": "orders",
@@ -1771,7 +1771,7 @@
       "id": "flow-undeclared:shipping.carrier_webhook",
       "code": "flow-undeclared",
       "level": "info",
-      "text": "declares no `flow:` — grouped into a process by cause and effect",
+      "text": "declares no `flow:` — grouped into a process by cause and effect; /essentials:slice-enrich drafts its journey",
       "target": {
         "kind": "slice",
         "id": "shipping.carrier_webhook",
@@ -1787,7 +1787,7 @@
       "id": "flow-undeclared:shipping.nightly_reship",
       "code": "flow-undeclared",
       "level": "info",
-      "text": "declares no `flow:` — grouped into a process by cause and effect",
+      "text": "declares no `flow:` — grouped into a process by cause and effect; /essentials:slice-enrich drafts its journey",
       "target": {
         "kind": "slice",
         "id": "shipping.nightly_reship",
@@ -1819,7 +1819,7 @@
       "id": "scenario-none:billing.charge_payment",
       "code": "scenario-none",
       "level": "info",
-      "text": "declares no scenarios — its board shows invariants and test kinds instead",
+      "text": "declares no scenarios — its board shows invariants and test kinds instead; /essentials:slice-enrich drafts them from its tests",
       "target": {
         "kind": "slice",
         "id": "billing.charge_payment",
@@ -1835,7 +1835,7 @@
       "id": "scenario-none:billing.payment_list",
       "code": "scenario-none",
       "level": "info",
-      "text": "declares no scenarios — its board shows invariants and test kinds instead",
+      "text": "declares no scenarios — its board shows invariants and test kinds instead; /essentials:slice-enrich drafts them from its tests",
       "target": {
         "kind": "slice",
         "id": "billing.payment_list",
@@ -1851,7 +1851,7 @@
       "id": "scenario-none:orders.cancellation_mailer",
       "code": "scenario-none",
       "level": "info",
-      "text": "declares no scenarios — its board shows invariants and test kinds instead",
+      "text": "declares no scenarios — its board shows invariants and test kinds instead; /essentials:slice-enrich drafts them from its tests",
       "target": {
         "kind": "slice",
         "id": "orders.cancellation_mailer",
@@ -1867,7 +1867,7 @@
       "id": "scenario-none:orders.order_history",
       "code": "scenario-none",
       "level": "info",
-      "text": "declares no scenarios — its board shows invariants and test kinds instead",
+      "text": "declares no scenarios — its board shows invariants and test kinds instead; /essentials:slice-enrich drafts them from its tests",
       "target": {
         "kind": "slice",
         "id": "orders.order_history",
@@ -1883,7 +1883,7 @@
       "id": "scenario-none:shipping.ship_order",
       "code": "scenario-none",
       "level": "info",
-      "text": "declares no scenarios — its board shows invariants and test kinds instead",
+      "text": "declares no scenarios — its board shows invariants and test kinds instead; /essentials:slice-enrich drafts them from its tests",
       "target": {
         "kind": "slice",
         "id": "shipping.ship_order",

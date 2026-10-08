@@ -959,7 +959,7 @@
       "id": "flow-undeclared:billing.refund_order",
       "code": "flow-undeclared",
       "level": "info",
-      "text": "declares no `flow:` — grouped into a process by cause and effect",
+      "text": "declares no `flow:` — grouped into a process by cause and effect; /essentials:slice-enrich drafts its journey",
       "target": {
         "kind": "slice",
         "id": "billing.refund_order",
@@ -975,7 +975,7 @@
       "id": "flow-undeclared:billing.settle_refund",
       "code": "flow-undeclared",
       "level": "info",
-      "text": "declares no `flow:` — grouped into a process by cause and effect",
+      "text": "declares no `flow:` — grouped into a process by cause and effect; /essentials:slice-enrich drafts its journey",
       "target": {
         "kind": "slice",
         "id": "billing.settle_refund",
@@ -991,7 +991,7 @@
       "id": "flow-undeclared:orders",
       "code": "flow-undeclared",
       "level": "info",
-      "text": "9 of 9 slices in `orders` declare no flow — grouped into processes by cause and effect",
+      "text": "9 of 9 slices in `orders` declare no flow — grouped into processes by cause and effect; /essentials:slice-enrich drafts their journeys",
       "target": {
         "kind": "context",
         "id": "orders",
@@ -1023,7 +1023,7 @@
       "id": "scenario-none:billing.refund_order",
       "code": "scenario-none",
       "level": "info",
-      "text": "declares no scenarios — its board shows invariants and test kinds instead",
+      "text": "declares no scenarios — its board shows invariants and test kinds instead; /essentials:slice-enrich drafts them from its tests",
       "target": {
         "kind": "slice",
         "id": "billing.refund_order",
@@ -1039,7 +1039,7 @@
       "id": "scenario-none:billing.settle_refund",
       "code": "scenario-none",
       "level": "info",
-      "text": "declares no scenarios — its board shows invariants and test kinds instead",
+      "text": "declares no scenarios — its board shows invariants and test kinds instead; /essentials:slice-enrich drafts them from its tests",
       "target": {
         "kind": "slice",
         "id": "billing.settle_refund",
@@ -1055,7 +1055,7 @@
       "id": "scenario-none:orders",
       "code": "scenario-none",
       "level": "info",
-      "text": "9 of 9 slices in `orders` declare no scenarios — their boards show invariants and test kinds instead",
+      "text": "9 of 9 slices in `orders` declare no scenarios — their boards show invariants and test kinds instead; /essentials:slice-enrich drafts scenarios from their tests",
       "target": {
         "kind": "context",
         "id": "orders",

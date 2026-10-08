@@ -1,0 +1,17 @@
+schemaVersion: "1.4"
+slice: ledger.entry_list
+kind: view
+bc: ledger
+owner: ledger-team
+status: live
+summary: Entries of a ledger, newest first.
+generator: essentials
+language: java
+tier: cqrs-es
+lane: decider
+serves: [GetEntryList]
+owns: [EntryList]
+projections:
+  - { name: EntryListProjection, from: [EntryPosted] }
+tests:
+  unit: { present: false }

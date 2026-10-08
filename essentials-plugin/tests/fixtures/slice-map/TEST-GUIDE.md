@@ -179,6 +179,13 @@ column, the minimap, hover cards, `↑`/`↓` walking the dock, `1`–`5`, `/`, 
 Diff lens's summary bar and "changes + 1 hop" filter on `atlas-sample`, and the phone-width layout. A DOM
 dump sees the state after a load, never the motion that got there.
 
+**By eye, per application:** `slice-index.py atlas tests/fixtures/atlas-multi --per-app <dir>` writes
+`alpha.html`, `beta.html` and `index.html`. The index lists alpha and beta, and each name opens its page.
+Each page's header shows "← all applications", which leads back to the index. The theme chosen on the
+index carries into the page link (`#theme=`). Hovering a board card, a scenario or a Metro station shows
+the compact detail preview; double-clicking a Metro station opens it in the Atlas lens; "Copy fix
+prompt" on the dock copies, or opens a dialog where the clipboard is blocked.
+
 ## Coverage gaps, stated rather than papered over
 
 - **Scale reads worse than it lays out.** `render-check.py` proves the 107-node map places every node

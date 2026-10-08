@@ -30,6 +30,9 @@ Usage
     slice-index.py html  [ROOT] --out FILE [--template FILE]  (+ every `map` option)
     slice-index.py atlas [ROOT] --out FILE [--before-ref REF | --before-map FILE] [--lens LENS] [--focus ID]
                          [--template FILE]  (+ every `map` option; --bc is the initial view, not a filter)
+    slice-index.py atlas [ROOT] --per-app DIR [--before-ref REF | --before-map-dir BDIR]  (+ as above)
+    slice-index.py map   [ROOT] --per-app DIR  (+ every `map` option but --bc)
+    slice-index.py apps  [ROOT]
     slice-index.py graph [ROOT] [--bc BC] [--json] [--repair-braced-paths]
     slice-index.py query [ROOT] WHAT NAME [--method M] [--json]
 
@@ -38,7 +41,22 @@ Usage
     atlas   the Slice Atlas page (docs/slice-atlas-design.md): the map plus a diff against a baseline
             (--before-ref builds it from `git archive REF`, --before-map reads an earlier `map` JSON)
             and the layout, inlined into references/slice/atlas/atlas.html and its lens-*.js; prints
-            one summary line. The computation is scripts/slice_atlas.py and slice_atlas_layout.py
+            one summary line. The computation is scripts/slice_atlas.py and slice_atlas_layout.py.
+            A ROOT holding several applications is refused with --out (exit 2, naming them): slice ids
+            are unique per application, not per folder. --per-app DIR writes DIR/<id>.html per
+            application and DIR/index.html (references/slice/atlas/index.html) linking them, one
+            summary line per page, then the index line; --before-map-dir BDIR diffs each page against
+            BDIR/<id>.json when that exists. --bc, --lens and --focus apply to every page that has the
+            context or target; a page without it opens as default
+    apps    the applications under ROOT as JSON: [{"id", "root" (relative to ROOT), "slices"}]. An
+            application is a build root (pom.xml, build.gradle, build.gradle.kts) owning at least one
+            manifest; a manifest belongs to the nearest build root above it, or to ROOT when there is
+            none. Id: the build root's directory name, its relative path with '/' as '-' on a clash
+            (docs/slice-enrich-design.md §4.1); `slices` counts its manifests. `map ROOT` without
+            --per-app still maps the whole ROOT as one map; `map --per-app DIR` writes DIR/<id>.json
+            per application, the baselines --before-map-dir reads. With --source-facts / --source-check
+            (one slice-source run at ROOT), each application takes the rows under its root, re-rooted
+            on it: reroot_facts()
     graph   the terminal --view graph: message chains from each entry point, longest first,
             each node expanded once, a repeat on the current path marked as a cycle
     query   locate the owning slice from manifests (references/slice/change-procedure.md §3).
@@ -63,7 +81,8 @@ Exit codes
         broken manifest carried as an `error` row; `html` writes NOTHING, because a page that
         silently omits a slice misleads. `atlas` writes its page, which draws each broken manifest
         as an error node under a "map incomplete" banner. `query` exits 1 when nothing matched
-    2   could not run — bad arguments, unreadable input, no YAML parser
+    2   could not run — bad arguments, unreadable input, no YAML parser. With --per-app: a page or map
+        could not be written (the others are), which outranks 1
     3   no slice.yaml under ROOT: nothing is declared, so there is nothing to map
         (/essentials:slice-discover is the command for that case)
 """
@@ -110,13 +129,52 @@ class UsageError(Exception):
 # ---------------------------------------------------------------- loading
 
 
-def find_manifests(root: Path):
+def find_manifests(root: Path, exclude=()):
+    """Every slice.yaml under root, less those under a directory in `exclude` (relative to root: the
+    applications nested inside this one, which own their own manifests)."""
     found = []
     for dirpath, dirnames, filenames in os.walk(root):
         dirnames[:] = sorted(d for d in dirnames if d not in SKIP_DIRS)
-        if "slice.yaml" in filenames:
+        if "slice.yaml" in filenames and not _within(Path(dirpath).relative_to(root).as_posix(), exclude):
             found.append(Path(dirpath) / "slice.yaml")
     return sorted(found)
+
+
+def _within(rel: str, dirs) -> bool:
+    return any(rel == d or rel.startswith(d + "/") for d in dirs)
+
+
+BUILD_FILES = ("pom.xml", "build.gradle", "build.gradle.kts")
+
+
+def applications(root: Path):
+    """The applications under root (design §4.1): each build root owning at least one manifest, a
+    manifest owned by the nearest build root above it, else by root. Ordered by relative path; each is
+    {"id", "root", "slices", "exclude"}, `exclude` being the applications nested inside it."""
+    root = root.resolve()
+    builds, owned = set(), {}
+    for dirpath, dirnames, filenames in os.walk(root):
+        dirnames[:] = sorted(d for d in dirnames if d not in SKIP_DIRS)
+        here = Path(dirpath)
+        if any(f in filenames for f in BUILD_FILES):
+            builds.add(here)
+        if "slice.yaml" in filenames:
+            d = here
+            while d != root and d not in builds:
+                d = d.parent
+            owned[d] = owned.get(d, 0) + 1
+    rels = {d: d.relative_to(root).as_posix() for d in owned}  # the root itself is "."
+    names = {d: (root.name if d == root else d.name) for d in owned}
+    clash = {n for n in names.values() if list(names.values()).count(n) > 1}
+    out = []
+    for d in sorted(owned, key=lambda d: rels[d]):
+        r = rels[d]
+        nested = [rels[o] for o in owned if o != d and (r == "." or rels[o].startswith(r + "/"))]
+        if r != ".":
+            nested = [n[len(r) + 1:] for n in nested]
+        out.append({"id": r.replace("/", "-") if names[d] in clash and r != "." else names[d], "root": r,
+                    "slices": owned[d], "exclude": sorted(nested)})
+    return out
 
 
 def repair_braced_paths(text: str):
@@ -142,12 +200,12 @@ def repair_braced_paths(text: str):
     return "".join(lines), changed
 
 
-def load(root: Path, repair: bool):
-    """Every manifest under root as (rel_dir, doc or None, error or None, repaired_lines)."""
+def load(root: Path, repair: bool, exclude=()):
+    """Every manifest under root (less `exclude`) as (rel_dir, doc or None, error or None, repaired_lines)."""
     import yaml
 
     out = []
-    for path in find_manifests(root):
+    for path in find_manifests(root, exclude):
         rel = path.parent.relative_to(root).as_posix()
         rel = "." if rel == "" else rel
         try:
@@ -788,6 +846,101 @@ def merge_source_facts(index, facts, messages, contexts):
             flag(s, "info", f"not checked — {u['gate']}: {u.get('reason', '')}", "map-not-checked", str(u["gate"]))
 
 
+# Keys whose string value is a path relative to slice-source's ROOT, and keys holding a list of them
+# (`alsoDeclaredIn` entries end in `:<line>`). `path` is also an endpoint's route, which starts with '/'.
+PATH_KEYS = ("dir", "manifest", "file", "declaredIn", "path", "bcPath")
+PATH_LIST_KEYS = ("dirs", "roots", "alsoDeclaredIn")
+LINE_SUFFIX = re.compile(r":\d+$")
+
+
+def reroot_facts(doc, app, ids_here, ids_elsewhere):
+    """One slice-source document (facts or check) cut to an application and re-rooted on it: what a run
+    of slice-source.py at the application root would have written, from one run at ROOT (design §4.2).
+    A row is kept when its path lies in the application (`app["root"]`, less `app["exclude"]`), every
+    path made relative to the application root. A row with no path (an endpoint) is kept when its slice
+    id is declared here and in no other application. A message declared only in another application
+    reads as not found; one declared here as well is re-pointed at the declaration here, keeping the
+    payload slice-source read from its first declaration (it records one payload per name — the same
+    unless the applications declare one type differently). Counts (`sourceFiles`, `manifests`,
+    `parsed`) stay the whole ROOT's."""
+    prefix, exclude = app["root"], app["exclude"]
+
+    def here(path):
+        """The path relative to the application root, or None when it lies outside the application."""
+        if prefix != ".":
+            if path == prefix:
+                return "."
+            if not path.startswith(prefix + "/"):
+                return None
+            path = path[len(prefix) + 1:]
+        return None if _within(path, exclude) else path
+
+    def located(path):
+        return isinstance(path, str) and path != "" and not path.startswith("/")
+
+    def location(row):
+        return next((row[k] for k in PATH_KEYS if located(row.get(k))), None)
+
+    def walk(value, top=False):
+        if isinstance(value, list):
+            out = []
+            for item in value:
+                if isinstance(item, dict):
+                    loc = location(item)
+                    if loc is not None and here(LINE_SUFFIX.sub("", loc)) is None:
+                        continue
+                    if loc is None and top and isinstance(item.get("slice"), str) and (
+                            item["slice"] not in ids_here or item["slice"] in ids_elsewhere):
+                        continue
+                out.append(walk(item))
+            return out
+        if not isinstance(value, dict):
+            return value
+        out = {}
+        for k, v in value.items():
+            if k in PATH_KEYS and located(v):
+                out[k] = here(v) or v
+            elif k in PATH_LIST_KEYS and isinstance(v, list):
+                kept = []
+                for x in v:
+                    if isinstance(x, str):
+                        m = LINE_SUFFIX.search(x)
+                        h = here(x[:m.start()] if m else x)
+                        if h is not None:
+                            kept.append(h + (m.group(0) if m else ""))
+                out[k] = kept
+            else:
+                out[k] = walk(v)
+        return out
+
+    def message(m):
+        if not isinstance(m, dict) or not m.get("found"):
+            return m
+        decls = [(m.get("declaredIn"), m.get("line"))]
+        for x in m.get("alsoDeclaredIn") or []:
+            p, _, line = x.rpartition(":")
+            decls.append((p, int(line) if line.isdigit() else None))
+        mine = [(here(p), line) for p, line in decls if isinstance(p, str) and here(p) is not None]
+        if not mine:
+            return {**m, "found": False, "identity": None, "fields": [], "declaredIn": None, "line": None,
+                    "alsoDeclaredIn": []}
+        return {**m, "declaredIn": mine[0][0], "line": mine[0][1],
+                "alsoDeclaredIn": [f"{p}:{line}" for p, line in mine[1:]]}
+
+    out = {}
+    for k, v in doc.items():
+        if k == "messages" and isinstance(v, list):
+            out[k] = [message(m) for m in v]
+        elif k == "root" and isinstance(v, str):
+            out[k] = v if prefix == "." else f"{v.rstrip('/')}/{prefix}"
+        elif k in PATH_KEYS or k in PATH_LIST_KEYS:
+            wrapped = walk({k: v})
+            out[k] = wrapped[k] if isinstance(wrapped, dict) else v
+        else:
+            out[k] = walk(v, top=True)
+    return out
+
+
 # ---------------------------------------------------------------- commands
 
 
@@ -808,7 +961,7 @@ def build_index(args):
         import yaml  # noqa: F401
     except ImportError:
         raise UsageError("`pyyaml` is not installed. Run through uv: uv run --script " + sys.argv[0])
-    loaded = load(root.resolve(), getattr(args, "repair_braced_paths", False))
+    loaded = load(root.resolve(), getattr(args, "repair_braced_paths", False), getattr(args, "exclude", ()))
     if not loaded:
         return None
     index = Index(loaded)
@@ -816,25 +969,34 @@ def build_index(args):
     return index
 
 
-def build_map(index, args):
+def read_source_docs(args):
+    """The --source-facts and --source-check documents, in that order."""
+    docs = []
+    for source in (args.source_facts or []) + (args.source_check or []):
+        try:
+            text = sys.stdin.read() if source == "-" else Path(source).read_text(encoding="utf-8")
+            facts = json.loads(text)
+        except (OSError, ValueError) as exc:
+            raise UsageError(f"cannot read --source-facts {source}: {exc}")
+        if not isinstance(facts, dict):
+            raise UsageError(f"--source-facts {source} must hold a JSON object")
+        docs.append(facts)
+    return docs
+
+
+def build_map(index, args, docs=None):
+    """The map JSON. `docs` are the slice-source documents already read (per application, re-rooted);
+    None reads them from --source-facts / --source-check."""
     root = Path(args.root)
     notes = []
     messages = index.messages()
     contexts = index.contexts(notes)
-    docs = []
     if args.source_facts or args.source_check:
-        args.source_facts = args.source_facts or []
-        for source in args.source_facts + (args.source_check or []):
-            try:
-                text = sys.stdin.read() if source == "-" else Path(source).read_text(encoding="utf-8")
-                facts = json.loads(text)
-            except (OSError, ValueError) as exc:
-                raise UsageError(f"cannot read --source-facts {source}: {exc}")
-            if not isinstance(facts, dict):
-                raise UsageError(f"--source-facts {source} must hold a JSON object")
+        docs = read_source_docs(args) if docs is None else docs
+        for facts in docs:
             merge_source_facts(index, facts, messages, contexts)
-            docs.append(facts)
     else:
+        docs = []
         notes.append("package, files, message payloads and read-model columns come from source and were "
                      "not read (no --source-facts)")
     if index.repaired:
@@ -882,18 +1044,9 @@ def build_map(index, args):
         issues = [i for i in issues if i["target"]["id"] in keep or i["target"] == {
             "kind": "context", "id": args.bc, "part": None}]
 
-    if args.root_label is not None:
-        label = args.root_label
-    else:
-        try:
-            label = Path(os.path.relpath(root.resolve(), Path.cwd())).as_posix()
-        except ValueError:
-            label = root.resolve().as_posix()
-        if label.startswith(".."):
-            label = root.resolve().as_posix()
     return {
         "meta": {
-            "root": label,
+            "root": args.root_label if args.root_label is not None else root_label(root),
             "sha": args.sha or git_sha(root),
             "project": args.project or root.resolve().name,
             "scope": f"bc:{args.bc}" if args.bc else "full",
@@ -912,6 +1065,15 @@ def build_map(index, args):
         "issues": issues,
         "lineage": slice_atlas.lineage(messages, slices),
     }
+
+
+def root_label(root: Path):
+    """meta.root by default: ROOT relative to the cwd, or absolute when it lies outside it."""
+    try:
+        label = Path(os.path.relpath(root.resolve(), Path.cwd())).as_posix()
+    except ValueError:
+        label = root.resolve().as_posix()
+    return root.resolve().as_posix() if label.startswith("..") else label
 
 
 # The keys atlas_fields() adds to every row; they end the row in this order.
@@ -934,6 +1096,8 @@ def atlas_fields(index, root, tests):
 
 
 def cmd_map(args):
+    if args.per_app:
+        return cmd_map_per_app(args)
     index = build_index(args)
     if index is None:
         return no_manifests(args)
@@ -968,7 +1132,17 @@ def cmd_html(args):
 
 def cmd_atlas(args):
     """The Atlas page. Unlike `html` it writes a map with unparsed manifests (each an error node under a
-    "map incomplete" banner) and then exits 1 (design A7)."""
+    "map incomplete" banner) and then exits 1 (design A7). A ROOT holding several applications is
+    refused: their slice ids are separate namespaces, and one page over them reports false duplicates."""
+    if args.per_app:
+        return cmd_atlas_per_app(args)
+    if args.before_map_dir:
+        raise UsageError("--before-map-dir holds one baseline per application: it goes with --per-app")
+    root = Path(args.root)
+    apps = applications(root) if root.is_dir() else []
+    if len(apps) > 1:
+        raise UsageError(f"{args.root} holds {len(apps)} applications ({', '.join(a['id'] for a in apps)}), "
+                         "each its own slice-id namespace: pass --per-app DIR for one page each")
     index = build_index(args)
     if index is None:
         return no_manifests(args)
@@ -976,22 +1150,216 @@ def cmd_atlas(args):
     data = build_map(index, args)
     if initial_bc and initial_bc not in {c["id"] for c in data["contexts"]}:
         raise UsageError(f"no slice declares bc: {initial_bc}")
+    atlas_data(args, data, index, initial_bc, args.focus)
+    write_page(args, data, Path(args.out))
+    print(atlas_summary(args.out, data, index.broken))
+    return 1 if index.broken else 0
+
+
+def atlas_data(args, data, index, initial_bc, focus):
+    """The map made the Atlas page's data: the diff, the page meta and the layout."""
     data["diff"] = before_diff(args, data)
     data["meta"].update({"atlasVersion": 1, "generatedBy": "slice-index.py atlas", "incomplete": len(index.broken),
-                         "initial": {"lens": args.lens, "focus": args.focus, "bc": initial_bc}})
+                         "initial": {"lens": args.lens, "focus": focus, "bc": initial_bc}})
+    if getattr(args, "app", None):
+        data["meta"]["app"] = args.app
     data["layout"] = layout(data)
-    template = Path(args.template) if args.template else (
+
+
+def atlas_template(args):
+    return Path(args.template) if args.template else (
         Path(__file__).resolve().parent.parent / "references" / "slice" / "atlas" / "atlas.html")
+
+
+def write_page(args, data, out: Path):
     try:
-        page = slice_atlas.assemble(template, data)
+        page = slice_atlas.assemble(atlas_template(args), data)
     except (OSError, ValueError) as exc:
         raise UsageError(f"cannot assemble the page: {exc}")
     try:
-        Path(args.out).write_text(page, encoding="utf-8")
+        out.write_text(page, encoding="utf-8")
     except OSError as exc:
-        raise UsageError(f"cannot write {args.out}: {exc}")
-    print(atlas_summary(args.out, data, index.broken))
-    return 1 if index.broken else 0
+        raise UsageError(f"cannot write {out}: {exc}")
+
+
+# ---------------------------------------------------------------- one page per application
+
+
+def app_runs(args):
+    """Each application under ROOT as (app, its args, its index, its re-rooted source documents or
+    None), or None when ROOT holds no manifest. The source documents are read once, at ROOT."""
+    root = Path(args.root)
+    if not root.is_dir():
+        raise UsageError(f"not a directory: {root}")
+    apps = applications(root)
+    if not apps:
+        return None
+    docs = read_source_docs(args) if (args.source_facts or args.source_check) else None
+    sha = args.sha or git_sha(root)
+    label = args.root_label if args.root_label is not None else root_label(root)
+    runs = []
+    for app in apps:
+        ns = argparse.Namespace(**vars(args))
+        ns.root = str(root if app["root"] == "." else root / app["root"])
+        ns.exclude = app["exclude"]
+        ns.sha = sha
+        ns.root_label = label if app["root"] == "." else f"{label.rstrip('/')}/{app['root']}"
+        ns.project = f"{args.project} / {app['id']}" if args.project else app["id"]
+        ns.app = {"id": app["id"], "root": app["root"], "index": "index.html"}
+        runs.append((app, ns, build_index(ns)))
+    ids = {app["id"]: {s["id"] for s in index.good} for app, _, index in runs}
+    out = []
+    for app, ns, index in runs:
+        elsewhere = set().union(*(v for k, v in ids.items() if k != app["id"]))
+        out.append((app, ns, index, None if docs is None else
+                    [reroot_facts(d, app, ids[app["id"]], elsewhere) for d in docs]))
+    return out
+
+
+def out_dir(args):
+    d = Path(args.per_app)
+    try:
+        d.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        raise UsageError(f"cannot create --per-app {d}: {exc}")
+    return d
+
+
+def cmd_map_per_app(args):
+    """DIR/<id>.json per application: the whole map of each, the CI baselines for --before-map-dir."""
+    if args.bc:
+        raise UsageError("--bc cuts a map to one context; --per-app writes each application's whole map")
+    runs = app_runs(args)
+    if runs is None:
+        return no_manifests(args)
+    d = out_dir(args)
+    failed = False
+    for app, ns, index, docs in runs:
+        path = d / f"{app['id']}.json"
+        data = build_map(index, ns, docs)
+        try:
+            path.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+        except OSError as exc:
+            print(f"slice-index: {app['id']}: cannot write {path}: {exc}", file=sys.stderr)
+            failed = True
+            continue
+        line = (f"slice-index: wrote {path} — {plural(data['meta']['sliceCount'], 'slice', 'slices')}"
+                f" in {plural(data['meta']['bcCount'], 'context', 'contexts')}")
+        if index.broken:
+            line += f" · map incomplete: {plural(len(index.broken), 'manifest', 'manifests')} did not parse"
+        print(line)
+    return 2 if failed else 1 if any(index.broken for _, _, index, _ in runs) else 0
+
+
+def has_target(data, focus):
+    """Whether a page holds --focus: a slice, process, context, issue or message id, or a target key."""
+    ids = ({s["id"] for s in data["slices"]} | {p["id"] for p in data["processes"]}
+           | {c["id"] for c in data["contexts"]} | {i["id"] for i in data["issues"]}
+           | {m["name"] for m in data["messages"]})
+    return focus in ids or (":" in focus and focus.split(":", 1)[1] in ids)
+
+
+def cmd_atlas_per_app(args):
+    """DIR/<id>.html per application and DIR/index.html linking them. A page that cannot be written is
+    reported and the others are still written; the index lists it as not written."""
+    if args.before_map:
+        raise UsageError("--before-map is one baseline for one map: with --per-app pass --before-map-dir")
+    runs = app_runs(args)
+    if runs is None:
+        return no_manifests(args)
+    d = out_dir(args)
+    maps = []
+    for app, ns, index, docs in runs:
+        ns.bc = None
+        maps.append(build_map(index, ns, docs))
+    if args.bc and not any(args.bc in {c["id"] for c in m["contexts"]} for m in maps):
+        raise UsageError(f"no slice declares bc: {args.bc}")
+    rows, failed = [], False
+    for (app, ns, index, _), data in zip(runs, maps):
+        out = d / f"{app['id']}.html"
+        bc = args.bc if args.bc in {c["id"] for c in data["contexts"]} else None
+        focus = args.focus if args.focus and has_target(data, args.focus) else None
+        if args.before_map_dir:
+            base = Path(args.before_map_dir) / f"{app['id']}.json"
+            ns.before_map = str(base) if base.is_file() else None
+        try:
+            atlas_data(ns, data, index, bc, focus)
+            write_page(ns, data, out)
+        except UsageError as exc:
+            print(f"slice-index: {app['id']}: {exc}", file=sys.stderr)
+            rows.append(index_row(app, None, index, str(exc)))
+            failed = True
+            continue
+        print(atlas_summary(out, data, index.broken))
+        rows.append(index_row(app, data, index, None))
+    index_path = d / "index.html"
+    label = args.root_label if args.root_label is not None else root_label(Path(args.root))
+    page_data = {"meta": {"root": label, "sha": runs[0][1].sha,
+                          "project": args.project or Path(args.root).resolve().name,
+                          "generatedBy": "slice-index.py atlas --per-app", "atlasVersion": 1,
+                          "baseline": args.before_ref or (args.before_map_dir and "before-map-dir")},
+                 "apps": rows}
+    try:
+        index_path.write_text(slice_atlas.assemble_index(index_template(args), atlas_template(args), page_data),
+                              encoding="utf-8")
+    except (OSError, ValueError) as exc:
+        print(f"slice-index: cannot write {index_path}: {exc}", file=sys.stderr)
+        return 2
+    print(index_summary(index_path, rows))
+    return 2 if failed else 1 if any(index.broken for _, _, index, _ in runs) else 0
+
+
+def index_template(args):
+    """index.html beside --template when there is one there, else the plugin's."""
+    if args.template and (Path(args.template).parent / "index.html").is_file():
+        return Path(args.template).parent / "index.html"
+    return Path(__file__).resolve().parent.parent / "references" / "slice" / "atlas" / "index.html"
+
+
+def index_row(app, data, index, error):
+    """One application's line on the index page."""
+    row = {"id": app["id"], "root": app["root"], "href": None if error else f"{app['id']}.html", "error": error,
+           "incomplete": len(index.broken), "sliceCount": None, "bcCount": None, "processCount": None,
+           "issues": None, "diff": None}
+    if data is None:
+        return row
+    row.update({"sliceCount": data["meta"]["sliceCount"], "bcCount": data["meta"]["bcCount"],
+                "processCount": len(data["processes"]),
+                "issues": {lvl: sum(1 for i in data["issues"] if i["level"] == lvl) for lvl in ("error", "warn", "info")}})
+    dd = data["diff"]
+    if dd:
+        row["diff"] = {"ref": dd["before"]["ref"], "sha": dd["before"]["sha"], "issuesKnown": dd["before"]["issuesKnown"],
+                       "slices": {k: len(dd["slices"][k]) for k in ("added", "removed", "changed")},
+                       "issues": {k: len(dd["issues"][k]) for k in ("new", "fixed")}}
+    return row
+
+
+def index_summary(path, rows):
+    written = [r for r in rows if r["href"]]
+    counts = {lvl: sum(r["issues"][lvl] for r in written) for lvl in ("error", "warn", "info")}
+    line = (f"slice-index: wrote {path} — {plural(len(rows), 'application', 'applications')}"
+            f" · {plural(sum(r['sliceCount'] for r in written), 'slice', 'slices')}"
+            f" · issues {counts['error']} error, {counts['warn']} warn, {counts['info']} info")
+    if len(written) < len(rows):
+        line += f" · {plural(len(rows) - len(written), 'page', 'pages')} not written"
+    return line
+
+
+def plural(count, one, many):
+    return f"{count} {one if count == 1 else many}"
+
+
+def cmd_apps(args):
+    root = Path(args.root)
+    if not root.is_dir():
+        raise UsageError(f"not a directory: {root}")
+    apps = applications(root)
+    if not apps:
+        return no_manifests(args)
+    json.dump([{"id": a["id"], "root": a["root"], "slices": a["slices"]} for a in apps], sys.stdout, indent=2,
+              ensure_ascii=False)
+    sys.stdout.write("\n")
+    return 0
 
 
 def layout(data):
@@ -1016,7 +1384,8 @@ def before_diff(args, after):
         return None
     with tempfile.TemporaryDirectory(prefix="slice-atlas-") as tmp:
         try:
-            root, sha = slice_atlas.extract_ref(Path(args.root), args.before_ref, Path(tmp) / "tree")
+            root, sha = slice_atlas.extract_ref(Path(args.root), args.before_ref, Path(tmp) / "tree",
+                                                missing_ok=getattr(args, "app", None) is not None)
         except (OSError, ValueError, tarfile.TarError) as exc:
             raise UsageError(f"--before-ref: {exc}")
         before = before_map(args, root, sha, Path(tmp))
@@ -1030,7 +1399,7 @@ def before_map(args, root, sha, tmp):
     current map was given source facts, so a source-derived issue is new or fixed, not appeared."""
     ns = argparse.Namespace(**vars(args))
     ns.root, ns.bc, ns.sha, ns.root_label = str(root), None, sha, args.before_ref
-    ns.source_facts, ns.source_check, ns.skipped = None, None, []
+    ns.source_facts, ns.source_check, ns.skipped, ns.app = None, None, [], None
     script = Path(__file__).resolve().parent / "slice-source.py"
     for wanted, extra, attr in ((args.source_facts, [], "source_facts"), (args.source_check, ["--check"], "source_check")):
         if not wanted:
@@ -1052,8 +1421,7 @@ def before_map(args, root, sha, tmp):
 
 def atlas_summary(out, data, broken):
     counts = {lvl: sum(1 for i in data["issues"] if i["level"] == lvl) for lvl in ("error", "warn", "info")}
-    def n(count, one, many):
-        return f"{count} {one if count == 1 else many}"
+    n = plural
     line = (f"slice-index: wrote {out} — {n(data['meta']['sliceCount'], 'slice', 'slices')}"
             f" in {n(data['meta']['bcCount'], 'context', 'contexts')}"
             f" · {n(len(data['processes']), 'process', 'processes')}"
@@ -1239,6 +1607,7 @@ def main(argv=None):
 
     p = sub.add_parser("map", help="the slice-map data contract as JSON")
     map_opts(p)
+    p.add_argument("--per-app", metavar="DIR", help="write DIR/<id>.json per application instead of stdout")
     p.set_defaults(fn=cmd_map)
 
     p = sub.add_parser("html", help="the slice-map page, written to --out")
@@ -1249,14 +1618,23 @@ def main(argv=None):
 
     p = sub.add_parser("atlas", help="the Slice Atlas page, written to --out")
     map_opts(p)
-    p.add_argument("--out", required=True, help="page to write — a path the user chose")
-    p.add_argument("--template", help="atlas.html; its lens-*.js are read beside it (default: the plugin's)")
+    where = p.add_mutually_exclusive_group(required=True)
+    where.add_argument("--out", help="page to write — a path the user chose")
+    where.add_argument("--per-app", metavar="DIR", help="one page per application and an index.html, in DIR")
+    p.add_argument("--template", help="atlas.html; its lens-*.js are read beside it, and index.html when it is "
+                                      "there (default: the plugin's)")
     before = p.add_mutually_exclusive_group()
     before.add_argument("--before-ref", metavar="REF", help="baseline for the Diff lens: ROOT as of this git ref")
     before.add_argument("--before-map", metavar="FILE", help="baseline for the Diff lens: an earlier `map` JSON")
+    before.add_argument("--before-map-dir", metavar="BDIR",
+                        help="--per-app baseline: BDIR/<id>.json, as `map --per-app` wrote it, per application")
     p.add_argument("--lens", choices=["atlas", "diff", "lineage", "matrix", "metro"], help="lens the page opens on")
     p.add_argument("--focus", metavar="ID", help="slice, process or issue id the page opens focused on")
     p.set_defaults(fn=cmd_atlas)
+
+    p = sub.add_parser("apps", help="the applications under ROOT, as JSON")
+    p.add_argument("root", nargs="?", default=".", help="directory to scan (default: .)")
+    p.set_defaults(fn=cmd_apps)
 
     p = sub.add_parser("graph", help="terminal --view graph")
     common(p)

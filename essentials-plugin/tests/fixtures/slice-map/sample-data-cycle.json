@@ -623,7 +623,7 @@
       "id": "flow-undeclared:orders.place_order",
       "code": "flow-undeclared",
       "level": "info",
-      "text": "declares no `flow:` — grouped into a process by cause and effect",
+      "text": "declares no `flow:` — grouped into a process by cause and effect; /essentials:slice-enrich drafts its journey",
       "target": {
         "kind": "slice",
         "id": "orders.place_order",
@@ -639,7 +639,7 @@
       "id": "flow-undeclared:payments",
       "code": "flow-undeclared",
       "level": "info",
-      "text": "4 of 4 slices in `payments` declare no flow — grouped into processes by cause and effect",
+      "text": "4 of 4 slices in `payments` declare no flow — grouped into processes by cause and effect; /essentials:slice-enrich drafts their journeys",
       "target": {
         "kind": "context",
         "id": "payments",
@@ -655,7 +655,7 @@
       "id": "flow-undeclared:reminders.schedule_next",
       "code": "flow-undeclared",
       "level": "info",
-      "text": "declares no `flow:` — grouped into a process by cause and effect",
+      "text": "declares no `flow:` — grouped into a process by cause and effect; /essentials:slice-enrich drafts its journey",
       "target": {
         "kind": "slice",
         "id": "reminders.schedule_next",
@@ -671,7 +671,7 @@
       "id": "flow-undeclared:reminders.send_reminder",
       "code": "flow-undeclared",
       "level": "info",
-      "text": "declares no `flow:` — grouped into a process by cause and effect",
+      "text": "declares no `flow:` — grouped into a process by cause and effect; /essentials:slice-enrich drafts its journey",
       "target": {
         "kind": "slice",
         "id": "reminders.send_reminder",
@@ -687,7 +687,7 @@
       "id": "scenario-none:orders.place_order",
       "code": "scenario-none",
       "level": "info",
-      "text": "declares no scenarios — its board shows invariants and test kinds instead",
+      "text": "declares no scenarios — its board shows invariants and test kinds instead; /essentials:slice-enrich drafts them from its tests",
       "target": {
         "kind": "slice",
         "id": "orders.place_order",
@@ -703,7 +703,7 @@
       "id": "scenario-none:payments",
       "code": "scenario-none",
       "level": "info",
-      "text": "4 of 4 slices in `payments` declare no scenarios — their boards show invariants and test kinds instead",
+      "text": "4 of 4 slices in `payments` declare no scenarios — their boards show invariants and test kinds instead; /essentials:slice-enrich drafts scenarios from their tests",
       "target": {
         "kind": "context",
         "id": "payments",
@@ -719,7 +719,7 @@
       "id": "scenario-none:reminders.schedule_next",
       "code": "scenario-none",
       "level": "info",
-      "text": "declares no scenarios — its board shows invariants and test kinds instead",
+      "text": "declares no scenarios — its board shows invariants and test kinds instead; /essentials:slice-enrich drafts them from its tests",
       "target": {
         "kind": "slice",
         "id": "reminders.schedule_next",
@@ -735,7 +735,7 @@
       "id": "scenario-none:reminders.send_reminder",
       "code": "scenario-none",
       "level": "info",
-      "text": "declares no scenarios — its board shows invariants and test kinds instead",
+      "text": "declares no scenarios — its board shows invariants and test kinds instead; /essentials:slice-enrich drafts them from its tests",
       "target": {
         "kind": "slice",
         "id": "reminders.send_reminder",

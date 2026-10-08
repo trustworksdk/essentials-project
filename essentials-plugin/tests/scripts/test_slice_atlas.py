@@ -17,6 +17,10 @@ by method name, one by @DisplayName and one that does not; a column no inbound e
 (`OrderListView.discount`); a `with` key that is no payload field; a `given` event nothing publishes; and
 `orders/use_cases/amend_order`, whose manifest does not parse (an unquoted braced path).
 
+`tests/fixtures/atlas-multi/` is the multi-application case (design: docs/slice-enrich-design.md §4): an
+aggregating parent pom over two applications, `alpha` and `beta`, that reuse the slice ids
+`ledger.post_entry` and `ledger.entry_list`; only `alpha` holds the test its scenario names.
+
 Goldens: `tests/slice-index/golden/atlas.map.json` (`map` with slice-source facts — so it also pins the
 seam with slice-source's `tests` index) and `atlas.diff.json` (the diff of a scripted change, built from a
 throwaway git repository by --before-ref). The page template here is a minimal one written per test:
@@ -26,6 +30,7 @@ the real `references/slice/atlas/` page is checked by `tests/fixtures/slice-map/
 from __future__ import annotations
 
 import importlib
+import importlib.util
 import json
 import os
 import re
@@ -41,6 +46,7 @@ SCRIPTS = PLUGIN / "scripts"
 INDEX = SCRIPTS / "slice-index.py"
 SOURCE = SCRIPTS / "slice-source.py"
 FIXTURE = PLUGIN / "tests" / "fixtures" / "atlas"
+MULTI = PLUGIN / "tests" / "fixtures" / "atlas-multi"
 GOLDEN = PLUGIN / "tests" / "slice-index" / "golden"
 UPDATE = "--update-golden" in sys.argv
 if UPDATE:
@@ -62,6 +68,8 @@ const ATLAS = /* __ATLAS_DATA__ */ null;
 /* __ATLAS_LENSES__ */
 </script>
 """
+# The page template plus a token block, which the index page copies (slice_atlas.assemble_index).
+TOKENS = "<style>\n/* __TOKENS_BEGIN__ */\n:root { --surface: #fff; }\n/* __TOKENS_END__ */\n</style>\n"
 MAP_ARGS = ["--sha", "fixture", "--project", "atlas", "--root-label", "tests/fixtures/atlas"]
 # A fixed identity and clock, so a commit in a throwaway repository has the same sha on every run.
 GIT_ENV = {**os.environ, "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@example.com", "GIT_COMMITTER_NAME": "t",
@@ -100,6 +108,12 @@ def golden(test, path: Path, actual: str):
 def page_data(page: str):
     m = re.search(r"^const ATLAS = (.*);$", page, re.M)
     assert m, "no data line in the page"
+    return json.loads(m.group(1))
+
+
+def index_data(page: str):
+    m = re.search(r"^const INDEX = (.*);$", page, re.M)
+    assert m, "no data line in the index page"
     return json.loads(m.group(1))
 
 
@@ -550,6 +564,223 @@ class Diff(unittest.TestCase):
         r = run("atlas", self.app, "--out", self.tmp / "p.html", "--template", self.tpl, "--before-ref", "nope")
         self.assertEqual(r.returncode, 2)
         self.assertIn("--before-ref", r.stderr)
+
+
+def manifest(path: Path, sid: str, kind: str = "command", extra: str = ""):
+    path.mkdir(parents=True, exist_ok=True)
+    (path / "slice.yaml").write_text(f'schemaVersion: "1.4"\nslice: {sid}\nkind: {kind}\nbc: {sid.split(".")[0]}\n'
+                                     + extra, encoding="utf-8")
+
+
+class Applications(unittest.TestCase):
+    """One page per application (design §4): what an application is, the refusal, the pages and the index."""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.tmp = Path(self._tmp.name)
+        self.tpl = self.tmp / "tpl" / "atlas.html"
+        self.tpl.parent.mkdir()
+        self.tpl.write_text(TEMPLATE + TOKENS, encoding="utf-8")
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
+    def per_app(self, root, out, *extra):
+        return run("atlas", root, "--per-app", out, "--template", self.tpl, "--sha", "x", *extra)
+
+    def test_apps(self):
+        r = run("apps", "tests/fixtures/atlas-multi")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        # the parent pom only aggregates: it owns no manifest, so it is no application
+        self.assertEqual(json.loads(r.stdout), [{"id": "alpha", "root": "alpha", "slices": 3},
+                                                {"id": "beta", "root": "beta", "slices": 2}])
+        r = run("apps", "tests/fixtures/atlas")  # no build file: the scanned root owns every manifest
+        self.assertEqual(json.loads(r.stdout), [{"id": "atlas", "root": ".", "slices": 14}])
+        self.assertEqual(run("apps", self.tmp).returncode, 3)
+
+    def test_ownership_nesting_and_id_clash(self):
+        root = self.tmp / "estate"
+        for d in ("a/svc", "b/svc", "a/svc/inner", "b/lib"):
+            (root / d).mkdir(parents=True)
+        (root / "a/svc/pom.xml").write_text("<project/>", encoding="utf-8")
+        (root / "b/svc/build.gradle.kts").write_text("", encoding="utf-8")
+        (root / "a/svc/inner/build.gradle").write_text("", encoding="utf-8")
+        (root / "b/lib/pom.xml").write_text("<project/>", encoding="utf-8")  # a build root with no manifest
+        manifest(root / "top/views/v", "t.v", "view")                         # above every build root
+        manifest(root / "a/svc/src/x/use_cases/c", "x.c")
+        manifest(root / "a/svc/inner/src/y/use_cases/c", "y.c")
+        manifest(root / "b/svc/src/x/use_cases/c", "x.c")
+        apps = slice_index().applications(root)
+        self.assertEqual([(a["id"], a["root"], a["slices"], a["exclude"]) for a in apps], [
+            ("estate", ".", 1, ["a/svc", "a/svc/inner", "b/svc"]),
+            ("a-svc", "a/svc", 1, ["inner"]),
+            ("inner", "a/svc/inner", 1, []),
+            ("b-svc", "b/svc", 1, [])])
+        out = self.tmp / "pages"
+        r = self.per_app(root, out)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        ids = {p.stem: [s["id"] for s in page_data(p.read_text(encoding="utf-8"))["slices"]]
+               for p in out.glob("*.html") if p.name != "index.html"}
+        self.assertEqual(ids, {"estate": ["t.v"], "a-svc": ["x.c"], "inner": ["y.c"], "b-svc": ["x.c"]})
+
+    def test_one_page_refuses_several_applications(self):
+        out = self.tmp / "page.html"
+        r = run("atlas", "tests/fixtures/atlas-multi", "--out", out, "--template", self.tpl)
+        self.assertEqual(r.returncode, 2)
+        self.assertIn("tests/fixtures/atlas-multi holds 2 applications (alpha, beta), each its own slice-id "
+                      "namespace: pass --per-app DIR for one page each", r.stderr)
+        self.assertFalse(out.exists())
+        # one application is the page of today, wherever it sits below ROOT
+        r = run("atlas", "tests/fixtures/atlas-multi/beta", "--out", out, "--template", self.tpl)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertNotIn("app", page_data(out.read_text(encoding="utf-8"))["meta"])
+        for bad in (["--per-app", self.tmp / "d", "--before-map", out], ["--out", out, "--before-map-dir", self.tmp]):
+            r = run("atlas", "tests/fixtures/atlas-multi", "--template", self.tpl, *bad)
+            self.assertEqual(r.returncode, 2, r.stdout)
+        self.assertEqual(run("map", "tests/fixtures/atlas-multi", "--per-app", self.tmp / "m", "--bc", "ledger")
+                         .returncode, 2)
+
+    def test_pages_and_index(self):
+        facts = source_facts(MULTI, self.tmp)
+        out = self.tmp / "pages"
+        r = self.per_app("tests/fixtures/atlas-multi", out, "--project", "ledgers", "--lens", "matrix",
+                         "--bc", "ledger", "--focus", "ledger.close_period", *facts)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        lines = r.stdout.splitlines()
+        self.assertEqual(len(lines), 3)
+        self.assertTrue(lines[0].startswith(f"slice-index: wrote {out / 'alpha.html'} — 3 slices in 1 context"))
+        self.assertTrue(lines[1].startswith(f"slice-index: wrote {out / 'beta.html'} — 2 slices in 1 context"))
+        self.assertTrue(lines[2].startswith(f"slice-index: wrote {out / 'index.html'} — 2 applications · 5 slices"))
+        pages = {a: page_data((out / f"{a}.html").read_text(encoding="utf-8")) for a in ("alpha", "beta")}
+        for app, data in pages.items():
+            meta = data["meta"]
+            self.assertEqual(meta["app"], {"id": app, "root": app, "index": "index.html"})
+            self.assertEqual((meta["root"], meta["project"]), (f"tests/fixtures/atlas-multi/{app}", f"ledgers / {app}"))
+            codes = {i["code"] for i in data["issues"]}
+            self.assertNotIn("map-duplicate-id", codes)  # the ids are unique per application
+            self.assertEqual(meta["initial"]["lens"], "matrix")
+            self.assertEqual(meta["initial"]["bc"], "ledger")
+        # --focus applies where the page has the target; the other page opens as default
+        self.assertEqual(pages["alpha"]["meta"]["initial"]["focus"], "ledger.close_period")
+        self.assertIsNone(pages["beta"]["meta"]["initial"]["focus"])
+        # each page reads its own application's tests: only beta's scenario names a test it lacks
+        missing = {a: [i["target"]["id"] for i in d["issues"] if i["code"] == "scenario-test-missing"]
+                   for a, d in pages.items()}
+        self.assertEqual(missing, {"alpha": [], "beta": ["ledger.post_entry"]})
+        index = (out / "index.html").read_text(encoding="utf-8")
+        self.assertNotIn("__ATLAS_TOKENS__", index)
+        self.assertNotIn("__ATLAS_INDEX_DATA__", index)
+        self.assertIn(":root { --surface: #fff; }", index)  # the tokens of the page template, copied
+        data = index_data(index)
+        self.assertEqual(data["meta"]["project"], "ledgers")
+        rows = {row["id"]: row for row in data["apps"]}
+        self.assertEqual(list(rows), ["alpha", "beta"])
+        self.assertEqual((rows["alpha"]["href"], rows["alpha"]["sliceCount"], rows["alpha"]["bcCount"]),
+                         ("alpha.html", 3, 1))
+        self.assertEqual((rows["alpha"]["issues"]["warn"], rows["beta"]["issues"]["warn"]), (1, 2))
+        self.assertIsNone(rows["beta"]["diff"])
+        r2 = self.per_app("tests/fixtures/atlas-multi", self.tmp / "again", "--project", "ledgers", "--lens", "matrix",
+                          "--bc", "ledger", "--focus", "ledger.close_period", *facts)
+        for name in ("alpha.html", "beta.html", "index.html"):  # byte-identical on a rerun
+            self.assertEqual((self.tmp / "again" / name).read_bytes(), (out / name).read_bytes(), name)
+        self.assertEqual(self.per_app("tests/fixtures/atlas-multi", out, "--bc", "nope").returncode, 2)
+
+    def test_source_facts_rerooted_as_a_run_at_the_application_root(self):
+        """`map --per-app` from slice-source run once at ROOT equals `map` of each application with
+        slice-source run at that application's root."""
+        facts = source_facts(MULTI, self.tmp)
+        out = self.tmp / "maps"
+        r = run("map", "tests/fixtures/atlas-multi", "--per-app", out, "--sha", "x", *facts)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(sorted(p.name for p in out.iterdir()), ["alpha.json", "beta.json"])
+        for app in ("alpha", "beta"):
+            own = self.tmp / app
+            own.mkdir()
+            direct = run("map", f"tests/fixtures/atlas-multi/{app}", "--sha", "x", *source_facts(MULTI / app, own))
+            self.assertEqual(json.loads((out / f"{app}.json").read_text(encoding="utf-8")), json.loads(direct.stdout),
+                             app)
+
+    def test_a_page_that_cannot_be_written(self):
+        out = self.tmp / "pages"
+        (out / "beta.html").mkdir(parents=True)
+        r = self.per_app("tests/fixtures/atlas-multi", out)
+        self.assertEqual(r.returncode, 2)
+        self.assertIn("beta", r.stderr)
+        self.assertTrue((out / "alpha.html").is_file())
+        rows = {row["id"]: row for row in index_data((out / "index.html").read_text(encoding="utf-8"))["apps"]}
+        self.assertIsNone(rows["beta"]["href"])
+        self.assertIn("cannot write", rows["beta"]["error"])
+        self.assertIn("1 page not written", r.stdout)
+
+    def test_index_assembly(self):
+        atlas = PLUGIN / "references" / "slice" / "atlas" / "atlas.html"
+        index = PLUGIN / "references" / "slice" / "atlas" / "index.html"
+        page = slice_atlas.assemble_index(index, atlas, {"meta": {}, "apps": []})
+        text = atlas.read_text(encoding="utf-8")
+        block = text[text.index("/* __TOKENS_BEGIN__ */"):text.index("/* __TOKENS_END__ */")]
+        self.assertIn('--p11:', block)
+        self.assertIn(':root[data-theme="dark"]', block)
+        self.assertIn(block[len("/* __TOKENS_BEGIN__ */"):].strip("\n"), page)  # the palette exists once
+        self.assertEqual(page.count("</script>"), 2)
+        no_markers = self.tmp / "plain.html"
+        no_markers.write_text(TEMPLATE, encoding="utf-8")
+        with self.assertRaises(ValueError):
+            slice_atlas.assemble_index(index, no_markers, {"meta": {}, "apps": []})
+
+    def test_author_route_names_slice_enrich(self):
+        """The Copy prompt's `author` group and the adoption issues point at the command that drafts flow
+        and scenarios, in its argument grammar (`--bc`, the positional being a path)."""
+        page = (PLUGIN / "references" / "slice" / "atlas" / "atlas.html").read_text(encoding="utf-8")
+        group = page[page.index("{ route: 'author'"):page.index("];", page.index("{ route: 'author'"))]
+        self.assertIn("cmd: (bc) => ['/essentials:slice-enrich', bc ? '--bc ' + bc : '']", group)
+        data = json.loads(run("map", "tests/fixtures/atlas-multi/beta").stdout)
+        texts = [i["text"] for i in data["issues"] if i["code"] in ("flow-undeclared", "scenario-none")]
+        self.assertTrue(texts)
+        self.assertTrue(all("/essentials:slice-enrich" in x for x in texts), texts)
+
+    def test_per_app_diff(self):
+        repo = self.tmp / "repo"
+        shutil.copytree(MULTI, repo / "estate")
+        git(repo, "init", "-q", "-b", "main")
+        git(repo, "add", "-A")
+        git(repo, "commit", "-q", "-m", "before")
+        root = repo / "estate"
+        base = self.tmp / "base"
+        self.assertEqual(run("map", root, "--per-app", base, "--sha", "base").returncode, 0)
+        manifest(root / "beta/src/main/java/com/example/ledger/views/balance", "ledger.balance", "view",
+                 "projections:\n  - { name: P, from: [EntryPosted] }\n")
+        (root / "gamma").mkdir()
+        (root / "gamma" / "pom.xml").write_text("<project/>", encoding="utf-8")
+        manifest(root / "gamma/src/main/java/com/example/audit/use_cases/record", "audit.record")
+        out = self.tmp / "pages"
+        r = self.per_app(root, out, "--before-ref", "HEAD")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        diffs = {a: page_data((out / f"{a}.html").read_text(encoding="utf-8"))["diff"] for a in ("alpha", "beta", "gamma")}
+        self.assertEqual(diffs["alpha"]["slices"], {"added": [], "removed": [], "changed": []})
+        self.assertEqual(diffs["beta"]["slices"]["added"], ["ledger.balance"])
+        self.assertEqual(diffs["beta"]["before"]["sliceCount"], 2)  # beta's subtree only, not alpha's
+        self.assertEqual(diffs["gamma"]["slices"]["added"], ["audit.record"])  # new since HEAD: diffed against nothing
+        self.assertEqual(diffs["gamma"]["before"]["sliceCount"], 0)
+        rows = {row["id"]: row for row in index_data((out / "index.html").read_text(encoding="utf-8"))["apps"]}
+        self.assertEqual(rows["beta"]["diff"]["slices"], {"added": 1, "removed": 0, "changed": 0})
+        self.assertEqual(index_data((out / "index.html").read_text(encoding="utf-8"))["meta"]["baseline"], "HEAD")
+        # the CI recipe: `map --per-app` on the base, then each page against its own baseline
+        r = self.per_app(root, self.tmp / "ci", "--before-map-dir", base)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        ci = {a: page_data((self.tmp / "ci" / f"{a}.html").read_text(encoding="utf-8"))["diff"]
+              for a in ("alpha", "beta", "gamma")}
+        self.assertEqual(ci["beta"]["slices"]["added"], ["ledger.balance"])
+        self.assertEqual(ci["beta"]["before"]["sha"], "base")
+        self.assertIsNone(ci["gamma"])  # no baseline file for it
+        self.assertIn("diff vs before-map (base)", r.stdout)
+
+
+def slice_index():
+    spec = importlib.util.spec_from_file_location("slice_index", INDEX)
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 if __name__ == "__main__":

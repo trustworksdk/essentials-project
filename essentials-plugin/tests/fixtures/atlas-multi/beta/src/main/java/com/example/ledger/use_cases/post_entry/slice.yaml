@@ -1,0 +1,26 @@
+schemaVersion: "1.4"
+slice: ledger.post_entry
+kind: command
+bc: ledger
+owner: ledger-team
+status: live
+summary: Post an entry to a ledger.
+generator: essentials
+language: java
+tier: cqrs-es
+lane: decider
+handles: [PostEntry]
+publishes: [EntryPosted]
+writes:
+  - { name: Ledger }
+endpoints:
+  - { method: POST, path: "/api/ledgers/{ledgerId}/entries", auth: user }
+scenarios:
+  - name: posts an entry
+    when: { command: PostEntry, with: { ledgerId: l-1, amount: 5 } }
+    then:
+      - event: EntryPosted
+        with: { ledgerId: l-1, amount: 5 }
+    test: PostEntryTest#postsAnEntry
+tests:
+  unit: { present: true }

@@ -4642,7 +4642,7 @@
       "id": "flow-undeclared:bc01",
       "code": "flow-undeclared",
       "level": "info",
-      "text": "4 of 4 slices in `bc01` declare no flow — grouped into processes by cause and effect",
+      "text": "4 of 4 slices in `bc01` declare no flow — grouped into processes by cause and effect; /essentials:slice-enrich drafts their journeys",
       "target": {
         "kind": "context",
         "id": "bc01",
@@ -4658,7 +4658,7 @@
       "id": "flow-undeclared:bc02",
       "code": "flow-undeclared",
       "level": "info",
-      "text": "4 of 4 slices in `bc02` declare no flow — grouped into processes by cause and effect",
+      "text": "4 of 4 slices in `bc02` declare no flow — grouped into processes by cause and effect; /essentials:slice-enrich drafts their journeys",
       "target": {
         "kind": "context",
         "id": "bc02",
@@ -4674,7 +4674,7 @@
       "id": "flow-undeclared:bc03",
       "code": "flow-undeclared",
       "level": "info",
-      "text": "4 of 4 slices in `bc03` declare no flow — grouped into processes by cause and effect",
+      "text": "4 of 4 slices in `bc03` declare no flow — grouped into processes by cause and effect; /essentials:slice-enrich drafts their journeys",
       "target": {
         "kind": "context",
         "id": "bc03",
@@ -4690,7 +4690,7 @@
       "id": "flow-undeclared:bc04",
       "code": "flow-undeclared",
       "level": "info",
-      "text": "5 of 5 slices in `bc04` declare no flow — grouped into processes by cause and effect",
+      "text": "5 of 5 slices in `bc04` declare no flow — grouped into processes by cause and effect; /essentials:slice-enrich drafts their journeys",
       "target": {
         "kind": "context",
         "id": "bc04",
@@ -4706,7 +4706,7 @@
       "id": "flow-undeclared:bc05",
       "code": "flow-undeclared",
       "level": "info",
-      "text": "4 of 4 slices in `bc05` declare no flow — grouped into processes by cause and effect",
+      "text": "4 of 4 slices in `bc05` declare no flow — grouped into processes by cause and effect; /essentials:slice-enrich drafts their journeys",
       "target": {
         "kind": "context",
         "id": "bc05",
@@ -4722,7 +4722,7 @@
       "id": "flow-undeclared:bc06",
       "code": "flow-undeclared",
       "level": "info",
-      "text": "5 of 5 slices in `bc06` declare no flow — grouped into processes by cause and effect",
+      "text": "5 of 5 slices in `bc06` declare no flow — grouped into processes by cause and effect; /essentials:slice-enrich drafts their journeys",
       "target": {
         "kind": "context",
         "id": "bc06",
@@ -4738,7 +4738,7 @@
       "id": "flow-undeclared:bc07",
       "code": "flow-undeclared",
       "level": "info",
-      "text": "4 of 4 slices in `bc07` declare no flow — grouped into processes by cause and effect",
+      "text": "4 of 4 slices in `bc07` declare no flow — grouped into processes by cause and effect; /essentials:slice-enrich drafts their journeys",
       "target": {
         "kind": "context",
         "id": "bc07",
@@ -4754,7 +4754,7 @@
       "id": "flow-undeclared:bc08",
       "code": "flow-undeclared",
       "level": "info",
-      "text": "5 of 5 slices in `bc08` declare no flow — grouped into processes by cause and effect",
+      "text": "5 of 5 slices in `bc08` declare no flow — grouped into processes by cause and effect; /essentials:slice-enrich drafts their journeys",
       "target": {
         "kind": "context",
         "id": "bc08",
@@ -4770,7 +4770,7 @@
       "id": "flow-undeclared:bc09",
       "code": "flow-undeclared",
       "level": "info",
-      "text": "4 of 4 slices in `bc09` declare no flow — grouped into processes by cause and effect",
+      "text": "4 of 4 slices in `bc09` declare no flow — grouped into processes by cause and effect; /essentials:slice-enrich drafts their journeys",
       "target": {
         "kind": "context",
         "id": "bc09",
@@ -4786,7 +4786,7 @@
       "id": "flow-undeclared:bc10",
       "code": "flow-undeclared",
       "level": "info",
-      "text": "4 of 4 slices in `bc10` declare no flow — grouped into processes by cause and effect",
+      "text": "4 of 4 slices in `bc10` declare no flow — grouped into processes by cause and effect; /essentials:slice-enrich drafts their journeys",
       "target": {
         "kind": "context",
         "id": "bc10",
@@ -4802,7 +4802,7 @@
       "id": "flow-undeclared:bc11",
       "code": "flow-undeclared",
       "level": "info",
-      "text": "4 of 4 slices in `bc11` declare no flow — grouped into processes by cause and effect",
+      "text": "4 of 4 slices in `bc11` declare no flow — grouped into processes by cause and effect; /essentials:slice-enrich drafts their journeys",
       "target": {
         "kind": "context",
         "id": "bc11",
@@ -4818,7 +4818,7 @@
       "id": "flow-undeclared:bc12",
       "code": "flow-undeclared",
       "level": "info",
-      "text": "6 of 6 slices in `bc12` declare no flow — grouped into processes by cause and effect",
+      "text": "6 of 6 slices in `bc12` declare no flow — grouped into processes by cause and effect; /essentials:slice-enrich drafts their journeys",
       "target": {
         "kind": "context",
         "id": "bc12",
@@ -4834,7 +4834,7 @@
       "id": "scenario-none:bc01",
       "code": "scenario-none",
       "level": "info",
-      "text": "4 of 4 slices in `bc01` declare no scenarios — their boards show invariants and test kinds instead",
+      "text": "4 of 4 slices in `bc01` declare no scenarios — their boards show invariants and test kinds instead; /essentials:slice-enrich drafts scenarios from their tests",
       "target": {
         "kind": "context",
         "id": "bc01",
@@ -4850,7 +4850,7 @@
       "id": "scenario-none:bc02",
       "code": "scenario-none",
       "level": "info",
-      "text": "4 of 4 slices in `bc02` declare no scenarios — their boards show invariants and test kinds instead",
+      "text": "4 of 4 slices in `bc02` declare no scenarios — their boards show invariants and test kinds instead; /essentials:slice-enrich drafts scenarios from their tests",
       "target": {
         "kind": "context",
         "id": "bc02",
@@ -4866,7 +4866,7 @@
       "id": "scenario-none:bc03",
       "code": "scenario-none",
       "level": "info",
-      "text": "4 of 4 slices in `bc03` declare no scenarios — their boards show invariants and test kinds instead",
+      "text": "4 of 4 slices in `bc03` declare no scenarios — their boards show invariants and test kinds instead; /essentials:slice-enrich drafts scenarios from their tests",
       "target": {
         "kind": "context",
         "id": "bc03",
@@ -4882,7 +4882,7 @@
       "id": "scenario-none:bc04",
       "code": "scenario-none",
       "level": "info",
-      "text": "5 of 5 slices in `bc04` declare no scenarios — their boards show invariants and test kinds instead",
+      "text": "5 of 5 slices in `bc04` declare no scenarios — their boards show invariants and test kinds instead; /essentials:slice-enrich drafts scenarios from their tests",
       "target": {
         "kind": "context",
         "id": "bc04",
@@ -4898,7 +4898,7 @@
       "id": "scenario-none:bc05",
       "code": "scenario-none",
       "level": "info",
-      "text": "4 of 4 slices in `bc05` declare no scenarios — their boards show invariants and test kinds instead",
+      "text": "4 of 4 slices in `bc05` declare no scenarios — their boards show invariants and test kinds instead; /essentials:slice-enrich drafts scenarios from their tests",
       "target": {
         "kind": "context",
         "id": "bc05",
@@ -4914,7 +4914,7 @@
       "id": "scenario-none:bc06",
       "code": "scenario-none",
       "level": "info",
-      "text": "5 of 5 slices in `bc06` declare no scenarios — their boards show invariants and test kinds instead",
+      "text": "5 of 5 slices in `bc06` declare no scenarios — their boards show invariants and test kinds instead; /essentials:slice-enrich drafts scenarios from their tests",
       "target": {
         "kind": "context",
         "id": "bc06",
@@ -4930,7 +4930,7 @@
       "id": "scenario-none:bc07",
       "code": "scenario-none",
       "level": "info",
-      "text": "4 of 4 slices in `bc07` declare no scenarios — their boards show invariants and test kinds instead",
+      "text": "4 of 4 slices in `bc07` declare no scenarios — their boards show invariants and test kinds instead; /essentials:slice-enrich drafts scenarios from their tests",
       "target": {
         "kind": "context",
         "id": "bc07",
@@ -4946,7 +4946,7 @@
       "id": "scenario-none:bc08",
       "code": "scenario-none",
       "level": "info",
-      "text": "5 of 5 slices in `bc08` declare no scenarios — their boards show invariants and test kinds instead",
+      "text": "5 of 5 slices in `bc08` declare no scenarios — their boards show invariants and test kinds instead; /essentials:slice-enrich drafts scenarios from their tests",
       "target": {
         "kind": "context",
         "id": "bc08",
@@ -4962,7 +4962,7 @@
       "id": "scenario-none:bc09",
       "code": "scenario-none",
       "level": "info",
-      "text": "4 of 4 slices in `bc09` declare no scenarios — their boards show invariants and test kinds instead",
+      "text": "4 of 4 slices in `bc09` declare no scenarios — their boards show invariants and test kinds instead; /essentials:slice-enrich drafts scenarios from their tests",
       "target": {
         "kind": "context",
         "id": "bc09",
@@ -4978,7 +4978,7 @@
       "id": "scenario-none:bc10",
       "code": "scenario-none",
       "level": "info",
-      "text": "4 of 4 slices in `bc10` declare no scenarios — their boards show invariants and test kinds instead",
+      "text": "4 of 4 slices in `bc10` declare no scenarios — their boards show invariants and test kinds instead; /essentials:slice-enrich drafts scenarios from their tests",
       "target": {
         "kind": "context",
         "id": "bc10",
@@ -4994,7 +4994,7 @@
       "id": "scenario-none:bc11",
       "code": "scenario-none",
       "level": "info",
-      "text": "4 of 4 slices in `bc11` declare no scenarios — their boards show invariants and test kinds instead",
+      "text": "4 of 4 slices in `bc11` declare no scenarios — their boards show invariants and test kinds instead; /essentials:slice-enrich drafts scenarios from their tests",
       "target": {
         "kind": "context",
         "id": "bc11",
@@ -5010,7 +5010,7 @@
       "id": "scenario-none:bc12",
       "code": "scenario-none",
       "level": "info",
-      "text": "6 of 6 slices in `bc12` declare no scenarios — their boards show invariants and test kinds instead",
+      "text": "6 of 6 slices in `bc12` declare no scenarios — their boards show invariants and test kinds instead; /essentials:slice-enrich drafts scenarios from their tests",
       "target": {
         "kind": "context",
         "id": "bc12",
