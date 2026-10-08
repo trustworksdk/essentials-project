@@ -291,12 +291,12 @@ p code, li code, td code { color: var(--accent); }
   border: 1px solid var(--rule);
   background: var(--surface);
 }
-.tradeoff > div { padding: 1.8cqh 1.6cqw; display: flex; flex-direction: column; gap: 0.9cqh; }
+.tradeoff > div { padding: 2.2cqh 1.8cqw; display: flex; flex-direction: column; gap: 1.4cqh; }
 .tradeoff > div + div { border-left: 1px solid var(--rule); }
-.tradeoff h3 { font-size: var(--t-label); }
+.tradeoff h3 { font-size: var(--t-small); }
 .tradeoff .gain h3 { color: var(--gain); }
 .tradeoff .cost h3 { color: var(--cost); }
-.tradeoff p { font-size: var(--t-small); max-width: none; }
+.tradeoff p { font-size: var(--t-body); line-height: 1.35; max-width: none; }
 
 /* ---- data table ---------------------------------------------------------- */
 .tbl-wrap { overflow-x: auto; border: 1px solid var(--rule); background: var(--surface); }
@@ -559,6 +559,17 @@ svg .dgm-edge { stroke: var(--ink-faint); stroke-width: 1.4; fill: none; }
 svg .dgm-hi   { stroke: var(--accent); stroke-width: 1.7; fill: none; }
 svg .ah-dim   { fill: var(--ink-faint); }
 svg .ah-hi    { fill: var(--accent); }
+
+/* The stale-data timeline on the CQRS concept slide. */
+svg .cq-lane   { stroke: var(--rule); stroke-width: 1; stroke-dasharray: 3 5; fill: none; }
+svg .cq-v1     { fill: var(--surface-2); stroke: var(--rule); }
+svg .cq-v2     { fill: color-mix(in srgb, var(--gain) 22%, transparent); stroke: var(--gain); }
+svg .cq-dot    { fill: var(--ink); }
+svg .cq-screen { fill: var(--ink-faint); }
+svg .cq-stale  { fill: var(--cost); }
+svg .cq-fail   { stroke: var(--cost); stroke-width: 1.6; stroke-dasharray: 5 4; fill: none; }
+svg .cq-cost-f { fill: var(--cost); }
+svg .cq-hi-f   { fill: var(--accent); }
 
 /* The slice diagram: lanes are capabilities, columns are slices; the notes use
    the event-model legend colours from the four-patterns slide. */
@@ -1565,10 +1576,10 @@ eventStore.appendToStream(SHOPPING_BASKETS, basketId, event)</code></pre>
   <div class="eyebrow"><span lang="en">With Essentials</span><span lang="da">Med Essentials</span></div>
   <h2><span lang="en">One fold per question, <em>thrown away after the decision</em></span><span lang="da">Én foldning pr. spørgsmål, <em>smidt væk efter beslutningen</em></span></h2>
   <div class="row grow" style="align-items:stretch">
-    <figure class="panel sm" style="flex:1.15 1 0">
+    <figure class="panel sm" style="flex:1 1 0">
       <figcaption><span>the fold</span><span class="path">remove_item_from_shopping_basket/BasketLinesEvolver.kt</span></figcaption>
-      <pre><code class="kotlin">fun basketLinesEvolver() =
-  Evolver&lt;ShoppingBasketEvent, Map&lt;ProductId, List&lt;Amount&gt;&gt;&gt; { event, state -&gt;
+      <pre><code class="kotlin">fun basketLinesEvolver() = Evolver&lt;ShoppingBasketEvent,
+        Map&lt;ProductId, List&lt;Amount&gt;&gt;&gt; { event, state -&gt;
     val current = state ?: emptyMap()
     when (event) {
         is ItemAddedToShoppingBasket -&gt;
@@ -1576,7 +1587,8 @@ eventStore.appendToStream(SHOPPING_BASKETS, basketId, event)</code></pre>
                 ((current[event.product] ?: emptyList()) + event.price))
 
         is ItemRemovedFromShoppingBasket -&gt; {
-            val remaining = (current[event.product] ?: emptyList()).dropLast(1)
+            val remaining = (current[event.product] ?: emptyList())
+                .dropLast(1)
             if (remaining.isEmpty()) current - event.product
             else current + (event.product to remaining)
         }
@@ -1585,20 +1597,28 @@ eventStore.appendToStream(SHOPPING_BASKETS, basketId, event)</code></pre>
     }
 }</code></pre>
     </figure>
-    <div class="col" style="flex:0.85 1 0">
-      <figure class="panel sm">
-        <figcaption><span>used by the decision</span><span class="path">RemoveItemFromShoppingBasketDecider.kt</span></figcaption>
-        <pre><code class="kotlin">val lines = Evolver.applyEvents(basketLinesEvolver(), emptyMap(), events)
+    <figure class="panel sm" style="flex:1 1 0">
+      <figcaption><span>used by the decision</span><span class="path">remove_item_from_shopping_basket/RemoveItemFromShoppingBasketDecider.kt</span></figcaption>
+      <pre><code class="kotlin">override fun handle(
+    cmd: RemoveItemFromShoppingBasket,
+    events: List&lt;ShoppingBasketEvent&gt;
+): ItemRemovedFromShoppingBasket? {
+    if (events.any { it is CheckOutRequested }) {
+        throw ShoppingBasketAlreadyCheckedOutException(cmd.id)
+    }
 
-return (lines[cmd.product] ?: emptyList()).lastOrNull()
-    ?.let { ItemRemovedFromShoppingBasket(cmd.id, cmd.product, it) }</code></pre>
-      </figure>
-      <p lang="en"><strong>Two folds over the same stream, neither knowing about the other.</strong> This slice needs units and their prices; <code>request_checkout</code> folds the same events into a running total. Neither grows a field for the other's sake.</p>
-      <p lang="da"><strong>To foldninger over samme stream, ingen af dem kender den anden.</strong> Denne slice har brug for enheder og deres priser; <code>request_checkout</code> folder de samme events til en løbende total.</p>
-      <p class="small" lang="en">The fold tracks <em>prices</em>, not just quantities, because the removal event carries the price of the unit that left. Without that, the basket view and the checkout total each had to guess which unit it was &mdash; and disagreed when two units went in at different prices.</p>
-      <p class="small" lang="da">Foldningen følger <em>priser</em>, ikke kun antal, fordi remove-eventet bærer prisen på den enhed der forsvandt. Uden det måtte kurv-viewet og checkout-totalen hver gætte &mdash; og de var uenige når to enheder gik ind til forskellige priser.</p>
-    </div>
+    // the fold on the left: built, used, thrown away
+    val lines = Evolver.applyEvents(
+        basketLinesEvolver(), emptyMap(), events)
+    val unitPrices = lines[cmd.product] ?: emptyList()
+
+    return unitPrices.lastOrNull()
+        ?.let { ItemRemovedFromShoppingBasket(cmd.id, cmd.product, it) }
+}</code></pre>
+    </figure>
   </div>
+  <p lang="en"><strong>Two folds over the same stream, neither knowing about the other.</strong> This slice needs units and their prices; <code>request_checkout</code> folds the same events into a running total. Neither grows a field for the other's sake.</p>
+  <p lang="da"><strong>To foldninger over samme stream, ingen af dem kender den anden.</strong> Denne slice har brug for enheder og deres priser; <code>request_checkout</code> folder de samme events til en løbende total.</p>
 </section>
 
 <!-- =================================================================== 20 — C10 concept -->
@@ -1776,43 +1796,82 @@ fun handle(e: ProductPriceChanged, orderedMessage: OrderedMessage) {
 
 <!-- =================================================================== 24 — C12 concept -->
 <section class="slide" data-side="concept" data-act="12/13 &mdash; CQRS and stale data" data-min="1"
-  data-note-en="Seventeen of the module's slides in one: CQS at property level, CQRS as two objects where there was one, and the collaborative-domain story. Tell the story - Anna, Bo, coffee, optimistic locking error - then read the arithmetic and ask why the user should be interrupted by a technical constraint."
-  data-note-da="Sytten af modulets slides i én: CQS paa property-niveau, CQRS som to objekter hvor der foer var ét, og historien om kollaborative domaener. Fortael historien - Anna, Bo, kaffe, optimistic locking-fejl - laes derefter regnestykket.">
+  data-note-en="Seventeen of the module's slides in one: CQRS as two objects where there was one - a model for commands and a separate one for queries - and the collaborative-domain story. On the left, the third bullet is the practical pain of one model: the fetch plan a write wants is never the one a screen wants. Then the picture, left to right: Anna and Bo both read version 1, coffee, Bo saves version 2 - and from that moment Anna's screen is stale, shown in red, until she saves and gets an optimistic locking error. Then the arithmetic under it: even without the coffee, data is already 120 ms old when it is painted. That is the argument for eventual consistency: every screen is already behind, so a read model that is updated milliseconds to a few hundred milliseconds after the event is stored adds nothing new - CQRS stops pretending the lag was not there. Ask why the user should be interrupted by a technical constraint."
+  data-note-da="Sytten af modulets slides i én: CQRS som to objekter hvor der foer var ét - en model til commands og en separat til forespoergsler - og historien om kollaborative domaener. Til venstre er tredje punkt den praktiske smerte ved én model: den fetch-plan en skrivning vil have, er aldrig den en skaerm vil have. Derefter billedet fra venstre: Anna og Bo laeser begge version 1, kaffe, Bo gemmer version 2 - og fra det oejeblik er Annas skaerm foraeldet, vist med roedt, indtil hun gemmer og faar en optimistic locking-fejl. Derefter regnestykket nedenunder: selv uden kaffen er data allerede 120 ms gamle naar de tegnes. Det er argumentet for eventual consistency: hver skaerm er allerede bagud, saa en laesemodel der opdateres millisekunder til et par hundrede millisekunder efter eventet er gemt tilfoejer intet nyt - CQRS holder op med at lade som om forsinkelsen ikke var der.">
   <div class="eyebrow concept"><span class="num">12 / 13</span><span class="sep">&middot;</span><span lang="en">The concept</span><span lang="da">Begrebet</span></div>
-  <h2><span lang="en">&ldquo;Two objects where there was previously only one&rdquo;</span><span lang="da">&ldquo;To objekter hvor der før kun var ét&rdquo;</span></h2>
+  <h2><span lang="en">&ldquo;Two objects where there was previously only one&rdquo; &mdash; <em>and data that is always a little old</em></span><span lang="da">&ldquo;To objekter hvor der før kun var ét&rdquo; &mdash; <em>og data der altid er lidt gamle</em></span></h2>
   <div class="row grow" style="align-items:stretch">
     <div class="col" style="flex:1 1 0">
-      <p lang="en"><strong>CQS</strong>, at property level: a setter changes data and returns nothing, a getter reads data and has no side effects. <strong>CQRS</strong> is the same split one level up &mdash; Greg Young's words above.</p>
-      <p lang="da"><strong>CQS</strong>, på property-niveau: en setter ændrer data og returnerer intet, en getter læser data og har ingen sideeffekter. <strong>CQRS</strong> er samme opdeling et niveau op.</p>
+      <p lang="en"><strong>CQRS</strong> &mdash; Command Query Responsibility Segregation: one model takes the commands that change state, and a separate model answers the queries. That is Greg Young's &ldquo;two objects&rdquo; above.</p>
+      <p lang="da"><strong>CQRS</strong> &mdash; Command Query Responsibility Segregation: én model tager imod de commands der ændrer tilstand, og en separat model besvarer forespørgslerne. Det er Greg Youngs &ldquo;to objekter&rdquo; ovenfor.</p>
       <ul class="tight">
         <li lang="en">Commands and queries <strong>support very different use cases</strong>.</li>
         <li lang="da">Commands og queries <strong>understøtter meget forskellige use cases</strong>.</li>
         <li lang="en">A query result contains <strong>only data, no logic</strong> &mdash; so why go through the domain layer?</li>
         <li lang="da">Et forespørgselsresultat indeholder <strong>kun data, ingen logik</strong> &mdash; så hvorfor gå gennem domænelaget?</li>
-        <li lang="en">&ldquo;When to use EAGER vs LAZY fetching?&rdquo; <strong>Highly depends on the use case</strong> &mdash; which is the problem.</li>
-        <li lang="da">&ldquo;Hvornår EAGER kontra LAZY?&rdquo; <strong>Afhænger helt af use casen</strong> &mdash; hvilket er problemet.</li>
+        <li lang="en">One shared model means <strong>one fetch plan for both</strong>: a write wants a small aggregate, a screen wants five tables joined. The ORM question &ldquo;EAGER or LAZY?&rdquo; has no right answer &mdash; a separate read model removes the question.</li>
+        <li lang="da">Én fælles model betyder <strong>én fetch-plan til begge</strong>: en skrivning vil have et lille aggregat, en skærm vil have fem tabeller joinet. ORM-spørgsmålet &ldquo;EAGER eller LAZY?&rdquo; har intet rigtigt svar &mdash; en separat læsemodel fjerner spørgsmålet.</li>
       </ul>
     </div>
     <div class="col" style="flex:1 1 0">
-      <div class="chain" style="flex-direction:column; align-items:stretch">
-        <div class="node"><b>1</b><span lang="en">Anna reads the order</span><span lang="da">Anna læser ordren</span></div>
-        <div class="node"><b>2</b><span lang="en">Bo reads the same order</span><span lang="da">Bo læser samme ordre</span></div>
-        <div class="node"><b>3</b><span lang="en">coffee time</span><span lang="da">kaffepause</span></div>
-        <div class="node"><b>4</b><span lang="en">Bo updates</span><span lang="da">Bo opdaterer</span></div>
-        <div class="node"><b>5</b><span lang="en">Anna updates &rarr; <em>stale data</em>, optimistic locking exception</span><span lang="da">Anna opdaterer &rarr; <em>gamle data</em>, optimistic locking exception</span></div>
-      </div>
+      <figure class="dgm" style="flex:1 1 auto">
+      <svg viewBox="0 0 640 300" role="img" style="max-height:32cqh"
+           aria-label="A timeline. Anna reads version 1 of an order, then Bo reads version 1. After a coffee break Bo saves version 2. From that moment Anna's screen still shows version 1 and is stale. When Anna saves, she gets an optimistic locking exception.">
+        <defs>
+          <marker id="ahcq" viewBox="0 0 8 8" refX="7.5" refY="4" markerWidth="6.5" markerHeight="6.5" orient="auto"><path d="M0 0 L8 4 L0 8 Z" class="ah-dim"/></marker>
+          <marker id="ahcqh" viewBox="0 0 8 8" refX="7.5" refY="4" markerWidth="6.5" markerHeight="6.5" orient="auto"><path d="M0 0 L8 4 L0 8 Z" class="ah-hi"/></marker>
+          <marker id="ahcqc" viewBox="0 0 8 8" refX="7.5" refY="4" markerWidth="6.5" markerHeight="6.5" orient="auto"><path d="M0 0 L8 4 L0 8 Z" class="cq-cost-f"/></marker>
+        </defs>
+        <text class="sl-lbl" x="0" y="64">ANNA</text>
+        <text class="sl-lbl" x="0" y="134">BO</text>
+        <g lang="en"><text class="sl-lbl" x="0" y="219">THE ORDER</text></g><g lang="da"><text class="sl-lbl" x="0" y="219">ORDREN</text></g>
+        <path class="cq-lane" d="M96 60 H630 M96 130 H630"/>
+
+        <rect class="cq-v1" x="96" y="200" width="304" height="28"/>
+        <rect class="cq-v2" x="400" y="200" width="230" height="28"/>
+        <text class="sl-t" x="110" y="219">v1</text>
+        <text class="sl-t" x="414" y="219">v2</text>
+
+        <path class="dgm-edge" d="M130 200 V68" marker-end="url(#ahcq)"/>
+        <circle class="cq-dot" cx="130" cy="60" r="5"/>
+        <path class="dgm-edge" d="M190 200 V138" marker-end="url(#ahcq)"/>
+        <circle class="cq-dot" cx="190" cy="130" r="5"/>
+
+        <rect class="cq-screen" x="130" y="70" width="270" height="8"/>
+        <rect class="cq-stale" x="400" y="70" width="160" height="8"/>
+        <rect class="cq-screen" x="190" y="140" width="210" height="8"/>
+        <g lang="en"><text class="dgm-s" x="138" y="96">reads v1</text><text class="dgm-s" x="198" y="166">reads v1</text></g><g lang="da"><text class="dgm-s" x="138" y="96">læser v1</text><text class="dgm-s" x="198" y="166">læser v1</text></g>
+        <g lang="en"><text class="dgm-s cq-cost-f" x="406" y="96">stale: still shows v1</text></g><g lang="da"><text class="dgm-s cq-cost-f" x="406" y="96">forældet: viser stadig v1</text></g>
+        <g lang="en"><text class="dgm-s" x="300" y="186" text-anchor="middle">… coffee …</text></g><g lang="da"><text class="dgm-s" x="300" y="186" text-anchor="middle">… kaffe …</text></g>
+
+        <path class="dgm-hi" d="M400 130 V196" marker-end="url(#ahcqh)"/>
+        <g lang="en"><text class="dgm-s cq-hi-f" x="408" y="166">saves v2</text></g><g lang="da"><text class="dgm-s cq-hi-f" x="408" y="166">gemmer v2</text></g>
+
+        <path class="cq-fail" d="M560 60 V196" marker-end="url(#ahcqc)"/>
+        <text class="tl-x tl-cost" x="572" y="192">✕</text>
+        <g lang="en"><text class="dgm-s cq-cost-f" x="630" y="252" text-anchor="end">Anna saves from v1 → optimistic locking exception</text></g><g lang="da"><text class="dgm-s cq-cost-f" x="630" y="252" text-anchor="end">Anna gemmer ud fra v1 → optimistic locking exception</text></g>
+
+        <path class="dgm-edge" d="M96 280 H626" marker-end="url(#ahcq)"/>
+        <g lang="en"><text class="sl-cap" x="96" y="298">TIME</text></g><g lang="da"><text class="sl-cap" x="96" y="298">TID</text></g>
+      </svg>
+      </figure>
       <p class="small" lang="en">And the arithmetic: 20 ms out, 1 ms to the database, 100 ms to render, 100 ms to paint, 20 ms back &mdash; <strong>the data was already 120 ms old</strong>, plus 1&ndash;1.5 seconds of thinking time.</p>
       <p class="small" lang="da">Og regnestykket: 20 ms ud, 1 ms til databasen, 100 ms at rendere, 100 ms at tegne, 20 ms tilbage &mdash; <strong>dataene var allerede 120 ms gamle</strong>, plus 1&ndash;1,5 sekunds betænkningstid.</p>
+      <div class="gloss">
+        <b><span lang="en">That is eventual consistency</span><span lang="da">Det er eventual consistency</span></b>
+        <span lang="en">Every screen is already behind the moment it is painted. A read model updated milliseconds to a few hundred milliseconds after the event is stored adds no new kind of staleness &mdash; CQRS just stops pretending the lag was not there.</span>
+        <span lang="da">Hver skærm er allerede bagud i det øjeblik den tegnes. En læsemodel der opdateres millisekunder til et par hundrede millisekunder efter eventet er gemt, tilføjer ingen ny slags forældelse &mdash; CQRS holder bare op med at lade som om forsinkelsen ikke var der.</span>
+      </div>
     </div>
   </div>
 </section>
 
 <!-- =================================================================== 25 — C12 answer -->
 <section class="slide" data-side="answer" data-act="12/13 &mdash; CQRS and stale data" data-min="1.5"
-  data-note-en="Both halves of the trade, out loud. The gain: the query goes nowhere near the domain, and a new question costs a view rather than a migration. The cost lands in the UI and that is better than hiding it - the demo's shop page polls after placing an order, and somebody has to decide with the business which screens may lag."
-  data-note-da="Begge halvdele af handlen, hoejt. Gevinsten: forespoergslen kommer aldrig i naerheden af domaenet, og et nyt spoergsmaal koster et view frem for en migrering. Omkostningen lander i UI'et, og det er bedre end at skjule den.">
+  data-note-en="Both halves of the trade, out loud. The gain: the query goes nowhere near the domain, and a new question costs a view rather than a migration. Then the cost, and say clearly that it is a choice per view, made by the processor you extend: a ViewEventProcessor updates the view after the commit and can be a few hundred milliseconds behind; an InTransactionEventProcessor updates it inside the same transaction as the event, so it is never behind, but it cannot be replayed and every write pays for it. All ten views in the demo chose the first, which is why the shop page polls after placing an order. Somebody has to decide with the business which screens may lag."
+  data-note-da="Begge halvdele af handlen, hoejt. Gevinsten: forespoergslen kommer aldrig i naerheden af domaenet, og et nyt spoergsmaal koster et view frem for en migrering. Derefter omkostningen, og sig tydeligt at det er et valg pr. view, truffet af den processor man extender: en ViewEventProcessor opdaterer viewet efter commit og kan vaere et par hundrede millisekunder bagud; en InTransactionEventProcessor opdaterer det i samme transaktion som eventet, saa det aldrig er bagud, men det kan ikke replayes og hver skrivning betaler. Alle ti views i demoen valgte den foerste, og derfor poller shop-siden efter en ordre. Nogen skal beslutte med forretningen hvilke skaerme der maa vaere bagud.">
   <div class="eyebrow"><span lang="en">With Essentials</span><span lang="da">Med Essentials</span></div>
-  <h2><span lang="en">The query never touches the domain &mdash; <em>and the screen says so</em></span><span lang="da">Forespørgslen rører aldrig domænet &mdash; <em>og skærmen siger det</em></span></h2>
+  <h2><span lang="en">The query never touches the domain &mdash; <em>and you choose how far behind it may be</em></span><span lang="da">Forespørgslen rører aldrig domænet &mdash; <em>og du vælger hvor langt bagud den må være</em></span></h2>
   <div class="row grow" style="align-items:stretch">
     <figure class="panel sm" style="flex:1 1 0">
       <figcaption><span>the whole query side of a slice</span><span class="path">views/products_for_sale/ProductsForSaleAPI.kt</span></figcaption>
@@ -1836,10 +1895,10 @@ class ProductsForSaleAPI(private val repository: ProductsForSaleViewRepository) 
       </div>
       <div class="cost">
         <h3><span lang="en">What it costs</span><span lang="da">Hvad det koster</span></h3>
-        <p lang="en">The row can be a few hundred milliseconds behind the fact, and that lands in the UI rather than in the infrastructure.</p>
-        <p lang="da">Rækken kan være et par hundrede millisekunder bagud, og det lander i UI'et frem for i infrastrukturen.</p>
-        <p lang="en">The demo's shop page <strong>polls</strong> after placing an order. It does not pretend the hold and the packaging list are already there.</p>
-        <p lang="da">Demoens shop-side <strong>poller</strong> efter en ordre er afgivet. Den lader ikke som om reservationen og pakkelisten allerede er der.</p>
+        <p lang="en">With a <code>ViewEventProcessor</code> &mdash; the demo&rsquo;s choice &mdash; the row can be up to a few hundred milliseconds behind, and that lands in the UI. An <code>InTransactionEventProcessor</code> updates the view in the same transaction as the event: never behind, but it cannot be replayed and every write pays for it.</p>
+        <p lang="da">Med en <code>ViewEventProcessor</code> &mdash; demoens valg &mdash; kan rækken være op til et par hundrede millisekunder bagud, og det lander i UI'et. En <code>InTransactionEventProcessor</code> opdaterer viewet i samme transaktion som eventet: aldrig bagud, men den kan ikke replayes, og hver skrivning betaler for det.</p>
+        <p lang="en">Because the demo chose the first, its shop page <strong>polls</strong> after placing an order. It does not pretend the hold and the packaging list are already there.</p>
+        <p lang="da">Fordi demoen valgte den første, <strong>poller</strong> dens shop-side efter en ordre er afgivet. Den lader ikke som om reservationen og pakkelisten allerede er der.</p>
       </div>
     </div>
   </div>

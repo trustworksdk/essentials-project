@@ -58,7 +58,7 @@ the module's own pptx (see `images/README.md`). The two web fonts degrade to sys
 | 9 | State inside a decision | slides 68–69 — the Evolver pattern, the module's own code | `Evolver.applyEvents`, one fold per question | 2.25 |
 | 10 | Why view projections | slides 39, 61 — Greg Young, and the three advantages | `ViewEventProcessor` plus a JPA table | 2.25 |
 | 11 | Order, delivery, idempotence | slide 61's three considerations, and the strict handler on 66 | two are the framework's, the third is yours | 2.25 |
-| 12 | CQRS and stale data | slides 42–58 — CQS, CQRS, collaborative domains, the 120 ms | the query never touches the domain, and the screen polls | 2.5 |
+| 12 | CQRS and stale data | slides 42–58 — CQRS (CQS skipped), collaborative domains, the 120 ms | the query never touches the domain, and how far behind it may be is the processor you choose | 2.5 |
 | 13 | Composite UI and automations | slides 73–74 — one screen from many views, and a to-do list | one row from four streams; a policy that owns its state | 2.75 |
 | — | Bonus: the dual write | slides 86–88 — the problem, and the module's own diagram | one local transaction, then a subscription publishes | 2.5 |
 | — | Bonus: a blocking call in a handler | not in the module — "record, then call", and what *committed* means | `UnitOfWorkMode.NONE` on the capture policy | 2.25 |
@@ -189,7 +189,8 @@ of its projections read two contexts' streams where no order exists between them
 
 **12 — CQRS and stale data.** Seventeen of the module's slides in one pair. Tell the Anna-and-Bo story,
 read the 120 ms arithmetic, and ask why the user should be interrupted by a technical constraint. The
-answer slide is a nine-line controller and both halves of the trade — and the cost is real: the demo's
+answer slide is a nine-line controller and both halves of the trade — and the cost is a choice per view: a `ViewEventProcessor` may lag, an
+`InTransactionEventProcessor` never does but cannot be replayed. The demo chose the first everywhere, so its
 shop page polls after placing an order rather than pretending.
 
 **13 — Composite UI and automations.** The module's colour-boxed order confirmation is the best slide in

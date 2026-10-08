@@ -55,7 +55,7 @@ modulets egen pptx (se `images/README.md`).
 | 9 | Tilstand i en beslutning | slides 68–69 — Evolver-mønstret, modulets egen kode | `Evolver.applyEvents`, én foldning pr. spørgsmål | 2,25 |
 | 10 | Hvorfor view-projektioner | slides 39, 61 — Greg Young, og de tre fordele | `ViewEventProcessor` plus en JPA-tabel | 2,25 |
 | 11 | Rækkefølge, levering, idempotens | slide 61's tre overvejelser, og den strikse handler på 66 | to er frameworkets, den tredje er din | 2,25 |
-| 12 | CQRS og gamle data | slides 42–58 — CQS, CQRS, kollaborative domæner, de 120 ms | forespørgslen rører aldrig domænet, og skærmen poller | 2,5 |
+| 12 | CQRS og gamle data | slides 42–58 — CQRS (CQS sprunget over), kollaborative domæner, de 120 ms | forespørgslen rører aldrig domænet, og hvor langt bagud den må være er den processor man vælger | 2,5 |
 | 13 | Composite UI og automatiseringer | slides 73–74 — én skærm fra mange views, og en to-do-liste | én række fra fire streams; en policy der ejer sin tilstand | 2,75 |
 | — | Bonus: dual write | slides 86–88 — problemet, og modulets eget diagram | én lokal transaktion, så publicerer et subscription | 2,5 |
 | — | Bonus: et blokerende kald i en handler | ikke i modulet — "registrér, kald så", og hvad *committet* betyder | `UnitOfWorkMode.NONE` på capture-policyen | 2,25 |
@@ -169,7 +169,9 @@ er ikke.
 
 **12 — CQRS og gamle data.** Sytten af modulets slides i ét par. Fortæl historien om Anna og Bo, læs
 120 ms-regnestykket, og spørg hvorfor brugeren skal afbrydes af en teknisk begrænsning. Svarsliden er en
-controller på ni linjer og begge halvdele af handlen.
+controller på ni linjer og begge halvdele af handlen — og omkostningen er et valg pr. view: en
+`ViewEventProcessor` kan være bagud, en `InTransactionEventProcessor` aldrig, men den kan ikke replayes. Demoen
+valgte den første overalt, så dens shop-side poller efter en ordre i stedet for at lade som om.
 
 **13 — Composite UI og automatiseringer.** Modulets farvekodede ordrebekræftelse er den bedste slide i dets
 deck; hver kasse er et forskelligt view. Svaret er én projektion over fire streams fra tre kontekster, plus
