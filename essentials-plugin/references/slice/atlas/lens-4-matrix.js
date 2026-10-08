@@ -24,8 +24,12 @@
   const BAND = 22;              // context band in either header
   const COL_HEAD_H = 170;       // column header: band + rotated slice names
   const MAX_UPRIGHT = 160;      // the deepest a standing column band gets
+  const MAX_COL_LABEL = 300;    // the column header deepens for a long slice name up to this, then an ellipsis
   const ROW_HEAD_W = 230;       // row header: band + target names
   const ROW_HEAD_W_NARROW = 150;
+  const MAX_ROW_HEAD_W = 400;   // the row header widens for a long target name up to this, then an ellipsis
+  const MAX_ROW_HEAD_W_NARROW = 220;
+  const LABEL_CHROME = 40;      // a header label's swatch, issue dot, padding and gaps, along the name
   const CTX_CW = 64;            // the context × context tab has wider cells and shorter headers
   const CTX_COL_HEAD_H = 120;
   const OVERSCAN = 6;           // rows / columns rendered beyond the visible edge
@@ -59,6 +63,7 @@
     '.mx-rowhead .mx-band.across span { writing-mode: horizontal-tb; transform: none; padding: 0 6px; }',
     '.mx-colhead .mx-band.upright span { writing-mode: vertical-rl; transform: rotate(180deg); padding: 6px 0; }',
     '.mx-probe { position: absolute; visibility: hidden; white-space: nowrap; font-weight: 600; left: -9999px; top: 0; }',
+    '.mx-probe.mono { font-weight: 700; font-family: var(--mono); font-size: 12px; }',
     '.mx-band.marked { border-color: var(--err); box-shadow: inset 0 0 0 2px var(--err); }',
     '.mx-cl, .mx-rl { cursor: pointer; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }',
     '.mx-cl { border-right: 1px solid var(--rule); padding: 6px 0 4px; display: flex; flex-direction: column; align-items: center; }',
@@ -240,31 +245,45 @@
     /* A context band whose name does not fit along it turns, so the name is never cut: when any row band is
        too short, every row band lies across, one width, widening into the row header; a column band too
        narrow stands up, deepening the column header. */
-    const probe = ctx.html('span', 'mx-probe');
-    grid.append(probe);
+    const probe = ctx.html('span', 'mx-probe'), monoProbe = ctx.html('span', 'mx-probe mono');
+    grid.append(probe, monoProbe);
     const widths = new Map();
-    function textW(text) {
-      if (!widths.has(text)) {
-        probe.textContent = text;
-        widths.set(text, probe.offsetWidth || Math.ceil(text.length * 7.5));   // no layout (a test DOM): estimate
+    function textW(text, mono) {                     // mono: a slice or target name, measured bold (a selected one)
+      const key = (mono ? 'm:' : 'b:') + text;
+      if (!widths.has(key)) {
+        const pr = mono ? monoProbe : probe;
+        pr.textContent = text;
+        widths.set(key, pr.offsetWidth || Math.ceil(text.length * (mono ? 7.3 : 7.5)));   // no layout (a test DOM): estimate
       }
-      return widths.get(text);
+      return widths.get(key);
     }
+    /* A long slice or target name grows its header to fit, up to MAX_COL_LABEL / MAX_ROW_HEAD_W; only past that an
+       ellipsis, with the whole name in the label's title. */
+    const colLabel = (m, c) => m === sliceModel ? m.cols[c].name : m.cols[c].id;
+    const longest = (names, mono) => names.reduce((w, n) => Math.max(w, textW(n, mono)), 0);
     const bandName = (g, none) => g.id || none;
     const rowBandW = (m) => {               // BAND when every name fits upright; else one width that fits them all
       const need = m.rowGroups.map(g => textW(bandName(g, '(no owner)')) + 12);
       if (m.rowGroups.every((g, i) => need[i] <= (g.end - g.start) * RH)) return BAND;
-      return Math.min(Math.max(...need) + 2, rhw - 90);
+      return Math.min(Math.max(...need) + 2, MAX_UPRIGHT, maxRhw - 90);   // the row header widens to take it
     };
     const colBandH = (m, g) => {                                         // BAND when the name fits across
       const lv = g.id ? 18 : 0, need = textW(bandName(g, '(no context)')) + 12;
       return need + lv <= (g.end - g.start) * m.cw ? BAND : Math.min(need, MAX_UPRIGHT) + lv + 2;
     };
-    const headH = (m) => m.colHeadH + Math.max(0, ...m.colGroups.map(g => colBandH(m, g) - BAND));
+    const headH = (m) => {
+      const labels = Math.min(longest(m.cols.map((_, c) => colLabel(m, c)), true) + LABEL_CHROME, MAX_COL_LABEL);
+      return Math.max(m.colHeadH, BAND + labels) + Math.max(0, ...m.colGroups.map(g => colBandH(m, g) - BAND));
+    };
+    const baseRhw = narrow ? ROW_HEAD_W_NARROW : ROW_HEAD_W, maxRhw = narrow ? MAX_ROW_HEAD_W_NARROW : MAX_ROW_HEAD_W;
+    const rowHeadW = (m) => {
+      const bw = m.rowGroups.length ? rowBandW(m) : 0;
+      const need = bw + longest(m.rows.map(r => r.id), true) + LABEL_CHROME;
+      return Math.max(baseRhw, Math.min(need, maxRhw));
+    };
 
-    const rhw = narrow ? ROW_HEAD_W_NARROW : ROW_HEAD_W;
     function place() {
-      const m = S.model, chh = headH(m);
+      const m = S.model, chh = headH(m), rhw = rowHeadW(m);
       corner.style.width = rhw + 'px'; corner.style.height = chh + 'px';
       colHead.style.left = rhw + 'px'; colHead.style.height = chh + 'px';
       rowHead.style.top = chh + 'px'; rowHead.style.width = rhw + 'px';
@@ -328,7 +347,7 @@
 
       /* column header: context bands (label held at the left edge while the band is in view), names */
       colIn.textContent = '';
-      const chh = headH(m), bandH = m.colGroups.length ? BAND : 0;
+      const chh = headH(m), rhw = rowHeadW(m), bandH = m.colGroups.length ? BAND : 0;
       const colBand = new Array(m.cols.length).fill(bandH);              // per column: its band's depth
       m.colGroups.forEach(g => {
         const bh = colBandH(m, g);
