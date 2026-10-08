@@ -703,6 +703,28 @@ Attributes:
 |-----------|--------|-------------|
 | `unitOfWork` | `REQUIRED` (default), `NONE` | `REQUIRED` invokes the method inside a `UnitOfWork`. `NONE` invokes it with none active, for blocking I/O — `EventProcessor` only, and the handler wraps its own transactional tail. See [Blocking I/O in a handler](#blocking-io-in-a-handler-unitofworkmodenone) |
 
+### Start position
+
+An `EventProcessor` or `ViewEventProcessor` keeps one durable resume point per aggregate type, under the subscriber id
+`<processorName>:<aggregateType>` (`AbstractEventProcessor.resolveSubscriberId`). Two hooks on `AbstractEventProcessor`
+choose where it starts. They apply **only while no resume point exists** for that id, i.e. on its first start. After
+that the subscription resumes where it left off, and changing a hook has no effect.
+
+| Hook | Default | Effect |
+|---|---|---|
+| `protected boolean isStartSubscriptionFromLatestEvent()` | `false` | `false`: start at `GlobalEventOrder.FIRST_GLOBAL_EVENT_ORDER` (global order 1), so the whole history is replayed. `true`: start after the highest global order persisted for the aggregate type when the subscription first subscribes |
+| `protected Function<AggregateType, GlobalEventOrder> resolveStartSubscriptionFromGlobalEventOrder()` | applies the flag above | Override it for any other start, per aggregate type |
+
+⚠️ A projection that starts from the latest event **never backfills its history**: aggregates whose events were
+appended before its first start never get a row. Use the latest-event start for processors that only react to new
+events (notifications, integrations), not for views. To fill a view after the fact, clear it in `onSubscriptionsReset`
+and call `resetAllSubscriptions()` or `resetSubscriptions(Map<AggregateType, GlobalEventOrder>, boolean)` on the
+instance that holds the processor's lock (see
+[LLM-foundation-test.md § What makes this safe with Essentials](LLM-foundation-test.md#what-makes-this-safe-with-essentials)).
+
+`InTransactionEventProcessor` has no resume point and no start position: it handles events inside the `UnitOfWork`
+that appends them, never history.
+
 ### Awaiting a processor (`awaitProcessed`)
 
 Since 0.60.1. A barrier that returns once a processor has processed a given event — for read-your-writes flows and

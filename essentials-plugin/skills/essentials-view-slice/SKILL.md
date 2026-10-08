@@ -208,6 +208,15 @@ Java entity gotchas:
   `cannot access kotlin.reflect.KClass`. Adding a view slice is what pulls this module in; Step 4's
   `requires` names whichever of the three the build file lacks.
 
+### 2g. Start position
+
+A new projector starts at global order 1 and replays the whole history — that is what a view needs, so leave
+`isStartSubscriptionFromLatestEvent()` at its default `false` and do not override
+`resolveStartSubscriptionFromGlobalEventOrder()`. A view that starts from the latest event never backfills: aggregates
+whose events came before its first start never get a row. Either hook only applies on the first start under the
+processor name; after that the stored resume point wins. See `references/llm/LLM-postgresql-event-store.md` § Start
+position.
+
 ## Step 3 — Check or scaffold the bounded context
 
 `Glob <sourceRoot>/<packageDir>/<bc>/`. **If absent, stop:** a bounded context starts with its first
