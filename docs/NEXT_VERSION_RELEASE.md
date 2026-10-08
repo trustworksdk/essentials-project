@@ -9,9 +9,9 @@ _Add an entry in the same commit as the change. Cite the commit or PR. Write it 
 changes for them, and what they must do, if anything. Purely internal refactors, test-only changes and CI
 plumbing that no user sees go in §7 at most, as one line._
 
-**So far:** no breaking change, one framework bug fix with a behaviour change (§1.1), plugin releases
+**So far:** no breaking change, two framework bug fixes with a behaviour change (§1.1), plugin releases
 `0.60.0-6` and `0.60.0-7`, and example and tooling updates. Nothing here requires a migration step. The persisted
-format is unchanged.
+format changes for one shape only, back to what 0.50 wrote: a type with a public `is`-getter (§1.1.2).
 
 ---
 
@@ -71,6 +71,37 @@ What you may notice:
 Commit `6ba568b5`. Pinned by `DurableQueuesIT.a_message_whose_handler_is_interrupted_by_the_consumer_stopping_is_redelivered_not_dead_lettered`
 (PostgreSQL traditional and centralized, both transactional variants, and MongoDB).
 
+#### 1.1.2 A public `is`-getter no longer adds a property to persisted JSON
+
+Affects every mapper Essentials builds: `EssentialsObjectMappers` (the persistence mapper behind the event store,
+durable queues, inbox/outbox and snapshots), `EssentialsImmutableJacksonModule.createObjectMapper()` and
+`EssentialTypesJacksonModule.createObjectMapper()`.
+
+The 0.50 Jackson 2 mapper serialized fields only. Jackson 3 detects `is`-getters separately from getters, and
+0.60.0 hid getters and setters but not `is`-getters, so a public `isX()` method added a property to every
+document. The same gap was in 0.50.x's Jackson 3 flavour (`createJackson3ObjectMapper()`). All three mappers now
+hide `is`-getters, which restores the 0.50 wire format:
+
+| Payload | 0.60.0 wrote | Now writes (as 0.50) |
+|---|---|---|
+| field `boolean isExpress` with `isExpress()` | `{"isExpress":true,"express":true}` | `{"isExpress":true}` |
+| record component `String gift` with a derived `boolean isGift()` | `{"gift":true}` | `{"gift":"ribbon"}` |
+
+What you may notice:
+
+- **Documents written by 0.60.0 still read.** The extra key is an unknown property, and unknown properties are
+  ignored.
+- **Except where the `is`-getter's property shares a name with a field or record component** (the second row).
+  0.60.0 wrote the getter's value *over* the field's, so the stored value is lost; it reads back as `"true"` or
+  `"false"`. The fix stops new writes doing that, but cannot recover what is already stored. If any of your
+  persisted types has both a field `x` and a public `isX()`, check the rows written by 0.60.0.
+- **New documents no longer carry the extra key.** Code that reads stored JSON directly (SQL on `jsonb`, CDC
+  consumers outside Essentials) and relied on it will no longer find it.
+
+Pinned by `EssentialsObjectMappersWireFormatTest` (`postgresql-event-store`), `EssentialsImmutableJacksonModuleTest`
+and `EssentialTypesJacksonModuleTest`. A startup check that also catches a mapper Essentials did not build is still
+open; see `docs/ROADMAP-0.6x.md` §0.1.
+
 ---
 
 ## 2. New features
@@ -84,6 +115,7 @@ No framework features so far. The plugin's are in [§4](#4-the-essentials-claude
 | Area | Fix | Commit |
 |---|---|---|
 | Durable queues | A message in flight when its consumer stops is no longer dead-lettered; see [§1.1.1](#111-a-message-in-flight-when-its-consumer-stops-is-redelivered-not-dead-lettered) | `6ba568b5` |
+| JSON (all Essentials mappers) | A document persisted before a primitive component was added failed every read with `Cannot map null into type int`: Jackson 3 enables `FAIL_ON_NULL_FOR_PRIMITIVES` by default, and Essentials left it on. It is now disabled, so the missing primitive reads as `0`/`false`, as under Jackson 2. Only reading changes; the written bytes do not | with §1.1.2 |
 | Durable queues (MongoDB) | Handing such a message back on an interrupted thread used to fail silently: the MongoDB driver refuses a connection on an interrupted thread (`Interrupted waiting for lock`), the failure was logged at DEBUG, and the message stayed marked as being delivered until the stuck-message reset. The hand-back now clears the interrupt flag for its write and restores it afterwards | `6ba568b5` |
 
 ---

@@ -59,11 +59,22 @@ public final class EssentialsObjectMappers {
                                                             .changeDefaultVisibility(visibility -> tools.jackson.databind.introspect.VisibilityChecker
                                                                     .defaultInstance()
                                                                     .withGetterVisibility(Visibility.NONE)
+                                                                    // Jackson 3 detects is-getters separately from
+                                                                    // getters. The 0.50 Jackson 2 mapper did not
+                                                                    // detect them at all, and a visible isX() adds a
+                                                                    // property to the persisted JSON - or overwrites
+                                                                    // a field of the same name.
+                                                                    .withIsGetterVisibility(Visibility.NONE)
                                                                     .withSetterVisibility(Visibility.NONE)
                                                                     .withFieldVisibility(Visibility.ANY)
                                                                     .withCreatorVisibility(Visibility.ANY))
                                                             .disable(tools.jackson.databind.MapperFeature.DEFAULT_VIEW_INCLUSION)
                                                             .disable(tools.jackson.databind.DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES)
+                                                            // Jackson 3 turned this on by default. Off, a document
+                                                            // persisted before a primitive component was added reads
+                                                            // it as 0/false, as Jackson 2 did; on, every such read
+                                                            // fails.
+                                                            .disable(tools.jackson.databind.DeserializationFeature.FAIL_ON_NULL_FOR_PRIMITIVES)
                                                             .disable(tools.jackson.databind.SerializationFeature.FAIL_ON_EMPTY_BEANS)
                                                             .enable(tools.jackson.databind.MapperFeature.PROPAGATE_TRANSIENT_MARKER)
                                                             .enable(tools.jackson.databind.DeserializationFeature.USE_BIG_DECIMAL_FOR_FLOATS)

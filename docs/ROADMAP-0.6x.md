@@ -14,55 +14,37 @@ The open fixes and improvements planned for the 0.6x line. Every item here was c
 - Each entry has three parts: the problem, why it matters, and the planned fix. Where the plan names an API, the name
   is a proposal, not a commitment.
 
+**Scope of 0.60.1** (decided 2026-10-08): everything in section 0 and P1, plus three P2 items: ES-4
+(`awaitProcessed`), DD-2 (the reserved-word check) and CB-4 (unhandled event types). Two P1 items ship softened,
+because a patch must not reject a setup that works today:
+- 0.2's "builder requires a UnitOfWork factory" becomes a WARN.
+- QL-3's redelivery-policy validation WARNs in 0.60.1 and fails from 0.61.
+
 ---
 
 ## 0. Planned for 0.60.0 but never shipped
 
-These were meant to block the 0.60.0 tag. None is in the tag. Items 0.1 to 0.3 concern the persisted wire format
-or reading existing data, so they come first in the next patch release.
+These were meant to block the 0.60.0 tag and are not in it. The two Jackson 3 persistence fixes (`is`-getters,
+`FAIL_ON_NULL_FOR_PRIMITIVES`) are fixed for the next release; see `docs/NEXT_VERSION_RELEASE.md` §1.1.2 and §3.
+What remains of them is 0.1.
 
-### 0.1 Jackson 3 serializes `is`-getters (N-1, SJ-3)
+### 0.1 A startup check for mappers Essentials did not build (N-1, SJ-3)
 
-The 0.50 Jackson 2 persistence mapper did not auto-detect `is`-getters. The Jackson 3 builders,
-`EssentialsObjectMappers` and `EssentialsImmutableJacksonModule.createObjectMapper`, only set getter and setter
-visibility to `NONE`, which leaves `isX()` methods visible. A public `isX()` therefore adds a key to the persisted
-JSON. That breaks the frozen wire format, and when a component has the same name, the value can be silently
-overwritten. No golden document covers it. The Jackson 3 flavour of 0.50.x (`createJackson3ObjectMapper()`) has the
-same gap, so data written by it may already carry the extra keys.
+Every mapper Essentials builds now reproduces the 0.50 wire format, and regression tests pin the `is`-getter and
+missing-primitive cases. The remaining risk is a mapper Essentials did not build. The `JSONSerializer` and
+`JSONEventSerializer` beans are `@ConditionalOnMissingBean`, and `Jackson3JSONSerializer(ObjectMapper)` accepts any
+mapper, so a hand-built one can drift without any signal.
 
 **Fix:**
-- Set `withIsGetterVisibility(Visibility.NONE)` in both builders.
-- Add a golden document that contains an `is`-getter.
-- Add a loud startup check, `EssentialsObjectMappers.findWireFormatDeviations(ObjectMapper)` in foundation. It
-  checks behaviour with a probe round trip, covering this setting, 0.2 and the pinned temporal features.
-- The starter runs the check against every `JSONSerializer`/`JSONEventSerializer` bean and logs one ERROR banner per
-  bean that deviates. It does not check Boot's web mapper.
+- Add `EssentialsObjectMappers.findWireFormatDeviations(ObjectMapper)` in foundation. It checks behaviour, not
+  configuration: it round-trips a small probe type and compares the result with the expected 0.50 bytes. The probe
+  covers `is`-getter and getter visibility, `FAIL_ON_NULL_FOR_PRIMITIVES` and the pinned temporal features.
+- The starter runs it against every `JSONSerializer`/`JSONEventSerializer` bean backed by a `Jackson3JSONSerializer`
+  and logs one ERROR banner per bean that deviates. It does not check Boot's web mapper.
 - Control it with `essentials.json.wire-format-check=warn|fail|off`, default `warn`. Consider `fail` as the default
   in the next major.
 
-**Release note:** data written by the Jackson 3 flavour of 0.50.x may carry extra keys derived from `is`-getters. A
-collision that has already been persisted cannot be recovered by the fix.
-
-### 0.2 A missing primitive no longer reads (N-2, SJ-1)
-
-Jackson 3 enables `FAIL_ON_NULL_FOR_PRIMITIVES` by default, and neither persistence builder disables it. A document
-written before a primitive field was added fails to deserialize, although Jackson 2 read it with the default value.
-
-**Fix:**
-- `disable(FAIL_ON_NULL_FOR_PRIMITIVES)` in both builders.
-- Add a read-regression test: a stored document that is missing a primitive.
-- Add a release-note entry.
-
-### 0.3 objenesis is `provided` while `immutable-jackson3` needs it (N-5, SB-1)
-
-`immutable-jackson3/pom.xml` declares objenesis with `provided` scope, and the starters mark it optional, while
-`immutable-jackson3` itself is a compile dependency. An application starts and writes, then fails its first read
-with `NoClassDefFoundError`.
-
-**Fix:** make objenesis a normal dependency of `immutable-jackson3`, or fail at startup with a message naming the
-Maven coordinate.
-
-### 0.4 The shard-owned queue engine does not join a Spring transaction on enqueue (N-15, RN-2)
+### 0.2 The shard-owned queue engine does not join a Spring transaction on enqueue (N-15, RN-2)
 
 `ShardOwnedDurableQueues.currentTransactionConnection()` joins only an Essentials `UnitOfWork` that is already bound.
 Under a plain Spring `@Transactional` or `TransactionTemplate`, nothing is bound. `Outbox.sendMessage`,
@@ -75,7 +57,7 @@ known-limitation note the plan called for either.
   not call the manual `getOrCreateNewUnitOfWork()`/`getRequiredUnitOfWork()` methods.
 - Make the builder require a UnitOfWork factory.
 
-### 0.5 Removed properties are silently ignored (N-18, RN-6)
+### 0.3 Removed properties are silently ignored (N-18, RN-6)
 
 The 0.60.0 release notes document the removed properties, but nothing warns when an application still sets one. The
 only `additional-spring-configuration-metadata.json` is in the event-store starter, and it has one warning-level
@@ -88,7 +70,7 @@ without any signal.
   property.
 - Add a startup check that logs an ERROR for any removed `essentials.*` key that is still set.
 
-### 0.6 The documentation still makes ordering and retry claims that are wrong (RN-4, RN-3, RN-5)
+### 0.4 The documentation still makes ordering and retry claims that are wrong (RN-4, RN-3, RN-5)
 
 `components/postgresql-queue-shard-owned/README.md` still says "a retry never reorders", which is false across a
 shard handover (see P1, "Shard-owned retry blocking survives a handover").

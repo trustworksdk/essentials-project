@@ -421,7 +421,7 @@ No issue was found for this exact combination.
 - ⚠️ `JSR310SingleValueType` needs `@JsonCreator` on constructor
 - ⚠️ Map keys typed by a value type need no annotation; a Jackson 2 `@JsonDeserialize(keyUsing = ...)` is silently ignored
 - ⚠️ `Money` serializes as `{"amount":"...","currency":"..."}` object, not single value
-- ⚠️ Factory `createObjectMapper()` disables getter/setter detection - uses fields only
+- ⚠️ Factory `createObjectMapper()` disables getter, `is`-getter and setter detection - uses fields only. Before the next release after 0.60.0 it left `is`-getters on, so a public `isX()` added a property
 - ⚠️ All registered types are from `dk.trustworks.essentials.types` — the **Java** hierarchy. Kotlin value types need `jackson-module-kotlin`
 - ⚠️ This module covers `@RequestBody`/`@ResponseBody` and persistence. `@PathVariable`/`@RequestParam` is `types-spring-web`, a separate mechanism
 

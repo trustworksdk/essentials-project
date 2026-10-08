@@ -174,10 +174,11 @@ public class ValidatedOrder {
 | Setting | Value | Purpose |
 |---------|-------|---------|
 | Field visibility | `ANY` | Serialize all fields |
-| Getter/setter visibility | `NONE` | Fields only, no getters/setters |
+| Getter, `is`-getter and setter visibility | `NONE` | Fields only: a public `isX()` adds no property |
 | Creator visibility | `ANY` | Any constructor may be used as creator |
 | `DEFAULT_VIEW_INCLUSION` | disabled | - |
 | `FAIL_ON_UNKNOWN_PROPERTIES` | disabled | Don't fail on extra JSON fields |
+| `FAIL_ON_NULL_FOR_PRIMITIVES` | disabled | A missing primitive reads as `0`/`false`, as under Jackson 2 |
 | `FAIL_ON_EMPTY_BEANS` | disabled | Allow empty objects |
 | `PROPAGATE_TRANSIENT_MARKER` | enabled | Respect `transient` keyword |
 

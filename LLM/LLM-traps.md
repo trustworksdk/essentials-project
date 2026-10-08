@@ -67,7 +67,7 @@ the number they have where they are defined, never renumbered: `ESS-S<n>` for a 
 - <a id="ess-020"></a>`ESS-020` `JSR310SingleValueType` subclass fails to deserialize without `@JsonCreator` → [LLM-types-jackson.md § JSR310SingleValueType](LLM-types-jackson.md#jsr310singlevaluetype)
 - <a id="ess-021"></a>`ESS-021` Old `@JsonDeserialize(keyUsing=…)` silently ignored on value-type map keys → [LLM-types-jackson.md § Map Keys](LLM-types-jackson.md#map-keys)
 - <a id="ess-022"></a>`ESS-022` `Money` is a JSON object, not a scalar → [LLM-types-jackson.md § Gotchas](LLM-types-jackson.md#gotchas)
-- <a id="ess-023"></a>`ESS-023` `createObjectMapper()` ignores getters/setters (fields only) → [LLM-types-jackson.md § Gotchas](LLM-types-jackson.md#gotchas)
+- <a id="ess-023"></a>`ESS-023` `createObjectMapper()` ignores getters, `is`-getters and setters (fields only) → [LLM-types-jackson.md § Gotchas](LLM-types-jackson.md#gotchas)
 - <a id="ess-024"></a>`ESS-024` Kotlin value-class id written as `{"value":…}` without `KotlinModule`, no error → [LLM-types-jackson.md § Kotlin semantic types](LLM-types-jackson.md#kotlin-semantic-types)
 - <a id="ess-112"></a>`ESS-112` Kotlin web body writes `"vOB4Bnc"` for `isExpedited`, and reading it back fails — a value-class property named `is…` loses its name on Boot's web mapper → [LLM-types-jackson.md § A value-class property named `is…` loses its name on the web mapper](LLM-types-jackson.md#a-value-class-property-named-is-loses-its-name-on-the-web-mapper)
 - <a id="ess-025"></a>`ESS-025` Value type serialized unexpectedly in a `@RequestBody`, or a module "registered" but not applied — web and persistence mappers are registered independently → [LLM-types-jackson.md § Quick Facts](LLM-types-jackson.md#quick-facts)

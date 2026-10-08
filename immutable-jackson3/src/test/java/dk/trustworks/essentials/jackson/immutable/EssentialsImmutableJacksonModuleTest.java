@@ -25,7 +25,7 @@ import org.junit.jupiter.api.Test;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
-import java.util.Map;
+import java.util.*;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -70,5 +70,59 @@ class EssentialsImmutableJacksonModuleTest {
 
         var deserializedSubject = objectMapper.readValue(serialized.getBytes(StandardCharsets.UTF_8), ImmutableSerializationTestSubject.class);
         assertThat(deserializedSubject).isEqualTo(testSubject);
+    }
+
+    /**
+     * Like {@code EssentialsObjectMappers}, this mapper reproduces the 0.50 Jackson 2 wire format, which did not
+     * auto-detect {@code is}-getters: a boolean field with an {@code isX()} accessor persists as the field alone.
+     */
+    @Test
+    void an_is_getter_next_to_its_field_is_not_serialized_as_a_second_property() throws IOException {
+        var shipment = new ExpressShipment("shipment-1", true);
+
+        var serialized = objectMapper.writeValueAsString(shipment);
+
+        assertThat(serialized).isEqualTo("{\"shipmentId\":\"shipment-1\",\"isExpress\":true}");
+        assertThat(objectMapper.readValue(serialized, ExpressShipment.class)).isEqualTo(shipment);
+    }
+
+    /**
+     * A document persisted before a primitive component was added reads with the primitive at its default, as it did
+     * under Jackson 2. Jackson 3 enables {@code FAIL_ON_NULL_FOR_PRIMITIVES} by default.
+     */
+    @Test
+    void a_document_persisted_before_a_primitive_component_was_added_reads_with_the_default() throws IOException {
+        var deserialized = objectMapper.readValue("{\"orderId\":\"order-1\"}", OrderWithLaterPrimitives.class);
+
+        assertThat(deserialized).isEqualTo(new OrderWithLaterPrimitives("order-1", 0, false));
+    }
+
+    static final class ExpressShipment {
+        private final String  shipmentId;
+        private final boolean isExpress;
+
+        ExpressShipment(String shipmentId, boolean isExpress) {
+            this.shipmentId = shipmentId;
+            this.isExpress = isExpress;
+        }
+
+        public boolean isExpress() {
+            return isExpress;
+        }
+
+        @Override
+        public boolean equals(Object o) {
+            return o instanceof ExpressShipment that
+                    && Objects.equals(shipmentId, that.shipmentId)
+                    && isExpress == that.isExpress;
+        }
+
+        @Override
+        public int hashCode() {
+            return Objects.hash(shipmentId, isExpress);
+        }
+    }
+
+    record OrderWithLaterPrimitives(String orderId, int quantity, boolean express) {
     }
 }

@@ -91,6 +91,9 @@ targets, with a `-N` suffix for plugin-only releases.
   inbox created elsewhere is listed as unresolved. Gate 11(b) also holds an inbound translation's
   `@KafkaListener`, `@RabbitListener` and `@JmsListener` payload types, or their concrete subtypes, to
   its `consumes`.
+- **Docs:** `LLM-immutable-jackson.md`, `LLM-types-jackson.md` and `ESS-023` in `LLM-traps.md` now say
+  the Essentials mappers hide `is`-getters as well as getters and setters, and read a missing primitive
+  as its default, matching the framework fix in the next Essentials release.
 
 ## 0.60.0-6 — targets Essentials 0.60.0
 - **`/essentials:upgrade` now moves a project to the plugin's Essentials release, code included.** A

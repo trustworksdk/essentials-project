@@ -145,6 +145,97 @@ class EssentialsObjectMappersWireFormatTest {
         assertThat(deserialized).isEqualTo(shapes());
     }
 
+    /**
+     * The 0.50 Jackson 2 mapper did not auto-detect {@code is}-getters, so a boolean field named {@code isExpress} with
+     * an {@code isExpress()} accessor persisted as the field alone. Jackson 3 detects {@code is}-getters independently
+     * of plain getters, so without {@code withIsGetterVisibility(NONE)} the accessor adds a second, {@code express},
+     * property to every document.
+     * <p>
+     * The expected JSON is what the 0.50 Jackson 2 mapper wrote for this shape. It is written out here rather than as a
+     * golden file because the Jackson 2 writer no longer exists to produce one.
+     */
+    @Test
+    void an_is_getter_next_to_its_field_is_not_serialized_as_a_second_property() {
+        var shipment = new ExpressShipment("shipment-1", true);
+
+        var json = serializer.serialize(shipment);
+
+        assertThat(json).isEqualTo("{\"shipmentId\":\"shipment-1\",\"isExpress\":true}");
+        assertThat(serializer.deserialize(json, ExpressShipment.class)).isEqualTo(shipment);
+    }
+
+    /**
+     * A derived {@code isGift()} whose property name collides with a record component is the silent-corruption case:
+     * an {@code is}-getter-detecting mapper writes {@code "gift":true} over the component's value, and the document
+     * then reads back with {@code gift = "true"}.
+     */
+    @Test
+    void a_derived_is_getter_does_not_overwrite_a_record_component_of_the_same_name() {
+        var order = new GiftOrder("order-1", "ribbon");
+
+        var json = serializer.serialize(order);
+
+        assertThat(json).isEqualTo("{\"orderId\":\"order-1\",\"gift\":\"ribbon\"}");
+        assertThat(serializer.deserialize(json, GiftOrder.class)).isEqualTo(order);
+    }
+
+    /**
+     * A type that gains a primitive component after documents of it were persisted must still read those documents,
+     * with the primitive at its default, as the Jackson 2 mapper did. Jackson 3 enables
+     * {@code FAIL_ON_NULL_FOR_PRIMITIVES} by default, which would fail every such read.
+     */
+    @Test
+    void a_document_persisted_before_a_primitive_component_was_added_reads_with_the_default() {
+        var persistedBeforeTheChange = "{\"orderId\":\"order-1\"}";
+
+        var deserialized = serializer.deserialize(persistedBeforeTheChange, OrderWithLaterPrimitives.class);
+
+        assertThat(deserialized).isEqualTo(new OrderWithLaterPrimitives("order-1", 0, false));
+    }
+
+    /** A boolean field whose accessor is an {@code is}-getter of a different property name. */
+    static final class ExpressShipment {
+        private final String  shipmentId;
+        private final boolean isExpress;
+
+        ExpressShipment(String shipmentId, boolean isExpress) {
+            this.shipmentId = shipmentId;
+            this.isExpress = isExpress;
+        }
+
+        public boolean isExpress() {
+            return isExpress;
+        }
+
+        @Override
+        public boolean equals(Object o) {
+            return o instanceof ExpressShipment that
+                    && Objects.equals(shipmentId, that.shipmentId)
+                    && isExpress == that.isExpress;
+        }
+
+        @Override
+        public int hashCode() {
+            return Objects.hash(shipmentId, isExpress);
+        }
+
+        @Override
+        public String toString() {
+            return "ExpressShipment{shipmentId='" + shipmentId + "', isExpress=" + isExpress + "}";
+        }
+    }
+
+    /** A record with a derived {@code is}-getter whose property name collides with a component. */
+    record GiftOrder(String orderId, String gift) {
+        public boolean isGift() {
+            return gift != null;
+        }
+    }
+
+    /** A record whose two primitive components were added after documents holding only {@code orderId} existed. */
+    record OrderWithLaterPrimitives(String orderId, int quantity, boolean express) {
+    }
+
     private static PersistedShapes shapes() {
         var metaData = new MessageMetaData(new TreeMap<>(Map.of("correlation_id", "corr-1", "tenant", "tenant-1")));
         return new PersistedShapes(new ImmutableOrderLine(QueueEntryId.of("line-1"), 3, Money.of("12.75", "EUR")),
