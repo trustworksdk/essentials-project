@@ -35,6 +35,25 @@ class PostgresqlUtilTest {
     }
 
     @Test
+    void a_reserved_keyword_is_named_as_the_cause() {
+        assertThatThrownBy(() -> PostgresqlUtil.checkIsValidTableOrColumnName("order", "OrderView.order"))
+                .isInstanceOf(InvalidTableOrColumnNameException.class)
+                .hasMessageContaining("Invalid table or column name: 'order' in context: OrderView.order")
+                .hasMessageContaining("'order' is a reserved SQL keyword");
+        assertThatThrownBy(() -> PostgresqlUtil.checkIsValidTableOrColumnName("public.user"))
+                .isInstanceOf(InvalidTableOrColumnNameException.class)
+                .hasMessageContaining("Invalid qualified table or column name: 'public.user'")
+                .hasMessageContaining("'user' is a reserved SQL keyword");
+    }
+
+    @Test
+    void a_malformed_name_does_not_blame_a_reserved_keyword() {
+        assertThatThrownBy(() -> PostgresqlUtil.checkIsValidTableOrColumnName("order; DROP TABLE x"))
+                .isInstanceOf(InvalidTableOrColumnNameException.class)
+                .hasMessageNotContaining("reserved");
+    }
+
+    @Test
     void testWithInvalidCharacters() {
         assertThatThrownBy(() -> PostgresqlUtil.checkIsValidTableOrColumnName("Invalid-Name"))
                 .isInstanceOf(InvalidTableOrColumnNameException.class)

@@ -90,7 +90,7 @@ The `@DocumentEntity.tableName`, entity property names, and `Index.name` are use
 
 **Mitigations:**
 - `PostgresqlDocumentDbRepository` calls `PostgresqlUtil#checkIsValidTableOrColumnName(String)` for basic validation at startup
-- Entity property names are validated via `EntityConfiguration.checkPropertyNames()`
+- Entity property names and JSON path segments are validated via `EntityConfiguration.checkPropertyNames()`: identifier characters and at most 63 characters. Unlike the table name they may be SQL reserved words (`order`, `user`, `values`, ...) since 0.60.1, because they reach SQL only as quoted JSON path segments, JDBI bind names and prefixed index names
 - This provides initial defense but does **NOT** guarantee complete SQL injection protection
 
 **Developer Responsibility:**

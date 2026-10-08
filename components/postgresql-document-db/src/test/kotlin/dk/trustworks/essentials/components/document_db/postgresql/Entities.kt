@@ -110,3 +110,25 @@ data class ShippingOrder(
     override var version: Version = Version.NOT_SAVED_YET,
     override var lastUpdated: OffsetDateTime = OffsetDateTime.now(UTC)
 ) : VersionedEntity<ShippingOrderId, ShippingOrder>
+/**
+ * Every property name here is on [dk.trustworks.essentials.components.foundation.postgresql.PostgresqlUtil.RESERVED_NAMES].
+ * They reach SQL only as quoted JSON path segments, bind names and the suffix of a prefixed index name, so they are
+ * ordinary JSON property names (DD-2).
+ */
+@DocumentEntity("reserved_word_documents")
+data class ReservedWordsDocument(
+    @Id val id: String,
+    @Indexed var order: String,
+    var user: String,
+    var values: Map<String, String>,
+    var key: String,
+    var path: String,
+    var language: String,
+    var text: String,
+    var time: String,
+    var group: ReservedWordsGroup,
+    override var version: Version = Version.NOT_SAVED_YET,
+    override var lastUpdated: OffsetDateTime = OffsetDateTime.now(UTC)
+) : VersionedEntity<String, ReservedWordsDocument>
+
+data class ReservedWordsGroup(val table: String, val select: Int)

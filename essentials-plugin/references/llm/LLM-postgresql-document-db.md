@@ -513,7 +513,7 @@ Index<JavaProduct> index = Index.fromPaths("idx_name_city", "name", "address.cit
 - ⚠️ **`@DocumentEntity` takes a named argument from Java**: `@DocumentEntity(tableName = "java_products")`, not the positional Kotlin form `@DocumentEntity("orders")`.
 - ⚠️ **Initialise the version field to `Version.NOT_SAVED_YET_VALUE`**, matching the Kotlin default `Version.NOT_SAVED_YET`, so an unsaved entity reads as unsaved. `save()` overwrites the version with its `initialVersion` argument, so this is a marker, not what `save()` checks.
 - ⚠️ **`@Indexed` only works on top-level properties** (see [Indexing](#indexing)). Nested paths need `addIndexByPaths` / `Index.fromPaths`.
-- ⚠️ **Path strings are concatenated into SQL.** Every path segment is validated with `PostgresqlUtil.checkIsValidTableOrColumnName`, the same defence as table and property names — and with the same limits. Never build a path from user input. See [Security](#security).
+- ⚠️ **Path strings are concatenated into SQL.** Every path segment is validated like an entity property name: identifier characters (`[A-Za-z_][A-Za-z0-9_]*`) and at most 63 characters. Never build a path from user input. See [Security](#security).
 
 ## Custom Repositories
 
@@ -704,9 +704,11 @@ Table names (`@DocumentEntity`), property names, and index names are used in SQL
 > ⚠️ **SQL Injection Risk**: `@DocumentEntity.tableName`, entity property names, and `Index.name` are used in SQL statements via string concatenation.
 
 **Mitigations:**
-- `PostgresqlUtil.checkIsValidTableOrColumnName()` validates at startup
-- `EntityConfiguration.checkPropertyNames()` validates property names
+- `PostgresqlUtil.checkIsValidTableOrColumnName()` validates the table name and `Index.name` at startup, including the SQL reserved-keyword list (an error names the keyword when that is the cause)
+- `EntityConfiguration.checkPropertyNames()` validates property names (recursively, but not into `java.*` types) and every JSON path segment: identifier characters, at most 63 characters
 - Provides basic defense but NOT complete protection
+
+**Property names may be SQL reserved words (since 0.60.1).** `order`, `user`, `values`, `key`, `path`, `group`, ... are accepted as property names and path segments: a property name reaches SQL only as a quoted JSON path segment (`data->>'order'`), inside a JDBI bind name (`:order__0`, replaced by `?` before PostgreSQL parses the statement) or as the suffix of a prefixed index name (`idx_<table>_order`). On 0.60.0 and earlier they fail repository creation with `InvalidTableOrColumnNameException` — rename the property, or (Java) the field. The table name still must not be a reserved word.
 
 **Developer Responsibility:**
 - Only use table/index/property names from controlled sources

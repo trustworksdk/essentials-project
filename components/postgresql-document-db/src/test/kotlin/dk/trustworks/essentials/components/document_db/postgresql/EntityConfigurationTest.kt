@@ -17,16 +17,13 @@
 package dk.trustworks.essentials.components.document_db.postgresql
 
 import dk.trustworks.essentials.components.document_db.postgresql.EntityConfiguration.Companion.isKotlinOrJavaBuiltInType
-import dk.trustworks.essentials.components.foundation.postgresql.PostgresqlUtil
 import dk.trustworks.essentials.components.foundation.types.RandomIdGenerator
 import dk.trustworks.essentials.types.CharSequenceType
 import org.assertj.core.api.Assertions.assertThat
-import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
-import org.mockito.*
 import java.math.BigDecimal
 import java.time.Instant
 import java.time.LocalDate
@@ -82,38 +79,25 @@ class EntityConfigurationTest {
     }
 
     // --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
-    private lateinit var mockedStatic: MockedStatic<PostgresqlUtil>
-
-    // Initialize Mockito annotations and captors
-    @Captor
-    lateinit var argumentCaptorContext: ArgumentCaptor<String>
-
-    private lateinit var checkedContexts : MutableList<String>
+    private lateinit var checkedContexts: MutableList<String>
 
     @BeforeEach
     fun setUp() {
-        checkedContexts = mutableListOf<String>()
-        MockitoAnnotations.openMocks(this)
-        mockedStatic = Mockito.mockStatic(PostgresqlUtil::class.java)
-        // Setup the static mock behavior
-        mockedStatic.`when`<Any> { PostgresqlUtil.checkIsValidTableOrColumnName(Mockito.anyString(), Mockito.anyString()) }
-            .thenAnswer { invocation ->
-                val context = invocation.getArgument<String>(1)
-                checkedContexts.add(context) // Capture the context for each call
-                null // Since the original method is void, return null
-            }
+        checkedContexts = mutableListOf()
     }
 
-    @AfterEach
-    fun tearDown() {
-        mockedStatic.close()
+    /**
+     * [EntityConfiguration.checkPropertyNames] with a recording name check, capturing the context of every name it checks.
+     */
+    private fun checkPropertyNames(property: KProperty1<*, *>) {
+        EntityConfiguration.checkPropertyNames(property as KProperty1<Any, *>, listOf(), mutableSetOf()) { _, context -> checkedContexts.add(context) }
     }
 
     @Test
     fun `checkPropertyNames - test property name checking`() {
         // Execute
         Person::class.memberProperties.forEach {
-            EntityConfiguration.checkPropertyNames(it as KProperty1<Any, *>)
+            checkPropertyNames(it)
         }
 
         // Verification
@@ -125,7 +109,7 @@ class EntityConfigurationTest {
     fun `checkPropertyNames - data class with Java semantic type`() {
         // Execute
         Customer::class.memberProperties.forEach {
-            EntityConfiguration.checkPropertyNames(it as KProperty1<Any, *>)
+            checkPropertyNames(it)
         }
 
         // Verification
@@ -138,7 +122,7 @@ class EntityConfigurationTest {
         class RecursiveEntity(val id: Int, val parent: RecursiveEntity?)
 
         RecursiveEntity::class.memberProperties.forEach {
-            EntityConfiguration.checkPropertyNames(it as KProperty1<Any, *>)
+            checkPropertyNames(it)
         }
 
         // Verification
@@ -150,7 +134,7 @@ class EntityConfigurationTest {
         class BuiltInTypesEntity(val id: Int, val name: String)
 
         BuiltInTypesEntity::class.memberProperties.forEach {
-            EntityConfiguration.checkPropertyNames(it as KProperty1<Any, *>)
+            checkPropertyNames(it)
         }
 
         // Verification
@@ -162,7 +146,7 @@ class EntityConfigurationTest {
         class Order(val id: OrderId)
 
         Order::class.memberProperties.forEach {
-            EntityConfiguration.checkPropertyNames(it as KProperty1<Any, *>)
+            checkPropertyNames(it)
         }
 
         // Verification
@@ -175,7 +159,7 @@ class EntityConfigurationTest {
 
 
         CollectionsEntity::class.memberProperties.forEach {
-            EntityConfiguration.checkPropertyNames(it as KProperty1<Any, *>)
+            checkPropertyNames(it)
         }
 
         // Verification
@@ -188,7 +172,7 @@ class EntityConfigurationTest {
 
 
         FinancialRecord::class.memberProperties.forEach {
-            EntityConfiguration.checkPropertyNames(it as KProperty1<Any, *>)
+            checkPropertyNames(it)
         }
 
         // Verification
@@ -206,7 +190,7 @@ class EntityConfigurationTest {
         )
 
         TimeEntity::class.memberProperties.forEach {
-            EntityConfiguration.checkPropertyNames(it as KProperty1<Any, *>)
+            checkPropertyNames(it)
         }
 
         // Verification

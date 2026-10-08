@@ -440,8 +440,47 @@ internal fun checkJsonPathExpression(pathExpression: String): String {
     if (segments.isEmpty()) {
         throw InvalidTableOrColumnNameException("Invalid JSON path expression: '$pathExpression'. It must contain at least one path segment")
     }
-    segments.forEach { PostgresqlUtil.checkIsValidTableOrColumnName(it, pathExpression) }
+    segments.forEach { checkIsValidJsonPropertyName(it, pathExpression) }
     return pathExpression
+}
+
+/**
+ * Validate a JSON property name or JSON path segment: the identifier character class
+ * ([PostgresqlUtil.VALID_SQL_IDENTIFIER_CHARACTERS_PATTERN]) and at most [PostgresqlUtil.MAX_IDENTIFIER_LENGTH] characters -
+ * and nothing else.
+ *
+ * Deliberately not [PostgresqlUtil.checkIsValidTableOrColumnName]: its reserved-keyword list is there for a name PostgreSQL
+ * parses as an identifier, and a property name never is one. It reaches SQL only as
+ * - a JSON path segment inside a single-quoted literal (`data->>'order'`), via [checkedJSONValueArrowPath] and the `@Indexed`
+ *   index DDL. The character class has no quote and no backslash, so a segment cannot leave the literal, and a keyword inside
+ *   a literal is just text;
+ * - part of a JDBI bind name (`:order__0`), via [checkedBindName]. JDBI replaces the whole `:name` token with a `?` before
+ *   PostgreSQL sees the statement;
+ * - the suffix of an `@Indexed` index name, `idx_<table>_<property>`, which is still checked as a whole with
+ *   [PostgresqlUtil.checkIsValidTableOrColumnName] and so is never a bare keyword.
+ *
+ * Applied to property names, the keyword list only rejected ordinary names (`order`, `user`, `values`, `key`, `path`), and,
+ * through the recursive [EntityConfiguration.checkPropertyNames], properties of JDK types such as `Optional.value`.
+ *
+ * As with [PostgresqlUtil.checkIsValidTableOrColumnName], this is a defense layer, not a security guarantee.
+ *
+ * @param name the JSON property name or path segment
+ * @param context where the name comes from (e.g. `OrderView.contactDetails.address`), included in the error message
+ * @return [name]
+ * @throws InvalidTableOrColumnNameException if the name is empty, too long or outside the identifier character class
+ */
+internal fun checkIsValidJsonPropertyName(name: String?, context: String? = null): String {
+    val inContext = if (context != null) " in context: $context" else ""
+    if (name.isNullOrBlank()) {
+        throw InvalidTableOrColumnNameException("JSON property name cannot be null or empty$inContext")
+    }
+    if (name.length > PostgresqlUtil.MAX_IDENTIFIER_LENGTH || !PostgresqlUtil.VALID_SQL_IDENTIFIER_CHARACTERS_PATTERN.matcher(name).matches()) {
+        throw InvalidTableOrColumnNameException(
+            "Invalid JSON property name: '$name'$inContext. A property name used in a JSON path must start with a letter or underscore, " +
+                "followed by letters, digits or underscores, and be at most ${PostgresqlUtil.MAX_IDENTIFIER_LENGTH} characters long"
+        )
+    }
+    return name
 }
 
 /**
@@ -467,11 +506,11 @@ private val bindNameLog = LoggerFactory.getLogger("dk.trustworks.essentials.comp
 /**
  * [Property.name] reduced to something safe to interpolate as a JDBI named bind parameter (`:<name>`).
  *
- * The identifier character class is borrowed from [PostgresqlUtil] (along with its reserved-word list) even though the
- * length limit isn't, which is why this uses [PostgresqlUtil.isValidSqlIdentifier] with an explicit maximum rather than
- * [PostgresqlUtil.checkIsValidTableOrColumnName]. The name is truncated *before* it is validated; that cannot weaken the
- * check, because what is validated is exactly what is emitted, and uniqueness comes from the counter the caller appends
- * rather than from the name.
+ * Only the identifier character class is borrowed from [PostgresqlUtil] ([PostgresqlUtil.VALID_SQL_IDENTIFIER_CHARACTERS_PATTERN]):
+ * neither its length limit nor its reserved-word list applies, because JDBI replaces the whole `:<name>` token with a `?`
+ * before PostgreSQL parses the statement - `:order__0` is as safe as `:city__0`. The name is truncated *before* it is
+ * validated; that cannot weaken the check, because what is validated is exactly what is emitted, and uniqueness comes from
+ * the counter the caller appends rather than from the name.
  *
  * The qualified variant ([PostgresqlUtil.isValidQualifiedSqlIdentifier], which allows 2*63+1 characters) is not an option:
  * it requires exactly one dot, which no [Property.name] contains, and a dot in a bind name means bean-property navigation
@@ -490,7 +529,7 @@ internal fun Property<*, *>.checkedBindName(): String {
             name, MAX_BIND_NAME_LENGTH, bindName
         )
     }
-    if (!PostgresqlUtil.isValidSqlIdentifier(bindName, MAX_BIND_NAME_LENGTH)) {
+    if (bindName.isEmpty() || !PostgresqlUtil.VALID_SQL_IDENTIFIER_CHARACTERS_PATTERN.matcher(bindName).matches()) {
         throw InvalidTableOrColumnNameException(
             "Invalid bind parameter name: '$bindName'. A Property name must start with a letter or underscore, " +
                 "followed by letters, digits or underscores"
@@ -508,7 +547,7 @@ class JsonPathProperty<T>(private val path: String) : Property<T, Any?> {
 
     init {
         require(segments.isNotEmpty()) { "Path must contain at least one segment" }
-        segments.forEach { PostgresqlUtil.checkIsValidTableOrColumnName(it) }
+        segments.forEach { checkIsValidJsonPropertyName(it, path) }
     }
 
     override fun toJSONValueArrowPath(): String {

@@ -740,7 +740,7 @@ data class Index<T>(
     init {
         PostgresqlUtil.checkIsValidTableOrColumnName(name)
         require(properties.isNotEmpty()) { "You have to specify at least 1 property" }
-        properties.forEach { PostgresqlUtil.checkIsValidTableOrColumnName(it.name()) }
+        properties.forEach { checkIsValidJsonPropertyName(it.name(), "Index '$name'") }
     }
 
     companion object {
