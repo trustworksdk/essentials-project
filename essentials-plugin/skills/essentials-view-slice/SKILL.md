@@ -217,6 +217,15 @@ whose events came before its first start never get a row. Either hook only appli
 processor name; after that the stored resume point wins. See `references/llm/LLM-postgresql-event-store.md` § Start
 position.
 
+### 2h. Handler failures
+
+A projection handler throws on a failure it cannot handle; never wrap it in a `try`/`catch` that logs and returns — the
+event is then acknowledged and the row is missing for good. A throw queues the event for redelivery and, once the
+redeliveries are used up, dead-letters it. The resume point keeps advancing, and only that aggregate's later events wait
+behind the dead letter. Say in the report that the team alerts on `essentials.messaging.durable_queues.dead_lettered`
+(or `DurableQueuesHealthIndicator`), fixes the cause and calls `resurrectDeadLetterMessage`. See
+`references/llm/LLM-postgresql-event-store.md` § Handler failures.
+
 ## Step 3 — Check or scaffold the bounded context
 
 `Glob <sourceRoot>/<packageDir>/<bc>/`. **If absent, stop:** a bounded context starts with its first
@@ -331,6 +340,7 @@ Walk § Red flags in the law printed in Step 1 — do not load it again — then
 ## Red flags specific to this kind
 
 - A projection `@MessageHandler` with only the event parameter — it cannot detect a replay.
+- A projection handler that catches an exception and only logs it — the event is acknowledged and lost.
 - `repository.update(entity)` with no version argument.
 - **Java:** a `private` `@Id` field — dead-letters every message, projection never populates.
 - **Java:** a `@Configuration` class named `<View>Repository` — collides with its own `@Bean`.

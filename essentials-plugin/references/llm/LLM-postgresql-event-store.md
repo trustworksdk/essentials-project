@@ -527,6 +527,8 @@ public class ShippingKafkaPublisher extends EventProcessor {
 
 **Features**: Exclusive (`FencedLock`), ordered per-aggregate (`OrderedMessage` via `Inbox`), redelivery (`RedeliveryPolicy`), command handling (`@CmdHandler` via `DurableLocalCommandBus`).
 
+A handler that fails throws; see [Handler failures](#handler-failures) for redelivery, dead letters and what to alert on.
+
 #### Blocking I/O in a handler: `UnitOfWorkMode.NONE`
 
 A `@MessageHandler` method runs inside a `UnitOfWork` by default — i.e. holding a pooled connection with an open transaction. For a handler that blocks on an external system (HTTP, SOAP, SFTP, a slow gRPC call) that connection sits in `idle in transaction` for the whole round trip, one per parallel consumer, writing nothing. Declare such a handler `UnitOfWorkMode.NONE` and wrap only the database work that follows it:
@@ -634,7 +636,7 @@ public class OrderViewProcessor extends InTransactionEventProcessor {
 
 For asynchronous view projections where low latency is critical but occasional failures acceptable. Events handled asynchronously directly (no queue) for minimal latency. On failure, queued to `DurableQueue` for retry. 
 If the queue has pending messages for a given aggregate id, new events related to the same aggregate-id are queued to maintain ordering.
-Only supports exclusive processing.
+Only supports exclusive processing. A handler that fails throws; see [Handler failures](#handler-failures).
 
 Rejects `@MessageHandler(unitOfWork = UnitOfWorkMode.NONE)` handlers at start-up: the view update and the acknowledgement commit in one `UnitOfWork` here, which a `NONE` handler would break. Blocking I/O belongs in an `EventProcessor`.
 
@@ -680,6 +682,33 @@ void on(OrderConfirmed event, OrderedMessage message) {
     if (rows == 0) throw new OptimisticLockingException("OrderListView", event.orderId());
 }
 ```
+
+### Handler failures
+
+Applies to `EventProcessor` and `ViewEventProcessor`. **A `@MessageHandler` throws on a failure it cannot handle.**
+Never catch and log it: a swallowed exception acknowledges the event, so the view or the side effect is silently
+missing for good.
+
+What a throw does:
+
+1. The event is redelivered through the processor's queue - the `Inbox` (`getInboxRedeliveryPolicy()`) for an
+   `EventProcessor`, the durable queue (`getDurableQueueRedeliveryPolicy()`) for a `ViewEventProcessor` once its direct
+   handling failed. The queue's built-in permanent-error list applies, so an `IllegalArgumentException` dead-letters on
+   the first attempt (see [LLM-foundation.md § The built-in permanent-error list](LLM-foundation.md#the-built-in-permanent-error-list)).
+2. When the redeliveries are used up, the message becomes a dead letter.
+3. The subscription's resume point **keeps advancing**: the event is in the queue, so the processor goes on with the
+   next events. Only that aggregate is held: messages are ordered by aggregate id (`OrderedMessage` key), and later
+   events of the same aggregate wait behind its dead letter (a `ViewEventProcessor` queues them behind it), while every
+   other aggregate keeps flowing.
+
+Operating it:
+
+- **Alert** on the `essentials.messaging.durable_queues.dead_lettered` counter (tag `queue_name` =
+  `processor.getDurableQueueName()`: `Inbox:<processorName>` or `<processorName>:queue`), or on
+  `DurableQueuesHealthIndicator` (see [LLM-foundation.md § Delivery observability](LLM-foundation.md#delivery-observability)).
+- **Fix the cause**, then **resurrect** the dead letter: `durableQueues.resurrectDeadLetterMessage(queueEntryId,
+  deliveryDelay)`, or the admin API's `durable-queues` resurrect operation. The held events of that aggregate follow
+  it in order.
 
 ### @MessageHandler Signatures
 
