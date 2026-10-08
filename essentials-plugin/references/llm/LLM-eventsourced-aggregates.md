@@ -31,16 +31,22 @@
 
 ## Pattern Selection
 
-| Pattern | State | Testing | Best For |
-|---------|-------|---------|----------|
-| **EventStreamDecider** | Immutable, event stream | Given-When-Then | Event Modeling, functional, slicing |
-| **Decider** | Immutable, external | Result types | Typed errors, enterprise |
-| **Modern AggregateRoot** | Mutable, internal | Unit tests | OOP, Spring Boot |
-| **Modern + WithState** | Mutable, separated | Unit tests | Complex state separation |
-| **FlexAggregate** | Immutable, internal | Functional | Explicit event control |
-| **Classic AggregateRoot** | Mutable, requires Event base | Unit tests | Legacy (avoid for new) |
+| Pattern | State | Testing | Snapshots | Best For |
+|---------|-------|---------|-----------|----------|
+| **EventStreamDecider** | Immutable, event stream | Given-When-Then | **No** - full stream per command | Event Modeling, functional, slicing |
+| **Decider** | Immutable, external | Result types | Yes (`deciderBasedCommandHandler`) | Typed errors, enterprise |
+| **Modern AggregateRoot** | Mutable, internal | Unit tests | Yes (`StatefulAggregateRepository`) | OOP, Spring Boot |
+| **Modern + WithState** | Mutable, separated | Unit tests | Yes (`StatefulAggregateRepository`) | Complex state separation |
+| **FlexAggregate** | Immutable, internal | Functional | **No** - full stream per load | Explicit event control |
+| **Classic AggregateRoot** | Mutable, requires Event base | Unit tests | Yes (`StatefulAggregateRepository`) | Legacy (avoid for new) |
 
 All `StatefulAggregate` patterns use `StatefulAggregateRepository`.
+
+**Snapshots** reach only the `StatefulAggregateRepository` (`setAggregateSnapshotRepository(...)` on its builder) and
+the typed-error `Decider` (the `AggregateSnapshotRepository` argument of `CommandHandler.deciderBasedCommandHandler`).
+`EventStreamDeciderCommandHandlerAdapter` takes no `AggregateSnapshotRepository` and fetches the aggregate's whole
+stream on every command, and so do `FlexAggregateRepository` and Kotlin's `DeciderCommandHandlerAdapter`. For a long
+stream on those patterns, keep the stream short instead ([Closing the Books](#closing-the-books)).
 
 ---
 
@@ -735,6 +741,8 @@ registers the descriptors before configuration validation runs. The aggregate ty
 - `JSONSerializer` / `EssentialsObjectMappers` from [foundation](./LLM-foundation.md) (Jackson 3; value types via [types-jackson3](./LLM-types-jackson.md), immutables via [immutable-jackson3](./LLM-immutable-jackson.md))
 
 Optimize loading for aggregates with many events. Snapshots save state at EventOrder N, then only load events after N.
+
+Used by `StatefulAggregateRepository` and the typed-error `Decider` only - `EventStreamDecider` and `FlexAggregate` always load the full stream (see [Pattern Selection](#pattern-selection)).
 
 ### When to Use
 | Scenario | Without | With |
