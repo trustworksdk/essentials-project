@@ -102,6 +102,7 @@ public final class MongoDurableQueues implements DurableQueues {
     private final   ConcurrentMap<QueueName, ReentrantLock>             localQueuePollLock    = new ConcurrentHashMap<>();
     private final   List<DurableQueuesInterceptor>                      interceptors          = new CopyOnWriteArrayList<>();
     private volatile DurableQueueMessageObserver                        messageObserver       = DurableQueueMessageObserver.none();
+    private final    EnqueueOutsideUnitOfWorkGuard                      enqueueOutsideUnitOfWorkGuard = new EnqueueOutsideUnitOfWorkGuard(MongoDurableQueues.class);
     private final   MessageListenerContainer                            messageListenerContainer;
 
 
@@ -385,6 +386,36 @@ public final class MongoDurableQueues implements DurableQueues {
         this.messageObserver = DurableQueueMessageObserver.safe(requireNonNull(messageObserver, "No messageObserver provided"));
     }
 
+    /**
+     * Should {@code queueMessage}/{@code queueMessages} fail when called outside a {@link UnitOfWork} or Spring transaction?
+     * Default {@code false}: such an enqueue commits on its own, and the first one is logged at WARN. In Spring Boot:
+     * {@value EnqueueOutsideUnitOfWorkGuard#REQUIRE_ACTIVE_UNIT_OF_WORK_FOR_ENQUEUE_PROPERTY}. See {@link EnqueueOutsideUnitOfWorkGuard}.
+     *
+     * @param requireActiveUnitOfWorkForEnqueue {@code true} to throw {@link NoActiveUnitOfWorkException} instead
+     */
+    public void setRequireActiveUnitOfWorkForEnqueue(boolean requireActiveUnitOfWorkForEnqueue) {
+        enqueueOutsideUnitOfWorkGuard.setRequireActiveUnitOfWork(requireActiveUnitOfWorkForEnqueue);
+    }
+
+    /**
+     * @return whether an enqueue outside a {@link UnitOfWork} or Spring transaction fails - see
+     * {@link #setRequireActiveUnitOfWorkForEnqueue(boolean)}
+     */
+    public boolean isRequireActiveUnitOfWorkForEnqueue() {
+        return enqueueOutsideUnitOfWorkGuard.isRequireActiveUnitOfWork();
+    }
+
+    /**
+     * An enqueue joins a Spring transaction (through {@code MongoTemplate}'s session synchronization) or the Essentials
+     * {@link UnitOfWork} wrapping one. Without a {@link UnitOfWorkFactory}, any active Spring transaction counts.
+     */
+    private void checkEnqueue(QueueName queueName) {
+        enqueueOutsideUnitOfWorkGuard.checkEnqueue(queueName,
+                                                   unitOfWorkFactory != null
+                                                   ? EnqueueOutsideUnitOfWorkGuard.isUnitOfWorkActive(unitOfWorkFactory)
+                                                   : org.springframework.transaction.support.TransactionSynchronizationManager.isActualTransactionActive());
+    }
+
     @Override
     public final DurableQueues addInterceptor(DurableQueuesInterceptor interceptor) {
         requireNonNull(interceptor, "No interceptor provided");
@@ -425,6 +456,7 @@ public final class MongoDurableQueues implements DurableQueues {
     @Override
     public final QueueEntryId queueMessage(QueueMessage operation) {
         requireNonNull(operation, "You must provide a QueueMessage instance");
+        checkEnqueue(operation.getQueueName());
         return newInterceptorChainForOperation(operation,
                                                interceptors,
                                                (interceptor, interceptorChain) -> interceptor.intercept(operation, interceptorChain),
@@ -541,6 +573,7 @@ public final class MongoDurableQueues implements DurableQueues {
     public final List<QueueEntryId> queueMessages(QueueMessages operation) {
         requireNonNull(operation, "You must provide a QueueMessages instance");
         operation.validate();
+        checkEnqueue(operation.getQueueName());
 
 
         return newInterceptorChainForOperation(operation,
@@ -1626,6 +1659,8 @@ public final class MongoDurableQueues implements DurableQueues {
 
         private DurableQueueMessageObserver messageObserver = DurableQueueMessageObserver.none();
 
+        private boolean requireActiveUnitOfWorkForEnqueue = false;
+
         /**
          * @param mongoTemplate required
          * @return this builder
@@ -1698,6 +1733,18 @@ public final class MongoDurableQueues implements DurableQueues {
         }
 
         /**
+         * @param requireActiveUnitOfWorkForEnqueue should {@code queueMessage}/{@code queueMessages} fail when called outside
+         *                                          a {@code UnitOfWork} or Spring transaction? Default {@code false}: such an
+         *                                          enqueue commits on its own, and the first one is logged at WARN. See
+         *                                          {@link EnqueueOutsideUnitOfWorkGuard}
+         * @return this builder
+         */
+        public Builder setRequireActiveUnitOfWorkForEnqueue(boolean requireActiveUnitOfWorkForEnqueue) {
+            this.requireActiveUnitOfWorkForEnqueue = requireActiveUnitOfWorkForEnqueue;
+            return this;
+        }
+
+        /**
          * @return the new {@link MongoDurableQueues}
          */
         public MongoDurableQueues build() {
@@ -1708,6 +1755,7 @@ public final class MongoDurableQueues implements DurableQueues {
                                           sharedQueueCollectionName,
                                           queuePollingOptimizerFactory);
             durableQueues.setMessageObserver(messageObserver);
+            durableQueues.setRequireActiveUnitOfWorkForEnqueue(requireActiveUnitOfWorkForEnqueue);
             return durableQueues;
         }
     }

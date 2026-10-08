@@ -26,6 +26,8 @@ import dk.trustworks.essentials.components.foundation.json.EssentialsObjectMappe
 import dk.trustworks.essentials.components.foundation.messaging.*;
 import dk.trustworks.essentials.components.foundation.messaging.eip.store_and_forward.*;
 import dk.trustworks.essentials.components.foundation.messaging.queue.*;
+import dk.trustworks.essentials.components.foundation.transaction.*;
+import dk.trustworks.essentials.components.foundation.transaction.jdbi.JdbiUnitOfWorkFactory;
 import dk.trustworks.essentials.components.foundation.transaction.spring.jdbi.SpringTransactionAwareJdbiUnitOfWorkFactory;
 import dk.trustworks.essentials.components.queue.shardowned.ShardOwnedSchema;
 import org.awaitility.Awaitility;
@@ -51,10 +53,13 @@ import static org.assertj.core.api.Assertions.*;
  * {@link SpringTransactionAwareJdbiUnitOfWorkFactory} over a JDBI behind a {@link TransactionAwareDataSourceProxy}.
  * Under a {@code TransactionTemplate} nothing has bound a {@code UnitOfWork} yet, so an adapter that only asked
  * {@code getCurrentUnitOfWork()} committed the enqueue on its own connection, and the Outbox kept a message for
- * work that had rolled back.
+ * work that had rolled back (N-15).
+ * <p>
+ * Also the opt-in guard against an enqueue outside any unit of work or transaction (RN-2): by default it commits on
+ * its own and WARNs once; with {@code requireActiveUnitOfWorkForEnqueue} it fails.
  */
 @Testcontainers(disabledWithoutDocker = true)
-class SpringTransactionEnqueueOnShardOwnedIT {
+class EnqueueTransactionBoundaryOnShardOwnedIT {
     private static final QueueName OUTBOX_QUEUE = QueueName.of("Outbox:orders");
     private static final QueueName PLAIN_QUEUE  = QueueName.of("plain");
 
@@ -187,6 +192,101 @@ class SpringTransactionEnqueueOnShardOwnedIT {
                 .singleElement(as(STRING))
                 .contains("without a UnitOfWorkFactory")
                 .contains("setUnitOfWorkFactory");
+    }
+
+    @Test
+    void a_direct_enqueue_rolls_back_with_an_essentials_unit_of_work() {
+        var essentialsUnitOfWorkFactory = new JdbiUnitOfWorkFactory(Jdbi.create(dataSource));
+        var essentialsQueues            = adapter(essentialsUnitOfWorkFactory, false);
+
+        assertThatThrownBy(() -> essentialsUnitOfWorkFactory.usingUnitOfWork(() -> {
+            essentialsQueues.queueMessage(PLAIN_QUEUE, Message.of(new OrderPlaced("rolled-back", 1)));
+            essentialsQueues.queueMessages(PLAIN_QUEUE, List.of(Message.of(new OrderPlaced("rolled-back-too", 2))));
+            throw new IllegalStateException("the caller's own work failed");
+        })).hasRootCauseMessage("the caller's own work failed");
+
+        assertThat(essentialsQueues.getTotalMessagesQueuedFor(PLAIN_QUEUE)).isZero();
+    }
+
+    // --------------------------------------- outside a unit of work (RN-2)
+
+    @Test
+    void by_default_an_enqueue_outside_a_unit_of_work_commits_and_warns_once_with_its_call_site() {
+        var logger   = (Logger) LoggerFactory.getLogger(ShardOwnedDurableQueues.class);
+        var appender = new ListAppender<ILoggingEvent>();
+        appender.start();
+        logger.addAppender(appender);
+        try {
+            durableQueues.queueMessage(PLAIN_QUEUE, Message.of(new OrderPlaced("first", 1)));
+            durableQueues.queueMessages(PLAIN_QUEUE, List.of(Message.of(new OrderPlaced("second", 2))));
+        } finally {
+            logger.detachAppender(appender);
+        }
+
+        assertThat(durableQueues.isRequireActiveUnitOfWorkForEnqueue()).isFalse();
+        assertThat(durableQueues.getTotalMessagesQueuedFor(PLAIN_QUEUE)).isEqualTo(2);
+        assertThat(appender.list)
+                .filteredOn(event -> event.getLevel() == Level.WARN)
+                .singleElement()
+                .satisfies(event -> {
+                    assertThat(event.getFormattedMessage()).contains("outside a UnitOfWork")
+                                                           .contains(EnqueueOutsideUnitOfWorkGuard.REQUIRE_ACTIVE_UNIT_OF_WORK_FOR_ENQUEUE_PROPERTY);
+                    assertThat(event.getThrowableProxy()).as("the call site").isNotNull();
+                });
+    }
+
+    @Test
+    void when_required_an_enqueue_outside_a_unit_of_work_fails_and_queues_nothing() {
+        var strict = adapter(unitOfWorkFactory, true);
+
+        assertThatThrownBy(() -> strict.queueMessage(PLAIN_QUEUE, Message.of(new OrderPlaced("refused", 1))))
+                .isInstanceOf(NoActiveUnitOfWorkException.class)
+                .hasMessageContaining(EnqueueOutsideUnitOfWorkGuard.REQUIRE_ACTIVE_UNIT_OF_WORK_FOR_ENQUEUE_PROPERTY);
+        assertThatThrownBy(() -> strict.queueMessages(PLAIN_QUEUE, List.of(Message.of(new OrderPlaced("refused-too", 2)))))
+                .isInstanceOf(NoActiveUnitOfWorkException.class);
+
+        assertThat(strict.getTotalMessagesQueuedFor(PLAIN_QUEUE)).isZero();
+    }
+
+    @Test
+    void when_required_an_enqueue_inside_a_plain_spring_transaction_goes_ahead() {
+        var strict = adapter(unitOfWorkFactory, true);
+
+        transactionTemplate.executeWithoutResult(status -> strict.queueMessage(PLAIN_QUEUE, Message.of(new OrderPlaced("inside", 1))));
+
+        assertThat(strict.getTotalMessagesQueuedFor(PLAIN_QUEUE)).isEqualTo(1);
+    }
+
+    @Test
+    void when_required_an_enqueue_inside_an_essentials_unit_of_work_goes_ahead() {
+        var essentialsUnitOfWorkFactory = new JdbiUnitOfWorkFactory(Jdbi.create(dataSource));
+        var strict                      = adapter(essentialsUnitOfWorkFactory, true);
+
+        essentialsUnitOfWorkFactory.usingUnitOfWork(() -> strict.queueMessage(PLAIN_QUEUE, Message.of(new OrderPlaced("inside", 1))));
+
+        assertThat(strict.getTotalMessagesQueuedFor(PLAIN_QUEUE)).isEqualTo(1);
+    }
+
+    @Test
+    void requiring_a_unit_of_work_without_a_unit_of_work_factory_is_refused_at_build() {
+        assertThatThrownBy(() -> ShardOwnedDurableQueues.builder()
+                                                        .setQueues(queues)
+                                                        .setJsonSerializer(EssentialsObjectMappers.createJSONSerializer())
+                                                        .setDataSource(dataSource)
+                                                        .setRequireActiveUnitOfWorkForEnqueue(true)
+                                                        .build())
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("setUnitOfWorkFactory");
+    }
+
+    private ShardOwnedDurableQueues adapter(UnitOfWorkFactory<? extends UnitOfWork> factory, boolean requireActiveUnitOfWorkForEnqueue) {
+        return ShardOwnedDurableQueues.builder()
+                                      .setQueues(queues)
+                                      .setJsonSerializer(EssentialsObjectMappers.createJSONSerializer())
+                                      .setUnitOfWorkFactory(factory)
+                                      .setDataSource(dataSource)
+                                      .setRequireActiveUnitOfWorkForEnqueue(requireActiveUnitOfWorkForEnqueue)
+                                      .build();
     }
 
     private Outbox outbox(List<OrderPlaced> received) {

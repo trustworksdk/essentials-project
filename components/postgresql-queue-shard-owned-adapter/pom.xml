@@ -177,7 +177,7 @@
             <scope>test</scope>
         </dependency>
         <!--
-          Test scope: SpringTransactionEnqueueOnShardOwnedIT proves an enqueue joins a plain Spring
+          Test scope: EnqueueTransactionBoundaryOnShardOwnedIT proves an enqueue joins a plain Spring
           TransactionTemplate (DataSourceTransactionManager + TransactionAwareDataSourceProxy), the
           set-up spring-boot-starter-postgresql wires.
         -->

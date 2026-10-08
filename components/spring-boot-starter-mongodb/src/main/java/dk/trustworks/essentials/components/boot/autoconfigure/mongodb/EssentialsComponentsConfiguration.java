@@ -324,6 +324,7 @@ public class EssentialsComponentsConfiguration {
                                               .setJsonSerializer(jsonSerializer)
                                               .setSharedQueueCollectionName(properties.getDurableQueues().getSharedQueueCollectionName())
                                               .setQueuePollingOptimizerFactory(pollingOptimizerFactory)
+                                              .setRequireActiveUnitOfWorkForEnqueue(properties.getDurableQueues().isRequireActiveUnitOfWorkForEnqueue())
                                               .build();
         durableQueues.addInterceptors(durableQueuesInterceptors);
         return durableQueues;

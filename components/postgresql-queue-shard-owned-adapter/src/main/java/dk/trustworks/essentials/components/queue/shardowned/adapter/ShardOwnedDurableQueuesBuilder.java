@@ -41,6 +41,7 @@ public class ShardOwnedDurableQueuesBuilder {
      * refuse, which has to be asked for now — see {@link #setAutoRegisterShardCount(int)}.
      */
     private int                                     autoRegisterShardCount = ShardOwnedDurableQueues.DEFAULT_AUTO_REGISTER_SHARD_COUNT;
+    private boolean                                 requireActiveUnitOfWorkForEnqueue;
 
     /**
      * Where queues are looked up by name.
@@ -120,7 +121,24 @@ public class ShardOwnedDurableQueuesBuilder {
         return this;
     }
 
+    /**
+     * Should {@code queueMessage}/{@code queueMessages} fail when called outside a {@code UnitOfWork} or Spring
+     * transaction? Default {@code false}: such an enqueue commits on its own, and the first one is logged at WARN. See
+     * {@link dk.trustworks.essentials.components.foundation.messaging.queue.EnqueueOutsideUnitOfWorkGuard}. Needs
+     * {@link #setUnitOfWorkFactory(UnitOfWorkFactory)}: without a factory every enqueue would fail.
+     */
+    public ShardOwnedDurableQueuesBuilder setRequireActiveUnitOfWorkForEnqueue(boolean requireActiveUnitOfWorkForEnqueue) {
+        this.requireActiveUnitOfWorkForEnqueue = requireActiveUnitOfWorkForEnqueue;
+        return this;
+    }
+
     public ShardOwnedDurableQueues build() {
-        return new ShardOwnedDurableQueues(queues, jsonSerializer, unitOfWorkFactory, dataSource, autoRegisterShardCount);
+        if (requireActiveUnitOfWorkForEnqueue && unitOfWorkFactory == null) {
+            throw new IllegalArgumentException("requireActiveUnitOfWorkForEnqueue needs a unitOfWorkFactory: without one no enqueue can "
+                                               + "join a unit of work, so every enqueue would fail. Call setUnitOfWorkFactory(...)");
+        }
+        var durableQueues = new ShardOwnedDurableQueues(queues, jsonSerializer, unitOfWorkFactory, dataSource, autoRegisterShardCount);
+        durableQueues.setRequireActiveUnitOfWorkForEnqueue(requireActiveUnitOfWorkForEnqueue);
+        return durableQueues;
     }
 }

@@ -202,6 +202,7 @@ Prefix: `essentials.durable-queues`
 | `polling-delay-interval-increment-factor` | `0.5` | Legacy (centralized=false) |
 | `max-polling-interval` | `2s` | Max backoff |
 | `verbose-tracing` | `false` | Include all ops in traces |
+| `require-active-unit-of-work-for-enqueue` | `false` | `true`: an enqueue (`queueMessage`/`queueMessages`, so `Outbox.sendMessage`, `sendAndDontWait`) outside a `UnitOfWork`/Spring transaction throws `NoActiveUnitOfWorkException`. `false`: it commits on its own, first one WARNs. Shard-owned engine reads it too |
 | `shared-queue-statistics-table-name` | `durable_queues_statistics` | Stats table - see [Security](#security) |
 | `enable-queue-statistics-ttl` | `false` | Auto-cleanup stats |
 | `queue-statistics-ttl-duration` | `90` | Days |
@@ -333,6 +334,7 @@ Prefix: `essentials.durable-queues`
 | `polling-delay-interval-increment-factor` | `0.5` | Backoff factor |
 | `max-polling-interval` | `2s` | Max backoff |
 | `verbose-tracing` | `false` | Include all ops in traces |
+| `require-active-unit-of-work-for-enqueue` | `false` | `true`: an enqueue (`queueMessage`/`queueMessages`, so `Outbox.sendMessage`, `sendAndDontWait`) outside a `UnitOfWork`/Spring transaction throws `NoActiveUnitOfWorkException`. `false`: it commits on its own, first one WARNs. |
 
 **Note:** No centralized message fetcher (PostgreSQL-only feature)
 

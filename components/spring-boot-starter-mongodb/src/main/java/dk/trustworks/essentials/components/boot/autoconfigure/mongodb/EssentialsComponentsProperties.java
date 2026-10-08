@@ -234,6 +234,8 @@ public class EssentialsComponentsProperties {
 
         private boolean verboseTracing = false;
 
+        private boolean requireActiveUnitOfWorkForEnqueue = false;
+
         /**
          * Settings for the {@link DurableQueuesHealthIndicator}, which reports dead-letter counts on
          * {@code /actuator/health}.
@@ -260,6 +262,31 @@ public class EssentialsComponentsProperties {
          */
         public void setVerboseTracing(boolean verboseTracing) {
             this.verboseTracing = verboseTracing;
+        }
+
+        /**
+         * Should an enqueue ({@code queueMessage}/{@code queueMessages}, and so {@code Outbox.sendMessage} and
+         * {@code DurableLocalCommandBus.sendAndDontWait}) FAIL when it runs outside a {@code UnitOfWork} or Spring
+         * transaction? Property {@code essentials.durable-queues.require-active-unit-of-work-for-enqueue}, default {@code false}.
+         * <p>
+         * Such an enqueue commits on its own and is not rolled back with any business work around it. With this {@code false}
+         * it goes ahead and the first one per {@code DurableQueues} is logged at WARN with its call site; with {@code true} it
+         * throws {@code NoActiveUnitOfWorkException} and nothing is queued. {@code Inbox.addMessageReceived} starts a
+         * {@code UnitOfWork} itself and is unaffected.
+         *
+         * @return whether an enqueue outside a unit of work or transaction fails
+         */
+        public boolean isRequireActiveUnitOfWorkForEnqueue() {
+            return requireActiveUnitOfWorkForEnqueue;
+        }
+
+        /**
+         * See {@link #isRequireActiveUnitOfWorkForEnqueue()}.
+         *
+         * @param requireActiveUnitOfWorkForEnqueue {@code true} to make an enqueue outside a unit of work or transaction fail
+         */
+        public void setRequireActiveUnitOfWorkForEnqueue(boolean requireActiveUnitOfWorkForEnqueue) {
+            this.requireActiveUnitOfWorkForEnqueue = requireActiveUnitOfWorkForEnqueue;
         }
 
         /**

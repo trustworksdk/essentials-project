@@ -161,6 +161,8 @@ public class ShardOwnedDurableQueues implements DurableQueues {
 
     private final AtomicBoolean warnedAboutUnitOfWorkWithoutConnection = new AtomicBoolean();
 
+    private final EnqueueOutsideUnitOfWorkGuard enqueueOutsideUnitOfWorkGuard = new EnqueueOutsideUnitOfWorkGuard(ShardOwnedDurableQueues.class);
+
     ShardOwnedDurableQueues(MessageQueues queues,
                             JSONSerializer jsonSerializer,
                             UnitOfWorkFactory<? extends UnitOfWork> unitOfWorkFactory,
@@ -209,6 +211,27 @@ public class ShardOwnedDurableQueues implements DurableQueues {
     @Override
     public Optional<UnitOfWorkFactory<? extends UnitOfWork>> getUnitOfWorkFactory() {
         return Optional.ofNullable(unitOfWorkFactory);
+    }
+
+    /**
+     * Should {@code queueMessage}/{@code queueMessages} fail when called outside a {@link UnitOfWork} or Spring transaction?
+     * Default {@code false}: such an enqueue commits on its own, and the first one is logged at WARN. In Spring Boot:
+     * {@value EnqueueOutsideUnitOfWorkGuard#REQUIRE_ACTIVE_UNIT_OF_WORK_FOR_ENQUEUE_PROPERTY}. See {@link EnqueueOutsideUnitOfWorkGuard}.
+     * Without a {@link UnitOfWorkFactory} every enqueue is outside one, so requiring it then fails every enqueue - the
+     * builder refuses that combination.
+     *
+     * @param requireActiveUnitOfWorkForEnqueue {@code true} to throw {@link NoActiveUnitOfWorkException} instead
+     */
+    public void setRequireActiveUnitOfWorkForEnqueue(boolean requireActiveUnitOfWorkForEnqueue) {
+        enqueueOutsideUnitOfWorkGuard.setRequireActiveUnitOfWork(requireActiveUnitOfWorkForEnqueue);
+    }
+
+    /**
+     * @return whether an enqueue outside a {@link UnitOfWork} or Spring transaction fails - see
+     * {@link #setRequireActiveUnitOfWorkForEnqueue(boolean)}
+     */
+    public boolean isRequireActiveUnitOfWorkForEnqueue() {
+        return enqueueOutsideUnitOfWorkGuard.isRequireActiveUnitOfWork();
     }
 
     @Override
@@ -271,6 +294,7 @@ public class ShardOwnedDurableQueues implements DurableQueues {
     @Override
     public QueueEntryId queueMessage(QueueMessage operation) {
         requireNonNull(operation, "No operation provided");
+        enqueueOutsideUnitOfWorkGuard.checkEnqueue(operation.getQueueName(), unitOfWorkFactory);
         return newInterceptorChainForOperation(operation,
                                                interceptors,
                                                (interceptor, interceptorChain) -> interceptor.intercept(operation, interceptorChain),
@@ -283,6 +307,7 @@ public class ShardOwnedDurableQueues implements DurableQueues {
     @Override
     public List<QueueEntryId> queueMessages(QueueMessages operation) {
         requireNonNull(operation, "No operation provided");
+        enqueueOutsideUnitOfWorkGuard.checkEnqueue(operation.getQueueName(), unitOfWorkFactory);
         return newInterceptorChainForOperation(operation,
                                                interceptors,
                                                (interceptor, interceptorChain) -> interceptor.intercept(operation, interceptorChain),

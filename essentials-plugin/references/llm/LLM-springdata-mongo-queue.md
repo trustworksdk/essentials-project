@@ -114,7 +114,17 @@ separate single-document operations, so a handler failure can never roll back th
 
 With a `SpringMongoTransactionAwareUnitOfWorkFactory` (`setUnitOfWorkFactory`, requires a replica set) each message is
 handled inside a `UnitOfWork` of its own, and a `queueMessage` called inside a caller's `UnitOfWork` joins it - the
-enqueue commits or rolls back with the caller's writes, which is what an Outbox relies on.
+enqueue commits or rolls back with the caller's writes, which is what an Outbox relies on. A plain Spring
+`@Transactional`/`TransactionTemplate` on the `MongoTransactionManager` is joined too.
+
+An enqueue **outside** any `UnitOfWork` or Spring transaction commits on its own and is not undone by a later
+rollback of the caller's work - e.g. `Outbox.sendMessage` called before the business transaction starts. The first one
+per `DurableQueues` logs a WARN with its call site. Opt in to failing instead with
+`setRequireActiveUnitOfWorkForEnqueue(true)` on the builder, or in Spring Boot
+`essentials.durable-queues.require-active-unit-of-work-for-enqueue=true`: such an enqueue then throws
+`NoActiveUnitOfWorkException` and queues nothing. A plain Spring `@Transactional`/`TransactionTemplate` counts as
+active. `Inbox.addMessageReceived` opens a `UnitOfWork` itself and is unaffected; `DurableLocalCommandBus.sendAndDontWait`
+outside a transaction is not. Dead-letter enqueues are never checked.
 
 ## Document Schema
 

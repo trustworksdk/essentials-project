@@ -83,3 +83,4 @@ All ITs need Docker (Testcontainers spins up MongoDB).
 - `acknowledgeMessageAsHandled` matches on `isDeadLetterMessage=false`; if handler calls `markAsDeadLetterMessage` mid-flight then ack returns `true` via secondary DLQ check — this is intentional.
 - `QueuePollingOptimizer` default factory is `this::createQueuePollingOptimizerFor`; passing `null` for factory in constructors falls back to this default — not null-safe if overridden improperly in subclasses.
 - `sharedQueueCollectionName` lowercased in constructor → collection names always lowercase regardless of input case.
+- **`queueMessage`/`queueMessages` outside a UoW: WARN once, or fail with `setRequireActiveUnitOfWorkForEnqueue(true)`** (`EnqueueOutsideUnitOfWorkGuard`, RN-2). No `unitOfWorkFactory` -> any active Spring tx counts (MongoTemplate joins it via session sync). Pinned by `MongoEnqueueTransactionBoundaryIT` (Essentials UoW + Spring `TransactionTemplate` rollback, guard on/off)

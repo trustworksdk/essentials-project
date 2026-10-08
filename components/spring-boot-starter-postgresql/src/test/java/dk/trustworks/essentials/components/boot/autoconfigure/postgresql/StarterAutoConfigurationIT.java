@@ -143,6 +143,14 @@ public class StarterAutoConfigurationIT {
     }
 
     @Test
+    void requiring_a_unit_of_work_for_enqueue_is_off_by_default_and_bound_from_properties() {
+        contextRunner.run(ctx -> assertThat(ctx.getBean(PostgresqlDurableQueues.class).isRequireActiveUnitOfWorkForEnqueue()).isFalse());
+        contextRunner
+                .withPropertyValues("essentials.durable-queues.require-active-unit-of-work-for-enqueue=true")
+                .run(ctx -> assertThat(ctx.getBean(PostgresqlDurableQueues.class).isRequireActiveUnitOfWorkForEnqueue()).isTrue());
+    }
+
+    @Test
     void the_dead_letter_health_indicator_is_registered_by_default_and_reports_up() {
         contextRunner.run(ctx -> {
             assertThat(ctx).hasSingleBean(DurableQueuesHealthIndicator.class);

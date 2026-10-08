@@ -127,6 +127,12 @@
             <artifactId>HikariCP</artifactId>
             <scope>test</scope>
         </dependency>
+        <!-- Test scope: EnqueueTransactionBoundaryIT enqueues under a Spring TransactionTemplate -->
+        <dependency>
+            <groupId>org.springframework</groupId>
+            <artifactId>spring-jdbc</artifactId>
+            <scope>test</scope>
+        </dependency>
     </dependencies>
 
     <build>

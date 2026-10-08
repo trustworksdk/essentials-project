@@ -24,6 +24,7 @@ import dk.trustworks.essentials.components.foundation.postgresql.stats.*;
 // and this class imports the spi package wholesale.
 import dk.trustworks.essentials.components.foundation.messaging.queue.DurableQueues;
 import dk.trustworks.essentials.components.foundation.messaging.queue.DurableQueuesInterceptor;
+import dk.trustworks.essentials.components.foundation.messaging.queue.EnqueueOutsideUnitOfWorkGuard;
 import dk.trustworks.essentials.components.foundation.transaction.*;
 import dk.trustworks.essentials.components.foundation.schema.*;
 import dk.trustworks.essentials.components.queue.shardowned.adapter.*;
@@ -370,7 +371,8 @@ public class ShardOwnedQueueAutoConfiguration {
                                                  UnitOfWorkFactory<? extends UnitOfWork> unitOfWorkFactory,
                                                  DataSource dataSource,
                                                  ShardOwnedQueueProperties properties,
-                                                 List<DurableQueuesInterceptor> durableQueuesInterceptors) {
+                                                 List<DurableQueuesInterceptor> durableQueuesInterceptors,
+                                                 Environment environment) {
         log.info("Durable queues are running on the SHARD-OWNED engine — Inbox, Outbox and every "
                  + "EventProcessor's projections are delivered by it. Queues invented at runtime get "
                  + "{} unordered shards.", properties.getAutoRegisterShardCount());
@@ -380,6 +382,11 @@ public class ShardOwnedQueueAutoConfiguration {
                                                    .setUnitOfWorkFactory(unitOfWorkFactory)
                                                    .setDataSource(dataSource)
                                                    .setAutoRegisterShardCount(properties.getAutoRegisterShardCount())
+                                                   // Read by key: the property is spring-boot-starter-postgresql's
+                                                   // (essentials.durable-queues.*), which this starter does not depend on.
+                                                   .setRequireActiveUnitOfWorkForEnqueue(Binder.get(environment)
+                                                                                               .bind(EnqueueOutsideUnitOfWorkGuard.REQUIRE_ACTIVE_UNIT_OF_WORK_FOR_ENQUEUE_PROPERTY, Boolean.class)
+                                                                                               .orElse(false))
                                                    .build();
         durableQueues.addInterceptors(durableQueuesInterceptors);
         return durableQueues;

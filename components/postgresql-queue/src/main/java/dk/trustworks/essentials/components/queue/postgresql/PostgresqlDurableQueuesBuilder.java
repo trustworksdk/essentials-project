@@ -66,6 +66,7 @@ public final class PostgresqlDurableQueuesBuilder {
     private int                                        batchedFetchSwitchThreshold              = PostgresqlDurableQueues.DEFAULT_BATCHED_FETCH_SWITCH_THRESHOLD;
     private int                                        batchedFetchWarnRowsThreshold            = PostgresqlDurableQueues.DEFAULT_BATCHED_FETCH_WARN_ROWS_THRESHOLD;
     private DurableQueueMessageObserver                messageObserver                          = DurableQueueMessageObserver.none();
+    private boolean                                    requireActiveUnitOfWorkForEnqueue        = false;
 
     /**
      * @param unitOfWorkFactory the {@link UnitOfWorkFactory} needed to access the database
@@ -257,6 +258,19 @@ public final class PostgresqlDurableQueuesBuilder {
         return this;
     }
 
+    /**
+     * Should {@code queueMessage}/{@code queueMessages} fail when called outside a {@code UnitOfWork} or Spring
+     * transaction? Default {@code false}: such an enqueue commits on its own, and the first one is logged at WARN.
+     * See {@link EnqueueOutsideUnitOfWorkGuard}.
+     *
+     * @param requireActiveUnitOfWorkForEnqueue {@code true} to make such an enqueue throw {@code NoActiveUnitOfWorkException}
+     * @return this builder instance
+     */
+    public PostgresqlDurableQueuesBuilder setRequireActiveUnitOfWorkForEnqueue(boolean requireActiveUnitOfWorkForEnqueue) {
+        this.requireActiveUnitOfWorkForEnqueue = requireActiveUnitOfWorkForEnqueue;
+        return this;
+    }
+
     public PostgresqlDurableQueues build() {
         var durableQueues = new PostgresqlDurableQueues(unitOfWorkFactory,
                                                        jsonSerializer != null ? jsonSerializer : DurableQueuesSerialization.createDefaultJSONSerializer(),
@@ -272,6 +286,7 @@ public final class PostgresqlDurableQueuesBuilder {
                                                        batchedFetchWarnRowsThreshold,
                                                        schemaOwnership);
         durableQueues.setMessageObserver(messageObserver);
+        durableQueues.setRequireActiveUnitOfWorkForEnqueue(requireActiveUnitOfWorkForEnqueue);
         return durableQueues;
     }
 }

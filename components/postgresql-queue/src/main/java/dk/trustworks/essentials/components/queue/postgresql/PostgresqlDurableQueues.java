@@ -131,6 +131,7 @@ public final class PostgresqlDurableQueues implements BatchMessageFetchingCapabl
      * grows a parameter. Always wrapped in {@link DurableQueueMessageObserver#safe(DurableQueueMessageObserver)}.
      */
     private volatile DurableQueueMessageObserver messageObserver = DurableQueueMessageObserver.none();
+    private final    EnqueueOutsideUnitOfWorkGuard enqueueOutsideUnitOfWorkGuard = new EnqueueOutsideUnitOfWorkGuard(PostgresqlDurableQueues.class);
 
     private   Function<QueueName, QueuePollingOptimizer> centralizedQueuePollingOptimizerFactory;
     private   int                                        messageHandlingTimeoutMs;
@@ -495,6 +496,25 @@ public final class PostgresqlDurableQueues implements BatchMessageFetchingCapabl
     }
 
     /**
+     * Should {@code queueMessage}/{@code queueMessages} fail when called outside a {@link UnitOfWork} or Spring transaction?
+     * Default {@code false}: such an enqueue commits on its own, and the first one is logged at WARN. In Spring Boot:
+     * {@value EnqueueOutsideUnitOfWorkGuard#REQUIRE_ACTIVE_UNIT_OF_WORK_FOR_ENQUEUE_PROPERTY}. See {@link EnqueueOutsideUnitOfWorkGuard}.
+     *
+     * @param requireActiveUnitOfWorkForEnqueue {@code true} to throw {@link NoActiveUnitOfWorkException} instead
+     */
+    public void setRequireActiveUnitOfWorkForEnqueue(boolean requireActiveUnitOfWorkForEnqueue) {
+        enqueueOutsideUnitOfWorkGuard.setRequireActiveUnitOfWork(requireActiveUnitOfWorkForEnqueue);
+    }
+
+    /**
+     * @return whether an enqueue outside a {@link UnitOfWork} or Spring transaction fails - see
+     * {@link #setRequireActiveUnitOfWorkForEnqueue(boolean)}
+     */
+    public boolean isRequireActiveUnitOfWorkForEnqueue() {
+        return enqueueOutsideUnitOfWorkGuard.isRequireActiveUnitOfWork();
+    }
+
+    /**
      * The name of the shared table where all queue messages are stored
      *
      * @return the name of the shared table where all queue messages are stored
@@ -854,6 +874,8 @@ public final class PostgresqlDurableQueues implements BatchMessageFetchingCapabl
     @Override
     public QueueEntryId queueMessage(QueueMessage operation) {
         requireNonNull(operation, "You must provide a QueueMessage instance");
+        // Before the chain: SingleOperationTransactionDurableQueuesInterceptor opens a UnitOfWork of its own inside it.
+        enqueueOutsideUnitOfWorkGuard.checkEnqueue(operation.getQueueName(), unitOfWorkFactory);
         return newInterceptorChainForOperation(operation,
                                                interceptors,
                                                (interceptor, interceptorChain) -> interceptor.intercept(operation, interceptorChain),
@@ -964,6 +986,7 @@ public final class PostgresqlDurableQueues implements BatchMessageFetchingCapabl
     public List<QueueEntryId> queueMessages(QueueMessages operation) {
         requireNonNull(operation, "You must provide a QueueMessages instance");
         operation.validate();
+        enqueueOutsideUnitOfWorkGuard.checkEnqueue(operation.getQueueName(), unitOfWorkFactory);
 
         return newInterceptorChainForOperation(operation,
                                                interceptors,

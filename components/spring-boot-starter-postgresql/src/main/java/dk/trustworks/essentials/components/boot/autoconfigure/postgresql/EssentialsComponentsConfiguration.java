@@ -304,6 +304,7 @@ public class EssentialsComponentsConfiguration {
                                                    .setUseBatchedFetch(properties.getDurableQueues().isUseBatchedFetch())
                                                    .setBatchedFetchSwitchThreshold(properties.getDurableQueues().getBatchedFetchSwitchThreshold())
                                                    .setBatchedFetchWarnRowsThreshold(properties.getDurableQueues().getBatchedFetchWarnRowsThreshold())
+                                                   .setRequireActiveUnitOfWorkForEnqueue(properties.getDurableQueues().isRequireActiveUnitOfWorkForEnqueue())
                                                    .setQueuePollingOptimizerFactory(consumeFromQueue -> new SimpleQueuePollingOptimizer(consumeFromQueue,
                                                                                                                                         (long) (consumeFromQueue.getPollingInterval().toMillis() *
                                                                                                                                                                       properties.getDurableQueues()

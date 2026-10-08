@@ -393,6 +393,23 @@ class ShardOwnedQueueAutoConfigurationIT {
                 });
     }
 
+    /**
+     * {@code essentials.durable-queues.require-active-unit-of-work-for-enqueue} is the base starter's property; this
+     * starter reads it by key, since it does not depend on that starter.
+     */
+    @Test
+    void requiring_a_unit_of_work_for_enqueue_is_off_by_default_and_read_from_the_shared_property() {
+        runner().withPropertyValues("essentials.shard-owned-queue.durable-queues-enabled=true")
+                .withUserConfiguration(DurableQueuesConfiguration.class)
+                .run(context -> assertThat(((ShardOwnedDurableQueues) context.getBean(DurableQueues.class)).isRequireActiveUnitOfWorkForEnqueue())
+                        .isFalse());
+        runner().withPropertyValues("essentials.shard-owned-queue.durable-queues-enabled=true",
+                                    "essentials.durable-queues.require-active-unit-of-work-for-enqueue=true")
+                .withUserConfiguration(DurableQueuesConfiguration.class)
+                .run(context -> assertThat(((ShardOwnedDurableQueues) context.getBean(DurableQueues.class)).isRequireActiveUnitOfWorkForEnqueue())
+                        .isTrue());
+    }
+
     /** Without the flag the adapter is not built at all, and the default engine stays in place. */
     @Test
     void durable_queues_stay_off_unless_asked() {

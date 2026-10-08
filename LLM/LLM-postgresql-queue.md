@@ -111,7 +111,17 @@ Created via `PostgresqlDurableQueues.builder()`.
 Every queue operation runs in its own transaction: queueing, fetching, acknowledging, retrying and dead-lettering are
 separate, so a failing handler can never roll back its own retry count. (0.60 removed `TransactionalMode`; its
 `FullyTransactional` mode broke exactly that.) A `queueMessage` called inside a caller's `UnitOfWork` joins it, so the
-enqueue commits or rolls back with the caller's writes - which is what an Outbox relies on.
+enqueue commits or rolls back with the caller's writes - which is what an Outbox relies on. With the starter's
+`SpringTransactionAwareJdbiUnitOfWorkFactory` a plain Spring `@Transactional`/`TransactionTemplate` is joined too.
+
+An enqueue **outside** any `UnitOfWork` or Spring transaction commits on its own and is not undone by a later
+rollback of the caller's work - e.g. `Outbox.sendMessage` called before the business transaction starts. The first one
+per `DurableQueues` logs a WARN with its call site. Opt in to failing instead with
+`setRequireActiveUnitOfWorkForEnqueue(true)` on the builder, or in Spring Boot
+`essentials.durable-queues.require-active-unit-of-work-for-enqueue=true`: such an enqueue then throws
+`NoActiveUnitOfWorkException` and queues nothing. A plain Spring `@Transactional`/`TransactionTemplate` counts as
+active. `Inbox.addMessageReceived` opens a `UnitOfWork` itself and is unaffected; `DurableLocalCommandBus.sendAndDontWait`
+outside a transaction is not. Dead-letter enqueues are never checked.
 
 ## Polling Mechanisms
 
