@@ -202,8 +202,8 @@ subscriptions have no order relative to each other. Letting the policy own its s
 **Bonus — the dual write.** Set the trap: two systems, no shared transaction, neither order safe. The
 module's own hand-drawn diagram already names the Essentials components, so show it and then show the
 publisher. Point at `stopRedeliveryOn` — some failures are permanent — and close on the operational
-commitment: somebody has to watch the dead letter queue, because a dead letter is one log line and the
-business outcome simply never happens.
+commitment: somebody has to watch the dead letter queue. A dead letter is kept, counted (metric and health
+indicator) and can be resurrected from the admin console, but the business outcome waits until someone does.
 
 **Bonus — a blocking call in a handler.** Not from the module; it is the dual write's sibling, and the one
 the demo actually hit. Packing charges the card, and the payment context's rule is *record the request, then
