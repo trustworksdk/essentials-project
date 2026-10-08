@@ -40,6 +40,8 @@ Beans wired (in order of dependency):
 15. `MicrometerDurableQueueMessageObserver` — `essentials.messaging.durable_queues.dead_lettered` counter; registered on `MeterRegistry` presence, NOT behind `essentials.metrics.durable-queues.enabled`
 16. `DurableQueuesHealthIndicator` — dead-letter counts on `/actuator/health` under `durableQueues`; on by default, `UP` until `essentials.durable-queues.health.dead-letter-threshold` is set positive
 
+**Shared startup checks.** `AutoConfiguration.imports` also lists foundation's `EssentialsStartupChecksAutoConfiguration` (package `foundation.boot`) = one implementation for all starters; Boot imports it once however many list it. Holds `WireFormatCheckBeanPostProcessor`: probes each `Jackson3JSONSerializer`-backed bean via `EssentialsObjectMappers.findWireFormatDeviations` (`essentials.json.wire-format-check=warn|fail|off`). New cross-starter check goes there, not into one starter.
+
 ## Test Structure
 
 Only a reflection check that no two `@Bean` methods return the same type (`EssentialsComponentsConfigurationBeanDefinitionsTest`); otherwise pure auto-configuration glue. Integration tests live in consumer modules (`springdata-mongo-queue`, `springdata-mongo-distributed-fenced-lock`). Testcontainers MongoDB dependency is declared for downstream test use.

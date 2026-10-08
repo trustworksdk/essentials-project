@@ -69,6 +69,7 @@ See [spring-boot-starter-postgresql README](https://github.com/trustworksdk/esse
 - `EssentialTypesJacksonModule` - Jackson 3 support for types (bean, so Spring Boot also registers it on its **web** `JsonMapper`)
 - `EssentialsImmutableJacksonModule` - Immutable support (when enabled; also a bean for the web mapper)
 - `JSONSerializer` - `EssentialsObjectMappers.createJSONSerializer()` (Jackson 3; when JSONEventSerializer not on classpath). Deliberately does **not** collect `JacksonModule` beans from the context — those are usually web-layer modules and would silently change the persisted format. Need extra persistence modules? Define your own `JSONSerializer` bean; the starter backs off
+- Wire-format check (0.60.1): every `JSONSerializer`/`JSONEventSerializer` bean backed by a `Jackson3JSONSerializer`, yours included, is probed at creation with `EssentialsObjectMappers.findWireFormatDeviations(mapper)`; a mapper that does not reproduce the persisted format logs one ERROR banner per bean naming each deviation. `essentials.json.wire-format-check=warn|fail|off` (default `warn`) - see [JSON Wire-Format Check](#json-wire-format-check). Build your mapper with `EssentialsObjectMappers.createJackson3ObjectMapper(extraModules...)` and it passes
 
 **Scheduler:**
 - `EssentialsScheduler` - Distributed scheduler (when enabled)
@@ -287,6 +288,17 @@ Prefix: `essentials`
 | `life-cycles.shutdown-timeout` | `10s` | Shutdown budget for stopping Lifecycle beans; bounded, best-effort DB cleanup during shutdown |
 | `reactive-bean-post-processor-enabled` | `true` | Auto-register handlers |
 | `immutable-jackson-module-enabled` | `true` | Enable immutable deserialization |
+
+#### JSON Wire-Format Check
+
+| Property | Default | Effect |
+|----------|---------|--------|
+| `essentials.json.wire-format-check` | `warn` | Probes every `JSONSerializer` bean backed by a `Jackson3JSONSerializer` (incl. the event store's `JSONEventSerializer`, and your replacement bean) as it is created. `warn`: one ERROR banner per bean whose mapper deviates from the persisted format, listing each deviation; `fail`: the bean's creation fails, and the context with it; `off`: no check. Boot's web `JsonMapper` is never checked |
+
+What it probes (behaviour, not configuration): field access, getter and `is`-getter visibility, ISO-8601 dates,
+numeric `Duration` (`30.000000000`), a missing primitive reading as its default (`FAIL_ON_NULL_FOR_PRIMITIVES` off),
+unknown properties ignored, untyped floats as `BigDecimal`, and with `types-jackson3` present, value types as JSON
+primitives. Shared by every starter: `EssentialsStartupChecksAutoConfiguration` (foundation).
 
 #### Database Schema
 

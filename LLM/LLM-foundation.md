@@ -1034,7 +1034,17 @@ String json = serializer.serialize(order);
 byte[] bytes = serializer.serializeAsBytes(order);
 Order order = serializer.deserialize(json, Order.class);
 Object event = serializer.deserialize(json, "com.example.OrderCreatedEvent");
+
+// Does a mapper Essentials did not build reproduce the persisted format? (0.60.1) Empty = yes
+List<WireFormatDeviation> deviations = EssentialsObjectMappers.findWireFormatDeviations(someMapper);
 ```
+
+`findWireFormatDeviations` checks behaviour, not configuration: it writes and reads small probe types and compares
+with the 0.50 bytes - field access, getter / `is`-getter visibility, ISO-8601 dates, numeric `Duration`, a missing
+primitive reading as its default, unknown properties ignored, untyped floats as `BigDecimal`, and value types as JSON
+primitives when `types-jackson3` is present. Each `WireFormatDeviation` carries `aspect`, `expected`, `actual`. The
+Spring Boot starters run it on every `Jackson3JSONSerializer`-backed serializer bean (`essentials.json.wire-format-check`,
+[starters](./LLM-spring-boot-starter-modules.md#json-wire-format-check)).
 
 ⚠️ `EssentialsJacksonModules.modules()` (used by `EssentialsObjectMappers`) throws `IllegalStateException` when a
 0.50-era Jackson 2 `types-jackson` / `immutable-jackson` jar is on the classpath (same FQCNs, wrong Jackson major) —

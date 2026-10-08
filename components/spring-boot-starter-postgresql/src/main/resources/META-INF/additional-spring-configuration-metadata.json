@@ -1,0 +1,10 @@
+{
+  "properties": [
+    {
+      "name": "essentials.json.wire-format-check",
+      "type": "dk.trustworks.essentials.components.foundation.boot.WireFormatCheckMode",
+      "description": "What to do at startup with a JSONSerializer or JSONEventSerializer bean, backed by a Jackson3JSONSerializer, whose mapper does not write and read the JSON format Essentials persists (typically a replacement bean built on a hand-configured JsonMapper). WARN logs one ERROR banner per deviating bean, FAIL stops the application, OFF skips the check. Spring Boot's web JsonMapper is not checked.",
+      "defaultValue": "warn"
+    }
+  ]
+}

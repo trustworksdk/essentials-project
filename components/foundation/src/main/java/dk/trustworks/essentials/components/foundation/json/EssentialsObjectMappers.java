@@ -18,6 +18,8 @@ package dk.trustworks.essentials.components.foundation.json;
 
 import com.fasterxml.jackson.annotation.JsonAutoDetect.Visibility;
 
+import java.util.List;
+
 import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 
 /**
@@ -122,5 +124,30 @@ public final class EssentialsObjectMappers {
      */
     public static JSONSerializer createJSONSerializer() {
         return new Jackson3JSONSerializer(createJackson3ObjectMapper());
+    }
+
+    /**
+     * Checks whether a mapper reproduces the persisted JSON format, for a mapper Essentials did not build.
+     * <p>
+     * Every mapper {@link #createJackson3ObjectMapper(tools.jackson.databind.JacksonModule...)} builds writes the
+     * format, but {@link Jackson3JSONSerializer} accepts any mapper, and a hand-built one drifts without a signal: the
+     * application starts, writes, and only data persisted by another version tells the difference.
+     * <p>
+     * The check is behavioural, not a comparison of configuration: it writes and reads small probe types and compares
+     * the result with what the Essentials 0.50 mapper wrote, so a mapper configured differently but to the same effect
+     * passes. It covers field access, getter and {@code is}-getter visibility, the ISO-8601 date and numeric
+     * {@code Duration} formats, a missing primitive reading as its default ({@code FAIL_ON_NULL_FOR_PRIMITIVES}),
+     * unknown properties being ignored, untyped floats reading as {@code BigDecimal}, and - when {@code types-jackson3}
+     * is on the classpath - Essentials value types written and read as JSON primitives.
+     * <p>
+     * The Essentials Spring Boot starters run it at startup against every {@link JSONSerializer} bean backed by a
+     * {@link Jackson3JSONSerializer} ({@code essentials.json.wire-format-check}).
+     *
+     * @param objectMapper the mapper to check
+     * @return every deviation found; empty when the mapper reproduces the persisted format
+     */
+    public static List<WireFormatDeviation> findWireFormatDeviations(tools.jackson.databind.ObjectMapper objectMapper) {
+        requireNonNull(objectMapper, "No objectMapper provided");
+        return WireFormatProbes.findDeviations(objectMapper);
     }
 }
