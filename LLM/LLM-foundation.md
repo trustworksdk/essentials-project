@@ -514,6 +514,7 @@ WHERE id = :id AND last_fence_token <= :token
 ```java
 // dk.trustworks.essentials.components.foundation.fencedlock.FencedLockManager
 public interface FencedLockManager extends Lifecycle {
+    Optional<FencedLock> lookupLock(LockName lockName);   // snapshot of the stored row
     FencedLock acquireLock(LockName lockName);
     Optional<FencedLock> tryAcquireLock(LockName lockName);
     Optional<FencedLock> tryAcquireLock(LockName lockName, Duration timeout);
@@ -527,8 +528,13 @@ public interface FencedLockManager extends Lifecycle {
 
 // dk.trustworks.essentials.components.foundation.fencedlock.FencedLock
 public interface FencedLock extends AutoCloseable {
-    long getCurrentToken();
+    LockName getName();
+    Long getCurrentToken();
+    String getLockedByLockManagerInstanceId();
+    boolean isLocked();
+    boolean isLockedByThisLockManagerInstance();
     void release();
+    default void close() throws Exception { release(); }
 }
 ```
 
@@ -596,6 +602,15 @@ boolean heldByMe = lockManager.isLockedByThisLockManagerInstance(LockName.of("my
 // Check if another instance holds the lock
 boolean heldByOther = lockManager.isLockAcquiredByAnotherLockManagerInstance(LockName.of("my-lock"));
 ```
+
+The two `isLockedByThisLockManagerInstance` predicates answer from different sources:
+
+| Predicate | Reads | Can be wrong when |
+|---|---|---|
+| `FencedLockManager.isLockedByThisLockManagerInstance(LockName)` | The lock row in the database | It compares the stored owner id with `getLockManagerInstanceId()` and ignores the fence token and the last-confirmed timestamp. A row left by a crashed process with the same instance id (a fixed `essentials.fenced-lock-manager.instance-id`) reads `true` until the lock is acquired again. A failed lookup returns `false` (logged at DEBUG) |
+| `FencedLock.isLockedByThisLockManagerInstance()` | The `FencedLock` object only, no database call | The object changes only when this manager confirms or releases the lock, so it can still read `true` up to one `lockConfirmationInterval` after another instance took the lock over — longer while the database is unreachable and `releaseAcquiredLocksInCaseOfIOExceptionsDuringLockConfirmation` is `false` (the default). A lock from `lookupLock` is a snapshot and never changes |
+
+`isLockAcquired` and `isLockAcquiredByAnotherLockManagerInstance` use the same database lookup as the manager predicate. Use the predicates for status and reporting. To guard work, hold the acquired `FencedLock` and pass its token downstream (see [Fence Tokens](#the-solution-fence-tokens)).
 
 ## Common Use Cases
 

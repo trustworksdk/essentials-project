@@ -102,9 +102,14 @@ public interface FencedLockManager extends Lifecycle {
 
     /**
      * Is the lock already acquired by this JVM node
+     * <p>
+     * Looks the lock up in the database and compares the stored owner id with {@link #getLockManagerInstanceId()}. The fence
+     * token and the last-confirmed timestamp are ignored, so a lock row left by a crashed process that used the same instance id
+     * reads as held by this instance. {@link FencedLock#isLockedByThisLockManagerInstance()} instead reads the {@link FencedLock}
+     * object, which only changes when this lock manager confirms or releases the lock.
      *
      * @param lockName the lock name
-     * @return true of the lock is acquired by this JVM node
+     * @return true if the lock is acquired by this JVM node
      */
     boolean isLockedByThisLockManagerInstance(LockName lockName);
 

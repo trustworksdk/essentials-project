@@ -641,6 +641,12 @@ public interface FencedLockManager extends Lifecycle {
 }
 ```
 
+The ownership predicates answer from different sources:
+- `FencedLockManager.isLockedByThisLockManagerInstance(LockName)` (like `isLockAcquired` and `isLockAcquiredByAnotherLockManagerInstance`) looks the lock row up in the database and compares the stored owner id with `getLockManagerInstanceId()`. It ignores the fence token and the last-confirmed timestamp, so a row left by a crashed process with the same instance id reads as held by this instance. A failed lookup returns `false`.
+- `FencedLock.isLockedByThisLockManagerInstance()` reads only the lock object, which changes when this manager confirms or releases the lock. It can still read `true` up to one `lockConfirmationInterval` after another instance took the lock over (longer while the database is unreachable and `releaseAcquiredLocksInCaseOfIOExceptionsDuringLockConfirmation` is `false`).
+
+Use them for status and reporting; to guard work, hold the acquired `FencedLock` and pass its fence token downstream.
+
 ### Implementations
 
 | Implementation | Module |

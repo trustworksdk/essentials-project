@@ -192,6 +192,8 @@ boolean heldByMe = lockManager.isLockedByThisLockManagerInstance(LockName.of("my
 boolean heldByOther = lockManager.isLockAcquiredByAnotherLockManagerInstance(LockName.of("my-lock"));
 ```
 
+The manager predicates read the stored owner id and ignore the fence token; `FencedLock.isLockedByThisLockManagerInstance()` reads the lock object and can be one confirmation interval stale. Details: [LLM-foundation.md § Pattern: Lock Status Queries](./LLM-foundation.md#pattern-lock-status-queries).
+
 ## Spring Integration
 
 ### Bean Configuration
