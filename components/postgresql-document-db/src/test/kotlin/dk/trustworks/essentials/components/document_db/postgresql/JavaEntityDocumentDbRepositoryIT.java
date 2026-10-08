@@ -18,6 +18,7 @@ package dk.trustworks.essentials.components.document_db.postgresql;
 
 import dk.trustworks.essentials.components.document_db.*;
 import dk.trustworks.essentials.components.document_db.annotations.*;
+import dk.trustworks.essentials.components.foundation.json.EssentialsObjectMappers;
 import dk.trustworks.essentials.components.foundation.transaction.jdbi.JdbiUnitOfWorkFactory;
 import dk.trustworks.essentials.types.CharSequenceType;
 import org.jdbi.v3.core.Jdbi;
@@ -50,7 +51,7 @@ class JavaEntityDocumentDbRepositoryIT {
         var jdbi = Jdbi.create(postgresContainer.getJdbcUrl(), postgresContainer.getUsername(), postgresContainer.getPassword());
         var repositoryFactory = new DocumentDbRepositoryFactory(jdbi,
                                                                 new JdbiUnitOfWorkFactory(jdbi),
-                                                                TestObjectMappers.INSTANCE.createJSONSerializer());
+                                                                EssentialsObjectMappers.createJSONSerializer());
         repository = repositoryFactory.createForCharSequenceTypeId(JavaOrderView.class);
         repository.deleteAll();
     }
