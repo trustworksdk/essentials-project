@@ -1,4 +1,4 @@
-schemaVersion: "1.1"
+schemaVersion: "1.4"
 slice: banking.transfer_money
 kind: automation
 bc: banking
@@ -34,6 +34,8 @@ invariants:
     enforcedBy: IntraBankMoneyTransfer
 forbidden:
   - cross-slice-internal:banking
+tier: cqrs-es
+flow: money-transfer
 tests:
   unit: { present: false }
   integration: { present: true }

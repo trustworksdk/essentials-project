@@ -1,4 +1,4 @@
-schemaVersion: "1.1"
+schemaVersion: "1.4"
 slice: banking.account_balance
 kind: view
 bc: banking
@@ -27,6 +27,42 @@ invariants:
     enforcedBy: AccountBalanceProjection
 forbidden:
   - cross-slice-internal:banking
+tier: cqrs-es
+flow:
+  - money-transfer
+  - open-account
+scenarios:
+  - name: account balance view is projected from the account events
+    given:
+      - event: AccountOpened
+        with:
+          accountNumber: "001123456"
+      - event: AccountDeposited
+        with:
+          depositedAmount: 250
+      - event: AccountWithdrawn
+        with:
+          withdrawAmount: 100
+    then:
+      readModel: AccountBalanceView
+      rows:
+        - accountNumber: "001123456"
+          balance: 150
+    test: AccountBalanceViewIT#account_balance_view_is_projected_from_the_account_events
+  - name: a later deposit adds to the projected balance
+    given:
+      - event: AccountOpened
+      - event: AccountDeposited
+        with:
+          depositedAmount: 40
+      - event: AccountDeposited
+        with:
+          depositedAmount: 10
+    then:
+      readModel: AccountBalanceView
+      rows:
+        - balance: 50
+    test: AccountBalanceViewIT#the_projection_is_idempotent_when_an_event_is_redelivered
 tests:
   unit: { present: false }
   integration: { present: true }

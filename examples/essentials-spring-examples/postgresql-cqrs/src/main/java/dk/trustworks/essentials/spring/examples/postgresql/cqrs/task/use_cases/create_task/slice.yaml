@@ -1,4 +1,4 @@
-schemaVersion: "1.1"
+schemaVersion: "1.4"
 slice: task.create_task
 kind: command
 bc: task
@@ -16,6 +16,8 @@ endpoints:
   - { method: POST, path: /tasks/create, auth: anonymous }
 forbidden:
   - cross-slice-internal:task
+tier: cqrs-es
+flow: create-task
 tests:
   unit: { present: false }
   integration: { present: true }

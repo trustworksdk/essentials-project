@@ -1,4 +1,4 @@
-schemaVersion: "1.1"
+schemaVersion: "1.4"
 slice: shipping.order_management
 kind: translation
 bc: shipping
@@ -18,6 +18,8 @@ maps:
   - { from: OrderShipped, to: ExternalOrderShipped }
 forbidden:
   - cross-slice-internal:shipping
+tier: cqrs-es
+flow: shipping-order
 tests:
   unit: { present: false }
   integration: { present: true }

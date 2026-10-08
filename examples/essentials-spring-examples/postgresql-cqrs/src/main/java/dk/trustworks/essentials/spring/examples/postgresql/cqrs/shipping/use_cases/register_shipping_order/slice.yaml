@@ -1,4 +1,4 @@
-schemaVersion: "1.1"
+schemaVersion: "1.4"
 slice: shipping.register_shipping_order
 kind: command
 bc: shipping
@@ -22,6 +22,8 @@ invariants:
     enforcedBy: RegisterShippingOrderHandler
 forbidden:
   - cross-slice-internal:shipping
+tier: cqrs-es
+flow: shipping-order
 tests:
   unit: { present: false }
   integration: { present: true }
