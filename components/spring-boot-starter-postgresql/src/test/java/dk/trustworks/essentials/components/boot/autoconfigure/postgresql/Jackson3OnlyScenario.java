@@ -39,7 +39,7 @@ public final class Jackson3OnlyScenario {
 
     /** The serializer bean the starter defines by default, used for a value type. */
     public static String serializeWithTheDefaultSerializer() {
-        var serializer = new EssentialsComponentsConfiguration().jsonSerializer();
+        var serializer = new EssentialsComponentsConfiguration().jsonSerializer(new EssentialsComponentsProperties());
         if (!(serializer instanceof Jackson3JSONSerializer)) {
             throw new IllegalStateException("Expected the Jackson 3 serializer, got " + serializer.getClass().getName());
         }

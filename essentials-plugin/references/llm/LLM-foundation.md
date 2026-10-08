@@ -1035,6 +1035,9 @@ byte[] bytes = serializer.serializeAsBytes(order);
 Order order = serializer.deserialize(json, Order.class);
 Object event = serializer.deserialize(json, "com.example.OrderCreatedEvent");
 
+// Without immutable-jackson3's Objenesis fallback (reading only; written JSON identical) (0.60.1)
+tools.jackson.databind.ObjectMapper noImmutable = EssentialsObjectMappers.createJackson3ObjectMapper(false);
+
 // Does a mapper Essentials did not build reproduce the persisted format? (0.60.1) Empty = yes
 List<WireFormatDeviation> deviations = EssentialsObjectMappers.findWireFormatDeviations(someMapper);
 ```

@@ -50,6 +50,7 @@ import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.su
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.transaction.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.types.*;
 import dk.trustworks.essentials.components.foundation.fencedlock.FencedLockManager;
+import dk.trustworks.essentials.components.foundation.json.EssentialsObjectMappers;
 import dk.trustworks.essentials.components.foundation.messaging.MessageHandler;
 import dk.trustworks.essentials.components.foundation.postgresql.MultiTableChangeListener;
 import dk.trustworks.essentials.components.foundation.postgresql.TableChangeNotification;
@@ -630,13 +631,19 @@ public class EventStoreConfiguration {
      * usually registered for the web layer, and adding them here would silently change the persisted JSON format. An
      * application that needs extra modules for persistence defines its own {@link JSONEventSerializer} bean, which
      * this backs off from.
+     * <p>
+     * The mapper is the one {@link EssentialsJSONEventSerializers#create()} builds, except that
+     * {@code essentials.immutable-jackson-module-enabled=false} leaves {@code EssentialsImmutableJacksonModule} out of it,
+     * as it does out of the web mapper. That changes nothing that is written, only what can be read: a type Jackson cannot
+     * construct then fails to deserialize instead of being instantiated through Objenesis.
      *
+     * @param properties the Essentials components properties
      * @return the {@link JSONEventSerializer} responsible for serializing/deserializing the raw Java events to and from JSON
      */
     @Bean
     @ConditionalOnMissingBean
-    public JSONEventSerializer jsonSerializer() {
-        return EssentialsJSONEventSerializers.create();
+    public JSONEventSerializer jsonSerializer(EssentialsComponentsProperties properties) {
+        return new Jackson3JSONEventSerializer(EssentialsObjectMappers.createJackson3ObjectMapper(properties.isImmutableJacksonModuleEnabled()));
     }
 
     /**

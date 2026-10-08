@@ -54,8 +54,23 @@ public final class EssentialsJacksonModules {
      *                               needs and which is {@code provided} by design, is not
      */
     public static List<tools.jackson.databind.JacksonModule> modules() {
-        var modules = new ArrayList<tools.jackson.databind.JacksonModule>();
-        for (String moduleClassName : List.of(TYPES_MODULE_CLASS_NAME, IMMUTABLE_MODULE_CLASS_NAME)) {
+        return modules(true);
+    }
+
+    /**
+     * @param includeImmutableModule {@code false} leaves {@code immutable-jackson3}'s module out even when it is on the
+     *                               classpath, and with it the need for Objenesis. It only affects reading: the module
+     *                               supplies a fallback instantiator for types Jackson cannot otherwise construct and
+     *                               contributes nothing to what is written. Without it such a type fails to deserialize
+     *                               instead of being instantiated without a constructor call. Spring Boot:
+     *                               {@code essentials.immutable-jackson-module-enabled}
+     * @return the Essentials Jackson modules that are on the classpath, less the immutable module unless included
+     * @throws IllegalStateException as {@link #modules()}
+     */
+    public static List<tools.jackson.databind.JacksonModule> modules(boolean includeImmutableModule) {
+        var modules          = new ArrayList<tools.jackson.databind.JacksonModule>();
+        var moduleClassNames = includeImmutableModule ? List.of(TYPES_MODULE_CLASS_NAME, IMMUTABLE_MODULE_CLASS_NAME) : List.of(TYPES_MODULE_CLASS_NAME);
+        for (String moduleClassName : moduleClassNames) {
             moduleClass(moduleClassName).ifPresent(moduleClass -> {
                 if (!isAssignableTo(moduleClass, JACKSON_MODULE_TYPE)) {
                     throw new IllegalStateException(
@@ -91,7 +106,9 @@ public final class EssentialsJacksonModules {
                             + "Add the dependency org.objenesis:objenesis to your application (compile scope; Spring Boot does not manage its "
                             + "version - use the one Essentials builds against, its objenesis.version). Essentials declares Objenesis with "
                             + "provided scope by design, so it is never brought in transitively. Without it every read of a persisted object "
-                            + "(an event, a durable-queue message, a document) would fail with NoClassDefFoundError: org/objenesis/...",
+                            + "(an event, a durable-queue message, a document) would fail with NoClassDefFoundError: org/objenesis/... "
+                            + "To run without the module instead, set essentials.immutable-jackson-module-enabled=false (Spring Boot starters) or "
+                            + "build the mapper with EssentialsObjectMappers.createJackson3ObjectMapper(false, ...).",
                     e);
         }
     }

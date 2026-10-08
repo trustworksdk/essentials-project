@@ -15,7 +15,7 @@
  */
 package dk.trustworks.essentials.components.boot.autoconfigure.postgresql.eventstore;
 
-import dk.trustworks.essentials.components.boot.autoconfigure.postgresql.EssentialsComponentsConfiguration;
+import dk.trustworks.essentials.components.boot.autoconfigure.postgresql.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.serializer.json.Jackson3JSONEventSerializer;
 import dk.trustworks.essentials.components.foundation.messaging.queue.QueueName;
 
@@ -35,7 +35,7 @@ public final class Jackson3OnlyScenario {
 
     /** The event serializer bean the starter defines by default, used for a value type. */
     public static String serializeWithTheDefaultSerializer() {
-        var serializer = new EventStoreConfiguration().jsonSerializer();
+        var serializer = new EventStoreConfiguration().jsonSerializer(new EssentialsComponentsProperties());
         if (!(serializer instanceof Jackson3JSONEventSerializer)) {
             throw new IllegalStateException("Expected the Jackson 3 serializer, got " + serializer.getClass().getName());
         }

@@ -18,6 +18,8 @@ package dk.trustworks.essentials.components.boot.autoconfigure.postgresql;
 
 import dk.trustworks.essentials.components.foundation.fencedlock.FencedLockManager;
 import dk.trustworks.essentials.components.foundation.fencedlock.api.DBFencedLockApi;
+import dk.trustworks.essentials.components.foundation.json.*;
+import dk.trustworks.essentials.jackson.immutable.EssentialsImmutableJacksonModule;
 import dk.trustworks.essentials.components.foundation.messaging.queue.api.DurableQueuesApi;
 import dk.trustworks.essentials.components.foundation.messaging.queue.health.DurableQueuesHealthIndicator;
 import dk.trustworks.essentials.components.foundation.postgresql.api.*;
@@ -126,6 +128,35 @@ public class StarterAutoConfigurationIT {
                     EssentialsComponentsProperties props = ctx.getBean(EssentialsComponentsProperties.class);
                     assertThat(props.isImmutableJacksonModuleEnabled()).isTrue();
                 });
+    }
+
+    /**
+     * {@code essentials.immutable-jackson-module-enabled} is documented with default {@code true}. Until 0.60.1 its
+     * condition lacked {@code matchIfMissing}, so the module bean existed only when the property was set explicitly, and
+     * the persistence mapper registered the module regardless of the property.
+     */
+    @Test
+    void the_immutable_jackson_module_is_on_by_default_for_both_the_web_and_the_persistence_mapper() {
+        contextRunner.run(ctx -> {
+            assertThat(ctx).hasSingleBean(EssentialsImmutableJacksonModule.class);
+            assertThat(persistenceMapperOf(ctx).registeredModules()).hasAtLeastOneElementOfType(EssentialsImmutableJacksonModule.class);
+        });
+    }
+
+    @Test
+    void turning_the_immutable_jackson_module_off_removes_it_from_both_and_leaves_the_wire_format_alone() {
+        contextRunner
+                .withPropertyValues("essentials.immutable-jackson-module-enabled=false")
+                .run(ctx -> {
+                    assertThat(ctx).doesNotHaveBean(EssentialsImmutableJacksonModule.class);
+                    var persistenceMapper = persistenceMapperOf(ctx);
+                    assertThat(persistenceMapper.registeredModules()).noneMatch(EssentialsImmutableJacksonModule.class::isInstance);
+                    assertThat(EssentialsObjectMappers.findWireFormatDeviations(persistenceMapper)).isEmpty();
+                });
+    }
+
+    private static tools.jackson.databind.ObjectMapper persistenceMapperOf(org.springframework.context.ApplicationContext ctx) {
+        return ((Jackson3JSONSerializer) ctx.getBean(JSONSerializer.class)).getObjectMapper();
     }
 
     @Test

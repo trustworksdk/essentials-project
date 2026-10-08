@@ -54,6 +54,19 @@ public final class EssentialsObjectMappers {
      * @throws IllegalStateException if an Essentials Jackson module on the classpath was built for Jackson 2
      */
     public static tools.jackson.databind.ObjectMapper createJackson3ObjectMapper(tools.jackson.databind.JacksonModule... additionalModules) {
+        return createJackson3ObjectMapper(true, additionalModules);
+    }
+
+    /**
+     * @param includeImmutableModule {@code false} leaves {@code immutable-jackson3}'s {@code EssentialsImmutableJacksonModule}
+     *                               out even when it is on the classpath; see {@link EssentialsJacksonModules#modules(boolean)}.
+     *                               Only reading is affected - the JSON written is identical either way. Spring Boot:
+     *                               {@code essentials.immutable-jackson-module-enabled}
+     * @param additionalModules      extra modules to register, e.g. application-specific serializers
+     * @return a Jackson 3 {@link tools.jackson.databind.ObjectMapper} with the canonical Essentials configuration
+     * @throws IllegalStateException as {@link #createJackson3ObjectMapper(tools.jackson.databind.JacksonModule...)}
+     */
+    public static tools.jackson.databind.ObjectMapper createJackson3ObjectMapper(boolean includeImmutableModule, tools.jackson.databind.JacksonModule... additionalModules) {
         requireNonNull(additionalModules, "No additionalModules provided");
         // Jackson 3 has JavaTime and Jdk8 support built in, and its mappers are immutable, so visibility is configured
         // on the builder rather than after the fact.
@@ -114,7 +127,7 @@ public final class EssentialsObjectMappers {
         // Jackson uses the sole constructor regardless. The parameter name is therefore part of the JSON contract under
         // Jackson 3, and a mismatch has to be fixed on the type rather than configured away.
         builder.addModule(new Jackson3CollectionWrapperModule());
-        EssentialsJacksonModules.modules().forEach(builder::addModule);
+        EssentialsJacksonModules.modules(includeImmutableModule).forEach(builder::addModule);
         builder.addModules(additionalModules);
         return builder.build();
     }
@@ -124,6 +137,14 @@ public final class EssentialsObjectMappers {
      */
     public static JSONSerializer createJSONSerializer() {
         return new Jackson3JSONSerializer(createJackson3ObjectMapper());
+    }
+
+    /**
+     * @param includeImmutableModule see {@link #createJackson3ObjectMapper(boolean, tools.jackson.databind.JacksonModule...)}
+     * @return a {@link JSONSerializer} using the canonical Essentials configuration
+     */
+    public static JSONSerializer createJSONSerializer(boolean includeImmutableModule) {
+        return new Jackson3JSONSerializer(createJackson3ObjectMapper(includeImmutableModule));
     }
 
     /**

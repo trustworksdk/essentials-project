@@ -158,7 +158,7 @@ public class EssentialsComponentsConfiguration {
      * {@code keyUsing} annotation is needed).
      * <p>
      * Published as a bean so Spring Boot adds it to the application's auto-configured (web) {@code JsonMapper}. The
-     * Essentials persistence {@link JSONSerializer} does not pick it up from here - see {@link #jsonSerializer()}.
+     * Essentials persistence {@link JSONSerializer} does not pick it up from here - see {@link #jsonSerializer(EssentialsComponentsProperties)}.
      *
      * @return the Essential Jackson module which adds support for serializing and deserializing any Essentials types
      */
@@ -175,7 +175,7 @@ public class EssentialsComponentsConfiguration {
      */
     @Bean
     @ConditionalOnClass(name = "org.objenesis.ObjenesisStd")
-    @ConditionalOnProperty(prefix = "essentials", name = "immutable-jackson-module-enabled", havingValue = "true")
+    @ConditionalOnProperty(prefix = "essentials", name = "immutable-jackson-module-enabled", havingValue = "true", matchIfMissing = true)
     @ConditionalOnMissingBean
     public EssentialsImmutableJacksonModule essentialsImmutableJacksonModule() {
         return new EssentialsImmutableJacksonModule();
@@ -446,14 +446,19 @@ public class EssentialsComponentsConfiguration {
      * usually registered for the web layer, and adding them here would silently change the persisted JSON format. An
      * application that needs extra modules for persistence defines its own {@link JSONSerializer} bean, which this
      * backs off from.
+     * <p>
+     * {@code essentials.immutable-jackson-module-enabled=false} leaves {@code EssentialsImmutableJacksonModule} out of
+     * this mapper too, not only out of the web mapper. That changes nothing that is written, only what can be read: a
+     * type Jackson cannot construct then fails to deserialize instead of being instantiated through Objenesis.
      *
+     * @param properties the auto configure properties
      * @return the {@link JSONSerializer} responsible for serializing/deserializing the raw Java events to and from JSON
      */
     @Bean
     @ConditionalOnMissingClass("dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.serializer.json.JSONEventSerializer")
     @ConditionalOnMissingBean
-    public JSONSerializer jsonSerializer() {
-        return EssentialsObjectMappers.createJSONSerializer();
+    public JSONSerializer jsonSerializer(EssentialsComponentsProperties properties) {
+        return EssentialsObjectMappers.createJSONSerializer(properties.isImmutableJacksonModuleEnabled());
     }
 
     @Bean

@@ -69,6 +69,19 @@ class MissingObjenesisTest {
         }
     }
 
+    /** The way out for an application that does not want the module: essentials.immutable-jackson-module-enabled=false. */
+    @Test
+    void a_mapper_without_the_immutable_module_needs_no_objenesis() throws Exception {
+        try (var withoutObjenesis = testClasspathWithout(MissingObjenesisTest::isObjenesis)) {
+            var mappers      = Class.forName(EssentialsObjectMappers.class.getName(), true, withoutObjenesis);
+            var modulesArray = Class.forName("[Ltools.jackson.databind.JacksonModule;", false, withoutObjenesis);
+            var mapper = mappers.getMethod("createJackson3ObjectMapper", boolean.class, modulesArray)
+                                .invoke(null, false, Array.newInstance(modulesArray.getComponentType(), 0));
+
+            assertThat(mapper).isNotNull();
+        }
+    }
+
     @Test
     void spring_boot_reports_the_missing_objenesis_with_its_coordinates() throws Exception {
         try (var withoutObjenesis = testClasspathWithout(MissingObjenesisTest::isObjenesis)) {

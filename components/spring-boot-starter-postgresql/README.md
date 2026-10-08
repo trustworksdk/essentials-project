@@ -122,7 +122,7 @@ All beans use `@ConditionalOnMissingBean` for easy overriding.
 | Bean | Condition | Description |
 |------|-----------|-------------|
 | `EssentialTypesJacksonModule` | Always | Jackson support for Essentials semantic types |
-| `EssentialsImmutableJacksonModule` | Objenesis on classpath + `essentials.immutable-jackson-module-enabled=true` | Jackson support for immutable objects without default constructor |
+| `EssentialsImmutableJacksonModule` | Objenesis on classpath + `essentials.immutable-jackson-module-enabled` not `false` (default `true`) | Jackson support for immutable objects without default constructor |
 | `JSONSerializer` (`Jackson3JSONSerializer`) | `JSONEventSerializer` NOT on classpath | `EssentialsObjectMappers.createJSONSerializer()` — the canonical persistence mapper. Define your own `JSONSerializer` bean to add modules; the starter does not pick up `JacksonModule` beans for persistence |
 
 > **Note:** The `JSONSerializer` bean is only auto-registered if `JSONEventSerializer` is NOT on the classpath.  
@@ -323,7 +323,7 @@ essentials.immutable-jackson-module-enabled=true
 | `life-cycles.start-life-cycles` | `true` | **true**: Automatically call `start()` on all `Lifecycle` beans (FencedLockManager, DurableQueues, etc.) when ApplicationContext starts, and `stop()` on shutdown.  <br/>**false**: You must manually start/stop Lifecycle beans. |
 | `life-cycles.shutdown-timeout` | `10s` | Time budget for stopping every `Lifecycle` bean on shutdown. Database cleanup during shutdown (releasing fenced locks, saving resume points, unscheduling jobs) gets one short attempt and is skipped once the database proves unreachable; a bean still stopping when the budget is spent is abandoned so the application can exit. Locks and leases left behind expire on their own. |
 | `reactive-bean-post-processor-enabled` | `true` | **true**: Auto-register `EventHandler` beans with `EventBus` and `CommandHandler` beans with `CommandBus`.  <br/>**false**: You must manually register handlers with their buses. |
-| `immutable-jackson-module-enabled` | `true` | **true**: Enable `EssentialsImmutableJacksonModule` for deserializing immutable objects (requires Objenesis).  <br/>**false**: Disable even if Objenesis is available. |
+| `immutable-jackson-module-enabled` | `true` | **true**: register `EssentialsImmutableJacksonModule` for deserializing immutable objects (requires Objenesis), in both Spring Boot's web `JsonMapper` and the persistence `JSONSerializer`. <br/>**false**: leave it out of both, even if Objenesis is available; only reading changes, the JSON written is identical. Before 0.60.1 the default only applied to the persistence mapper, which also ignored `false`. |
 
 ### Database Schema Configuration
 

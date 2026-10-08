@@ -44,7 +44,7 @@ Beans wired (in order of dependency):
 
 ## Test Structure
 
-Only a reflection check that no two `@Bean` methods return the same type (`EssentialsComponentsConfigurationBeanDefinitionsTest`); otherwise pure auto-configuration glue. Integration tests live in consumer modules (`springdata-mongo-queue`, `springdata-mongo-distributed-fenced-lock`). Testcontainers MongoDB dependency is declared for downstream test use.
+`StarterAutoConfigurationIT` (Testcontainers Mongo replica set, `ApplicationContextRunner` + Boot's `MongoAutoConfiguration`/`DataMongoAutoConfiguration`, lifecycles off) wires the whole starter. Plus a reflection check that no two `@Bean` methods return the same type (`EssentialsComponentsConfigurationBeanDefinitionsTest`) and no-Docker tests of the shared startup checks. Integration tests live in consumer modules (`springdata-mongo-queue`, `springdata-mongo-distributed-fenced-lock`). Testcontainers MongoDB dependency is declared for downstream test use.
 
 ## Extension Points
 
@@ -63,7 +63,7 @@ Only a reflection check that no two `@Bean` methods return the same type (`Essen
 
 - `MongoFencedLockManager` calls `buildAndStart()` at bean creation → lock manager starts immediately during context refresh, before `LifecycleManager` kicks in.
 - `jsonSerializer` bean has `@ConditionalOnMissingClass("...JSONEventSerializer")` — if postgresql event store starter is also on classpath, it wins and this bean is skipped entirely.
-- `EssentialsImmutableJacksonModule` has dual conditions: Objenesis must be on classpath AND `essentials.immutable-jackson-module-enabled=true` (default: property key absent → `havingValue="true"` means it is NOT auto-enabled unless property is explicitly set).
+- `EssentialsImmutableJacksonModule` bean: Objenesis on classpath AND `essentials.immutable-jackson-module-enabled` true or absent (`matchIfMissing`, 0.60.1). Same property drives `jsonSerializer(properties)` → `createJSONSerializer(boolean)`; reading only, written bytes identical.
 - Collection names (`fencedLocksCollectionName`, `sharedQueueCollectionName`) are used verbatim in MongoDB queries → `MongoUtil#checkIsValidCollectionName` is first-line defense only; never source these from untrusted input.
 - `SpringBootDevToolsClassLoaderChangeContextRefreshedListener` resets the Jackson `ObjectMapper` classloader on every `ContextRefreshedEvent` — relevant only in dev; production classloaders are stable.
 - `UnitOfWorkControllingCommandBusInterceptor` is added to command bus automatically unless user's interceptor list already contains an instance of that class — checked by `isAssignableFrom`, so subclassing also suppresses auto-add.
