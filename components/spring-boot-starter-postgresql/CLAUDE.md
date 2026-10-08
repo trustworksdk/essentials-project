@@ -41,7 +41,7 @@ Single package: `dk.trustworks.essentials.components.boot.autoconfigure.postgres
 18. Tracing: `DurableQueuesMicrometerTracingInterceptor` + `DurableQueuesMicrometerInterceptor` — conditional on `management.tracing.enabled=true`
 19. `DurableQueuesHealthIndicator` — dead-letter counts on `/actuator/health` under `durableQueues`; on by default, `UP` until an opt-in threshold is set
 
-**Shared startup checks.** `AutoConfiguration.imports` also lists foundation's `EssentialsStartupChecksAutoConfiguration` (package `foundation.boot`) = one implementation for all starters; Boot imports it once however many list it. Holds `WireFormatCheckBeanPostProcessor`: probes each `Jackson3JSONSerializer`-backed bean via `EssentialsObjectMappers.findWireFormatDeviations` (`essentials.json.wire-format-check=warn|fail|off`). New cross-starter check goes there, not into one starter.
+**Shared startup checks.** `AutoConfiguration.imports` also lists foundation's `EssentialsStartupChecksAutoConfiguration` (package `foundation.boot`) = one implementation for all starters; Boot imports it once however many list it. Holds `WireFormatCheckBeanPostProcessor`: probes each `Jackson3JSONSerializer`-backed bean via `EssentialsObjectMappers.findWireFormatDeviations` (`essentials.json.wire-format-check=warn|fail|off`), and `RemovedEssentialsPropertiesCheck` (`BeanFactoryPostProcessor`, runs before any bean): ERROR per removed `essentials.*` key still set, relaxed-name match. Removed key = entry in its `REMOVED_PROPERTIES` AND an `error`-level deprecation in this starter's `additional-spring-configuration-metadata.json` (`RemovedPropertiesCheckTest` pins the metadata half). New cross-starter check goes there, not into one starter.
 
 ## Test Structure
 

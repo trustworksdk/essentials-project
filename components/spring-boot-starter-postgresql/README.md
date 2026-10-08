@@ -200,26 +200,15 @@ essentials.durable-queues.verbose-tracing=false
 | Property | Default | Description                                                                 |
 |----------|---------|-----------------------------------------------------------------------------|
 | `shared-queue-table-name` | `durable_queues` | PostgreSQL table for messages. **See [Security](#security)** |
-| `message-handling-timeout` | `30s` | Timeout before unacknowledged message is redelivered (single-op mode only)  |
+| `message-handling-timeout` | `30s` | Timeout before an unacknowledged message is redelivered                     |
 | `use-centralized-message-fetcher` | `true` | Use optimized centralized message fetching                                  |
 | `centralized-message-fetcher-polling-interval` | `20ms` | Base polling interval for centralized fetcher                               |
 | `centralized-polling-delay-back-off-factor` | `1.5` | Backoff factor when no messages found                                       |
 | `polling-delay-interval-increment-factor` | `0.5` | Legacy backoff factor (when not using centralized fetcher)                  |
 | `max-polling-interval` | `2s` | Maximum polling delay                                                       |
 | `verbose-tracing` | `false` | Include all operations in traces (not just top-level)                       |
-| `enable-queue-statistics` | `false` | Enable queue statistics collection                                          |
-| `shared-queue-statistics-table-name` | `durable_queues_statistics` | Table for queue statistics. **See [Security](#security)**                                                 |
-| `enable-queue-statistics-ttl` | `false` | Enable TTL for statistics records                                           |
-| `queue-statistics-ttl-duration` | `90` | TTL duration in days                                                        |
 
-**Transactional Modes:**
-
-| Mode | Description | Recommended |
-|------|-------------|-------------|
-| `single-operation-transaction` | Queue operations execute without transactions; uses timeout-based message acknowledgment | **Yes** |
-| `fully-transactional` | Queue operations share the parent `UnitOfWork` transaction | No |
-
-> ⚠️ **Warning:** `fully-transactional` mode causes issues with retries and dead letter handling because when an exception occurs, the transaction is marked for rollback and retry counts are never increased. Use `single-operation-transaction` for reliable message processing.
+**Removed in 0.60.0:** `transactional-mode`, `use-ordered-unordered-query`, `enable-queue-statistics`, `shared-queue-statistics-table-name`, `enable-queue-statistics-ttl`, `queue-statistics-ttl-duration`. Every queue operation runs in its own transaction (what `single-operation-transaction` did); there is no mode to choose. Since 0.60.1 the starter logs an ERROR at startup for each removed `essentials.*` property still set, and the configuration metadata marks them as errors for the IDE. See [MIGRATION-0.60](../../docs/MIGRATION-0.60.md) (`TransactionalMode` is retired, `useOrderedUnorderedQuery` is removed, the queue statistics feature is removed).
 
 ### MultiTableChangeListener Configuration
 

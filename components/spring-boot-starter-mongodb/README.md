@@ -171,19 +171,12 @@ essentials.durable-queues.verbose-tracing=false
 | Property | Default | Description                                                                   |
 |----------|---------|-------------------------------------------------------------------------------|
 | `shared-queue-collection-name` | `durable_queues` | MongoDB collection for messages. **See [Security](#security)** |
-| `message-handling-timeout` | `30s` | Timeout before unacknowledged message is redelivered (single-op mode only)    |
+| `message-handling-timeout` | `30s` | Timeout before an unacknowledged message is redelivered                       |
 | `polling-delay-interval-increment-factor` | `0.5` | Backoff factor when no messages found                                         |
 | `max-polling-interval` | `2s` | Maximum polling delay                                                         |
 | `verbose-tracing` | `false` | Include all operations in traces (not just top-level)                         |
 
-**Transactional Modes:**
-
-| Mode | Description | Recommended |
-|------|-------------|-------------|
-| `single-operation-transaction` | Queue operations execute without transactions; uses timeout-based message acknowledgment | **Yes** |
-| `fully-transactional` | Queue operations share the parent `UnitOfWork` transaction | No |
-
-> ⚠️ **Warning:** `fully-transactional` mode causes issues with retries and dead letter handling because when an exception occurs, the transaction is marked for rollback and retry counts are never increased. Use `single-operation-transaction` for reliable message processing.
+**Removed in 0.60.0:** `transactional-mode`. Every queue operation runs in its own transaction (what `single-operation-transaction` did); there is no mode to choose. Since 0.60.1 the starter logs an ERROR at startup for each removed `essentials.*` property still set, and the configuration metadata marks them as errors for the IDE. See [MIGRATION-0.60](../../docs/MIGRATION-0.60.md#transactionalmode-is-retired).
 
 ### EventBus Configuration
 

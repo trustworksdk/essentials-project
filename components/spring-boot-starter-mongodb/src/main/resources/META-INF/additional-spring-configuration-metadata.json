@@ -5,6 +5,15 @@
       "type": "dk.trustworks.essentials.components.foundation.boot.WireFormatCheckMode",
       "description": "What to do at startup with a JSONSerializer bean, backed by a Jackson3JSONSerializer, whose mapper does not write and read the JSON format Essentials persists (typically a replacement bean built on a hand-configured JsonMapper). WARN logs one ERROR banner per deviating bean, FAIL stops the application, OFF skips the check. Spring Boot's web JsonMapper is not checked.",
       "defaultValue": "warn"
+    },
+    {
+      "name": "essentials.durable-queues.transactional-mode",
+      "type": "java.lang.String",
+      "description": "Removed in 0.60.0. Selected the durable queues' TransactionalMode (FullyTransactional or SingleOperationTransaction).",
+      "deprecation": {
+        "level": "error",
+        "reason": "Removed in 0.60.0 and ignored: every queue operation now runs in its own transaction, as SingleOperationTransaction did. If it was set to fully-transactional, delivery semantics changed - see docs/MIGRATION-0.60.md 'TransactionalMode is retired'."
+      }
     }
   ]
 }

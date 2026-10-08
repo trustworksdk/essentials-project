@@ -39,4 +39,13 @@ public class EssentialsStartupChecksAutoConfiguration {
     public static WireFormatCheckBeanPostProcessor essentialsWireFormatCheck() {
         return new WireFormatCheckBeanPostProcessor();
     }
+
+    /**
+     * @return the check that logs an ERROR for every removed {@code essentials.*} property that is still set
+     * @see RemovedEssentialsPropertiesCheck
+     */
+    @Bean
+    public static RemovedEssentialsPropertiesCheck essentialsRemovedPropertiesCheck() {
+        return new RemovedEssentialsPropertiesCheck();
+    }
 }

@@ -21,7 +21,7 @@ Cross-cutting infrastructure abstractions: transactions, distributed locking, du
 | `scheduler` | `EssentialsScheduler` SPI, `DefaultEssentialsScheduler`; `pgcron` and `executor` sub-packages |
 | `lifecycle` | `DefaultLifecycleManager` (Spring `SmartLifecycle` adapter), `ShutdownAware` + `ShutdownContext` (shutdown signal, bounded DB cleanup) |
 | `json` | `JSONSerializer` SPI, `Jackson3JSONSerializer`, `EssentialsObjectMappers`, `EssentialsJacksonModules` |
-| `boot` | Spring Boot startup checks shared by every starter (each lists `EssentialsStartupChecksAutoConfiguration` in its `AutoConfiguration.imports`): `WireFormatCheckBeanPostProcessor` (`essentials.json.wire-format-check`) |
+| `boot` | Spring Boot startup checks shared by every starter (each lists `EssentialsStartupChecksAutoConfiguration` in its `AutoConfiguration.imports`): `WireFormatCheckBeanPostProcessor` (`essentials.json.wire-format-check`), `RemovedEssentialsPropertiesCheck` (ERROR per removed `essentials.*` key still set) |
 | `reactive.command` | `DurableLocalCommandBus` (reactive command bus backed by `DurableQueues`) |
 | `interceptor.micrometer` | Micrometer timing interceptors for queue + command bus |
 | `events` | `InfrastructureLocalEventBus` (internal event bus for infrastructure events) |

@@ -196,7 +196,7 @@ Prefix: `essentials.durable-queues`
 | Property | Default | Notes |
 |----------|---------|-------|
 | `shared-queue-table-name` | `durable_queues` | Table name - see [Security](#security) |
-| `message-handling-timeout` | `30s` | Single-op mode only |
+| `message-handling-timeout` | `30s` | Unacknowledged delivery becomes deliverable again after this |
 | `use-centralized-message-fetcher` | `true` | Recommended |
 | `centralized-message-fetcher-polling-interval` | `20ms` | Base interval |
 | `centralized-polling-delay-back-off-factor` | `1.5` | Backoff multiplier |
@@ -204,9 +204,8 @@ Prefix: `essentials.durable-queues`
 | `max-polling-interval` | `2s` | Max backoff |
 | `verbose-tracing` | `false` | Include all ops in traces |
 | `require-active-unit-of-work-for-enqueue` | `false` | `true`: an enqueue (`queueMessage`/`queueMessages`, so `Outbox.sendMessage`, `sendAndDontWait`) outside a `UnitOfWork`/Spring transaction throws `NoActiveUnitOfWorkException`. `false`: it commits on its own, first one WARNs. Shard-owned engine reads it too |
-| `shared-queue-statistics-table-name` | `durable_queues_statistics` | Stats table - see [Security](#security) |
-| `enable-queue-statistics-ttl` | `false` | Auto-cleanup stats |
-| `queue-statistics-ttl-duration` | `90` | Days |
+
+Removed in 0.60.0, ignored if set (since 0.60.1 an ERROR is logged at startup per key, and the metadata marks them `error`): `transactional-mode` (every queue operation is its own transaction - a `fully-transactional` setup changed semantics, trap `ESS-103`), `use-ordered-unordered-query`, `enable-queue-statistics`, `shared-queue-statistics-table-name`, `enable-queue-statistics-ttl`, `queue-statistics-ttl-duration`. MongoDB starter: `transactional-mode`.
 
 #### MultiTableChangeListener
 
@@ -350,7 +349,7 @@ Prefix: `essentials.durable-queues`
 | Property | Default | Notes |
 |----------|---------|-------|
 | `shared-queue-collection-name` | `durable_queues` | Collection name - see [Security](#security) |
-| `message-handling-timeout` | `30s` | Single-op mode only |
+| `message-handling-timeout` | `30s` | Unacknowledged delivery becomes deliverable again after this |
 | `polling-delay-interval-increment-factor` | `0.5` | Backoff factor |
 | `max-polling-interval` | `2s` | Max backoff |
 | `verbose-tracing` | `false` | Include all ops in traces |
