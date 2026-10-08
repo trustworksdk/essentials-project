@@ -231,6 +231,34 @@ fixes (§3) change four things you can observe:
   the listener its own LISTEN connection outside the pool, built from the same `JdbcConnectionDetails`.
   (N-14, `60256d4e`)
 
+- **`awaitProcessed`: wait until a processor has handled an event.** `EventProcessor` and `ViewEventProcessor` get
+  `awaitProcessed(AggregateType, GlobalEventOrder, Duration)`, `awaitProcessed(PersistedEvent, Duration)` and
+  `awaitProcessedAsync(...)` (`Mono<Void>`). An event counts as processed when the subscription's resume point is
+  past it, it is not a gap the subscriber still has to fill, and no message for its aggregate is queued in the
+  processor's Inbox or durable queue (a dead letter counts as queued). On timeout it throws
+  `AwaitProcessedTimeoutException`, naming the processor, aggregate type, order, resume point, reason and queue
+  counts. `InTransactionEventProcessor` has the same methods and returns at once. It sees only the processor in this
+  JVM: a `ViewEventProcessor` whose lock another instance holds times out. Integration tests can replace guessed
+  Awaitility timeouts with it; `LLM-postgresql-event-store.md` § "Awaiting a processor" has an example.
+  (ES-4, `944633a4`)
+- **`AppendedEvents.recordDuring(() -> commandBus.send(cmd))`** (`eventsourced-aggregates`) returns what `send`
+  returned plus the `PersistedEvent`s an `EventStreamDeciderCommandHandlerAdapter` appended, so a caller has an
+  order to wait for. Same thread only (`send`, not `sendAsync`). (ES-4, `944633a4`)
+- **`Inbox` default methods** `hasOrderedMessageQueuedForKey(String)` and `getNumberOfDeadLetterMessages()`,
+  implemented by the DurableQueues-based Inbox; a custom `Inbox` throws `UnsupportedOperationException` from them
+  until it implements them. (ES-4, `944633a4`)
+- **Sealed commands no decider handles are reported at startup.** `EventStreamDeciderAndAggregateTypeConfigurator`
+  walks `getPermittedSubclasses()` of sealed command types and WARNs for each permitted command no decider handles;
+  before, it showed only at the first send, as a `NoCommandHandlerFoundException`. (CB-4, `9f4ddecf`)
+- **Wire-format check for mappers Essentials did not build.**
+  `EssentialsObjectMappers.findWireFormatDeviations(ObjectMapper)` round-trips small probe types and compares them
+  with the 0.50 bytes (field access, getter and `is`-getter visibility, ISO dates, numeric durations,
+  `FAIL_ON_NULL_FOR_PRIMITIVES`, `FAIL_ON_UNKNOWN_PROPERTIES`, `USE_BIG_DECIMAL_FOR_FLOATS`, and value types when
+  `types-jackson3` is present). The starters run it on every `JSONSerializer`/`JSONEventSerializer` bean backed by a
+  `Jackson3JSONSerializer`, your own replacement bean included, and log one ERROR banner per deviating bean. Boot's
+  web mapper is not checked. New property `essentials.json.wire-format-check=warn|fail|off`, default `warn`.
+  (N-1, SJ-3, `c9314dc3`)
+
 The plugin's features are in [§4](#4-the-essentials-claude-code-plugin).
 
 ---
@@ -252,6 +280,9 @@ The plugin's features are in [§4](#4-the-essentials-claude-code-plugin).
 | `MultiTableChangeListener` | A half-open LISTEN connection was never detected, and a lost one was logged only at DEBUG, so the listener could go silent for good and every event-store and queue wake-up fell back to polling. It now probes the connection with `Connection.isValid()` every 10 s, logs a loss at WARN (at most once a minute) and reconnects on the next poll | LN-2, LN-3, N-7, `5bae5aed` |
 | `MultiTableChangeListener` | A `listenToNotificationsFor(...)` between a failed poll and the next one reopened the connection with only its own `LISTEN`, so every other table went silent. A new connection now listens to every registered table. `stop()` now runs `UNLISTEN *` and closes the connection; before, a pooled session was left listening | LN-3, `5bae5aed` |
 | `MultiTableChangeListener` | One NOTIFY whose payload was not JSON dropped the whole poll batch, event-store and queue wake-ups included, whenever a duplicate filter was registered, which the PostgreSQL queue always does. Such a payload now has no duplicate key and is never dropped | LN-5, N-6, `b88ad079` |
+| Spring Boot starters | A property removed in 0.60.0 that is still set was ignored without a word, including `essentials.durable-queues.transactional-mode=fully-transactional`, which silently changed transaction semantics. Each one now logs an ERROR at startup and is marked as an error in the IDE metadata. PostgreSQL starter: `durable-queues.transactional-mode`, `use-ordered-unordered-query`, `enable-queue-statistics`, `shared-queue-statistics-table-name`, `enable-queue-statistics-ttl`, `queue-statistics-ttl-duration`; MongoDB starter: `durable-queues.transactional-mode` | N-18, RN-6, `c61a9399` |
+| Spring Boot starters | A missing `provided` library surfaced as a bare `NoClassDefFoundError` or `ClassNotFoundException` deep in bean creation. The startup failure report now names the Maven coordinates to add: jdbi3-core/postgres, the PostgreSQL driver, kotlin-stdlib/kotlin-reflect, Spring Data MongoDB, spring-boot-starter-jdbc, Jackson 3, objenesis and reactor-core | SB-2, `e26d0459` |
+| `immutable-jackson3` | With `immutable-jackson3` on the classpath but no `org.objenesis:objenesis`, an application started and wrote, then every read failed with `NoClassDefFoundError`. Creating the persistence mapper now throws an `IllegalStateException` naming the dependency. Objenesis stays `provided` | SB-2, N-5, `e26d0459` |
 | Durable queues (MongoDB) | Handing such a message back on an interrupted thread used to fail silently: the MongoDB driver refuses a connection on an interrupted thread (`Interrupted waiting for lock`), the failure was logged at DEBUG, and the message stayed marked as being delivered until the stuck-message reset. The hand-back now clears the interrupt flag for its write and restores it afterwards | `6ba568b5` |
 
 ---
@@ -318,6 +349,8 @@ Not published; listed because they are the reference for how to use the framewor
 - **`LLM/LLM-traps.md`** gains `ESS-119`–`ESS-123` for 0.60 upgrade symptoms: `QueuedMessageCounts` equality,
   the removed CDC live-drain stall alert, and three groups of compile errors (Jackson 2 serializers and WAL
   filters, `useOrderedUnorderedQuery`, the removed 0.50 `forRemoval` members) (`e088534c`).
+- **The starter READMEs and `LLM-spring-boot-starter-modules.md`** no longer list the removed statistics properties
+  or the transactional-mode table. (N-18, `c61a9399`)
 - **Fenced-lock ownership is per lock-manager instance**, not per caller or thread: a second `tryAcquireLock` in
   the same JVM returns the same lock, and `release()` by either caller releases it for both. Javadoc and
   `LLM-foundation.md` say so, and the Singleton Worker Pattern gains an in-process guard. (QL-1, `9e211beb`)

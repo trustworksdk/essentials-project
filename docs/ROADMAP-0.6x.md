@@ -33,62 +33,16 @@ Added to 0.60.1 on 2026-10-08:
 
 ## 0. Planned for 0.60.0 but never shipped
 
-These were meant to block the 0.60.0 tag and are not in it. The two Jackson 3 persistence fixes (`is`-getters,
-`FAIL_ON_NULL_FOR_PRIMITIVES`) are fixed for the next release; see `docs/NEXT_VERSION_RELEASE.md` §1.1.2 and §3.
-What remains of them is 0.1. The third planned fix, making objenesis a compile dependency of `immutable-jackson3`
-(N-5, SB-1), is rejected: every third-party dependency of a module or starter stays `provided`, by design. The
-plugin's S2.1 table and its generated POM now declare objenesis instead, and SB-2 (P1) covers the framework side.
-
-### 0.1 A startup check for mappers Essentials did not build (N-1, SJ-3)
-
-Every mapper Essentials builds now reproduces the 0.50 wire format, and regression tests pin the `is`-getter and
-missing-primitive cases. The remaining risk is a mapper Essentials did not build. The `JSONSerializer` and
-`JSONEventSerializer` beans are `@ConditionalOnMissingBean`, and `Jackson3JSONSerializer(ObjectMapper)` accepts any
-mapper, so a hand-built one can drift without any signal.
-
-**Fix:**
-- Add `EssentialsObjectMappers.findWireFormatDeviations(ObjectMapper)` in foundation. It checks behaviour, not
-  configuration: it round-trips a small probe type and compares the result with the expected 0.50 bytes. The probe
-  covers `is`-getter and getter visibility, `FAIL_ON_NULL_FOR_PRIMITIVES` and the pinned temporal features.
-- The starter runs it against every `JSONSerializer`/`JSONEventSerializer` bean backed by a `Jackson3JSONSerializer`
-  and logs one ERROR banner per bean that deviates. It does not check Boot's web mapper.
-- Control it with `essentials.json.wire-format-check=warn|fail|off`, default `warn`. Consider `fail` as the default
-  in the next major.
-
-### 0.2 Removed properties are silently ignored (N-18, RN-6)
-
-The 0.60.0 release notes document the removed properties, but nothing warns when an application still sets one. The
-only `additional-spring-configuration-metadata.json` is in the event-store starter, and it has one warning-level
-entry. No starter checks for removed `essentials.*` keys at startup. This matters most for
-`essentials.*.transactional-mode=fully-transactional`: it is now ignored, which changes transaction semantics
-without any signal.
-
-**Fix:**
-- Add `additional-spring-configuration-metadata.json` entries with error-level deprecations for every removed
-  property.
-- Add a startup check that logs an ERROR for any removed `essentials.*` key that is still set.
+All shipped in 0.60.1; see `docs/NEXT_VERSION_RELEASE.md`. One planned fix was rejected rather than shipped:
+making objenesis a compile dependency of `immutable-jackson3` (N-5, SB-1). Every third-party dependency of a module
+or starter stays `provided`, by design; the plugin's S2.1 table and its generated POM declare objenesis, and mapper
+creation fails naming it when it is missing (SB-2).
 
 ---
 
 ## P1: 0.60.x patch releases
 
-Bug fixes only; no API breaks.
-
-### Spring Boot starters
-
-**Missing optional dependencies fail without saying what is missing (SB-2).** Every third-party integration has
-`provided`/optional scope. A missing dependency therefore surfaces as a raw `NoClassDefFoundError` or
-`ClassNotFoundException` deep in a bean-creation stack, often only at first use. **Fix:** add one Spring Boot
-`FailureAnalyzer` that maps the known missing classes to the Maven coordinates to add.
-Objenesis needs one more step, because it fails at the first read rather than at startup: when
-`EssentialsJacksonModules.modules()` finds `immutable-jackson3` but not objenesis, it throws at mapper creation with
-a message naming `org.objenesis:objenesis`. The dependency stays `provided` (N-5).
-
-**`essentials.immutable-jackson-module-enabled` has no effect (N-11).** The property is documented with default
-`true`, but its condition lacks `matchIfMissing = true`. The module bean is therefore created only when the property
-is set explicitly, and the persistence mapper ignores the bean anyway. The PostgreSQL and MongoDB starters both have
-this. **Fix:** add `matchIfMissing = true` and make the persistence serializer honour the property, or deprecate the
-property if it cannot apply.
+Bug fixes only; no API breaks. Everything planned here shipped in 0.60.1.
 
 ---
 
@@ -112,18 +66,9 @@ Additive features.
 
 ### Event store
 
-**Wait until a processor has handled an event (ES-4).** A caller that appends an event cannot wait until a given
-processor has handled it. Read-your-writes flows and integration tests therefore poll the read model under a guessed
-timeout. Under load, every such timeout becomes a source of flakiness that nothing can diagnose.
-
-**Fix:** a processor-level `awaitProcessed(AggregateType, GlobalEventOrder, Duration)`, plus a `Mono` form.
-- **Why on the processor and not the subscription:** a subscription's resume point being past N does not mean event
-  N was processed. `EventProcessor` only forwards the event to its Inbox, and `ViewEventProcessor` may have queued it
-  after a failure. The barrier must therefore require both: the resume point is past N, and no queued message
-  remains for the keys involved.
-- **Surface the appended order:** `EventStreamDeciderCommandHandlerAdapter.persistEvent` currently logs the
-  `GlobalEventOrder` the append returned and then discards it. The adapter and the command bus path should hand it
-  to the caller, for example on a result wrapper or in UnitOfWork metadata, so a caller has an N to wait for.
+**A cross-instance `awaitProcessed` (ES-4 follow-up).** 0.60.1's `awaitProcessed` sees only the processor in this
+JVM: a `ViewEventProcessor` whose fenced lock another instance holds times out. **Fix:** fall back to the persisted
+resume point and the shared durable queue when the lock is held elsewhere, so a caller on any instance can wait.
 
 **Typed event-order ranges (ES-1).**
 - **Problem:** the event-store read APIs take an untyped `LongRange` for both per-stream `EventOrder` and cross-stream
@@ -190,17 +135,6 @@ Changing the default is deferred to the next major.
 - Promote the swagger-core `EssentialsValueTypeModelConverter` from `admin-api-spec` into a consumer module,
   `types-openapi`. It needs an exemption from the `ban-jackson-2` enforcer rule.
 - Add a `types-assertj` module with an `EssentialsAssertions.assertThat(CharSequenceType)` entry point.
-
-### Handler coverage
-
-**Make unhandled event types visible (CB-4).** Event processors allow unmatched messages, so they silently drop any
-event type that has no handler. A missing handler stays invisible until someone notices data is missing.
-
-**Fix:**
-- At startup, log the event types each processor handles.
-- Optionally, add a rate-limited WARN or a per-type counter for unmatched events.
-- For deciders whose command root type is sealed, the configurator walks `getPermittedSubclasses()` at startup and
-  reports any command that no decider handles.
 
 ### Opt-ins
 
@@ -346,6 +280,10 @@ Edit `LLM/` only; `essentials-plugin/references/llm/` is generated from it.
 
 ## P4: `essentials` plugin
 
+- **S2.1's objenesis row when the pins move to 0.60.1.** `stack-contract.md` S2.1, the generated POM comment and the
+  init goldens say a missing objenesis fails "at the first read", which is true for 0.60.0. From 0.60.1, mapper
+  creation fails at startup naming the dependency (SB-2). Update the row with the `essentials.version` pin and
+  regenerate the goldens.
 - **Profile-aware project `CLAUDE.md` (DOC-2).** The templates are done. Two pieces remain:
   - Scope init's "say which write styles the project can use" to the chat reply, and make it aware of the DB
     profile (no event-sourced lanes on `pg-crud` or `mongo`).
