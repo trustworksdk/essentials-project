@@ -257,7 +257,7 @@ void shouldRejectInvalidTransition() {
     scenario
         .given(new OrderCreated(orderId, customerId))
         .when(new ShipOrder(orderId))
-        .thenThrows(IllegalStateException.class);
+        .thenFailsWithExceptionType(IllegalStateException.class);
 }
 
 @Test
