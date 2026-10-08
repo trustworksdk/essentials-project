@@ -60,7 +60,7 @@ Base package: `dk.trustworks.essentials.components.document_db`
 1. Implement `VersionedEntity<ID, SELF_TYPE>`
 2. `@DocumentEntity("table_name")` annotation
 3. `@Id` annotation on ID property
-4. ID must be `String`, `StringValueType`, or use `createForCompositeId(entityClass, idSerializer)`
+4. ID must be `String`, `StringValueType`, a Java `CharSequenceType` (`createForCharSequenceTypeId`), or use `createForCompositeId(entityClass, idSerializer)`
 
 ### Basic Entity Pattern
 
@@ -185,6 +185,7 @@ fun kotlinModule() = KotlinModule.Builder()
 |--------|----------|---------|
 | `create(entityClass)` | `StringValueType` ID (recommended) | `factory.create(Order::class)` |
 | `createForStringId(entityClass)` | Plain `String` ID | `factory.createForStringId(Product::class)` |
+| `createForCharSequenceTypeId(entityClass)` | Java `CharSequenceType` ID (since 0.60.1) | `factory.createForCharSequenceTypeId(OrderView.class)` |
 | `createForCompositeId(entityClass, idSerializer)` | Composite/custom ID | See [Composite ID Pattern](#composite-id-pattern) |
 
 ```kotlin
@@ -438,14 +439,19 @@ Every factory method has a Java-friendly `Class<T>` overload beside its `KClass<
 |---|---|
 | `createForStringId(Class<ENTITY>)` | a plain `String` |
 | `create(Class<ENTITY>)` | a Kotlin `StringValueType` (value class) |
-| `createForCompositeId(Class<ENTITY>, IdSerializer<ID>)` | anything else (incl. Java `CharSequenceType` IDs) |
+| `createForCharSequenceTypeId(Class<ENTITY>)` | a Java `CharSequenceType` (since 0.60.1; stored as its `toString()`) |
+| `createForCompositeId(Class<ENTITY>, IdSerializer<ID>)` | anything else |
 | `createForCompositeId(Class<ENTITY>, java.util.function.Function<ID, String>)` | anything else — lambda form, most idiomatic from Java |
 
 ```java
 DocumentDbRepository<JavaProduct, String> repo = factory.createForStringId(JavaProduct.class);
+DocumentDbRepository<OrderView, OrderId> views =        // OrderId extends CharSequenceType<OrderId>
+    factory.createForCharSequenceTypeId(OrderView.class);
 DocumentDbRepository<Patient, PatientId> patients =
     factory.createForCompositeId(Patient.class, PatientId::toString);
 ```
+
+Do not call `create(...)` with a raw type for a `CharSequenceType` id: it compiles, then fails at runtime with a `ClassCastException`, because `create` serializes the id as a Kotlin `StringValueType`. Before 0.60.1, use `createForCompositeId(View.class, OrderId::toString)` instead; it stores the same value.
 
 ### CRUD: `long` version overloads
 
@@ -497,9 +503,11 @@ Index<JavaProduct> index = Index.fromPaths("idx_name_city", "name", "address.cit
 
 ### Java gotchas
 
-- ⚠️ **The `@Id` field must be `public`.** `EntityConfiguration` resolves `@Id` through Kotlin reflection over `memberProperties`. For a Java class the property is synthesised from the **field**, so the repository reads it by direct field access — *not* by calling `getId()` — and does not make it accessible. A `private` `@Id` makes the first `save`/`update`/`delete` throw Kotlin's `IllegalCallableAccessException` (wrapping `IllegalAccessException`). Nothing fails at repository creation, so inside a message handler it surfaces only as a failing/dead-lettered message and a projection that never populates.
+- **The `@Id` field is read as a field, not through `getId()`.** `EntityConfiguration` resolves `@Id` through Kotlin reflection over `memberProperties`. For a Java class the property is synthesised from the **field**, so the repository reads it by direct field access. Since 0.60.1 the repository makes a non-public `@Id` accessible when it is created, so `@Id private OrderId id;` works. If the JVM refuses (a package of a named module that is not opened), repository creation fails with an `IllegalStateException` naming the entity and the field.
 
-  `version` and `lastUpdated` escape this because they are declared on `JavaVersionedEntity`/`VersionedEntity` as Kotlin properties with real getter methods, so their `KProperty1` getter is a method call, not a field read. The rule: **Kotlin-declared property → method call; Java-declared field → field read.**
+  ⚠️ **On 0.60.0 and earlier the `@Id` field must be `public`.** There a `private` `@Id` passes repository creation and makes every `save`/`update`/`delete` throw Kotlin's `IllegalCallableAccessException`, so in a message handler it surfaces only as dead-lettered messages and a projection that never populates.
+
+  `version` and `lastUpdated` never had this problem: they are declared on `JavaVersionedEntity`/`VersionedEntity` as Kotlin properties with real getter methods, so their `KProperty1` getter is a method call, not a field read.
 
 - ⚠️ **A pure-Java module must declare `kotlin-stdlib-jdk8` and `kotlin-reflect` itself.** This module declares both in `provided` scope, so they are **not** transitive. Java code needs them at *compile* time regardless: `createForStringId` and the `Condition` DSL expose `KClass`/`KProperty1` overloads that javac must resolve in order to select the `Class`-based one. Without them the build fails with `cannot access kotlin.reflect.KClass`.
 - ⚠️ **`@DocumentEntity` takes a named argument from Java**: `@DocumentEntity(tableName = "java_products")`, not the positional Kotlin form `@DocumentEntity("orders")`.

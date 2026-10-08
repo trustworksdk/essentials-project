@@ -422,12 +422,13 @@ val repositoryFactory = DocumentDbRepositoryFactory(
 
 ### Creating Repositories
 
-The factory provides three methods for creating repositories, depending on your ID type strategy. Each method returns a fully configured `DocumentDbRepository` ready for use.
+The factory provides four methods for creating repositories, depending on your ID type strategy. Each method returns a fully configured `DocumentDbRepository` ready for use.
 
 | Method | Use Case |
 |--------|----------|
 | `create(entityClass)` | Entities with `StringValueType` IDs (recommended) |
 | `createForStringId(entityClass)` | Entities with plain `String` IDs |
+| `createForCharSequenceTypeId(entityClass)` | Entities with a Java `CharSequenceType` ID (e.g. `OrderId extends CharSequenceType<OrderId>`) |
 | `createForCompositeId(entityClass, idSerializer)` | Entities with composite or custom ID types |
 
 **For `StringValueType` IDs (recommended):**

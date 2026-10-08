@@ -76,6 +76,20 @@ class JavaInteropApiTest {
     }
 
     /**
+     * DD-3: {@code JavaProduct.id} is a private {@code @Id} field. Configuration used to accept it and every later read of the id
+     * (save, update, delete) failed with {@code IllegalCallableAccessException} - in a projection, every message dead-lettered.
+     */
+    @Test
+    void privateIdFieldIsReadableThroughTheConfiguredIdProperty() {
+        var kotlinClass = JvmClassMappingKt.getKotlinClass(JavaProduct.class);
+        EntityConfiguration<String, JavaProduct> configuration = EntityConfiguration.Companion.configureEntity(kotlinClass);
+        JavaProduct entity = new JavaProduct();
+        entity.setId("product-1");
+
+        assertEquals("product-1", configuration.idProperty().getGetter().call(entity));
+    }
+
+    /**
      * DD-1: {@code save}/{@code update} declare no {@code throws} clause, so a checked {@link OptimisticLockingException} could
      * not be caught by name from Java - javac rejects the catch below as unreachable. It compiles only because the exception
      * is unchecked.

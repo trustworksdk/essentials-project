@@ -167,7 +167,7 @@ the number they have where they are defined, never renumbered: `ESS-S<n>` for a 
 - <a id="ess-077"></a>`ESS-077` `Order::address.city` does not work in a query — use `then` → [LLM-postgresql-document-db.md § Gotchas](LLM-postgresql-document-db.md#gotchas)
 - <a id="ess-078"></a>`ESS-078` Optimistic locking breaks after setting `version` by hand → [LLM-postgresql-document-db.md § Gotchas](LLM-postgresql-document-db.md#gotchas)
 - <a id="ess-079"></a>`ESS-079` `create(...)` rejects a Java `CharSequenceType` id; `Version.of(...)` does not exist → [LLM-postgresql-document-db.md § Gotchas](LLM-postgresql-document-db.md#gotchas)
-- <a id="ess-080"></a>`ESS-080` Java entity's first `save`/`update`/`delete` throws `IllegalCallableAccessException` (projection never populates) — `@Id` field is not `public` → [LLM-postgresql-document-db.md § Java gotchas](LLM-postgresql-document-db.md#java-gotchas)
+- <a id="ess-080"></a>`ESS-080` Java entity's first `save`/`update`/`delete` throws `IllegalCallableAccessException` (projection never populates) — `@Id` field is not `public` (0.60.0 and earlier; 0.60.1 makes it accessible) → [LLM-postgresql-document-db.md § Java gotchas](LLM-postgresql-document-db.md#java-gotchas)
 - <a id="ess-081"></a>`ESS-081` Numeric or date range query returns wrong rows — path string compared as text without `DbType` → [LLM-postgresql-document-db.md § Gotchas](LLM-postgresql-document-db.md#gotchas)
 
 ### springdata-mongo-queue ([LLM-springdata-mongo-queue.md](LLM-springdata-mongo-queue.md))

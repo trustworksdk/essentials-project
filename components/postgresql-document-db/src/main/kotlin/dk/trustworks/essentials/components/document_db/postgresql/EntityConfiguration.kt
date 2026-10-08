@@ -27,12 +27,14 @@ import org.slf4j.Logger
 import org.slf4j.LoggerFactory
 import java.time.ZonedDateTime
 import kotlin.reflect.KClass
+import kotlin.reflect.KVisibility
 import kotlin.reflect.KMutableProperty1
 import kotlin.reflect.KProperty1
 import kotlin.reflect.full.findAnnotation
 import kotlin.reflect.full.memberProperties
 import kotlin.reflect.full.primaryConstructor
 import kotlin.reflect.jvm.javaField
+import kotlin.reflect.jvm.isAccessible
 import kotlin.reflect.jvm.javaGetter
 import kotlin.reflect.jvm.jvmErasure
 
@@ -62,8 +64,33 @@ class EntityConfiguration<ID, T : VersionedEntity<ID, T>>(private val entityClas
     fun idProperty(idProperty: KProperty1<T, ID>) = apply {
         log.info("Resolved Entity '{}' @Id property '{}'", entityClass.simpleName, idProperty)
         PostgresqlUtil.checkIsValidTableOrColumnName(idProperty.name)
+        makeIdPropertyAccessible(idProperty)
         this.idProperty = idProperty
         this.idPropertyType = idProperty.returnType.classifier as? KClass<*>
+    }
+
+    /**
+     * The repository reads (and, for a `null` String id on `save`, writes) the `@Id` property reflectively on every
+     * `save`/`update`/`delete`. A non-public one - typically a Java `@Id private OrderId id` field - would otherwise pass
+     * configuration and then fail every one of those calls with an `IllegalCallableAccessException`, so it is made
+     * accessible here, once. If the JVM refuses (e.g. a package of a named module that isn't opened), a non-public
+     * property fails here, naming the entity and the property, instead of on first use.
+     */
+    private fun makeIdPropertyAccessible(idProperty: KProperty1<T, ID>) {
+        try {
+            idProperty.isAccessible = true
+        } catch (e: RuntimeException) {
+            if (idProperty.visibility == KVisibility.PUBLIC) {
+                // Public: reflective access may still work as it did before - keep the old behaviour, but say why if it doesn't
+                log.warn("Could not make Entity '{}' @Id property '{}' accessible: {}", entityClass.qualifiedName, idProperty.name, e.toString())
+                return
+            }
+            throw IllegalStateException(
+                "Entity '${entityClass.qualifiedName}' @Id property '${idProperty.name}' is ${idProperty.visibility?.name?.lowercase() ?: "not public"} " +
+                    "and cannot be made accessible for reflective reads: ${e.message}. Make the @Id property public, or open its package for deep reflection.",
+                e
+            )
+        }
     }
 
     fun isValueClassWrappingString(kClass: KClass<*>?): Boolean {
