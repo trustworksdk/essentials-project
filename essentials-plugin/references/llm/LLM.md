@@ -340,7 +340,7 @@ public class OrderProcessor {
             try {
                 performCleanup(lock.getCurrentToken());
             } finally {
-                locks.releaseLock(lock);
+                lock.release();   // FencedLock is also AutoCloseable; close() calls release()
             }
         });
     }

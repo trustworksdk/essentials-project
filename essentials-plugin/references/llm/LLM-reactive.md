@@ -371,24 +371,27 @@ public interface SendAndDontWaitErrorHandler {
 **Package:** `dk.trustworks.essentials.reactive.command`
 
 ```java
+// Base of the two routing failures below - abstract, never thrown itself
+public abstract class SendCommandException extends RuntimeException {
+    public final Class<?> commandType;
+    public SendCommandException(Class<?> commandType, String message)
+    public SendCommandException(Class<?> commandType, String message, Exception e)
+}
+
 // No handler found for command type
-public class NoCommandHandlerFoundException extends RuntimeException {
-    NoCommandHandlerFoundException(Class<?> commandType, String message)
-    Class<?> getCommandType()
+public final class NoCommandHandlerFoundException extends SendCommandException {
+    public NoCommandHandlerFoundException(Class<?> commandType, String message)
 }
 
 // Multiple handlers found (violates single-handler rule)
-public class MultipleCommandHandlersFoundException extends RuntimeException {
-    MultipleCommandHandlersFoundException(Class<?> commandType, String message)
-    Class<?> getCommandType()
-}
-
-// Command execution failed
-public class SendCommandException extends RuntimeException {
-    SendCommandException(Object command, Throwable cause)
-    Object getCommand()
+public final class MultipleCommandHandlersFoundException extends SendCommandException {
+    public MultipleCommandHandlersFoundException(Class<?> commandType, String message)
 }
 ```
+
+Both are thrown by `findCommandHandlerCapableOfHandling`, before any interceptor runs, so they reach the caller
+unwrapped. A failing handler's own exception is **not** wrapped in a `SendCommandException` - see
+[Exceptions arrive wrapped](#exceptions-arrive-wrapped-in-unitofworkexception).
 
 ---
 
