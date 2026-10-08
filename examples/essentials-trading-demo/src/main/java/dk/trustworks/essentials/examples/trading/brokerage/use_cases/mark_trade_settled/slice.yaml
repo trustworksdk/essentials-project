@@ -7,6 +7,7 @@ status: live
 summary: Mark a trade as settled, once its settlement has completed.
 generator: essentials
 language: java
+lane: aggregate
 
 handles: [MarkTradeSettled]
 publishes: [TradeSettled]

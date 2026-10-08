@@ -7,6 +7,7 @@ status: live
 summary: Value one trade against the latest market price, from a read model that projects both the trade's lifecycle and market_data's price events.
 generator: essentials
 language: java
+lane: aggregate
 
 serves: [GetTradeValuation]
 endpoints:
@@ -15,6 +16,7 @@ reads:
   - { name: TradeValuation }
 projections:
   - name: TradeValuationProjection
+    aggregateTypes: [Trades, InstrumentPrices]
     from: [TradePlaced, TradeExecuted, SettlementRequested, TradeSettled, PriceInitialized, PriceUpdated]
     consistency: eventual
     store: jdbc

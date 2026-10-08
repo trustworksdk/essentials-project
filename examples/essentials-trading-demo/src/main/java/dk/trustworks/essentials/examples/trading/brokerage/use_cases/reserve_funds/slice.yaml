@@ -7,6 +7,7 @@ status: live
 summary: Set cash aside on a trading account so a trade in flight cannot be outspent by another.
 generator: essentials
 language: java
+lane: aggregate
 
 handles: [ReserveFunds]
 # AccountBooksClosed/TradingAccountOpened are emitted when the ON_ACCESS closing-books policy rolls the

@@ -7,6 +7,7 @@ status: live
 summary: Send every newly registered instrument through an external risk assessment and record the answer, calling the risk service outside any transaction.
 generator: essentials
 language: java
+lane: aggregate
 
 consumes: [InstrumentRegistered]
 publishes: [InstrumentRiskApproved, InstrumentRiskRejected]

@@ -7,6 +7,7 @@ status: live
 summary: Join each trade to its settlement's lifecycle state in one projected read model, and serve one settlement from it.
 generator: essentials
 language: java
+lane: aggregate
 
 serves: [ListTradeSettlements, GetSettlementStatus]
 endpoints:
@@ -16,6 +17,7 @@ reads:
   - { name: TradeSettlementStatus }
 projections:
   - name: TradeSettlementStatusProjection
+    aggregateTypes: [Trades, Settlements]
     from: [TradePlaced, TradeExecuted, SettlementRequested, TradeSettled, SettlementCreated, ClearingRequested, ClearingConfirmed, SettlementMarkedSettled, SettlementReconciled, SettlementClosed]
     consistency: eventual
     store: jdbc

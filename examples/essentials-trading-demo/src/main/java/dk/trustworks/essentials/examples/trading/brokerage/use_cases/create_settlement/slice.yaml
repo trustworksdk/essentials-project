@@ -7,6 +7,7 @@ status: live
 summary: Open the post-trade settlement of a trade.
 generator: essentials
 language: java
+lane: aggregate
 
 handles: [CreateSettlement]
 publishes: [SettlementCreated]

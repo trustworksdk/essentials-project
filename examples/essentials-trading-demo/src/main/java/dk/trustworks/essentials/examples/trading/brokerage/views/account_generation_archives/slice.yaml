@@ -7,6 +7,7 @@ status: live
 summary: List the archived books generations of a trading account, and serve the contents of one archive entry.
 generator: essentials
 language: java
+lane: aggregate
 
 serves: [ListArchivedGenerations, GetArchiveContent]
 endpoints:

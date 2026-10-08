@@ -7,6 +7,7 @@ status: live
 summary: Roll a trading account's books - seal the current generation and open the next one.
 generator: essentials
 language: java
+lane: aggregate
 
 handles: [CloseBooksAndOpenNextPeriod]
 publishes: [AccountBooksClosed, TradingAccountOpened]

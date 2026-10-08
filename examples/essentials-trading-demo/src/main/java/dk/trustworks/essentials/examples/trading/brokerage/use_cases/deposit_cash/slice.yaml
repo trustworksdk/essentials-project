@@ -7,6 +7,7 @@ status: live
 summary: Book cash into a trading account's currently open books generation.
 generator: essentials
 language: java
+lane: aggregate
 
 handles: [DepositCash]
 # AccountBooksClosed/TradingAccountOpened are emitted when the ON_ACCESS closing-books policy rolls the

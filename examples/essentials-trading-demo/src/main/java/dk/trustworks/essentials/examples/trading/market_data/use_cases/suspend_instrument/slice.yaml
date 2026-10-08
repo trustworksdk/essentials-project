@@ -7,6 +7,7 @@ status: live
 summary: Suspend trading in an instrument, recording why.
 generator: essentials
 language: java
+lane: aggregate
 
 handles: [SuspendInstrument]
 publishes: [InstrumentSuspended]

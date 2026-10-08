@@ -7,6 +7,7 @@ status: live
 summary: Place a new trade against a trading account.
 generator: essentials
 language: java
+lane: aggregate
 
 handles: [PlaceTrade]
 publishes: [TradePlaced]

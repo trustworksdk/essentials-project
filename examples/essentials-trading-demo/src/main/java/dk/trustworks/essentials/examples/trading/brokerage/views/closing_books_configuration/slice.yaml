@@ -7,6 +7,7 @@ status: live
 summary: Report the closing-books policy currently in force, rendered in the vocabulary the admin surface speaks.
 generator: essentials
 language: java
+lane: aggregate
 
 serves: [GetClosingBooksConfiguration]
 endpoints:

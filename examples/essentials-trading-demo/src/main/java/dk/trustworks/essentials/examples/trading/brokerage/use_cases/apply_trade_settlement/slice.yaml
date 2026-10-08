@@ -7,6 +7,7 @@ status: live
 summary: Book the cash and realized-P&L result of a settled trade onto the trading account.
 generator: essentials
 language: java
+lane: aggregate
 
 handles: [ApplyTradeSettlement]
 # AccountBooksClosed/TradingAccountOpened are emitted when the ON_ACCESS closing-books policy rolls the

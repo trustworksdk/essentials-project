@@ -7,6 +7,7 @@ status: live
 summary: Register a new instrument's reference data (symbol and display name).
 generator: essentials
 language: java
+lane: aggregate
 
 handles: [RegisterInstrument]
 publishes: [InstrumentRegistered]

@@ -7,6 +7,7 @@ status: live
 summary: Record that a completed settlement has been reconciled against the books.
 generator: essentials
 language: java
+lane: aggregate
 
 handles: [ReconcileSettlement]
 publishes: [SettlementReconciled]

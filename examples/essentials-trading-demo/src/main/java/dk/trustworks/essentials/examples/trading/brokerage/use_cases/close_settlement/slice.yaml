@@ -7,6 +7,7 @@ status: live
 summary: Close a reconciled settlement - the last step of its lifecycle.
 generator: essentials
 language: java
+lane: aggregate
 
 handles: [CloseSettlement]
 publishes: [SettlementClosed]

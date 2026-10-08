@@ -7,6 +7,7 @@ status: live
 summary: Serve instrument reference data, suspension state and risk-assessment status from a projected read model.
 generator: essentials
 language: java
+lane: aggregate
 
 serves: [ListInstruments, GetInstrumentDetails]
 endpoints:
@@ -16,6 +17,7 @@ reads:
   - { name: InstrumentDetails }
 projections:
   - name: InstrumentDetailsProjection
+    aggregateTypes: [Instruments]
     from: [InstrumentRegistered, InstrumentRenamed, InstrumentSuspended, InstrumentRiskApproved, InstrumentRiskRejected]
     consistency: eventual
     store: postgresql

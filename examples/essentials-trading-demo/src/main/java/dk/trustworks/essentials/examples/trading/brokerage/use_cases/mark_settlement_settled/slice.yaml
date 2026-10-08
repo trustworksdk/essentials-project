@@ -7,6 +7,7 @@ status: live
 summary: Record that the settlement itself has completed.
 generator: essentials
 language: java
+lane: aggregate
 
 handles: [MarkSettlementSettled]
 publishes: [SettlementMarkedSettled]

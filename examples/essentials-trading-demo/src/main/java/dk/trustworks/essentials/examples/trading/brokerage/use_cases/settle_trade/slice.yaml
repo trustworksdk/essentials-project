@@ -7,9 +7,10 @@ status: live
 summary: Drive an executed trade through settlement to the end, issuing each step's command from the previous step's event, so a trade's settlement is one causation tree.
 generator: essentials
 language: java
+lane: aggregate
 
-handles: [TradeExecuted, SettlementRequested, SettlementCreated, ClearingRequested, ClearingConfirmed, SettlementMarkedSettled, SettlementReconciled]
-sends: [RequestSettlement, CreateSettlement, RequestClearing, ConfirmClearing, MarkSettlementSettled, ReconcileSettlement, MarkTradeSettled, ApplyTradeSettlement, CloseSettlement]
+consumes: [TradeExecuted, SettlementRequested, SettlementCreated, ClearingRequested, ClearingConfirmed, SettlementMarkedSettled, SettlementReconciled, TradePlaced, TradeSettled, SettlementClosed]
+dispatches: [RequestSettlement, CreateSettlement, RequestClearing, ConfirmClearing, MarkSettlementSettled, ReconcileSettlement, MarkTradeSettled, ApplyTradeSettlement, CloseSettlement]
 publishes: []
 writes: []
 reads: []
