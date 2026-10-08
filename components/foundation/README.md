@@ -619,6 +619,10 @@ lockManager.acquireLockAsync(LockName.of("ScheduledTask"), new LockCallback() {
 });
 ```
 
+### Ownership is per lock-manager instance, not per caller or thread
+
+A `FencedLock` excludes other lock-manager instances (other JVMs), never other callers in the same JVM. While a `FencedLockManager` holds a lock, a second `tryAcquireLock`/`acquireLock` for the same `LockName` - from another component, another thread or the same thread - returns the **same** `FencedLock` instance instead of an empty result, and `release()` by **either** caller releases the lock for both; another node can then acquire it while the first caller is still working. Callers in one JVM that share a lock name and must not overlap (e.g. a scheduled run and a manual trigger of the same job) need their own in-process guard, such as an `AtomicBoolean`, in front of the lock.
+
 ### FencedLockManager API
 
 ```java

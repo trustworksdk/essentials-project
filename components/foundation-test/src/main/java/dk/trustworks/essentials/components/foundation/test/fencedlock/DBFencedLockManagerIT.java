@@ -21,6 +21,7 @@ import org.awaitility.Awaitility;
 import org.junit.jupiter.api.*;
 
 import java.time.Duration;
+import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -149,6 +150,31 @@ public abstract class DBFencedLockManagerIT<LOCK_MANAGER extends DBFencedLockMan
         assertThat(lockManagerNode2.isLockedByThisLockManagerInstance(lockName)).isFalse();
         assertThat(lockManagerNode2.isLockAcquiredByAnotherLockManagerInstance(lockName)).isFalse();
         assertThat(lockManagerNode2.isLockAcquired(lockName)).isFalse();
+    }
+
+    /**
+     * QL-1: pins the contract {@link FencedLockManager}'s Javadoc and LLM-foundation.md document - ownership is per
+     * lock-manager instance, not per caller or thread. If this starts failing, the behaviour changed and so must the docs.
+     */
+    @Test
+    void a_second_acquire_on_the_same_manager_returns_the_same_lock_and_either_release_releases_it_for_both() throws Exception {
+        var lockName = LockName.of("testLock");
+        var first    = lockManagerNode1.tryAcquireLock(lockName);
+        // Another caller in the same JVM, on another thread
+        var second = CompletableFuture.supplyAsync(() -> lockManagerNode1.tryAcquireLock(lockName)).get(10, TimeUnit.SECONDS);
+
+        assertThat(first).isPresent();
+        assertThat(second).isPresent();
+        assertThat(second.get()).isSameAs(first.get());
+        assertThat(lockManagerNode1.acquireLock(lockName)).isSameAs(first.get());
+
+        // When the second caller releases "its" lock
+        second.get().release();
+
+        // Then the first caller's lock is released too, and another node can take it while the first caller still works
+        assertThat(first.get().isLocked()).isFalse();
+        assertThat(lockManagerNode1.isLockAcquired(lockName)).isFalse();
+        assertThat(lockManagerNode2.tryAcquireLock(lockName)).isPresent();
     }
 
     @Test

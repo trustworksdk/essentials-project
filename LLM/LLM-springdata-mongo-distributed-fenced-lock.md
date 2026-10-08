@@ -447,6 +447,10 @@ nobody commits or aborts. That transaction keeps the lock document write-locked,
 hand-over after such an outage to take up to that long instead of `lockTimeOut`; nothing is lost, and it recovers by
 itself.
 
+### ⚠️ A Lock Excludes Other JVMs, Not Other Callers in This JVM
+
+Ownership is per lock-manager instance, not per caller or thread. While this manager holds a lock, a second `tryAcquireLock`/`acquireLock` for the same name in the same JVM returns the **same** `FencedLock`, and `release()` by either caller releases it for both. Guard same-JVM callers that must not overlap yourself — see [LLM-foundation.md § Ownership is per lock-manager instance](./LLM-foundation.md#ownership-is-per-lock-manager-instance-not-per-caller-or-thread).
+
 ### ⚠️ Always Release Locks
 
 ```java

@@ -535,6 +535,16 @@ public interface FencedLock extends AutoCloseable {
 
 **Rule**: `lockConfirmationInterval` should be 2-3x smaller than `lockTimeOut`.
 
+### Ownership is per lock-manager instance, not per caller or thread
+
+A `FencedLock` excludes **other lock-manager instances** (other JVMs), never other callers in the same JVM:
+
+- While this `FencedLockManager` holds a lock, a second `tryAcquireLock`/`acquireLock` for the same `LockName` — from another component, another thread or the same thread — succeeds at once and returns the **same** `FencedLock` instance. It is not refused as busy.
+- There is no acquire count: `release()` by **either** caller releases the lock for both, and another node can then take it while the first caller is still working.
+- `isLockedByThisLockManagerInstance()` (on the lock or the manager) answers for the manager instance, so it is `true` for every caller in the JVM.
+
+Two callers in one JVM that share a lock name and must not overlap (a `@Scheduled` run and a manual trigger of the same job, two schedulers using one name) need their own in-process guard in front of the lock — see [Singleton Worker Pattern](#singleton-worker-pattern). An exclusive acquire is planned as an additive API.
+
 ### Usage
 
 ```java
@@ -543,13 +553,13 @@ try (FencedLock lock = lockManager.acquireLock(LockName.of("MyLock"))) {
     performCriticalWork();
 }
 
-// Pattern: Try-Acquire (Non-Blocking)
+// Pattern: Try-Acquire (Non-Blocking) - excludes other JVMs only, see "Ownership is per lock-manager instance"
 Optional<FencedLock> lock = lockManager.tryAcquireLock(LockName.of("order-processor"));
 if (lock.isPresent()) {
     try {
         processOrders(lock.get().getCurrentToken());
     } finally {
-        lockManager.releaseLock(lock.get());
+        lock.get().release();
     }
 }
 
@@ -585,25 +595,39 @@ boolean heldByOther = lockManager.isLockAcquiredByAnotherLockManagerInstance(Loc
 
 ### Singleton Worker Pattern
 
+The fenced lock makes the work run on one JVM at a time. It does **not** stop a second caller in the *same* JVM: that caller gets the same lock back, and its `release()` frees the lock under the first one (see [Ownership is per lock-manager instance](#ownership-is-per-lock-manager-instance-not-per-caller-or-thread)). If anything else in the JVM can start the same work under the same lock name — a manual trigger, an admin endpoint, a second schedule — put an in-process guard in front of the lock:
+
 ```java
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
 @Component
 public class ScheduledWorker {
+    private final AtomicBoolean running = new AtomicBoolean();   // exclusion inside this JVM - not a ReentrantLock,
+                                                                  // a nested call on the same thread must be refused too
+
     @Scheduled(fixedDelay = 30000)
-    public void processOrders() {
-        Optional<FencedLock> lock = lockManager.tryAcquireLock(LockName.of("order-processor"));
-        if (lock.isPresent()) {
-            try {
-                processOrderBatch(lock.get().getCurrentToken());
-            } finally {
-                lockManager.releaseLock(lock.get());
+    public void processOrders() {                                  // also called by a manual trigger
+        if (!running.compareAndSet(false, true)) {
+            return;                                                // already running in this JVM
+        }
+        try {
+            Optional<FencedLock> lock = lockManager.tryAcquireLock(LockName.of("order-processor"));  // exclusion across JVMs
+            if (lock.isPresent()) {
+                try {
+                    processOrderBatch(lock.get().getCurrentToken());
+                } finally {
+                    lock.get().release();
+                }
             }
+        } finally {
+            running.set(false);
         }
     }
 }
 ```
+
+A lone `@Scheduled(fixedDelay = …)` method never overlaps itself, so the guard is only redundant when that method is the lock name's sole user.
 
 ### Leadership Election
 
