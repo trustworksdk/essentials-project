@@ -1,0 +1,375 @@
+{
+ "crossReads": [],
+ "diff": null,
+ "flows": [
+  {
+   "bc": "orders",
+   "crossContext": false,
+   "dangling": false,
+   "event": "OrderPlaced",
+   "from": [
+    "orders.place_order"
+   ],
+   "to": [
+    "orders.order_history"
+   ]
+  },
+  {
+   "bc": "orders",
+   "crossContext": false,
+   "dangling": false,
+   "event": "OrderRefunded",
+   "from": [
+    "orders.refund_order"
+   ],
+   "to": []
+  },
+  {
+   "bc": "orders",
+   "crossContext": false,
+   "dangling": false,
+   "event": "OrderReturned",
+   "from": [
+    "orders.return_order"
+   ],
+   "to": [
+    "orders.order_history",
+    "orders.refund_on_return"
+   ]
+  }
+ ],
+ "issues": [],
+ "lineage": {
+  "fields": {},
+  "technicalColumns": []
+ },
+ "messages": [],
+ "meta": {
+  "atlasVersion": 1
+ },
+ "processes": [
+  {
+   "bcs": [
+    "orders"
+   ],
+   "color": 6,
+   "declared": true,
+   "entries": [],
+   "id": "checkout",
+   "links": [],
+   "name": "checkout",
+   "sliceIds": [
+    "orders.order_history",
+    "orders.place_order"
+   ]
+  },
+  {
+   "bcs": [
+    "orders"
+   ],
+   "color": 9,
+   "declared": true,
+   "entries": [],
+   "id": "returns",
+   "links": [],
+   "name": "returns",
+   "sliceIds": [
+    "orders.order_history",
+    "orders.refund_on_return",
+    "orders.refund_order",
+    "orders.return_order"
+   ]
+  }
+ ],
+ "slices": [
+  {
+   "bc": "orders",
+   "consumes": [],
+   "dependsOn": [],
+   "direction": null,
+   "dispatches": [],
+   "doc": null,
+   "endpoints": [
+    {
+     "auth": "user",
+     "method": "POST",
+     "path": "/api/orders"
+    }
+   ],
+   "externalSystem": null,
+   "files": [],
+   "flags": [],
+   "flows": [
+    "checkout"
+   ],
+   "handles": [
+    "PlaceOrder"
+   ],
+   "id": "orders.place_order",
+   "invariants": [],
+   "kind": "command",
+   "lane": "decider",
+   "language": "java",
+   "name": "place_order",
+   "owner": "orders-team",
+   "owns": [],
+   "package": null,
+   "path": "orders/use_cases/place_order",
+   "projections": [],
+   "publishes": [
+    "OrderPlaced"
+   ],
+   "reads": [],
+   "scenarios": [],
+   "serves": [],
+   "status": "live",
+   "summary": null,
+   "supersedes": null,
+   "tests": [
+    "unit"
+   ],
+   "tier": "cqrs-es",
+   "writes": [
+    "Order"
+   ]
+  },
+  {
+   "bc": "orders",
+   "consumes": [],
+   "dependsOn": [],
+   "direction": null,
+   "dispatches": [],
+   "doc": null,
+   "endpoints": [
+    {
+     "auth": "user",
+     "method": "POST",
+     "path": "/api/orders/{id}/return"
+    }
+   ],
+   "externalSystem": null,
+   "files": [],
+   "flags": [],
+   "flows": [
+    "returns"
+   ],
+   "handles": [
+    "ReturnOrder"
+   ],
+   "id": "orders.return_order",
+   "invariants": [],
+   "kind": "command",
+   "lane": "decider",
+   "language": "java",
+   "name": "return_order",
+   "owner": "orders-team",
+   "owns": [],
+   "package": null,
+   "path": "orders/use_cases/return_order",
+   "projections": [],
+   "publishes": [
+    "OrderReturned"
+   ],
+   "reads": [],
+   "scenarios": [],
+   "serves": [],
+   "status": "live",
+   "summary": null,
+   "supersedes": null,
+   "tests": [
+    "unit"
+   ],
+   "tier": "cqrs-es",
+   "writes": [
+    "Order"
+   ]
+  },
+  {
+   "bc": "orders",
+   "consumes": [],
+   "dependsOn": [],
+   "direction": null,
+   "dispatches": [],
+   "doc": null,
+   "endpoints": [
+    {
+     "auth": "user",
+     "method": "GET",
+     "path": "/api/orders/history"
+    }
+   ],
+   "externalSystem": null,
+   "files": [],
+   "flags": [],
+   "flows": [
+    "checkout",
+    "returns"
+   ],
+   "handles": [],
+   "id": "orders.order_history",
+   "invariants": [],
+   "kind": "view",
+   "lane": "decider",
+   "language": "java",
+   "name": "order_history",
+   "owner": "orders-team",
+   "owns": [
+    "OrderHistory"
+   ],
+   "package": null,
+   "path": "orders/views/order_history",
+   "projections": [
+    {
+     "from": [
+      "OrderPlaced",
+      "OrderReturned"
+     ],
+     "name": "OrderHistoryProjection"
+    }
+   ],
+   "publishes": [],
+   "readModels": [],
+   "reads": [],
+   "scenarios": [
+    {
+     "given": [],
+     "name": "scenario 1",
+     "note": null,
+     "test": null,
+     "testResolved": {
+      "line": null,
+      "path": null,
+      "status": "not-checked"
+     },
+     "then": {
+      "kind": "nothing"
+     },
+     "when": null
+    }
+   ],
+   "serves": [],
+   "status": "live",
+   "summary": null,
+   "supersedes": null,
+   "tests": [
+    "unit"
+   ],
+   "tier": "cqrs-es",
+   "writes": []
+  },
+  {
+   "bc": "orders",
+   "consumes": [
+    "OrderReturned"
+   ],
+   "dependsOn": [],
+   "direction": null,
+   "dispatches": [
+    "RefundOrder"
+   ],
+   "doc": null,
+   "endpoints": [],
+   "externalSystem": null,
+   "files": [],
+   "flags": [],
+   "flows": [
+    "returns"
+   ],
+   "handles": [],
+   "id": "orders.refund_on_return",
+   "invariants": [],
+   "kind": "automation",
+   "lane": "decider",
+   "language": "java",
+   "name": "refund_on_return",
+   "owner": "orders-team",
+   "owns": [],
+   "package": null,
+   "path": "orders/automations/refund_on_return",
+   "projections": [],
+   "publishes": [],
+   "reads": [],
+   "scenarios": [],
+   "serves": [],
+   "status": "live",
+   "summary": null,
+   "supersedes": null,
+   "tests": [
+    "unit"
+   ],
+   "tier": "cqrs-es",
+   "writes": []
+  },
+  {
+   "bc": "orders",
+   "consumes": [],
+   "dependsOn": [],
+   "direction": null,
+   "dispatches": [],
+   "doc": null,
+   "endpoints": [],
+   "externalSystem": null,
+   "files": [],
+   "flags": [],
+   "flows": [
+    "returns"
+   ],
+   "handles": [
+    "RefundOrder"
+   ],
+   "id": "orders.refund_order",
+   "invariants": [],
+   "kind": "command",
+   "lane": "decider",
+   "language": "java",
+   "name": "refund_order",
+   "owner": "orders-team",
+   "owns": [],
+   "package": null,
+   "path": "orders/use_cases/refund_order",
+   "projections": [],
+   "publishes": [
+    "OrderRefunded"
+   ],
+   "reads": [],
+   "scenarios": [],
+   "serves": [],
+   "status": "live",
+   "summary": null,
+   "supersedes": null,
+   "tests": [
+    "unit"
+   ],
+   "tier": "cqrs-es",
+   "writes": [
+    "Order"
+   ]
+  }
+ ],
+ "writers": [
+  {
+   "bcs": [
+    "orders"
+   ],
+   "flag": null,
+   "kind": "aggregate",
+   "slices": [
+    "orders.place_order",
+    "orders.refund_order",
+    "orders.return_order"
+   ],
+   "target": "Order"
+  },
+  {
+   "bcs": [
+    "orders"
+   ],
+   "flag": null,
+   "kind": "read-model",
+   "slices": [
+    "orders.order_history"
+   ],
+   "target": "OrderHistory"
+  }
+ ]
+}

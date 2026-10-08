@@ -258,7 +258,7 @@ An empty `then: []` is invalid: it is indistinguishable from a scenario left unf
 | Kind | `given` | `when` | `then` |
 |---|---|---|---|
 | command | `event` (any event published in scope), `state` (∈ `writes`) | `command` ∈ `handles` — required | events ⊆ `publishes`; `error`; `nothing` |
-| view | `event` ∈ `projections[].from` ∪ `consumes` | optional; `query` ∈ `serves` | `readModel` ∈ `owns`, row keys ⊆ that model's columns; `error` (for a `when` query) |
+| view | `event` ∈ `projections[].from` ∪ `consumes` | optional; `query` ∈ `serves` | `readModel` ∈ `owns` ∪ `reads[].name` ∪ `projections[].name` (the plugin's view template writes no `owns`), row keys ⊆ that model's columns; `error` (for a `when` query) |
 | automation | `event`, `state` (its own to-do read model, if any) | `event` ∈ `consumes`, or `schedule: true` when the slice declares `schedule` — required | commands ⊆ `dispatches`; `nothing`; `error` |
 | translation, inbound | `event`, `state` | `external` — required | commands ⊆ `dispatches`, events ⊆ `publishes`; `nothing`; `error` |
 | translation, outbound | `event`, `state` | `event` ∈ `consumes` — required | `external` steps; `nothing`; `error` |
@@ -366,8 +366,10 @@ A link pasted in a PR comment reopens the same view. Unknown keys are ignored; a
   minimisation moves neighbours whenever a slice is added, and a map whose shape jumps between commits
   destroys the reader's mental map — the thing the Atlas exists to build. A "tidy" toggle applies a
   deterministic barycenter pass for a one-off read, off by default.
-- Contexts are packed in id order on a fixed grid sized by slice count; adding a slice grows its
-  context's cell and moves nothing else.
+- Contexts are packed in id order into cells that grow in size steps at most 25 % apart; adding a slice
+  rearranges only its own context, unless that context crosses a size step — then the contexts after it
+  shift as whole blocks, keeping their inner layout. (A strict guarantee needs one row of fixed-width
+  contexts, about 50:1 wide at 60 contexts.)
 - The layout JSON is golden-tested (§12).
 
 ### 9.4 Detail card

@@ -21,6 +21,10 @@ not infer types: a handler typed as a generic stays that name, and a sealed pare
 to the subtypes declared inside ROOT. WebFlux functional `RouterFunction` routes are reported as not
 analysed. Anything it cannot read is listed under `unparsed` — never skipped, never guessed.
 
+The facts mode also indexes the project's tests (`tests`), so a manifest's `scenarios[].test` can be
+resolved: every type declared under a test source root, and on each the methods carrying a JUnit 5
+test annotation, matched by simple name — a composed annotation of your own is not followed.
+
 Judgement stays with the command that calls it: the service-entity lane criterion ("state loaded,
 mutated and saved in place"), gate 11(a), and every judgement field in
 `references/slice/manifest-reconciliation.md` §1.
@@ -30,7 +34,8 @@ Usage
     slice-source.py [ROOT] [--json] [--check] [--bc NAME]... [--quiet]
 
     ROOT        directory to scan (default: the current directory)
-    --json      emit JSON on stdout (facts, or findings with --check)
+    --json      emit JSON on stdout (facts, or findings with --check); the facts carry the test
+                index under `tests`
     --check     compare every slice.yaml with its source: gates 6 (endpoints and query
                 discriminators, per handler; raw-scalar ids at the API edge), 11(b) (handled
                 events declared) and the signal-count rows of 14 (write-style lane). Needs pyyaml.
@@ -42,8 +47,8 @@ Exit codes
     0   nothing to report: no findings, nothing unparsed, nothing unverified
     1   findings (--check)
     2   could not run — ROOT not a directory, bad arguments, --check without pyyaml
-    3   incomplete, NOT a pass: no findings, but some source was unparsed or (with --check)
-        some check had nothing to run against
+    3   incomplete, NOT a pass: no findings, but some source was unparsed (in the facts mode,
+        test source included) or (with --check) some check had nothing to run against
 
 Dependencies
 ------------
@@ -65,6 +70,10 @@ FORMAT = 1
 ROLES = {"use_cases": "command", "views": "view", "automations": "automation", "external_systems": "translation"}
 SKIP_DIRS = {"target", "build", "node_modules", "dist"}
 NON_MAIN_SOURCE_SETS = {"test", "tests", "it", "integrationTest", "testFixtures", "intTest", "jmh"}
+# the non-main source sets that hold tests (plus any `src/*Test`); fixtures and benchmarks hold none
+TEST_SOURCE_SETS = NON_MAIN_SOURCE_SETS - {"testFixtures", "jmh"}
+TEST_LANG_DIRS = ("java", "kotlin")
+TEST_ANNS = {"Test", "ParameterizedTest", "RepeatedTest", "TestFactory", "TestTemplate"}
 SOURCE_EXT = {".java": "java", ".kt": "kotlin"}
 NOT_SLICE_FILES = {"slice.yaml", "CLAUDE.md"}
 
@@ -1103,8 +1112,8 @@ def rel(path, root):
 
 
 def walk(root):
-    """Main source files and slice manifests under root."""
-    sources, manifests, dirs = [], [], []
+    """Main source files, slice manifests and test source roots under root."""
+    sources, manifests, dirs, test_roots = [], [], [], []
     for dirpath, dirnames, filenames in os.walk(root):
         here = Path(dirpath)
         keep = []
@@ -1112,6 +1121,8 @@ def walk(root):
             if d.startswith(".") or d in SKIP_DIRS:
                 continue
             if here.name == "src" and (d in NON_MAIN_SOURCE_SETS or d.endswith("Test")):
+                if d in TEST_SOURCE_SETS or d.endswith("Test"):
+                    test_roots.extend(here / d / lang for lang in TEST_LANG_DIRS if (here / d / lang).is_dir())
                 continue
             keep.append(d)
         dirnames[:] = sorted(keep)
@@ -1122,7 +1133,16 @@ def walk(root):
                 manifests.append(p)
             elif p.suffix in SOURCE_EXT:
                 sources.append(p)
-    return sources, manifests, dirs
+    return sources, manifests, dirs, sorted(test_roots)
+
+
+def walk_tests(test_root):
+    """Java and Kotlin files under one test source root."""
+    out = []
+    for dirpath, dirnames, filenames in os.walk(test_root):
+        dirnames[:] = sorted(d for d in dirnames if not d.startswith(".") and d not in SKIP_DIRS)
+        out.extend(Path(dirpath) / f for f in sorted(filenames) if Path(f).suffix in SOURCE_EXT)
+    return out
 
 
 class BC:
@@ -1157,7 +1177,7 @@ class Project:
     def __init__(self, root, root_arg, bcs_filter, yaml_mod):
         self.root, self.root_arg, self.yaml = root, root_arg, yaml_mod
         self.unparsed, self.unresolved = [], []
-        sources, manifest_paths, dirs = walk(root)
+        sources, manifest_paths, dirs, self.test_roots = walk(root)
         self.files = []
         for p in sources:
             try:
@@ -1474,6 +1494,63 @@ class Project:
         for n in names:
             if n in args:
                 return self.value(f, *args[n])
+        return None
+
+    # -- test index --------------------------------------------------------------------------------
+
+    def tests(self):
+        """Every type under a test source root, with its JUnit test methods. A file the lexer cannot read is
+        listed under `unparsed` and contributes no class: an index with a hole in it must say so."""
+        classes = []
+        for test_root in self.test_roots:
+            for p in walk_tests(test_root):
+                try:
+                    text = p.read_text(encoding="utf-8", errors="replace")
+                except OSError as exc:
+                    self.unparsed.append(self._u(p, None, "test source file", f"unreadable: {exc}"))
+                    continue
+                f = SrcFile(p, rel(p, self.root), SOURCE_EXT[p.suffix], text)
+                if f.error is not None:
+                    self.unparsed.append(self._u(p, f.error.line, "test source file", f.error.reason))
+                    continue
+                classes.extend(self._test_classes(f))
+        return {"roots": [rel(r, self.root) for r in self.test_roots],
+                "classes": sorted(classes, key=lambda c: (c["path"], c["name"]))}
+
+    def _test_classes(self, f):
+        out, attached = [], set()
+        for td in f.types:
+            attached.update(id(a) for a in td.anns)
+            if td.kind == "annotation" or f.method_at(td.kw) is not None:  # a local class is never discovered
+                continue
+            names, outer = [td.name], td.outer
+            while outer is not None:
+                names.append(outer.name)
+                outer = outer.outer
+            methods = []
+            for m in td.methods:
+                if not any(a.simple in TEST_ANNS for a in m.anns):
+                    continue
+                attached.update(id(a) for a in m.anns)
+                methods.append({"name": m.name, "line": m.line, "displayName": self._display_name(f, m)})
+            out.append({"name": ".".join(reversed(names)), "path": f.rel,
+                        "methods": sorted(methods, key=lambda x: (x["line"], x["name"]))})
+        for _, a in sorted(f.anns_at.items()):
+            if a.simple in TEST_ANNS and id(a) not in attached:
+                self.unparsed.append(self._u(f.path, a.line, f"@{a.simple}",
+                                             "not on a method of a named class the reader could read"))
+        return out
+
+    def _display_name(self, f, m):
+        ann = next((a for a in m.anns if a.simple == "DisplayName"), None)
+        if ann is None:
+            return None
+        value = self.arg(f, ann, "value")
+        if value is not None and value.kind == "str":
+            return value.v
+        owner = m.owner.name if m.owner else ""
+        self.unparsed.append(self._u(f.path, ann.line, f"@DisplayName on {owner}.{m.name}",
+                                     f"not a readable string: {value.text if value else ''}"))
         return None
 
     # -- per-slice facts ---------------------------------------------------------------------------
@@ -2090,6 +2167,7 @@ def build_messages(project, slice_facts):
 
 def facts_json(project):
     slice_facts = [(s, project.slice_facts(s)) for s in project.slices]
+    tests = project.tests()
     bcs = []
     for bc in project.bcs:
         lane = lane_facts(project, bc)
@@ -2105,6 +2183,7 @@ def facts_json(project):
         "messages": build_messages(project, slice_facts),
         "unparsed": sorted(project.unparsed, key=_loc_key),
         "unresolved": sorted(_dedupe(project.unresolved), key=_loc_key),
+        "tests": tests,
     }
 
 
@@ -2525,6 +2604,10 @@ def print_facts(data, quiet):
             print(f"  NOT ANALYSED  {na['file']}:{na['line']}  {na['reason']}", file=out)
     for bc in data["bcs"]:
         print(f"lane      {bc['name']}: {bc['lane']['detected']}", file=out)
+    if data["tests"]["roots"]:
+        methods = sum(len(c["methods"]) for c in data["tests"]["classes"])
+        print(f"tests     {len(data['tests']['classes'])} class(es), {methods} test method(s) under "
+              f"{', '.join(data['tests']['roots'])}", file=out)
     print(f"\n{len(data['slices'])} slice(s), {data['sourceFiles']} source file(s), {len(data['messages'])} message(s), "
           f"{len(data['unparsed'])} unparsed, {len(data['unresolved'])} unresolved.", file=out)
     if not data["manifestsRead"]:

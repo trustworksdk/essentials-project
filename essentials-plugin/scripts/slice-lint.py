@@ -15,8 +15,9 @@ that makes it loud.
 It is deterministic by design: parsing and schema validation are mechanical, and a
 language model has no business guessing at either. `/essentials:slice-check` runs this
 script for its gates 1, 3 and 4, and for the one manifest-only clause of gate 14 (a
-write style written into `tier`), rather than eyeballing the files. It reads manifests only;
-the syntactic source facts are `slice-source.py`'s.
+write style written into `tier`), rather than eyeballing the files. Gate 1(d) is the one
+cross-field rule inside a manifest: a scenario (`scenarios:`, schema 1.4) names the slice's own
+messages. It reads manifests only; the syntactic source facts are `slice-source.py`'s.
 
 Usage
 -----
@@ -277,6 +278,35 @@ def schema_hint(location, error):
                 "only name, aggregateTypes, from, consistency and store are read; move the rest "
                 "into `notes`"
             )
+    if head == "flow":
+        return (
+            "`flow` is one journey name or a non-empty list of distinct names, each lower-case "
+            "kebab- or snake_case: flow: checkout, or flow: [checkout, returns] (manifest-guide.md §3)"
+        )
+    if head == "scenarios":
+        # A `oneOf` reports at its own level; the cause sits in its context, so look there too.
+        def causes(e):
+            yield e
+            for sub in e.context or ():
+                yield from causes(sub)
+
+        if any(c.validator == "type" and ({"with", "rows"} & set(map(str, c.absolute_path)))
+               for c in causes(error)):
+            return (
+                "example values are scalars — string, number, boolean or null. Quote a date or a "
+                "time: unquoted, YAML reads 2026-10-08 as a date (manifest-guide.md §3)"
+            )
+        if len(location) >= 3 and location[2] == "then":
+            return (
+                "`then` is exactly one of: a non-empty list of steps; { error: Name, message: … }; "
+                "{ nothing: true }; { readModel: Name, rows: [...] }. An empty `then: []` is not "
+                "allowed — write { nothing: true } (manifest-guide.md §3)"
+            )
+        if len(location) >= 3 and location[2] in ("given", "when"):
+            return (
+                "a step is a mapping with exactly one of event, command, query, state, external or "
+                "schedule (schedule: true), plus an optional `with` (manifest-guide.md §3)"
+            )
     if head is None and "Additional properties" in error.message:
         return (
             "no reader consults an unknown root key. Use the field that fits, `notes:` for prose, "
@@ -487,6 +517,211 @@ def stream_vs_event_checks(parsed, findings):
                     )
 
 
+# The message keys of a scenario step (schema `$defs/scenarioStep`). The schema guarantees exactly
+# one per step; a step with none or several is its finding, so the cross-field rule skips it.
+STEP_KEYS = ("event", "command", "query", "state", "external", "schedule")
+
+SCENARIO_HINT = (
+    "a scenario names the slice's own messages, per kind (manifest-guide.md §3 `scenarios`). "
+    "Fix the name, or declare it in the list named here if the slice really has it"
+)
+
+
+def _step(step):
+    """(key, name) of a scenario step, or None when its shape is the schema's finding.
+    `name` is None for `schedule: true`."""
+    if not isinstance(step, dict):
+        return None
+    keys = [k for k in STEP_KEYS if k in step]
+    if len(keys) != 1:
+        return None
+    key = keys[0]
+    value = step[key]
+    if key == "schedule":
+        return (key, None) if value is True else None
+    return (key, value) if isinstance(value, str) else None
+
+
+def _a(kind):
+    return ("an " if str(kind)[:1] in "aeiou" else "a ") + str(kind)
+
+
+def _listed(names):
+    return "[" + ", ".join(sorted(set(names))) + "]" if names else "nothing"
+
+
+def _scenario_line(lines, name):
+    """Line of `name: <name>` inside the root `scenarios:` block, or None."""
+    start = next((i for i, t in enumerate(lines) if re.match(r"^scenarios:", t)), None)
+    if start is None or not isinstance(name, str):
+        return None
+    pattern = re.compile(r"^\s*(?:-\s*)?(?:\{\s*)?name:\s*[\"']?" + re.escape(name)
+                         + r"[\"']?\s*(?:[,}#]|$)")
+    for i in range(start + 1, len(lines)):
+        line = lines[i]
+        if line and not line[0].isspace() and line[0] not in "-#":
+            break  # the next root key: the block ended
+        if pattern.match(line):
+            return i + 1
+    return None
+
+
+def _scenario_problems(doc, scenario):
+    """What one scenario names outside the slice's own lists (manifest-guide.md §3 `scenarios`).
+
+    Intra-manifest only. A `given` event that no slice publishes, a `with`/`rows` key that is no
+    payload field or column, and a `test:` that resolves to nothing need other files: they are the
+    Atlas's (`slice-index.py atlas`), never this script's, which ships into projects.
+    """
+    kind = doc.get("kind")
+    problems = []
+    handles, publishes = _names(doc.get("handles")), _names(doc.get("publishes"))
+    consumes, dispatches = _names(doc.get("consumes")), _names(doc.get("dispatches"))
+    serves, writes = _names(doc.get("serves")), _names(doc.get("writes"))
+    projected = [n for p in _projections(doc) for n in (p.get("from") or []) if isinstance(n, str)]
+    inbound = consumes + projected
+    # A view's own read model: `owns`, plus `reads` and `projections[].name`, because the plugin's
+    # own view template records the model there and writes no `owns`.
+    models = (_names(doc.get("owns")) + _names(doc.get("reads"))
+              + [p["name"] for p in _projections(doc) if isinstance(p.get("name"), str)])
+
+    given, when, then = scenario.get("given"), scenario.get("when"), scenario.get("then")
+
+    if isinstance(given, list):
+        allowed = ("event",) if kind == "view" else ("event", "state")
+        for step in given:
+            parsed = _step(step)
+            if parsed is None:
+                continue
+            key, name = parsed
+            if key not in allowed:
+                problems.append(f"`given` holds a `{key}` step; on {_a(kind)} slice `given` takes "
+                                + " and ".join(f"`{a}`" for a in allowed) + " steps only")
+            elif kind == "view" and name not in inbound:
+                problems.append(f"`given: {{ event: {name} }}` is not an event this view projects — "
+                                f"`projections[].from` and `consumes` give {_listed(inbound)}")
+            elif kind == "command" and key == "state" and name not in writes:
+                problems.append(f"`given: {{ state: {name} }}` is not in `writes` {_listed(writes)}")
+
+    # A translation's direction decides what may trigger it, and the trigger decides what it emits.
+    direction = doc.get("direction")
+    can_in = direction in (None, "inbound", "both")
+    can_out = direction in (None, "outbound", "both")
+    mode = None
+    if when is None:
+        if kind in ("command", "automation", "translation"):
+            problems.append(f"no `when` — {_a(kind)} slice's scenario needs its trigger")
+    elif (w := _step(when)) is not None:
+        key, name = w
+        if kind == "command":
+            if key != "command":
+                problems.append(f"`when` is a `{key}` step; a command slice is triggered by a `command`")
+            elif name not in handles:
+                problems.append(f"`when: {{ command: {name} }}` is not in `handles` {_listed(handles)}")
+        elif kind == "view":
+            if key != "query":
+                problems.append(f"`when` is a `{key}` step; a view's `when` is a `query` it serves")
+            elif name not in serves:
+                problems.append(f"`when: {{ query: {name} }}` is not in `serves` {_listed(serves)}")
+        elif kind == "automation":
+            if key == "schedule":
+                if "schedule" not in doc:
+                    problems.append("`when: { schedule: true }`, but the slice declares no `schedule`")
+            elif key != "event":
+                problems.append(f"`when` is a `{key}` step; an automation is triggered by an `event` "
+                                f"it consumes or by `schedule: true`")
+            elif name not in consumes:
+                problems.append(f"`when: {{ event: {name} }}` is not in `consumes` {_listed(consumes)}")
+        elif kind == "translation":
+            if key == "external" and can_in:
+                mode = "inbound"
+            elif key == "event" and can_out:
+                mode = "outbound"
+                if name not in consumes:
+                    problems.append(f"`when: {{ event: {name} }}` is not in `consumes` {_listed(consumes)}")
+            else:
+                expected = {(True, True): "an `external` message (inbound) or an `event` it consumes "
+                                          "(outbound)",
+                            (True, False): "an `external` message (`direction: inbound`)",
+                            (False, True): "an `event` it consumes (`direction: outbound`)"}
+                problems.append(f"`when` is a `{key}` step; this translation is triggered by "
+                                + expected.get((can_in, can_out), "nothing it declares"))
+
+    if isinstance(then, list):
+        if kind == "view":
+            problems.append("`then` lists steps; a view's `then` is `{ readModel, rows }`, or "
+                            "`{ error }` for a `when` query")
+            return problems
+        if kind == "translation":
+            emits = {"inbound": ("command", "event"), "outbound": ("external",)}.get(
+                mode or "", (("command", "event") if can_in else ()) + (("external",) if can_out else ()))
+        else:
+            emits = {"command": ("event",), "automation": ("command",)}.get(str(kind), ())
+        for step in then:
+            parsed = _step(step)
+            if parsed is None:
+                continue
+            key, name = parsed
+            if key not in emits:
+                who = f"an {mode} translation" if mode else f"{_a(kind)} slice"
+                problems.append(f"`then` holds a `{key}` step; {who} emits "
+                                + (" and ".join(f"`{a}`" for a in emits) or "no") + " steps")
+            elif key == "event" and name not in publishes:
+                problems.append(f"`then: {{ event: {name} }}` is not in `publishes` {_listed(publishes)}")
+            elif key == "command" and name not in dispatches:
+                problems.append(f"`then: {{ command: {name} }}` is not in `dispatches` "
+                                f"{_listed(dispatches)}")
+    elif isinstance(then, dict):
+        if "readModel" in then and kind != "view":
+            problems.append(f"`then: {{ readModel }}` is a view's outcome; {_a(kind)} slice ends in "
+                            f"steps, `error` or `nothing`")
+        elif "readModel" in then and isinstance(then["readModel"], str) and then["readModel"] not in models:
+            problems.append(f"`then: {{ readModel: {then['readModel']} }}` is not this view's read model "
+                            f"— `owns`, `reads` and `projections[].name` give {_listed(models)}")
+        elif "nothing" in then and kind == "view":
+            problems.append("`then: { nothing: true }` on a view; an empty read model is "
+                            "`{ readModel: <Name>, rows: [] }`")
+        elif "error" in then and kind == "view" and when is None:
+            problems.append("`then: { error }` on a view needs the `when` query that fails")
+    return problems
+
+
+def scenario_checks(parsed, findings):
+    """Gate 1(d) — a scenario that names a message outside the slice's own lists.
+
+    The schema checks a scenario's shape; it cannot see that `when: { command: CancelOrdr }` is not
+    the command the slice `handles`, which is the mistake a generator makes. Same manifest, no other
+    file, so it is precise, and a finding. Also the one shape rule the schema cannot state: a
+    scenario name is unique within its slice.
+    """
+    for path, doc in sorted(parsed.items(), key=lambda kv: str(kv[0])):
+        scenarios = doc.get("scenarios")
+        if not isinstance(scenarios, list):
+            continue
+        try:
+            lines = path.read_text(encoding="utf-8").splitlines()
+        except OSError:
+            lines = []
+        counts = {}
+        for scenario in scenarios:
+            if isinstance(scenario, dict) and isinstance(scenario.get("name"), str):
+                counts[scenario["name"]] = counts.get(scenario["name"], 0) + 1
+        for i, scenario in enumerate(scenarios):
+            if not isinstance(scenario, dict):
+                continue
+            name = scenario.get("name")
+            where = f"scenarios/{i}" + (f" '{name}'" if isinstance(name, str) else "")
+            problems = []
+            if isinstance(name, str) and counts[name] > 1:
+                problems.append(f"{counts[name]} scenarios of this slice share the name; a scenario "
+                                f"name is unique within its slice")
+            problems.extend(_scenario_problems(doc, scenario))
+            line = _scenario_line(lines, name) if problems else None
+            for problem in problems:
+                findings.append(Finding("Should-fix", "1(d) scenario", path, f"{where}: {problem}",
+                                        line=line, hint=SCENARIO_HINT))
+
+
 def baseline_key(finding, root):
     """(id, file, message) with `root` cut out of the file and the message, so a baseline taken in
     another checkout of the same tree still matches. Accepts a Finding or a `--json` finding."""
@@ -644,6 +879,7 @@ def main(argv=None):
     parsed = parse_manifests(manifests, findings)
     schema_ran = validate_schema(parsed, schema, findings)
     stream_vs_event_checks(parsed, findings)
+    scenario_checks(parsed, findings)
     cross_manifest_checks(parsed, findings)
     tier_checks(parsed, findings)
 

@@ -1,0 +1,21 @@
+schemaVersion: "1.4"
+slice: shipping.ship_order
+kind: command
+bc: shipping
+owner: shipping-team
+status: live
+summary: Hand an order to the carrier.
+generator: essentials
+language: java
+tier: cqrs-es
+lane: decider
+flow: checkout
+handles: [ShipOrder]
+publishes: [OrderShipped]
+writes:
+  - { name: Shipment }
+forbidden:
+  - cross-slice-internal:shipping
+tests:
+  unit: { present: false }
+  integration: { present: false }

@@ -1,0 +1,36 @@
+{
+ "bounds": {
+  "atlas": {
+   "h": 14848,
+   "w": 16480,
+   "x": 0,
+   "y": 0
+  },
+  "metro": {
+   "h": 7080,
+   "w": 1208,
+   "x": 0,
+   "y": 0
+  }
+ },
+ "contexts": 60,
+ "drawnElements": {
+  "L0": 120,
+  "L1": 374,
+  "L2": 2269,
+  "L3": 2389,
+  "matrixCells": 354,
+  "metro": 603
+ },
+ "layoutBytes": 614684,
+ "layoutSha256": "d6469e46a4df8379990c1cd9591944195edb5ce48d4a16ff9a294c377258d290",
+ "oneSliceAdditions": {
+  "cellGrewPastAStep": [
+   "c00",
+   "c57"
+  ],
+  "tried": 60
+ },
+ "processes": 176,
+ "slices": 427
+}

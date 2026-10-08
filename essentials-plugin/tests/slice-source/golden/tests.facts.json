@@ -1,0 +1,217 @@
+{
+  "tool": "slice-source",
+  "format": 1,
+  "mode": "facts",
+  "root": "tests/slice-source/cases/tests",
+  "manifestsRead": true,
+  "sourceFiles": 1,
+  "bcs": [
+    {
+      "name": "orders",
+      "path": "src/main/*/com/example/shop/orders",
+      "dirs": [
+        "src/main/java/com/example/shop/orders"
+      ],
+      "languages": [
+        "java"
+      ],
+      "slices": [
+        "orders.cancel_order"
+      ],
+      "lane": {
+        "signals": {
+          "decider": [],
+          "aggregates": null,
+          "entities": null,
+          "eventStore": []
+        },
+        "declared": [],
+        "detected": "undetermined"
+      }
+    }
+  ],
+  "slices": [
+    {
+      "id": "orders.cancel_order",
+      "idSource": "directory",
+      "bc": "orders",
+      "bcPath": "src/main/*/com/example/shop/orders",
+      "dir": "src/main/java/com/example/shop/orders/use_cases/cancel_order",
+      "role": "use_cases",
+      "kind": "command",
+      "manifest": null,
+      "language": "java",
+      "package": "com.example.shop.orders.use_cases.cancel_order",
+      "files": [
+        "CancelOrder.java"
+      ],
+      "processors": [],
+      "handlers": [],
+      "handles": [],
+      "dispatches": [],
+      "publishes": [],
+      "subscriptions": [],
+      "mappings": [],
+      "schedules": [],
+      "notAnalysed": []
+    }
+  ],
+  "messages": [],
+  "unparsed": [
+    {
+      "file": "src/test/kotlin/com/example/shop/orders/BrokenTest.kt",
+      "line": 9,
+      "what": "test source file",
+      "reason": "unterminated string literal"
+    },
+    {
+      "file": "src/test/kotlin/com/example/shop/orders/StrayTest.kt",
+      "line": 6,
+      "what": "@Test",
+      "reason": "not on a method of a named class the reader could read"
+    },
+    {
+      "file": "src/test/kotlin/com/example/shop/orders/TemplatedNameTest.kt",
+      "line": 9,
+      "what": "@DisplayName on TemplatedNameTest.templated",
+      "reason": "not a readable string: \"order $ID is cancelled\""
+    }
+  ],
+  "unresolved": [],
+  "tests": {
+    "roots": [
+      "src/integrationTest/java",
+      "src/test/java",
+      "src/test/kotlin"
+    ],
+    "classes": [
+      {
+        "name": "OrdersIT",
+        "path": "src/integrationTest/java/com/example/shop/OrdersIT.java",
+        "methods": [
+          {
+            "name": "placesAndCancels",
+            "line": 8,
+            "displayName": null
+          }
+        ]
+      },
+      {
+        "name": "CancelOrderDeciderTest",
+        "path": "src/test/java/com/example/shop/orders/use_cases/cancel_order/CancelOrderDeciderTest.java",
+        "methods": [
+          {
+            "name": "cancelsPlacedOrder",
+            "line": 22,
+            "displayName": null
+          },
+          {
+            "name": "rejectsUnknownOrder",
+            "line": 32,
+            "displayName": "rejects an unknown order"
+          },
+          {
+            "name": "fullyQualifiedAnnotation",
+            "line": 36,
+            "displayName": null
+          },
+          {
+            "name": "parameterised",
+            "line": 41,
+            "displayName": null
+          },
+          {
+            "name": "repeated",
+            "line": 45,
+            "displayName": null
+          },
+          {
+            "name": "factory",
+            "line": 49,
+            "displayName": null
+          },
+          {
+            "name": "template",
+            "line": 54,
+            "displayName": null
+          }
+        ]
+      },
+      {
+        "name": "CancelOrderDeciderTest.WhenCancelled",
+        "path": "src/test/java/com/example/shop/orders/use_cases/cancel_order/CancelOrderDeciderTest.java",
+        "methods": [
+          {
+            "name": "secondCancelIsNoOp",
+            "line": 64,
+            "displayName": "cancelling twice is a no-op"
+          }
+        ]
+      },
+      {
+        "name": "CancelOrderDeciderTest.WhenCancelled.Twice",
+        "path": "src/test/java/com/example/shop/orders/use_cases/cancel_order/CancelOrderDeciderTest.java",
+        "methods": [
+          {
+            "name": "stillNoOp",
+            "line": 70,
+            "displayName": null
+          }
+        ]
+      },
+      {
+        "name": "CancelOrderTest",
+        "path": "src/test/kotlin/com/example/shop/orders/CancelOrderTest.kt",
+        "methods": [
+          {
+            "name": "cancels a placed order",
+            "line": 14,
+            "displayName": null
+          },
+          {
+            "name": "cancelling twice is a no-op",
+            "line": 21,
+            "displayName": "idempotent retry"
+          },
+          {
+            "name": "rejectsUnknown",
+            "line": 26,
+            "displayName": null
+          }
+        ]
+      },
+      {
+        "name": "CancelOrderTest.Companion",
+        "path": "src/test/kotlin/com/example/shop/orders/CancelOrderTest.kt",
+        "methods": []
+      },
+      {
+        "name": "CancelOrderTest.when unpaid",
+        "path": "src/test/kotlin/com/example/shop/orders/CancelOrderTest.kt",
+        "methods": [
+          {
+            "name": "auto cancels",
+            "line": 32,
+            "displayName": null
+          }
+        ]
+      },
+      {
+        "name": "TemplatedNameTest",
+        "path": "src/test/kotlin/com/example/shop/orders/TemplatedNameTest.kt",
+        "methods": [
+          {
+            "name": "templated",
+            "line": 10,
+            "displayName": null
+          }
+        ]
+      },
+      {
+        "name": "TemplatedNameTest.Companion",
+        "path": "src/test/kotlin/com/example/shop/orders/TemplatedNameTest.kt",
+        "methods": []
+      }
+    ]
+  }
+}

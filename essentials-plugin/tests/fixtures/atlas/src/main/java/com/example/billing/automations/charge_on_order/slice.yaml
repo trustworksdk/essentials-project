@@ -1,0 +1,25 @@
+schemaVersion: "1.4"
+slice: billing.charge_on_order
+kind: automation
+bc: billing
+owner: billing-team
+status: live
+summary: Charge the customer once an order is placed.
+generator: essentials
+language: java
+tier: cqrs-es
+lane: decider
+flow: checkout
+consumes: [OrderPlaced]
+dispatches: [ChargePayment]
+scenarios:
+  - name: charges a placed order
+    when: { event: OrderPlaced, with: { orderId: o-1, quantity: 2 } }
+    then:
+      - command: ChargePayment
+        with: { orderId: o-1, amount: 20 }
+forbidden:
+  - cross-slice-internal:billing
+tests:
+  unit: { present: false }
+  integration: { present: false }

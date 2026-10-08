@@ -1,0 +1,1926 @@
+{
+  "meta": {
+    "root": "tests/fixtures/atlas",
+    "sha": "fixture",
+    "project": "atlas",
+    "scope": "full",
+    "sliceCount": 14,
+    "bcCount": 3,
+    "skipped": []
+  },
+  "contexts": [
+    {
+      "id": "billing",
+      "lane": "decider",
+      "language": "java",
+      "tier": "cqrs-es",
+      "owners": [
+        "billing-team"
+      ],
+      "sliceIds": [
+        "billing.charge_on_order",
+        "billing.charge_payment",
+        "billing.payment_list",
+        "billing.refund_payment"
+      ]
+    },
+    {
+      "id": "orders",
+      "lane": "decider",
+      "language": "java",
+      "tier": "cqrs-es",
+      "owners": [
+        "orders-team"
+      ],
+      "sliceIds": [
+        "orders.cancel_order",
+        "orders.cancellation_mailer",
+        "orders.order_history",
+        "orders.order_list",
+        "orders.place_order"
+      ]
+    },
+    {
+      "id": "shipping",
+      "lane": "decider",
+      "language": "java",
+      "tier": "cqrs-es",
+      "owners": [
+        "shipping-team"
+      ],
+      "sliceIds": [
+        "shipping.carrier_webhook",
+        "shipping.nightly_reship",
+        "shipping.ship_on_payment",
+        "shipping.ship_order"
+      ]
+    }
+  ],
+  "slices": [
+    {
+      "id": "billing.charge_on_order",
+      "bc": "billing",
+      "name": "charge_on_order",
+      "kind": "automation",
+      "status": "live",
+      "owner": "billing-team",
+      "summary": "Charge the customer once an order is placed.",
+      "language": "java",
+      "tier": "cqrs-es",
+      "lane": "decider",
+      "path": "src/main/java/com/example/billing/automations/charge_on_order",
+      "package": "com.example.billing.automations.charge_on_order",
+      "files": [
+        "ChargeOnOrder.java"
+      ],
+      "handles": [],
+      "serves": [],
+      "publishes": [],
+      "consumes": [
+        "OrderPlaced"
+      ],
+      "dispatches": [
+        "ChargePayment"
+      ],
+      "writes": [],
+      "owns": [],
+      "projections": [],
+      "reads": [],
+      "endpoints": [],
+      "invariants": [],
+      "externalSystem": null,
+      "direction": null,
+      "supersedes": null,
+      "dependsOn": [],
+      "tests": [],
+      "flags": [],
+      "flows": [
+        "checkout"
+      ],
+      "scenarios": [
+        {
+          "name": "charges a placed order",
+          "given": [],
+          "when": {
+            "type": "event",
+            "name": "OrderPlaced",
+            "with": {
+              "orderId": "o-1",
+              "quantity": 2
+            }
+          },
+          "then": {
+            "kind": "steps",
+            "steps": [
+              {
+                "type": "command",
+                "name": "ChargePayment",
+                "with": {
+                  "orderId": "o-1",
+                  "amount": 20
+                }
+              }
+            ]
+          },
+          "test": null,
+          "testResolved": {
+            "status": "not-checked",
+            "path": null,
+            "line": null
+          },
+          "note": null
+        }
+      ],
+      "schedule": null,
+      "doc": null
+    },
+    {
+      "id": "billing.charge_payment",
+      "bc": "billing",
+      "name": "charge_payment",
+      "kind": "command",
+      "status": "live",
+      "owner": "billing-team",
+      "summary": "Charge a payment for an order.",
+      "language": "java",
+      "tier": "cqrs-es",
+      "lane": "decider",
+      "path": "src/main/java/com/example/billing/use_cases/charge_payment",
+      "package": "com.example.billing.use_cases.charge_payment",
+      "files": [
+        "ChargePayment.java"
+      ],
+      "handles": [
+        "ChargePayment"
+      ],
+      "serves": [],
+      "publishes": [
+        "PaymentCharged"
+      ],
+      "consumes": [],
+      "dispatches": [],
+      "writes": [
+        "Payment"
+      ],
+      "owns": [],
+      "projections": [],
+      "reads": [],
+      "endpoints": [],
+      "invariants": [],
+      "externalSystem": null,
+      "direction": null,
+      "supersedes": null,
+      "dependsOn": [],
+      "tests": [],
+      "flags": [],
+      "flows": [
+        "checkout"
+      ],
+      "scenarios": [],
+      "schedule": null,
+      "doc": null
+    },
+    {
+      "id": "billing.refund_payment",
+      "bc": "billing",
+      "name": "refund_payment",
+      "kind": "command",
+      "status": "live",
+      "owner": "billing-team",
+      "summary": "Refund a charged payment.",
+      "language": "java",
+      "tier": "cqrs-es",
+      "lane": "decider",
+      "path": "src/main/java/com/example/billing/use_cases/refund_payment",
+      "package": "com.example.billing.use_cases.refund_payment",
+      "files": [
+        "RefundPayment.java",
+        "RefundPaymentAPI.java"
+      ],
+      "handles": [
+        "RefundPayment"
+      ],
+      "serves": [],
+      "publishes": [
+        "PaymentRefunded"
+      ],
+      "consumes": [],
+      "dispatches": [],
+      "writes": [
+        "Payment"
+      ],
+      "owns": [],
+      "projections": [],
+      "reads": [],
+      "endpoints": [
+        {
+          "method": "POST",
+          "path": "/api/payments/{id}/refund",
+          "auth": "user"
+        }
+      ],
+      "invariants": [],
+      "externalSystem": null,
+      "direction": null,
+      "supersedes": null,
+      "dependsOn": [],
+      "tests": [],
+      "flags": [],
+      "flows": [
+        "returns"
+      ],
+      "scenarios": [
+        {
+          "name": "refunds a returned order",
+          "given": [
+            {
+              "type": "event",
+              "name": "PaymentCharged",
+              "with": {
+                "paymentId": "p-1",
+                "orderId": "o-1",
+                "amount": 20
+              }
+            },
+            {
+              "type": "event",
+              "name": "OrderReturned",
+              "with": {
+                "orderId": "o-1"
+              }
+            }
+          ],
+          "when": {
+            "type": "command",
+            "name": "RefundPayment",
+            "with": {
+              "paymentId": "p-1",
+              "amount": 20
+            }
+          },
+          "then": {
+            "kind": "steps",
+            "steps": [
+              {
+                "type": "event",
+                "name": "PaymentRefunded",
+                "with": {
+                  "paymentId": "p-1",
+                  "amount": 20
+                }
+              }
+            ]
+          },
+          "test": null,
+          "testResolved": {
+            "status": "not-checked",
+            "path": null,
+            "line": null
+          },
+          "note": null
+        }
+      ],
+      "schedule": null,
+      "doc": null
+    },
+    {
+      "id": "billing.payment_list",
+      "bc": "billing",
+      "name": "payment_list",
+      "kind": "view",
+      "status": "live",
+      "owner": "billing-team",
+      "summary": "Payments with their charged and refunded amounts.",
+      "language": "java",
+      "tier": "cqrs-es",
+      "lane": "decider",
+      "path": "src/main/java/com/example/billing/views/payment_list",
+      "package": "com.example.billing.views.payment_list",
+      "files": [
+        "PaymentListAPI.java",
+        "PaymentListProjection.java",
+        "PaymentListView.java"
+      ],
+      "handles": [],
+      "serves": [
+        "ListPayments"
+      ],
+      "publishes": [],
+      "consumes": [],
+      "dispatches": [],
+      "writes": [],
+      "owns": [
+        "PaymentListView"
+      ],
+      "projections": [
+        {
+          "name": "PaymentListProjection",
+          "from": [
+            "PaymentCharged",
+            "PaymentRefunded"
+          ]
+        }
+      ],
+      "reads": [],
+      "endpoints": [
+        {
+          "method": "GET",
+          "path": "/api/payments",
+          "auth": "user"
+        }
+      ],
+      "invariants": [],
+      "externalSystem": null,
+      "direction": null,
+      "supersedes": null,
+      "dependsOn": [],
+      "tests": [],
+      "flags": [],
+      "readModels": [
+        {
+          "name": "PaymentListView",
+          "store": null,
+          "columns": [
+            {
+              "name": "paymentId",
+              "type": "String",
+              "note": null
+            },
+            {
+              "name": "orderId",
+              "type": "String",
+              "note": null
+            },
+            {
+              "name": "amount",
+              "type": "long",
+              "note": null
+            }
+          ]
+        }
+      ],
+      "flows": [
+        "checkout",
+        "returns"
+      ],
+      "scenarios": [],
+      "schedule": null,
+      "doc": null
+    },
+    {
+      "id": "orders.cancellation_mailer",
+      "bc": "orders",
+      "name": "cancellation_mailer",
+      "kind": "translation",
+      "status": "live",
+      "owner": "orders-team",
+      "summary": "Mail the customer when an order is cancelled.",
+      "language": "java",
+      "tier": "cqrs-es",
+      "lane": "decider",
+      "path": "src/main/java/com/example/orders/external_systems/cancellation_mailer",
+      "package": "com.example.orders.external_systems.cancellation_mailer",
+      "files": [
+        "CancellationMailer.java"
+      ],
+      "handles": [],
+      "serves": [],
+      "publishes": [],
+      "consumes": [
+        "OrderCancelled"
+      ],
+      "dispatches": [],
+      "writes": [],
+      "owns": [],
+      "projections": [],
+      "reads": [],
+      "endpoints": [],
+      "invariants": [],
+      "externalSystem": "mailer",
+      "direction": "outbound",
+      "supersedes": null,
+      "dependsOn": [],
+      "tests": [],
+      "flags": [
+        {
+          "level": "info",
+          "text": "not checked — 11(b) handled events: the manifest declares OrderCancelled but no @MessageHandler / @Handler / @EventListener method was found in the slice's source, so the declaration cannot be checked against code"
+        }
+      ],
+      "flows": [],
+      "scenarios": [],
+      "schedule": null,
+      "doc": null
+    },
+    {
+      "id": "src/main/java/com/example/orders/use_cases/amend_order",
+      "bc": null,
+      "name": "amend_order",
+      "kind": null,
+      "status": null,
+      "owner": null,
+      "summary": null,
+      "language": null,
+      "tier": null,
+      "lane": null,
+      "path": "src/main/java/com/example/orders/use_cases/amend_order",
+      "package": null,
+      "files": [],
+      "handles": [],
+      "serves": [],
+      "publishes": [],
+      "consumes": [],
+      "dispatches": [],
+      "writes": [],
+      "owns": [],
+      "projections": [],
+      "reads": [],
+      "endpoints": [],
+      "invariants": [],
+      "externalSystem": null,
+      "direction": null,
+      "supersedes": null,
+      "dependsOn": [],
+      "tests": [],
+      "flags": [
+        {
+          "level": "error",
+          "text": "slice.yaml is not valid YAML (line 15) — this slice is missing from every edge of the map. Repair: /essentials:slice-check --fix-manifests (manifest-guide.md §3)"
+        }
+      ],
+      "error": true,
+      "flows": [],
+      "scenarios": [],
+      "schedule": null,
+      "doc": null
+    },
+    {
+      "id": "orders.cancel_order",
+      "bc": "orders",
+      "name": "cancel_order",
+      "kind": "command",
+      "status": "live",
+      "owner": "orders-team",
+      "summary": "Cancel a placed order.",
+      "language": "java",
+      "tier": "cqrs-es",
+      "lane": "decider",
+      "path": "src/main/java/com/example/orders/use_cases/cancel_order",
+      "package": "com.example.orders.use_cases.cancel_order",
+      "files": [
+        "CancelOrder.java",
+        "CancelOrderAPI.java"
+      ],
+      "handles": [
+        "CancelOrder"
+      ],
+      "serves": [],
+      "publishes": [
+        "OrderCancelled"
+      ],
+      "consumes": [],
+      "dispatches": [],
+      "writes": [
+        "Order"
+      ],
+      "owns": [],
+      "projections": [],
+      "reads": [],
+      "endpoints": [
+        {
+          "method": "POST",
+          "path": "/api/orders/{id}/cancel",
+          "auth": "user"
+        }
+      ],
+      "invariants": [],
+      "externalSystem": null,
+      "direction": null,
+      "supersedes": null,
+      "dependsOn": [],
+      "tests": [
+        "unit"
+      ],
+      "flags": [],
+      "flows": [],
+      "scenarios": [
+        {
+          "name": "cancels a placed order",
+          "given": [
+            {
+              "type": "event",
+              "name": "OrderPlaced",
+              "with": {
+                "orderId": "o-1",
+                "customerId": "c-7",
+                "quantity": 2
+              }
+            }
+          ],
+          "when": {
+            "type": "command",
+            "name": "CancelOrder",
+            "with": {
+              "orderId": "o-1",
+              "reason": "changed mind"
+            }
+          },
+          "then": {
+            "kind": "steps",
+            "steps": [
+              {
+                "type": "event",
+                "name": "OrderCancelled",
+                "with": {
+                  "orderId": "o-1",
+                  "reason": "changed mind"
+                }
+              }
+            ]
+          },
+          "test": "CancelOrderTest#cancelsAPlacedOrder",
+          "testResolved": {
+            "status": "found",
+            "path": "src/test/java/com/example/orders/use_cases/cancel_order/CancelOrderTest.java",
+            "line": 8
+          },
+          "note": null
+        },
+        {
+          "name": "cancelling twice is a no-op",
+          "given": [
+            {
+              "type": "event",
+              "name": "OrderPlaced",
+              "with": {}
+            },
+            {
+              "type": "event",
+              "name": "OrderCancelled",
+              "with": {}
+            }
+          ],
+          "when": {
+            "type": "command",
+            "name": "CancelOrder",
+            "with": {
+              "orderId": "o-1"
+            }
+          },
+          "then": {
+            "kind": "nothing"
+          },
+          "test": "CancelOrderTest#cancellingTwiceIsANoOp",
+          "testResolved": {
+            "status": "missing",
+            "path": null,
+            "line": null
+          },
+          "note": null
+        },
+        {
+          "name": "rejects an unknown order",
+          "given": [],
+          "when": {
+            "type": "command",
+            "name": "CancelOrder",
+            "with": {
+              "orderId": "o-404",
+              "priority": "high"
+            }
+          },
+          "then": {
+            "kind": "error",
+            "error": "OrderNotFound",
+            "message": "Order o-404 not found"
+          },
+          "test": null,
+          "testResolved": {
+            "status": "not-checked",
+            "path": null,
+            "line": null
+          },
+          "note": null
+        }
+      ],
+      "schedule": null,
+      "doc": "<h1>cancel_order</h1><p>Cancelling an order that is already cancelled changes nothing.</p>"
+    },
+    {
+      "id": "orders.place_order",
+      "bc": "orders",
+      "name": "place_order",
+      "kind": "command",
+      "status": "live",
+      "owner": "orders-team",
+      "summary": "Place an order for a customer.",
+      "language": "java",
+      "tier": "cqrs-es",
+      "lane": "decider",
+      "path": "src/main/java/com/example/orders/use_cases/place_order",
+      "package": "com.example.orders.use_cases.place_order",
+      "files": [
+        "PlaceOrder.java",
+        "PlaceOrderAPI.java"
+      ],
+      "handles": [
+        "PlaceOrder"
+      ],
+      "serves": [],
+      "publishes": [
+        "OrderPlaced"
+      ],
+      "consumes": [],
+      "dispatches": [],
+      "writes": [
+        "Order"
+      ],
+      "owns": [],
+      "projections": [],
+      "reads": [],
+      "endpoints": [
+        {
+          "method": "POST",
+          "path": "/api/orders",
+          "auth": "user"
+        }
+      ],
+      "invariants": [
+        {
+          "id": "positive-quantity",
+          "text": "An order has a positive quantity.",
+          "enforcedBy": "PlaceOrderDecider"
+        }
+      ],
+      "externalSystem": null,
+      "direction": null,
+      "supersedes": null,
+      "dependsOn": [],
+      "tests": [
+        "unit"
+      ],
+      "flags": [],
+      "flows": [
+        "checkout"
+      ],
+      "scenarios": [
+        {
+          "name": "places an order",
+          "given": [],
+          "when": {
+            "type": "command",
+            "name": "PlaceOrder",
+            "with": {
+              "orderId": "o-1",
+              "customerId": "c-7",
+              "quantity": 2
+            }
+          },
+          "then": {
+            "kind": "steps",
+            "steps": [
+              {
+                "type": "event",
+                "name": "OrderPlaced",
+                "with": {
+                  "orderId": "o-1",
+                  "customerId": "c-7",
+                  "quantity": 2
+                }
+              }
+            ]
+          },
+          "test": "PlaceOrderTest#placesAnOrder",
+          "testResolved": {
+            "status": "found",
+            "path": "src/test/java/com/example/orders/use_cases/place_order/PlaceOrderTest.java",
+            "line": 9
+          },
+          "note": null
+        },
+        {
+          "name": "rejects a zero quantity",
+          "given": [],
+          "when": {
+            "type": "command",
+            "name": "PlaceOrder",
+            "with": {
+              "orderId": "o-2",
+              "quantity": 0
+            }
+          },
+          "then": {
+            "kind": "error",
+            "error": "IllegalArgumentException",
+            "message": "quantity must be positive"
+          },
+          "test": "PlaceOrderTest#rejects a zero quantity",
+          "testResolved": {
+            "status": "found",
+            "path": "src/test/java/com/example/orders/use_cases/place_order/PlaceOrderTest.java",
+            "line": 14
+          },
+          "note": null
+        }
+      ],
+      "schedule": null,
+      "doc": "<h1>place_order</h1><p>Takes a <code>PlaceOrder</code> from the API and publishes <strong>OrderPlaced</strong>.</p><h2>Invariants</h2><ul><li>A quantity of zero or less is rejected with an <code>IllegalArgumentException</code>.</li><li>The order id comes from the caller; see the API.</li></ul><table><thead><tr><th>Field</th><th>Meaning</th></tr></thead><tbody><tr><td>orderId</td><td>the caller&#x27;s id for the order</td></tr><tr><td>quantity</td><td>how many, <em>always</em> positive</td></tr></tbody></table><p>Raw markup such as &lt;b&gt;bold&lt;/b&gt; &amp; &lt;script&gt;alert(1)&lt;/script&gt; is shown as text.</p><pre><code>new PlaceOrder(&quot;o-1&quot;, &quot;c-7&quot;, 2);</code></pre>"
+    },
+    {
+      "id": "orders.order_history",
+      "bc": "orders",
+      "name": "order_history",
+      "kind": "view",
+      "status": "live",
+      "owner": "orders-team",
+      "summary": "Every order a customer placed.",
+      "language": "java",
+      "tier": "cqrs-es",
+      "lane": "decider",
+      "path": "src/main/java/com/example/orders/views/order_history",
+      "package": "com.example.orders.views.order_history",
+      "files": [
+        "OrderHistoryAPI.java",
+        "OrderHistoryProjection.java",
+        "OrderHistoryView.java"
+      ],
+      "handles": [],
+      "serves": [
+        "OrderHistory"
+      ],
+      "publishes": [],
+      "consumes": [],
+      "dispatches": [],
+      "writes": [],
+      "owns": [
+        "OrderHistoryView"
+      ],
+      "projections": [
+        {
+          "name": "OrderHistoryProjection",
+          "from": [
+            "OrderPlaced"
+          ]
+        }
+      ],
+      "reads": [],
+      "endpoints": [
+        {
+          "method": "GET",
+          "path": "/api/orders/history",
+          "auth": "user"
+        }
+      ],
+      "invariants": [],
+      "externalSystem": null,
+      "direction": null,
+      "supersedes": null,
+      "dependsOn": [],
+      "tests": [],
+      "flags": [],
+      "readModels": [
+        {
+          "name": "OrderHistoryView",
+          "store": null,
+          "columns": [
+            {
+              "name": "orderId",
+              "type": "String",
+              "note": null
+            },
+            {
+              "name": "customerId",
+              "type": "String",
+              "note": null
+            },
+            {
+              "name": "quantity",
+              "type": "int",
+              "note": null
+            },
+            {
+              "name": "lastModified",
+              "type": "String",
+              "note": null
+            }
+          ]
+        }
+      ],
+      "flows": [],
+      "scenarios": [],
+      "schedule": null,
+      "doc": null
+    },
+    {
+      "id": "orders.order_list",
+      "bc": "orders",
+      "name": "order_list",
+      "kind": "view",
+      "status": "live",
+      "owner": "orders-team",
+      "summary": "List orders with what was ordered and why one was cancelled.",
+      "language": "java",
+      "tier": "cqrs-es",
+      "lane": "decider",
+      "path": "src/main/java/com/example/orders/views/order_list",
+      "package": "com.example.orders.views.order_list",
+      "files": [
+        "OrderListAPI.java",
+        "OrderListProjection.java",
+        "OrderListView.java"
+      ],
+      "handles": [],
+      "serves": [
+        "ListOrders"
+      ],
+      "publishes": [],
+      "consumes": [],
+      "dispatches": [],
+      "writes": [],
+      "owns": [
+        "OrderListView"
+      ],
+      "projections": [
+        {
+          "name": "OrderListProjection",
+          "from": [
+            "OrderPlaced",
+            "OrderCancelled"
+          ]
+        }
+      ],
+      "reads": [],
+      "endpoints": [
+        {
+          "method": "GET",
+          "path": "/api/orders",
+          "auth": "user"
+        }
+      ],
+      "invariants": [],
+      "externalSystem": null,
+      "direction": null,
+      "supersedes": null,
+      "dependsOn": [],
+      "tests": [],
+      "flags": [],
+      "readModels": [
+        {
+          "name": "OrderListView",
+          "store": null,
+          "columns": [
+            {
+              "name": "orderId",
+              "type": "String",
+              "note": null
+            },
+            {
+              "name": "customerId",
+              "type": "String",
+              "note": null
+            },
+            {
+              "name": "quantity",
+              "type": "int",
+              "note": null
+            },
+            {
+              "name": "reason",
+              "type": "String",
+              "note": null
+            },
+            {
+              "name": "discount",
+              "type": "String",
+              "note": null
+            },
+            {
+              "name": "version",
+              "type": "long",
+              "note": null
+            }
+          ]
+        }
+      ],
+      "flows": [
+        "checkout"
+      ],
+      "scenarios": [
+        {
+          "name": "lists a placed order",
+          "given": [
+            {
+              "type": "event",
+              "name": "OrderPlaced",
+              "with": {
+                "orderId": "o-1",
+                "customerId": "c-7",
+                "quantity": 2
+              }
+            }
+          ],
+          "when": {
+            "type": "query",
+            "name": "ListOrders",
+            "with": {}
+          },
+          "then": {
+            "kind": "readModel",
+            "readModel": "OrderListView",
+            "rows": [
+              {
+                "orderId": "o-1",
+                "customerId": "c-7",
+                "quantity": 2,
+                "reason": null
+              }
+            ]
+          },
+          "test": null,
+          "testResolved": {
+            "status": "not-checked",
+            "path": null,
+            "line": null
+          },
+          "note": null
+        }
+      ],
+      "schedule": null,
+      "doc": null
+    },
+    {
+      "id": "shipping.nightly_reship",
+      "bc": "shipping",
+      "name": "nightly_reship",
+      "kind": "automation",
+      "status": "live",
+      "owner": "shipping-team",
+      "summary": "Re-ship orders the carrier has not collected by the end of the day.",
+      "language": "java",
+      "tier": "cqrs-es",
+      "lane": "decider",
+      "path": "src/main/java/com/example/shipping/automations/nightly_reship",
+      "package": "com.example.shipping.automations.nightly_reship",
+      "files": [
+        "NightlyReship.java"
+      ],
+      "handles": [],
+      "serves": [],
+      "publishes": [],
+      "consumes": [],
+      "dispatches": [
+        "ShipOrder"
+      ],
+      "writes": [],
+      "owns": [],
+      "projections": [],
+      "reads": [],
+      "endpoints": [],
+      "invariants": [],
+      "externalSystem": null,
+      "direction": null,
+      "supersedes": null,
+      "dependsOn": [],
+      "tests": [],
+      "flags": [],
+      "flows": [],
+      "scenarios": [
+        {
+          "name": "nothing is stuck",
+          "given": [],
+          "when": {
+            "type": "schedule",
+            "name": null,
+            "with": {}
+          },
+          "then": {
+            "kind": "nothing"
+          },
+          "test": null,
+          "testResolved": {
+            "status": "not-checked",
+            "path": null,
+            "line": null
+          },
+          "note": null
+        }
+      ],
+      "schedule": {
+        "cron": "0 0 2 * * *",
+        "note": "after the carrier's last collection"
+      },
+      "doc": null
+    },
+    {
+      "id": "shipping.ship_on_payment",
+      "bc": "shipping",
+      "name": "ship_on_payment",
+      "kind": "automation",
+      "status": "live",
+      "owner": "shipping-team",
+      "summary": "Ship an order once its payment is charged.",
+      "language": "java",
+      "tier": "cqrs-es",
+      "lane": "decider",
+      "path": "src/main/java/com/example/shipping/automations/ship_on_payment",
+      "package": "com.example.shipping.automations.ship_on_payment",
+      "files": [
+        "ShipOnPayment.java"
+      ],
+      "handles": [],
+      "serves": [],
+      "publishes": [],
+      "consumes": [
+        "PaymentCharged"
+      ],
+      "dispatches": [
+        "ShipOrder"
+      ],
+      "writes": [],
+      "owns": [],
+      "projections": [],
+      "reads": [],
+      "endpoints": [],
+      "invariants": [],
+      "externalSystem": null,
+      "direction": null,
+      "supersedes": null,
+      "dependsOn": [],
+      "tests": [],
+      "flags": [],
+      "flows": [
+        "checkout"
+      ],
+      "scenarios": [
+        {
+          "name": "ships a paid order",
+          "given": [],
+          "when": {
+            "type": "event",
+            "name": "PaymentCharged",
+            "with": {
+              "paymentId": "p-1",
+              "orderId": "o-1"
+            }
+          },
+          "then": {
+            "kind": "steps",
+            "steps": [
+              {
+                "type": "command",
+                "name": "ShipOrder",
+                "with": {
+                  "orderId": "o-1"
+                }
+              }
+            ]
+          },
+          "test": null,
+          "testResolved": {
+            "status": "not-checked",
+            "path": null,
+            "line": null
+          },
+          "note": null
+        }
+      ],
+      "schedule": null,
+      "doc": null
+    },
+    {
+      "id": "shipping.carrier_webhook",
+      "bc": "shipping",
+      "name": "carrier_webhook",
+      "kind": "translation",
+      "status": "live",
+      "owner": "shipping-team",
+      "summary": "Turn the carrier's delivery notices into events.",
+      "language": "java",
+      "tier": "cqrs-es",
+      "lane": "decider",
+      "path": "src/main/java/com/example/shipping/external_systems/carrier_webhook",
+      "package": "com.example.shipping.external_systems.carrier_webhook",
+      "files": [
+        "CarrierWebhook.java"
+      ],
+      "handles": [],
+      "serves": [],
+      "publishes": [
+        "ShipmentDelivered"
+      ],
+      "consumes": [
+        "DeliveryNotice"
+      ],
+      "dispatches": [],
+      "writes": [],
+      "owns": [],
+      "projections": [],
+      "reads": [],
+      "endpoints": [],
+      "invariants": [],
+      "externalSystem": "carrier",
+      "direction": "inbound",
+      "supersedes": null,
+      "dependsOn": [],
+      "tests": [],
+      "flags": [
+        {
+          "level": "warn",
+          "text": "consumes DeliveryNotice, which no slice in scope publishes (dangling edge)"
+        }
+      ],
+      "flows": [],
+      "scenarios": [
+        {
+          "name": "records a delivery",
+          "given": [],
+          "when": {
+            "type": "external",
+            "name": "DeliveryNotice",
+            "with": {
+              "trackingId": "t-9"
+            }
+          },
+          "then": {
+            "kind": "steps",
+            "steps": [
+              {
+                "type": "event",
+                "name": "ShipmentDelivered",
+                "with": {
+                  "orderId": "o-1",
+                  "deliveredAt": "2026-10-08T10:00:00Z"
+                }
+              }
+            ]
+          },
+          "test": null,
+          "testResolved": {
+            "status": "not-checked",
+            "path": null,
+            "line": null
+          },
+          "note": null
+        }
+      ],
+      "schedule": null,
+      "doc": null
+    },
+    {
+      "id": "shipping.ship_order",
+      "bc": "shipping",
+      "name": "ship_order",
+      "kind": "command",
+      "status": "live",
+      "owner": "shipping-team",
+      "summary": "Hand an order to the carrier.",
+      "language": "java",
+      "tier": "cqrs-es",
+      "lane": "decider",
+      "path": "src/main/java/com/example/shipping/use_cases/ship_order",
+      "package": "com.example.shipping.use_cases.ship_order",
+      "files": [
+        "ShipOrder.java"
+      ],
+      "handles": [
+        "ShipOrder"
+      ],
+      "serves": [],
+      "publishes": [
+        "OrderShipped"
+      ],
+      "consumes": [],
+      "dispatches": [],
+      "writes": [
+        "Shipment"
+      ],
+      "owns": [],
+      "projections": [],
+      "reads": [],
+      "endpoints": [],
+      "invariants": [],
+      "externalSystem": null,
+      "direction": null,
+      "supersedes": null,
+      "dependsOn": [],
+      "tests": [],
+      "flags": [],
+      "flows": [
+        "checkout"
+      ],
+      "scenarios": [],
+      "schedule": null,
+      "doc": null
+    }
+  ],
+  "messages": [
+    {
+      "name": "CancelOrder",
+      "type": "command",
+      "identity": "orderId: String",
+      "fields": [
+        "orderId: String",
+        "reason: String"
+      ],
+      "declaredIn": "src/main/java/com/example/orders/use_cases/cancel_order/CancelOrder.java",
+      "version": null,
+      "schema": null,
+      "idempotencyKey": null,
+      "summary": null
+    },
+    {
+      "name": "ChargePayment",
+      "type": "command",
+      "identity": "orderId: String",
+      "fields": [
+        "orderId: String",
+        "amount: long"
+      ],
+      "declaredIn": "src/main/java/com/example/billing/use_cases/charge_payment/ChargePayment.java",
+      "version": null,
+      "schema": null,
+      "idempotencyKey": null,
+      "summary": null
+    },
+    {
+      "name": "PlaceOrder",
+      "type": "command",
+      "identity": "orderId: String",
+      "fields": [
+        "orderId: String",
+        "customerId: String",
+        "quantity: int"
+      ],
+      "declaredIn": "src/main/java/com/example/orders/use_cases/place_order/PlaceOrder.java",
+      "version": null,
+      "schema": null,
+      "idempotencyKey": null,
+      "summary": null
+    },
+    {
+      "name": "RefundPayment",
+      "type": "command",
+      "identity": "paymentId: String",
+      "fields": [
+        "paymentId: String",
+        "amount: long"
+      ],
+      "declaredIn": "src/main/java/com/example/billing/use_cases/refund_payment/RefundPayment.java",
+      "version": null,
+      "schema": null,
+      "idempotencyKey": null,
+      "summary": null
+    },
+    {
+      "name": "ShipOrder",
+      "type": "command",
+      "identity": "orderId: String",
+      "fields": [
+        "orderId: String"
+      ],
+      "declaredIn": "src/main/java/com/example/shipping/use_cases/ship_order/ShipOrder.java",
+      "version": null,
+      "schema": null,
+      "idempotencyKey": null,
+      "summary": null
+    },
+    {
+      "name": "DeliveryNotice",
+      "type": "event",
+      "identity": null,
+      "fields": [],
+      "declaredIn": null,
+      "version": null,
+      "schema": null,
+      "idempotencyKey": null,
+      "summary": "No declaration in scope — its payload is not known here."
+    },
+    {
+      "name": "OrderCancelled",
+      "type": "event",
+      "identity": "orderId: String",
+      "fields": [
+        "orderId: String",
+        "reason: String"
+      ],
+      "declaredIn": "src/main/java/com/example/orders/events/OrderCancelled.java",
+      "version": null,
+      "schema": null,
+      "idempotencyKey": null,
+      "summary": null
+    },
+    {
+      "name": "OrderPlaced",
+      "type": "event",
+      "identity": "orderId: String",
+      "fields": [
+        "orderId: String",
+        "customerId: String",
+        "quantity: int"
+      ],
+      "declaredIn": "src/main/java/com/example/orders/events/OrderPlaced.java",
+      "version": null,
+      "schema": null,
+      "idempotencyKey": null,
+      "summary": null
+    },
+    {
+      "name": "OrderShipped",
+      "type": "event",
+      "identity": "orderId: String",
+      "fields": [
+        "orderId: String",
+        "carrier: String"
+      ],
+      "declaredIn": "src/main/java/com/example/shipping/events/OrderShipped.java",
+      "version": null,
+      "schema": null,
+      "idempotencyKey": null,
+      "summary": null
+    },
+    {
+      "name": "PaymentCharged",
+      "type": "event",
+      "identity": "paymentId: String",
+      "fields": [
+        "paymentId: String",
+        "orderId: String",
+        "amount: long"
+      ],
+      "declaredIn": "src/main/java/com/example/billing/events/PaymentCharged.java",
+      "version": null,
+      "schema": null,
+      "idempotencyKey": null,
+      "summary": null
+    },
+    {
+      "name": "PaymentRefunded",
+      "type": "event",
+      "identity": "paymentId: String",
+      "fields": [
+        "paymentId: String",
+        "amount: long"
+      ],
+      "declaredIn": "src/main/java/com/example/billing/events/PaymentRefunded.java",
+      "version": null,
+      "schema": null,
+      "idempotencyKey": null,
+      "summary": null
+    },
+    {
+      "name": "ShipmentDelivered",
+      "type": "event",
+      "identity": "orderId: String",
+      "fields": [
+        "orderId: String",
+        "deliveredAt: String"
+      ],
+      "declaredIn": "src/main/java/com/example/shipping/events/ShipmentDelivered.java",
+      "version": null,
+      "schema": null,
+      "idempotencyKey": null,
+      "summary": null
+    }
+  ],
+  "flows": [
+    {
+      "event": "OrderPlaced",
+      "bc": "orders",
+      "from": [
+        "orders.place_order"
+      ],
+      "to": [
+        "billing.charge_on_order",
+        "orders.order_history",
+        "orders.order_list"
+      ],
+      "crossContext": true,
+      "dangling": false
+    },
+    {
+      "event": "PaymentCharged",
+      "bc": "billing",
+      "from": [
+        "billing.charge_payment"
+      ],
+      "to": [
+        "billing.payment_list",
+        "shipping.ship_on_payment"
+      ],
+      "crossContext": true,
+      "dangling": false
+    },
+    {
+      "event": "DeliveryNotice",
+      "bc": "shipping",
+      "from": [],
+      "to": [
+        "shipping.carrier_webhook"
+      ],
+      "crossContext": false,
+      "dangling": true
+    },
+    {
+      "event": "OrderCancelled",
+      "bc": "orders",
+      "from": [
+        "orders.cancel_order"
+      ],
+      "to": [
+        "orders.cancellation_mailer",
+        "orders.order_list"
+      ],
+      "crossContext": false,
+      "dangling": false
+    },
+    {
+      "event": "OrderShipped",
+      "bc": "shipping",
+      "from": [
+        "shipping.ship_order"
+      ],
+      "to": [],
+      "crossContext": false,
+      "dangling": false
+    },
+    {
+      "event": "PaymentRefunded",
+      "bc": "billing",
+      "from": [
+        "billing.refund_payment"
+      ],
+      "to": [
+        "billing.payment_list"
+      ],
+      "crossContext": false,
+      "dangling": false
+    },
+    {
+      "event": "ShipmentDelivered",
+      "bc": "shipping",
+      "from": [
+        "shipping.carrier_webhook"
+      ],
+      "to": [],
+      "crossContext": false,
+      "dangling": false
+    }
+  ],
+  "writers": [
+    {
+      "target": "Order",
+      "kind": "aggregate",
+      "bcs": [
+        "orders"
+      ],
+      "slices": [
+        "orders.cancel_order",
+        "orders.place_order"
+      ],
+      "flag": null
+    },
+    {
+      "target": "OrderHistoryView",
+      "kind": "read-model",
+      "bcs": [
+        "orders"
+      ],
+      "slices": [
+        "orders.order_history"
+      ],
+      "flag": null
+    },
+    {
+      "target": "OrderListView",
+      "kind": "read-model",
+      "bcs": [
+        "orders"
+      ],
+      "slices": [
+        "orders.order_list"
+      ],
+      "flag": null
+    },
+    {
+      "target": "Payment",
+      "kind": "aggregate",
+      "bcs": [
+        "billing"
+      ],
+      "slices": [
+        "billing.charge_payment",
+        "billing.refund_payment"
+      ],
+      "flag": null
+    },
+    {
+      "target": "PaymentListView",
+      "kind": "read-model",
+      "bcs": [
+        "billing"
+      ],
+      "slices": [
+        "billing.payment_list"
+      ],
+      "flag": null
+    },
+    {
+      "target": "Shipment",
+      "kind": "aggregate",
+      "bcs": [
+        "shipping"
+      ],
+      "slices": [
+        "shipping.ship_order"
+      ],
+      "flag": null
+    }
+  ],
+  "crossReads": [],
+  "notes": [
+    "NOT MAPPED — did not parse: src/main/java/com/example/orders/use_cases/amend_order/slice.yaml"
+  ],
+  "processes": [
+    {
+      "id": "checkout",
+      "name": "checkout",
+      "declared": true,
+      "color": 6,
+      "bcs": [
+        "billing",
+        "orders",
+        "shipping"
+      ],
+      "sliceIds": [
+        "orders.place_order",
+        "billing.charge_on_order",
+        "orders.order_list",
+        "billing.charge_payment",
+        "billing.payment_list",
+        "shipping.ship_on_payment",
+        "shipping.ship_order"
+      ],
+      "entries": [
+        "orders.place_order"
+      ],
+      "links": [
+        {
+          "to": "~unattached:orders",
+          "via": [
+            "OrderPlaced"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "returns",
+      "name": "returns",
+      "declared": true,
+      "color": 9,
+      "bcs": [
+        "billing"
+      ],
+      "sliceIds": [
+        "billing.refund_payment",
+        "billing.payment_list"
+      ],
+      "entries": [
+        "billing.refund_payment"
+      ],
+      "links": []
+    },
+    {
+      "id": "~orders.cancel_order",
+      "name": "cancel order",
+      "declared": false,
+      "color": 2,
+      "bcs": [
+        "orders"
+      ],
+      "sliceIds": [
+        "orders.cancel_order",
+        "orders.cancellation_mailer"
+      ],
+      "entries": [
+        "orders.cancel_order"
+      ],
+      "links": [
+        {
+          "to": "checkout",
+          "via": [
+            "OrderCancelled"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "~shipping.carrier_webhook",
+      "name": "carrier webhook",
+      "declared": false,
+      "color": 10,
+      "bcs": [
+        "shipping"
+      ],
+      "sliceIds": [
+        "shipping.carrier_webhook"
+      ],
+      "entries": [
+        "shipping.carrier_webhook"
+      ],
+      "links": []
+    },
+    {
+      "id": "~shipping.nightly_reship",
+      "name": "nightly reship",
+      "declared": false,
+      "color": 3,
+      "bcs": [
+        "shipping"
+      ],
+      "sliceIds": [
+        "shipping.nightly_reship"
+      ],
+      "entries": [
+        "shipping.nightly_reship"
+      ],
+      "links": [
+        {
+          "to": "checkout",
+          "via": [
+            "ShipOrder"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "~unattached:orders",
+      "name": "unattached",
+      "declared": false,
+      "color": 1,
+      "bcs": [
+        "orders"
+      ],
+      "sliceIds": [
+        "orders.order_history",
+        "src/main/java/com/example/orders/use_cases/amend_order"
+      ],
+      "entries": [
+        "orders.order_history"
+      ],
+      "links": []
+    }
+  ],
+  "issues": [
+    {
+      "id": "map-parse-error:src/main/java/com/example/orders/use_cases/amend_order",
+      "code": "map-parse-error",
+      "level": "error",
+      "text": "slice.yaml is not valid YAML (line 15) — this slice is missing from every edge of the map. Repair: /essentials:slice-check --fix-manifests (manifest-guide.md §3)",
+      "target": {
+        "kind": "slice",
+        "id": "src/main/java/com/example/orders/use_cases/amend_order",
+        "part": null
+      },
+      "source": "map"
+    },
+    {
+      "id": "map-dangling-consume:shipping.carrier_webhook:event:DeliveryNotice",
+      "code": "map-dangling-consume",
+      "level": "warn",
+      "text": "consumes DeliveryNotice, which no slice in scope publishes (dangling edge)",
+      "target": {
+        "kind": "slice",
+        "id": "shipping.carrier_webhook",
+        "part": "event:DeliveryNotice"
+      },
+      "source": "map"
+    },
+    {
+      "id": "scenario-given-unpublished:billing.refund_payment:scenario:refunds a returned order:OrderReturned",
+      "code": "scenario-given-unpublished",
+      "level": "warn",
+      "text": "scenario `refunds a returned order`: given event OrderReturned, which no slice in scope publishes",
+      "target": {
+        "kind": "slice",
+        "id": "billing.refund_payment",
+        "part": "scenario:refunds a returned order:OrderReturned"
+      },
+      "source": "atlas"
+    },
+    {
+      "id": "scenario-test-missing:orders.cancel_order:scenario:cancelling twice is a no-op",
+      "code": "scenario-test-missing",
+      "level": "warn",
+      "text": "scenario `cancelling twice is a no-op`: test `CancelOrderTest#cancellingTwiceIsANoOp` resolves to no test under src/test/java",
+      "target": {
+        "kind": "slice",
+        "id": "orders.cancel_order",
+        "part": "scenario:cancelling twice is a no-op"
+      },
+      "source": "atlas"
+    },
+    {
+      "id": "completeness-unsourced-column:orders.order_list:readModel:OrderListView.discount",
+      "code": "completeness-unsourced-column",
+      "level": "info",
+      "text": "column `discount` of OrderListView matches no field of OrderPlaced, OrderCancelled",
+      "target": {
+        "kind": "slice",
+        "id": "orders.order_list",
+        "part": "readModel:OrderListView.discount"
+      },
+      "source": "atlas"
+    },
+    {
+      "id": "flow-undeclared:orders",
+      "code": "flow-undeclared",
+      "level": "info",
+      "text": "3 of 5 slices in `orders` declare no flow — grouped into processes by cause and effect",
+      "target": {
+        "kind": "context",
+        "id": "orders",
+        "part": null
+      },
+      "source": "atlas"
+    },
+    {
+      "id": "flow-undeclared:shipping.carrier_webhook",
+      "code": "flow-undeclared",
+      "level": "info",
+      "text": "declares no `flow:` — grouped into a process by cause and effect",
+      "target": {
+        "kind": "slice",
+        "id": "shipping.carrier_webhook",
+        "part": null
+      },
+      "source": "atlas"
+    },
+    {
+      "id": "flow-undeclared:shipping.nightly_reship",
+      "code": "flow-undeclared",
+      "level": "info",
+      "text": "declares no `flow:` — grouped into a process by cause and effect",
+      "target": {
+        "kind": "slice",
+        "id": "shipping.nightly_reship",
+        "part": null
+      },
+      "source": "atlas"
+    },
+    {
+      "id": "map-not-checked:orders.cancellation_mailer:11(b) handled events",
+      "code": "map-not-checked",
+      "level": "info",
+      "text": "not checked — 11(b) handled events: the manifest declares OrderCancelled but no @MessageHandler / @Handler / @EventListener method was found in the slice's source, so the declaration cannot be checked against code",
+      "target": {
+        "kind": "slice",
+        "id": "orders.cancellation_mailer",
+        "part": "11(b) handled events"
+      },
+      "source": "source"
+    },
+    {
+      "id": "scenario-none:billing.charge_payment",
+      "code": "scenario-none",
+      "level": "info",
+      "text": "declares no scenarios — its board shows invariants and test kinds instead",
+      "target": {
+        "kind": "slice",
+        "id": "billing.charge_payment",
+        "part": null
+      },
+      "source": "atlas"
+    },
+    {
+      "id": "scenario-none:billing.payment_list",
+      "code": "scenario-none",
+      "level": "info",
+      "text": "declares no scenarios — its board shows invariants and test kinds instead",
+      "target": {
+        "kind": "slice",
+        "id": "billing.payment_list",
+        "part": null
+      },
+      "source": "atlas"
+    },
+    {
+      "id": "scenario-none:orders.cancellation_mailer",
+      "code": "scenario-none",
+      "level": "info",
+      "text": "declares no scenarios — its board shows invariants and test kinds instead",
+      "target": {
+        "kind": "slice",
+        "id": "orders.cancellation_mailer",
+        "part": null
+      },
+      "source": "atlas"
+    },
+    {
+      "id": "scenario-none:orders.order_history",
+      "code": "scenario-none",
+      "level": "info",
+      "text": "declares no scenarios — its board shows invariants and test kinds instead",
+      "target": {
+        "kind": "slice",
+        "id": "orders.order_history",
+        "part": null
+      },
+      "source": "atlas"
+    },
+    {
+      "id": "scenario-none:shipping.ship_order",
+      "code": "scenario-none",
+      "level": "info",
+      "text": "declares no scenarios — its board shows invariants and test kinds instead",
+      "target": {
+        "kind": "slice",
+        "id": "shipping.ship_order",
+        "part": null
+      },
+      "source": "atlas"
+    },
+    {
+      "id": "scenario-unknown-field:orders.cancel_order:scenario:rejects an unknown order:CancelOrder.priority",
+      "code": "scenario-unknown-field",
+      "level": "info",
+      "text": "scenario `rejects an unknown order`: `priority` is not a payload field of CancelOrder (orderId, reason)",
+      "target": {
+        "kind": "slice",
+        "id": "orders.cancel_order",
+        "part": "scenario:rejects an unknown order:CancelOrder.priority"
+      },
+      "source": "atlas"
+    }
+  ],
+  "lineage": {
+    "fields": {
+      "amount": [
+        "msg:command:ChargePayment",
+        "msg:command:RefundPayment",
+        "msg:event:PaymentCharged",
+        "msg:event:PaymentRefunded",
+        "rm:PaymentListView"
+      ],
+      "carrier": [
+        "msg:event:OrderShipped"
+      ],
+      "customerid": [
+        "msg:command:PlaceOrder",
+        "msg:event:OrderPlaced",
+        "rm:OrderHistoryView",
+        "rm:OrderListView"
+      ],
+      "deliveredat": [
+        "msg:event:ShipmentDelivered"
+      ],
+      "discount": [
+        "rm:OrderListView"
+      ],
+      "lastmodified": [
+        "rm:OrderHistoryView"
+      ],
+      "orderid": [
+        "msg:command:CancelOrder",
+        "msg:command:ChargePayment",
+        "msg:command:PlaceOrder",
+        "msg:command:ShipOrder",
+        "msg:event:OrderCancelled",
+        "msg:event:OrderPlaced",
+        "msg:event:OrderShipped",
+        "msg:event:PaymentCharged",
+        "msg:event:ShipmentDelivered",
+        "rm:OrderHistoryView",
+        "rm:OrderListView",
+        "rm:PaymentListView"
+      ],
+      "paymentid": [
+        "msg:command:RefundPayment",
+        "msg:event:PaymentCharged",
+        "msg:event:PaymentRefunded",
+        "rm:PaymentListView"
+      ],
+      "quantity": [
+        "msg:command:PlaceOrder",
+        "msg:event:OrderPlaced",
+        "rm:OrderHistoryView",
+        "rm:OrderListView"
+      ],
+      "reason": [
+        "msg:command:CancelOrder",
+        "msg:event:OrderCancelled",
+        "rm:OrderListView"
+      ],
+      "version": [
+        "rm:OrderListView"
+      ]
+    },
+    "technicalColumns": [
+      "id",
+      "version",
+      "createdAt",
+      "updatedAt",
+      "lastModified",
+      "etag"
+    ]
+  }
+}

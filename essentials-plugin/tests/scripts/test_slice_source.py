@@ -143,6 +143,7 @@ class ExitCodes(unittest.TestCase):
         "lexer": (0, 0),
         "raw-ids": (0, 1),
         "unparsed": (3, 3),
+        "tests": (3, 0),  # facts: test files unparsed; check: never reads test source
     }
 
     def test_case_exit_codes(self):
@@ -351,6 +352,49 @@ class Rules(unittest.TestCase):
                 with self.subTest(case=case, gate=f["gate"]):
                     self.assertEqual(f["id"], ss.gate_id(f["gate"]))
                     self.assertRegex(f["id"], r"^ESS-G(6|11b|14)$")
+
+
+    def test_test_index(self):
+        t = self.facts["tests"]["tests"]
+        self.assertEqual(t["roots"], ["src/integrationTest/java", "src/test/java", "src/test/kotlin"],
+                         "testFixtures, resources and main are not test roots")
+        methods = {(c["name"], m["name"]): m["displayName"] for c in t["classes"] for m in c["methods"]}
+        self.assertEqual(sorted(methods), sorted([
+            ("OrdersIT", "placesAndCancels"),
+            ("CancelOrderDeciderTest", "cancelsPlacedOrder"),
+            ("CancelOrderDeciderTest", "rejectsUnknownOrder"),
+            ("CancelOrderDeciderTest", "fullyQualifiedAnnotation"),
+            ("CancelOrderDeciderTest", "parameterised"),
+            ("CancelOrderDeciderTest", "repeated"),
+            ("CancelOrderDeciderTest", "factory"),
+            ("CancelOrderDeciderTest", "template"),
+            ("CancelOrderDeciderTest.WhenCancelled", "secondCancelIsNoOp"),
+            ("CancelOrderDeciderTest.WhenCancelled.Twice", "stillNoOp"),
+            ("CancelOrderTest", "cancels a placed order"),
+            ("CancelOrderTest", "cancelling twice is a no-op"),
+            ("CancelOrderTest", "rejectsUnknown"),
+            ("CancelOrderTest.when unpaid", "auto cancels"),
+            ("TemplatedNameTest", "templated"),
+        ]), "no helper, no commented or string-borne @Test, nothing from main, testFixtures or target/")
+        self.assertEqual(methods[("CancelOrderDeciderTest", "rejectsUnknownOrder")], "rejects an unknown order")
+        self.assertEqual(methods[("CancelOrderDeciderTest.WhenCancelled", "secondCancelIsNoOp")],
+                         "cancelling twice is a no-op", "a concatenation of literals is readable")
+        self.assertEqual(methods[("CancelOrderTest", "cancelling twice is a no-op")], "idempotent retry")
+        self.assertIsNone(methods[("TemplatedNameTest", "templated")], "a templated display name is never guessed")
+        self.assertNotIn("BrokenTest", {c["name"] for c in t["classes"]}, "an unreadable file contributes no class")
+        self.assertEqual(sorted((u["file"].rsplit("/", 1)[-1], u["what"]) for u in self.facts["tests"]["unparsed"]), [
+            ("BrokenTest.kt", "test source file"),
+            ("StrayTest.kt", "@Test"),
+            ("TemplatedNameTest.kt", "@DisplayName on TemplatedNameTest.templated"),
+        ])
+        for c in t["classes"]:
+            self.assertEqual([m["line"] for m in c["methods"]], sorted(m["line"] for m in c["methods"]))
+        self.assertEqual([(c["path"], c["name"]) for c in t["classes"]],
+                         sorted((c["path"], c["name"]) for c in t["classes"]))
+        self.assertEqual(self.check["tests"]["unparsed"], [], "--check never reads test source")
+
+    def test_no_test_roots_is_an_empty_index(self):
+        self.assertEqual(self.facts["java-clean"]["tests"], {"roots": [], "classes": []})
 
 
 class Units(unittest.TestCase):

@@ -28,11 +28,17 @@ Usage
     slice-index.py map   [ROOT] [--bc BC] [--source-facts FILE] [--source-check FILE] [--sha SHA] [--project NAME]
                          [--root-label LABEL] [--skipped TEXT]... [--repair-braced-paths]
     slice-index.py html  [ROOT] --out FILE [--template FILE]  (+ every `map` option)
+    slice-index.py atlas [ROOT] --out FILE [--before-ref REF | --before-map FILE] [--lens LENS] [--focus ID]
+                         [--template FILE]  (+ every `map` option; --bc is the initial view, not a filter)
     slice-index.py graph [ROOT] [--bc BC] [--json] [--repair-braced-paths]
     slice-index.py query [ROOT] WHAT NAME [--method M] [--json]
 
     map     the slice-map data contract (commands/slice-map.md §6) as JSON on stdout
     html    the same data substituted into the slice-map page, written to --out
+    atlas   the Slice Atlas page (docs/slice-atlas-design.md): the map plus a diff against a baseline
+            (--before-ref builds it from `git archive REF`, --before-map reads an earlier `map` JSON)
+            and the layout, inlined into references/slice/atlas/atlas.html and its lens-*.js; prints
+            one summary line. The computation is scripts/slice_atlas.py and slice_atlas_layout.py
     graph   the terminal --view graph: message chains from each entry point, longest first,
             each node expanded once, a repeat on the current path marked as a cycle
     query   locate the owning slice from manifests (references/slice/change-procedure.md §3).
@@ -55,7 +61,8 @@ Exit codes
     0   done
     1   done, but at least one manifest did not parse. `map` and `graph` still emit output, with the
         broken manifest carried as an `error` row; `html` writes NOTHING, because a page that
-        silently omits a slice misleads. `query` exits 1 when nothing matched
+        silently omits a slice misleads. `atlas` writes its page, which draws each broken manifest
+        as an error node under a "map incomplete" banner. `query` exits 1 when nothing matched
     2   could not run — bad arguments, unreadable input, no YAML parser
     3   no slice.yaml under ROOT: nothing is declared, so there is nothing to map
         (/essentials:slice-discover is the command for that case)
@@ -64,12 +71,18 @@ Exit codes
 from __future__ import annotations
 
 import argparse
+import importlib
 import json
 import os
 import re
 import subprocess
 import sys
+import tarfile
+import tempfile
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import slice_atlas  # noqa: E402  (beside this script: the Atlas fields, issues, diff and page)
 
 SKIP_DIRS = {".git", "target", "build", "out", "node_modules", ".idea", ".gradle", "dist"}
 PLACEHOLDER = "const SLICE_MAP = /* __SLICE_MAP_DATA__ */ null;"
@@ -263,6 +276,13 @@ def normalise(rel, doc):
         # object forms carry what messages() needs; dropped from the output
         "_raw_handles": _list(doc.get("handles")),
         "_raw_publishes": _list(doc.get("publishes")),
+        # read by atlas_fields() once the source facts are merged, so the Atlas keys end the row
+        "_raw_flow": doc.get("flow"),
+        "_raw_scenarios": doc.get("scenarios"),
+        "_raw_schedule": doc.get("schedule"),
+        "_maps": [m for m in _list(doc.get("maps")) if isinstance(m, dict) and isinstance(m.get("from"), str)
+                  and isinstance(m.get("to"), str)],
+        "_codes": [],
     }
 
 
@@ -277,6 +297,7 @@ def broken_row(rel, error):
         "flags": [{"level": "error", "text": error + " — this slice is missing from every edge of the map. "
                    "Repair: /essentials:slice-check --fix-manifests (manifest-guide.md §3)"}],
         "error": True,
+        "_codes": [("map-parse-error", None)],
     }
 
 
@@ -290,8 +311,11 @@ def inbound(s):
     return out
 
 
-def flag(s, level, text):
+def flag(s, level, text, code, part=None):
+    """A divergence flag on a slice. `code` (and `part`, which tells two flags of one code on one
+    slice apart) make it an Atlas issue: slice_atlas.flag_issues()."""
     s["flags"].append({"level": level, "text": text})
+    s["_codes"].append((code, part))
 
 
 # ---------------------------------------------------------------- the index
@@ -312,7 +336,7 @@ class Index:
                     self.repaired.append(rel)
                     flag(s, "warn", "slice.yaml is not valid YAML on disk (unquoted path containing '{' on line "
                          + ", ".join(map(str, repaired)) + "); mapped from an in-memory corrected copy. "
-                         "Repair: /essentials:slice-check --fix-manifests")
+                         "Repair: /essentials:slice-check --fix-manifests", "map-parse-error")
                 self.slices.append(s)
         self.good = [s for s in self.slices if not s.get("error")]
         self.by_id = {}
@@ -328,14 +352,16 @@ class Index:
         for s in self.good:
             if counts[s["id"]] > 1:
                 others = [o["path"] for o in self.good if o["id"] == s["id"] and o is not s]
-                flag(s, "error", f"slice id '{s['id']}' is also declared by: " + ", ".join(others))
+                flag(s, "error", f"slice id '{s['id']}' is also declared by: " + ", ".join(others),
+                     "map-duplicate-id", s["path"])
             want = KIND_DIR.get(s["kind"])
             if want and Path(s["path"]).parent.name != want:
                 flag(s, "warn", f"{'an' if s['kind'][0] in 'aeiou' else 'a'} {s['kind']} slice outside {want}/ (it is under "
-                     f"{Path(s['path']).parent.as_posix()}/)")
+                     f"{Path(s['path']).parent.as_posix()}/)", "map-kind-location")
             for event in inbound(s):
                 if event not in published:
-                    flag(s, "warn", f"consumes {event}, which no slice in scope publishes (dangling edge)")
+                    flag(s, "warn", f"consumes {event}, which no slice in scope publishes (dangling edge)",
+                         "map-dangling-consume", "event:" + event)
         self.twins()
 
     def twins(self):
@@ -348,15 +374,16 @@ class Index:
                 continue
             old = self.by_id.get(target)
             if old is None:
-                flag(s, "warn", f"supersedes '{target}', which is not a slice in scope")
+                flag(s, "warn", f"supersedes '{target}', which is not a slice in scope", "map-twin-broken",
+                     "supersedes:" + target)
                 continue
             self.twin_pairs.add(frozenset((s["id"], old["id"])))
             if old["status"] != "deprecated":
                 flag(old, "warn", f"superseded by {s['id']} but status is {old['status']} — a migration "
-                     "twin moves the old slice to status: deprecated")
+                     "twin moves the old slice to status: deprecated", "map-twin-broken", "supersededBy:" + s["id"])
             else:
                 flag(old, "info", f"superseded by {s['id']} — retirement outstanding: delete this slice "
-                     "once consumers have swapped over")
+                     "once consumers have swapped over", "map-twin-broken", "supersededBy:" + s["id"])
 
     def home_bcs(self):
         """Target name → the BCs whose slices write (aggregate) or own (read model) it."""
@@ -748,7 +775,9 @@ def merge_source_facts(index, facts, messages, contexts):
             continue
         where = f" ({f['file']}:{f['line']})" if f.get("file") and f.get("line") else ""
         gate = f"{f['gate']}: " if f.get("gate") else ""
-        flag(s, "warn", f"{gate}{f.get('message', '')}{where}")
+        code = "map-handled-undeclared" if str(f["gate"]).startswith("11(b)") else "map-endpoint-missing"
+        flag(s, "warn", f"{gate}{f.get('message', '')}{where}", code,
+             f"{f['gate']}@{f['file']}" if f.get("file") else str(f["gate"]))
 
     # A check that had no source to run against must not read as a pass.
     for u in facts.get("unverified", []):
@@ -756,7 +785,7 @@ def merge_source_facts(index, facts, messages, contexts):
             continue
         s = index.by_id.get(u.get("slice"))
         if s is not None:
-            flag(s, "info", f"not checked — {u['gate']}: {u.get('reason', '')}")
+            flag(s, "info", f"not checked — {u['gate']}: {u.get('reason', '')}", "map-not-checked", str(u["gate"]))
 
 
 # ---------------------------------------------------------------- commands
@@ -792,6 +821,7 @@ def build_map(index, args):
     notes = []
     messages = index.messages()
     contexts = index.contexts(notes)
+    docs = []
     if args.source_facts or args.source_check:
         args.source_facts = args.source_facts or []
         for source in args.source_facts + (args.source_check or []):
@@ -803,6 +833,7 @@ def build_map(index, args):
             if not isinstance(facts, dict):
                 raise UsageError(f"--source-facts {source} must hold a JSON object")
             merge_source_facts(index, facts, messages, contexts)
+            docs.append(facts)
     else:
         notes.append("package, files, message payloads and read-model columns come from source and were "
                      "not read (no --source-facts)")
@@ -816,13 +847,23 @@ def build_map(index, args):
     writers = index.writers()
     cross = index.cross_reads()
 
+    # The Atlas additions (slice_atlas.py): judged over the whole map, then cut to --bc below.
+    tests = next((d["tests"] for d in docs if isinstance(d.get("tests"), dict)), None)
+    atlas_fields(index, root, tests)
+    processes = slice_atlas.processes(index.slices)
+    issues = [i for s in index.slices for i in slice_atlas.flag_issues(s, s["_codes"])]
+    issues += slice_atlas.atlas_issues(index.slices, index.slices, messages, tests,
+                                       any("messages" in d for d in docs))
+    issues = slice_atlas.sort_issues(slice_atlas.aggregate(issues, index.slices))
+
     slices = []
     for s in index.slices:
-        row = {k: v for k, v in s.items() if not k.startswith("_")}
+        row = {k: v for k, v in s.items() if not k.startswith("_") and k not in ATLAS_KEYS}
         if row["kind"] != "view":
             row.pop("readModels", None)
         elif "readModels" not in row:
             row["readModels"] = []
+        row.update({k: s[k] for k in ATLAS_KEYS})
         slices.append(row)
 
     if args.bc:
@@ -836,6 +877,9 @@ def build_map(index, args):
         cross = [c for c in cross if c["from"] in keep or c["toBc"] == args.bc]
         names_in_scope = {n for s in slices for n in s["handles"] + s["dispatches"] + s["publishes"] + inbound(s)}
         messages = [m for m in messages if m["name"] in names_in_scope]
+        processes = [p for p in processes if args.bc in p["bcs"]]
+        issues = [i for i in issues if i["target"]["id"] in keep or i["target"] == {
+            "kind": "context", "id": args.bc, "part": None}]
 
     if args.root_label is not None:
         label = args.root_label
@@ -863,7 +907,29 @@ def build_map(index, args):
         "writers": writers,
         "crossReads": cross,
         "notes": notes,
+        "processes": processes,
+        "issues": issues,
+        "lineage": slice_atlas.lineage(messages, slices),
     }
+
+
+# The keys atlas_fields() adds to every row; they end the row in this order.
+ATLAS_KEYS = ("flows", "scenarios", "schedule", "doc")
+
+
+def atlas_fields(index, root, tests):
+    """`flow:` and `scenarios:` normalised, each scenario's `test:` resolved against slice-source's test
+    index, the schedule object, and the slice's CLAUDE.md as safe HTML (slice_atlas.py)."""
+    for s in index.slices:
+        scenarios, problems = slice_atlas.normalise_scenarios(s.get("_raw_scenarios"))
+        for sc in scenarios:
+            if sc["test"]:
+                sc["testResolved"] = slice_atlas.resolve_test(sc["test"], tests)
+        s["_scenario_problems"] = problems
+        s["flows"] = slice_atlas.normalise_flow(s.get("_raw_flow"))
+        s["scenarios"] = scenarios
+        s["schedule"] = slice_atlas.normalise_schedule(s.get("_raw_schedule"))
+        s["doc"] = slice_atlas.read_doc(root / s["path"])
 
 
 def cmd_map(args):
@@ -897,6 +963,108 @@ def cmd_html(args):
     Path(args.out).write_text(page.replace(PLACEHOLDER, "const SLICE_MAP = " + data + ";"), encoding="utf-8")
     print(f"slice-index: wrote {args.out}", file=sys.stderr)
     return 0
+
+
+def cmd_atlas(args):
+    """The Atlas page. Unlike `html` it writes a map with unparsed manifests (each an error node under a
+    "map incomplete" banner) and then exits 1 (design A7)."""
+    index = build_index(args)
+    if index is None:
+        return no_manifests(args)
+    initial_bc, args.bc = args.bc, None  # the atlas always maps everything; --bc is where it opens
+    data = build_map(index, args)
+    if initial_bc and initial_bc not in {c["id"] for c in data["contexts"]}:
+        raise UsageError(f"no slice declares bc: {initial_bc}")
+    data["diff"] = before_diff(args, data)
+    data["meta"].update({"atlasVersion": 1, "generatedBy": "slice-index.py atlas", "incomplete": len(index.broken),
+                         "initial": {"lens": args.lens, "focus": args.focus, "bc": initial_bc}})
+    data["layout"] = layout(data)
+    template = Path(args.template) if args.template else (
+        Path(__file__).resolve().parent.parent / "references" / "slice" / "atlas" / "atlas.html")
+    try:
+        page = slice_atlas.assemble(template, data)
+    except (OSError, ValueError) as exc:
+        raise UsageError(f"cannot assemble the page: {exc}")
+    try:
+        Path(args.out).write_text(page, encoding="utf-8")
+    except OSError as exc:
+        raise UsageError(f"cannot write {args.out}: {exc}")
+    print(atlas_summary(args.out, data, index.broken))
+    return 1 if index.broken else 0
+
+
+def layout(data):
+    """slice_atlas_layout.compute over the data, or None while that module is absent."""
+    try:
+        compute = getattr(importlib.import_module("slice_atlas_layout"), "compute")
+    except (ImportError, AttributeError):
+        return None
+    return compute({k: v for k, v in data.items() if k != "layout"})
+
+
+def before_diff(args, after):
+    if args.before_map:
+        try:
+            before = json.loads(Path(args.before_map).read_text(encoding="utf-8"))
+        except (OSError, ValueError) as exc:
+            raise UsageError(f"cannot read --before-map {args.before_map}: {exc}")
+        if not isinstance(before, dict) or not isinstance(before.get("slices"), list):
+            raise UsageError(f"--before-map {args.before_map} is not a slice-map JSON (no `slices` list)")
+        return slice_atlas.diff(before, after)
+    if not args.before_ref:
+        return None
+    with tempfile.TemporaryDirectory(prefix="slice-atlas-") as tmp:
+        try:
+            root, sha = slice_atlas.extract_ref(Path(args.root), args.before_ref, Path(tmp) / "tree")
+        except (OSError, ValueError, tarfile.TarError) as exc:
+            raise UsageError(f"--before-ref: {exc}")
+        before = before_map(args, root, sha, Path(tmp))
+    out = slice_atlas.diff(before, after)
+    out["before"].update({"sha": sha, "ref": args.before_ref})
+    return out
+
+
+def before_map(args, root, sha, tmp):
+    """The map of the baseline tree, built as the current one was: slice-source runs on it when the
+    current map was given source facts, so a source-derived issue is new or fixed, not appeared."""
+    ns = argparse.Namespace(**vars(args))
+    ns.root, ns.bc, ns.sha, ns.root_label = str(root), None, sha, args.before_ref
+    ns.source_facts, ns.source_check, ns.skipped = None, None, []
+    script = Path(__file__).resolve().parent / "slice-source.py"
+    for wanted, extra, attr in ((args.source_facts, [], "source_facts"), (args.source_check, ["--check"], "source_check")):
+        if not wanted:
+            continue
+        r = subprocess.run([sys.executable, str(script), str(root), "--json", *extra],
+                           capture_output=True, text=True, timeout=600)
+        if r.returncode not in (0, 1, 3):
+            raise UsageError(f"--before-ref: slice-source.py {' '.join(extra)} failed on the baseline: {r.stderr.strip()}")
+        path = tmp / f"{attr}.json"
+        path.write_text(r.stdout, encoding="utf-8")
+        setattr(ns, attr, [str(path)])
+    if not root.is_dir():
+        return {"meta": {"sha": sha}, "slices": [], "issues": []}
+    index = build_index(ns)
+    if index is None:
+        return {"meta": {"sha": sha}, "slices": [], "issues": []}
+    return build_map(index, ns)
+
+
+def atlas_summary(out, data, broken):
+    counts = {lvl: sum(1 for i in data["issues"] if i["level"] == lvl) for lvl in ("error", "warn", "info")}
+    line = (f"slice-index: wrote {out} — {data['meta']['sliceCount']} slices in {data['meta']['bcCount']} contexts"
+            f" · {len(data['processes'])} processes · issues {counts['error']} error, {counts['warn']} warn,"
+            f" {counts['info']} info")
+    d = data["diff"]
+    if d:
+        line += (f" · diff vs {d['before']['ref'] or 'before-map'} ({d['before']['sha']}): +{len(d['slices']['added'])}"
+                 f" −{len(d['slices']['removed'])} ~{len(d['slices']['changed'])} slices")
+        if d["before"]["issuesKnown"]:
+            line += f", issues +{len(d['issues']['new'])} new / −{len(d['issues']['fixed'])} fixed"
+    if data["layout"] is None:
+        line += " · no layout (slice_atlas_layout.py absent)"
+    if broken:
+        line += f" · map incomplete: {len(broken)} manifest{'s' if len(broken) > 1 else ''} did not parse"
+    return line
 
 
 def cmd_graph(args):
@@ -1073,6 +1241,17 @@ def main(argv=None):
     p.add_argument("--out", required=True, help="page to write — a path the user chose")
     p.add_argument("--template", help="slice-map-template.html (default: the plugin's)")
     p.set_defaults(fn=cmd_html)
+
+    p = sub.add_parser("atlas", help="the Slice Atlas page, written to --out")
+    map_opts(p)
+    p.add_argument("--out", required=True, help="page to write — a path the user chose")
+    p.add_argument("--template", help="atlas.html; its lens-*.js are read beside it (default: the plugin's)")
+    before = p.add_mutually_exclusive_group()
+    before.add_argument("--before-ref", metavar="REF", help="baseline for the Diff lens: ROOT as of this git ref")
+    before.add_argument("--before-map", metavar="FILE", help="baseline for the Diff lens: an earlier `map` JSON")
+    p.add_argument("--lens", choices=["atlas", "diff", "lineage", "matrix", "metro"], help="lens the page opens on")
+    p.add_argument("--focus", metavar="ID", help="slice, process or issue id the page opens focused on")
+    p.set_defaults(fn=cmd_atlas)
 
     p = sub.add_parser("graph", help="terminal --view graph")
     common(p)

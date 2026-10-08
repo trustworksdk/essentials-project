@@ -1,0 +1,837 @@
+{
+ "atlas": {
+  "bounds": {
+   "h": 1152,
+   "w": 2624,
+   "x": 0,
+   "y": 0
+  },
+  "bridges": [
+   {
+    "events": [
+     "OrderPlaced"
+    ],
+    "from": "orders",
+    "to": "payments"
+   }
+  ],
+  "cards": [
+   {
+    "ghost": false,
+    "h": 72,
+    "id": "~orders.place_order@orders|orders.place_order|trigger|POST /api/orders",
+    "lane": "trigger",
+    "name": "POST /api/orders",
+    "portal": false,
+    "role": "trigger",
+    "segment": "~orders.place_order@orders",
+    "slice": "orders.place_order",
+    "w": 168,
+    "x": 228,
+    "y": 160
+   },
+   {
+    "ghost": false,
+    "h": 72,
+    "id": "~orders.place_order@orders|orders.place_order|command|PlaceOrder",
+    "lane": "action",
+    "name": "PlaceOrder",
+    "portal": false,
+    "role": "command",
+    "segment": "~orders.place_order@orders",
+    "slice": "orders.place_order",
+    "w": 168,
+    "x": 228,
+    "y": 256
+   },
+   {
+    "ghost": false,
+    "h": 72,
+    "id": "~orders.place_order@orders|orders.place_order|event|OrderPlaced",
+    "lane": "stream:Order",
+    "name": "OrderPlaced",
+    "portal": false,
+    "role": "event",
+    "segment": "~orders.place_order@orders",
+    "slice": "orders.place_order",
+    "w": 168,
+    "x": 228,
+    "y": 352
+   },
+   {
+    "ghost": false,
+    "h": 72,
+    "id": "~unattached:payments@payments|payments.start_payment|automation|start_payment",
+    "lane": "trigger",
+    "name": "start_payment",
+    "portal": false,
+    "role": "automation",
+    "segment": "~unattached:payments@payments",
+    "slice": "payments.start_payment",
+    "w": 168,
+    "x": 836,
+    "y": 160
+   },
+   {
+    "ghost": false,
+    "h": 72,
+    "id": "~unattached:payments@payments|payments.start_payment|command|ChargePayment",
+    "lane": "action",
+    "name": "ChargePayment",
+    "portal": false,
+    "role": "command",
+    "segment": "~unattached:payments@payments",
+    "slice": "payments.start_payment",
+    "w": 168,
+    "x": 836,
+    "y": 256
+   },
+   {
+    "ghost": false,
+    "h": 72,
+    "id": "~unattached:payments@payments|payments.charge_payment|command|ChargePayment",
+    "lane": "action",
+    "name": "ChargePayment",
+    "portal": false,
+    "role": "command",
+    "segment": "~unattached:payments@payments",
+    "slice": "payments.charge_payment",
+    "w": 168,
+    "x": 1044,
+    "y": 256
+   },
+   {
+    "ghost": false,
+    "h": 72,
+    "id": "~unattached:payments@payments|payments.charge_payment|event|PaymentCharged",
+    "lane": "stream:Payment",
+    "name": "PaymentCharged",
+    "portal": false,
+    "role": "event",
+    "segment": "~unattached:payments@payments",
+    "slice": "payments.charge_payment",
+    "w": 168,
+    "x": 1044,
+    "y": 352
+   },
+   {
+    "ghost": false,
+    "h": 72,
+    "id": "~unattached:payments@payments|payments.charge_payment|event|PaymentFailed",
+    "lane": "stream:Payment",
+    "name": "PaymentFailed",
+    "portal": false,
+    "role": "event",
+    "segment": "~unattached:payments@payments",
+    "slice": "payments.charge_payment",
+    "w": 168,
+    "x": 1044,
+    "y": 436
+   },
+   {
+    "ghost": false,
+    "h": 72,
+    "id": "~unattached:payments@payments|payments.payment_list|trigger|GET /api/payments",
+    "lane": "trigger",
+    "name": "GET /api/payments",
+    "portal": false,
+    "role": "trigger",
+    "segment": "~unattached:payments@payments",
+    "slice": "payments.payment_list",
+    "w": 168,
+    "x": 1252,
+    "y": 160
+   },
+   {
+    "ghost": false,
+    "h": 72,
+    "id": "~unattached:payments@payments|payments.payment_list|view|payment_list_view",
+    "lane": "action",
+    "name": "payment_list_view",
+    "portal": false,
+    "role": "view",
+    "segment": "~unattached:payments@payments",
+    "slice": "payments.payment_list",
+    "w": 168,
+    "x": 1252,
+    "y": 256
+   },
+   {
+    "ghost": false,
+    "h": 72,
+    "id": "~unattached:payments@payments|payments.retry_payment|automation|retry_payment",
+    "lane": "trigger",
+    "name": "retry_payment",
+    "portal": false,
+    "role": "automation",
+    "segment": "~unattached:payments@payments",
+    "slice": "payments.retry_payment",
+    "w": 168,
+    "x": 1460,
+    "y": 160
+   },
+   {
+    "ghost": false,
+    "h": 72,
+    "id": "~unattached:payments@payments|payments.retry_payment|command|ChargePayment",
+    "lane": "action",
+    "name": "ChargePayment",
+    "portal": false,
+    "role": "command",
+    "segment": "~unattached:payments@payments",
+    "slice": "payments.retry_payment",
+    "w": 168,
+    "x": 1460,
+    "y": 256
+   },
+   {
+    "ghost": false,
+    "h": 72,
+    "id": "~unattached:reminders@reminders|reminders.send_reminder|command|SendReminder",
+    "lane": "action",
+    "name": "SendReminder",
+    "portal": false,
+    "role": "command",
+    "segment": "~unattached:reminders@reminders",
+    "slice": "reminders.send_reminder",
+    "w": 168,
+    "x": 1956,
+    "y": 256
+   },
+   {
+    "ghost": false,
+    "h": 72,
+    "id": "~unattached:reminders@reminders|reminders.send_reminder|event|ReminderSent",
+    "lane": "stream:Reminder",
+    "name": "ReminderSent",
+    "portal": false,
+    "role": "event",
+    "segment": "~unattached:reminders@reminders",
+    "slice": "reminders.send_reminder",
+    "w": 168,
+    "x": 1956,
+    "y": 352
+   },
+   {
+    "ghost": false,
+    "h": 72,
+    "id": "~unattached:reminders@reminders|reminders.schedule_next|automation|schedule_next",
+    "lane": "trigger",
+    "name": "schedule_next",
+    "portal": false,
+    "role": "automation",
+    "segment": "~unattached:reminders@reminders",
+    "slice": "reminders.schedule_next",
+    "w": 168,
+    "x": 2164,
+    "y": 160
+   },
+   {
+    "ghost": false,
+    "h": 72,
+    "id": "~unattached:reminders@reminders|reminders.schedule_next|command|SendReminder",
+    "lane": "action",
+    "name": "SendReminder",
+    "portal": false,
+    "role": "command",
+    "segment": "~unattached:reminders@reminders",
+    "slice": "reminders.schedule_next",
+    "w": 168,
+    "x": 2164,
+    "y": 256
+   }
+  ],
+  "contexts": [
+   {
+    "h": 768,
+    "id": "orders",
+    "w": 512,
+    "x": 64,
+    "y": 64
+   },
+   {
+    "h": 1024,
+    "id": "payments",
+    "w": 1024,
+    "x": 672,
+    "y": 64
+   },
+   {
+    "h": 512,
+    "id": "reminders",
+    "w": 768,
+    "x": 1792,
+    "y": 64
+   }
+  ],
+  "edges": [
+   {
+    "cross": false,
+    "from": "~orders.place_order@orders|orders.place_order|command|PlaceOrder",
+    "kind": "publishes",
+    "to": "~orders.place_order@orders|orders.place_order|event|OrderPlaced"
+   },
+   {
+    "cross": true,
+    "from": "~orders.place_order@orders|orders.place_order|event|OrderPlaced",
+    "kind": "feeds",
+    "to": "~unattached:payments@payments|payments.start_payment|automation|start_payment"
+   },
+   {
+    "cross": false,
+    "from": "~orders.place_order@orders|orders.place_order|trigger|POST /api/orders",
+    "kind": "handles",
+    "to": "~orders.place_order@orders|orders.place_order|command|PlaceOrder"
+   },
+   {
+    "cross": false,
+    "from": "~unattached:payments@payments|payments.charge_payment|command|ChargePayment",
+    "kind": "publishes",
+    "to": "~unattached:payments@payments|payments.charge_payment|event|PaymentCharged"
+   },
+   {
+    "cross": false,
+    "from": "~unattached:payments@payments|payments.charge_payment|command|ChargePayment",
+    "kind": "publishes",
+    "to": "~unattached:payments@payments|payments.charge_payment|event|PaymentFailed"
+   },
+   {
+    "cross": false,
+    "from": "~unattached:payments@payments|payments.charge_payment|event|PaymentCharged",
+    "kind": "feeds",
+    "to": "~unattached:payments@payments|payments.payment_list|view|payment_list_view"
+   },
+   {
+    "cross": false,
+    "from": "~unattached:payments@payments|payments.charge_payment|event|PaymentFailed",
+    "kind": "feeds",
+    "to": "~unattached:payments@payments|payments.payment_list|view|payment_list_view"
+   },
+   {
+    "cross": false,
+    "from": "~unattached:payments@payments|payments.charge_payment|event|PaymentFailed",
+    "kind": "feeds",
+    "to": "~unattached:payments@payments|payments.retry_payment|automation|retry_payment"
+   },
+   {
+    "cross": false,
+    "from": "~unattached:payments@payments|payments.payment_list|trigger|GET /api/payments",
+    "kind": "handles",
+    "to": "~unattached:payments@payments|payments.payment_list|view|payment_list_view"
+   },
+   {
+    "cross": false,
+    "from": "~unattached:payments@payments|payments.retry_payment|automation|retry_payment",
+    "kind": "dispatches",
+    "to": "~unattached:payments@payments|payments.retry_payment|command|ChargePayment"
+   },
+   {
+    "cross": false,
+    "from": "~unattached:payments@payments|payments.retry_payment|command|ChargePayment",
+    "kind": "dispatches",
+    "to": "~unattached:payments@payments|payments.charge_payment|command|ChargePayment"
+   },
+   {
+    "cross": false,
+    "from": "~unattached:payments@payments|payments.start_payment|automation|start_payment",
+    "kind": "dispatches",
+    "to": "~unattached:payments@payments|payments.start_payment|command|ChargePayment"
+   },
+   {
+    "cross": false,
+    "from": "~unattached:payments@payments|payments.start_payment|command|ChargePayment",
+    "kind": "dispatches",
+    "to": "~unattached:payments@payments|payments.charge_payment|command|ChargePayment"
+   },
+   {
+    "cross": false,
+    "from": "~unattached:reminders@reminders|reminders.schedule_next|automation|schedule_next",
+    "kind": "dispatches",
+    "to": "~unattached:reminders@reminders|reminders.schedule_next|command|SendReminder"
+   },
+   {
+    "cross": false,
+    "from": "~unattached:reminders@reminders|reminders.schedule_next|command|SendReminder",
+    "kind": "dispatches",
+    "to": "~unattached:reminders@reminders|reminders.send_reminder|command|SendReminder"
+   },
+   {
+    "cross": false,
+    "from": "~unattached:reminders@reminders|reminders.send_reminder|command|SendReminder",
+    "kind": "publishes",
+    "to": "~unattached:reminders@reminders|reminders.send_reminder|event|ReminderSent"
+   },
+   {
+    "cross": false,
+    "from": "~unattached:reminders@reminders|reminders.send_reminder|event|ReminderSent",
+    "kind": "feeds",
+    "to": "~unattached:reminders@reminders|reminders.schedule_next|automation|schedule_next"
+   }
+  ],
+  "links": [
+   {
+    "cross": true,
+    "events": [
+     "OrderPlaced"
+    ],
+    "from": "~orders.place_order@orders",
+    "to": "~unattached:payments@payments"
+   }
+  ],
+  "scenarioBoxes": [
+   {
+    "h": 272,
+    "segment": "~orders.place_order@orders",
+    "slice": "orders.place_order",
+    "w": 192,
+    "x": 216,
+    "y": 448
+   },
+   {
+    "h": 0,
+    "segment": "~unattached:payments@payments",
+    "slice": "payments.start_payment",
+    "w": 192,
+    "x": 824,
+    "y": 532
+   },
+   {
+    "h": 412,
+    "segment": "~unattached:payments@payments",
+    "slice": "payments.charge_payment",
+    "w": 192,
+    "x": 1032,
+    "y": 532
+   },
+   {
+    "h": 0,
+    "segment": "~unattached:payments@payments",
+    "slice": "payments.payment_list",
+    "w": 192,
+    "x": 1240,
+    "y": 532
+   },
+   {
+    "h": 0,
+    "segment": "~unattached:payments@payments",
+    "slice": "payments.retry_payment",
+    "w": 192,
+    "x": 1448,
+    "y": 532
+   },
+   {
+    "h": 0,
+    "segment": "~unattached:reminders@reminders",
+    "slice": "reminders.send_reminder",
+    "w": 192,
+    "x": 1944,
+    "y": 448
+   },
+   {
+    "h": 0,
+    "segment": "~unattached:reminders@reminders",
+    "slice": "reminders.schedule_next",
+    "w": 192,
+    "x": 2152,
+    "y": 448
+   }
+  ],
+  "segments": [
+   {
+    "bc": "orders",
+    "columns": [
+     {
+      "portal": false,
+      "slice": "orders.place_order",
+      "w": 192,
+      "x": 216
+     }
+    ],
+    "h": 624,
+    "id": "~orders.place_order@orders",
+    "lanes": [
+     {
+      "h": 96,
+      "id": "trigger",
+      "label": "Trigger",
+      "y": 148
+     },
+     {
+      "h": 96,
+      "id": "action",
+      "label": "Command · View",
+      "y": 244
+     },
+     {
+      "h": 96,
+      "id": "stream:Order",
+      "label": "Events · Order",
+      "y": 340
+     }
+    ],
+    "process": "~orders.place_order",
+    "w": 336,
+    "x": 88,
+    "y": 112
+   },
+   {
+    "bc": "payments",
+    "columns": [
+     {
+      "portal": false,
+      "slice": "payments.start_payment",
+      "w": 192,
+      "x": 824
+     },
+     {
+      "portal": false,
+      "slice": "payments.charge_payment",
+      "w": 192,
+      "x": 1032
+     },
+     {
+      "portal": false,
+      "slice": "payments.payment_list",
+      "w": 192,
+      "x": 1240
+     },
+     {
+      "portal": false,
+      "slice": "payments.retry_payment",
+      "w": 192,
+      "x": 1448
+     }
+    ],
+    "h": 848,
+    "id": "~unattached:payments@payments",
+    "lanes": [
+     {
+      "h": 96,
+      "id": "trigger",
+      "label": "Trigger",
+      "y": 148
+     },
+     {
+      "h": 96,
+      "id": "action",
+      "label": "Command · View",
+      "y": 244
+     },
+     {
+      "h": 180,
+      "id": "stream:Payment",
+      "label": "Events · Payment",
+      "y": 340
+     }
+    ],
+    "process": "~unattached:payments",
+    "w": 960,
+    "x": 696,
+    "y": 112
+   },
+   {
+    "bc": "reminders",
+    "columns": [
+     {
+      "portal": false,
+      "slice": "reminders.send_reminder",
+      "w": 192,
+      "x": 1944
+     },
+     {
+      "portal": false,
+      "slice": "reminders.schedule_next",
+      "w": 192,
+      "x": 2152
+     }
+    ],
+    "h": 416,
+    "id": "~unattached:reminders@reminders",
+    "lanes": [
+     {
+      "h": 96,
+      "id": "trigger",
+      "label": "Trigger",
+      "y": 148
+     },
+     {
+      "h": 96,
+      "id": "action",
+      "label": "Command · View",
+      "y": 244
+     },
+     {
+      "h": 96,
+      "id": "stream:Reminder",
+      "label": "Events · Reminder",
+      "y": 340
+     }
+    ],
+    "process": "~unattached:reminders",
+    "w": 544,
+    "x": 1816,
+    "y": 112
+   }
+  ]
+ },
+ "matrix": {
+  "bcMatrix": {
+   "bcs": [
+    "orders",
+    "payments",
+    "reminders"
+   ],
+   "counts": [
+    [
+     0,
+     1,
+     0
+    ],
+    [
+     0,
+     2,
+     0
+    ],
+    [
+     0,
+     0,
+     1
+    ]
+   ],
+   "events": [
+    [
+     [],
+     [
+      "OrderPlaced"
+     ],
+     []
+    ],
+    [
+     [],
+     [
+      "PaymentCharged",
+      "PaymentFailed"
+     ],
+     []
+    ],
+    [
+     [],
+     [],
+     [
+      "ReminderSent"
+     ]
+    ]
+   ]
+  },
+  "cells": [
+   {
+    "c": 0,
+    "cross": false,
+    "r": 0,
+    "v": "W"
+   },
+   {
+    "c": 1,
+    "cross": false,
+    "r": 1,
+    "v": "W"
+   },
+   {
+    "c": 2,
+    "cross": false,
+    "r": 2,
+    "v": "O"
+   },
+   {
+    "c": 5,
+    "cross": false,
+    "r": 3,
+    "v": "W"
+   }
+  ],
+  "cols": [
+   {
+    "bc": "orders",
+    "kind": "command",
+    "slice": "orders.place_order"
+   },
+   {
+    "bc": "payments",
+    "kind": "command",
+    "slice": "payments.charge_payment"
+   },
+   {
+    "bc": "payments",
+    "kind": "view",
+    "slice": "payments.payment_list"
+   },
+   {
+    "bc": "payments",
+    "kind": "automation",
+    "slice": "payments.retry_payment"
+   },
+   {
+    "bc": "payments",
+    "kind": "automation",
+    "slice": "payments.start_payment"
+   },
+   {
+    "bc": "reminders",
+    "kind": "command",
+    "slice": "reminders.send_reminder"
+   },
+   {
+    "bc": "reminders",
+    "kind": "automation",
+    "slice": "reminders.schedule_next"
+   }
+  ],
+  "rows": [
+   {
+    "bc": "orders",
+    "id": "Order",
+    "kind": "aggregate"
+   },
+   {
+    "bc": "payments",
+    "id": "Payment",
+    "kind": "aggregate"
+   },
+   {
+    "bc": "payments",
+    "id": "payment_list_view",
+    "kind": "read-model"
+   },
+   {
+    "bc": "reminders",
+    "id": "Reminder",
+    "kind": "aggregate"
+   }
+  ]
+ },
+ "metro": {
+  "bounds": {
+   "h": 160,
+   "w": 376,
+   "x": 0,
+   "y": 0
+  },
+  "lines": [
+   {
+    "color": 0,
+    "derived": true,
+    "points": [
+     [
+      40,
+      40
+     ]
+    ],
+    "process": "~orders.place_order"
+   },
+   {
+    "color": 1,
+    "derived": true,
+    "points": [
+     [
+      120,
+      80
+     ],
+     [
+      200,
+      80
+     ],
+     [
+      280,
+      80
+     ],
+     [
+      336,
+      80
+     ]
+    ],
+    "process": "~unattached:payments"
+   },
+   {
+    "color": 3,
+    "derived": true,
+    "points": [
+     [
+      40,
+      120
+     ],
+     [
+      120,
+      120
+     ]
+    ],
+    "process": "~unattached:reminders"
+   }
+  ],
+  "stations": [
+   {
+    "interchange": false,
+    "lines": [
+     "~orders.place_order"
+    ],
+    "slice": "orders.place_order",
+    "x": 40,
+    "y": 40
+   },
+   {
+    "interchange": false,
+    "lines": [
+     "~unattached:reminders"
+    ],
+    "slice": "reminders.send_reminder",
+    "x": 40,
+    "y": 120
+   },
+   {
+    "interchange": false,
+    "lines": [
+     "~unattached:payments"
+    ],
+    "slice": "payments.start_payment",
+    "x": 120,
+    "y": 80
+   },
+   {
+    "interchange": false,
+    "lines": [
+     "~unattached:reminders"
+    ],
+    "slice": "reminders.schedule_next",
+    "x": 120,
+    "y": 120
+   },
+   {
+    "interchange": false,
+    "lines": [
+     "~unattached:payments"
+    ],
+    "slice": "payments.charge_payment",
+    "x": 200,
+    "y": 80
+   },
+   {
+    "interchange": false,
+    "lines": [
+     "~unattached:payments"
+    ],
+    "slice": "payments.payment_list",
+    "x": 280,
+    "y": 80
+   },
+   {
+    "interchange": false,
+    "lines": [
+     "~unattached:payments"
+    ],
+    "slice": "payments.retry_payment",
+    "x": 336,
+    "y": 80
+   }
+  ]
+ },
+ "version": 1
+}

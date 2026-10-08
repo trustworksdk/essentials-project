@@ -12,7 +12,7 @@
   },
   "required": ["schemaVersion", "slice", "kind", "bc", "owner", "status", "summary", "tests"],
   "properties": {
-    "schemaVersion": { "type": "string", "description": "Manifest schema version, e.g. \"1.3\". Readers accept any 1.x, so a manifest stamped at an earlier 1.x stays valid and needs no restamp." },
+    "schemaVersion": { "type": "string", "description": "Manifest schema version, e.g. \"1.4\". Readers accept any 1.x, so a manifest stamped at an earlier 1.x stays valid and needs no restamp. A manifest that carries `flow` or `scenarios` (both added in 1.4) is stamped \"1.4\" or later, so a reader can tell from the stamp alone that a project copy of this schema older than 1.4 would reject it." },
     "slice": { "type": "string", "pattern": "^[a-z0-9_-]+\\.[a-z0-9_-]+$", "description": "Globally unique id <bc>.<slice-id>. kebab-case or snake_case; snake_case is REQUIRED on JVM platforms, where package directories cannot contain hyphens (e.g. orders.place_order)." },
     "generator": { "enum": ["sdd", "essentials", "manual"], "description": "Which toolchain owns this manifest: essentials, manual, or an external generator. Determines whether lastSyncedAt/arch are expected and which tool may rewrite the manifest's derived fields." },
     "language": { "type": "string", "description": "Implementation language of the slice (open string: java | kotlin | typescript | python | go | ...). Lets tooling pick the right template family without sniffing file extensions in a mixed module." },
@@ -80,6 +80,18 @@
         "externalSystem": { "type": "string" }
       }
     },
+    "flow": {
+      "description": "The journey (process) this slice serves, as a global name: two bounded contexts that use the same name mean the same journey. One name, or a non-empty list of distinct names for a slice that genuinely serves several (a view read by two journeys, a translation used by both). No order is declared — order inside a journey is derived from cause and effect. Optional; a slice without one is grouped by derivation. See manifest-guide.md §3.",
+      "oneOf": [
+        { "type": "string", "pattern": "^[a-z0-9][a-z0-9_-]*$" },
+        { "type": "array", "minItems": 1, "uniqueItems": true, "items": { "type": "string", "pattern": "^[a-z0-9][a-z0-9_-]*$" } }
+      ]
+    },
+    "scenarios": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/scenario" },
+      "description": "The slice's specification by example, in Event Modeling's given / when / then form, naming the slice's own messages. Data that is rendered and checked, not a test — the test that runs a scenario is named in its `test`. Which message kinds each slice kind may name, and from which of its own lists, is checked by scripts/slice-lint.py (gate 1(d)); see manifest-guide.md §3."
+    },
     "code": { "type": "object", "description": "Optional, estate-level code-symbol-graph ids." },
     "dependsOn": { "type": "array", "items": { "type": "string" } }
   },
@@ -99,6 +111,69 @@
     }
   ],
   "$defs": {
+    "scenario": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "then"],
+      "properties": {
+        "name": { "type": "string", "minLength": 1, "description": "Unique within the slice." },
+        "given": { "type": "array", "items": { "$ref": "#/$defs/scenarioStep" }, "description": "Prior history: `event` steps, and `state` steps for a write target without an event stream." },
+        "when": { "$ref": "#/$defs/scenarioStep", "description": "The trigger. Required on every kind except a view." },
+        "then": {
+          "description": "Exactly one of: a non-empty list of steps (what the slice emits); { error, message? } (the slice rejects, nothing is emitted); { nothing: true } (accepted, nothing emitted); { readModel, rows } (a view's state). An empty list is not allowed — write { nothing: true }.",
+          "oneOf": [
+            { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/scenarioStep" } },
+            {
+              "type": "object", "additionalProperties": false, "required": ["error"],
+              "properties": {
+                "error": { "type": "string", "minLength": 1, "description": "The exception or domain-error type's simple name, as thrown." },
+                "message": { "type": "string", "description": "An example message." }
+              }
+            },
+            {
+              "type": "object", "additionalProperties": false, "required": ["nothing"],
+              "properties": { "nothing": { "const": true } }
+            },
+            {
+              "type": "object", "additionalProperties": false, "required": ["readModel", "rows"],
+              "properties": {
+                "readModel": { "type": "string", "minLength": 1 },
+                "rows": { "type": "array", "items": { "$ref": "#/$defs/scalarMap" }, "description": "Rows of the read model; `rows: []` is a valid empty outcome." }
+              }
+            }
+          ]
+        },
+        "test": { "type": "string", "minLength": 1, "description": "The test that executes this scenario: `ClassName#method` (everything after # verbatim, so a Kotlin backtick name works), `ClassName`, or `path/from/test/root/File.kt#method` when the class name is ambiguous." },
+        "note": { "type": "string" }
+      }
+    },
+    "scenarioStep": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Exactly one message key, plus optional example values in `with`.",
+      "oneOf": [
+        { "required": ["event"] },
+        { "required": ["command"] },
+        { "required": ["query"] },
+        { "required": ["state"] },
+        { "required": ["external"] },
+        { "required": ["schedule"] }
+      ],
+      "properties": {
+        "event": { "type": "string", "minLength": 1 },
+        "command": { "type": "string", "minLength": 1 },
+        "query": { "type": "string", "minLength": 1 },
+        "state": { "type": "string", "minLength": 1 },
+        "external": { "type": "string", "minLength": 1 },
+        "schedule": { "const": true },
+        "with": { "$ref": "#/$defs/scalarMap" }
+      }
+    },
+    "scalarMap": {
+      "type": "object",
+      "description": "Example values: payload field or column names mapped to scalars, rendered verbatim and never interpreted. Quote a date or a time — unquoted, YAML reads it as a date, which is not a scalar here.",
+      "additionalProperties": { "type": ["string", "number", "boolean", "null"] }
+    },
     "namedContract": {
       "oneOf": [
         { "type": "string" },

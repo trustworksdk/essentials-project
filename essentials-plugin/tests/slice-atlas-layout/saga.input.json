@@ -1,0 +1,554 @@
+{
+ "crossReads": [],
+ "diff": null,
+ "flows": [
+  {
+   "bc": "orders",
+   "crossContext": true,
+   "dangling": false,
+   "event": "OrderPlaced",
+   "from": [
+    "orders.place_order"
+   ],
+   "to": [
+    "payments.start_payment"
+   ]
+  },
+  {
+   "bc": "payments",
+   "crossContext": false,
+   "dangling": false,
+   "event": "PaymentCharged",
+   "from": [
+    "payments.charge_payment"
+   ],
+   "to": [
+    "payments.payment_list"
+   ]
+  },
+  {
+   "bc": "payments",
+   "crossContext": false,
+   "dangling": false,
+   "event": "PaymentFailed",
+   "from": [
+    "payments.charge_payment"
+   ],
+   "to": [
+    "payments.payment_list",
+    "payments.retry_payment"
+   ]
+  },
+  {
+   "bc": "reminders",
+   "crossContext": false,
+   "dangling": false,
+   "event": "ReminderSent",
+   "from": [
+    "reminders.send_reminder"
+   ],
+   "to": [
+    "reminders.schedule_next"
+   ]
+  }
+ ],
+ "issues": [],
+ "lineage": {
+  "fields": {},
+  "technicalColumns": []
+ },
+ "messages": [],
+ "meta": {
+  "atlasVersion": 1
+ },
+ "processes": [
+  {
+   "bcs": [
+    "orders"
+   ],
+   "color": 0,
+   "declared": false,
+   "entries": [
+    "orders.place_order"
+   ],
+   "id": "~orders.place_order",
+   "links": [],
+   "name": "place order",
+   "sliceIds": [
+    "orders.place_order"
+   ]
+  },
+  {
+   "bcs": [
+    "payments"
+   ],
+   "color": 1,
+   "declared": false,
+   "entries": [],
+   "id": "~unattached:payments",
+   "links": [],
+   "name": "unattached payments",
+   "sliceIds": [
+    "payments.charge_payment",
+    "payments.payment_list",
+    "payments.retry_payment",
+    "payments.start_payment"
+   ]
+  },
+  {
+   "bcs": [
+    "reminders"
+   ],
+   "color": 3,
+   "declared": false,
+   "entries": [],
+   "id": "~unattached:reminders",
+   "links": [],
+   "name": "unattached reminders",
+   "sliceIds": [
+    "reminders.schedule_next",
+    "reminders.send_reminder"
+   ]
+  }
+ ],
+ "slices": [
+  {
+   "bc": "orders",
+   "consumes": [],
+   "dependsOn": [],
+   "direction": null,
+   "dispatches": [],
+   "doc": null,
+   "endpoints": [
+    {
+     "auth": "user",
+     "method": "POST",
+     "path": "/api/orders"
+    }
+   ],
+   "externalSystem": null,
+   "files": [],
+   "flags": [],
+   "flows": [],
+   "handles": [
+    "PlaceOrder"
+   ],
+   "id": "orders.place_order",
+   "invariants": [],
+   "kind": "command",
+   "lane": "decider",
+   "language": "java",
+   "name": "place_order",
+   "owner": "orders-team",
+   "owns": [],
+   "package": null,
+   "path": "orders/use_cases/place_order",
+   "projections": [],
+   "publishes": [
+    "OrderPlaced"
+   ],
+   "reads": [],
+   "scenarios": [
+    {
+     "given": [],
+     "name": "scenario 1",
+     "note": null,
+     "test": null,
+     "testResolved": {
+      "line": null,
+      "path": null,
+      "status": "not-checked"
+     },
+     "then": {
+      "kind": "nothing"
+     },
+     "when": null
+    },
+    {
+     "given": [],
+     "name": "scenario 2",
+     "note": null,
+     "test": null,
+     "testResolved": {
+      "line": null,
+      "path": null,
+      "status": "not-checked"
+     },
+     "then": {
+      "kind": "nothing"
+     },
+     "when": null
+    }
+   ],
+   "serves": [],
+   "status": "live",
+   "summary": null,
+   "supersedes": null,
+   "tests": [
+    "unit"
+   ],
+   "tier": "cqrs-es",
+   "writes": [
+    "Order"
+   ]
+  },
+  {
+   "bc": "payments",
+   "consumes": [
+    "OrderPlaced"
+   ],
+   "dependsOn": [],
+   "direction": null,
+   "dispatches": [
+    "ChargePayment"
+   ],
+   "doc": null,
+   "endpoints": [],
+   "externalSystem": null,
+   "files": [],
+   "flags": [],
+   "flows": [],
+   "handles": [],
+   "id": "payments.start_payment",
+   "invariants": [],
+   "kind": "automation",
+   "lane": "decider",
+   "language": "java",
+   "name": "start_payment",
+   "owner": "payments-team",
+   "owns": [],
+   "package": null,
+   "path": "payments/automations/start_payment",
+   "projections": [],
+   "publishes": [],
+   "reads": [],
+   "scenarios": [],
+   "serves": [],
+   "status": "live",
+   "summary": null,
+   "supersedes": null,
+   "tests": [
+    "unit"
+   ],
+   "tier": "cqrs-es",
+   "writes": []
+  },
+  {
+   "bc": "payments",
+   "consumes": [
+    "PaymentFailed"
+   ],
+   "dependsOn": [],
+   "direction": null,
+   "dispatches": [
+    "ChargePayment"
+   ],
+   "doc": null,
+   "endpoints": [],
+   "externalSystem": null,
+   "files": [],
+   "flags": [],
+   "flows": [],
+   "handles": [],
+   "id": "payments.retry_payment",
+   "invariants": [],
+   "kind": "automation",
+   "lane": "decider",
+   "language": "java",
+   "name": "retry_payment",
+   "owner": "payments-team",
+   "owns": [],
+   "package": null,
+   "path": "payments/automations/retry_payment",
+   "projections": [],
+   "publishes": [],
+   "reads": [],
+   "scenarios": [],
+   "serves": [],
+   "status": "live",
+   "summary": null,
+   "supersedes": null,
+   "tests": [
+    "unit"
+   ],
+   "tier": "cqrs-es",
+   "writes": []
+  },
+  {
+   "bc": "payments",
+   "consumes": [],
+   "dependsOn": [],
+   "direction": null,
+   "dispatches": [],
+   "doc": null,
+   "endpoints": [],
+   "externalSystem": null,
+   "files": [],
+   "flags": [],
+   "flows": [],
+   "handles": [
+    "ChargePayment"
+   ],
+   "id": "payments.charge_payment",
+   "invariants": [],
+   "kind": "command",
+   "lane": "decider",
+   "language": "java",
+   "name": "charge_payment",
+   "owner": "payments-team",
+   "owns": [],
+   "package": null,
+   "path": "payments/use_cases/charge_payment",
+   "projections": [],
+   "publishes": [
+    "PaymentCharged",
+    "PaymentFailed"
+   ],
+   "reads": [],
+   "scenarios": [
+    {
+     "given": [],
+     "name": "scenario 1",
+     "note": null,
+     "test": null,
+     "testResolved": {
+      "line": null,
+      "path": null,
+      "status": "not-checked"
+     },
+     "then": {
+      "kind": "nothing"
+     },
+     "when": null
+    },
+    {
+     "given": [],
+     "name": "scenario 2",
+     "note": null,
+     "test": null,
+     "testResolved": {
+      "line": null,
+      "path": null,
+      "status": "not-checked"
+     },
+     "then": {
+      "kind": "nothing"
+     },
+     "when": null
+    },
+    {
+     "given": [],
+     "name": "scenario 3",
+     "note": null,
+     "test": null,
+     "testResolved": {
+      "line": null,
+      "path": null,
+      "status": "not-checked"
+     },
+     "then": {
+      "kind": "nothing"
+     },
+     "when": null
+    }
+   ],
+   "serves": [],
+   "status": "live",
+   "summary": null,
+   "supersedes": null,
+   "tests": [
+    "unit"
+   ],
+   "tier": "cqrs-es",
+   "writes": [
+    "Payment"
+   ]
+  },
+  {
+   "bc": "payments",
+   "consumes": [],
+   "dependsOn": [],
+   "direction": null,
+   "dispatches": [],
+   "doc": null,
+   "endpoints": [
+    {
+     "auth": "user",
+     "method": "GET",
+     "path": "/api/payments"
+    }
+   ],
+   "externalSystem": null,
+   "files": [],
+   "flags": [],
+   "flows": [],
+   "handles": [],
+   "id": "payments.payment_list",
+   "invariants": [],
+   "kind": "view",
+   "lane": "decider",
+   "language": "java",
+   "name": "payment_list",
+   "owner": "payments-team",
+   "owns": [
+    "payment_list_view"
+   ],
+   "package": null,
+   "path": "payments/views/payment_list",
+   "projections": [
+    {
+     "from": [
+      "PaymentCharged",
+      "PaymentFailed"
+     ],
+     "name": "PaymentListProjection"
+    }
+   ],
+   "publishes": [],
+   "readModels": [],
+   "reads": [],
+   "scenarios": [],
+   "serves": [
+    "ListPayments"
+   ],
+   "status": "live",
+   "summary": null,
+   "supersedes": null,
+   "tests": [
+    "unit"
+   ],
+   "tier": "cqrs-es",
+   "writes": []
+  },
+  {
+   "bc": "reminders",
+   "consumes": [
+    "ReminderSent"
+   ],
+   "dependsOn": [],
+   "direction": null,
+   "dispatches": [
+    "SendReminder"
+   ],
+   "doc": null,
+   "endpoints": [],
+   "externalSystem": null,
+   "files": [],
+   "flags": [],
+   "flows": [],
+   "handles": [],
+   "id": "reminders.schedule_next",
+   "invariants": [],
+   "kind": "automation",
+   "lane": "decider",
+   "language": "kotlin",
+   "name": "schedule_next",
+   "owner": "reminders-team",
+   "owns": [],
+   "package": null,
+   "path": "reminders/automations/schedule_next",
+   "projections": [],
+   "publishes": [],
+   "reads": [],
+   "scenarios": [],
+   "serves": [],
+   "status": "live",
+   "summary": null,
+   "supersedes": null,
+   "tests": [
+    "unit"
+   ],
+   "tier": "cqrs-es",
+   "writes": []
+  },
+  {
+   "bc": "reminders",
+   "consumes": [],
+   "dependsOn": [],
+   "direction": null,
+   "dispatches": [],
+   "doc": null,
+   "endpoints": [],
+   "externalSystem": null,
+   "files": [],
+   "flags": [],
+   "flows": [],
+   "handles": [
+    "SendReminder"
+   ],
+   "id": "reminders.send_reminder",
+   "invariants": [],
+   "kind": "command",
+   "lane": "decider",
+   "language": "kotlin",
+   "name": "send_reminder",
+   "owner": "reminders-team",
+   "owns": [],
+   "package": null,
+   "path": "reminders/use_cases/send_reminder",
+   "projections": [],
+   "publishes": [
+    "ReminderSent"
+   ],
+   "reads": [],
+   "scenarios": [],
+   "serves": [],
+   "status": "live",
+   "summary": null,
+   "supersedes": null,
+   "tests": [
+    "unit"
+   ],
+   "tier": "cqrs-es",
+   "writes": [
+    "Reminder"
+   ]
+  }
+ ],
+ "writers": [
+  {
+   "bcs": [
+    "orders"
+   ],
+   "flag": null,
+   "kind": "aggregate",
+   "slices": [
+    "orders.place_order"
+   ],
+   "target": "Order"
+  },
+  {
+   "bcs": [
+    "payments"
+   ],
+   "flag": null,
+   "kind": "aggregate",
+   "slices": [
+    "payments.charge_payment"
+   ],
+   "target": "Payment"
+  },
+  {
+   "bcs": [
+    "reminders"
+   ],
+   "flag": null,
+   "kind": "aggregate",
+   "slices": [
+    "reminders.send_reminder"
+   ],
+   "target": "Reminder"
+  },
+  {
+   "bcs": [
+    "payments"
+   ],
+   "flag": null,
+   "kind": "read-model",
+   "slices": [
+    "payments.payment_list"
+   ],
+   "target": "payment_list_view"
+  }
+ ]
+}

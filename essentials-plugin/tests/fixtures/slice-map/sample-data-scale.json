@@ -232,7 +232,11 @@
       "tests": [
         "unit"
       ],
-      "flags": []
+      "flags": [],
+      "flows": [],
+      "scenarios": [],
+      "schedule": null,
+      "doc": null
     },
     {
       "id": "bc01.close_thing",
@@ -272,7 +276,11 @@
       "tests": [
         "unit"
       ],
-      "flags": []
+      "flags": [],
+      "flows": [],
+      "scenarios": [],
+      "schedule": null,
+      "doc": null
     },
     {
       "id": "bc01.create_thing",
@@ -318,7 +326,11 @@
       "tests": [
         "unit"
       ],
-      "flags": []
+      "flags": [],
+      "flows": [],
+      "scenarios": [],
+      "schedule": null,
+      "doc": null
     },
     {
       "id": "bc01.thing_list",
@@ -374,7 +386,11 @@
         "unit"
       ],
       "flags": [],
-      "readModels": []
+      "readModels": [],
+      "flows": [],
+      "scenarios": [],
+      "schedule": null,
+      "doc": null
     },
     {
       "id": "bc02.follow_upstream",
@@ -412,7 +428,11 @@
       "tests": [
         "unit"
       ],
-      "flags": []
+      "flags": [],
+      "flows": [],
+      "scenarios": [],
+      "schedule": null,
+      "doc": null
     },
     {
       "id": "bc02.close_thing",
@@ -452,7 +472,11 @@
       "tests": [
         "unit"
       ],
-      "flags": []
+      "flags": [],
+      "flows": [],
+      "scenarios": [],
+      "schedule": null,
+      "doc": null
     },
     {
       "id": "bc02.create_thing",
@@ -498,7 +522,11 @@
       "tests": [
         "unit"
       ],
-      "flags": []
+      "flags": [],
+      "flows": [],
+      "scenarios": [],
+      "schedule": null,
+      "doc": null
     },
     {
       "id": "bc02.thing_list",
@@ -554,7 +582,11 @@
         "unit"
       ],
       "flags": [],
-      "readModels": []
+      "readModels": [],
+      "flows": [],
+      "scenarios": [],
+      "schedule": null,
+      "doc": null
     },
     {
       "id": "bc03.follow_upstream",
@@ -592,7 +624,11 @@
       "tests": [
         "unit"
       ],
-      "flags": []
+      "flags": [],
+      "flows": [],
+      "scenarios": [],
+      "schedule": null,
+      "doc": null
     },
     {
       "id": "bc03.close_thing",
@@ -632,7 +668,11 @@
       "tests": [
         "unit"
       ],
-      "flags": []
+      "flags": [],
+      "flows": [],
+      "scenarios": [],
+      "schedule": null,
+      "doc": null
     },
     {
       "id": "bc03.create_thing",
@@ -678,7 +718,11 @@
       "tests": [
         "unit"
       ],
-      "flags": []
+      "flags": [],
+      "flows": [],
+      "scenarios": [],
+      "schedule": null,
+      "doc": null
     },
     {
       "id": "bc03.thing_list",
@@ -734,7 +778,11 @@
         "unit"
       ],
       "flags": [],
-      "readModels": []
+      "readModels": [],
+      "flows": [],
+      "scenarios": [],
+      "schedule": null,
+      "doc": null
     },
     {
       "id": "bc04.follow_upstream",
@@ -772,7 +820,11 @@
       "tests": [
         "unit"
       ],
-      "flags": []
+      "flags": [],
+      "flows": [],
+      "scenarios": [],
+      "schedule": null,
+      "doc": null
     },
     {
       "id": "bc04.partner_feed",
@@ -815,7 +867,11 @@
           "level": "warn",
           "text": "consumes PartnerThing04, which no slice in scope publishes (dangling edge)"
         }
-      ]
+      ],
+      "flows": [],
+      "scenarios": [],
+      "schedule": null,
+      "doc": null
     },
     {
       "id": "bc04.close_thing",
@@ -855,7 +911,11 @@
       "tests": [
         "unit"
       ],
-      "flags": []
+      "flags": [],
+      "flows": [],
+      "scenarios": [],
+      "schedule": null,
+      "doc": null
     },
     {
       "id": "bc04.create_thing",
@@ -901,7 +961,11 @@
       "tests": [
         "unit"
       ],
-      "flags": []
+      "flags": [],
+      "flows": [],
+      "scenarios": [],
+      "schedule": null,
+      "doc": null
     },
     {
       "id": "bc04.thing_list",
@@ -957,7 +1021,11 @@
         "unit"
       ],
       "flags": [],
-      "readModels": []
+      "readModels": [],
+      "flows": [],
+      "scenarios": [],
+      "schedule": null,
+      "doc": null
     },
     {
       "id": "bc05.follow_upstream",
@@ -995,7 +1063,11 @@
       "tests": [
         "unit"
       ],
-      "flags": []
+      "flags": [],
+      "flows": [],
+      "scenarios": [],
+      "schedule": null,
+      "doc": null
     },
     {
       "id": "bc05.close_thing",
@@ -1035,7 +1107,11 @@
       "tests": [
         "unit"
       ],
-      "flags": []
+      "flags": [],
+      "flows": [],
+      "scenarios": [],
+      "schedule": null,
+      "doc": null
     },
     {
       "id": "bc05.create_thing",
@@ -1081,7 +1157,11 @@
       "tests": [
         "unit"
       ],
-      "flags": []
+      "flags": [],
+      "flows": [],
+      "scenarios": [],
+      "schedule": null,
+      "doc": null
     },
     {
       "id": "bc05.thing_list",
@@ -1137,7 +1217,11 @@
         "unit"
       ],
       "flags": [],
-      "readModels": []
+      "readModels": [],
+      "flows": [],
+      "scenarios": [],
+      "schedule": null,
+      "doc": null
     },
     {
       "id": "bc06.close_on_create",
@@ -1175,7 +1259,11 @@
       "tests": [
         "unit"
       ],
-      "flags": []
+      "flags": [],
+      "flows": [],
+      "scenarios": [],
+      "schedule": null,
+      "doc": null
     },
     {
       "id": "bc06.close_thing",
@@ -1215,7 +1303,11 @@
       "tests": [
         "unit"
       ],
-      "flags": []
+      "flags": [],
+      "flows": [],
+      "scenarios": [],
+      "schedule": null,
+      "doc": null
     },
     {
       "id": "bc06.create_thing",
@@ -1261,7 +1353,11 @@
       "tests": [
         "unit"
       ],
-      "flags": []
+      "flags": [],
+      "flows": [],
+      "scenarios": [],
+      "schedule": null,
+      "doc": null
     },
     {
       "id": "bc06.thing_list",
@@ -1317,7 +1413,11 @@
         "unit"
       ],
       "flags": [],
-      "readModels": []
+      "readModels": [],
+      "flows": [],
+      "scenarios": [],
+      "schedule": null,
+      "doc": null
     },
     {
       "id": "bc06.thing_report",
@@ -1366,7 +1466,11 @@
         "unit"
       ],
       "flags": [],
-      "readModels": []
+      "readModels": [],
+      "flows": [],
+      "scenarios": [],
+      "schedule": null,
+      "doc": null
     },
     {
       "id": "bc07.follow_upstream",
@@ -1404,7 +1508,11 @@
       "tests": [
         "unit"
       ],
-      "flags": []
+      "flags": [],
+      "flows": [],
+      "scenarios": [],
+      "schedule": null,
+      "doc": null
     },
     {
       "id": "bc07.close_thing",
@@ -1444,7 +1552,11 @@
       "tests": [
         "unit"
       ],
-      "flags": []
+      "flags": [],
+      "flows": [],
+      "scenarios": [],
+      "schedule": null,
+      "doc": null
     },
     {
       "id": "bc07.create_thing",
@@ -1490,7 +1602,11 @@
       "tests": [
         "unit"
       ],
-      "flags": []
+      "flags": [],
+      "flows": [],
+      "scenarios": [],
+      "schedule": null,
+      "doc": null
     },
     {
       "id": "bc07.thing_list",
@@ -1546,7 +1662,11 @@
         "unit"
       ],
       "flags": [],
-      "readModels": []
+      "readModels": [],
+      "flows": [],
+      "scenarios": [],
+      "schedule": null,
+      "doc": null
     },
     {
       "id": "bc08.follow_upstream",
@@ -1584,7 +1704,11 @@
       "tests": [
         "unit"
       ],
-      "flags": []
+      "flags": [],
+      "flows": [],
+      "scenarios": [],
+      "schedule": null,
+      "doc": null
     },
     {
       "id": "bc08.partner_feed",
@@ -1627,7 +1751,11 @@
           "level": "warn",
           "text": "consumes PartnerThing08, which no slice in scope publishes (dangling edge)"
         }
-      ]
+      ],
+      "flows": [],
+      "scenarios": [],
+      "schedule": null,
+      "doc": null
     },
     {
       "id": "bc08.close_thing",
@@ -1667,7 +1795,11 @@
       "tests": [
         "unit"
       ],
-      "flags": []
+      "flags": [],
+      "flows": [],
+      "scenarios": [],
+      "schedule": null,
+      "doc": null
     },
     {
       "id": "bc08.create_thing",
@@ -1713,7 +1845,11 @@
       "tests": [
         "unit"
       ],
-      "flags": []
+      "flags": [],
+      "flows": [],
+      "scenarios": [],
+      "schedule": null,
+      "doc": null
     },
     {
       "id": "bc08.thing_list",
@@ -1769,7 +1905,11 @@
         "unit"
       ],
       "flags": [],
-      "readModels": []
+      "readModels": [],
+      "flows": [],
+      "scenarios": [],
+      "schedule": null,
+      "doc": null
     },
     {
       "id": "bc09.follow_upstream",
@@ -1807,7 +1947,11 @@
       "tests": [
         "unit"
       ],
-      "flags": []
+      "flags": [],
+      "flows": [],
+      "scenarios": [],
+      "schedule": null,
+      "doc": null
     },
     {
       "id": "bc09.close_thing",
@@ -1847,7 +1991,11 @@
       "tests": [
         "unit"
       ],
-      "flags": []
+      "flags": [],
+      "flows": [],
+      "scenarios": [],
+      "schedule": null,
+      "doc": null
     },
     {
       "id": "bc09.create_thing",
@@ -1893,7 +2041,11 @@
       "tests": [
         "unit"
       ],
-      "flags": []
+      "flags": [],
+      "flows": [],
+      "scenarios": [],
+      "schedule": null,
+      "doc": null
     },
     {
       "id": "bc09.thing_list",
@@ -1949,7 +2101,11 @@
         "unit"
       ],
       "flags": [],
-      "readModels": []
+      "readModels": [],
+      "flows": [],
+      "scenarios": [],
+      "schedule": null,
+      "doc": null
     },
     {
       "id": "bc10.follow_upstream",
@@ -1987,7 +2143,11 @@
       "tests": [
         "unit"
       ],
-      "flags": []
+      "flags": [],
+      "flows": [],
+      "scenarios": [],
+      "schedule": null,
+      "doc": null
     },
     {
       "id": "bc10.close_thing",
@@ -2027,7 +2187,11 @@
       "tests": [
         "unit"
       ],
-      "flags": []
+      "flags": [],
+      "flows": [],
+      "scenarios": [],
+      "schedule": null,
+      "doc": null
     },
     {
       "id": "bc10.create_thing",
@@ -2073,7 +2237,11 @@
       "tests": [
         "unit"
       ],
-      "flags": []
+      "flags": [],
+      "flows": [],
+      "scenarios": [],
+      "schedule": null,
+      "doc": null
     },
     {
       "id": "bc10.thing_list",
@@ -2129,7 +2297,11 @@
         "unit"
       ],
       "flags": [],
-      "readModels": []
+      "readModels": [],
+      "flows": [],
+      "scenarios": [],
+      "schedule": null,
+      "doc": null
     },
     {
       "id": "bc11.close_on_create",
@@ -2167,7 +2339,11 @@
       "tests": [
         "unit"
       ],
-      "flags": []
+      "flags": [],
+      "flows": [],
+      "scenarios": [],
+      "schedule": null,
+      "doc": null
     },
     {
       "id": "bc11.close_thing",
@@ -2207,7 +2383,11 @@
       "tests": [
         "unit"
       ],
-      "flags": []
+      "flags": [],
+      "flows": [],
+      "scenarios": [],
+      "schedule": null,
+      "doc": null
     },
     {
       "id": "bc11.create_thing",
@@ -2253,7 +2433,11 @@
       "tests": [
         "unit"
       ],
-      "flags": []
+      "flags": [],
+      "flows": [],
+      "scenarios": [],
+      "schedule": null,
+      "doc": null
     },
     {
       "id": "bc11.thing_list",
@@ -2309,7 +2493,11 @@
         "unit"
       ],
       "flags": [],
-      "readModels": []
+      "readModels": [],
+      "flows": [],
+      "scenarios": [],
+      "schedule": null,
+      "doc": null
     },
     {
       "id": "bc12.follow_upstream",
@@ -2347,7 +2535,11 @@
       "tests": [
         "unit"
       ],
-      "flags": []
+      "flags": [],
+      "flows": [],
+      "scenarios": [],
+      "schedule": null,
+      "doc": null
     },
     {
       "id": "bc12.partner_feed",
@@ -2390,7 +2582,11 @@
           "level": "warn",
           "text": "consumes PartnerThing12, which no slice in scope publishes (dangling edge)"
         }
-      ]
+      ],
+      "flows": [],
+      "scenarios": [],
+      "schedule": null,
+      "doc": null
     },
     {
       "id": "bc12.close_thing",
@@ -2430,7 +2626,11 @@
       "tests": [
         "unit"
       ],
-      "flags": []
+      "flags": [],
+      "flows": [],
+      "scenarios": [],
+      "schedule": null,
+      "doc": null
     },
     {
       "id": "bc12.create_thing",
@@ -2476,7 +2676,11 @@
       "tests": [
         "unit"
       ],
-      "flags": []
+      "flags": [],
+      "flows": [],
+      "scenarios": [],
+      "schedule": null,
+      "doc": null
     },
     {
       "id": "bc12.thing_list",
@@ -2532,7 +2736,11 @@
         "unit"
       ],
       "flags": [],
-      "readModels": []
+      "readModels": [],
+      "flows": [],
+      "scenarios": [],
+      "schedule": null,
+      "doc": null
     },
     {
       "id": "bc12.thing_report",
@@ -2581,7 +2789,11 @@
         "unit"
       ],
       "flags": [],
-      "readModels": []
+      "readModels": [],
+      "flows": [],
+      "scenarios": [],
+      "schedule": null,
+      "doc": null
     }
   ],
   "messages": [
@@ -3760,5 +3972,958 @@
   "crossReads": [],
   "notes": [
     "package, files, message payloads and read-model columns come from source and were not read (no --source-facts)"
-  ]
+  ],
+  "processes": [
+    {
+      "id": "~bc01.create_thing",
+      "name": "create thing",
+      "declared": false,
+      "color": 11,
+      "bcs": [
+        "bc01"
+      ],
+      "sliceIds": [
+        "bc01.create_thing",
+        "bc01.close_on_create",
+        "bc01.close_thing",
+        "bc01.thing_list"
+      ],
+      "entries": [
+        "bc01.create_thing"
+      ],
+      "links": [
+        {
+          "to": "~unattached:bc02",
+          "via": [
+            "ThingCreated01"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "~bc02.create_thing",
+      "name": "create thing",
+      "declared": false,
+      "color": 4,
+      "bcs": [
+        "bc02"
+      ],
+      "sliceIds": [
+        "bc02.create_thing",
+        "bc02.thing_list"
+      ],
+      "entries": [
+        "bc02.create_thing"
+      ],
+      "links": [
+        {
+          "to": "~unattached:bc03",
+          "via": [
+            "ThingCreated02"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "~bc03.create_thing",
+      "name": "create thing",
+      "declared": false,
+      "color": 2,
+      "bcs": [
+        "bc03"
+      ],
+      "sliceIds": [
+        "bc03.create_thing",
+        "bc03.thing_list"
+      ],
+      "entries": [
+        "bc03.create_thing"
+      ],
+      "links": [
+        {
+          "to": "~unattached:bc04",
+          "via": [
+            "ThingCreated03"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "~bc04.create_thing",
+      "name": "create thing",
+      "declared": false,
+      "color": 10,
+      "bcs": [
+        "bc04"
+      ],
+      "sliceIds": [
+        "bc04.create_thing",
+        "bc04.thing_list"
+      ],
+      "entries": [
+        "bc04.create_thing"
+      ],
+      "links": [
+        {
+          "to": "~unattached:bc05",
+          "via": [
+            "ThingCreated04"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "~bc04.partner_feed",
+      "name": "partner feed",
+      "declared": false,
+      "color": 3,
+      "bcs": [
+        "bc04"
+      ],
+      "sliceIds": [
+        "bc04.partner_feed",
+        "bc04.create_thing",
+        "bc04.thing_list"
+      ],
+      "entries": [
+        "bc04.partner_feed"
+      ],
+      "links": [
+        {
+          "to": "~unattached:bc05",
+          "via": [
+            "ThingCreated04"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "~bc05.create_thing",
+      "name": "create thing",
+      "declared": false,
+      "color": 8,
+      "bcs": [
+        "bc05"
+      ],
+      "sliceIds": [
+        "bc05.create_thing",
+        "bc05.thing_list"
+      ],
+      "entries": [
+        "bc05.create_thing"
+      ],
+      "links": []
+    },
+    {
+      "id": "~bc06.create_thing",
+      "name": "create thing",
+      "declared": false,
+      "color": 11,
+      "bcs": [
+        "bc06"
+      ],
+      "sliceIds": [
+        "bc06.create_thing",
+        "bc06.close_on_create",
+        "bc06.close_thing",
+        "bc06.thing_list"
+      ],
+      "entries": [
+        "bc06.create_thing"
+      ],
+      "links": [
+        {
+          "to": "~unattached:bc07",
+          "via": [
+            "ThingCreated06"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "~bc07.create_thing",
+      "name": "create thing",
+      "declared": false,
+      "color": 1,
+      "bcs": [
+        "bc07"
+      ],
+      "sliceIds": [
+        "bc07.create_thing",
+        "bc07.thing_list"
+      ],
+      "entries": [
+        "bc07.create_thing"
+      ],
+      "links": [
+        {
+          "to": "~unattached:bc08",
+          "via": [
+            "ThingCreated07"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "~bc08.create_thing",
+      "name": "create thing",
+      "declared": false,
+      "color": 11,
+      "bcs": [
+        "bc08"
+      ],
+      "sliceIds": [
+        "bc08.create_thing",
+        "bc08.thing_list"
+      ],
+      "entries": [
+        "bc08.create_thing"
+      ],
+      "links": [
+        {
+          "to": "~unattached:bc09",
+          "via": [
+            "ThingCreated08"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "~bc08.partner_feed",
+      "name": "partner feed",
+      "declared": false,
+      "color": 2,
+      "bcs": [
+        "bc08"
+      ],
+      "sliceIds": [
+        "bc08.partner_feed",
+        "bc08.create_thing",
+        "bc08.thing_list"
+      ],
+      "entries": [
+        "bc08.partner_feed"
+      ],
+      "links": [
+        {
+          "to": "~unattached:bc09",
+          "via": [
+            "ThingCreated08"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "~bc09.create_thing",
+      "name": "create thing",
+      "declared": false,
+      "color": 1,
+      "bcs": [
+        "bc09"
+      ],
+      "sliceIds": [
+        "bc09.create_thing",
+        "bc09.thing_list"
+      ],
+      "entries": [
+        "bc09.create_thing"
+      ],
+      "links": [
+        {
+          "to": "~unattached:bc10",
+          "via": [
+            "ThingCreated09"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "~bc10.create_thing",
+      "name": "create thing",
+      "declared": false,
+      "color": 5,
+      "bcs": [
+        "bc10"
+      ],
+      "sliceIds": [
+        "bc10.create_thing",
+        "bc10.thing_list"
+      ],
+      "entries": [
+        "bc10.create_thing"
+      ],
+      "links": []
+    },
+    {
+      "id": "~bc11.create_thing",
+      "name": "create thing",
+      "declared": false,
+      "color": 11,
+      "bcs": [
+        "bc11"
+      ],
+      "sliceIds": [
+        "bc11.create_thing",
+        "bc11.close_on_create",
+        "bc11.close_thing",
+        "bc11.thing_list"
+      ],
+      "entries": [
+        "bc11.create_thing"
+      ],
+      "links": [
+        {
+          "to": "~unattached:bc12",
+          "via": [
+            "ThingCreated11"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "~bc12.create_thing",
+      "name": "create thing",
+      "declared": false,
+      "color": 8,
+      "bcs": [
+        "bc12"
+      ],
+      "sliceIds": [
+        "bc12.create_thing",
+        "bc12.thing_list"
+      ],
+      "entries": [
+        "bc12.create_thing"
+      ],
+      "links": []
+    },
+    {
+      "id": "~bc12.partner_feed",
+      "name": "partner feed",
+      "declared": false,
+      "color": 1,
+      "bcs": [
+        "bc12"
+      ],
+      "sliceIds": [
+        "bc12.partner_feed",
+        "bc12.create_thing",
+        "bc12.thing_list"
+      ],
+      "entries": [
+        "bc12.partner_feed"
+      ],
+      "links": []
+    },
+    {
+      "id": "~unattached:bc02",
+      "name": "unattached",
+      "declared": false,
+      "color": 6,
+      "bcs": [
+        "bc02"
+      ],
+      "sliceIds": [
+        "bc02.close_thing",
+        "bc02.follow_upstream"
+      ],
+      "entries": [
+        "bc02.close_thing",
+        "bc02.follow_upstream"
+      ],
+      "links": [
+        {
+          "to": "~bc02.create_thing",
+          "via": [
+            "CreateThing02",
+            "ThingClosed02"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "~unattached:bc03",
+      "name": "unattached",
+      "declared": false,
+      "color": 0,
+      "bcs": [
+        "bc03"
+      ],
+      "sliceIds": [
+        "bc03.close_thing",
+        "bc03.follow_upstream"
+      ],
+      "entries": [
+        "bc03.close_thing",
+        "bc03.follow_upstream"
+      ],
+      "links": [
+        {
+          "to": "~bc03.create_thing",
+          "via": [
+            "CreateThing03",
+            "ThingClosed03"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "~unattached:bc04",
+      "name": "unattached",
+      "declared": false,
+      "color": 3,
+      "bcs": [
+        "bc04"
+      ],
+      "sliceIds": [
+        "bc04.close_thing",
+        "bc04.follow_upstream"
+      ],
+      "entries": [
+        "bc04.close_thing",
+        "bc04.follow_upstream"
+      ],
+      "links": [
+        {
+          "to": "~bc04.create_thing",
+          "via": [
+            "CreateThing04",
+            "ThingClosed04"
+          ]
+        },
+        {
+          "to": "~bc04.partner_feed",
+          "via": [
+            "CreateThing04",
+            "ThingClosed04"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "~unattached:bc05",
+      "name": "unattached",
+      "declared": false,
+      "color": 1,
+      "bcs": [
+        "bc05"
+      ],
+      "sliceIds": [
+        "bc05.close_thing",
+        "bc05.follow_upstream"
+      ],
+      "entries": [
+        "bc05.close_thing",
+        "bc05.follow_upstream"
+      ],
+      "links": [
+        {
+          "to": "~bc05.create_thing",
+          "via": [
+            "CreateThing05",
+            "ThingClosed05"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "~unattached:bc06",
+      "name": "unattached",
+      "declared": false,
+      "color": 7,
+      "bcs": [
+        "bc06"
+      ],
+      "sliceIds": [
+        "bc06.thing_report"
+      ],
+      "entries": [
+        "bc06.thing_report"
+      ],
+      "links": []
+    },
+    {
+      "id": "~unattached:bc07",
+      "name": "unattached",
+      "declared": false,
+      "color": 5,
+      "bcs": [
+        "bc07"
+      ],
+      "sliceIds": [
+        "bc07.close_thing",
+        "bc07.follow_upstream"
+      ],
+      "entries": [
+        "bc07.close_thing",
+        "bc07.follow_upstream"
+      ],
+      "links": [
+        {
+          "to": "~bc07.create_thing",
+          "via": [
+            "CreateThing07",
+            "ThingClosed07"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "~unattached:bc08",
+      "name": "unattached",
+      "declared": false,
+      "color": 0,
+      "bcs": [
+        "bc08"
+      ],
+      "sliceIds": [
+        "bc08.close_thing",
+        "bc08.follow_upstream"
+      ],
+      "entries": [
+        "bc08.close_thing",
+        "bc08.follow_upstream"
+      ],
+      "links": [
+        {
+          "to": "~bc08.create_thing",
+          "via": [
+            "CreateThing08",
+            "ThingClosed08"
+          ]
+        },
+        {
+          "to": "~bc08.partner_feed",
+          "via": [
+            "CreateThing08",
+            "ThingClosed08"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "~unattached:bc09",
+      "name": "unattached",
+      "declared": false,
+      "color": 6,
+      "bcs": [
+        "bc09"
+      ],
+      "sliceIds": [
+        "bc09.close_thing",
+        "bc09.follow_upstream"
+      ],
+      "entries": [
+        "bc09.close_thing",
+        "bc09.follow_upstream"
+      ],
+      "links": [
+        {
+          "to": "~bc09.create_thing",
+          "via": [
+            "CreateThing09",
+            "ThingClosed09"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "~unattached:bc10",
+      "name": "unattached",
+      "declared": false,
+      "color": 11,
+      "bcs": [
+        "bc10"
+      ],
+      "sliceIds": [
+        "bc10.close_thing",
+        "bc10.follow_upstream"
+      ],
+      "entries": [
+        "bc10.close_thing",
+        "bc10.follow_upstream"
+      ],
+      "links": [
+        {
+          "to": "~bc10.create_thing",
+          "via": [
+            "CreateThing10",
+            "ThingClosed10"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "~unattached:bc12",
+      "name": "unattached",
+      "declared": false,
+      "color": 3,
+      "bcs": [
+        "bc12"
+      ],
+      "sliceIds": [
+        "bc12.close_thing",
+        "bc12.follow_upstream",
+        "bc12.thing_report"
+      ],
+      "entries": [
+        "bc12.close_thing",
+        "bc12.follow_upstream",
+        "bc12.thing_report"
+      ],
+      "links": [
+        {
+          "to": "~bc12.create_thing",
+          "via": [
+            "CreateThing12",
+            "ThingClosed12"
+          ]
+        },
+        {
+          "to": "~bc12.partner_feed",
+          "via": [
+            "CreateThing12",
+            "ThingClosed12"
+          ]
+        }
+      ]
+    }
+  ],
+  "issues": [
+    {
+      "id": "map-dangling-consume:bc04.partner_feed:event:PartnerThing04",
+      "code": "map-dangling-consume",
+      "level": "warn",
+      "text": "consumes PartnerThing04, which no slice in scope publishes (dangling edge)",
+      "target": {
+        "kind": "slice",
+        "id": "bc04.partner_feed",
+        "part": "event:PartnerThing04"
+      },
+      "source": "map"
+    },
+    {
+      "id": "map-dangling-consume:bc08.partner_feed:event:PartnerThing08",
+      "code": "map-dangling-consume",
+      "level": "warn",
+      "text": "consumes PartnerThing08, which no slice in scope publishes (dangling edge)",
+      "target": {
+        "kind": "slice",
+        "id": "bc08.partner_feed",
+        "part": "event:PartnerThing08"
+      },
+      "source": "map"
+    },
+    {
+      "id": "map-dangling-consume:bc12.partner_feed:event:PartnerThing12",
+      "code": "map-dangling-consume",
+      "level": "warn",
+      "text": "consumes PartnerThing12, which no slice in scope publishes (dangling edge)",
+      "target": {
+        "kind": "slice",
+        "id": "bc12.partner_feed",
+        "part": "event:PartnerThing12"
+      },
+      "source": "map"
+    },
+    {
+      "id": "flow-undeclared:bc01",
+      "code": "flow-undeclared",
+      "level": "info",
+      "text": "4 of 4 slices in `bc01` declare no flow — grouped into processes by cause and effect",
+      "target": {
+        "kind": "context",
+        "id": "bc01",
+        "part": null
+      },
+      "source": "atlas"
+    },
+    {
+      "id": "flow-undeclared:bc02",
+      "code": "flow-undeclared",
+      "level": "info",
+      "text": "4 of 4 slices in `bc02` declare no flow — grouped into processes by cause and effect",
+      "target": {
+        "kind": "context",
+        "id": "bc02",
+        "part": null
+      },
+      "source": "atlas"
+    },
+    {
+      "id": "flow-undeclared:bc03",
+      "code": "flow-undeclared",
+      "level": "info",
+      "text": "4 of 4 slices in `bc03` declare no flow — grouped into processes by cause and effect",
+      "target": {
+        "kind": "context",
+        "id": "bc03",
+        "part": null
+      },
+      "source": "atlas"
+    },
+    {
+      "id": "flow-undeclared:bc04",
+      "code": "flow-undeclared",
+      "level": "info",
+      "text": "5 of 5 slices in `bc04` declare no flow — grouped into processes by cause and effect",
+      "target": {
+        "kind": "context",
+        "id": "bc04",
+        "part": null
+      },
+      "source": "atlas"
+    },
+    {
+      "id": "flow-undeclared:bc05",
+      "code": "flow-undeclared",
+      "level": "info",
+      "text": "4 of 4 slices in `bc05` declare no flow — grouped into processes by cause and effect",
+      "target": {
+        "kind": "context",
+        "id": "bc05",
+        "part": null
+      },
+      "source": "atlas"
+    },
+    {
+      "id": "flow-undeclared:bc06",
+      "code": "flow-undeclared",
+      "level": "info",
+      "text": "5 of 5 slices in `bc06` declare no flow — grouped into processes by cause and effect",
+      "target": {
+        "kind": "context",
+        "id": "bc06",
+        "part": null
+      },
+      "source": "atlas"
+    },
+    {
+      "id": "flow-undeclared:bc07",
+      "code": "flow-undeclared",
+      "level": "info",
+      "text": "4 of 4 slices in `bc07` declare no flow — grouped into processes by cause and effect",
+      "target": {
+        "kind": "context",
+        "id": "bc07",
+        "part": null
+      },
+      "source": "atlas"
+    },
+    {
+      "id": "flow-undeclared:bc08",
+      "code": "flow-undeclared",
+      "level": "info",
+      "text": "5 of 5 slices in `bc08` declare no flow — grouped into processes by cause and effect",
+      "target": {
+        "kind": "context",
+        "id": "bc08",
+        "part": null
+      },
+      "source": "atlas"
+    },
+    {
+      "id": "flow-undeclared:bc09",
+      "code": "flow-undeclared",
+      "level": "info",
+      "text": "4 of 4 slices in `bc09` declare no flow — grouped into processes by cause and effect",
+      "target": {
+        "kind": "context",
+        "id": "bc09",
+        "part": null
+      },
+      "source": "atlas"
+    },
+    {
+      "id": "flow-undeclared:bc10",
+      "code": "flow-undeclared",
+      "level": "info",
+      "text": "4 of 4 slices in `bc10` declare no flow — grouped into processes by cause and effect",
+      "target": {
+        "kind": "context",
+        "id": "bc10",
+        "part": null
+      },
+      "source": "atlas"
+    },
+    {
+      "id": "flow-undeclared:bc11",
+      "code": "flow-undeclared",
+      "level": "info",
+      "text": "4 of 4 slices in `bc11` declare no flow — grouped into processes by cause and effect",
+      "target": {
+        "kind": "context",
+        "id": "bc11",
+        "part": null
+      },
+      "source": "atlas"
+    },
+    {
+      "id": "flow-undeclared:bc12",
+      "code": "flow-undeclared",
+      "level": "info",
+      "text": "6 of 6 slices in `bc12` declare no flow — grouped into processes by cause and effect",
+      "target": {
+        "kind": "context",
+        "id": "bc12",
+        "part": null
+      },
+      "source": "atlas"
+    },
+    {
+      "id": "scenario-none:bc01",
+      "code": "scenario-none",
+      "level": "info",
+      "text": "4 of 4 slices in `bc01` declare no scenarios — their boards show invariants and test kinds instead",
+      "target": {
+        "kind": "context",
+        "id": "bc01",
+        "part": null
+      },
+      "source": "atlas"
+    },
+    {
+      "id": "scenario-none:bc02",
+      "code": "scenario-none",
+      "level": "info",
+      "text": "4 of 4 slices in `bc02` declare no scenarios — their boards show invariants and test kinds instead",
+      "target": {
+        "kind": "context",
+        "id": "bc02",
+        "part": null
+      },
+      "source": "atlas"
+    },
+    {
+      "id": "scenario-none:bc03",
+      "code": "scenario-none",
+      "level": "info",
+      "text": "4 of 4 slices in `bc03` declare no scenarios — their boards show invariants and test kinds instead",
+      "target": {
+        "kind": "context",
+        "id": "bc03",
+        "part": null
+      },
+      "source": "atlas"
+    },
+    {
+      "id": "scenario-none:bc04",
+      "code": "scenario-none",
+      "level": "info",
+      "text": "5 of 5 slices in `bc04` declare no scenarios — their boards show invariants and test kinds instead",
+      "target": {
+        "kind": "context",
+        "id": "bc04",
+        "part": null
+      },
+      "source": "atlas"
+    },
+    {
+      "id": "scenario-none:bc05",
+      "code": "scenario-none",
+      "level": "info",
+      "text": "4 of 4 slices in `bc05` declare no scenarios — their boards show invariants and test kinds instead",
+      "target": {
+        "kind": "context",
+        "id": "bc05",
+        "part": null
+      },
+      "source": "atlas"
+    },
+    {
+      "id": "scenario-none:bc06",
+      "code": "scenario-none",
+      "level": "info",
+      "text": "5 of 5 slices in `bc06` declare no scenarios — their boards show invariants and test kinds instead",
+      "target": {
+        "kind": "context",
+        "id": "bc06",
+        "part": null
+      },
+      "source": "atlas"
+    },
+    {
+      "id": "scenario-none:bc07",
+      "code": "scenario-none",
+      "level": "info",
+      "text": "4 of 4 slices in `bc07` declare no scenarios — their boards show invariants and test kinds instead",
+      "target": {
+        "kind": "context",
+        "id": "bc07",
+        "part": null
+      },
+      "source": "atlas"
+    },
+    {
+      "id": "scenario-none:bc08",
+      "code": "scenario-none",
+      "level": "info",
+      "text": "5 of 5 slices in `bc08` declare no scenarios — their boards show invariants and test kinds instead",
+      "target": {
+        "kind": "context",
+        "id": "bc08",
+        "part": null
+      },
+      "source": "atlas"
+    },
+    {
+      "id": "scenario-none:bc09",
+      "code": "scenario-none",
+      "level": "info",
+      "text": "4 of 4 slices in `bc09` declare no scenarios — their boards show invariants and test kinds instead",
+      "target": {
+        "kind": "context",
+        "id": "bc09",
+        "part": null
+      },
+      "source": "atlas"
+    },
+    {
+      "id": "scenario-none:bc10",
+      "code": "scenario-none",
+      "level": "info",
+      "text": "4 of 4 slices in `bc10` declare no scenarios — their boards show invariants and test kinds instead",
+      "target": {
+        "kind": "context",
+        "id": "bc10",
+        "part": null
+      },
+      "source": "atlas"
+    },
+    {
+      "id": "scenario-none:bc11",
+      "code": "scenario-none",
+      "level": "info",
+      "text": "4 of 4 slices in `bc11` declare no scenarios — their boards show invariants and test kinds instead",
+      "target": {
+        "kind": "context",
+        "id": "bc11",
+        "part": null
+      },
+      "source": "atlas"
+    },
+    {
+      "id": "scenario-none:bc12",
+      "code": "scenario-none",
+      "level": "info",
+      "text": "6 of 6 slices in `bc12` declare no scenarios — their boards show invariants and test kinds instead",
+      "target": {
+        "kind": "context",
+        "id": "bc12",
+        "part": null
+      },
+      "source": "atlas"
+    }
+  ],
+  "lineage": {
+    "fields": {},
+    "technicalColumns": [
+      "id",
+      "version",
+      "createdAt",
+      "updatedAt",
+      "lastModified",
+      "etag"
+    ]
+  }
 }

@@ -851,5 +851,9 @@
     }
   ],
   "unparsed": [],
-  "unresolved": []
+  "unresolved": [],
+  "tests": {
+    "roots": [],
+    "classes": []
+  }
 }

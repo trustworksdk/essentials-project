@@ -72,7 +72,7 @@ def found(doc, root):
 
 
 class SliceLint(unittest.TestCase):
-    def test_fixtures_clean_except_multi_lane_tier(self):
+    def test_fixtures_clean_except_multi_lane_tier_and_atlas_breakage(self):
         for fixture in sorted((PLUGIN / "tests" / "fixtures").iterdir()):
             if not fixture.is_dir():
                 continue
@@ -87,6 +87,13 @@ class SliceLint(unittest.TestCase):
                         "src/main/java/com/example/multi/ledger/use_cases/post_entry/slice.yaml")])
                     self.assertEqual(doc["findings"][0]["line"], 10)
                     self.assertEqual(doc["findings"][0]["severity"], "Should-fix")
+                elif fixture.name == "atlas":
+                    # The Atlas fixture carries a broken manifest (and may carry a malformed scenario)
+                    # on purpose; its scenarios must otherwise name the slices' own messages.
+                    self.assertEqual(code, 1)
+                    self.assertTrue(doc["findings"])
+                    self.assertEqual({f["gate"] for f in doc["findings"]} - {"1(a) parse", "1(b) schema"},
+                                     set(), [f["message"] for f in doc["findings"]])
                 else:
                     self.assertEqual((code, doc["findings"]), (0, []))
 
@@ -236,6 +243,360 @@ class SliceLint(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertTrue(doc["schemaValidated"])
         self.assertGreater(doc["manifests"], 0)
+
+
+# --- flow and scenarios (schema 1.4) ------------------------------------------------------------
+#
+# One manifest per case, all linted in one run. Cases share command and read-model names, so the
+# cross-manifest gates (3, 4) fire between them; only the gates under test are read.
+
+BASES = {
+    "command": {
+        "kind": "command", "handles": ["CancelOrder"], "publishes": ["OrderCancelled"],
+        "writes": ["Order"], "endpoints": [{"method": "POST", "path": "/api/orders/cancel", "auth": "user"}],
+    },
+    "view": {
+        "kind": "view", "serves": ["ListOrders"], "reads": [{"name": "OrderListView"}],
+        "projections": [{"name": "OrderListProjection", "aggregateTypes": ["Orders"],
+                         "from": ["OrderPlaced", "OrderCancelled"], "consistency": "eventual"}],
+    },
+    "automation": {"kind": "automation", "consumes": ["OrderPlaced"], "dispatches": ["InitiatePayment"]},
+    "automation-scheduled": {"kind": "automation", "schedule": {"cron": "0 0 3 * * *"},
+                             "dispatches": ["ExpireQuotes"]},
+    "inbound": {
+        "kind": "translation", "externalSystem": "billing", "direction": "inbound",
+        "consumes": ["InvoiceIssued"], "maps": [{"from": "InvoiceIssued", "to": "RecordPayment"}],
+        "dispatches": ["RecordPayment"], "publishes": ["PaymentRecorded"],
+    },
+    "outbound": {"kind": "translation", "externalSystem": "billing", "direction": "outbound",
+                 "consumes": ["OrderPlaced"]},
+    "both": {
+        "kind": "translation", "externalSystem": "billing", "direction": "both",
+        "consumes": ["InvoiceIssued", "OrderPlaced"], "dispatches": ["RecordPayment"],
+        "maps": [{"from": "InvoiceIssued", "to": "RecordPayment"}],
+    },
+}
+
+E, C, Q, S, X = ("event", "command", "query", "state", "external")
+
+
+def step(key, name, **values):
+    out: dict = {key: name}
+    if values:
+        out["with"] = values
+    return out
+
+
+def sc(name="s", given=None, when=None, then=None, **extra):
+    out: dict = {"name": name}
+    if given is not None:
+        out["given"] = given
+    if when is not None:
+        out["when"] = when
+    if then is not None:
+        out["then"] = then
+    out.update(extra)
+    return out
+
+
+NOTHING = {"nothing": True}
+ERROR = {"error": "OrderNotFound", "message": "Order o-404 not found"}
+
+# (case, base, extra root fields) — every row of the manifest-guide §3 kind table, valid.
+VALID = [
+    ("command-events", "command", {"scenarios": [sc(
+        given=[step(E, "OrderPlaced", orderId="o-1"), step(S, "Order")],
+        when=step(C, "CancelOrder", orderId="o-1"),
+        then=[step(E, "OrderCancelled", orderId="o-1")], test="CancelOrderTest#cancelsPlacedOrder")]}),
+    ("command-error", "command", {"scenarios": [sc(when=step(C, "CancelOrder"), then=ERROR)]}),
+    ("command-nothing", "command", {"scenarios": [sc(
+        given=[step(E, "OrderPlaced"), step(E, "OrderCancelled")], when=step(C, "CancelOrder"),
+        then=NOTHING, note="idempotent retry")]}),
+    ("view-rows", "view", {"scenarios": [sc(
+        given=[step(E, "OrderPlaced", orderId="o-1", total=12.5)], when=step(Q, "ListOrders"),
+        then={"readModel": "OrderListView", "rows": [{"orderId": "o-1", "total": 12.5, "shipped": False,
+                                                      "note": None}]})]}),
+    ("view-empty-no-when", "view", {"scenarios": [sc(then={"readModel": "OrderListView", "rows": []})]}),
+    ("view-owns-projection-name", "view", {"owns": ["OrderBoard"], "scenarios": [
+        sc("a", then={"readModel": "OrderBoard", "rows": []}),
+        sc("b", then={"readModel": "OrderListProjection", "rows": []})]}),
+    ("view-error", "view", {"scenarios": [sc(when=step(Q, "ListOrders", page=-1),
+                                             then={"error": "IllegalArgumentException"})]}),
+    ("automation-dispatches", "automation", {"scenarios": [sc(
+        given=[step(E, "PaymentFailed"), step(S, "PaymentAttempts")], when=step(E, "OrderPlaced"),
+        then=[step(C, "InitiatePayment", orderId="o-1")])]}),
+    ("automation-nothing-error", "automation", {"scenarios": [
+        sc("ignored", when=step(E, "OrderPlaced"), then=NOTHING),
+        sc("fails", when=step(E, "OrderPlaced"), then={"error": "PaymentGatewayDown"})]}),
+    ("automation-schedule", "automation-scheduled", {"scenarios": [sc(
+        when={"schedule": True}, then=[step(C, "ExpireQuotes")])]}),
+    ("inbound", "inbound", {"scenarios": [
+        sc("records", given=[step(E, "OrderPlaced")], when=step(X, "InvoiceIssued", invoiceId="i-1"),
+           then=[step(C, "RecordPayment"), step(E, "PaymentRecorded")]),
+        sc("dup", when=step(X, "InvoiceIssued"), then=NOTHING),
+        sc("bad", when=step(X, "InvoiceIssued"), then={"error": "UnknownInvoice"})]}),
+    ("outbound", "outbound", {"scenarios": [
+        sc("sends", given=[step(S, "SentInvoices")], when=step(E, "OrderPlaced"),
+           then=[step(X, "CreateInvoice", amount=10)]),
+        sc("skip", when=step(E, "OrderPlaced"), then=NOTHING),
+        sc("down", when=step(E, "OrderPlaced"), then={"error": "BillingUnavailable"})]}),
+    ("both-directions", "both", {"scenarios": [
+        sc("in", when=step(X, "InvoiceIssued"), then=[step(C, "RecordPayment")]),
+        sc("out", when=step(E, "OrderPlaced"), then=[step(X, "CreateInvoice")])]}),
+    ("flow-one", "command", {"flow": "checkout"}),
+    ("flow-several", "view", {"flow": ["checkout", "returns_2"]}),
+]
+
+# (case, base, extra root fields, expected (gate, message fragment) findings) — each one invalid.
+INVALID = [
+    # command
+    ("cmd-when-not-handled", "command", {"scenarios": [sc(when=step(C, "CancelOrdr"), then=NOTHING)]},
+     [("1(d)", "`when: { command: CancelOrdr }` is not in `handles` [CancelOrder]")]),
+    ("cmd-when-event", "command", {"scenarios": [sc(when=step(E, "OrderPlaced"), then=NOTHING)]},
+     [("1(d)", "a command slice is triggered by a `command`")]),
+    ("cmd-no-when", "command", {"scenarios": [sc(then=NOTHING)]},
+     [("1(d)", "no `when` — a command slice's scenario needs its trigger")]),
+    ("cmd-then-unpublished", "command", {"scenarios": [sc(when=step(C, "CancelOrder"),
+                                                          then=[step(E, "OrderShipped")])]},
+     [("1(d)", "`then: { event: OrderShipped }` is not in `publishes` [OrderCancelled]")]),
+    ("cmd-then-command", "command", {"scenarios": [sc(when=step(C, "CancelOrder"),
+                                                      then=[step(C, "RefundOrder")])]},
+     [("1(d)", "a command slice emits `event` steps")]),
+    ("cmd-then-read-model", "command", {"scenarios": [sc(when=step(C, "CancelOrder"),
+                                                         then={"readModel": "Order", "rows": []})]},
+     [("1(d)", "is a view's outcome")]),
+    ("cmd-given-query", "command", {"scenarios": [sc(given=[step(Q, "ListOrders")],
+                                                     when=step(C, "CancelOrder"), then=NOTHING)]},
+     [("1(d)", "`given` holds a `query` step")]),
+    ("cmd-given-state-unwritten", "command", {"scenarios": [sc(given=[step(S, "Invoice")],
+                                                               when=step(C, "CancelOrder"), then=NOTHING)]},
+     [("1(d)", "`given: { state: Invoice }` is not in `writes` [Order]")]),
+    # view
+    ("view-when-not-served", "view", {"scenarios": [sc(when=step(Q, "GetOrder"),
+                                                       then={"readModel": "OrderListView", "rows": []})]},
+     [("1(d)", "`when: { query: GetOrder }` is not in `serves` [ListOrders]")]),
+    ("view-when-command", "view", {"scenarios": [sc(when=step(C, "CancelOrder"),
+                                                    then={"readModel": "OrderListView", "rows": []})]},
+     [("1(d)", "a view's `when` is a `query` it serves")]),
+    ("view-given-unprojected", "view", {"scenarios": [sc(given=[step(E, "OrderShipped")],
+                                                         then={"readModel": "OrderListView", "rows": []})]},
+     [("1(d)", "`given: { event: OrderShipped }` is not an event this view projects")]),
+    ("view-given-state", "view", {"scenarios": [sc(given=[step(S, "Order")],
+                                                   then={"readModel": "OrderListView", "rows": []})]},
+     [("1(d)", "on a view slice `given` takes `event` steps only")]),
+    ("view-then-steps", "view", {"scenarios": [sc(then=[step(E, "OrderPlaced")])]},
+     [("1(d)", "a view's `then` is `{ readModel, rows }`")]),
+    ("view-then-nothing", "view", {"scenarios": [sc(when=step(Q, "ListOrders"), then=NOTHING)]},
+     [("1(d)", "an empty read model is `{ readModel: <Name>, rows: [] }`")]),
+    ("view-then-unknown-model", "view", {"scenarios": [sc(then={"readModel": "Orders", "rows": []})]},
+     [("1(d)", "`then: { readModel: Orders }` is not this view's read model")]),
+    ("view-error-no-when", "view", {"scenarios": [sc(then=ERROR)]},
+     [("1(d)", "needs the `when` query that fails")]),
+    # automation
+    ("auto-when-unconsumed", "automation", {"scenarios": [sc(when=step(E, "OrderShipped"), then=NOTHING)]},
+     [("1(d)", "`when: { event: OrderShipped }` is not in `consumes` [OrderPlaced]")]),
+    ("auto-schedule-undeclared", "automation", {"scenarios": [sc(when={"schedule": True}, then=NOTHING)]},
+     [("1(d)", "the slice declares no `schedule`")]),
+    ("auto-when-command", "automation", {"scenarios": [sc(when=step(C, "InitiatePayment"), then=NOTHING)]},
+     [("1(d)", "an automation is triggered by an `event`")]),
+    ("auto-no-when", "automation", {"scenarios": [sc(then=NOTHING)]},
+     [("1(d)", "no `when` — an automation slice's scenario")]),
+    ("auto-then-undispatched", "automation", {"scenarios": [sc(when=step(E, "OrderPlaced"),
+                                                               then=[step(C, "CancelOrder")])]},
+     [("1(d)", "`then: { command: CancelOrder }` is not in `dispatches` [InitiatePayment]")]),
+    ("auto-then-event", "automation", {"scenarios": [sc(when=step(E, "OrderPlaced"),
+                                                        then=[step(E, "PaymentInitiated")])]},
+     [("1(d)", "an automation slice emits `command` steps")]),
+    # translation, inbound
+    ("in-when-event", "inbound", {"scenarios": [sc(when=step(E, "InvoiceIssued"), then=NOTHING)]},
+     [("1(d)", "this translation is triggered by an `external` message (`direction: inbound`)")]),
+    ("in-no-when", "inbound", {"scenarios": [sc(then=NOTHING)]},
+     [("1(d)", "no `when` — a translation slice's scenario")]),
+    ("in-then-external", "inbound", {"scenarios": [sc(when=step(X, "InvoiceIssued"),
+                                                      then=[step(X, "Ack")])]},
+     [("1(d)", "an inbound translation emits `command` and `event` steps")]),
+    ("in-then-undispatched", "inbound", {"scenarios": [sc(when=step(X, "InvoiceIssued"),
+                                                          then=[step(C, "CancelOrder"),
+                                                                step(E, "OrderCancelled")])]},
+     [("1(d)", "`then: { command: CancelOrder }` is not in `dispatches` [RecordPayment]"),
+      ("1(d)", "`then: { event: OrderCancelled }` is not in `publishes` [PaymentRecorded]")]),
+    # translation, outbound
+    ("out-when-external", "outbound", {"scenarios": [sc(when=step(X, "InvoiceIssued"), then=NOTHING)]},
+     [("1(d)", "an `event` it consumes (`direction: outbound`)")]),
+    ("out-when-unconsumed", "outbound", {"scenarios": [sc(when=step(E, "OrderShipped"), then=NOTHING)]},
+     [("1(d)", "`when: { event: OrderShipped }` is not in `consumes` [OrderPlaced]")]),
+    ("out-then-command", "outbound", {"scenarios": [sc(when=step(E, "OrderPlaced"),
+                                                       then=[step(C, "RecordPayment")])]},
+     [("1(d)", "an outbound translation emits `external` steps")]),
+    ("both-in-emits-external", "both", {"scenarios": [sc(when=step(X, "InvoiceIssued"),
+                                                         then=[step(X, "CreateInvoice")])]},
+     [("1(d)", "an inbound translation emits `command` and `event` steps")]),
+    # uniqueness, the one shape rule the schema cannot state
+    ("duplicate-name", "command", {"scenarios": [sc("twice", when=step(C, "CancelOrder"), then=NOTHING),
+                                                 sc("twice", when=step(C, "CancelOrder"), then=ERROR)]},
+     [("1(d)", "2 scenarios of this slice share the name")] * 2),
+    # shape — the schema
+    ("then-empty", "command", {"scenarios": [sc(when=step(C, "CancelOrder"), then=[])]},
+     [("1(b)", "scenarios/0/then")]),
+    ("then-missing", "command", {"scenarios": [sc(when=step(C, "CancelOrder"))]},
+     [("1(b)", "'then' is a required property")]),
+    ("name-missing", "command", {"scenarios": [{"when": step(C, "CancelOrder"), "then": NOTHING}]},
+     [("1(b)", "'name' is a required property")]),
+    ("step-two-keys", "command", {"scenarios": [sc(when={"command": "CancelOrder", "event": "OrderPlaced"},
+                                                   then=NOTHING)]},
+     [("1(b)", "scenarios/0/when")]),
+    ("step-no-key", "command", {"scenarios": [sc(when={"with": {"orderId": "o-1"}}, then=NOTHING)]},
+     [("1(b)", "scenarios/0/when")]),
+    ("then-two-forms", "command", {"scenarios": [sc(when=step(C, "CancelOrder"),
+                                                    then={"error": "X", "nothing": True})]},
+     [("1(b)", "scenarios/0/then")]),
+    ("nothing-false", "command", {"scenarios": [sc(when=step(C, "CancelOrder"), then={"nothing": False})]},
+     [("1(b)", "scenarios/0/then")]),
+    ("schedule-false", "automation-scheduled", {"scenarios": [sc(when={"schedule": False}, then=NOTHING)]},
+     [("1(b)", "scenarios/0/when")]),
+    ("with-nested", "command", {"scenarios": [sc(when=step(C, "CancelOrder", lines=[1, 2]), then=NOTHING)]},
+     [("1(b)", "scenarios/0/when")]),
+    ("unknown-scenario-key", "command", {"scenarios": [sc(when=step(C, "CancelOrder"), then=NOTHING,
+                                                          expect="x")]},
+     [("1(b)", "Additional properties are not allowed ('expect' was unexpected)")]),
+    ("flow-capitalised", "command", {"flow": "Checkout"}, [("1(b)", "flow")]),
+    ("flow-empty-list", "command", {"flow": []}, [("1(b)", "flow")]),
+    ("flow-duplicate", "command", {"flow": ["checkout", "checkout"]}, [("1(b)", "flow")]),
+    ("flow-number", "command", {"flow": 3}, [("1(b)", "flow")]),
+]
+
+
+class FlowAndScenarios(unittest.TestCase):
+    """Schema 1.4: `flow` and `scenarios` — the shape in the schema, the names in gate 1(d)."""
+
+    by_case: dict = {}
+    hints: dict = {}
+
+    @classmethod
+    def setUpClass(cls):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            for case, base, extra, *_ in VALID + INVALID:
+                manifest = {"schemaVersion": "1.4", "slice": f"orders.{case.replace('-', '_')}",
+                            "bc": "orders", "owner": "orders-team", "status": "live", "summary": case,
+                            "tests": {"unit": {"present": True}}, **BASES[base], **extra}
+                (root / case).mkdir()
+                (root / case / "slice.yaml").write_text(yaml.safe_dump(manifest, sort_keys=False))
+            _, doc = lint(root)
+            for f in doc["findings"]:
+                case = Path(f["file"]).parent.name
+                if f["gate"] in ("1(b) schema", "1(d) scenario"):
+                    cls.by_case.setdefault(case, []).append(f)
+        cls.doc = doc
+
+    def test_every_valid_case_is_clean(self):
+        for case, *_ in VALID:
+            with self.subTest(case=case):
+                self.assertEqual(self.by_case.get(case, []), [])
+
+    def test_every_invalid_case_reports_exactly_its_findings(self):
+        for case, _, _, expected in INVALID:
+            with self.subTest(case=case):
+                got = self.by_case.get(case, [])
+                self.assertEqual(len(got), len(expected), [f["message"] for f in got])
+                for (gate, fragment), finding in zip(expected, sorted(got, key=lambda f: f["message"])):
+                    self.assertTrue(finding["gate"].startswith(gate), finding)
+                    self.assertIn(fragment, finding["message"])
+                    self.assertEqual(finding["severity"], "Should-fix")
+                    self.assertEqual(finding["id"], "ESS-G1d" if gate == "1(d)" else "ESS-G1b")
+
+    def test_hints_name_the_forms(self):
+        hint = self.by_case["then-empty"][0]["hint"]
+        self.assertIn("write { nothing: true }", hint)
+        self.assertIn("exactly one of event, command", self.by_case["step-two-keys"][0]["hint"])
+        self.assertIn("lower-case", self.by_case["flow-capitalised"][0]["hint"])
+        self.assertIn("manifest-guide.md §3", self.by_case["cmd-when-not-handled"][0]["hint"])
+
+    def test_unquoted_date_gets_the_quoting_hint(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            manifest = Path(tmp) / "orders" / "slice.yaml"
+            manifest.parent.mkdir()
+            manifest.write_text(yaml.safe_dump({
+                "schemaVersion": "1.4", "slice": "orders.place_order", "kind": "command", "bc": "orders",
+                "owner": "o", "status": "live", "summary": "s", "tests": {}, **BASES["command"]})
+                + "scenarios:\n  - name: dated\n    when: { command: CancelOrder, with: { on: 2026-10-08 } }\n"
+                  "    then: [{ event: OrderCancelled, with: { at: 2026-10-08 } }]\n")
+            code, doc = lint(tmp)
+        self.assertEqual(code, 1)
+        self.assertEqual([f["gate"] for f in doc["findings"]], ["1(b) schema", "1(b) schema"])
+        for f in doc["findings"]:
+            self.assertIn("Quote a date", f["hint"])
+
+    def test_finding_points_at_the_scenario_line_and_exits_1(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            manifest = Path(tmp) / "orders" / "slice.yaml"
+            manifest.parent.mkdir()
+            manifest.write_text(
+                'schemaVersion: "1.4"\nslice: orders.cancel_order\nkind: command\nbc: orders\n'
+                "owner: orders-team\nstatus: live\nsummary: Cancel.\nhandles: [CancelOrder]\n"
+                "publishes: [OrderCancelled]\nwrites: [Order]\nflow: checkout\n"
+                "scenarios:\n"
+                "  - name: cancels a placed order\n"
+                "    when: { command: CancelOrder }\n"
+                "    then: [{ event: OrderCancelled }]\n"
+                "  - { name: \"rejects an unknown order\", when: { command: CancelOrdr }, then: { error: X } }\n"
+                "tests:\n  unit: { present: true }\n")
+            code, doc = lint(tmp)
+            r = subprocess.run([sys.executable, str(SCRIPT), tmp], capture_output=True, text=True, timeout=60)
+        self.assertEqual(code, 1)
+        self.assertEqual([(f["gate"], f["line"]) for f in doc["findings"]], [("1(d) scenario", 16)])
+        self.assertIn("scenarios/1 'rejects an unknown order'", doc["findings"][0]["message"])
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("1(d) scenario", r.stdout)
+
+    def test_rule_runs_without_jsonschema(self):
+        # Manifest-only, no schema needed: a python3 hook without jsonschema still reports it (exit 1).
+        with tempfile.TemporaryDirectory() as tmp:
+            manifest = Path(tmp) / "slice.yaml"
+            manifest.write_text(yaml.safe_dump({
+                "schemaVersion": "1.4", "slice": "orders.cancel_order", "kind": "command", "bc": "orders",
+                "owner": "o", "status": "live", "summary": "s", "tests": {}, **BASES["command"],
+                "scenarios": [sc(when=step(C, "CancelOrdr"), then=NOTHING)]}))
+            code, out, _ = lint_without_jsonschema(tmp, "--json")
+        doc = json.loads(out)
+        self.assertEqual((code, doc["schemaValidated"]), (1, False))
+        self.assertEqual([f["gate"] for f in doc["findings"]], ["1(d) scenario"])
+
+    def test_pre_1_4_schema_copy_rejects_the_new_fields(self):
+        # manifest-guide.md §3 compatibility rule: a project copy older than 1.4 fails these manifests,
+        # which is why a generator checks the copy for a `scenarios` property before writing either.
+        with tempfile.TemporaryDirectory() as tmp:
+            old = json.loads(SCHEMA.read_text())
+            del old["properties"]["flow"], old["properties"]["scenarios"]
+            old_path = Path(tmp) / "old.json"
+            old_path.write_text(json.dumps(old))
+            manifest = Path(tmp) / "m" / "slice.yaml"
+            manifest.parent.mkdir()
+            manifest.write_text(yaml.safe_dump({
+                "schemaVersion": "1.4", "slice": "orders.cancel_order", "kind": "command", "bc": "orders",
+                "owner": "o", "status": "live", "summary": "s", "tests": {}, **BASES["command"],
+                "flow": "checkout"}))
+            code, doc = lint(manifest.parent, "--schema", str(old_path))
+        self.assertEqual(code, 1)
+        self.assertIn("'flow' does not match any of the regexes", doc["findings"][0]["message"])
+        self.assertIn("scenarios", json.loads(SCHEMA.read_text())["properties"])
+
+    def test_manifest_guide_worked_examples_lint_clean(self):
+        # manifest-guide.md §5 is what an author copies; it must pass the gate it documents.
+        import re
+        guide = (PLUGIN / "references" / "slice" / "manifest-guide.md").read_text()
+        section = guide[guide.index("## 5. Worked examples"):guide.index("## 6. The companion")]
+        blocks = re.findall(r"```yaml\n(.*?)```", section, re.S)
+        self.assertEqual(len(blocks), 4)
+        with tempfile.TemporaryDirectory() as tmp:
+            for i, block in enumerate(blocks):
+                (Path(tmp) / str(i)).mkdir()
+                (Path(tmp) / str(i) / "slice.yaml").write_text(block)
+            code, doc = lint(tmp)
+        self.assertEqual((code, doc["parsed"], doc["findings"]), (0, 4, []))
+        kinds = "".join(blocks)
+        for form in ("error:", "nothing: true", "readModel:", "external:", "flow:"):
+            self.assertIn(form, kinds)
 
 
 if __name__ == "__main__":
