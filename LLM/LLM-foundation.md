@@ -1048,7 +1048,9 @@ Spring Boot starters run it on every `Jackson3JSONSerializer`-backed serializer 
 
 ⚠️ `EssentialsJacksonModules.modules()` (used by `EssentialsObjectMappers`) throws `IllegalStateException` when a
 0.50-era Jackson 2 `types-jackson` / `immutable-jackson` jar is on the classpath (same FQCNs, wrong Jackson major) —
-depend on `types-jackson3` / `immutable-jackson3`.
+depend on `types-jackson3` / `immutable-jackson3`. Since 0.60.1 it also throws when `immutable-jackson3` is present but
+`org.objenesis:objenesis` is not (provided by design, so the application declares it): without it every read of a
+persisted object would fail with `NoClassDefFoundError: org/objenesis/...` after a normal startup.
 
 ⚠️ Under Jackson 3 a constructor parameter **name** is part of the JSON contract. Jackson 3 reads parameter names from
 the bytecode (classes compiled with `-parameters`, and Kotlin) and uses a class's constructor as a properties-based

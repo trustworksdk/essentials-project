@@ -6,7 +6,7 @@
 - Package: `dk.trustworks.essentials.jackson.immutable`
 - Purpose: Jackson deserialization for immutable classes without matching constructors
 - Artifact: `immutable-jackson3` (Jackson 3 / `tools.jackson`)
-- Dependencies: `tools.jackson.core:jackson-databind`, `objenesis` (both provided scope)
+- Dependencies: `tools.jackson.core:jackson-databind`, `objenesis` (both provided scope - the application declares them). Since 0.60.1 `EssentialsObjectMappers` refuses to build a mapper when this module is on the classpath without Objenesis, instead of the first read failing with `NoClassDefFoundError`
 - **Status**: WORK-IN-PROGRESS
 
 ```xml

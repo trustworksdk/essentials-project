@@ -21,7 +21,7 @@ Cross-cutting infrastructure abstractions: transactions, distributed locking, du
 | `scheduler` | `EssentialsScheduler` SPI, `DefaultEssentialsScheduler`; `pgcron` and `executor` sub-packages |
 | `lifecycle` | `DefaultLifecycleManager` (Spring `SmartLifecycle` adapter), `ShutdownAware` + `ShutdownContext` (shutdown signal, bounded DB cleanup) |
 | `json` | `JSONSerializer` SPI, `Jackson3JSONSerializer`, `EssentialsObjectMappers`, `EssentialsJacksonModules` |
-| `boot` | Spring Boot startup checks shared by every starter (each lists `EssentialsStartupChecksAutoConfiguration` in its `AutoConfiguration.imports`): `WireFormatCheckBeanPostProcessor` (`essentials.json.wire-format-check`), `RemovedEssentialsPropertiesCheck` (ERROR per removed `essentials.*` key still set) |
+| `boot` | Spring Boot startup checks shared by every starter (each lists `EssentialsStartupChecksAutoConfiguration` in its `AutoConfiguration.imports`): `WireFormatCheckBeanPostProcessor` (`essentials.json.wire-format-check`), `RemovedEssentialsPropertiesCheck` (ERROR per removed `essentials.*` key still set); `MissingDependencyFailureAnalyzer` (registered via starters' `META-INF/spring.factories`, not the imports: missing provided lib → Maven coordinates; curated prefix list, order specific→broad) |
 | `reactive.command` | `DurableLocalCommandBus` (reactive command bus backed by `DurableQueues`) |
 | `interceptor.micrometer` | Micrometer timing interceptors for queue + command bus |
 | `events` | `InfrastructureLocalEventBus` (internal event bus for infrastructure events) |
@@ -57,7 +57,7 @@ Cross-cutting infrastructure abstractions: transactions, distributed locking, du
 | `DefaultLifecycleManager` | Spring `SmartLifecycle` — discovers and starts/stops all `Lifecycle` beans |
 | `JSONSerializer` | Serialization SPI; impl `Jackson3JSONSerializer` |
 | `EssentialsObjectMappers` | **The** canonical persisted-JSON mapper config (Jackson 3; byte-identical to 0.50's Jackson 2 output). Every mapper used for persistence must come from here. `findWireFormatDeviations(mapper)` probes any other mapper behaviourally (package-private `WireFormatProbes`; expected bytes are written out, never produced by this class) |
-| `EssentialsJacksonModules` | `modules()` reflectively resolves `types-jackson3`/`immutable-jackson3` modules when present; throws `IllegalStateException` if a 0.50-era Jackson 2 `types-jackson`/`immutable-jackson` jar (same FQCN) is on classpath |
+| `EssentialsJacksonModules` | `modules()` reflectively resolves `types-jackson3`/`immutable-jackson3` modules when present; throws `IllegalStateException` if a 0.50-era Jackson 2 `types-jackson`/`immutable-jackson` jar (same FQCN) is on classpath, or `immutable-jackson3` present without Objenesis (looked up via the module's own classloader; objenesis stays `provided` everywhere, never make it compile) |
 | `Jackson3CollectionWrapperModule` | Pins any `Map`/`Collection` implementation that wraps one behind a final field to a delegating creator, so it keeps reading as its contents. Matched by shape, so new wrapper types are covered on arrival |
 | `PostgresqlUtil` | `checkIsValidTableOrColumnName` (SQL injection guard), extension checks, version detection |
 | `DurableLocalCommandBus` | Command bus backed by `DurableQueues`; durable delivery of commands |

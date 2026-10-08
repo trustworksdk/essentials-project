@@ -38,6 +38,9 @@ public final class EssentialsJacksonModules {
     /** Present when {@code immutable-jackson3} is on the classpath. */
     public static final String IMMUTABLE_MODULE_CLASS_NAME = "dk.trustworks.essentials.jackson.immutable.EssentialsImmutableJacksonModule";
 
+    /** The Objenesis class {@code immutable-jackson3} instantiates objects through. */
+    static final String OBJENESIS_CLASS_NAME = "org.objenesis.ObjenesisStd";
+
     private static final String JACKSON_MODULE_TYPE = "tools.jackson.databind.JacksonModule";
 
     private EssentialsJacksonModules() {
@@ -46,7 +49,9 @@ public final class EssentialsJacksonModules {
     /**
      * @return the Essentials Jackson modules that are on the classpath
      * @throws IllegalStateException if a module is present but was built for Jackson 2 (an Essentials 0.50 or earlier
-     *                               {@code types-jackson} / {@code immutable-jackson} artifact)
+     *                               {@code types-jackson} / {@code immutable-jackson} artifact), or if
+     *                               {@code immutable-jackson3} is present but {@code org.objenesis:objenesis}, which it
+     *                               needs and which is {@code provided} by design, is not
      */
     public static List<tools.jackson.databind.JacksonModule> modules() {
         var modules = new ArrayList<tools.jackson.databind.JacksonModule>();
@@ -61,10 +66,34 @@ public final class EssentialsJacksonModules {
                                     + "nested objects instead of JSON primitives, which existing persisted data cannot be "
                                     + "read back as.");
                 }
+                if (IMMUTABLE_MODULE_CLASS_NAME.equals(moduleClassName)) {
+                    requireObjenesisFor(moduleClass);
+                }
                 modules.add((tools.jackson.databind.JacksonModule) instantiate(moduleClass));
             });
         }
         return modules;
+    }
+
+    /**
+     * {@code immutable-jackson3} needs Objenesis, which it declares {@code provided}: the application chooses the
+     * version, so it must declare the dependency itself. Without it nothing fails while the mapper is built or while it
+     * writes - the module's value instantiator links Objenesis only when the first object is read, so the application
+     * starts, persists, and then fails every read of an event, queue message or document with a
+     * {@code NoClassDefFoundError}. Checking here moves that failure to the moment the mapper is created.
+     */
+    private static void requireObjenesisFor(Class<?> immutableModuleClass) {
+        try {
+            Class.forName(OBJENESIS_CLASS_NAME, false, immutableModuleClass.getClassLoader());
+        } catch (ClassNotFoundException | LinkageError e) {
+            throw new IllegalStateException(
+                    "immutable-jackson3 (" + IMMUTABLE_MODULE_CLASS_NAME + ") is on the classpath, but Objenesis, which it needs, is not. "
+                            + "Add the dependency org.objenesis:objenesis to your application (compile scope; Spring Boot does not manage its "
+                            + "version - use the one Essentials builds against, its objenesis.version). Essentials declares Objenesis with "
+                            + "provided scope by design, so it is never brought in transitively. Without it every read of a persisted object "
+                            + "(an event, a durable-queue message, a document) would fail with NoClassDefFoundError: org/objenesis/...",
+                    e);
+        }
     }
 
     private static Optional<Class<?>> moduleClass(String moduleClassName) {

@@ -727,7 +727,7 @@ public PostgresqlDurableQueues postgresqlDurableQueues(...) {
     <groupId>dk.trustworks.essentials.components</groupId>
     <artifactId>spring-boot-starter-postgresql</artifactId>
 </dependency>
-<!-- Required: spring-boot-starter-jdbc, jdbi3-core, jdbi3-postgres, postgresql, tools.jackson.core:jackson-databind (Jackson 3), reactor-core -->
+<!-- Required: spring-boot-starter-jdbc, jdbi3-core, jdbi3-postgres, postgresql, tools.jackson.core:jackson-databind (Jackson 3), reactor-core, org.objenesis:objenesis -->
 ```
 
 ### MongoDB Starter
@@ -736,7 +736,7 @@ public PostgresqlDurableQueues postgresqlDurableQueues(...) {
     <groupId>dk.trustworks.essentials.components</groupId>
     <artifactId>spring-boot-starter-mongodb</artifactId>
 </dependency>
-<!-- Required: spring-boot-starter-data-mongodb, tools.jackson.core:jackson-databind (Jackson 3), reactor-core -->
+<!-- Required: spring-boot-starter-data-mongodb, tools.jackson.core:jackson-databind (Jackson 3), reactor-core, org.objenesis:objenesis -->
 ```
 
 ### Event Store Starter
@@ -747,6 +747,8 @@ public PostgresqlDurableQueues postgresqlDurableQueues(...) {
 </dependency>
 <!-- Includes spring-boot-starter-postgresql transitively -->
 ```
+
+Every third-party library above is `provided` upstream, by design - declare each in compile scope. A missing one fails startup; since 0.60.1 the starters' `MissingDependencyFailureAnalyzer` (foundation, registered in their `META-INF/spring.factories`) turns the `NoClassDefFoundError`/`ClassNotFoundException` into a report naming the Maven coordinates to add. Objenesis used to fail only at the first read of a persisted object; since 0.60.1 the persistence mapper refuses to be created without it (`IllegalStateException` naming `org.objenesis:objenesis`). Spring Boot does not manage the objenesis version.
 
 ### Admin UI Starter
 ```xml
