@@ -108,7 +108,14 @@ or auditing a slice, seeing the whole map, and reviewing a change.
                          per journey, a Diff lens against the branch's merge
                          base, field lineage, a coupling matrix and a metro
                          map, with an issues dock and deep links. Written by
-                         script; audits nothing.
+                         script; audits nothing. --per-app: one page per
+                         application of a multi-application folder, plus an
+                         index page.
+  /essentials:slice-enrich
+                         Catches older manifests up on the fields they lack —
+                         flow, scenarios, summary, invariants, tier — drafted
+                         from evidence in the code and tests, each confirmed;
+                         writes only absent fields. --dry-run writes nothing.
 
 ━━━ REVIEWING A CHANGE ━━━
 
@@ -261,6 +268,7 @@ or auditing a slice, seeing the whole map, and reviewing a change.
   /essentials:add-slice   ← existing project; add a feature
   /essentials:slice-map   ← existing project that follows the law; see it
   /essentials:slice-map-html ← the same, as a page; what this branch changed
+  /essentials:slice-enrich ← manifests from before schema 1.4; catch them up
   /essentials:slice-check ← existing project that follows the law; audit it
   /essentials:slice-discover ← existing project that does not; map it first
   /essentials:review      ← before you open a pull request

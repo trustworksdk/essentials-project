@@ -1,0 +1,16 @@
+schemaVersion: "1.3"
+slice: lending.register_copy
+kind: command
+bc: lending
+owner: circulation
+status: live
+summary: Adds a newly catalogued copy to the lending stock.
+generator: essentials
+language: java
+lane: decider
+handles: [RegisterCopy]
+publishes: [CopyRegistered]
+writes: [Copy]
+invariants: []
+tests:
+  unit: { present: false }

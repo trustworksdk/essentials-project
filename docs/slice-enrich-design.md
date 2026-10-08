@@ -154,9 +154,8 @@ facts live in `slice-enrich.py`, so `slice-source.py`'s goldens do not move.
        "scenarios": {"tests": [
          {"class": "PlaceTradeDeciderTest", "method": "placesATrade", "path": "src/test/java/…", "line": 41,
           "displayName": null,
-          "extracted": {"given": [], "when": {"type": "command", "name": "PlaceTrade", "with": {"quantity": 10}},
-                        "then": {"kind": "steps", "steps": [{"type": "event", "name": "TradePlaced"}]}}}],
-         "unmapped": false},
+          "extracted": {"given": [], "when": {"command": "PlaceTrade", "with": {"quantity": 10}},
+                        "then": [{"event": "TradePlaced"}]}}]},
        "summary": {"draft": "Places a trade for an account.", "evidence": [{"path": "…/PlaceTrade.java", "line": 12, "text": "/** Places a trade …"}]},
        "invariants": [{"text": "Quantity must be positive", "enforcedBy": "PlaceTradeDecider#handle",
                        "evidence": {"path": "…", "line": 30, "text": "FailFast.requireTrue(cmd.quantity() > 0, \"Quantity must be positive\")"}}],
@@ -174,7 +173,11 @@ facts live in `slice-enrich.py`, so `slice-source.py`'s goldens do not move.
 
 Deterministic: same input, same bytes (sorted keys where order carries no meaning; journeys and slices by
 id). A key appears in `proposals` only when the field is absent and the script found evidence; a field
-absent without evidence goes in the slice's `absent` list only.
+absent without evidence goes in the slice's `absent` list only. One exception: absent `scenarios` with no
+mapped test gives `{"tests": [], "unmapped": true}`, so the command can suggest the test the slice lacks.
+Also emitted: top-level `ambiguousTests` (a test class matching several slices equally), a journey's
+`alsoDeclared` (when members declare several flows), and evidence kind `projects` (event → view) beside
+`feeds` and `dispatches`. `extracted` is already in the manifest's scenario shape.
 
 ### 5.3 Journeys (`flow`)
 
@@ -227,7 +230,7 @@ written. `--dry-run` prints the unified diff per file and writes nothing.
    Doctor (`--for slice`).
 2. **Lint first** — `slice-lint.py`: a manifest that does not parse is skipped and named, with
    `/essentials:slice-check --fix-manifests` as the repair. Check the project's installed schema copy knows
-   1.4 (`manifest-guide.md` §7.4): when it does not, offer `/essentials:upgrade` Group A2 first, because the
+   1.4 (`manifest-guide.md` §3): when it does not, offer `/essentials:upgrade` Group A2 first, because the
    pre-commit hook would reject the written manifests.
 3. **Propose** — `slice-source.py --json` into a temp directory, then `slice-enrich.py propose`.
 4. **Journeys** — show each journey: members in causal order, the evidence edges, the suggested name;
@@ -241,7 +244,7 @@ written. `--dry-run` prints the unified diff per file and writes nothing.
 
 Never edits source or tests; never writes a present field; never proposes without evidence; never drafts a
 scenario from code alone (E4). The Atlas Copy prompt's `author` group names
-`/essentials:slice-enrich <bc>`; the `flow-undeclared` and `scenario-none` issue texts name it too.
+`/essentials:slice-enrich --bc <bc>`; the `flow-undeclared` and `scenario-none` issue texts name it too.
 
 ## 6. Tests
 

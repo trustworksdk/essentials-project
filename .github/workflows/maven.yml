@@ -87,6 +87,9 @@ jobs:
       - name: Slice Atlas layout (slice_atlas_layout.py)
         run: scripts/plugin-check.sh step slice-atlas-layout
 
+      - name: Slice enrich (slice-enrich.py)
+        run: scripts/plugin-check.sh step slice-enrich
+
       - name: Slice law views per lane and kind (slice-law.py)
         run: scripts/plugin-check.sh step slice-law
 

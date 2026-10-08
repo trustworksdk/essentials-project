@@ -166,7 +166,7 @@ When Claude is **about to write or modify** code that uses Essentials types (imp
 
 If the change is **structural** rather than a framework-API question — adding a capability, extending or amending an existing slice, changing a read model — hand it to the `essentials-change` skill, which is the routing path: it classifies the request, finds the owning slice from its manifest, and enters the scaffolding skills when a new slice is the answer. Do **not** end the turn by printing a command name and stopping; that is a dead end, not a route.
 
-The explicit commands remain available and are the right answer when the user asks for one: `/essentials:add-slice` (or `/essentials:add-{command,view,automation,translation}-slice`) scaffolds a whole slice, `/essentials:slice-check` audits existing slices against the law, `/essentials:slice-map` shows what a project contains and how its slices connect, and `/essentials:slice-map-html` writes the same as a browsable page (the Slice Atlas).
+The explicit commands remain available and are the right answer when the user asks for one: `/essentials:add-slice` (or `/essentials:add-{command,view,automation,translation}-slice`) scaffolds a whole slice, `/essentials:slice-check` audits existing slices against the law, `/essentials:slice-map` shows what a project contains and how its slices connect, `/essentials:slice-map-html` writes the same as a browsable page (the Slice Atlas), and `/essentials:slice-enrich` catches existing manifests up on the fields they lack — `flow`, `scenarios`, `summary`, `invariants` — drafted from the code and tests, written only on the user's yes.
 
 Then, for the **specific module(s)** the code touches (event store, queues, fenced locks, types-jackson/jdbi, etc.), scan the matching heading of `references/llm/LLM-traps.md` — one line per footgun most likely to slip through review (missing handler annotations, stale fence tokens, name-injection surfaces, `appendToStream()` without an expected `EventOrder`, …) — and follow each relevant link into the module doc, which holds the full text and the fix. The anti-pattern table below is the cross-module summary; the module docs are the deeper per-module detail.
 
@@ -207,6 +207,7 @@ Some user questions are better answered by a command or a decision than by the d
 | "Bootstrap a new Essentials project from scratch" | `/essentials:init` |
 | "What is in here / where is this implemented / how do these connect?" | `/essentials:slice-map` |
 | "Show me the map / the journeys / what this branch changed, as a page" | `/essentials:slice-map-html` |
+| "Add / backfill flows or scenarios in our existing manifests" — older manifests catching up | `/essentials:slice-enrich` |
 
 ## Step 9 — When the docs aren't enough
 

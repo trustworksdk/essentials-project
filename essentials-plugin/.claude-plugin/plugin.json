@@ -1,7 +1,7 @@
 {
   "name": "essentials",
   "version": "0.60.0-7",
-  "description": "Trustworks Essentials Java/Kotlin framework support: a vertical-slice law (command, view, automation, translation; R1-R5 anti-god-class rules) with commands to scaffold, audit, discover and map slices, in the terminal and as the Slice Atlas page; an application stack contract (S1-S11) with Kotlin/Java bindings, a frontend spec and version pins; docs and change-routing skills; init and upgrade to create a verified project and keep it current; review against the traps; and doctor for the tools.",
+  "description": "Trustworks Essentials Java/Kotlin framework support: a vertical-slice law (command, view, automation, translation; R1-R5 anti-god-class rules) with commands to scaffold, audit, discover, map and enrich slices, in the terminal and as the Slice Atlas; an application stack contract (S1-S11) with Kotlin/Java bindings, a frontend spec and version pins; docs and change-routing skills; init and upgrade to create a verified project and keep it current; review against the traps; and doctor for the tools.",
   "author": {
     "name": "Jeppe Cramon"
   },

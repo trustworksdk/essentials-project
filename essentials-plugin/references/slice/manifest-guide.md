@@ -38,7 +38,7 @@ Schema-required is the floor; Essentials writes the stricter set so the manifest
 | view | `serves` | `projections` (**with `from`** — see §3), `reads`, `endpoints` |
 | automation | `consumes` **or** `schedule` | `dispatches`, `invariants` |
 | translation | `externalSystem`; plus `consumes` + `maps` unless `direction: outbound` | `direction`, `tests.contract` |
-| any kind | — | optional, never required: `flow` (the journey, §3); `scenarios` (given / when / then, §3 — written by a generator or a person; the plugin's slice skills do not write it) |
+| any kind | — | optional, never required: `flow` (the journey, §3); `scenarios` (given / when / then, §3 — written by a generator or a person; the plugin's slice skills do not write it, and `/essentials:slice-enrich` drafts it from existing tests for a person to accept) |
 
 **Every kind declares what triggers it, but not all in the same field.** A view uses
 `projections[].from`; automations use `consumes` or `schedule`; translations use `consumes`. §3 has
@@ -261,6 +261,11 @@ a command slice always writes `publishes` and a view slice always writes `projec
   projector at all, and manifests authored before schema 1.3 never had the field to fill in.
 - **`dispatches` is what an automation sends**, i.e. command types.
 - **`maps` is the translation table**: `[{ from: BillingInvoiceIssued, to: RecordPayment }]`.
+- **`featureFlag` names the property a slice is switched on by.** The schema accepts any object; the
+  plugin writes `{ property: returns.self-service.enabled, havingValue: "true" }` — the two attributes of
+  the `@ConditionalOnProperty` on a type in the slice's directory, which is the evidence
+  `/essentials:slice-enrich` drafts it from; `havingValue` is left out when the annotation has none.
+  Absent means the slice declares no flag.
 - **`invariants` carry an id, text, and the component that enforces it** —
   `{ id: INV-PO-1, text: "Quantity must be positive", enforcedBy: PlaceOrderDecider }`. An invariant
   with no `enforcedBy` is a wish, not an invariant.
@@ -283,7 +288,10 @@ a command slice always writes `publishes` and a view slice always writes `projec
   inserted into the journey. Give every slice created for a journey that journey's name, and add a
   second name only to a slice that serves both. A slice without `flow` is grouped by derivation —
   the forward closure of cause and effect from an entry slice (an endpoint-triggered command, an
-  inbound translation, a scheduled automation) inside its context — and the map says so.
+  inbound translation, a scheduled automation) inside its context — and the map says so. A project
+  whose manifests predate the field catches up with `/essentials:slice-enrich`: it proposes journeys
+  from the same cause and effect, across contexts, and a person accepts, renames, splits or skips each
+  one before anything is written.
 - **`scenarios` is the slice's specification by example** (schema 1.4, optional, any kind), in
   Event Modeling's given / when / then form. It is **data that is rendered and checked, not a test**:
   the test that runs a scenario lives in the source tree and is named in `test`.
@@ -364,8 +372,10 @@ a command slice always writes `publishes` and a view slice always writes `projec
   is no payload field or column, a `test` that resolves to no test, and a slice with no scenarios.
 
   **Who writes it.** The plugin's slice skills do not write `scenarios`; a spec-driven generator or a
-  person does. A slice without scenarios is not a defect — the map shows its invariants and test
-  kinds in their place.
+  person does. For slices that already exist, `/essentials:slice-enrich` drafts them from the slice's
+  existing tests — each scenario names the test it came from in `test` — and writes only those a person
+  accepts; a slice with no mapped test gets a suggestion, not a draft. A slice without scenarios is not
+  a defect — the map shows its invariants and test kinds in their place.
 - **A generator writes `flow` and `scenarios` only where the project's schema copy knows them.** The
   schema rejects an unknown root key, and every project with the lint gate carries its **own copy**
   (`scripts/slice-yaml.schema.json`, installed by `/essentials:init` Step 9 or `/essentials:upgrade`
@@ -378,6 +388,9 @@ a command slice always writes `publishes` and a view slice always writes `projec
      refreshes the gate (Group A2). Do not add the fields and leave the gate red.
   3. Stamp `schemaVersion: "1.4"` on a manifest that carries either field. Readers accept any `1.x`,
      so a manifest without them needs no restamp.
+
+  `/essentials:slice-enrich` follows these steps: it checks the schema copy before proposing and its
+  script stamps 1.4 when it writes either field.
 - **An unknown root key is rejected, and `x-` is the escape hatch.** The schema is strict at the root
   so that drift is visible rather than silent. Where a project genuinely needs to carry something no
   field fits, prefix the key with `x-` (`x-team-oncall: payments`) and it validates. Reach for a real

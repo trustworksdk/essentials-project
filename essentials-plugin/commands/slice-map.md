@@ -230,7 +230,7 @@ none is on a slice's `flags`:
 | Scenario fields known | A `with` key that is no payload field of its message, or a `rows` key that is no column of the read model. Not checked without source facts | `info` · `scenario-unknown-field` |
 | Scenario test resolves | A `test:` that names no test under the module's test roots. Not checked without `slice-source.py`'s test index | `warn` · `scenario-test-missing` |
 | Scenario shape | A scenario that does not have the schema's shape, kept as far as it parses | `warn` · `scenario-malformed` |
-| Adoption | A slice with no `flow:` (grouped into a journey by cause and effect instead), or with no scenarios. Once per context, with a count, when it holds for most of a context's slices | `info` · `flow-undeclared`, `scenario-none` |
+| Adoption | A slice with no `flow:` (grouped into a journey by cause and effect instead), or with no scenarios. Once per context, with a count, when it holds for most of a context's slices. Point at `/essentials:slice-enrich --bc <bc>`, which drafts both from the code's cause and effect and the slice's tests and writes only what a person accepts | `info` · `flow-undeclared`, `scenario-none` |
 
 **A "not checked" flag is not a pass.** When `slice-source.py` could not verify a check (a handler in an
 anonymous class, a route served by a WebFlux `RouterFunction`, a file it could not read), the slice
@@ -293,7 +293,7 @@ implemented"* answer and it is worth printing even when the rest is skipped.
 
 Close with what was in scope and what was skipped (`notes[]`), and with `issues[]`: grouped by level,
 then by code, each with its target. A context-level adoption entry is one line with its count, never
-one line per slice.
+one line per slice, and names `/essentials:slice-enrich --bc <bc>` as the way to catch up.
 
 ## Step 6 — The data contract
 

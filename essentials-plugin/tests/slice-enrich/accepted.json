@@ -1,0 +1,244 @@
+{
+  "schema": "slice-enrich/1",
+  "root": "tests/fixtures/enrich",
+  "fields": [
+    "flow",
+    "scenarios",
+    "summary",
+    "invariants",
+    "tier",
+    "consistency",
+    "featureFlag",
+    "maps"
+  ],
+  "journeys": [
+    {
+      "id": "j1",
+      "name": "reminders",
+      "slices": [
+        "lending.borrow_book",
+        "lending.loan_reminders",
+        "lending.loans_on_shelf",
+        "lending.schedule_reminder"
+      ]
+    },
+    {
+      "id": "j2",
+      "name": "catalogue-feed",
+      "slices": [
+        "lending.catalogue_feed",
+        "lending.register_copy"
+      ]
+    },
+    {
+      "id": "j3",
+      "name": "return-book",
+      "slices": [
+        "lending.return_book",
+        "lending.loans_on_shelf"
+      ]
+    }
+  ],
+  "slices": [
+    {
+      "id": "accounts.open_account",
+      "path": "src/main/kotlin/com/example/library/accounts/use_cases/open_account/slice.yaml",
+      "accept": {
+        "summary": "Registers a new member: one account, #1 per person.",
+        "invariants": [
+          {
+            "text": "A member is at least 16 years old",
+            "enforcedBy": "OpenAccountHandler#handle"
+          },
+          {
+            "text": "A member opens one account only",
+            "enforcedBy": "OpenAccountHandler#handle"
+          },
+          {
+            "text": "Staff accounts are opened by the administration",
+            "enforcedBy": "OpenAccountHandler#handle"
+          }
+        ]
+      }
+    },
+    {
+      "id": "lending.borrow_book",
+      "path": "src/main/java/com/example/library/lending/use_cases/borrow_book/slice.yaml",
+      "accept": {
+        "flow": "reminders",
+        "invariants": [
+          {
+            "text": "A loan lasts at least one day",
+            "enforcedBy": "BorrowBook"
+          },
+          {
+            "text": "A copy that is out on loan cannot be borrowed again",
+            "enforcedBy": "BorrowBookDecider#handle"
+          }
+        ],
+        "tier": "cqrs-es",
+        "scenarios": [
+          {
+            "name": "lends an available copy",
+            "given": [],
+            "when": {
+              "command": "BorrowBook",
+              "with": {
+                "copyId": "c-1",
+                "memberId": "m-7",
+                "loanDays": 14
+              }
+            },
+            "then": [
+              {
+                "event": "BookBorrowed",
+                "with": {
+                  "copyId": "c-1",
+                  "memberId": "m-7",
+                  "loanDays": 14
+                }
+              }
+            ],
+            "test": "BorrowBookDeciderTest#lendsAnAvailableCopy"
+          },
+          {
+            "name": "a copy out on loan is not lent twice",
+            "given": [
+              {
+                "event": "BookBorrowed",
+                "with": {
+                  "copyId": "c-1",
+                  "memberId": "m-7",
+                  "loanDays": 14
+                }
+              }
+            ],
+            "when": {
+              "command": "BorrowBook",
+              "with": {
+                "copyId": "c-1",
+                "memberId": "m-9",
+                "loanDays": 7
+              }
+            },
+            "then": {
+              "error": "IllegalStateException"
+            },
+            "test": "BorrowBookDeciderTest#refusesASecondLoan"
+          }
+        ]
+      }
+    },
+    {
+      "id": "lending.catalogue_feed",
+      "path": "src/main/java/com/example/library/lending/external_systems/catalogue_feed/slice.yaml",
+      "accept": {
+        "flow": "catalogue-feed",
+        "tier": "cqrs-es",
+        "maps": [
+          {
+            "from": "CatalogueEntryReceived",
+            "to": "RegisterCopy"
+          }
+        ]
+      }
+    },
+    {
+      "id": "lending.loan_reminders",
+      "path": "src/main/java/com/example/library/lending/automations/loan_reminders/slice.yaml",
+      "accept": {
+        "flow": "reminders",
+        "tier": "cqrs-es"
+      }
+    },
+    {
+      "id": "lending.loans_on_shelf",
+      "path": "src/main/java/com/example/library/lending/views/loans_on_shelf/slice.yaml",
+      "accept": {
+        "flow": [
+          "reminders",
+          "return-book"
+        ],
+        "summary": "Lists every copy that is out on loan, with the member holding it.",
+        "tier": "cqrs-es",
+        "consistency": {
+          "LoansOnShelfProjection": "eventual"
+        },
+        "featureFlag": {
+          "property": "library.shelf.enabled",
+          "havingValue": "true"
+        }
+      }
+    },
+    {
+      "id": "lending.register_copy",
+      "path": "src/main/java/com/example/library/lending/use_cases/register_copy/slice.yaml",
+      "accept": {
+        "flow": "catalogue-feed",
+        "tier": "cqrs-es"
+      }
+    },
+    {
+      "id": "lending.return_book",
+      "path": "src/main/java/com/example/library/lending/use_cases/return_book/slice.yaml",
+      "accept": {
+        "flow": "return-book",
+        "summary": "Takes a borrowed copy back onto the shelf.",
+        "invariants": [
+          {
+            "text": "Only a copy on loan can be returned",
+            "enforcedBy": "ReturnBookDecider#handle"
+          }
+        ]
+      }
+    },
+    {
+      "id": "lending.schedule_reminder",
+      "path": "src/main/java/com/example/library/lending/use_cases/schedule_reminder/slice.yaml",
+      "accept": {
+        "invariants": [
+          {
+            "text": "A reminder is never planned more than 30 days ahead",
+            "enforcedBy": "ScheduleReminderDecider#handle"
+          }
+        ],
+        "tier": "cqrs-es",
+        "scenarios": [
+          {
+            "name": "plans a reminder",
+            "given": [],
+            "when": {
+              "command": "ScheduleReminder",
+              "with": {
+                "copyId": "c-1",
+                "dayOffset": 3
+              }
+            },
+            "then": [
+              {
+                "event": "ReminderScheduled"
+              }
+            ],
+            "test": "ScheduleReminderTest#plansAReminder"
+          },
+          {
+            "name": "never plans far ahead",
+            "given": [],
+            "when": {
+              "command": "ScheduleReminder",
+              "with": {
+                "copyId": "c-1",
+                "dayOffset": 45
+              }
+            },
+            "then": {
+              "error": "IllegalArgumentException",
+              "message": "A reminder is never planned more than 30 days ahead"
+            },
+            "test": "ScheduleReminderTest#neverPlansFarAhead"
+          }
+        ]
+      }
+    }
+  ]
+}

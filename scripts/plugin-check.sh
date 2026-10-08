@@ -155,7 +155,7 @@ default_merge_base() {
 # ---- steps ------------------------------------------------------------------------------------------------------
 # One function per plugin-docs step, in the job's order. Each runs in the directory that CI step ran in.
 
-steps=(llm-sync citations ess-ids plugin-version symlinks slice-lint lint-hook render-slice slice-source slice-index slice-atlas-layout slice-law stack-lint
+steps=(llm-sync citations ess-ids plugin-version symlinks slice-lint lint-hook render-slice slice-source slice-index slice-atlas-layout slice-enrich slice-law stack-lint
     init-render review-scan migration-plan docs-search doctor check-patches check-expected eval-graders eval-flags slice-compile-table render-check)
 declare -A step_desc=(
     [llm-sync]="regenerate references/llm/ from LLM/ (sync-plugin-llm.sh) and fail on drift"
@@ -169,6 +169,7 @@ declare -A step_desc=(
     [slice-source]="slice source facts (test_slice_source.py)"
     [slice-index]="slice index, graph and atlas data (test_slice_index.py, test_slice_atlas.py)"
     [slice-atlas-layout]="Slice Atlas layout: goldens, geometry, stability and the 60-context budget (test_slice_atlas_layout.py)"
+    [slice-enrich]="slice-enrich propose/apply on the enrich fixture: goldens, absent-fields-only writes, refusals (test_slice_enrich.py)"
     [slice-law]="slice-law scope lines valid, every lane x kind view within budget and matching its golden (test_slice_law.py)"
     [stack-lint]="stack contract lint (stack-lint.py --self-test + unit tests)"
     [init-render]="every answer set renders and lints; the nine cells match their goldens (init-render.py)"
@@ -313,6 +314,10 @@ step_slice-index() {
 
 step_slice-atlas-layout() {
     x "$plugin" uv run --script tests/scripts/test_slice_atlas_layout.py
+}
+
+step_slice-enrich() {
+    x "$plugin" uv run --script tests/scripts/test_slice_enrich.py
 }
 
 step_slice-law() {
@@ -498,8 +503,10 @@ manual_checks() {
     # No unquoted endpoint path in any manifest this plugin ships; one hit is a file that is not YAML. The same
     # one-liner slice-check gate 1 and slice-map Step 2 give users. Scoped to slice.yaml: the guides show the broken
     # form as a counter-example. The Slice Atlas fixture breaks one manifest this way on purpose (its error card and
-    # banner are what tests/fixtures/atlas checks), so that one file is excluded by its exact path.
-    out=$(grep -rn "path: [^\"']*{" --include=slice.yaml . | grep -v '^\./tests/fixtures/atlas/src/main/java/com/example/orders/use_cases/amend_order/slice\.yaml:')
+    # banner are what tests/fixtures/atlas checks), and so does the slice-enrich fixture (an unparseable older
+    # manifest it must skip), so those two files are excluded by their exact paths.
+    out=$(grep -rn "path: [^\"']*{" --include=slice.yaml . | grep -v '^\./tests/fixtures/atlas/src/main/java/com/example/orders/use_cases/amend_order/slice\.yaml:' |
+        grep -v '^\./tests/fixtures/enrich/src/main/java/com/example/library/lending/views/waitlist/slice\.yaml:')
     echo "+ grep -rn \"path: [^\\\"']*{\" --include=slice.yaml ."
     [ -z "$out" ] || echo "$out"
     if [ -z "$out" ]; then record unquoted-paths PASS 0; else record unquoted-paths FAIL 0 "unquoted path in a slice.yaml"; fi

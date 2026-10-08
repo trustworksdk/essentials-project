@@ -1,0 +1,16 @@
+slice-enrich propose — tests/fixtures/enrich
+  journeys: 3
+    j1 reminders (extends declared flow reminders): lending.borrow_book → lending.loan_reminders → lending.loans_on_shelf → lending.schedule_reminder
+    j2 catalogue-feed: lending.catalogue_feed → lending.register_copy
+    j3 return-book: lending.return_book → lending.loans_on_shelf
+  accounts.open_account: proposes scenarios (no test maps to it), summary, invariants; absent without evidence: flow, tier, featureFlag
+  lending.borrow_book: proposes flow, scenarios, invariants, tier; absent without evidence: featureFlag
+  lending.catalogue_feed: proposes flow, scenarios (no test maps to it), tier, maps; absent without evidence: summary, invariants, featureFlag
+  lending.loan_reminders: proposes flow, scenarios (no test maps to it), tier; absent without evidence: invariants, featureFlag
+  lending.loans_on_shelf: proposes flow, scenarios (no test maps to it), summary, tier, consistency, featureFlag; absent without evidence: invariants
+  lending.register_copy: proposes flow, scenarios (no test maps to it), tier; absent without evidence: featureFlag
+  lending.return_book: proposes flow, summary, invariants; absent without evidence: featureFlag
+  lending.schedule_reminder: proposes scenarios, invariants, tier; absent without evidence: featureFlag
+  skipped src/main/java/com/example/library/lending/use_cases/renew_loan/slice.yaml: generator: sdd — its generator owns flow and scenarios
+  skipped src/main/java/com/example/library/lending/views/waitlist/slice.yaml: slice.yaml is not valid YAML (line 11) — /essentials:slice-check --fix-manifests first
+  not inferable when absent: characterization, forbidden, notes, observability, profile, sla, stability, statutory, supersedes

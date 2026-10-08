@@ -1,0 +1,641 @@
+{
+  "schema": "slice-enrich/1",
+  "root": "tests/fixtures/enrich",
+  "fields": [
+    "flow",
+    "scenarios",
+    "summary",
+    "invariants",
+    "tier",
+    "consistency",
+    "featureFlag",
+    "maps"
+  ],
+  "journeys": [
+    {
+      "id": "j1",
+      "suggestedName": "reminders",
+      "declared": "reminders",
+      "slices": [
+        "lending.borrow_book",
+        "lending.loan_reminders",
+        "lending.loans_on_shelf",
+        "lending.schedule_reminder"
+      ],
+      "entries": [
+        "lending.borrow_book"
+      ],
+      "bcs": [
+        "lending"
+      ],
+      "evidence": [
+        {
+          "from": "lending.borrow_book",
+          "to": "lending.loan_reminders",
+          "via": "BookBorrowed",
+          "kind": "feeds"
+        },
+        {
+          "from": "lending.borrow_book",
+          "to": "lending.loans_on_shelf",
+          "via": "BookBorrowed",
+          "kind": "projects"
+        },
+        {
+          "from": "lending.loan_reminders",
+          "to": "lending.schedule_reminder",
+          "via": "ScheduleReminder",
+          "kind": "dispatches"
+        }
+      ]
+    },
+    {
+      "id": "j2",
+      "suggestedName": "catalogue-feed",
+      "declared": null,
+      "slices": [
+        "lending.catalogue_feed",
+        "lending.register_copy"
+      ],
+      "entries": [
+        "lending.catalogue_feed"
+      ],
+      "bcs": [
+        "lending"
+      ],
+      "evidence": [
+        {
+          "from": "lending.catalogue_feed",
+          "to": "lending.register_copy",
+          "via": "RegisterCopy",
+          "kind": "dispatches"
+        }
+      ]
+    },
+    {
+      "id": "j3",
+      "suggestedName": "return-book",
+      "declared": null,
+      "slices": [
+        "lending.return_book",
+        "lending.loans_on_shelf"
+      ],
+      "entries": [
+        "lending.return_book"
+      ],
+      "bcs": [
+        "lending"
+      ],
+      "evidence": [
+        {
+          "from": "lending.return_book",
+          "to": "lending.loans_on_shelf",
+          "via": "BookReturned",
+          "kind": "projects"
+        }
+      ]
+    }
+  ],
+  "slices": [
+    {
+      "id": "accounts.open_account",
+      "path": "src/main/kotlin/com/example/library/accounts/use_cases/open_account/slice.yaml",
+      "kind": "command",
+      "bc": "accounts",
+      "absent": [
+        "flow",
+        "scenarios",
+        "summary",
+        "invariants",
+        "tier",
+        "featureFlag"
+      ],
+      "proposals": {
+        "scenarios": {
+          "tests": [],
+          "unmapped": true
+        },
+        "summary": {
+          "draft": "Registers a new member so they can borrow.",
+          "evidence": [
+            {
+              "path": "src/main/kotlin/com/example/library/accounts/use_cases/open_account/OpenAccountHandler.kt",
+              "line": 5,
+              "text": "Registers a new member so they can borrow."
+            }
+          ]
+        },
+        "invariants": [
+          {
+            "text": "A member is at least 16 years old",
+            "enforcedBy": "OpenAccountHandler#handle",
+            "evidence": {
+              "path": "src/main/kotlin/com/example/library/accounts/use_cases/open_account/OpenAccountHandler.kt",
+              "line": 12,
+              "text": "require(cmd.age>=16){\"A member is at least 16 years old\"}"
+            }
+          },
+          {
+            "text": "A member opens one account only",
+            "enforcedBy": "OpenAccountHandler#handle",
+            "evidence": {
+              "path": "src/main/kotlin/com/example/library/accounts/use_cases/open_account/OpenAccountHandler.kt",
+              "line": 13,
+              "text": "check(memberId!in known){\"A member opens one account only\"}"
+            }
+          },
+          {
+            "text": "Staff accounts are opened by the administration",
+            "enforcedBy": "OpenAccountHandler#handle",
+            "evidence": {
+              "path": "src/main/kotlin/com/example/library/accounts/use_cases/open_account/OpenAccountHandler.kt",
+              "line": 15,
+              "text": "throw IllegalStateException(\"Staff accounts are opened by the administration\")"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "lending.borrow_book",
+      "path": "src/main/java/com/example/library/lending/use_cases/borrow_book/slice.yaml",
+      "kind": "command",
+      "bc": "lending",
+      "absent": [
+        "flow",
+        "scenarios",
+        "invariants",
+        "tier",
+        "featureFlag"
+      ],
+      "proposals": {
+        "flow": {
+          "journeys": [
+            "j1"
+          ]
+        },
+        "scenarios": {
+          "tests": [
+            {
+              "class": "BorrowBookDeciderTest",
+              "method": "lendsAnAvailableCopy",
+              "path": "src/test/java/com/example/library/lending/use_cases/borrow_book/BorrowBookDeciderTest.java",
+              "line": 11,
+              "displayName": null,
+              "name": "lends an available copy",
+              "test": "BorrowBookDeciderTest#lendsAnAvailableCopy",
+              "extracted": {
+                "given": [],
+                "when": {
+                  "command": "BorrowBook",
+                  "with": {
+                    "copyId": "c-1",
+                    "memberId": "m-7",
+                    "loanDays": 14
+                  }
+                },
+                "then": [
+                  {
+                    "event": "BookBorrowed",
+                    "with": {
+                      "copyId": "c-1",
+                      "memberId": "m-7",
+                      "loanDays": 14
+                    }
+                  }
+                ]
+              }
+            },
+            {
+              "class": "BorrowBookDeciderTest",
+              "method": "refusesASecondLoan",
+              "path": "src/test/java/com/example/library/lending/use_cases/borrow_book/BorrowBookDeciderTest.java",
+              "line": 22,
+              "displayName": "a copy out on loan is not lent twice",
+              "name": "a copy out on loan is not lent twice",
+              "test": "BorrowBookDeciderTest#refusesASecondLoan",
+              "extracted": {
+                "given": [
+                  {
+                    "event": "BookBorrowed",
+                    "with": {
+                      "copyId": "c-1",
+                      "memberId": "m-7",
+                      "loanDays": 14
+                    }
+                  }
+                ],
+                "when": {
+                  "command": "BorrowBook",
+                  "with": {
+                    "copyId": "c-1",
+                    "memberId": "m-9",
+                    "loanDays": 7
+                  }
+                },
+                "then": {
+                  "error": "IllegalStateException"
+                }
+              }
+            },
+            {
+              "class": "BorrowBookDeciderTest",
+              "method": "zeroDayLoan",
+              "path": "src/test/java/com/example/library/lending/use_cases/borrow_book/BorrowBookDeciderTest.java",
+              "line": 32,
+              "displayName": null,
+              "name": "zero day loan",
+              "test": "BorrowBookDeciderTest#zeroDayLoan",
+              "extracted": {
+                "given": null,
+                "when": null,
+                "then": {
+                  "error": "IllegalArgumentException",
+                  "message": "A loan lasts at least one day"
+                }
+              }
+            },
+            {
+              "class": "ReturnBookAfterLoanTest",
+              "method": "lendsACopyThatCameBack",
+              "path": "src/test/java/com/example/library/lending/use_cases/borrow_book/ReturnBookAfterLoanTest.java",
+              "line": 11,
+              "displayName": null,
+              "name": "lends a copy that came back",
+              "test": "ReturnBookAfterLoanTest#lendsACopyThatCameBack",
+              "extracted": {
+                "given": [
+                  {
+                    "event": "BookBorrowed",
+                    "with": {
+                      "copyId": "c-3",
+                      "memberId": "m-2",
+                      "loanDays": 7
+                    }
+                  },
+                  {
+                    "event": "BookReturned",
+                    "with": {
+                      "copyId": "c-3",
+                      "memberId": "m-2"
+                    }
+                  }
+                ],
+                "when": {
+                  "command": "BorrowBook",
+                  "with": {
+                    "copyId": "c-3",
+                    "memberId": "m-4",
+                    "loanDays": 7
+                  }
+                },
+                "then": null
+              }
+            }
+          ],
+          "unmapped": false
+        },
+        "invariants": [
+          {
+            "text": "A loan lasts at least one day",
+            "enforcedBy": "BorrowBook",
+            "evidence": {
+              "path": "src/main/java/com/example/library/lending/use_cases/borrow_book/BorrowBook.java",
+              "line": 16,
+              "text": "requireTrue(loanDays>0, \"A loan lasts at least one day\")"
+            }
+          },
+          {
+            "text": "A copy that is out on loan cannot be borrowed again",
+            "enforcedBy": "BorrowBookDecider#handle",
+            "evidence": {
+              "path": "src/main/java/com/example/library/lending/use_cases/borrow_book/BorrowBookDecider.java",
+              "line": 24,
+              "text": "throw new IllegalStateException(\"A copy that is out on loan cannot be borrowed again\")"
+            }
+          }
+        ],
+        "tier": {
+          "value": "cqrs-es",
+          "from": "lane decider, with event-store use in the context (manifest-guide.md §3 lane → tier); the context's other manifests declare cqrs-es"
+        }
+      }
+    },
+    {
+      "id": "lending.catalogue_feed",
+      "path": "src/main/java/com/example/library/lending/external_systems/catalogue_feed/slice.yaml",
+      "kind": "translation",
+      "bc": "lending",
+      "absent": [
+        "flow",
+        "scenarios",
+        "summary",
+        "invariants",
+        "tier",
+        "featureFlag",
+        "maps"
+      ],
+      "proposals": {
+        "flow": {
+          "journeys": [
+            "j2"
+          ]
+        },
+        "scenarios": {
+          "tests": [],
+          "unmapped": true
+        },
+        "tier": {
+          "value": "cqrs-es",
+          "from": "lane decider, with event-store use in the context (manifest-guide.md §3 lane → tier); the context's other manifests declare cqrs-es"
+        },
+        "maps": {
+          "evidence": [
+            {
+              "path": "src/main/java/com/example/library/lending/external_systems/catalogue_feed/CatalogueFeedTranslator.java",
+              "line": 9,
+              "text": "CatalogueFeedTranslator#toCommand(CatalogueEntryReceived) → RegisterCopy"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "lending.loan_reminders",
+      "path": "src/main/java/com/example/library/lending/automations/loan_reminders/slice.yaml",
+      "kind": "automation",
+      "bc": "lending",
+      "absent": [
+        "flow",
+        "scenarios",
+        "invariants",
+        "tier",
+        "featureFlag"
+      ],
+      "proposals": {
+        "flow": {
+          "journeys": [
+            "j1"
+          ]
+        },
+        "scenarios": {
+          "tests": [],
+          "unmapped": true
+        },
+        "tier": {
+          "value": "cqrs-es",
+          "from": "lane decider, with event-store use in the context (manifest-guide.md §3 lane → tier); the context's other manifests declare cqrs-es"
+        }
+      }
+    },
+    {
+      "id": "lending.loans_on_shelf",
+      "path": "src/main/java/com/example/library/lending/views/loans_on_shelf/slice.yaml",
+      "kind": "view",
+      "bc": "lending",
+      "absent": [
+        "flow",
+        "scenarios",
+        "summary",
+        "invariants",
+        "tier",
+        "consistency",
+        "featureFlag"
+      ],
+      "proposals": {
+        "flow": {
+          "journeys": [
+            "j1",
+            "j3"
+          ]
+        },
+        "scenarios": {
+          "tests": [],
+          "unmapped": true
+        },
+        "summary": {
+          "draft": "Lists every copy that is out on loan, with the member holding it.",
+          "evidence": [
+            {
+              "path": "src/main/java/com/example/library/lending/views/loans_on_shelf/CLAUDE.md",
+              "line": 3,
+              "text": "Lists every copy that is out on loan, with the member holding it."
+            }
+          ]
+        },
+        "tier": {
+          "value": "cqrs-es",
+          "from": "lane decider, with event-store use in the context (manifest-guide.md §3 lane → tier); the context's other manifests declare cqrs-es"
+        },
+        "consistency": [
+          {
+            "projection": "LoansOnShelfProjection",
+            "value": "eventual",
+            "evidence": {
+              "path": "src/main/java/com/example/library/lending/views/loans_on_shelf/LoansOnShelfProjection.java",
+              "line": 18,
+              "text": "LoansOnShelfProjection extends ViewEventProcessor"
+            }
+          },
+          {
+            "projection": "ShelfCountProjection",
+            "value": "strong",
+            "evidence": {
+              "path": "src/main/java/com/example/library/lending/views/loans_on_shelf/ShelfCountProjection.java",
+              "line": 17,
+              "text": "ShelfCountProjection extends InTransactionEventProcessor"
+            }
+          }
+        ],
+        "featureFlag": {
+          "value": {
+            "property": "library.shelf.enabled",
+            "havingValue": "true"
+          },
+          "evidence": [
+            {
+              "path": "src/main/java/com/example/library/lending/views/loans_on_shelf/LoansOnShelfProjection.java",
+              "line": 17,
+              "text": "@ConditionalOnProperty(prefix=\"library.shelf\", name=\"enabled\", havingValue=\"true\")"
+            },
+            {
+              "path": "src/main/java/com/example/library/lending/views/loans_on_shelf/ShelfCountProjection.java",
+              "line": 16,
+              "text": "@ConditionalOnProperty(prefix=\"library.shelf\", name=\"enabled\", havingValue=\"true\")"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "lending.register_copy",
+      "path": "src/main/java/com/example/library/lending/use_cases/register_copy/slice.yaml",
+      "kind": "command",
+      "bc": "lending",
+      "absent": [
+        "flow",
+        "scenarios",
+        "tier",
+        "featureFlag"
+      ],
+      "proposals": {
+        "flow": {
+          "journeys": [
+            "j2"
+          ]
+        },
+        "scenarios": {
+          "tests": [],
+          "unmapped": true
+        },
+        "tier": {
+          "value": "cqrs-es",
+          "from": "lane decider, with event-store use in the context (manifest-guide.md §3 lane → tier); the context's other manifests declare cqrs-es"
+        }
+      }
+    },
+    {
+      "id": "lending.return_book",
+      "path": "src/main/java/com/example/library/lending/use_cases/return_book/slice.yaml",
+      "kind": "command",
+      "bc": "lending",
+      "absent": [
+        "flow",
+        "summary",
+        "invariants",
+        "featureFlag"
+      ],
+      "proposals": {
+        "flow": {
+          "journeys": [
+            "j3"
+          ]
+        },
+        "summary": {
+          "draft": "Takes a borrowed copy back onto the shelf.",
+          "evidence": [
+            {
+              "path": "src/main/java/com/example/library/lending/use_cases/return_book/ReturnBook.java",
+              "line": 5,
+              "text": "Takes a borrowed copy back onto the shelf."
+            }
+          ]
+        },
+        "invariants": [
+          {
+            "text": "Only a copy on loan can be returned",
+            "enforcedBy": "ReturnBookDecider#handle",
+            "evidence": {
+              "path": "src/main/java/com/example/library/lending/use_cases/return_book/ReturnBookDecider.java",
+              "line": 16,
+              "text": "throw new IllegalStateException(\"Only a copy on loan can be returned\")"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "lending.schedule_reminder",
+      "path": "src/main/java/com/example/library/lending/use_cases/schedule_reminder/slice.yaml",
+      "kind": "command",
+      "bc": "lending",
+      "absent": [
+        "scenarios",
+        "invariants",
+        "tier",
+        "featureFlag"
+      ],
+      "proposals": {
+        "scenarios": {
+          "tests": [
+            {
+              "class": "ScheduleReminderTest",
+              "method": "plansAReminder",
+              "path": "src/test/java/com/example/library/lending/ScheduleReminderTest.java",
+              "line": 12,
+              "displayName": null,
+              "name": "plans a reminder",
+              "test": "ScheduleReminderTest#plansAReminder",
+              "extracted": {
+                "given": [],
+                "when": {
+                  "command": "ScheduleReminder",
+                  "with": {
+                    "copyId": "c-1",
+                    "dayOffset": 3
+                  }
+                },
+                "then": [
+                  {
+                    "event": "ReminderScheduled"
+                  }
+                ]
+              }
+            },
+            {
+              "class": "ScheduleReminderTest",
+              "method": "neverPlansFarAhead",
+              "path": "src/test/java/com/example/library/lending/ScheduleReminderTest.java",
+              "line": 20,
+              "displayName": null,
+              "name": "never plans far ahead",
+              "test": "ScheduleReminderTest#neverPlansFarAhead",
+              "extracted": {
+                "given": [],
+                "when": {
+                  "command": "ScheduleReminder",
+                  "with": {
+                    "copyId": "c-1",
+                    "dayOffset": 45
+                  }
+                },
+                "then": {
+                  "error": "IllegalArgumentException",
+                  "message": "A reminder is never planned more than 30 days ahead"
+                }
+              }
+            }
+          ],
+          "unmapped": false
+        },
+        "invariants": [
+          {
+            "text": "A reminder is never planned more than 30 days ahead",
+            "enforcedBy": "ScheduleReminderDecider#handle",
+            "evidence": {
+              "path": "src/main/java/com/example/library/lending/use_cases/schedule_reminder/ScheduleReminderDecider.java",
+              "line": 17,
+              "text": "FailFast.requireFalse(cmd.dayOffset()>30, \"A reminder is never planned more than 30 days ahead\")"
+            }
+          }
+        ],
+        "tier": {
+          "value": "cqrs-es",
+          "from": "lane decider, with event-store use in the context (manifest-guide.md §3 lane → tier); the context's other manifests declare cqrs-es"
+        }
+      }
+    }
+  ],
+  "ambiguousTests": [],
+  "skipped": [
+    {
+      "path": "src/main/java/com/example/library/lending/use_cases/renew_loan/slice.yaml",
+      "why": "generator: sdd — its generator owns flow and scenarios"
+    },
+    {
+      "path": "src/main/java/com/example/library/lending/views/waitlist/slice.yaml",
+      "why": "slice.yaml is not valid YAML (line 11) — /essentials:slice-check --fix-manifests first"
+    }
+  ],
+  "notInferable": [
+    "characterization",
+    "forbidden",
+    "notes",
+    "observability",
+    "profile",
+    "sla",
+    "stability",
+    "statutory",
+    "supersedes"
+  ]
+}

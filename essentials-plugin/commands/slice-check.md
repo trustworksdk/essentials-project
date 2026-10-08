@@ -3,10 +3,9 @@ name: slice-check
 description: >-
   Audit an existing Trustworks Essentials project against the slice-design law — layout, manifests,
   anti-god-class rules, wiring, processor handler shapes and boundary violations; manifest parsing,
-  schema and sole-ownership checks run deterministically in scripts/slice-lint.py, and the syntactic
-  source facts behind gates 6, 11(b) and 14 in scripts/slice-source.py. Read-only by
-  default: --fix-manifests regenerates orientation artifacts, --adopt-tier backfills the one field
-  reconciliation will not write, --fix-source proposes source fixes one at a time.
+  schema and sole-ownership checks run in scripts/slice-lint.py, the source facts behind gates 6,
+  11(b) and 14 in scripts/slice-source.py. Read-only by default: --fix-manifests regenerates orientation artifacts, --adopt-tier backfills an absent tier,
+  --fix-source proposes source fixes one at a time.
 user-invocable: true
 allowed-tools: [Read, Write, Edit, Bash, Glob, Grep, AskUserQuestion]
 argument-hint: "[<bc>] [--fix-manifests] [--fix-source] [--adopt-tier]"
@@ -25,7 +24,7 @@ is audited.
 |---|---|
 | _(default)_ | Nothing. Report only. |
 | `--fix-manifests` | `slice.yaml`, per-slice `CLAUDE.md`, per-BC `CLAUDE.md`, and the `.claude/rules` pointer. **Never source code.** |
-| `--adopt-tier` | One field, one time: writes `tier` into manifests that have none. Never overwrites one. |
+| `--adopt-tier` | One field, one time: writes `tier` into manifests that have none. Never overwrites one. `/essentials:slice-enrich` covers `tier` too, with the other absent human-owned fields |
 | `--fix-source` | Additionally *proposes* structural source fixes. Each is shown as a diff and applied only on explicit per-fix confirmation. |
 
 `--fix-source` **refuses to run on a dirty working tree** (`git status --porcelain` non-empty) so
@@ -415,7 +414,8 @@ reporting error that costs a reader their trust in the whole report.
 **`tier` absent is not a defect.** A project that adopted manifests before the field existed will
 never gain it, because `tier` is human-owned and `--fix-manifests` will not write over a human-owned
 field. Report absence as *"falls back to the project default"*, never as unset by mistake, and
-mention `--adopt-tier` (Step 4) once rather than per slice.
+mention `--adopt-tier` (Step 4) once rather than per slice — or `/essentials:slice-enrich`, when the
+manifests also lack `flow` or `scenarios`, since one run of it catches up every absent human-owned field.
 
 Then one table, ordered by severity, using the taxonomy in `rules/slice-design.md`
 § Reporting severities:
@@ -443,6 +443,19 @@ every slice it stamped. This does not contradict the human-owned rule in
 value here to overwrite. A `tier` that is present and disagrees with the resolved default is a
 **finding**, never an edit. Combinable with `--fix-manifests`; on its own it touches nothing else.
 
+The BC's resolved value, decided without judgement, so both commands reach the same one:
+
+1. **From the lane.** The one lane the BC's manifests declare; when they declare none, the lane
+   `slice-source.py` detected — never an uncertain (`service-entity?`), conflicting or undetermined one.
+   That lane maps by `manifest-guide.md` §3: aggregate → `cqrs-es`, service-entity → `service-entity`,
+   decider → `cqrs-es` only when `slice-source.py` saw event-store use in the BC.
+2. **From the siblings.** The one `tier` the BC's other manifests declare.
+3. Both give a value: they must agree. One gives a value: use it. Otherwise — none, several, or a
+   disagreement — there is no resolved value: write nothing and ask.
+
+`/essentials:slice-enrich` applies the same rule to `tier` alongside the other absent human-owned fields;
+`--adopt-tier` stays for a run that wants this one field and nothing else.
+
 **`--fix-manifests`.** Regenerate `slice.yaml` and per-slice `CLAUDE.md` by three-way merge, following
 `${CLAUDE_PLUGIN_ROOT}/references/slice/manifest-reconciliation.md` — read it first; it carries the
 derivable/human-owned split, the per-field extraction rules, the `CLAUDE.md` contract, and the
@@ -453,7 +466,9 @@ Machine-derived fields (`handles`, `publishes`, **`consumes`**, **`dispatches`**
 hand-written prose is preserved byte-for-byte; contradictions are reported rather than silently
 resolved. Refresh the pointer file only after the user accepts gate 12's offer — never silently.
 `flow` and `scenarios` are never written or rewritten: they are generator- or human-owned
-(`manifest-reconciliation.md` §1). A derived field the refresh changes can leave a scenario naming a
+(`manifest-reconciliation.md` §1). Where they are absent, `/essentials:slice-enrich` drafts them from
+the code's cause and effect and the slice's tests, and writes only what a person accepts — name it in
+the report rather than drafting here. A derived field the refresh changes can leave a scenario naming a
 message the slice no longer has; slice-lint's `1(d)` then reports it — report it on, do not edit the
 scenario.
 

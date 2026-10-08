@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # doctor.sh — which of the tools the essentials plugin's commands run are on this machine, and what
 # each missing one costs. Backs /essentials:doctor and the preflights of /essentials:init,
-# /essentials:review, /essentials:slice-check, /essentials:slice-map and /essentials:slice-map-html.
+# /essentials:review, /essentials:slice-check, /essentials:slice-map, /essentials:slice-map-html and
+# /essentials:slice-enrich.
 #
 # Usage:
 #   doctor.sh [--for init|review|slice|docs|all] [--json]
@@ -17,8 +18,9 @@
 #   review  /essentials:review: python3 (review-scan.py, stack-lint.py); uv for slice-lint.py and
 #           slice-source.py; git for its base-ref and --pr modes
 #   slice   /essentials:add-slice, the slice skills, /essentials:slice-check, /essentials:slice-map,
-#           /essentials:slice-map-html:
-#           python3 (render-slice.py, slice-law.py); uv for slice-lint.py, slice-source.py, slice-index.py
+#           /essentials:slice-map-html, /essentials:slice-enrich:
+#           python3 (render-slice.py, slice-law.py); uv for slice-lint.py, slice-source.py, slice-index.py,
+#           slice-enrich.py
 #   docs    the essentials-docs and essentials-change skills: search.sh (rg optional) and slice-law.py
 #   all     every profile above, plus /essentials:upgrade (stack-lint.py, migration-plan.py; ./mvnw or mvn, Docker
 #           and git for its re-check and its Essentials upgrade)
@@ -272,15 +274,17 @@ impacts() {
             case $status in
                 fallback)
                     echo "review|fallback|slice-lint.py and slice-source.py run with python3 and the pyyaml and jsonschema already installed, not the pinned versions"
-                    echo "slice|fallback|slice-lint.py, slice-source.py and slice-index.py run with python3 and the pyyaml and jsonschema already installed, not the pinned versions" ;;
+                    echo "slice|fallback|slice-lint.py, slice-source.py, slice-index.py and slice-enrich.py run with python3 and the pyyaml and jsonschema already installed, not the pinned versions" ;;
                 partial)
                     echo "review|not-run|slice-lint.py cannot run (no jsonschema): /essentials:review lists its slice-law gates under Not run; slice-source.py runs with python3"
-                    echo "slice|not-run|slice-lint.py cannot run (no jsonschema): /essentials:slice-check reports gates 1, 3, 4 and 14 tier not run; slice-source.py and slice-index.py run with python3" ;;
+                    echo "slice|not-run|slice-lint.py cannot run (no jsonschema): /essentials:slice-check reports gates 1, 3, 4 and 14 tier not run; slice-source.py and slice-index.py run with python3"
+                    echo "slice|not-run|/essentials:slice-enrich drafts but writes nothing: slice-enrich.py apply validates every result against the schema and needs jsonschema" ;;
                 *)
                     echo "review|not-run|slice-lint.py and slice-source.py cannot run (no pyyaml): /essentials:review lists the slice-law gates they cover under Not run"
                     echo "slice|not-run|/essentials:slice-check: slice-lint.py and slice-source.py cannot run, so gates 1, 3, 4 and 14 tier and the script halves of 6, 11(b) and 14 are not run"
                     echo "slice|stop|/essentials:slice-map stops: slice-index.py cannot run without pyyaml, and the map is never built by hand"
-                    echo "slice|stop|/essentials:slice-map-html stops: slice-index.py cannot run without pyyaml, and the page is never built by hand" ;;
+                    echo "slice|stop|/essentials:slice-map-html stops: slice-index.py cannot run without pyyaml, and the page is never built by hand"
+                    echo "slice|stop|/essentials:slice-enrich stops: slice-enrich.py cannot run without pyyaml, and no manifest is enriched by hand" ;;
             esac ;;
         java)
             echo "init|not-run|/essentials:init's smoke build (Step 13.7) cannot build the rendered project, which targets the pinned Java release: its result is failed"
