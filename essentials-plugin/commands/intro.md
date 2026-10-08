@@ -101,9 +101,14 @@ or auditing a slice, seeing the whole map, and reviewing a change.
                          Built by scripts from the manifests and the sources'
                          syntax, so it reads no method body for meaning. Prints
                          by default; --view graph draws the chains in the
-                         terminal; --html writes a single self-contained page
-                         whose graph pans, zooms, maximises, filters by kind and
-                         explains each node on hover. Audits nothing.
+                         terminal. Audits nothing.
+  /essentials:slice-map-html
+                         The same map as one self-contained page: the Slice
+                         Atlas. Contexts, journeys and an Event Modeling board
+                         per journey, a Diff lens against the branch's merge
+                         base, field lineage, a coupling matrix and a metro
+                         map, with an issues dock and deep links. Written by
+                         script; audits nothing.
 
 ━━━ REVIEWING A CHANGE ━━━
 
@@ -255,6 +260,7 @@ or auditing a slice, seeing the whole map, and reviewing a change.
   /essentials:upgrade     ← existing project; catch up with the plugin and its release
   /essentials:add-slice   ← existing project; add a feature
   /essentials:slice-map   ← existing project that follows the law; see it
+  /essentials:slice-map-html ← the same, as a page; what this branch changed
   /essentials:slice-check ← existing project that follows the law; audit it
   /essentials:slice-discover ← existing project that does not; map it first
   /essentials:review      ← before you open a pull request

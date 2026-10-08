@@ -579,7 +579,7 @@
       if (c.role === 'trigger') return arr(s.endpoints).map(e => e.method + ' ' + e.path + (e.auth ? ' [' + e.auth + ']' : ''));
       if (c.role === 'automation') {
         const ins = arr(s.consumes).map(U.nameOf);
-        return (s.schedule ? ['schedule ' + s.schedule] : []).concat(ins.length ? ['on ' + ins.join(', ')] : []);
+        return (s.schedule ? ['schedule ' + U.fmtSchedule(s.schedule)] : []).concat(ins.length ? ['on ' + ins.join(', ')] : []);
       }
       if (c.role === 'external') return [(s.direction || 'external') + ' · ' + (s.name || c.slice)];
       if (c.role === 'error') return arr(s.flags).map(f => f.text).concat(['manifest did not parse']);

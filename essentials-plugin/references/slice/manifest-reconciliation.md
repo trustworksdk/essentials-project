@@ -18,7 +18,7 @@ The single most important distinction. Getting it wrong destroys work.
 | Class | Fields | Rule |
 |---|---|---|
 | **Machine-derived** | `handles`, `publishes`, `consumes`, `dispatches`, `serves`, `endpoints`, `writes`, `owns`, `reads`, `projections` (including `from` **and `aggregateTypes`**), `schedule`, `language`, `lane`, `tests.*.present` | Read from the code. On a conflict the **code wins** — it is what actually runs |
-| **Human-owned** | `summary`, `owner`, `status`, `stability`, `invariants[].text`, `notes`, `forbidden`, `supersedes`, `tier`, `profile`, `sla`, `statutory`, `observability`, `x-*` | Never overwritten. Preserved byte-for-byte, including comments and ordering where the writer can manage it |
+| **Human-owned** | `summary`, `owner`, `status`, `stability`, `invariants[].text`, `notes`, `forbidden`, `supersedes`, `flow`, `scenarios`, `tier`, `profile`, `sla`, `statutory`, `observability`, `x-*` | Never overwritten. Preserved byte-for-byte, including comments and ordering where the writer can manage it |
 | **Derived, but a judgement** | `invariants[].enforcedBy`, `reads[].via`, `projections[].consistency`, `provides`, `endpoints[].capability` | Proposable from code, but confirm rather than assume: `consistency` follows the processor type, `enforcedBy` follows the class that throws |
 
 A field that is machine-derived is safe to regenerate on every run. A human-owned field that disagrees
@@ -37,7 +37,9 @@ finding.
 the tool that wrote the manifest may derive `tier` from its own project data and overwrite it on every
 refresh — it has a source to derive from, and this plugin does not. That manifest is its generator's
 to maintain; leave its `tier` alone. Nothing else on the human-owned row is backfillable — `summary`, `notes` and
-`invariants[].text` are prose that a tool inventing content would only corrupt.
+`invariants[].text` are prose that a tool inventing content would only corrupt. `flow` and `scenarios`
+are on the human-owned row for the same reason, and are **not** backfillable: `--fix-manifests` never
+invents a journey name or a scenario.
 
 **Two of the judgement fields are seam metadata and need the pairing checked, not just the value.**
 `provides` on the owning slice and `reads[].via` on the consumer are two halves of one declaration

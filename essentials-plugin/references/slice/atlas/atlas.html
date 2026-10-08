@@ -527,7 +527,7 @@ const ATLAS = /* __ATLAS_DATA__ */ null;
    ctx.svg(tag, attrs?, text?)  SVG element factory;  ctx.html(tag, className?, text?)  HTML factory.
                             Both set text with textContent. Never put data into innerHTML — the
                             one exception, slices[].doc, is rendered by the shell.
-   ctx.util                 { arr, clamp, trunc, humanise, nameOf, MIN_TEXT_PX }
+   ctx.util                 { arr, clamp, trunc, humanise, nameOf, fmtSchedule, MIN_TEXT_PX }
    ctx.procColor(process) → 'var(--pN)'   N = process.color (0…11)
    ctx.theme() → 'light'|'dark'    the resolved theme; ctx.onTheme(fn) on change. The CSS tokens
                             follow on their own; only drawing that bakes a colour needs this.
@@ -637,6 +637,18 @@ const Atlas = (() => {
   const humanise = (s) => String(s || '').replace(/[_-]+/g, ' ');
   const nameOf = (v) => (v && typeof v === 'object') ? (v.name != null ? String(v.name) : String(v)) : String(v);
   const byStr = (a, b) => a < b ? -1 : a > b ? 1 : 0;
+  /** A slice's schedule (C2: the manifest object, or null; a plain string from older data) as one line. */
+  function fmtSchedule(sc) {
+    if (sc == null || sc === '') return '';
+    if (typeof sc !== 'object') return String(sc);
+    const parts = [];
+    if (sc.cron) parts.push('cron ' + sc.cron);
+    if (sc.fixedDelay) parts.push('every ' + sc.fixedDelay);
+    if (sc.initialDelay) parts.push('first after ' + sc.initialDelay);
+    if (sc.timeZone) parts.push(sc.timeZone);
+    if (sc.note) parts.push(sc.note);
+    return parts.join(' · ');
+  }
   const SVGNS = 'http://www.w3.org/2000/svg';
   function svg(tag, attrs, text) {
     const n = document.createElementNS(SVGNS, tag);
@@ -796,7 +808,7 @@ const Atlas = (() => {
   }
   function sliceHay(s) {
     if (!s) return '';
-    return [s.id, s.name, s.bc, s.kind, s.summary, s.status, s.externalSystem, s.schedule,
+    return [s.id, s.name, s.bc, s.kind, s.summary, s.status, s.externalSystem, fmtSchedule(s.schedule),
       arr(s.endpoints).map(e => e.method + ' ' + e.path).join(' '),
       ['handles', 'serves', 'publishes', 'consumes', 'dispatches', 'writes', 'owns'].map(k => arr(s[k]).map(nameOf).join(' ')).join(' '),
       arr(s.projections).map(p => arr(p && p.from).map(nameOf).join(' ')).join(' '),
@@ -1129,7 +1141,7 @@ const Atlas = (() => {
       setHash, getHash: () => Object.assign({}, hashState),
       onHash: (fn) => { st.hashFns.push(fn); },
       createViewport, tip, hideTip, toast, match, sliceHay, svg, html,
-      util: { arr, clamp, trunc, humanise, nameOf, MIN_TEXT_PX },
+      util: { arr, clamp, trunc, humanise, nameOf, fmtSchedule, MIN_TEXT_PX },
       procColor: (p) => 'var(--p' + (((((p && p.color) | 0) % 12) + 12) % 12) + ')',
       theme: resolvedTheme, onTheme: (fn) => { st.themeFns.push(fn); }
     };
@@ -1477,7 +1489,7 @@ const Atlas = (() => {
       index.diff.changes(s.id).forEach(c => ul.append(html('li', null, fmtChange(c))));
       sec.append(ul); body.append(sec);
     }
-    const trows = [['endpoints', arr(s.endpoints).map(fmtEndpoint)], ['schedule', s.schedule || null],
+    const trows = [['endpoints', arr(s.endpoints).map(fmtEndpoint)], ['schedule', fmtSchedule(s.schedule) || null],
       ['external', s.externalSystem ? s.externalSystem + (s.direction ? ' (' + s.direction + ')' : '') : null]];
     if (trows.some(r => r[1] && (!Array.isArray(r[1]) || r[1].length))) { const sec = section('Trigger'); sec.append(kv(trows)); body.append(sec); }
     const msgs = section('Messages and payloads');
@@ -1805,7 +1817,7 @@ const Atlas = (() => {
 
   return {
     registerLens, getLens, boot, parseTarget, targetKey, MIN_TEXT_PX,
-    util: { arr, clamp, trunc, humanise, nameOf, svg, html, match }
+    util: { arr, clamp, trunc, humanise, nameOf, fmtSchedule, svg, html, match }
   };
 })();
 </script>

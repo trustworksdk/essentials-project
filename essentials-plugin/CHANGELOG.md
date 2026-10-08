@@ -3,6 +3,54 @@
 Each entry is a release, headed by its `plugin.json` version: the Essentials release the plugin
 targets, with a `-N` suffix for plugin-only releases.
 
+## 0.60.0-7 — targets Essentials 0.60.0
+- **`/essentials:slice-map-html` — the Slice Atlas.** A new command writes one self-contained page
+  (no server, no CDN, opens from `file://`) that shows the whole slice architecture from the manifests,
+  computed entirely by scripts — no model tokens go into the drawing. Five lenses:
+  - **Atlas** — semantic zoom from bounded contexts, to journeys linked by events, to a classic Event
+    Modeling board per journey (trigger, command and view, and one event lane per stream), with each
+    slice's given / when / then scenarios at the deepest zoom, or its invariants and test kinds when it
+    declares none.
+  - **Diff** — what changed against a baseline: on a feature branch the merge base with the default
+    branch, or `--diff <ref>`. Added, removed and changed slices, edges and messages, and the issues the
+    change introduced or fixed.
+  - **Lineage** — pick a field and see every command, event and read model that carries it; a
+    read-model column no inbound event supplies is flagged.
+  - **Coupling matrix** — slices against the aggregates and read models they write, own and read,
+    with cross-context coupling off the diagonal, and a context × context event matrix.
+  - **Metro map** — each journey a coloured line, shared slices as interchanges.
+
+  Every lens shares an issues dock that flies to the issue and marks it, search, a detail card (manifest,
+  payloads, read-model table, scenarios, the slice's `CLAUDE.md`), and the whole view in the URL hash, so
+  a link in a PR comment reopens it. Light and dark follow the system with a toggle, in the Trustworks
+  palette. A map with unparsed manifests is still written — each one a red error card under an
+  "incomplete" banner — and exits 1. The page is built by the new `slice-index.py atlas`, which CI can run
+  directly (`--before-map` takes a cached baseline map).
+- **`/essentials:slice-map --html` is retired**: given the flag, slice-map says the page moved and runs
+  `/essentials:slice-map-html` with the same path. `--md` stays, and `slice-index.py html` keeps its
+  page and its refusal to write an incomplete map.
+- **Manifest schema 1.4: optional `flow:` and `scenarios:`.** `flow:` names the journey (or journeys) a
+  slice serves; a slice without one is grouped by cause and effect. `scenarios:` is the slice's
+  specification by example — given / when / then over the slice's own messages, ending in emitted
+  messages, an error (`{ error, message }`), `{ nothing: true }` or a view's read-model rows — with an
+  optional `test:` naming the test that runs it. New slice-lint gate `1(d) scenario` checks that a
+  scenario names only messages its own manifest declares. Both fields are human- or generator-owned:
+  `/essentials:slice-check --fix-manifests` never writes them. A project's schema copy older than 1.4
+  rejects them, so a generator checks the copy first and otherwise sends the user to
+  `/essentials:upgrade` (`manifest-guide.md` §3).
+- `/essentials:slice-map`'s closed list of checks gains the completeness rule (a read-model column no
+  inbound event carries) and the scenario and adoption checks (a `given` event nothing publishes, an
+  unknown field, a `test:` that resolves to no test, a malformed scenario, no `flow:`, no scenarios). All
+  are `info`/`warn` annotations: still no R1–R5 gates and no severities. The map JSON gains
+  `slices[].flows`, `scenarios`, `schedule` and `doc`, and `processes`, `issues` and `lineage`
+  (`commands/slice-map.md` §6).
+- `slice-source.py --json` gains a top-level `tests` key — the test classes under the project's test
+  source roots with their JUnit 5 test methods and `@DisplayName`s — which resolves a scenario's `test:`.
+  An unreadable test file is listed under `unparsed`, so the facts mode can now exit 3 on test source
+  alone.
+- `render-check.py` also renders the Atlas pages: each lens mounts with no console error, an issue
+  focuses its target, a deep link restores the view, a broken manifest is an error card.
+
 ## 0.60.0-6 — targets Essentials 0.60.0
 - **`/essentials:upgrade` now moves a project to the plugin's Essentials release, code included.** A
   project on an older release (`essentials.version` below the pin) gets a new Group D: the move is

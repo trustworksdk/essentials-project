@@ -1,10 +1,11 @@
 # `slice-map` fixture — expected output
 
 Expected output for `references/slice/slice-map-template.html` and for the data contract in
-`commands/slice-map.md` §6. The ground truth is written out here. Every row a DOM can show is also
-checked by `render-check.py`, which renders each data file in headless Chrome and asserts on the dumped
-DOM; its per-file values live in `expected.json`, next to this file. The rows marked **by eye** — pan,
-zoom, hover, click, double-click, maximise — need a real pointer, so check them in a browser.
+`commands/slice-map.md` §6, and (§ The Atlas pages) for the Slice Atlas page. The ground truth is
+written out here. Every row a DOM can show is also checked by `render-check.py`, which renders each data
+file in headless Chrome and asserts on the dumped DOM; its per-file values live in `expected.json`,
+next to this file. The rows marked **by eye** — pan, zoom, hover, click, double-click, maximise — need
+a real pointer, so check them in a browser.
 
 ```bash
 python3 tests/fixtures/slice-map/render-check.py      # 0 ok · 1 failed · 2 harness error · 3 SKIPPED (no Chrome)
@@ -149,6 +150,34 @@ items 9–9b, and the unrendered-template trap.
 
 It cannot click. G6–G9, G14, G15, H1–H15, item 13–16 interaction and the pointer-capture trap stay **by
 eye**: a DOM dump never exercises the browser's click-target resolution.
+
+## The Atlas pages
+
+`render-check.py` also checks the page `/essentials:slice-map-html` writes (`references/slice/atlas/`),
+twice: built from `tests/fixtures/atlas/` exactly as the command builds it, and from the hand-written
+`tests/fixtures/slice-atlas/sample.json` through the same inliner. Each row is one browser load with the
+URL hash shown; a probe script prepended to the harness's copy of the page records every uncaught error,
+unhandled rejection and `console.error`, and every row also fails on any of those.
+
+| # | Load | Expected |
+|---|---|---|
+| A1 | `atlas.html` as shipped, no data | the "This page has not been rendered" notice; no lens mounts |
+| A2 | `#lens=<id>` for each `lens-<n>-<id>.js` | that lens mounts (`.lens-root[data-lens=<id>]`), its tab is selected, it draws something and shows no "failed to draw" message, and the hash keeps `lens=<id>`. The Diff lens on the fixture page has no baseline and says so — that is a mount, not a failure |
+| A3 | `#lens=atlas` on a map with unparsed manifests | the banner is shown and says how many "did not parse"; on a complete map it is hidden |
+| A4 | `#issue=<the map-parse-error id>` | the unparsed manifest is a red error card (`g.st.r-error`) in its context's unattached journey; the dock row is selected, the card is open at the issue, the hash carries `issue=` and `focus=` |
+| A5 | `#lens=atlas`, then the probe clicks the first issue on a parsed slice | as A4 for that issue, plus the target's sticky is selected on the board (`.sel`) and an issue marker (`.mark`) is drawn |
+| A6 | `#lens=atlas&focus=<a command slice>&q=<its name>&theme=dark` | the view comes back: the Atlas lens, the card open on that slice, the slice selected on the board, the search box holding the name with a count, `data-theme="dark"`, and the hash unchanged in those keys |
+| A7 | `#focus=render-check.not_in_this_map` | a "Not in this map" toast, and nothing fails |
+
+Which issue, slice and name a row uses is read from the page's own data, so the rows hold for any map
+that has a parsed command slice and an issue on a parsed slice; both fixtures have them, and the row
+fails rather than skips when one is missing.
+
+**By eye**, in a browser: pan and zoom through the four levels of detail (contexts, journeys, the board,
+the board with payloads and scenario stacks), text never under 11 px, portals flying to their original
+column, the minimap, hover cards, `↑`/`↓` walking the dock, `1`–`5`, `/`, `Esc`, the theme toggle, the
+Diff lens's summary bar and "changes + 1 hop" filter on `atlas-sample`, and the phone-width layout. A DOM
+dump sees the state after a load, never the motion that got there.
 
 ## Coverage gaps, stated rather than papered over
 

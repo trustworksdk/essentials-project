@@ -81,8 +81,11 @@ jobs:
       - name: Slice source facts (slice-source.py)
         run: scripts/plugin-check.sh step slice-source
 
-      - name: Slice index and graph (slice-index.py)
+      - name: Slice index, graph and atlas data (slice-index.py)
         run: scripts/plugin-check.sh step slice-index
+
+      - name: Slice Atlas layout (slice_atlas_layout.py)
+        run: scripts/plugin-check.sh step slice-atlas-layout
 
       - name: Slice law views per lane and kind (slice-law.py)
         run: scripts/plugin-check.sh step slice-law
@@ -140,9 +143,10 @@ jobs:
           echo "chrome-headless-shell $CHROME_VERSION"
           echo "path=$RUNNER_TEMP/chrome-headless-shell-linux64/chrome-headless-shell" >> "$GITHUB_OUTPUT"
 
-      # The slice-map page's layout is JavaScript; the check runs it in the browser and parses the DOM it leaves.
+      # The slice-map and Slice Atlas pages draw in JavaScript; the check runs them in the browser and parses the DOM
+      # they leave (the Atlas page is built first with slice-index.py atlas, so uv is needed too).
       # Exit 3 means "no Chrome, skipped", which locally is a notice and here is a failure.
-      - name: slice-map page renders (render-check.py)
+      - name: slice-map and Slice Atlas pages render (render-check.py)
         env:
           PLUGIN_CHECK_CHROME: ${{ steps.chrome.outputs.path }}
         run: scripts/plugin-check.sh step render-check

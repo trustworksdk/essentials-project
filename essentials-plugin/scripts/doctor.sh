@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # doctor.sh — which of the tools the essentials plugin's commands run are on this machine, and what
 # each missing one costs. Backs /essentials:doctor and the preflights of /essentials:init,
-# /essentials:review, /essentials:slice-check and /essentials:slice-map.
+# /essentials:review, /essentials:slice-check, /essentials:slice-map and /essentials:slice-map-html.
 #
 # Usage:
 #   doctor.sh [--for init|review|slice|docs|all] [--json]
@@ -16,7 +16,8 @@
 #           its post-render hooks and smoke build (Steps 12 and 13.7)
 #   review  /essentials:review: python3 (review-scan.py, stack-lint.py); uv for slice-lint.py and
 #           slice-source.py; git for its base-ref and --pr modes
-#   slice   /essentials:add-slice, the slice skills, /essentials:slice-check, /essentials:slice-map:
+#   slice   /essentials:add-slice, the slice skills, /essentials:slice-check, /essentials:slice-map,
+#           /essentials:slice-map-html:
 #           python3 (render-slice.py, slice-law.py); uv for slice-lint.py, slice-source.py, slice-index.py
 #   docs    the essentials-docs and essentials-change skills: search.sh (rg optional) and slice-law.py
 #   all     every profile above, plus /essentials:upgrade (stack-lint.py, migration-plan.py; ./mvnw or mvn, Docker
@@ -278,7 +279,8 @@ impacts() {
                 *)
                     echo "review|not-run|slice-lint.py and slice-source.py cannot run (no pyyaml): /essentials:review lists the slice-law gates they cover under Not run"
                     echo "slice|not-run|/essentials:slice-check: slice-lint.py and slice-source.py cannot run, so gates 1, 3, 4 and 14 tier and the script halves of 6, 11(b) and 14 are not run"
-                    echo "slice|stop|/essentials:slice-map stops: slice-index.py cannot run without pyyaml, and the map is never built by hand" ;;
+                    echo "slice|stop|/essentials:slice-map stops: slice-index.py cannot run without pyyaml, and the map is never built by hand"
+                    echo "slice|stop|/essentials:slice-map-html stops: slice-index.py cannot run without pyyaml, and the page is never built by hand" ;;
             esac ;;
         java)
             echo "init|not-run|/essentials:init's smoke build (Step 13.7) cannot build the rendered project, which targets the pinned Java release: its result is failed"

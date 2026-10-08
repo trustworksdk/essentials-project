@@ -155,7 +155,7 @@ default_merge_base() {
 # ---- steps ------------------------------------------------------------------------------------------------------
 # One function per plugin-docs step, in the job's order. Each runs in the directory that CI step ran in.
 
-steps=(llm-sync citations ess-ids plugin-version symlinks slice-lint lint-hook render-slice slice-source slice-index slice-law stack-lint
+steps=(llm-sync citations ess-ids plugin-version symlinks slice-lint lint-hook render-slice slice-source slice-index slice-atlas-layout slice-law stack-lint
     init-render review-scan migration-plan docs-search doctor check-patches check-expected eval-graders eval-flags slice-compile-table render-check)
 declare -A step_desc=(
     [llm-sync]="regenerate references/llm/ from LLM/ (sync-plugin-llm.sh) and fail on drift"
@@ -167,7 +167,8 @@ declare -A step_desc=(
     [lint-hook]="the slice-manifest pre-commit hook template in a temp repo, project in a subdirectory (test_pre_commit_hook.py)"
     [render-slice]="slice templates render to the committed goldens (render-slice.py check + unit tests)"
     [slice-source]="slice source facts (test_slice_source.py)"
-    [slice-index]="slice index and graph (test_slice_index.py)"
+    [slice-index]="slice index, graph and atlas data (test_slice_index.py, test_slice_atlas.py)"
+    [slice-atlas-layout]="Slice Atlas layout: goldens, geometry, stability and the 60-context budget (test_slice_atlas_layout.py)"
     [slice-law]="slice-law scope lines valid, every lane x kind view within budget and matching its golden (test_slice_law.py)"
     [stack-lint]="stack contract lint (stack-lint.py --self-test + unit tests)"
     [init-render]="every answer set renders and lints; the nine cells match their goldens (init-render.py)"
@@ -180,7 +181,7 @@ declare -A step_desc=(
     [eval-graders]="eval graders generated from their expected results, not edited (evals/build.py --check)"
     [eval-flags]="evals/README.md § Run it's claude plugin eval command equals the flags \`evals\` runs"
     [slice-compile-table]="every fixture is compiled or listed as not compiled (overlay.py check)"
-    [render-check]="slice-map page renders in headless Chrome (render-check.py; exit 3 = skipped, no Chrome)"
+    [render-check]="slice-map and Slice Atlas pages render in headless Chrome (render-check.py; exit 3 = skipped, no Chrome)"
 )
 
 step_llm-sync() {
@@ -307,7 +308,11 @@ step_slice-source() {
 }
 
 step_slice-index() {
-    x "$plugin" uv run --script tests/scripts/test_slice_index.py
+    x "$plugin" uv run --script tests/scripts/test_slice_index.py && x "$plugin" uv run --script tests/scripts/test_slice_atlas.py
+}
+
+step_slice-atlas-layout() {
+    x "$plugin" uv run --script tests/scripts/test_slice_atlas_layout.py
 }
 
 step_slice-law() {
@@ -492,8 +497,9 @@ manual_checks() {
 
     # No unquoted endpoint path in any manifest this plugin ships; one hit is a file that is not YAML. The same
     # one-liner slice-check gate 1 and slice-map Step 2 give users. Scoped to slice.yaml: the guides show the broken
-    # form as a counter-example.
-    out=$(grep -rn "path: [^\"']*{" --include=slice.yaml .)
+    # form as a counter-example. The Slice Atlas fixture breaks one manifest this way on purpose (its error card and
+    # banner are what tests/fixtures/atlas checks), so that one file is excluded by its exact path.
+    out=$(grep -rn "path: [^\"']*{" --include=slice.yaml . | grep -v '^\./tests/fixtures/atlas/src/main/java/com/example/orders/use_cases/amend_order/slice\.yaml:')
     echo "+ grep -rn \"path: [^\\\"']*{\" --include=slice.yaml ."
     [ -z "$out" ] || echo "$out"
     if [ -z "$out" ]; then record unquoted-paths PASS 0; else record unquoted-paths FAIL 0 "unquoted path in a slice.yaml"; fi

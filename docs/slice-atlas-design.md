@@ -1,13 +1,12 @@
 # Slice Atlas — design
 
-Status: **proposed, not shipped.** This document lives outside `essentials-plugin/` on purpose: the plugin
-names only what ships (`essentials-plugin/CLAUDE.md` companion table). When a phase below ships, its
-contract moves into the plugin — the manifest fields into `references/slice/slice-yaml.schema.json` and
-`references/slice/manifest-guide.md`, the rendering rules into `commands/slice-map.md` — and the matching
-section here is cut down to a pointer.
+Status: **shipped in plugin 0.60.0-7.** The contracts moved into the plugin as planned: the manifest fields
+to `references/slice/manifest-guide.md` and the schema, the commands to `commands/slice-map-html.md` and
+`commands/slice-map.md` (§6 data contract, Step 4 checks). This document keeps the design rationale and the
+decisions; where it and the plugin disagree, the plugin is right.
 
-**§6 (`flow:`) and §7 (`scenarios:`) are the contract an external spec-driven-development (SDD) generator
-targets.** They are written to be read on their own; point a generator at those two sections and §8.
+**An external spec-driven-development (SDD) generator targets `essentials-plugin/references/slice/manifest-guide.md`
+§3 and §5** (see §6–§7 below); §8 here says how the board draws what it writes.
 
 ## 1. Problem
 
@@ -161,171 +160,20 @@ optional fields gets a dock with 300 entries and stops reading it.
 
 ## 6. Contract: `flow:`
 
-Optional, any kind, schema `1.4`.
-
-```yaml
-flow: checkout              # one journey
-flow: [checkout, returns]   # a slice that serves several — typically a shared view
-```
-
-- Value: `^[a-z0-9][a-z0-9_-]*$`, a name or a non-empty list of names, no duplicates.
-- **A flow name is global, not per bounded context.** A journey that crosses contexts (checkout spans
-  `orders`, `billing`, `shipping`) is one process; the Atlas draws its per-context segments in one colour
-  and the metro lens draws it as one line. Two contexts that pick the same name *mean* the same journey.
-- **No order is declared.** Order inside a process is the causal rank (§10.1). An ordinal would have to
-  be renumbered by every inserted slice.
-- A generator should give every slice it creates for a journey that journey's name, and add a second
-  name to a slice only when that slice genuinely serves both (a view read by two journeys, a translation
-  used by both).
-
-Derivation for slices with no `flow:` (A3): from each **entry slice** in a context — a command slice
-with an endpoint, an inbound translation, a schedule-triggered automation — take the forward closure along
-*command → slice → event → reacting slice → dispatched command*, **stopping at the context boundary and
-at any slice that declares a flow** (those become process links, not members). Each closure is a derived
-process, id `~<entry slice id>`, named after the entry slice humanised (`cancel_order` → "cancel order").
-Closures may overlap; a slice in several derived processes belongs to each. Slices reached from no entry
-go to one derived process per context, "unattached" — typically HTTP-only views.
-
-Issue: `flow-undeclared` (`info`, aggregated per context).
+Shipped. The contract now lives in the plugin: `essentials-plugin/references/slice/manifest-guide.md` §3
+(`flow`, and how a slice without one is grouped) and `references/slice/slice-yaml.schema.json` (schema 1.4).
+Flow names are global, so one journey can span bounded contexts; no order is declared.
 
 ## 7. Contract: `scenarios:`
 
-Optional, any kind, schema `1.4`. The slice's specification by example, in Event Modeling's
-given / when / then form. It is **data the board renders and scripts check, not a test**: the test is
-named in `test:` and lives in the source tree.
-
-### 7.1 Shape
-
-```yaml
-scenarios:
-  - name: cancels a placed order               # required, unique within the slice
-    given:                                     # optional; prior history
-      - event: OrderPlaced
-        with: { orderId: o-1, customerId: c-7 }
-    when:                                      # required except on a view (§7.2)
-      command: CancelOrder
-      with: { orderId: o-1 }
-    then:                                      # required
-      - event: OrderCancelled
-        with: { orderId: o-1 }
-    test: CancelOrderDeciderTest#cancelsPlacedOrder   # optional
-
-  - name: rejects an unknown order
-    when: { command: CancelOrder, with: { orderId: o-404 } }
-    then: { error: OrderNotFound, message: "Order o-404 not found" }
-
-  - name: cancelling twice is a no-op
-    given: [{ event: OrderPlaced }, { event: OrderCancelled }]
-    when: { command: CancelOrder }
-    then: { nothing: true }
-```
-
-**A step** is a mapping with exactly one message key and an optional `with`:
-
-| Key | Names | Allowed in |
-|---|---|---|
-| `event` | an event type | given, when (reactors), then |
-| `command` | a command type | when (command slices), then (automations, inbound translations) |
-| `query` | a query type the slice `serves` | when (views) |
-| `state` | a write target the slice `writes` — the current state of an entity, for lanes without an event stream (service-entity) | given |
-| `external` | a message of the slice's `externalSystem` | when (inbound translation), then (outbound translation) |
-| `schedule` | `true` — the time trigger of a schedule-driven automation | when |
-
-`with` is a flat mapping of **example values**: keys are payload field names, values are scalars.
-Values are rendered verbatim and never interpreted.
-
-**`then`** is exactly one of:
-
-| Form | Meaning |
-|---|---|
-| a non-empty list of steps | what the slice emits: events published, commands dispatched, external calls made |
-| `{ error: <Name>, message?: <text> }` | the slice rejects. `<Name>` is the exception or domain-error type's simple name as thrown (`OrderNotFound`, `IllegalArgumentException`); `message` an example message. Nothing is emitted |
-| `{ nothing: true }` | accepted, nothing emitted — the idempotent retry, the event a policy ignores |
-| `{ readModel: <Name>, rows: [ {col: value, …}, … ] }` | a view's state after `given` (and the result of a `when` query). `rows: []` is a valid "empty" outcome |
-
-An empty `then: []` is invalid: it is indistinguishable from a scenario left unfinished. Write
-`{ nothing: true }`.
-
-**`test`** names the test that executes the scenario, resolved under the module's test roots:
-
-- `ClassName#method` — the usual form. Everything after `#` is taken verbatim, so a Kotlin backtick name
-  works: ``CancelOrderTest#cancels a placed order``.
-- `ClassName` — the scenario is the whole class (one parameterised test, one test class per scenario).
-- `path/from/test/root/File.kt#method` — when the simple class name is ambiguous.
-
-### 7.2 What each kind may say
-
-| Kind | `given` | `when` | `then` |
-|---|---|---|---|
-| command | `event` (any event published in scope), `state` (∈ `writes`) | `command` ∈ `handles` — required | events ⊆ `publishes`; `error`; `nothing` |
-| view | `event` ∈ `projections[].from` ∪ `consumes` | optional; `query` ∈ `serves` | `readModel` ∈ `owns` ∪ `reads[].name` ∪ `projections[].name` (the plugin's view template writes no `owns`), row keys ⊆ that model's columns; `error` (for a `when` query) |
-| automation | `event`, `state` (its own to-do read model, if any) | `event` ∈ `consumes`, or `schedule: true` when the slice declares `schedule` — required | commands ⊆ `dispatches`; `nothing`; `error` |
-| translation, inbound | `event`, `state` | `external` — required | commands ⊆ `dispatches`, events ⊆ `publishes`; `nothing`; `error` |
-| translation, outbound | `event`, `state` | `event` ∈ `consumes` — required | `external` steps; `nothing`; `error` |
-
-### 7.3 Checks, and where they run
-
-| Check | Level | Runs in | Why there |
-|---|---|---|---|
-| Shape (one message key per step, `then` form, unique `name`) | error | schema (`slice-lint.py`) | precise, per file — the commit gate catches a malformed generator output |
-| A name in `when`/`then` outside the slice's own lists per §7.2 | error | `slice-lint.py` (new cross-field rule) | precise: same manifest, no other file needed |
-| A `given` event no slice in scope publishes | warn `scenario-given-unpublished` | Atlas | needs every manifest |
-| A `with`/`rows` key that is not a payload field / column | info `scenario-unknown-field` | Atlas | needs source facts; `not checked` without them |
-| `test:` resolves to no test | warn `scenario-test-missing` | Atlas, via `slice-source.py` | needs the test tree; `not checked` when unresolvable |
-| Slice has no scenarios | info `scenario-none` | Atlas, aggregated per context | adoption signal, not a defect |
-
-### 7.4 Compatibility — read before generating
-
-The schema has `additionalProperties: false`, and **every project carries its own copy** of it
-(`scripts/slice-yaml.schema.json`, installed by `/essentials:init` with the lint gate). A project whose
-copy predates `1.4` rejects a manifest containing `flow:` or `scenarios:` at commit time.
-
-A generator must therefore:
-
-1. Check the project's `scripts/slice-yaml.schema.json` (or, without a lint gate, the plugin's) for a
-   `scenarios` property before writing either field.
-2. If absent, write neither field and tell the user to run `/essentials:upgrade`, which refreshes the
-   gate (Group A2) — not add the fields and leave the gate red.
-3. Stamp `schemaVersion: "1.4"` on a manifest it writes either field into. Readers accept any `1.x`, so
-   manifests without the fields need no restamp.
-
-### 7.5 JSON Schema (draft, lands in `slice-yaml.schema.json` at 1.4)
-
-```json
-"flow": { "oneOf": [
-  { "type": "string", "pattern": "^[a-z0-9][a-z0-9_-]*$" },
-  { "type": "array", "minItems": 1, "uniqueItems": true,
-    "items": { "type": "string", "pattern": "^[a-z0-9][a-z0-9_-]*$" } } ] },
-"scenarios": { "type": "array", "items": { "$ref": "#/$defs/scenario" } },
-
-"$defs": {
-  "scenario": { "type": "object", "additionalProperties": false, "required": ["name", "then"],
-    "properties": {
-      "name":  { "type": "string", "minLength": 1 },
-      "given": { "type": "array", "items": { "$ref": "#/$defs/scenarioStep" } },
-      "when":  { "$ref": "#/$defs/scenarioStep" },
-      "then":  { "oneOf": [
-        { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/scenarioStep" } },
-        { "type": "object", "additionalProperties": false, "required": ["error"],
-          "properties": { "error": { "type": "string" }, "message": { "type": "string" } } },
-        { "type": "object", "additionalProperties": false, "required": ["nothing"],
-          "properties": { "nothing": { "const": true } } },
-        { "type": "object", "additionalProperties": false, "required": ["readModel", "rows"],
-          "properties": { "readModel": { "type": "string" },
-                          "rows": { "type": "array", "items": { "$ref": "#/$defs/scalarMap" } } } } ] },
-      "test":  { "type": "string", "minLength": 1 },
-      "note":  { "type": "string" } } },
-  "scenarioStep": { "type": "object", "additionalProperties": false,
-    "oneOf": [ { "required": ["event"] }, { "required": ["command"] }, { "required": ["query"] },
-               { "required": ["state"] }, { "required": ["external"] }, { "required": ["schedule"] } ],
-    "properties": {
-      "event": { "type": "string" }, "command": { "type": "string" }, "query": { "type": "string" },
-      "state": { "type": "string" }, "external": { "type": "string" }, "schedule": { "const": true },
-      "with": { "$ref": "#/$defs/scalarMap" } } },
-  "scalarMap": { "type": "object",
-    "additionalProperties": { "type": ["string", "number", "boolean", "null"] } }
-}
-```
+Shipped. **Point an external generator at `essentials-plugin/references/slice/manifest-guide.md` §3**
+(shape, the `then` forms including `{ error, message }` and `{ nothing: true }`, what each kind may say,
+the `test:` forms, and the rule to check the project's schema copy before writing either field), the
+worked examples in its §5, and `references/slice/slice-yaml.schema.json`. Two refinements made while
+building: a view's `then.readModel` may name anything in `owns` ∪ `reads[].name` ∪ `projections[].name`
+(the plugin's view template writes no `owns`), and slice-lint's check is gate `1(d) scenario`
+(Should-fix). The checks that need the whole project (a `given` event nothing publishes, an unknown
+field, a test that does not resolve) run in the Atlas, as `info`/`warn` issues.
 
 ## 8. Rendering the board — what a generator's output turns into
 

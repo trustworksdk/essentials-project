@@ -20,7 +20,7 @@ user's permission either; it prints the command and leaves running it to them.
 ## Step 1 — Run the script
 
 The argument is a profile: `init`, `review`, `slice` (add-slice, the slice skills, slice-check,
-slice-map), `docs` (the docs skill's search and the slice law), or `all`, the default. Anything else:
+slice-map, slice-map-html), `docs` (the docs skill's search and the slice law), or `all`, the default. Anything else:
 say which values exist and stop.
 
 ```bash
