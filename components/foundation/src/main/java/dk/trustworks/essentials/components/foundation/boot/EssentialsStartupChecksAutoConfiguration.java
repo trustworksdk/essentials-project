@@ -32,6 +32,16 @@ import org.springframework.core.Ordered;
 public class EssentialsStartupChecksAutoConfiguration {
 
     /**
+     * @return the per-context {@code EssentialsStartupReport}, bound to the refreshing thread and printed as one block
+     * when the application is ready
+     * @see EssentialsStartupReportPublisher
+     */
+    @Bean
+    public static EssentialsStartupReportPublisher essentialsStartupReportPublisher() {
+        return new EssentialsStartupReportPublisher();
+    }
+
+    /**
      * @return the check that every persistence {@code JSONSerializer} bean reproduces the persisted JSON format
      * @see WireFormatCheckBeanPostProcessor
      */

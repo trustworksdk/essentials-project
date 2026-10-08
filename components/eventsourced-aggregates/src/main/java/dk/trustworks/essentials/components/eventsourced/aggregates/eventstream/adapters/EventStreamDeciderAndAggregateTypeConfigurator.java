@@ -19,6 +19,7 @@ package dk.trustworks.essentials.components.eventsourced.aggregates.eventstream.
 import dk.trustworks.essentials.components.eventsourced.aggregates.eventstream.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.AggregateType;
+import dk.trustworks.essentials.components.foundation.startup.EssentialsStartupReport;
 import dk.trustworks.essentials.reactive.command.*;
 import org.slf4j.*;
 
@@ -338,6 +339,11 @@ public class EventStreamDeciderAndAggregateTypeConfigurator {
                              unhandled,
                              commandBus.getClass().getSimpleName(),
                              NoCommandHandlerFoundException.class.getSimpleName());
+                    EssentialsStartupReport.addToCurrent(EssentialsStartupReport.Finding.warn(
+                            "sealed command type '" + sealedCommandType.getName() + "'",
+                            "permits " + unhandled.size() + " command type(s) that no EventStreamDecider handles (" + declaredAs + "): " + unhandled
+                                    + " - every send of them fails with a " + NoCommandHandlerFoundException.class.getSimpleName(),
+                            "Add an EventStreamDecider for each, unless another command handler on the CommandBus handles it (only EventStreamDecider adapters can be checked)"));
                 } else {
                     log.debug("Every command type that sealed command type '{}' permits is handled by an EventStreamDecider", sealedCommandType.getName());
                 }
@@ -359,6 +365,11 @@ public class EventStreamDeciderAndAggregateTypeConfigurator {
                      handlers,
                      commandBus.getClass().getSimpleName(),
                      MultipleCommandHandlersFoundException.class.getSimpleName());
+            EssentialsStartupReport.addToCurrent(EssentialsStartupReport.Finding.warn(
+                    "command type '" + commandType.getName() + "'",
+                    "would be handled by " + handlers.size() + " command handlers: " + handlers + " - every send of it fails with a "
+                            + MultipleCommandHandlersFoundException.class.getSimpleName(),
+                    "Register each command type with exactly one EventStreamDecider (check the deciders' canHandle and the EventStreamDeciderAndAggregateTypeConfigurators sharing this CommandBus)"));
             return;
         }
         var deciders = adapter.getDeciders().stream().filter(candidate -> candidate.canHandle(commandType)).toList();
@@ -369,6 +380,11 @@ public class EventStreamDeciderAndAggregateTypeConfigurator {
                      deciders.size(),
                      adapter,
                      deciders.stream().map(candidate -> candidate.getClass().getName()).toList());
+            EssentialsStartupReport.addToCurrent(EssentialsStartupReport.Finding.warn(
+                    "command type '" + commandType.getName() + "'",
+                    "would be handled by " + deciders.size() + " deciders of " + adapter + ": " + deciders.stream().map(candidate -> candidate.getClass().getName()).toList()
+                            + " - every send of it fails with 'Multiple deciders found'",
+                    "Register each command type with exactly one EventStreamDecider"));
         }
     }
 

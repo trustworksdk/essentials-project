@@ -783,7 +783,9 @@ projection checking that the order is contiguous breaks, and the view is incompl
   (default no-op). `MeasurementEventStoreSubscriptionObserver` counts it as
   `essentials.eventstore.processor.unhandled_event_type` (tags `processor`, `aggregate_type`, `event_type`, optional
   `Module`) whenever it has a `MeterRegistry` - the starter wires that when one is present.
-- Logger: `dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.processor.UnhandledEventTypes`.
+- Logger: `dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.processor.UnhandledEventTypes`. With
+  a Spring Boot starter the start-up WARN is repeated in the startup report block
+  ([LLM-spring-boot-starter-modules.md § Startup Report](LLM-spring-boot-starter-modules.md#startup-report)).
 
 ## In-Memory Projections
 

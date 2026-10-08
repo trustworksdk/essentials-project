@@ -16,6 +16,7 @@
 
 package dk.trustworks.essentials.components.foundation.messaging;
 
+import dk.trustworks.essentials.components.foundation.startup.EssentialsStartupReport;
 import org.junit.jupiter.api.Test;
 
 import java.time.Duration;
@@ -57,6 +58,22 @@ class RedeliveryPolicyBuilderChecksTest {
         var policy = builder.build();
         assertThat(policy.getMaximumNumberOfRedeliveries()).as("unchanged in 0.60.x: unset means 0").isZero();
         assertThat(policy.calculateNextRedeliveryDelay(3)).as("unchanged in 0.60.x: no growth").isEqualTo(DELAY);
+    }
+
+    @Test
+    void an_incomplete_policy_built_during_startup_is_added_to_the_startup_report() {
+        var report = new EssentialsStartupReport();
+        try (var binding = report.bindToCurrentThread()) {
+            RedeliveryPolicy.fixedBackoff()
+                            .setRedeliveryDelay(DELAY)
+                            .build();
+        }
+
+        assertThat(report.getFindings()).singleElement().satisfies(finding -> {
+            assertThat(finding.severity()).isEqualTo(EssentialsStartupReport.Severity.WARN);
+            assertThat(finding.source()).startsWith("RedeliveryPolicy built with ");
+            assertThat(finding.message()).contains("setMaximumNumberOfRedeliveries(...)");
+        });
     }
 
     @Test

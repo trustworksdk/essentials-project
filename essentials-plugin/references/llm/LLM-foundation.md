@@ -1090,6 +1090,26 @@ public DefaultLifecycleManager lifecycleManager() {
 }
 ```
 
+### Startup report
+
+Since 0.60.1. `EssentialsStartupReport` (`dk.trustworks.essentials.components.foundation.startup`) collects the findings
+of the Essentials start-up checks so they can be printed as one block. Every check still logs where it runs; it also
+calls `EssentialsStartupReport.addToCurrent(finding)`, which adds to the report bound to the **current thread** and
+does nothing when none is bound. There is no JVM-wide report (a test JVM runs many contexts at once). The Spring Boot
+starters create, bind and print one per context - see
+[LLM-spring-boot-starter-modules.md § Startup Report](LLM-spring-boot-starter-modules.md#startup-report). Without Spring:
+
+```java
+var report = new EssentialsStartupReport();
+try (var binding = report.bindToCurrentThread()) {     // close on the same thread; bindings nest
+    // build and start the Essentials components
+}
+report.log();   // one block: ERROR if any error finding, WARN if any warning, else INFO "no findings"
+List<EssentialsStartupReport.Finding> findings = report.getFindings();   // Finding(severity, source, message, fix)
+```
+
+A finding raised on another thread is only logged by its check. Identical findings are kept once.
+
 ### PostgreSQL Utilities
 
 **Package**: `dk.trustworks.essentials.components.foundation.postgresql`

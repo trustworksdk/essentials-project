@@ -16,6 +16,8 @@
 
 package dk.trustworks.essentials.components.foundation.boot;
 
+import dk.trustworks.essentials.components.foundation.startup.EssentialsStartupReport;
+import dk.trustworks.essentials.components.foundation.startup.EssentialsStartupReport.Finding;
 import org.slf4j.*;
 import org.springframework.beans.factory.config.*;
 import org.springframework.boot.context.properties.source.*;
@@ -78,7 +80,10 @@ public final class RemovedEssentialsPropertiesCheck implements BeanFactoryPostPr
     @Override
     public void postProcessBeanFactory(ConfigurableListableBeanFactory beanFactory) {
         if (environment != null) {
-            findRemovedPropertiesStillSet(environment).forEach(log::error);
+            findRemovedProperties(environment).forEach(finding -> {
+                log.error(asLogMessage(finding));
+                EssentialsStartupReport.addToCurrent(finding);
+            });
         }
     }
 
@@ -87,19 +92,34 @@ public final class RemovedEssentialsPropertiesCheck implements BeanFactoryPostPr
      * @return one message per removed {@code essentials.*} property that is still set, sorted by property name
      */
     static List<String> findRemovedPropertiesStillSet(Environment environment) {
+        return findRemovedProperties(environment).stream().map(RemovedEssentialsPropertiesCheck::asLogMessage).toList();
+    }
+
+    /**
+     * @param environment the environment to inspect
+     * @return one {@link EssentialsStartupReport.Severity#ERROR} finding per removed {@code essentials.*} property that
+     * is still set, sorted by property name
+     */
+    static List<Finding> findRemovedProperties(Environment environment) {
         requireNonNull(environment, "No environment provided");
-        var messages = new ArrayList<String>();
+        var findings = new ArrayList<Finding>();
         new TreeMap<>(REMOVED_PROPERTIES).forEach((property, guidance) -> {
             var name = ConfigurationPropertyName.of(property);
             for (ConfigurationPropertySource source : ConfigurationPropertySources.get(environment)) {
                 var configured = source.getConfigurationProperty(name);
                 if (configured != null) {
-                    messages.add("Essentials: the property '" + property + "' is set (" + describeOrigin(configured) + ") but is no longer supported and is ignored. " + guidance);
+                    findings.add(Finding.error("property '" + property + "'",
+                                               "is set (" + describeOrigin(configured) + ") but is no longer supported and is ignored",
+                                               guidance));
                     return;
                 }
             }
         });
-        return messages;
+        return findings;
+    }
+
+    private static String asLogMessage(Finding finding) {
+        return "Essentials: the " + finding.source() + " " + finding.message() + ". " + finding.fix();
     }
 
     private static String describeOrigin(ConfigurationProperty configured) {

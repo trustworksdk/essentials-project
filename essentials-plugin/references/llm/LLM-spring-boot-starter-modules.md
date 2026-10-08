@@ -299,6 +299,37 @@ numeric `Duration` (`30.000000000`), a missing primitive reading as its default 
 unknown properties ignored, untyped floats as `BigDecimal`, and with `types-jackson3` present, value types as JSON
 primitives. Shared by every starter: `EssentialsStartupChecksAutoConfiguration` (foundation).
 
+#### Startup Report
+
+Since 0.60.1, every starter (shared `EssentialsStartupChecksAutoConfiguration`, foundation) gives each application
+context an `EssentialsStartupReport` bean and logs it as **one block on `ApplicationReadyEvent`**: at ERROR if any
+finding is an error, at WARN if any is a warning, otherwise one INFO line `Essentials startup report: no findings`.
+The block lists the findings grouped by severity, each with its fix. Every check still logs where it runs, so nothing
+is lost without the block. No property; logger `dk.trustworks.essentials.components.foundation.startup.EssentialsStartupReport`.
+
+| Finding | Severity | Fix it points at |
+|---|---|---|
+| A removed `essentials.*` property is still set (also logged as an ERROR at once) | ERROR | Remove the property; the guidance names its replacement |
+| A `JSONSerializer`/`JSONEventSerializer` bean does not reproduce the persisted JSON format (`essentials.json.wire-format-check=warn`) | ERROR | Build the mapper with `EssentialsObjectMappers.createJackson3ObjectMapper(...)` |
+| A `ViewEventProcessor` handles part of a sealed event type and neither handles nor ignores the rest | WARN | `@MessageHandler`, or `@IgnoresEventTypes` on the view |
+| A sealed command type permits commands no `EventStreamDecider` handles | WARN | Add a decider |
+| A command type would be handled by more than one handler or decider | WARN | Register it with exactly one decider |
+| `ShardOwnedDurableQueues` built without a `UnitOfWorkFactory` | WARN | `setUnitOfWorkFactory(...)` |
+| An incomplete `RedeliveryPolicy` was built | WARN | The builder setters named |
+| A message was enqueued outside a `UnitOfWork` while the application started | WARN | Enqueue in a `UnitOfWork`/transaction |
+| `essentials.schema.mode=emit` / `validate`: what the script or the validation covers | INFO | Register every `AggregateType` at start-up |
+
+- **What reaches it:** findings raised on the thread that refreshes the context (bean creation, the start of the
+  `Lifecycle` beans). A finding raised on another thread or after the refresh (an `ApplicationRunner`) is only logged.
+- **What does not:** a check that stops the application - a missing provided library such as Objenesis,
+  `wire-format-check=fail`, a failed schema `validate`. The failure is the report.
+- **When it prints:** on `ApplicationReadyEvent`; an application stopped after `ApplicationStartedEvent` without
+  becoming ready (`essentials.schema.mode=emit`) prints it as the context closes. A context not started by
+  `SpringApplication` (`ApplicationContextRunner`) prints nothing - read the `EssentialsStartupReport` bean
+  (`getFindings()`).
+- One report per context, never shared: two contexts in one JVM never see each other's findings. Not exposed over the
+  admin API or actuator.
+
 #### Database Schema
 
 Prefix: `essentials.schema` - what happens to the schema every Essentials component describes. SPI and rules:

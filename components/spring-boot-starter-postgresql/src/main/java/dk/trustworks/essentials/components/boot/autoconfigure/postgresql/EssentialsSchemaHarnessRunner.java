@@ -17,6 +17,7 @@ package dk.trustworks.essentials.components.boot.autoconfigure.postgresql;
 
 import dk.trustworks.essentials.components.foundation.postgresql.PostgresqlEmitSchemaApplier;
 import dk.trustworks.essentials.components.foundation.schema.*;
+import dk.trustworks.essentials.components.foundation.startup.EssentialsStartupReport;
 import org.slf4j.*;
 import org.springframework.beans.factory.*;
 import org.springframework.boot.SpringApplication;
@@ -65,6 +66,29 @@ public final class EssentialsSchemaHarnessRunner implements SmartInitializingSin
         contributors.orderedStream().filter(distinct::add).forEach(found::add);
         log.info("Schema mode '{}': {} schema contributor(s)", mode.name().toLowerCase(Locale.ROOT), found.size());
         new EssentialsSchemaHarness(applier, context.getIfAvailable(SchemaContext::empty), found).apply();
+        addStartupReportNote(found.size());
+    }
+
+    /**
+     * The RN-5 notes for the startup report: what {@code emit} and {@code validate} cover, and what they cannot
+     */
+    private void addStartupReportNote(int contributors) {
+        var registerAtStartup = "Register every AggregateType and schema-owning component at start-up (as singleton beans or in their component's configuration), " +
+                "not from an ApplicationRunner, a @Lazy bean or on demand, and re-run the emit mode after adding one";
+        if (mode == SchemaMode.EMIT) {
+            var scriptFile = applier instanceof PostgresqlEmitSchemaApplier emitApplier ? "'" + emitApplier.getScriptFile().toAbsolutePath() + "'" : "the script";
+            EssentialsStartupReport.addToCurrent(EssentialsStartupReport.Finding.info(
+                    "essentials.schema.mode=emit",
+                    "the schema of " + contributors + " contributor(s) is written to " + scriptFile + (exitAfterEmit ? " and the application stops once started" : "") +
+                            "; it covers what was registered during start-up only",
+                    registerAtStartup));
+        } else if (mode == SchemaMode.VALIDATE) {
+            EssentialsStartupReport.addToCurrent(EssentialsStartupReport.Finding.info(
+                    "essentials.schema.mode=validate",
+                    "the schema of " + contributors + " contributor(s) was validated against the ledger; an AggregateType registered later is validated when it is " +
+                            "registered and fails with a SchemaValidationException naming it if its table is not in the ledger",
+                    registerAtStartup));
+        }
     }
 
     @Override

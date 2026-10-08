@@ -17,6 +17,7 @@
 package dk.trustworks.essentials.components.foundation.boot;
 
 import dk.trustworks.essentials.components.foundation.json.*;
+import dk.trustworks.essentials.components.foundation.startup.EssentialsStartupReport;
 import org.slf4j.*;
 import org.springframework.beans.factory.config.BeanPostProcessor;
 import org.springframework.boot.context.properties.bind.Binder;
@@ -76,6 +77,11 @@ public final class WireFormatCheckBeanPostProcessor implements BeanPostProcessor
             throw new IllegalStateException(report);
         }
         log.error(report);
+        EssentialsStartupReport.addToCurrent(EssentialsStartupReport.Finding.error(
+                "JSONSerializer bean '" + beanName + "'",
+                "does not write and read the JSON format Essentials persists: " + deviations.stream().map(String::valueOf).collect(Collectors.joining("; ")),
+                "Build its mapper with EssentialsObjectMappers.createJackson3ObjectMapper(additionalModules...) instead of configuring a JsonMapper by hand. "
+                        + PROPERTY + "=fail stops the application instead, =off skips the check"));
         return bean;
     }
 

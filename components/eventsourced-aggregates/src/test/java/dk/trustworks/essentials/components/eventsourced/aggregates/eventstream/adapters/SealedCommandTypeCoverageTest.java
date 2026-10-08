@@ -23,6 +23,7 @@ import dk.trustworks.essentials.components.eventsourced.aggregates.eventstream.*
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.ConfigurableEventStore;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.AggregateType;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.serializer.AggregateIdSerializer;
+import dk.trustworks.essentials.components.foundation.startup.EssentialsStartupReport;
 import dk.trustworks.essentials.reactive.command.*;
 import org.junit.jupiter.api.*;
 import org.slf4j.LoggerFactory;
@@ -80,6 +81,22 @@ class SealedCommandTypeCoverageTest {
                               .doesNotContain(CreateShipment.class.getName())
                               .doesNotContain(DispatchShipment.class.getName())
                               .contains(NoCommandHandlerFoundException.class.getSimpleName());
+    }
+
+    @Test
+    void the_warning_is_also_added_to_the_startup_report_bound_to_the_thread() {
+        var report = new EssentialsStartupReport();
+        try (var binding = report.bindToCurrentThread()) {
+            new EventStreamDeciderAndAggregateTypeConfigurator(eventStore, commandBus, List.of(shipmentConfiguration),
+                                                               List.of(new CreateShipmentDecider(), new DispatchShipmentDecider()));
+        }
+
+        assertThat(report.getFindings()).singleElement().satisfies(finding -> {
+            assertThat(finding.severity()).isEqualTo(EssentialsStartupReport.Severity.WARN);
+            assertThat(finding.source()).isEqualTo("sealed command type '" + ShipmentCommand.class.getName() + "'");
+            assertThat(finding.message()).contains(CancelShipment.class.getName());
+            assertThat(finding.fix()).contains("Add an EventStreamDecider");
+        });
     }
 
     @Test

@@ -16,6 +16,7 @@
 
 package dk.trustworks.essentials.components.foundation.messaging.queue;
 
+import dk.trustworks.essentials.components.foundation.startup.EssentialsStartupReport;
 import dk.trustworks.essentials.components.foundation.transaction.*;
 import org.slf4j.*;
 
@@ -117,6 +118,12 @@ public final class EnqueueOutsideUnitOfWorkGuard {
                      "Spring transaction; set '{}=true' to make such an enqueue fail instead. Logged once per DurableQueues instance; the " +
                      "stack trace shows the call site.",
                      queueName, REQUIRE_ACTIVE_UNIT_OF_WORK_FOR_ENQUEUE_PROPERTY, new EnqueueCallSite());
+            // Reaches the startup report only when the enqueue happens while the application context is starting
+            EssentialsStartupReport.addToCurrent(EssentialsStartupReport.Finding.warn(
+                    "DurableQueues enqueue on queue '" + queueName + "'",
+                    "a message was enqueued outside a UnitOfWork/transaction while the application was starting, so it committed on its own",
+                    "Enqueue inside a UnitOfWork or a Spring transaction if it should commit with surrounding work; '" + REQUIRE_ACTIVE_UNIT_OF_WORK_FOR_ENQUEUE_PROPERTY
+                            + "=true' makes such an enqueue fail instead"));
         }
     }
 
