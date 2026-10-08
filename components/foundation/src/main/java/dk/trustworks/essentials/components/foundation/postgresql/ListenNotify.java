@@ -83,13 +83,16 @@ public final class ListenNotify {
      *                  To mitigate the risk of SQL injection attacks, external or untrusted inputs should never directly provide the {@code tableName} value.<br>
      *                  <b>Failure to adequately sanitize and validate this value could expose the application to SQL injection
      *                  vulnerabilities, compromising the security and integrity of the database.</b>
-     * @return the resolved channel name (the same as the {@code tableName} with the {@code tableName} checked against {@link PostgresqlUtil#checkIsValidTableOrColumnName(String)}
-     * as a first link of defense)
+     * @return the resolved channel name: the {@code tableName} lower-cased with {@link Locale#ROOT}, after the {@code tableName} has been checked
+     * against {@link PostgresqlUtil#checkIsValidTableOrColumnName(String)} as a first line of defense.<br>
+     * It is lower-cased because the two sides of LISTEN/NOTIFY treat case differently: {@code LISTEN Orders} takes an unquoted identifier,
+     * which PostgreSQL folds to {@code orders}, while {@code pg_notify('Orders', ...)} takes a case-sensitive string. Before 0.60.1 a
+     * mixed-case table name therefore never delivered a notification.
      */
     public static String resolveTableChangeChannelName(String tableName) {
         var resolvedChannelName = requireNonNull(tableName, "No tableName provided");
         PostgresqlUtil.checkIsValidTableOrColumnName(resolvedChannelName);
-        return resolvedChannelName;
+        return resolvedChannelName.toLowerCase(Locale.ROOT);
     }
 
     /**

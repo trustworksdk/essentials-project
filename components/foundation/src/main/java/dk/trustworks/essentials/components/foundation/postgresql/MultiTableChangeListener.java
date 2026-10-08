@@ -88,7 +88,7 @@ public final class MultiTableChangeListener<T extends TableChangeNotification> i
     private final JSONSerializer                            jsonSerializer;
     private final EventBus                                  eventBus;
     /**
-     * Key: The table name<br>
+     * Key: The channel name, i.e. the table name normalised by {@link ListenNotify#resolveTableChangeChannelName(String)} (lower case)<br>
      * Value: The {@link TableChangeNotification} subclass that the notification string payload should be mapped to using the {@link #jsonSerializer}
      */
     private final ConcurrentMap<String, Class<? extends T>> listenForNotificationsRelatedToTables;
@@ -219,7 +219,7 @@ public final class MultiTableChangeListener<T extends TableChangeNotification> i
         requireNonBlank(tableName, "No tableName was provided");
         requireNonNull(tableNotificationType, "No tableNotificationType was provided");
         PostgresqlUtil.checkIsValidTableOrColumnName(tableName);
-        if (listenForNotificationsRelatedToTables.put(tableName, tableNotificationType) == null) {
+        if (listenForNotificationsRelatedToTables.put(resolveTableChangeChannelName(tableName), tableNotificationType) == null) {
             listen(tableName);
         }
         return this;
@@ -253,7 +253,7 @@ public final class MultiTableChangeListener<T extends TableChangeNotification> i
     public MultiTableChangeListener unlistenToNotificationsFor(String tableName) {
         requireNonBlank(tableName, "No tableName was provided");
         PostgresqlUtil.checkIsValidTableOrColumnName(tableName);
-        if (listenForNotificationsRelatedToTables.remove(tableName) != null) {
+        if (listenForNotificationsRelatedToTables.remove(resolveTableChangeChannelName(tableName)) != null) {
             unlisten(tableName);
         }
         return this;
@@ -365,7 +365,7 @@ public final class MultiTableChangeListener<T extends TableChangeNotification> i
                 }
                 filterDuplicateNotifications(notifications)
                         .map(notification -> {
-                            var payloadType = listenForNotificationsRelatedToTables.get(notification.getName());
+                            var payloadType = listenForNotificationsRelatedToTables.get(notification.getName().toLowerCase(Locale.ROOT));
                             if (payloadType == null) {
                                 log.error(msg("Couldn't find a concrete {} type for notifications related to table '{}'",
                                               TableChangeNotification.class.getSimpleName(),
