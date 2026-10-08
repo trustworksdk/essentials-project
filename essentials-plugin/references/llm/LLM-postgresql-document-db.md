@@ -139,6 +139,10 @@ value class Version(override val value: Long) : LongValueType<Version> {
 }
 ```
 
+`version` and `lastUpdated` are the property names `VersionedEntity` declares, and the repository looks them up by those names when it is created. A Kotlin entity overrides them as `var`s. A `JavaVersionedEntity` reaches them through `getVersionValue()`/`setVersionValue(long)` and `getLastUpdated()`/`setLastUpdated(...)`, so its backing fields may have any name (the JSON document then carries the field names; the table's `version`/`last_updated` columns do not change).
+
+`save` overwrites the entity's `version` with its `initialVersion` argument (`Version.ZERO` by default) and sets `lastUpdated` to now; `update` does the same with the next version. Both properties must therefore be mutable: a read-only one fails repository creation with `IllegalStateException` ("… is read-only").
+
 ## Repository Setup
 
 ### Factory Creation
@@ -284,6 +288,11 @@ fun on(event: ProductAddedToOrder, message: OrderedMessage) {
   does not reject an event that was already applied. The skip check above is what makes the projection
   idempotent.
 - `Version` is a Kotlin value class with a constructor and no `of()` factory: `Version(message.order)`.
+- ⚠️ **Deleting a projection row deletes its version too.** The version lives in the row, so once
+  `deleteById`/`delete` has run, a redelivered *older* event finds no row and the skip check has nothing to
+  compare with: a handler that creates the view when `findById` returns `null` re-creates it. Where redelivery
+  matters, soft-delete instead (a `deleted` flag written with `update(view, Version(message.order))`), or keep
+  a tombstone row whose version is the deleting event's order.
 
 ## Query API
 
