@@ -393,11 +393,17 @@ public final class PostgresqlEventStore<CONFIG extends AggregateEventStreamConfi
                                                this,
                                                eventStoreInterceptors,
                                                (eventStoreInterceptor, eventStoreInterceptorChain) -> eventStoreInterceptor.intercept(operation, eventStoreInterceptorChain),
-                                               () -> persistenceStrategy.loadAggregateEvents(unitOfWorkFactory.getRequiredUnitOfWork(),
-                                                                                             operation.aggregateType,
-                                                                                             operation.aggregateId,
-                                                                                             operation.getEventOrderRange(),
-                                                                                             operation.getTenant()))
+                                               () -> {
+                                                   // Decided here, after the interceptors ran: an interceptor can replace the range
+                                                   if (operation.getEventOrderRange().isEmpty()) {
+                                                       return Optional.<AggregateEventStream<ID>>empty();
+                                                   }
+                                                   return persistenceStrategy.loadAggregateEvents(unitOfWorkFactory.getRequiredUnitOfWork(),
+                                                                                                  operation.aggregateType,
+                                                                                                  operation.aggregateId,
+                                                                                                  operation.getEventOrderRange(),
+                                                                                                  operation.getTenant());
+                                               })
                 .proceed();
     }
 
@@ -453,6 +459,11 @@ public final class PostgresqlEventStore<CONFIG extends AggregateEventStreamConfi
     }
 
     private Stream<PersistedEvent> loadEventsByGlobalOrderFromPersistence(LoadEventsByGlobalOrder operation) {
+        // Decided here, after the interceptors ran: an interceptor can replace the range or the additional orders
+        var includeAdditionalGlobalOrders = operation.getIncludeAdditionalGlobalOrders();
+        if (operation.getGlobalEventOrderRange().isEmpty() && (includeAdditionalGlobalOrders == null || includeAdditionalGlobalOrders.isEmpty())) {
+            return Stream.empty();
+        }
         var onlyLoadPayloadIfEventBelongsToTenant = operation.getOnlyLoadPayloadIfEventBelongsToTenant();
         if (onlyLoadPayloadIfEventBelongsToTenant.isPresent() && operation.getOnlyIncludeEventIfItBelongsToTenant().isEmpty()) {
             return persistenceStrategy.loadEventsByGlobalOrderOmittingOtherTenantsPayloads(unitOfWorkFactory.getRequiredUnitOfWork(),
