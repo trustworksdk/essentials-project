@@ -35,7 +35,8 @@ import java.util.Optional;
  * <br>
  * To coordinate this properly it's important that each {@link FencedLockManager#getLockManagerInstanceId()}
  * is unique across the cluster.<br>
- * Per default, it uses the local machine hostname as {@link FencedLockManager#getLockManagerInstanceId()} value.
+ * Per default, it uses {@code <hostname>:<pid>} as {@link FencedLockManager#getLockManagerInstanceId()} value (the bare hostname before 0.60.1) -
+ * see {@link FencedLockManagerSettings#defaultLockManagerInstanceId()}.
  */
 public interface FencedLockManager extends Lifecycle {
     /**
@@ -120,7 +121,8 @@ public interface FencedLockManager extends Lifecycle {
     /**
      * Get the instance id that distinguishes different {@link FencedLockManager} instances from each other<br>
      * For local JVM testing you can assign a unique instance id to allow multiple {@link FencedLockManager}'s to compete for Locks.<br>
-     * In production the hostname should be returned
+     * It must be unique per running lock manager: it is what the lock table, the admin API and the ownership predicates report as
+     * the lock holder. The default is {@code <hostname>:<pid>} ({@link FencedLockManagerSettings#defaultLockManagerInstanceId()})
      *
      * @return the instance id
      */

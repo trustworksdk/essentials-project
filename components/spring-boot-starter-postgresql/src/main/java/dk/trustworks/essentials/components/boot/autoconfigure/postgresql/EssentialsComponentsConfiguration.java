@@ -262,6 +262,7 @@ public class EssentialsComponentsConfiguration {
         var builder = PostgresqlFencedLockManager.builder()
                                           .setJdbi(jdbi)
                                           .setUnitOfWorkFactory(unitOfWorkFactory)
+                                          .setLockManagerInstanceId(properties.getFencedLockManager().getInstanceId())
                                           .setLockTimeOut(properties.getFencedLockManager().getLockTimeOut())
                                           .setLockConfirmationInterval(properties.getFencedLockManager().getLockConfirmationInterval())
                                           .setFencedLocksTableName(properties.getFencedLockManager().getFencedLocksTableName())

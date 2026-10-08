@@ -183,6 +183,7 @@ Prefix: `essentials.fenced-lock-manager`
 | Property | Default | Notes |
 |----------|---------|-------|
 | `fenced-locks-table-name` | `fenced_locks` | Table name - see [Security](#security) |
+| `instance-id` | `<hostname>:<pid>` | Lock holder id shown in the lock table, admin API and logs; must be unique per instance. Since 0.60.1 (before: bare hostname, so two JVMs on one host looked like one holder) |
 | `lock-time-out` | `15s` | Must be > `lock-confirmation-interval` |
 | `lock-confirmation-interval` | `4s` | Heartbeat frequency |
 | `release-acquired-locks-in-case-of-i-o-exceptions-during-lock-confirmation` | `false` | Local release on I/O error |
@@ -316,6 +317,7 @@ Prefix: `essentials.fenced-lock-manager`
 | Property | Default | Notes |
 |----------|---------|-------|
 | `fenced-locks-collection-name` | `fenced_locks` | Collection name - see [Security](#security) |
+| `instance-id` | `<hostname>:<pid>` | Lock holder id shown in the lock table, admin API and logs; must be unique per instance. Since 0.60.1 (before: bare hostname, so two JVMs on one host looked like one holder) |
 | `lock-time-out` | `12s` | Must be > `lock-confirmation-interval` |
 | `lock-confirmation-interval` | `5s` | Heartbeat frequency |
 | `release-acquired-locks-in-case-of-i-o-exceptions-during-lock-confirmation` | `false` | Local release on I/O error |

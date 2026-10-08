@@ -458,6 +458,30 @@ public class EssentialsComponentsProperties {
         private Duration lockConfirmationInterval                                       = Duration.ofSeconds(4);
         private String   fencedLocksCollectionName                                      = MongoFencedLockStorage.DEFAULT_FENCED_LOCKS_COLLECTION_NAME;
         private boolean  releaseAcquiredLocksInCaseOfIOExceptionsDuringLockConfirmation = false;
+        private String   instanceId;
+
+        /**
+         * The lock manager's instance id: what the lock table, the admin API ({@code lockedByLockManagerInstanceId}) and the
+         * logs report as a lock's holder, and what {@code isLockedByThisLockManagerInstance} compares against. It must be
+         * unique per running application instance.
+         * <p>
+         * Property: {@code essentials.fenced-lock-manager.instance-id}. Unset (the default), it is {@code <hostname>:<pid>}
+         * - see {@link dk.trustworks.essentials.components.foundation.fencedlock.FencedLockManagerSettings#defaultLockManagerInstanceId()}.
+         * Set it where a stable, readable id matters, e.g. to the pod name.
+         *
+         * @return the configured instance id, or {@code null} to use {@code <hostname>:<pid>}
+         */
+        public String getInstanceId() {
+            return instanceId;
+        }
+
+        /**
+         * @param instanceId the lock manager's instance id, or {@code null} to use {@code <hostname>:<pid>}
+         * @see #getInstanceId()
+         */
+        public void setInstanceId(String instanceId) {
+            this.instanceId = instanceId;
+        }
 
         /**
          * @return Should {@link FencedLock}'s acquired by this {@link dk.trustworks.essentials.components.foundation.fencedlock.FencedLockManager} be released in case calls to {@link FencedLockStorage#confirmLockInDB(DBFencedLockManager, UnitOfWork, DBFencedLock, OffsetDateTime)} fails

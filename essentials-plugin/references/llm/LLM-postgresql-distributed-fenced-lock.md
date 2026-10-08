@@ -91,7 +91,7 @@ import org.jdbi.v3.core.Jdbi;
 PostgresqlFencedLockManager lockManager = PostgresqlFencedLockManager.builder()
     .setJdbi(jdbi)                                        // Required
     .setUnitOfWorkFactory(unitOfWorkFactory)              // Required
-    .setLockManagerInstanceId("node-01")                  // Optional, defaults to hostname
+    .setLockManagerInstanceId("node-01")                  // Optional, defaults to <hostname>:<pid>
     .setLockTimeOut(Duration.ofSeconds(10))               // Optional, default 10s
     .setLockConfirmationInterval(Duration.ofSeconds(3))   // Optional, default 3s
     .setFencedLocksTableName("my_locks")                  // Optional, default "fenced_locks"
@@ -106,7 +106,7 @@ PostgresqlFencedLockManager lockManager = PostgresqlFencedLockManager.builder()
 |--------|------|---------|-------------|
 | `jdbi` | `Jdbi` | Required | JDBI instance for database access |
 | `unitOfWorkFactory` | `HandleAwareUnitOfWorkFactory` | Required | Transaction management |
-| `lockManagerInstanceId` | `String` | Hostname | Unique ID for this manager instance |
+| `lockManagerInstanceId` | `String` | `<hostname>:<pid>` (bare hostname before 0.60.1) | Unique ID for this manager instance; Spring: `essentials.fenced-lock-manager.instance-id` |
 | `lockTimeOut` | `Duration` | 10 seconds | Lock expiration without confirmation |
 | `lockConfirmationInterval` | `Duration` | 3 seconds | Heartbeat interval |
 | `fencedLocksTableName` | `String` | `"fenced_locks"` | Database table name ⚠️ SQL injection risk |
@@ -121,8 +121,8 @@ Duration lockTimeout = Duration.ofSeconds(30);
 Duration confirmationInterval = lockTimeout.dividedBy(3);  // 10 seconds
 
 // Instance ID best practices
-String instanceId = Network.hostName();                    // Use hostname (default)
-String instanceId = "service-" + UUID.randomUUID();        // Or unique ID
+String instanceId = FencedLockManagerSettings.defaultLockManagerInstanceId(); // <hostname>:<pid> (the default)
+String instanceId = System.getenv("POD_NAME");             // Or a stable, readable unique ID
 ```
 
 ## Usage Patterns
@@ -257,9 +257,15 @@ public PostgresqlFencedLockManager fencedLockManager(
 .setLockManagerInstanceId("service-instance")
 
 // ✅ RIGHT - Each instance has unique ID
-.setLockManagerInstanceId(Network.hostName())
+.setLockManagerInstanceId(null)                           // default: <hostname>:<pid>
+.setLockManagerInstanceId(System.getenv("POD_NAME"))
 .setLockManagerInstanceId("node-" + UUID.randomUUID())
+
+// ⚠️ Not unique when two JVMs share a host or two containers share a hostname
+.setLockManagerInstanceId(Network.hostName())
 ```
+
+The id never decides mutual exclusion — acquire, confirm and release are compare-and-set updates on the fence token — but it is what the lock table, the admin API and `isLockedByThisLockManagerInstance()` report, so a shared id makes both instances look like the holder.
 
 ### ⚠️ Confirmation Interval vs Timeout
 

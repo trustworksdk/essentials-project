@@ -62,7 +62,7 @@ import dk.trustworks.essentials.components.foundation.transaction.UnitOfWorkFact
 MongoFencedLockManager lockManager = MongoFencedLockManager.builder()
     .setMongoTemplate(mongoTemplate)                          // Required
     .setUnitOfWorkFactory(unitOfWorkFactory)                  // Required
-    .setLockManagerInstanceId("node-01")                      // Optional, defaults to hostname
+    .setLockManagerInstanceId("node-01")                      // Optional, defaults to <hostname>:<pid>
     .setLockTimeOut(Duration.ofSeconds(10))                   // Optional, default 10s
     .setLockConfirmationInterval(Duration.ofSeconds(3))       // Optional, default 3s
     .setFencedLocksCollectionName("my_locks")                 // Optional, default "fenced_locks"
@@ -77,7 +77,7 @@ MongoFencedLockManager lockManager = MongoFencedLockManager.builder()
 |--------|------|---------|-------------|
 | `mongoTemplate` | `MongoTemplate` | Required | Spring Data MongoDB template |
 | `unitOfWorkFactory` | `UnitOfWorkFactory<ClientSessionAwareUnitOfWork>` | Required | Transaction management |
-| `lockManagerInstanceId` | `String` | Hostname | Unique ID for this manager instance |
+| `lockManagerInstanceId` | `String` | `<hostname>:<pid>` (bare hostname before 0.60.1) | Unique ID for this manager instance; Spring: `essentials.fenced-lock-manager.instance-id` |
 | `lockTimeOut` | `Duration` | 10 seconds | Lock expiration without confirmation |
 | `lockConfirmationInterval` | `Duration` | 3 seconds | Heartbeat interval |
 | `fencedLocksCollectionName` | `String` | `"fenced_locks"` | Collection name ⚠️ NoSQL injection risk |
@@ -93,8 +93,8 @@ Duration confirmationInterval = lockTimeout.dividedBy(3);  // 10 seconds
 
 // Instance ID best practices
 import dk.trustworks.essentials.shared.network.Network;
-String instanceId = Network.hostName();                    // Use hostname (default)
-String instanceId = "service-" + UUID.randomUUID();        // Or unique ID
+String instanceId = FencedLockManagerSettings.defaultLockManagerInstanceId(); // <hostname>:<pid> (the default)
+String instanceId = System.getenv("POD_NAME");             // Or a stable, readable unique ID
 ```
 
 ## Database Schema
@@ -397,9 +397,15 @@ MongoClient client = MongoClients.create(
 .setLockManagerInstanceId("service-instance")
 
 // ✅ RIGHT - Each instance has unique ID
-.setLockManagerInstanceId(Network.hostName())
+.setLockManagerInstanceId(null)                           // default: <hostname>:<pid>
+.setLockManagerInstanceId(System.getenv("POD_NAME"))
 .setLockManagerInstanceId("node-" + UUID.randomUUID())
+
+// ⚠️ Not unique when two JVMs share a host or two containers share a hostname
+.setLockManagerInstanceId(Network.hostName())
 ```
+
+The id never decides mutual exclusion — acquire, confirm and release are compare-and-set updates on the fence token — but it is what the lock table, the admin API and `isLockedByThisLockManagerInstance()` report, so a shared id makes both instances look like the holder.
 
 ### ⚠️ Confirmation Interval vs Timeout
 

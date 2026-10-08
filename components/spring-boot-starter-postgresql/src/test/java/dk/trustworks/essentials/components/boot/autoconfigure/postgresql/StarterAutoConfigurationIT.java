@@ -16,6 +16,7 @@
 
 package dk.trustworks.essentials.components.boot.autoconfigure.postgresql;
 
+import dk.trustworks.essentials.components.foundation.fencedlock.FencedLockManager;
 import dk.trustworks.essentials.components.foundation.fencedlock.api.DBFencedLockApi;
 import dk.trustworks.essentials.components.foundation.messaging.queue.api.DurableQueuesApi;
 import dk.trustworks.essentials.components.foundation.messaging.queue.health.DurableQueuesHealthIndicator;
@@ -24,6 +25,7 @@ import dk.trustworks.essentials.components.foundation.postgresql.stats.Postgresq
 import dk.trustworks.essentials.components.foundation.scheduler.api.*;
 import dk.trustworks.essentials.components.foundation.ttl.TTLJob;
 import dk.trustworks.essentials.components.queue.postgresql.PostgresqlDurableQueues;
+import dk.trustworks.essentials.shared.network.Network;
 import dk.trustworks.essentials.shared.security.EssentialsSecurityProvider;
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.autoconfigure.AutoConfigurations;
@@ -124,6 +126,20 @@ public class StarterAutoConfigurationIT {
                     EssentialsComponentsProperties props = ctx.getBean(EssentialsComponentsProperties.class);
                     assertThat(props.isImmutableJacksonModuleEnabled()).isTrue();
                 });
+    }
+
+    @Test
+    void the_fenced_lock_manager_instance_id_defaults_to_hostname_and_pid() {
+        contextRunner.run(ctx -> assertThat(ctx.getBean(FencedLockManager.class).getLockManagerInstanceId())
+                .isEqualTo(Network.hostName() + ":" + ProcessHandle.current().pid()));
+    }
+
+    @Test
+    void the_fenced_lock_manager_instance_id_is_bound_from_properties() {
+        contextRunner
+                .withPropertyValues("essentials.fenced-lock-manager.instance-id=order-service-node-a")
+                .run(ctx -> assertThat(ctx.getBean(FencedLockManager.class).getLockManagerInstanceId())
+                        .isEqualTo("order-service-node-a"));
     }
 
     @Test

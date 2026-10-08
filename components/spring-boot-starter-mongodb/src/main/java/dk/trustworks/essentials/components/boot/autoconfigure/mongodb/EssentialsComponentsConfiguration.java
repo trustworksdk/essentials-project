@@ -280,6 +280,7 @@ public class EssentialsComponentsConfiguration {
         return MongoFencedLockManager.builder()
                                      .setMongoTemplate(mongoTemplate)
                                      .setUnitOfWorkFactory(unitOfWorkFactory)
+                                     .setLockManagerInstanceId(properties.getFencedLockManager().getInstanceId())
                                      .setLockTimeOut(properties.getFencedLockManager().getLockTimeOut())
                                      .setLockConfirmationInterval(properties.getFencedLockManager().getLockConfirmationInterval())
                                      .setFencedLocksCollectionName(properties.getFencedLockManager().getFencedLocksCollectionName())
