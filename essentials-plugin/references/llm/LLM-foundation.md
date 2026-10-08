@@ -71,7 +71,11 @@ public interface UnitOfWorkFactory<UOW extends UnitOfWork> {
     // Return value, WITH UnitOfWork access
     <R> R withUnitOfWork(CheckedFunction<UOW, R> function);
 
-    UOW getRequiredUnitOfWork();  // Throws if no active UnitOfWork
+    // Framework-internal - see "Usage rule" below
+    UOW getRequiredUnitOfWork();      // Throws NoActiveUnitOfWorkException if no active UnitOfWork
+    UOW getOrCreateNewUnitOfWork();   // Caller must start/commit/roll back itself
+
+    // Read-only probe: is a UnitOfWork bound to this thread?
     Optional<UOW> getCurrentUnitOfWork();
 }
 
@@ -107,6 +111,12 @@ public interface UnitOfWorkLifecycleCallback<RESOURCE_TYPE> {
     default boolean hasPendingChanges(RESOURCE_TYPE resource) { return true; }
 }
 ```
+
+### Usage rule
+
+- **Application code** opens or joins a transaction with `unitOfWorkFactory.usingUnitOfWork(...)`/`withUnitOfWork(...)`, or with Spring `@Transactional`/`TransactionTemplate`. These join an active UnitOfWork or Spring transaction, or start one and commit or roll it back.
+- **Framework-internal**: `getOrCreateNewUnitOfWork()`, `getRequiredUnitOfWork()` and a UnitOfWork's own `start()`/`commit()`/`rollback()`. Need the UnitOfWork itself (a JDBI `Handle`, `markAsRollbackOnly`)? Take it as the lambda parameter: `usingUnitOfWork(uow -> …)`, `withUnitOfWork(uow -> …)`.
+- **`getCurrentUnitOfWork()` is a read-only probe** ("is a UnitOfWork bound to this thread?"), never a way to decide whether to join or open one — `withUnitOfWork` already decides that. Under a Spring-aware factory it is empty inside a plain `@Transactional` method until something has used the factory, so it does not answer "is a transaction active?" either.
 
 ### Implementations
 
@@ -144,28 +154,31 @@ public void processOrder(Order order) {
     // Spring tx active - NO explicit usingUnitOfWork needed
     orderRepository.save(order);  // Spring Data participates
 
-    // DurableQueues calls getRequiredUnitOfWork() internally
-    // which auto-creates UnitOfWork joining Spring tx
+    // Joins the Spring tx: the enqueue commits or rolls back with the save
     durableQueues.queueMessage(queueName, new OrderProcessedEvent(order.getId()));
 }
 ```
 
+A `DurableQueues` enqueue joins an active UnitOfWork or Spring transaction, or runs on its own (PostgreSQL through `withUnitOfWork`, MongoDB as a plain `MongoTemplate` write). An enqueue outside both therefore commits on its own and is not rolled back with the caller's work. The first one per `DurableQueues` instance WARNs; `essentials.durable-queues.require-active-unit-of-work-for-enqueue=true` (builder: `setRequireActiveUnitOfWorkForEnqueue(true)`) makes it throw `NoActiveUnitOfWorkException` instead — see [LLM-postgresql-queue.md § Transactions](./LLM-postgresql-queue.md#transactions).
+
 **When to use explicit `usingUnitOfWork` / `withUnitOfWork`:**
 1. No transaction exists - starts new transaction
 2. Need return value - use `withUnitOfWork`
+3. Need the UnitOfWork itself - take it as the lambda parameter:
 
-**Accessing current UnitOfWork:**
 ```java
-UnitOfWork uow = unitOfWorkFactory.getRequiredUnitOfWork();
-uow.markAsRollbackOnly(exception);
+unitOfWorkFactory.usingUnitOfWork(uow -> {
+    uow.markAsRollbackOnly(exception);
+});
 
-// For JDBI - access Handle
-HandleAwareUnitOfWork handleUow = (HandleAwareUnitOfWork) unitOfWorkFactory.getRequiredUnitOfWork();
-Handle handle = handleUow.handle();
-
-Optional<UnitOfWork> maybeUow = unitOfWorkFactory.getCurrentUnitOfWork();
+// For JDBI - access the Handle (joins an active UnitOfWork or @Transactional, or starts one)
+int rows = unitOfWorkFactory.withUnitOfWork(uow -> uow.handle()
+        .createUpdate("UPDATE orders SET status = :status WHERE id = :id")
+        .bind("status", status)
+        .bind("id", orderId)
+        .execute());
 ```
-**Note**: `getRequiredUnitOfWork()` throws `NoActiveUnitOfWorkException` if called outside a Spring managed transaction - use `usingUnitOfWork`/`withUnitOfWork` to create one first.
+`withUnitOfWork(uow -> …)` gives the same UnitOfWork `getRequiredUnitOfWork()` would return inside a transaction, and opens one where `getRequiredUnitOfWork()` would throw `NoActiveUnitOfWorkException`.
 
 ## DurableQueues (Messaging)
 

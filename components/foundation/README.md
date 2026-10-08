@@ -133,6 +133,12 @@ The `UnitOfWorkFactory`'s `withUnitOfWork(CheckedFunction)` and `usingUnitOfWork
 
 This behavior enables composable transactional methods where inner methods don't need to know if they're running in an existing transaction.
 
+### Usage Rule
+
+- **Application code** opens or joins a transaction with `unitOfWorkFactory.usingUnitOfWork(...)`/`withUnitOfWork(...)`, or with Spring `@Transactional`/`TransactionTemplate`.
+- **Framework-internal:** `getOrCreateNewUnitOfWork()`, `getRequiredUnitOfWork()` and a `UnitOfWork`'s own `start()`/`commit()`/`rollback()`. When you need the `UnitOfWork` itself (a JDBI `Handle`, `markAsRollbackOnly`), take it as the lambda parameter: `usingUnitOfWork(uow -> …)` / `withUnitOfWork(uow -> …)`.
+- **`getCurrentUnitOfWork()` is a read-only probe** ("is a `UnitOfWork` bound to this thread?"), never a way to decide whether to join or open one - `withUnitOfWork` already decides that. Under a Spring-aware factory it is empty inside a plain `@Transactional` method until something has used the factory, so it does not answer "is a transaction active?" either.
+
 ### `UnitOfWorkFactory` Implementations
 
 | Class | Use Case                                                            |
@@ -163,7 +169,9 @@ The Spring-aware `UnitOfWorkFactory` implementations provide **transparent integ
 
 #### Internal Mechanism: `getRequiredUnitOfWork()`
 
-The `getRequiredUnitOfWork()` method is used by framework components (like `DurableQueues`, `EventStore`) to obtain a UnitOfWork:
+> How the framework works, not API to call - see [Usage Rule](#usage-rule).
+
+The `getRequiredUnitOfWork()` method is used by framework components (like `EventStore`, or `DurableQueues` inside the `withUnitOfWork` it opens for each operation) to obtain a UnitOfWork:
 
 1. Checks if a Spring transaction is active
 2. If **YES** → calls `getOrCreateNewUnitOfWork()` which creates a `UnitOfWork` if one doesn't exist
@@ -185,6 +193,8 @@ This means framework components work correctly whether called from:
 - `TransactionTemplate` callbacks (Spring transaction already active)
 
 #### Internal Mechanism: `getOrCreateNewUnitOfWork()`
+
+> How the framework works, not API to call - see [Usage Rule](#usage-rule).
 
 When `usingUnitOfWork()`, `withUnitOfWork()`, or `getRequiredUnitOfWork()` is called, the factory's `getOrCreateNewUnitOfWork()` method determines what to do based on the current transaction state:
 
@@ -251,8 +261,7 @@ public class OrderService {
         // Spring Data repository participates in the Spring transaction
         orderRepository.save(order);
 
-        // DurableQueues internally calls getRequiredUnitOfWork() which auto-creates
-        // a UnitOfWork joining the existing Spring transaction
+        // The enqueue joins the existing Spring transaction
         durableQueues.queueMessage(queueName, new OrderProcessedEvent(order.getId()));
 
         // All operations commit or rollback together
@@ -260,7 +269,9 @@ public class OrderService {
 }
 ```
 
-**Why this works:** Framework components internally call `unitOfWorkFactory.getRequiredUnitOfWork()`, which detects the active Spring transaction and automatically creates a `UnitOfWork` that participates in it.
+**Why this works:** Framework components go through the same factory. A `DurableQueues` operation runs in `withUnitOfWork` (PostgreSQL) or as a `MongoTemplate` write that joins the Spring transaction (MongoDB), and the `EventStore` calls `getRequiredUnitOfWork()`; under a Spring-aware factory each of these creates a `UnitOfWork` that participates in the active Spring transaction.
+
+**Outside any transaction** an enqueue commits on its own and is not rolled back with the caller's work. The first one per `DurableQueues` instance is logged at WARN with its call site; set `essentials.durable-queues.require-active-unit-of-work-for-enqueue=true` (builder: `setRequireActiveUnitOfWorkForEnqueue(true)`) to make it throw `NoActiveUnitOfWorkException` instead. See [postgresql-queue](../postgresql-queue/README.md) / [springdata-mongo-queue](../springdata-mongo-queue/README.md).
 
 #### When to Use Explicit `usingUnitOfWork()`
 
@@ -280,32 +291,38 @@ Use `usingUnitOfWork()` or `withUnitOfWork()` when:
    ```java
    @Transactional
    public void complexOperation(Order order) {
-       // Get the UnitOfWork for direct access
-       var uow = unitOfWorkFactory.getRequiredUnitOfWork();
-       // ... use uow.handle() for custom JDBI queries
+       // Joins the @Transactional transaction; uow.handle() runs custom JDBI queries in it
+       unitOfWorkFactory.usingUnitOfWork(uow -> {
+           uow.handle().createUpdate("UPDATE orders SET status = :status WHERE id = :id")
+              .bind("status", order.getStatus())
+              .bind("id", order.getId())
+              .execute();
+       });
    }
    ```
 
 #### Accessing the Current UnitOfWork
 
-Regardless of how the transaction was started, you can access the current `UnitOfWork`:
+Regardless of how the transaction was started, take the current `UnitOfWork` as the lambda parameter - the call joins it, or opens one if none is active:
 
 ```java
-// Get current UnitOfWork (returns Optional - empty if no transaction active)
-Optional<UnitOfWork> currentUow = unitOfWorkFactory.getCurrentUnitOfWork();
-
-// Get required UnitOfWork (throws NoActiveUnitOfWorkException if none exists)
-UnitOfWork uow = unitOfWorkFactory.getRequiredUnitOfWork();
-
 // For JDBI-based factories (HandleAwareUnitOfWork), access the Handle
-HandleAwareUnitOfWork handleUow = (HandleAwareUnitOfWork) unitOfWorkFactory.getRequiredUnitOfWork();
-Handle handle = handleUow.handle();
+int rows = unitOfWorkFactory.withUnitOfWork(uow -> uow.handle()
+        .createUpdate("UPDATE orders SET status = :status WHERE id = :id")
+        .bind("status", status)
+        .bind("id", orderId)
+        .execute());
+
+// Mark the current transaction for rollback without throwing
+unitOfWorkFactory.usingUnitOfWork(uow -> uow.markAsRollbackOnly(cause));
+
+// Read-only probe: is a UnitOfWork bound to this thread? (see Usage Rule - not a test for "is a transaction active?")
+boolean bound = unitOfWorkFactory.getCurrentUnitOfWork().isPresent();
 ```
 
 This is useful when you need to:
 - Execute custom JDBI queries within the same transaction
 - Access transaction metadata or status
-- Perform conditional logic based on transaction state
 - Register lifecycle callbacks on the current transaction
 
 This seamless integration ensures that **all database operations** (whether from Spring Data, JDBI, or Essentials components) participate in the **same transaction boundary**, maintaining data consistency.
@@ -327,7 +344,7 @@ Use the variant **with** `UnitOfWork` parameter when you need to:
 - Access to `handle()` method when using `HandleAwareUnitOfWork`
 - Use other `UnitOfWork` methods
 
-> **Note:** Even without the `UnitOfWork` parameter, you can always retrieve the current `UnitOfWork` via `unitOfWorkFactory.getRequiredUnitOfWork()` from within your lambda.
+> **Note:** Need the `UnitOfWork` inside the lambda? Use the variant that takes it as a parameter rather than calling `unitOfWorkFactory.getRequiredUnitOfWork()` - see [Usage Rule](#usage-rule).
 
 ### Avoid Using `getOrCreateNewUnitOfWork` Directly
 
