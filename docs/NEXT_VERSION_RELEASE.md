@@ -9,7 +9,7 @@ _Add an entry in the same commit as the change. Cite the commit or PR. Write it 
 changes for them, and what they must do, if anything. Purely internal refactors, test-only changes and CI
 plumbing that no user sees go in §7 at most, as one line._
 
-**So far:** no breaking change, seven framework changes with a behaviour change (§1.1), additive features
+**So far:** no breaking change, eight framework changes with a behaviour change (§1.1), additive features
 (§2), bug fixes (§3), plugin releases `0.60.0-6` and `0.60.0-7`, and example and tooling updates. Nothing here requires a migration
 step. The persisted
 format changes for one shape only, back to what 0.50 wrote: a type with a public `is`-getter (§1.1.2).
@@ -167,6 +167,21 @@ New: `LongRange.isEmpty()`, true for any closed range whose end is below its sta
 
 (N-9, ES-4, ES-7, `75076149`)
 
+#### 1.1.8 The shard-owned queue's default instance id is `<hostname>:<pid>`
+
+`spring-boot-starter-postgresql-queue-shard-owned` now defaults `essentials.shard-owned-queue.instance-id` to
+`<hostname>:<pid>` (`FencedLockManagerSettings.defaultLockManagerInstanceId()`, the same default as the fenced lock
+manager, §1.1.4) instead of the bare hostname. Two processes on one host are now two instances; before, fair share
+counted them as one and each got half the shards. One visible difference: after a crash, a process restarted on the
+same host waits up to `leaseTtl` to take its units back, where before it took them at once because it reused the
+dead process's id. Containers that share a hostname and all run as pid 1 still need an explicit `instance-id`. A
+rolling upgrade that mixes old and new instances is safe: the id only names membership rows and lease owners, and
+every lease acquisition bumps the fence. (N-8, `e639f3d0`)
+
+Also on the shard-owned ordered lane: the attempt bump at takeover now skips rows that are not yet visible (delayed
+messages and messages waiting out a retry backoff), so their `attempts` no longer goes up on a hand-over.
+(N-16, `dacd9ebb`)
+
 ---
 
 ## 2. New features
@@ -205,6 +220,7 @@ The plugin's features are in [§4](#4-the-essentials-claude-code-plugin).
 | Event store | When creating or validating an aggregate type's event-stream table failed, the type stayed registered without a table: a retry did nothing and later appends failed with a bare "relation does not exist". The type is now registered only once its table is ready; the exception propagates and a retry runs initialisation again. Concurrent registrations of one type initialise it once | N-17, `0b572aaa` |
 | Schema harness | In `essentials.schema.mode=validate`, an event-stream table error now names the `AggregateType` as well as the table, and says to register the type at startup and re-run `emit`. The `emit` script starts with a `-- Contents:` header listing each module's tables and their aggregate types, the emit log line lists the same, and a registration that arrives after the emit exit was triggered logs a WARN | RN-5, `07d23d7d` |
 | Command bus | Two configurators registering the same command type failed only at the first `send`, with a `MultipleCommandHandlersFoundException` listing `EventStreamDeciderCommandHandlerAdapter@hash` entries. The adapter's `toString()` now names its `AggregateType` and deciders, and `EventStreamDeciderAndAggregateTypeConfigurator` WARNs at construction when a command type it registers is already handled by one of its adapters on that bus | CB-3, `7c0183fa` |
+| Durable queues (shard-owned) | On the ordered lane, a message waiting out its retry backoff blocked its key only in the owning instance's memory. After a rebalance, a graceful stop or a crash, the new owner delivered the key's next message first, breaking per-key order. On takeover the new owner now reloads the rows a retry pushed into the future (`visible_at > now()`, `attempts > 0`) and blocks their keys until each retry is due; the docs that called out the gap are updated. A delayed ordered message still does not block its key. The PostgreSQL and MongoDB engines were checked and never had this gap: they pick the next message per key with a query over all of the key's messages | N-16, RN-4, `dacd9ebb` |
 | Durable queues (MongoDB) | Handing such a message back on an interrupted thread used to fail silently: the MongoDB driver refuses a connection on an interrupted thread (`Interrupted waiting for lock`), the failure was logged at DEBUG, and the message stayed marked as being delivered until the stuck-message reset. The hand-back now clears the interrupt flag for its write and restores it afterwards | `6ba568b5` |
 
 ---
@@ -274,10 +290,6 @@ Not published; listed because they are the reference for how to use the framewor
 - **Fenced-lock ownership is per lock-manager instance**, not per caller or thread: a second `tryAcquireLock` in
   the same JVM returns the same lock, and `release()` by either caller releases it for both. Javadoc and
   `LLM-foundation.md` say so, and the Singleton Worker Pattern gains an in-process guard. (QL-1, `9e211beb`)
-- **Shard-owned per-key ordering across a handover.** The shard-owned README, module `CLAUDE.md`,
-  `docs/durable-queue-shard-owned.md` and the LLM doc said "a retry never reorders". A retry keeps per-key order
-  only while the key stays with one owner: after a rebalance, a graceful stop or a crash, a later message for the
-  same key can overtake one waiting out its retry backoff. The docs now say so. (RN-4, `4eaf055d`)
 - **Corrections to the 0.60.0 release notes:**
   - §1.1.6 (`use-ordered-unordered-query`): "is now ignored" is true only for the Spring property
     `essentials.durable-queues.use-ordered-unordered-query`. `PostgresqlDurableQueuesBuilder.setUseOrderedUnorderedQuery`,

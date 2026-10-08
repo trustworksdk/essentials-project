@@ -65,21 +65,6 @@ without any signal.
 
 Bug fixes only; no API breaks.
 
-### Durable queues
-
-**Shard-owned retry blocking survives a handover (N-16, RN-4).**
-- **Problem:** on the shard-owned engine's ordered lane, "this key is blocked while its message waits out a retry
-  backoff" exists only in the owning instance's memory (`OrderedShardOwner.keysAwaitingRetry`). `inFlight()` does not
-  count those keys.
-- **Consequence:** after a handover (rebalance, graceful stop or crash), the new owner reads only rows with
-  `visible_at <= now()`. A later message for the same key then overtakes the one being retried, which breaks the
-  per-key ordering the docs promise.
-- **Fix:** on takeover, load ordered rows whose `visible_at` is in the future as blocked keys, and count retry-blocked
-  keys in `inFlight()`.
-- **Acceptance:** a new `ShardOwnedOrderedRetryHandoverIT` covers rebalance, graceful stop and crash, both directly
-  and through the `DurableQueues` adapter, plus the `postgresql-queue` and MongoDB counterparts. It must fail on the
-  current code and pass after the fix.
-
 ### `MultiTableChangeListener`
 
 **Robustness fixes (LN-2 to LN-6, N-6, N-7).** `MultiTableChangeListener` fans PostgreSQL LISTEN/NOTIFY out to the
