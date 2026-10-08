@@ -16,12 +16,16 @@
 
 package dk.trustworks.essentials.components.foundation.postgresql;
 
+import ch.qos.logback.classic.*;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.read.ListAppender;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import dk.trustworks.essentials.components.foundation.json.*;
 import dk.trustworks.essentials.components.foundation.postgresql.MultiTableChangeListenerIT.*;
 import dk.trustworks.essentials.reactive.LocalEventBus;
 import org.jdbi.v3.core.Jdbi;
 import org.junit.jupiter.api.*;
+import org.slf4j.LoggerFactory;
 import org.testcontainers.junit.jupiter.*;
 import org.testcontainers.postgresql.PostgreSQLContainer;
 import org.testcontainers.shaded.org.awaitility.Awaitility;
@@ -53,11 +57,16 @@ class MultiTableChangeListenerRobustnessIT {
     private LocalEventBus                                   eventBus;
     private List<Object>                                    received;
     private MultiTableChangeListener<TestTableNotification> listener;
+    private ListAppender<ILoggingEvent>                     listenerLog;
+    private Level                                           originalListenerLogLevel;
+    private FreezableTcpProxy                               proxy;
 
     @BeforeEach
     void setup() {
         jdbi = Jdbi.create(postgreSQLContainer.getJdbcUrl(), postgreSQLContainer.getUsername(), postgreSQLContainer.getPassword());
         jsonSerializer = new Jackson3JSONSerializer(EssentialsObjectMappers.createJackson3ObjectMapper());
+        // A listener left behind by an earlier test must not be mistaken for this test's
+        terminateListenerBackends();
         jdbi.useHandle(handle -> {
             handle.execute("DROP TABLE IF EXISTS table1");
             handle.execute("DROP TABLE IF EXISTS table2");
@@ -71,6 +80,12 @@ class MultiTableChangeListenerRobustnessIT {
             throw new RuntimeException(e);
         });
         eventBus.addSyncSubscriber(received::add);
+
+        var listenerLogger = listenerLogger();
+        originalListenerLogLevel = listenerLogger.getLevel();
+        listenerLog = new ListAppender<>();
+        listenerLog.start();
+        listenerLogger.addAppender(listenerLog);
     }
 
     @AfterEach
@@ -79,6 +94,129 @@ class MultiTableChangeListenerRobustnessIT {
             listener.stop();
             listener.close();
         }
+        var listenerLogger = listenerLogger();
+        listenerLogger.detachAppender(listenerLog);
+        listenerLogger.setLevel(originalListenerLogLevel);
+        if (proxy != null) {
+            proxy.close();
+        }
+    }
+
+    // -------------------------------------------------------------------------------------------------------------
+    // LN-3
+    // -------------------------------------------------------------------------------------------------------------
+
+    /**
+     * LN-3: polling was scheduled in the constructor and {@code stop()} shut the executor down, so a later
+     * {@code start()} only flipped a flag - the listener stayed silent for good.
+     */
+    @Test
+    void stop_followed_by_start_resumes_delivering_notifications() {
+        listener = new MultiTableChangeListener<>(jdbi, Duration.ofMillis(50), jsonSerializer, eventBus, false);
+        listener.start();
+        listener.listenToNotificationsFor(TABLE_1, Table1Notification.class);
+        insertInto(TABLE_1);
+        Awaitility.waitAtMost(Duration.ofSeconds(5))
+                  .untilAsserted(() -> assertThat(received).hasSize(1));
+
+        listener.stop();
+        assertThat(listener.isStarted()).isFalse();
+        listener.start();
+        assertThat(listener.isStarted()).isTrue();
+
+        insertInto(TABLE_1);
+        Awaitility.waitAtMost(Duration.ofSeconds(5))
+                  .untilAsserted(() -> assertThat(received).hasSize(2));
+    }
+
+    // -------------------------------------------------------------------------------------------------------------
+    // LN-2 / N-7
+    // -------------------------------------------------------------------------------------------------------------
+
+    /**
+     * LN-2: a lost connection was logged at DEBUG only, so in production a dead listener was silent. It must be logged
+     * at WARN, and the listener must re-establish the LISTEN for <b>every</b> channel.
+     */
+    @Test
+    void a_terminated_connection_is_logged_at_warn_and_every_channel_is_listened_to_again() {
+        listener = new MultiTableChangeListener<>(jdbi, Duration.ofMillis(50), jsonSerializer, eventBus, false);
+        listener.start();
+        listener.listenToNotificationsFor(TABLE_1, Table1Notification.class);
+        listener.listenToNotificationsFor(TABLE_2, Table2Notification.class);
+        insertInto(TABLE_1);
+        Awaitility.waitAtMost(Duration.ofSeconds(5))
+                  .untilAsserted(() -> assertThat(received).hasSize(1));
+
+        assertThat(terminateListenerBackends()).isPositive();
+
+        Awaitility.waitAtMost(Duration.ofSeconds(10))
+                  .untilAsserted(() -> assertThat(listenerLog.list).anyMatch(event -> event.getLevel() == Level.WARN && event.getThrowableProxy() != null));
+        awaitDeliveryFromBothTables();
+    }
+
+    /**
+     * N-7: a {@code listenToNotificationsFor} call between a failed poll and the next one opened a new connection that
+     * LISTENed only to the new table - every table registered before it was silently lost.
+     */
+    @Test
+    void listening_to_a_new_table_after_a_lost_connection_listens_to_every_table_again() {
+        listenerLogger().setLevel(Level.DEBUG);
+        // A long interval leaves a wide gap between the poll that notices the lost connection and the next one
+        listener = new MultiTableChangeListener<>(jdbi, Duration.ofSeconds(3), jsonSerializer, eventBus, false);
+        listener.start();
+        listener.listenToNotificationsFor(TABLE_1, Table1Notification.class);
+
+        assertThat(terminateListenerBackends()).isPositive();
+        Awaitility.waitAtMost(Duration.ofSeconds(10))
+                  .untilAsserted(() -> assertThat(listenerLog.list).anyMatch(event -> event.getThrowableProxy() != null));
+
+        listener.listenToNotificationsFor(TABLE_2, Table2Notification.class);
+
+        awaitDeliveryFromBothTables();
+    }
+
+    /**
+     * N-7: {@code stop()} never closed the connection. With a connection from a pool, the LISTENs stayed on a pooled
+     * session that other code would then borrow.
+     */
+    @Test
+    void stop_closes_the_listen_connection() {
+        listener = new MultiTableChangeListener<>(jdbi, Duration.ofMillis(50), jsonSerializer, eventBus, false);
+        listener.start();
+        listener.listenToNotificationsFor(TABLE_1, Table1Notification.class);
+        assertThat(countListenerBackends()).isEqualTo(1);
+
+        listener.stop();
+
+        Awaitility.waitAtMost(Duration.ofSeconds(5))
+                  .untilAsserted(() -> assertThat(countListenerBackends()).isZero());
+    }
+
+    /**
+     * LN-2: a half-open connection - the peer is gone, but nothing ever says so - never fails a non-blocking read for
+     * notifications, so the listener used to wait for notifications on it for ever. A periodic
+     * {@link java.sql.Connection#isValid(int)} probe detects it.
+     */
+    @Test
+    void a_half_open_connection_is_detected_and_replaced() throws Exception {
+        proxy = new FreezableTcpProxy(postgreSQLContainer.getHost(), postgreSQLContainer.getMappedPort(PostgreSQLContainer.POSTGRESQL_PORT));
+        var proxiedJdbi = Jdbi.create(proxy.jdbcUrl(postgreSQLContainer.getDatabaseName()), postgreSQLContainer.getUsername(), postgreSQLContainer.getPassword());
+        listener = new MultiTableChangeListener<>(proxiedJdbi, Duration.ofMillis(50), jsonSerializer, eventBus, false);
+        listener.start();
+        listener.listenToNotificationsFor(TABLE_1, Table1Notification.class);
+        insertInto(TABLE_1);
+        Awaitility.waitAtMost(Duration.ofSeconds(5))
+                  .untilAsserted(() -> assertThat(received).hasSize(1));
+
+        proxy.freezeOpenConnections();
+
+        Awaitility.waitAtMost(Duration.ofSeconds(30))
+                  .pollInterval(Duration.ofMillis(250))
+                  .untilAsserted(() -> {
+                      insertInto(TABLE_1);
+                      assertThat(received).hasSizeGreaterThan(1);
+                  });
+        assertThat(listenerLog.list).anyMatch(event -> event.getLevel() == Level.WARN);
     }
 
     // -------------------------------------------------------------------------------------------------------------
@@ -179,6 +317,51 @@ class MultiTableChangeListenerRobustnessIT {
     // -------------------------------------------------------------------------------------------------------------
     // Helpers
     // -------------------------------------------------------------------------------------------------------------
+
+    /**
+     * Inserts into both tables until a notification from each has arrived. Anything inserted before the LISTEN is back
+     * in place is lost for good - delivery is at most once - so a single insert would make the test racy.
+     */
+    private void awaitDeliveryFromBothTables() {
+        var table1NotificationsBefore = countReceived(Table1Notification.class);
+        var table2NotificationsBefore = countReceived(Table2Notification.class);
+        Awaitility.waitAtMost(Duration.ofSeconds(15))
+                  .pollInterval(Duration.ofMillis(250))
+                  .untilAsserted(() -> {
+                      insertInto(TABLE_1);
+                      insertInto(TABLE_2);
+                      assertThat(countReceived(Table1Notification.class)).isGreaterThan(table1NotificationsBefore);
+                      assertThat(countReceived(Table2Notification.class)).isGreaterThan(table2NotificationsBefore);
+                  });
+    }
+
+    private long countReceived(Class<?> notificationType) {
+        return received.stream().filter(notificationType::isInstance).count();
+    }
+
+    /**
+     * Terminates every other client session on the test database. The test inserts through short-lived connections, so
+     * the only session that lives between statements is the listener's.
+     *
+     * @return the number of sessions terminated
+     */
+    private int terminateListenerBackends() {
+        return jdbi.withHandle(handle -> handle.createQuery("SELECT count(pg_terminate_backend(pid)) FROM pg_stat_activity " +
+                                                                    "WHERE datname = current_database() AND pid <> pg_backend_pid() AND backend_type = 'client backend'")
+                                               .mapTo(Integer.class)
+                                               .one());
+    }
+
+    private int countListenerBackends() {
+        return jdbi.withHandle(handle -> handle.createQuery("SELECT count(*) FROM pg_stat_activity " +
+                                                                    "WHERE datname = current_database() AND pid <> pg_backend_pid() AND backend_type = 'client backend'")
+                                               .mapTo(Integer.class)
+                                               .one());
+    }
+
+    private static Logger listenerLogger() {
+        return (Logger) LoggerFactory.getLogger(MultiTableChangeListener.class);
+    }
 
     private void insertInto(String table) {
         jdbi.useHandle(handle -> {
