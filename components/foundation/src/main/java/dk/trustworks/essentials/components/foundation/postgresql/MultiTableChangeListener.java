@@ -150,10 +150,10 @@ public final class MultiTableChangeListener<T extends TableChangeNotification> i
      * The {@link NotificationDuplicationFilter}'s are used to extract unique keys from the {@link Notification#getParameter()}
      * JSON content.<br>
      * The key extracted from {@link NotificationDuplicationFilter#extractDuplicationKey(JsonNode)}
-     * will be used inside {@link MultiTableChangeListener} for duplication checks across all {@link Notification}'s
-     * returned in one poll.<br>
+     * will be used inside {@link MultiTableChangeListener} for duplication checks among the {@link Notification}'s that arrive on the same channel
+     * in one poll (since 0.60.1 duplicates are detected per channel, never across channels).<br>
      * If an empty {@link Optional} is returned then the given notification won't be deduplicated.<br>
-     * If two or more {@link Notification}'s in a given poll batch share the same duplication key, <b>AND {@link #isFilterDuplicateNotifications()} is true</b>,
+     * If two or more {@link Notification}'s on the same channel in a given poll batch share the same duplication key, <b>AND {@link #isFilterDuplicateNotifications()} is true</b>,
      * then only one of them will be published to the listeners registered with the {@link MultiTableChangeListener}<br>
      * <br>
      * Note: Only a single instance of a particular {@link NotificationDuplicationFilter},
@@ -171,10 +171,10 @@ public final class MultiTableChangeListener<T extends TableChangeNotification> i
      * The {@link NotificationDuplicationFilter}'s are used to extract unique keys from the {@link Notification#getParameter()}
      * JSON content.<br>
      * The key extracted from {@link NotificationDuplicationFilter#extractDuplicationKey(JsonNode)}
-     * will be used inside {@link MultiTableChangeListener} for duplication checks across all {@link Notification}'s
-     * returned in one poll.<br>
+     * will be used inside {@link MultiTableChangeListener} for duplication checks among the {@link Notification}'s that arrive on the same channel
+     * in one poll (since 0.60.1 duplicates are detected per channel, never across channels).<br>
      * If an empty {@link Optional} is returned then the given notification won't be deduplicated.<br>
-     * If two or more {@link Notification}'s in a given poll batch share the same duplication key, <b>AND {@link #isFilterDuplicateNotifications()} is true</b>,
+     * If two or more {@link Notification}'s on the same channel in a given poll batch share the same duplication key, <b>AND {@link #isFilterDuplicateNotifications()} is true</b>,
      * then only one of them will be published to the listeners registered with the {@link MultiTableChangeListener}<br>
      * <br>
      * Note: Only a single instance of a particular {@link NotificationDuplicationFilter},
@@ -308,27 +308,57 @@ public final class MultiTableChangeListener<T extends TableChangeNotification> i
         }
     }
 
+    /**
+     * Removes duplicate notifications from one poll batch.<br>
+     * Duplicates are detected <b>per channel</b>: two notifications are duplicates only when they arrived on the same channel and
+     * the {@link NotificationDuplicationFilter}'s extract the same key from both. A notification for which no key can be
+     * extracted - including one whose payload is not JSON - is never treated as a duplicate and is always kept.
+     */
     private Stream<PGNotification> filterDuplicateNotifications(PGNotification[] notifications) {
         if (filterDuplicateNotifications && notifications.length > 1 && notificationFilterChain.hasDuplicationFilters()) {
-            var duplicationKeys       = new HashSet<String>();
-            var filteredNotifications = new ArrayList<PGNotification>();
+            var duplicationKeysPerChannel = new HashMap<String, Set<String>>();
+            var filteredNotifications     = new ArrayList<PGNotification>();
 
             for (var notification : notifications) {
-                var parameterJson  = notification.getParameter();
-                var duplicationKey = notificationFilterChain.extractDuplicationKey(parameterJson);
-                if (duplicationKey.isEmpty() || duplicationKeys.add(duplicationKey.get())) {
+                var duplicationKey = extractDuplicationKey(notification);
+                if (duplicationKey.isEmpty() ||
+                        duplicationKeysPerChannel.computeIfAbsent(channelNameOf(notification), channel -> new HashSet<>())
+                                                 .add(duplicationKey.get())) {
                     filteredNotifications.add(notification);
                 }
             }
 
-            int originalCount = notifications.length;
-            int filteredCount = filteredNotifications.size();
-            int reducedCount  = originalCount - filteredCount;
-            log.debug("Reduced notifications from {} to {} (reduction by {}). UniqueNames: {}", originalCount, filteredCount, reducedCount, duplicationKeys);
+            if (log.isDebugEnabled()) {
+                int originalCount = notifications.length;
+                int filteredCount = filteredNotifications.size();
+                log.debug("Reduced notifications from {} to {} (reduction by {}). Unique keys per channel: {}", originalCount, filteredCount, originalCount - filteredCount, duplicationKeysPerChannel);
+            }
 
             return filteredNotifications.stream();
         }
         return Arrays.stream(notifications);
+    }
+
+    /**
+     * @return the duplication key for the notification, or empty if it has none - which is also the answer for a payload that
+     * is not JSON. A malformed payload must never cost the rest of the poll batch: it is deserialized (and fails, and is logged)
+     * on its own like any other notification.
+     */
+    private Optional<String> extractDuplicationKey(PGNotification notification) {
+        var parameter = notification.getParameter();
+        if (parameter == null || parameter.isBlank()) {
+            return Optional.empty();
+        }
+        try {
+            return notificationFilterChain.extractDuplicationKey(parameter);
+        } catch (Exception e) {
+            log.trace("No duplication key for notification on channel '{}' - the payload could not be read as JSON: '{}'", notification.getName(), parameter, e);
+            return Optional.empty();
+        }
+    }
+
+    private static String channelNameOf(PGNotification notification) {
+        return notification.getName().toLowerCase(Locale.ROOT);
     }
 
     private void pollForNotifications() {
@@ -365,7 +395,7 @@ public final class MultiTableChangeListener<T extends TableChangeNotification> i
                 }
                 filterDuplicateNotifications(notifications)
                         .map(notification -> {
-                            var payloadType = listenForNotificationsRelatedToTables.get(notification.getName().toLowerCase(Locale.ROOT));
+                            var payloadType = listenForNotificationsRelatedToTables.get(channelNameOf(notification));
                             if (payloadType == null) {
                                 log.error(msg("Couldn't find a concrete {} type for notifications related to table '{}'",
                                               TableChangeNotification.class.getSimpleName(),

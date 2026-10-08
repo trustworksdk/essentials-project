@@ -25,6 +25,7 @@ import org.junit.jupiter.api.*;
 import org.testcontainers.junit.jupiter.*;
 import org.testcontainers.postgresql.PostgreSQLContainer;
 import org.testcontainers.shaded.org.awaitility.Awaitility;
+import tools.jackson.databind.JsonNode;
 
 import java.time.Duration;
 import java.util.*;
@@ -109,6 +110,73 @@ class MultiTableChangeListenerRobustnessIT {
     }
 
     // -------------------------------------------------------------------------------------------------------------
+    // LN-5 / N-6
+    // -------------------------------------------------------------------------------------------------------------
+
+    /**
+     * N-6: {@code NotificationFilterChain.extractDuplicationKey} throws on a payload that is not JSON. The poll loop
+     * caught it, closed the connection and dropped the whole poll batch - including every table change that arrived
+     * with it. A duplication filter is always registered when the PostgreSQL queue is used.
+     */
+    @Test
+    void a_non_json_notification_does_not_drop_the_rest_of_the_poll_batch() {
+        listener = new MultiTableChangeListener<>(jdbi, Duration.ofMillis(50), jsonSerializer, eventBus, true);
+        listener.addDuplicationFilterAsLast(new NotificationDuplicationFilter.TableNameDuplicationFilter());
+        listener.start();
+        listener.listenToNotificationsFor(TABLE_1, Table1Notification.class);
+
+        // Same transaction, so both arrive in the same poll batch
+        jdbi.useTransaction(handle -> {
+            handle.execute("SELECT pg_notify('table1', 'this is not JSON')");
+            handle.execute("INSERT INTO table1 (column1, column2) VALUES ('a', 'b')");
+        });
+
+        Awaitility.waitAtMost(Duration.ofSeconds(5))
+                  .untilAsserted(() -> assertThat(received).hasSize(1).first().isInstanceOf(Table1Notification.class));
+    }
+
+    /**
+     * LN-5: duplicates were detected across every channel in a poll batch, so two notifications from different tables
+     * that happened to produce the same duplication key collapsed into one.
+     */
+    @Test
+    void duplicates_are_detected_per_channel_not_across_channels() {
+        listener = new MultiTableChangeListener<>(jdbi, Duration.ofMillis(50), jsonSerializer, eventBus, true);
+        listener.addDuplicationFilterAsLast(new IdDuplicationFilter());
+        listener.start();
+        listener.listenToNotificationsFor(TABLE_1, Table1Notification.class);
+        listener.listenToNotificationsFor(TABLE_2, Table2Notification.class);
+
+        // Both rows get id 1, so both notifications carry the same duplication key - but on different channels
+        jdbi.useTransaction(handle -> {
+            handle.execute("INSERT INTO table1 (column1, column2) VALUES ('a', 'b')");
+            handle.execute("INSERT INTO table2 (column3, column4) VALUES ('c', 'd')");
+        });
+
+        Awaitility.waitAtMost(Duration.ofSeconds(5))
+                  .untilAsserted(() -> assertThat(received).hasSize(2));
+        assertThat(received).hasAtLeastOneElementOfType(Table1Notification.class)
+                            .hasAtLeastOneElementOfType(Table2Notification.class);
+    }
+
+    @Test
+    void duplicates_on_the_same_channel_are_still_filtered() {
+        listener = new MultiTableChangeListener<>(jdbi, Duration.ofMillis(50), jsonSerializer, eventBus, true);
+        listener.addDuplicationFilterAsLast(new NotificationDuplicationFilter.TableNameDuplicationFilter());
+        listener.start();
+        listener.listenToNotificationsFor(TABLE_1, Table1Notification.class);
+
+        jdbi.useTransaction(handle -> {
+            for (var i = 0; i < 10; i++) {
+                handle.execute("INSERT INTO table1 (column1, column2) VALUES ('a', 'b')");
+            }
+        });
+
+        Awaitility.waitAtMost(Duration.ofSeconds(5))
+                  .untilAsserted(() -> assertThat(received).hasSize(1));
+    }
+
+    // -------------------------------------------------------------------------------------------------------------
     // Helpers
     // -------------------------------------------------------------------------------------------------------------
 
@@ -120,6 +188,13 @@ class MultiTableChangeListenerRobustnessIT {
                 handle.execute("INSERT INTO table2 (column3, column4) VALUES ('c', 'd')");
             }
         });
+    }
+
+    private static class IdDuplicationFilter implements NotificationDuplicationFilter {
+        @Override
+        public Optional<String> extractDuplicationKey(JsonNode notificationParameterJson) {
+            return Optional.ofNullable(notificationParameterJson.has("id") ? notificationParameterJson.get("id").asString() : null);
+        }
     }
 
     static class Table2Notification extends TestTableNotification {
