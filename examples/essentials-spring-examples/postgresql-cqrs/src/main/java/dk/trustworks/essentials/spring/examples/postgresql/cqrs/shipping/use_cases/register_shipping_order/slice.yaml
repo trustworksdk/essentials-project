@@ -7,6 +7,7 @@ status: live
 summary: Register a new shipping order with its destination address.
 generator: essentials
 language: java
+lane: aggregate
 
 handles: [RegisterShippingOrder]
 publishes: [ShippingOrderRegistered]

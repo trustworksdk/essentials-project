@@ -7,10 +7,12 @@ status: live
 summary: Anti-corruption boundary to the order-management system over Kafka, in both directions.
 generator: essentials
 language: java
+lane: aggregate
 
 externalSystem: order_management
 direction: both
 consumes: [OrderAccepted, OrderShipped]
+dispatches: [ShipOrder]
 maps:
   - { from: OrderAccepted, to: ShipOrder }
   - { from: OrderShipped, to: ExternalOrderShipped }

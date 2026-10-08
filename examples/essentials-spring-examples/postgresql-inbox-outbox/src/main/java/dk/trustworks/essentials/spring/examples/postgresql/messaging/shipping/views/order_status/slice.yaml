@@ -7,6 +7,7 @@ status: live
 summary: Answer where a shipping order stands, by list, by id, or filtered by shipped status.
 generator: essentials
 language: java
+lane: service-entity
 tier: service-entity
 
 serves: [ListOrders, GetOrderStatus, FindOrdersByShippedStatus]

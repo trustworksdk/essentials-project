@@ -7,6 +7,7 @@ status: live
 summary: Create a task, optionally carrying an initial comment.
 generator: essentials
 language: java
+lane: aggregate
 
 handles: [CreateTask]
 publishes: [TaskCreated]

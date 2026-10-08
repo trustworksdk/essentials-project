@@ -7,6 +7,7 @@ status: live
 summary: Carry a requested intra-bank transfer through withdrawal, deposit and completion.
 generator: essentials
 language: java
+lane: aggregate
 
 consumes:
   - IntraBankMoneyTransferRequested

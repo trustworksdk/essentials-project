@@ -7,6 +7,7 @@ status: live
 summary: Add a comment to an existing task.
 generator: essentials
 language: java
+lane: aggregate
 
 handles: [AddComment]
 publishes: [CommentAdded]

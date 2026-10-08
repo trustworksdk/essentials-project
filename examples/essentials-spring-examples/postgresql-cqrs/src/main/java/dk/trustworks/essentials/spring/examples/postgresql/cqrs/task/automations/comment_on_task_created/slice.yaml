@@ -7,6 +7,7 @@ status: live
 summary: Turn the initial comment carried by a newly created task into an explicit AddComment command.
 generator: essentials
 language: java
+lane: aggregate
 
 consumes: [TaskCreated]
 dispatches: [AddComment]

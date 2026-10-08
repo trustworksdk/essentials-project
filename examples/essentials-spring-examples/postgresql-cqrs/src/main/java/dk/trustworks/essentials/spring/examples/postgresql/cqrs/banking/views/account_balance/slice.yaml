@@ -7,6 +7,7 @@ status: live
 summary: Serve the running balance per account from a projected read model.
 generator: essentials
 language: java
+lane: aggregate
 
 serves: [ListAccountBalances, GetAccountBalance]
 endpoints:
@@ -16,6 +17,7 @@ reads:
   - { name: AccountBalanceView }
 projections:
   - name: AccountBalanceProjection
+    aggregateTypes: [Accounts]
     from: [AccountOpened, AccountDeposited, AccountWithdrawn]
     consistency: eventual
     store: document-db
