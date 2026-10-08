@@ -490,7 +490,13 @@ PROBE = """<script>
       }
       setTimeout(function () {
         var q = document.querySelector('#q');
-        out('rc-state', { hash: location.hash, q: q ? q.value : null, clicked: clicked });
+        // A board shape painted with SVG's default black fill is one whose lens CSS never arrived.
+        var black = 0;
+        document.querySelectorAll('#lens-host rect, #lens-host path').forEach(function (r) {
+          var cs = getComputedStyle(r);
+          if (cs.fill === 'rgb(0, 0, 0)' && cs.fillOpacity !== '0' && cs.display !== 'none') black++;
+        });
+        out('rc-state', { hash: location.hash, q: q ? q.value : null, clicked: clicked, black: black });
         out('rc-errors', errors);
       }, 1500);
     }, 500);
@@ -668,6 +674,8 @@ def check_atlas_page(ap: AtlasPage, data, ids):
                   if "failed to draw" in n.all_text()]
         rep.check(not failed, f"lens {lid}: {failed[:1]}")
         rep.check(bool(hosts) and bool(hosts[0].children), f"lens {lid}: drew nothing")
+        rep.check(not state.get("black"), f"lens {lid}: {state.get('black')} shapes painted SVG's default black — "
+                  "a stylesheet this lens draws with was not injected")
         rep.check(hash_state(state.get("hash")).get("lens") == lid, f"lens {lid}: hash is {state.get('hash')!r}")
         if lid == "atlas":
             banner = by_id(root, "banner")

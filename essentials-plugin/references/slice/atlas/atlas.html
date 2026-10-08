@@ -494,7 +494,7 @@ const ATLAS = /* __ATLAS_DATA__ */ null;
      id:     'atlas',             // unique, [a-z]+; the hash value lens=<id>
      label:  'Atlas',             // tab text
      key:    '1',                 // keyboard shortcut and tab order ('1'…'9'), unique
-     css:    '…',                 // optional: lens-only CSS, injected once. Tokens only.
+     css:    '…',                 // optional: lens-only CSS, injected once, with every lens's, on the first mount. Tokens only.
      mount(ctx),                  // build into ctx.el; called each time the lens is shown
      unmount(),                   // release listeners/timers; the shell then empties ctx.el and
                                   // destroys the lens's viewports
@@ -1208,12 +1208,15 @@ const Atlas = (() => {
     const lens = getLens(id) || lenses[0];
     if (!lens) return;
     unmountActive();
-    if (lens.css && !injectedCss.has(lens.id)) {
+    // Every lens's CSS, not only this one's: a lens may draw with another's board (Diff draws the Atlas
+    // lens's), and a page opened straight on it would otherwise paint that board with SVG's black default.
+    lenses.forEach(l => {
+      if (!l.css || injectedCss.has(l.id)) return;
       const st = document.createElement('style');
-      st.textContent = lens.css;
+      st.textContent = l.css;
       document.head.append(st);
-      injectedCss.add(lens.id);
-    }
+      injectedCss.add(l.id);
+    });
     const host = html('div', 'lens-root');
     host.dataset.lens = lens.id;
     $('#lens-host').append(host);
