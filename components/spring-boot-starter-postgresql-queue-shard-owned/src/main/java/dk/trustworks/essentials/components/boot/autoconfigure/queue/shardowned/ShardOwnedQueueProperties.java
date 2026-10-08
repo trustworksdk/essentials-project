@@ -59,11 +59,11 @@ public class ShardOwnedQueueProperties {
     private boolean initializeSchema = true;
 
     /**
-     * Identifies this process among the instances competing for a queue's shards. Defaults to the
-     * hostname, matching how the fenced lock manager and the scheduler identify an instance.
+     * Identifies this process among the instances competing for a queue's shards. Defaults to
+     * {@code <hostname>:<pid>}, the fenced lock manager's default (the bare hostname before 0.60.1).
      * <p>
-     * Set it where the hostname is <em>not</em> unique per process — several instances on one host,
-     * or a container platform that does not give each one its own. Two processes sharing an id look
+     * Set it where that is <em>not</em> unique per process — containers that share a hostname and
+     * all run as pid 1 — or where a stable, readable id matters. Two processes sharing an id look
      * like one to the fair-share rebalance, which halves the shards each of them is allowed to hold.
      */
     /**

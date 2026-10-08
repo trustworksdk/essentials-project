@@ -164,7 +164,7 @@ ShardOwnedSchema.registerQueue(dataSource, QueueName.of("orders"), 4);
 try (var orders = PostgresqlMessageQueue.builder()
                                         .setDataSource(dataSource)
                                         .setQueueName(QueueName.of("orders"))  // id + shard count from the registry
-                                        .setInstanceId(Network.hostName())
+                                        .setInstanceId(Network.hostName() + ":" + ProcessHandle.current().pid())  // unique per process
                                         .build()) {
 
     // 4. Produce
@@ -534,9 +534,14 @@ The unordered lane *chases* each unresolved value with a query, so `holeExpiry` 
 
 ### Instance identity
 
-Defaults to the hostname (`Network.hostName()`, the same source the fenced lock manager and the
-scheduler use). Set it explicitly where one host runs several instances: **two processes sharing an id
-look like one instance**, so each is allowed half the shards.
+The engine takes it from the caller (`setInstanceId`). The Spring Boot starter defaults it to
+`<hostname>:<pid>` — `FencedLockManagerSettings.defaultLockManagerInstanceId()`, the fenced lock
+manager's default — and before 0.60.1 to the bare hostname. It must be unique per process: **two
+processes sharing an id look like one instance**, so each is allowed half the shards. Set
+`essentials.shard-owned-queue.instance-id` where `hostname:pid` is still not unique, such as containers
+that share a hostname and all run as pid 1. A new pid on every restart costs nothing: the id names a
+membership row and a lease owner, a graceful stop hands the units back, and a crashed instance's units
+are taken once its membership row is older than `leaseTtl`.
 
 ## Shard Count, Scaling and Autoscaling
 

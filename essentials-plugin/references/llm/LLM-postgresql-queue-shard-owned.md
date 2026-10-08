@@ -296,7 +296,7 @@ The ceiling is reported as `maxInstances` on the **admin API's** queue status
 itself carries the two ceilings separately — `shardCount()` and `orderedUnits()` — and no combined
 accessor.
 
-**Instance identity is the hostname** by default (`Network.hostName()`, as the fenced lock manager and scheduler use), overridable with `essentials.shard-owned-queue.instance-id`. Set it where one host runs several instances: two processes sharing an id look like one instance, so each is allowed only half the shards.
+**Instance identity is `<hostname>:<pid>`** by default in the starter (`FencedLockManagerSettings.defaultLockManagerInstanceId()`, the fenced lock manager's default; the bare hostname before 0.60.1), overridable with `essentials.shard-owned-queue.instance-id`. Two processes sharing an id look like one instance, so each is allowed only half the shards — set it explicitly where `hostname:pid` is still not unique (containers that share a hostname and all run as pid 1). The pid changing on a restart is harmless: a gracefully stopped instance hands its units back, and a crashed one's units are taken once its membership row is older than `leaseTtl`.
 
 **Autoscaling specifics.** Membership is a row per instance, refreshed every `leaseTtl / 3` and
 counted live within `leaseTtl`. A gracefully stopped instance deregisters immediately, so scaling in

@@ -509,15 +509,16 @@ class ShardOwnedQueueAutoConfigurationIT {
     }
 
     /**
-     * The instance identity is the hostname, as everywhere else in Essentials — the fenced lock
-     * manager and the scheduler both use {@code Network.hostName()} bare. An operator correlating a
-     * shard hand-over with a lock hand-over should not have to translate between naming schemes, and
-     * a per-boot UUID means nothing in a log line or in the membership table.
+     * The instance identity is {@code <hostname>:<pid>}, the fenced lock manager's default
+     * ({@code FencedLockManagerSettings.defaultLockManagerInstanceId()}). The bare hostname it used to be
+     * made two processes on one host one instance to the fair-share rebalance, each allowed half the
+     * shards; the pid keeps them apart while the id stays readable in a log line and the membership table.
      */
     @Test
-    void the_instance_id_defaults_to_the_hostname() {
+    void the_instance_id_defaults_to_the_hostname_and_pid_like_the_fenced_lock_manager() {
         runner().run(context -> assertThat(context.getBean(ShardOwnedQueueFactory.class).instanceId())
-                .isEqualTo(dk.trustworks.essentials.shared.network.Network.hostName()));
+                .isEqualTo(dk.trustworks.essentials.components.foundation.fencedlock.FencedLockManagerSettings.defaultLockManagerInstanceId())
+                .isEqualTo(dk.trustworks.essentials.shared.network.Network.hostName() + ":" + ProcessHandle.current().pid()));
     }
 
     @Test
