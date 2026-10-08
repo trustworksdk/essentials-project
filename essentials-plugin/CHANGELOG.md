@@ -55,8 +55,9 @@ targets, with a `-N` suffix for plugin-only releases.
   fields, columns or endpoints, ending in "+N fields" when they do not fit. A command dispatched from
   another journey is drawn once, where it is handled, not as a second card. Hovering a card, context,
   process or scenario shows a compact form of the detail pane. Double-clicking a Metro station (or
-  Shift+Enter) opens it in the Atlas lens. Matrix context bands end a name that does not fit in an
-  ellipsis.
+  Shift+Enter) opens it in the Atlas lens. A Matrix context band too small for its name turns rather
+  than cutting it: row bands lie across, and a narrow column band stands up. The Matrix headers grow
+  to fit a long slice or target name, up to a cap; past it the tooltip has the whole name.
 - **Copy fix prompt.** The issues dock copies a prompt for all, error, warning or info issues, grouped
   by the command that fixes them: `/essentials:slice-check <bc> --fix-manifests` for manifest repairs,
   `/essentials:slice-check <bc>` for what needs an audit, and `/essentials:slice-enrich --bc <bc>` for
