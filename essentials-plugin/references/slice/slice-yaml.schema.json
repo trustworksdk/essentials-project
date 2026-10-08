@@ -117,7 +117,7 @@
       "required": ["name", "then"],
       "properties": {
         "name": { "type": "string", "minLength": 1, "description": "Unique within the slice." },
-        "given": { "type": "array", "items": { "$ref": "#/$defs/scenarioStep" }, "description": "Prior history: `event` steps, and `state` steps for a write target without an event stream." },
+        "given": { "type": "array", "items": { "$ref": "#/$defs/scenarioStep" }, "description": "Prior history: `event` steps, and `state` steps for an entity without an event stream (a write target, or what a service-entity view reads)." },
         "when": { "$ref": "#/$defs/scenarioStep", "description": "The trigger. Required on every kind except a view." },
         "then": {
           "description": "Exactly one of: a non-empty list of steps (what the slice emits); { error, message? } (the slice rejects, nothing is emitted); { nothing: true } (accepted, nothing emitted); { readModel, rows } (a view's state). An empty list is not allowed — write { nothing: true }.",

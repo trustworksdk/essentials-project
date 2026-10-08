@@ -327,7 +327,7 @@ a command slice always writes `publishes` and a view slice always writes `projec
   | `event` | an event type | given, when (reactors), then |
   | `command` | a command type | when (command slices), then (automations, inbound translations) |
   | `query` | a query type the slice `serves` | when (views) |
-  | `state` | a write target — the current state of an entity, for a lane without an event stream (service-entity) | given |
+  | `state` | the current state of an entity, for a lane without an event stream (service-entity): a write target, or the entity a service-entity view reads | given |
   | `external` | a message of the slice's `externalSystem` | when (inbound translation), then (outbound translation) |
   | `schedule` | `true` — the time trigger of a schedule-driven automation | when |
 
@@ -352,7 +352,7 @@ a command slice always writes `publishes` and a view slice always writes `projec
   | Kind | `given` | `when` | `then` |
   |---|---|---|---|
   | command | `event` (any event published in scope), `state` (∈ `writes`) | `command` ∈ `handles` — required | events ⊆ `publishes`; `error`; `nothing` |
-  | view | `event` ∈ `projections[].from` ∪ `consumes` | optional; `query` ∈ `serves` | `readModel` — the view's own model (`owns`, or the `reads` / `projections[].name` the plugin's view template writes) — with row keys from its columns; `error` (for a `when` query) |
+  | view | `event` ∈ `projections[].from` ∪ `consumes`; on the service-entity lane (`lane` or `tier: service-entity`) also `state`, the entity it reads | optional; `query` ∈ `serves` | `readModel` — the view's own model (`owns`, or the `reads` / `projections[].name` the plugin's view template writes) — with row keys from its columns; `error` (for a `when` query) |
   | automation | `event`, `state` (its own to-do read model, if any) | `event` ∈ `consumes`, or `schedule: true` when the slice declares `schedule` — required | commands ⊆ `dispatches`; `nothing`; `error` |
   | translation, inbound | `event`, `state` | `external` — required | commands ⊆ `dispatches`, events ⊆ `publishes`; `nothing`; `error` |
   | translation, outbound | `event`, `state` | `event` ∈ `consumes` — required | `external` steps; `nothing`; `error` |

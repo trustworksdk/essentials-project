@@ -588,7 +588,10 @@ def _scenario_problems(doc, scenario):
     given, when, then = scenario.get("given"), scenario.get("when"), scenario.get("then")
 
     if isinstance(given, list):
-        allowed = ("event",) if kind == "view" else ("event", "state")
+        # A view on the service-entity lane reads entity state and has no events to be given; any
+        # other view is fed by events only (manifest-guide.md §3, the kind table).
+        entity_view = kind == "view" and "service-entity" in (doc.get("lane"), doc.get("tier"))
+        allowed = ("event",) if kind == "view" and not entity_view else ("event", "state")
         for step in given:
             parsed = _step(step)
             if parsed is None:
@@ -597,7 +600,7 @@ def _scenario_problems(doc, scenario):
             if key not in allowed:
                 problems.append(f"`given` holds a `{key}` step; on {_a(kind)} slice `given` takes "
                                 + " and ".join(f"`{a}`" for a in allowed) + " steps only")
-            elif kind == "view" and name not in inbound:
+            elif kind == "view" and key == "event" and name not in inbound:
                 problems.append(f"`given: {{ event: {name} }}` is not an event this view projects — "
                                 f"`projections[].from` and `consumes` give {_listed(inbound)}")
             elif kind == "command" and key == "state" and name not in writes:

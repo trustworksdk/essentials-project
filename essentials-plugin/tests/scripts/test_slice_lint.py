@@ -360,6 +360,13 @@ VALID = [
         sc("out", when=step(E, "OrderPlaced"), then=[step(X, "CreateInvoice")])]}),
     ("flow-one", "command", {"flow": "checkout"}),
     ("flow-several", "view", {"flow": ["checkout", "returns_2"]}),
+    # a view on the service-entity lane reads entity state: it has no events to be given
+    ("view-given-state-entity-lane", "view", {"lane": "service-entity",
+                                              "scenarios": [sc(given=[step(S, "ShippingOrder")],
+                                                               then={"readModel": "OrderListView", "rows": []})]}),
+    ("view-given-state-entity-tier", "view", {"tier": "service-entity",
+                                              "scenarios": [sc(given=[step(S, "ShippingOrder")],
+                                                               then={"readModel": "OrderListView", "rows": []})]}),
 ]
 
 # (case, base, extra root fields, expected (gate, message fragment) findings) — each one invalid.
