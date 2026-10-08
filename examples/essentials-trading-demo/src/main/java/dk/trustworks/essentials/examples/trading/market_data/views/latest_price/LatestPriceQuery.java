@@ -29,9 +29,9 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 /**
  * Answers "what is this instrument worth right now?" from the read model {@link LatestPriceProjection} owns.
  * <p>
- * The answer is strongly consistent, which the demo's bootstrap relies on: it asks this query whether a price
- * already exists before deciding to seed. The projection is an {@code InTransactionEventProcessor}, so a price's row
- * commits with the event that set it, and a restart against a populated database finds it.
+ * The answer is eventually consistent: a price event appended a moment ago may not be visible yet. Do not use this
+ * to decide whether something exists before writing it; ask the {@code InstrumentPrices} repository instead, as the
+ * demo bootstrap's idempotency probe does.
  */
 @Service
 public class LatestPriceQuery {

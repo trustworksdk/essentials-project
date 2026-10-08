@@ -17,8 +17,9 @@
 package dk.trustworks.essentials.examples.trading.market_data.views.latest_price;
 
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.AggregateType;
-import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.processor.EventProcessorDependencies;
-import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.processor.InTransactionEventProcessor;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.processor.ViewEventProcessor;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.processor.ViewEventProcessorDependencies;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.types.GlobalEventOrder;
 import dk.trustworks.essentials.components.foundation.messaging.MessageHandler;
 import dk.trustworks.essentials.components.foundation.messaging.queue.OrderedMessage;
 import dk.trustworks.essentials.examples.trading.market_data.aggregates.InstrumentPrices;
@@ -35,26 +36,23 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 
 /**
  * Projects {@code InstrumentPriceEvent} into this slice's own read model, one row per instrument.
- *
- * <h2>Why in-transaction</h2>
- * The demo's bootstrap decides whether to seed by asking this slice whether a price already exists. An eventually
- * consistent answer could say "absent" on a restart against a populated database, and the bootstrap would seed a
- * second time on top of it. An {@link InTransactionEventProcessor} writes the row in the same transaction that
- * appends the price event, so the row exists exactly when the event does, and the slice can answer strongly
- * consistently without reading the {@code InstrumentPrice} aggregate. It is non-exclusive, so every node projects
- * the events it appends itself; an exclusive subscription would leave a node without the lock appending events its
- * own read model never sees.
+ * <p>
+ * A {@link ViewEventProcessor}, so the model is eventually consistent and can be rebuilt: a new subscription starts at
+ * the first price event, so a database that has price events and no rows backfills on its own, and a subscription
+ * reset truncates the table and replays it. Nothing reads this model strongly consistently. The bootstrap's "is the
+ * demo already seeded?" probe asks the {@code InstrumentPrices} repository instead, because a lagging view could answer
+ * "absent" on a restart against a populated database.
  * <p>
  * Each row stores the {@code EventOrder} it was last written from, and a write never moves it backwards, so an event
- * projected twice cannot put an older price back.
+ * redelivered from the processor's retry queue cannot put an older price back.
  */
 @Service
-public class LatestPriceProjection extends InTransactionEventProcessor {
+public class LatestPriceProjection extends ViewEventProcessor {
     private final JdbcTemplate jdbcTemplate;
 
-    public LatestPriceProjection(EventProcessorDependencies eventProcessorDependencies,
+    public LatestPriceProjection(ViewEventProcessorDependencies dependencies,
                                  JdbcTemplate jdbcTemplate) {
-        super(eventProcessorDependencies);
+        super(dependencies);
         this.jdbcTemplate = requireNonNull(jdbcTemplate, "No jdbcTemplate provided");
         this.jdbcTemplate.execute("""
                                           CREATE TABLE IF NOT EXISTS projection_latest_price (
@@ -99,5 +97,11 @@ public class LatestPriceProjection extends InTransactionEventProcessor {
                             instrumentId.toString(),
                             price.value(),
                             eventOrder);
+    }
+
+    @Override
+    protected void onSubscriptionsReset(AggregateType aggregateType,
+                                        GlobalEventOrder resubscribeFromAndIncluding) {
+        jdbcTemplate.execute("TRUNCATE TABLE projection_latest_price");
     }
 }

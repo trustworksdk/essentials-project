@@ -40,11 +40,11 @@ Being outside the boundary check is not permission to reach into the contexts:
 ## Exception 1: the bootstrap idempotency probe
 
 `TradingSimulationRunner.seedDataState()` — and nothing else in this package — may inject `TradingAccounts`,
-`Trades`, `Settlements` and `Instruments`, and may call their `findX(…)` methods. It must be **strongly
+`Trades`, `Settlements`, `Instruments` and `InstrumentPrices`, and may call their `findX(…)` methods. It must be **strongly
 consistent**: the brokerage projections are eventually consistent, so on a restart against a populated database
 a projection-backed probe could answer "absent" while the data is there, and the runner would seed a second time
-on top of existing data. The price half of the probe uses `LatestPriceQuery`, whose in-transaction projection makes
-it strongly consistent already.
+on top of existing data. That goes for the price half too: `market_data.latest_price` is a projection, so the
+probe asks `InstrumentPrices.findPrice(…)` rather than `LatestPriceQuery`.
 
 The probe reads *existence*, never a field, and it runs once at startup.
 

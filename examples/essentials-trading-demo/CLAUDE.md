@@ -48,10 +48,10 @@ lane. Do **not** convert to `Decider`s.
 - **`TradingAccountClosingBooksPolicy` holds one immutable `ClosingBooksSettings` behind a lock.** Use
   `update(...)` or `withTemporarySettings(...)` — never reintroduce per-field setters. Four independent
   mutators are what let the benchmark scenario silently revert an admin change.
-- **No aggregate exposes state to the read side; every view projects.** `market_data.views.latest_price` used
-  to read `InstrumentPrice.latestPrice()` because the bootstrap's idempotency probe needs a strongly-consistent
-  answer. It now gets that from an `InTransactionEventProcessor`, whose row commits with the price event. Do not
-  add the accessor back.
+- **No aggregate exposes state to the read side; every view projects, through a `ViewEventProcessor`.**
+  Views must be replayable, and an `InTransactionEventProcessor` is not. A strongly-consistent *existence*
+  check (the bootstrap's idempotency probe) asks a repository wrapper's `findX`, never a view. Do not add
+  `InstrumentPrice.latestPrice()` back.
 - **Aggregate state fields are private**, including on the snapshotted `TradingAccount` —
   `EssentialsObjectMappers` sets `withFieldVisibility(ANY)` / `withGetterVisibility(NONE)`, so snapshots
   round-trip fine. The `protected` no-arg constructors are load-bearing: without them Jackson 3 would pick a

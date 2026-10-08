@@ -23,6 +23,8 @@ import dk.trustworks.essentials.components.eventsourced.aggregates.closingbooks.
 import dk.trustworks.essentials.components.eventsourced.aggregates.closingbooks.ClosingBooksTimeBoundary;
 import dk.trustworks.essentials.components.eventsourced.aggregates.closingbooks.GenerationState;
 import dk.trustworks.essentials.components.eventsourced.aggregates.closingbooks.LogicalAggregateId;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.transaction.EventStoreUnitOfWork;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.transaction.EventStoreUnitOfWorkFactory;
 import dk.trustworks.essentials.examples.trading._demo_harness.DashboardMetricSummaryView;
 import dk.trustworks.essentials.examples.trading._demo_harness.DashboardSummaryView;
 import dk.trustworks.essentials.examples.trading._demo_harness.PricePathScenarioResultView;
@@ -32,6 +34,7 @@ import dk.trustworks.essentials.examples.trading._demo_harness.TradingLoadGenera
 import dk.trustworks.essentials.examples.trading._demo_harness.TradingSimulationRunner;
 import dk.trustworks.essentials.examples.trading.brokerage.aggregates.TradingAccountClosingBooksPolicy;
 import dk.trustworks.essentials.examples.trading.brokerage.aggregates.TradingAccounts;
+import dk.trustworks.essentials.examples.trading.market_data.aggregates.InstrumentPrices;
 import dk.trustworks.essentials.examples.trading.brokerage.types.OwnerId;
 import dk.trustworks.essentials.examples.trading.brokerage.types.PeriodId;
 import dk.trustworks.essentials.examples.trading.brokerage.types.Quantity;
@@ -175,6 +178,12 @@ class TradingDemoApplicationTest {
     private LatestPriceQuery latestPriceQuery;
 
     @Autowired
+    private InstrumentPrices instrumentPrices;
+
+    @Autowired
+    private EventStoreUnitOfWorkFactory<? extends EventStoreUnitOfWork> unitOfWorkFactory;
+
+    @Autowired
     private InstrumentDetailsQuery instrumentDetailsQuery;
 
     @Autowired
@@ -250,9 +259,9 @@ class TradingDemoApplicationTest {
                                                  Amount.of(BigDecimal.valueOf(-500)),
                                                  Amount.of(BigDecimal.valueOf(42))));
 
-        // The price aggregate is the authoritative latest price and is strongly consistent, so this one is not awaited.
-        assertThat(latestPriceQuery.findLatestPrice(instrumentId))
-                .hasValueSatisfying(latestPrice -> assertThat(latestPrice.latestPrice().value()).isEqualByComparingTo("525"));
+        await().atMost(PROJECTION_TIMEOUT).untilAsserted(() ->
+                assertThat(latestPriceQuery.findLatestPrice(instrumentId))
+                        .hasValueSatisfying(latestPrice -> assertThat(latestPrice.latestPrice().value()).isEqualByComparingTo("525")));
 
         await().atMost(PROJECTION_TIMEOUT).untilAsserted(() -> {
             var statement = accountStatement(accountId);
@@ -925,11 +934,16 @@ class TradingDemoApplicationTest {
         registerInstrumentWithPriceIfAbsent(InstrumentId.of("AAPL"), "AAPL", "Apple Inc.", Amount.of(BigDecimal.valueOf(500)));
         registerInstrumentWithPriceIfAbsent(InstrumentId.of("MSFT"), "MSFT", "Microsoft Corporation", Amount.of(BigDecimal.valueOf(510)));
 
-        // The harness answers 503 "Demo seed data is not available yet" until its own probe can see ACC-DEMO-001, and
-        // that probe reads the eventually consistent account_statement projection - so opening the account is not
-        // enough, the projection has to have caught up before any burst or comparison endpoint is called.
+        // The harness answers 503 "Demo seed data is not available yet" until its own probe can see ACC-DEMO-001 and a
+        // price for the first instrument, and that probe reads the eventually consistent account_statement and
+        // latest_price projections - so sending the commands is not enough, both projections have to have caught up
+        // before any burst or comparison endpoint is called.
         await().atMost(PROJECTION_TIMEOUT)
-               .untilAsserted(() -> assertThat(accountStatement(TradingAccountId.of("ACC-DEMO-001"))).isNotNull());
+               .untilAsserted(() -> {
+                   assertThat(accountStatement(TradingAccountId.of("ACC-DEMO-001"))).isNotNull();
+                   assertThat(latestPriceQuery.findLatestPrice(InstrumentId.of("AAPL"))).isPresent();
+                   assertThat(latestPriceQuery.findLatestPrice(InstrumentId.of("MSFT"))).isPresent();
+               });
     }
 
     private void openAccountIfAbsent(TradingAccountId accountId, OwnerId ownerId, PeriodId periodId) {
@@ -944,7 +958,8 @@ class TradingDemoApplicationTest {
                                                      String symbol,
                                                      String displayName,
                                                      Amount initialPrice) {
-        if (latestPriceQuery.findLatestPrice(instrumentId).isEmpty()) {
+        // The repository, not the eventually-consistent latest_price view, so a second call never registers twice
+        if (unitOfWorkFactory.withUnitOfWork(uow -> instrumentPrices.findPrice(instrumentId)).isEmpty()) {
             commandBus.send(new RegisterInstrument(instrumentId, Symbol.of(symbol), displayName));
             commandBus.send(new InitializePrice(instrumentId, initialPrice));
         }

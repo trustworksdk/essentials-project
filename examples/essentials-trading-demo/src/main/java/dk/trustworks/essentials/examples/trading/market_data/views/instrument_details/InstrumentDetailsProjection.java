@@ -37,9 +37,9 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 /**
  * Projects {@code InstrumentEvent} into this slice's own read model.
  * <p>
- * A {@link ViewEventProcessor}, so the model is eventually consistent: nothing needs an instrument's reference data
- * <em>strongly</em> consistently. {@code views/latest_price} does need that, and gets it from an
- * {@code InTransactionEventProcessor} instead; neither view reads the aggregate.
+ * A {@link ViewEventProcessor}, so the model is eventually consistent and can be rebuilt by replay: nothing needs an
+ * instrument's reference data <em>strongly</em> consistently. Like {@code views/latest_price}, it never reads the
+ * aggregate.
  */
 @Service
 public class InstrumentDetailsProjection extends ViewEventProcessor {

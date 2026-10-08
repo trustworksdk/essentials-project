@@ -34,6 +34,7 @@ import dk.trustworks.essentials.examples.trading.brokerage.aggregates.TradingAcc
 import dk.trustworks.essentials.examples.trading.brokerage.aggregates.Trades;
 import dk.trustworks.essentials.examples.trading.brokerage.types.TradingAccountId;
 import dk.trustworks.essentials.examples.trading.brokerage.views.account_statement.AccountStatementQuery;
+import dk.trustworks.essentials.examples.trading.market_data.aggregates.InstrumentPrices;
 import dk.trustworks.essentials.examples.trading.market_data.aggregates.Instruments;
 import dk.trustworks.essentials.examples.trading.market_data.views.latest_price.LatestPriceQuery;
 import dk.trustworks.essentials.reactive.command.CommandBus;
@@ -87,7 +88,7 @@ public class TradingDemoApplication {
     }
 
     /**
-     * The bootstrap seeder. It writes through the {@link CommandBus} like everything else in the harness; the four
+     * The bootstrap seeder. It writes through the {@link CommandBus} like everything else in the harness; the five
      * repository wrappers are here only for its strongly-consistent idempotency probe — see
      * {@code TradingSimulationRunner.seedDataState()}.
      */
@@ -96,25 +97,25 @@ public class TradingDemoApplication {
                                                      CommandBus commandBus,
                                                      TradingAccountClosingBooksPolicy closingBooksPolicy,
                                                      AggregateLifecycleApi aggregateLifecycleApi,
-                                                     LatestPriceQuery latestPriceQuery,
                                                      DirectInstrumentPriceService directInstrumentPriceService,
                                                      EventStoreUnitOfWorkFactory<? extends EventStoreUnitOfWork> unitOfWorkFactory,
                                                      TradingAccounts tradingAccounts,
                                                      Trades trades,
                                                      Settlements settlements,
                                                      Instruments instruments,
+                                                     InstrumentPrices instrumentPrices,
                                                      TradeSettlementStatusQuery tradeSettlementStatusQuery) {
         return new TradingSimulationRunner(properties,
                                            commandBus,
                                            closingBooksPolicy,
                                            aggregateLifecycleApi,
-                                           latestPriceQuery,
                                            directInstrumentPriceService,
                                            unitOfWorkFactory,
                                            tradingAccounts,
                                            trades,
                                            settlements,
                                            instruments,
+                                           instrumentPrices,
                                            tradeSettlementStatusQuery);
     }
 

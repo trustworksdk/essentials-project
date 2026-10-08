@@ -22,7 +22,7 @@ everything else: their command type, their one API file, their handler and their
 | `use_cases/initialize_price` | command | Opens the price stream at a starting price |
 | `use_cases/update_price` | command | Records a price tick. The authoritative write path |
 | `use_cases/risk_approve_instrument` | automation | Runs a newly registered instrument through an external risk assessment and records the answer. The demo's `UnitOfWorkMode.NONE` example |
-| `views/latest_price` | view | Serves the current price of one instrument, from an in-transaction projection. Strongly consistent |
+| `views/latest_price` | view | Serves the current price of one instrument. Projection-backed, eventually consistent |
 | `views/instrument_details` | view | Lists instruments and serves one by id, from a projection. Includes risk status |
 
 ## Two aggregates, one id
@@ -51,18 +51,15 @@ only purpose is to be timed against the aggregate path. It lives in the demo har
 so the trade path cannot reach it by accident. Do not move it here, and do not make anything in this context
 read it.
 
-## `views/latest_price` projects in the appending transaction
+## `views/latest_price` is an ordinary eventually-consistent view
 
-Aggregate state is private, and read models project events rather than reading the write model. That holds
-for `views/latest_price` too, although it must answer **strongly consistently**: the demo's bootstrap uses it
-to decide whether seed data already exists, and an eventually-consistent "absent" would let it seed on top of
-a populated database. Its `LatestPriceProjection` is an `InTransactionEventProcessor`, so a price's row commits
-in the same transaction as the event that set it. It used to read a public `InstrumentPrice.latestPrice()`
-instead; that accessor is gone, and nothing on `InstrumentPrice` or `Instrument` is public state.
-
-The cost is one upsert per price tick inside the tick's own transaction. Any read that wants price *history*,
-or prices *across* instruments, is a different read model, and an eventually-consistent one is enough for it,
-as `brokerage.trade_valuation` shows.
+Aggregate state is private, and read models project events rather than reading the write model.
+`LatestPriceProjection` is a `ViewEventProcessor`, like every other view here, so it can be replayed: a new
+subscription starts at the first price event, and a subscription reset truncates the table and rebuilds it.
+It once read a public `InstrumentPrice.latestPrice()`, and later projected in the appending transaction, both
+to give the demo bootstrap's "already seeded?" probe a strongly-consistent answer. Neither is needed: the
+probe asks `InstrumentPrices.findPrice(...)`, a write-side existence check, and nothing reads this view
+strongly consistently. Do not add the accessor back, and do not move the projection back in-transaction.
 
 ## Every mutating method is an idempotent no-op
 

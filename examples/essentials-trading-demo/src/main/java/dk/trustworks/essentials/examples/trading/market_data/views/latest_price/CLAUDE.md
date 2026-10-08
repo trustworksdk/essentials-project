@@ -4,19 +4,17 @@ Serves the current price of one instrument: `GET /api/admin/instrument-prices/{i
 
 ## The one thing to know about this slice
 
-**Its projection runs in the transaction that appends the price event.** `LatestPriceProjection` is an
-`InTransactionEventProcessor` writing `projection_latest_price`, one row per instrument, so the row commits
-with the event that set it. That makes this the demo's only strongly-consistent read, and it needs to be:
-the bootstrap asks `LatestPriceQuery` whether a price already exists before deciding to seed, and an
-eventually-consistent answer could say "absent" on a restart against a populated database, so the bootstrap
-would seed on top of existing data.
+**It is an ordinary eventually-consistent view, and that is deliberate.** `LatestPriceProjection` is a
+`ViewEventProcessor` writing `projection_latest_price`, one row per instrument. Being a `ViewEventProcessor`
+is what makes it replayable: a new subscription starts at the first price event, so a database with price
+events and no rows backfills on its own, and a subscription reset truncates the table and rebuilds it. Each
+row stores the `EventOrder` it was written from, and a write never moves it backwards.
 
-The processor is non-exclusive, so every instance projects the events it appends itself. Each row stores the
-`EventOrder` it was written from, and a write never moves it backwards.
-
-It used to read the `InstrumentPrice` aggregate through a public `latestPrice()` accessor, a documented
-exception to "views project". The exception is gone; do not bring the accessor back. A database created before
-the projection existed has price events and no rows, so the probe would seed again: `docker compose down -v`.
+Do not use `LatestPriceQuery` to decide whether something exists before writing it. The demo bootstrap's
+"already seeded?" probe needs a strongly-consistent answer, so it asks `InstrumentPrices.findPrice(...)` on the
+write side instead. This slice has been both aggregate-backed (a public `InstrumentPrice.latestPrice()`) and
+an `InTransactionEventProcessor` for that probe's sake; the first broke "views project", the second gave up
+replay. Do not bring either back.
 
 ## What would make it a different slice
 

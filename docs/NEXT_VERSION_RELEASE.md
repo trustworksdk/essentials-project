@@ -128,10 +128,10 @@ entries are in [`essentials-plugin/CHANGELOG.md`](../essentials-plugin/CHANGELOG
 Not published; listed because they are the reference for how to use the framework.
 
 - **`essentials-trading-demo`: `market_data.views.latest_price` projects instead of reading the aggregate.**
-  `LatestPriceProjection`, a non-exclusive `InTransactionEventProcessor`, writes `projection_latest_price` in the
-  transaction that appends each price event, so the bootstrap's seed probe still gets a strongly-consistent
-  answer. `InstrumentPrice.latestPrice()` and `InstrumentPrices.findPrice()` are gone. **A demo database created
-  before this has price events and no rows: run `docker compose down -v`.** (`9a6e3e86`)
+  `LatestPriceProjection` is a `ViewEventProcessor` writing `projection_latest_price`, so the view is eventually
+  consistent and can be replayed; an existing demo database backfills the table on first start.
+  `InstrumentPrice.latestPrice()` is gone. The bootstrap's idempotency probe, which needs a strongly-consistent
+  answer, asks `InstrumentPrices.findPrice(...)` on the write side instead of the view. (`9a6e3e86` and the commit after it)
 - **`postgresql-cqrs`:** the `task` context, on the aggregate lane, drops its `routing/TaskCommand` marker,
   which only the decider lane uses (`f8e78176`). `AccountBalanceViewIT` now really redelivers an event to test
   the projection's idempotency (`e88f8e70`).
