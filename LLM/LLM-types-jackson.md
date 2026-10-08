@@ -312,6 +312,14 @@ The Essentials Spring Boot starters already define this bean. They deliberately 
 from the context into the persistence mapper; an application needing extra persistence modules defines its own
 `JSONSerializer` / `JSONEventSerializer` bean, which the starter backs off from.
 
+⚠️ **A request body that omits a primitive fails before validation.** Jackson 3 enables
+`FAIL_ON_NULL_FOR_PRIMITIVES` by default. `EssentialsObjectMappers` turns it off for the persistence mapper, but
+Essentials does not configure Boot's web mapper, so a body that leaves out an `int`/`boolean`/`long` record component
+is rejected with HTTP 400 before `@Valid` runs. The error Spring reports, ``JSON parse error: Cannot map `null` into
+type `int` …``, names no field. To read a missing primitive as `0`/`false` (Jackson 2 behaviour), set
+`spring.jackson.deserialization.fail-on-null-for-primitives=false`; or use a boxed type and validate it with
+`@NotNull`.
+
 ### Complete Type Definition
 
 ```java
