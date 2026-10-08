@@ -53,7 +53,7 @@
     '.mx-sizer > div, .mx-in > div { position: absolute; }',
     '.mx-band { background: var(--panel-strong); border: 1px solid var(--rule-strong); color: var(--text); font-weight: 600; overflow: hidden;',
     '           white-space: nowrap; cursor: pointer; }',
-    '.mx-band span { position: absolute; padding: 0 6px; line-height: 20px; }',
+    '.mx-band span { position: absolute; padding: 0 6px; line-height: 20px; box-sizing: border-box; overflow: hidden; text-overflow: ellipsis; }',
     '.mx-rowhead .mx-band span { writing-mode: vertical-rl; transform: rotate(180deg); padding: 6px 0; line-height: 20px; }',
     '.mx-band.marked { border-color: var(--err); box-shadow: inset 0 0 0 2px var(--err); }',
     '.mx-cl, .mx-rl { cursor: pointer; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }',
@@ -306,11 +306,15 @@
         const b = box('mx-band', x, 0, w, BAND - 1);
         if (mk && mk.group && mk.group.id === g.id) b.classList.add('marked');
         const lab = ctx.html('span', null, g.id || '(no context)');
-        lab.style.left = clamp(sl - x, 0, Math.max(0, w - 80)) + 'px';
+        const lv = g.id ? ctx.levelOf(ctx.issuesFor({ kind: 'context', id: g.id })) : null;
+        const left = clamp(sl - x, 0, Math.max(0, w - 80));
+        lab.style.left = left + 'px';
+        // A band narrower than its name (a context with one or two slices) ends the name in an ellipsis;
+        // the band's title carries it whole.
+        lab.style.maxWidth = Math.max(0, w - left - (lv ? 18 : 0)) + 'px';
         b.append(lab);
         b.title = 'context ' + (g.id || '(none)');
         if (g.id) b.addEventListener('click', () => openContext(g.id));
-        const lv = g.id ? ctx.levelOf(ctx.issuesFor({ kind: 'context', id: g.id })) : null;
         if (lv) { const d = lvlDot(lv); d.style.position = 'absolute'; d.style.right = '6px'; d.style.top = '6px'; b.append(d); }
         colIn.append(b);
       });
@@ -338,7 +342,10 @@
         const b = box('mx-band', 0, y, BAND - 1, h);
         if (mk && mk.group && mk.group.id === g.id) b.classList.add('marked');
         const lab = ctx.html('span', null, g.id || '(no owner)');
-        lab.style.top = clamp(st - y, 0, Math.max(0, h - 80)) + 'px';
+        const top = clamp(st - y, 0, Math.max(0, h - 80));
+        lab.style.top = top + 'px';
+        lab.style.maxHeight = Math.max(0, h - top) + 'px';   // as the column band: ellipsis, title whole
+        if (h < 3 * RH) lab.style.padding = '2px 0';         // a one- or two-row band: room for a letter or two
         b.append(lab);
         b.title = g.id ? 'context ' + g.id : 'targets no slice writes or owns';
         if (g.id) b.addEventListener('click', () => openContext(g.id));
