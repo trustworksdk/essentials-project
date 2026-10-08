@@ -128,16 +128,18 @@ or auditing a slice, seeing the whole map, and reviewing a change.
                          Essentials project.
   /essentials:upgrade    The other half: what init never does. Brings an EXISTING
                          project up to the installed plugin — refreshes the slice
-                         rules pointer, installs or refreshes the slice-manifest
-                         lint gate, checks the project CLAUDE.md still routes to
-                         essentials-docs, and audits the application against the
-                         current stack contract (S1-S11), the silent-startup-
-                         failure set first. Reports before it writes and offers
-                         each fix on its own, apart from what only applies once
-                         the project moves to the plugin's Essentials release.
-                         Never regenerates a skeleton, never edits slice source,
-                         moves no version pin but a Kotlin compiler too old for
-                         the project's Java baseline.
+                         rules pointer, installs, refreshes or activates the
+                         slice-manifest lint gate, checks the project CLAUDE.md
+                         still routes to essentials-docs, and audits the
+                         application against the current stack contract (S1-S11),
+                         the silent-startup-failure set first. On an older
+                         Essentials release it also moves the project to the
+                         plugin's: essentials.version and only the platform pins
+                         that release requires, under a decision note you approve,
+                         on its own branch, code migrations included, gated by a
+                         full build. Reports before it writes and offers each fix
+                         on its own. Never regenerates a skeleton or restructures
+                         slice source; --check shows the whole plan.
                          --check is a report-only dry run.
   /essentials:doctor     Checks this machine for the tools the commands run —
                          python3, uv, the pinned JDK, Maven, Docker, npm — and
@@ -250,7 +252,7 @@ or auditing a slice, seeing the whole map, and reviewing a change.
 ━━━ GET STARTED ━━━
 
   /essentials:init        ← new project
-  /essentials:upgrade     ← existing project; catch up with the plugin
+  /essentials:upgrade     ← existing project; catch up with the plugin and its release
   /essentials:add-slice   ← existing project; add a feature
   /essentials:slice-map   ← existing project that follows the law; see it
   /essentials:slice-check ← existing project that follows the law; audit it

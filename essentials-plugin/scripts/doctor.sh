@@ -19,7 +19,8 @@
 #   slice   /essentials:add-slice, the slice skills, /essentials:slice-check, /essentials:slice-map:
 #           python3 (render-slice.py, slice-law.py); uv for slice-lint.py, slice-source.py, slice-index.py
 #   docs    the essentials-docs and essentials-change skills: search.sh (rg optional) and slice-law.py
-#   all     every profile above, plus /essentials:upgrade's re-check (stack-lint.py, ./mvnw or mvn, Docker)
+#   all     every profile above, plus /essentials:upgrade (stack-lint.py, migration-plan.py; ./mvnw or mvn, Docker
+#           and git for its re-check and its Essentials upgrade)
 #           — the default
 #
 # Requirements, from README.md § Requirements and the commands:
@@ -33,7 +34,8 @@
 #   maven     mvn; a ./mvnw in the working directory serves /essentials:upgrade, not init's wrapper hook
 #   docker    the binary and a running daemon (`docker info`)
 #   npm       only for a frontend
-#   git       /essentials:review's base-ref and --pr modes; without it only <path> mode works
+#   git       /essentials:review's base-ref and --pr modes, where without it only <path> mode works; the branch
+#             /essentials:upgrade's Essentials upgrade works on
 #   rg        search.sh falls back to grep -R
 #
 # Status values: ok, missing, too-old, not-running (docker: binary, no daemon), fallback, partial,
@@ -264,7 +266,7 @@ impacts() {
             echo "review|stop|/essentials:review stops at Step 0: no deterministic check can run, and it does not review by eye"
             echo "slice|stop|/essentials:add-slice and the slice skills cannot render a slice (render-slice.py) or load the slice law (slice-law.py)"
             echo "docs|stop|the essentials-docs and essentials-change skills cannot load the slice law (slice-law.py) before a slice change"
-            echo "upgrade|not-run|/essentials:upgrade cannot run stack-lint.py: Group C is reported not run" ;;
+            echo "upgrade|not-run|/essentials:upgrade cannot run stack-lint.py or migration-plan.py: Group C and the Essentials upgrade (Group D) are reported not run" ;;
         uv)
             case $status in
                 fallback)
@@ -280,18 +282,20 @@ impacts() {
             esac ;;
         java)
             echo "init|not-run|/essentials:init's smoke build (Step 13.7) cannot build the rendered project, which targets the pinned Java release: its result is failed"
-            echo "upgrade|not-run|/essentials:upgrade's context-start re-check after a dependency or config fix cannot build the project" ;;
+            echo "upgrade|not-run|/essentials:upgrade cannot build the project: neither the context-start re-check after a fix nor the Essentials upgrade (Group D), whose gate is that build, runs" ;;
         maven)
             echo "init|skipped|/essentials:init skips the maven-wrapper hook (no mvnw in the new project) and its smoke build cannot run"
             [ "$status" = partial ] ||
-                echo "upgrade|not-run|/essentials:upgrade's context-start re-check needs ./mvnw or mvn" ;;
+                echo "upgrade|not-run|/essentials:upgrade's context-start re-check and its Essentials upgrade (Group D) need ./mvnw or mvn" ;;
         docker)
             echo "init|compile-only|/essentials:init's smoke build is compile-only (compiled-only): the Spring context is never started"
-            echo "upgrade|compile-only|/essentials:upgrade's re-check runs test-compile only: the context start is unverified" ;;
+            echo "upgrade|compile-only|/essentials:upgrade's re-check runs test-compile only: the context start is unverified"
+            echo "upgrade|not-run|/essentials:upgrade does not start the Essentials upgrade (Group D): a release move has no compile-only result; --check still prints its plan" ;;
         npm)
             echo "init|skipped|with a frontend, /essentials:init skips the frontend-lockfile hook and leaves the frontend unchecked; an embedded build needs -Pskip-frontend until a package-lock.json exists" ;;
         git)
-            echo "review|not-run|/essentials:review: only <path> mode works outside git; a base ref and --pr cannot be resolved" ;;
+            echo "review|not-run|/essentials:review: only <path> mode works outside git; a base ref and --pr cannot be resolved"
+            echo "upgrade|not-run|/essentials:upgrade does not start the Essentials upgrade (Group D) outside git: it works on its own branch" ;;
         rg)
             echo "docs|fallback|search.sh falls back to grep -R: the same matches, slower" ;;
     esac
@@ -367,7 +371,7 @@ row java "$java_status" "$java_found" "$java_required" init upgrade
 row maven "$maven_status" "$maven_found" "<null>" init upgrade
 row docker "$docker_status" "$docker_found" "running daemon" init upgrade
 row npm "$npm_status" "$npm_found" "<null>" init
-row git "$git_status" "$git_found" "<null>" review
+row git "$git_status" "$git_found" "<null>" review upgrade
 row rg "$rg_status" "$rg_found" "<null>" docs
 
 blocking_names=${blocking_names# }

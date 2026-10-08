@@ -90,4 +90,5 @@ mechanical. Three rules:
 
 When Essentials itself releases, the pins move as part of a documented upgrade — for these pins that
 is the Essentials repository's `docs/MIGRATION-0.60.md` § Platform, routed from
-`references/llm/LLM-traps.md` § Upgrading.
+`references/llm/LLM-traps.md` § Upgrading: `/essentials:upgrade` Group D moves them in a project, as the
+release's notes in `references/stack/migrations/` list them.

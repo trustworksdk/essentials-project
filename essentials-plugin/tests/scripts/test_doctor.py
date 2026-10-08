@@ -171,7 +171,7 @@ class DoctorTest(unittest.TestCase):
         self.assertFalse(jdk["blocking"])
         dock = requirement(doc, "docker")
         self.assertEqual(dock["status"], "not-running")
-        self.assertEqual({i["effect"] for i in dock["impacts"]}, {"compile-only"})
+        self.assertEqual({i["effect"] for i in dock["impacts"]}, {"compile-only", "not-run"})
         self.assertEqual(requirement(doc, "rg")["status"], "missing")
         self.assertEqual(requirement(doc, "maven")["status"], "ok")
 
@@ -205,10 +205,12 @@ class DoctorTest(unittest.TestCase):
         self.assertEqual(requirement(doc, "docker")["status"], "missing")
         self.assertEqual(requirement(doc, "npm")["status"], "missing")
         self.assertEqual(requirement(doc, "python3")["impacts"], [])
-        # Without git /essentials:review still runs in <path> mode, so git degrades it and never blocks.
+        # Without git /essentials:review still runs in <path> mode and /essentials:upgrade without its Essentials
+        # upgrade, so git degrades both and never blocks.
         git = requirement(doc, "git")
         self.assertEqual((git["status"], git["blocking"]), ("missing", False))
-        self.assertEqual({(i["profile"], i["effect"]) for i in git["impacts"]}, {("review", "not-run")})
+        self.assertEqual({(i["profile"], i["effect"]) for i in git["impacts"]},
+                         {("review", "not-run"), ("upgrade", "not-run")})
 
         plain = m.run("--for", "slice")
         self.assertEqual(plain.returncode, 0)

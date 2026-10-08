@@ -75,7 +75,8 @@ Stop here and say plainly what was found:
 > `<the marker that matched>` — this is already a Trustworks Essentials project. `/essentials:init`
 > scaffolds a **new** one; it never updates an existing project. To pick up what this plugin has
 > shipped since the project was created — the slice-manifest lint gate, a refreshed rules pointer,
-> and a conformance check against the current stack contract — run **`/essentials:upgrade`**.
+> a conformance check against the current stack contract, and the move to the plugin's Essentials
+> release — run **`/essentials:upgrade`**.
 
 Then offer exactly one escape hatch via `AskUserQuestion`, because continuing *is* legitimate in one
 case: the user wants a **second, separate** project inside this repository (a monorepo gaining a

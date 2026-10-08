@@ -3,6 +3,75 @@
 Each entry is a release, headed by its `plugin.json` version: the Essentials release the plugin
 targets, with a `-N` suffix for plugin-only releases.
 
+## 0.60.0-6 — targets Essentials 0.60.0
+- **`/essentials:upgrade` now moves a project to the plugin's Essentials release, code included.** A
+  project on an older release (`essentials.version` below the pin) gets a new Group D: the move is
+  planned by the new `scripts/migration-plan.py` from the release's migration notes
+  (`references/stack/migrations/0.50-to-0.60.json`), shown as a decision note — the pins it moves,
+  marked Essentials or platform, the findings it closes, the code migrations and their risks, and the
+  checklist of behaviour changes — and applied only after you approve it. The note is printed, or
+  written to a path you choose (it offers `docs/adr/` when the project has one), and is the ADR. It
+  moves `essentials.version` and only the platform pins the release requires, after one question
+  (Move all / Stop / Show impact), on an `essentials-<version>` branch it creates, with a commit per
+  step if you want one. Then it applies the stack-contract findings that hold only on the new release,
+  the API migrations `review-scan.py --tree` finds, and the compile errors that remain — call site by
+  call site, each confirmed, in slice source too but never structurally — verifying each step and
+  gating the move on the project's full build (Docker required). Behaviour changes no compiler sees
+  come back as a checklist with their `ESS` ids, never applied; workarounds the release makes
+  removable are offered one at a time. A failing step is named, mapped to its symptom and offered for
+  revert; the branch you started from is untouched. `--check` prints the whole plan and needs neither
+  Docker nor a clean tree. Upgrade still never moves a pin the release does not require.
+- **Upgrade detection for 0.50 → 0.60** — `review-scan.py --tree` scans a whole project (the
+  empty-tree diff), with new signatures for the 0.60 compile breaks and removed keys, and new traps
+  `ESS-119` to `ESS-123` in `LLM-traps.md` § Upgrading: `QueuedMessageCounts`' new components, the
+  CDC `live-drain-stall-threshold` key, the Jackson 2 API renames, `useOrderedUnorderedQuery`, and the
+  0.50 `forRemoval` constructors.
+- **Standalone Next.js and Create React App frontends are judged correctly** — S8's standalone checks
+  assumed Vite: they matched only `import.meta.env.VITE_API_BASE_URL` in a file named `custom-fetch.ts`
+  and a hard-coded Orval output path, so a Next.js frontend doing exactly what S8 asks got findings
+  whose fixes would break it. `stack-lint.py` now accepts any `import.meta.env.*` or `process.env.*`
+  read that prefixes the request URL, finds the mutator and the generated paths from `orval.config.*`
+  (reported as not run when that config is computed), reports the tooling it found
+  (`facts.frontendTooling`) and names that tooling's variable in its fix text. S8 is worded for any
+  tooling, with Vite as the example.
+- **CORS origins bound with `@Value`** — `s8-standalone-cors-value` claimed "startup fails" for every
+  such key; that holds only for a list. It stays Blocking for a YAML sequence or an indexed key (with a
+  `:default`, it says the default is bound silently instead); a scalar, or a key no `application*` file
+  sets, is now the Should-fix `s8-standalone-cors-value-scalar`.
+- **`slice-lint.py` no longer passes when it validated nothing** — a run that could not import
+  `jsonschema` and found nothing exits 2, as `/essentials:slice-check` already documented, instead of
+  0. `--allow-skip-schema` accepts a parse-only pass explicitly; `--require-schema` is still accepted,
+  as a no-op, so existing hooks and CI keep parsing.
+- **Refreshing the lint gate no longer turns CI red unannounced** — `slice-lint.py --baseline <json>`
+  reports only the findings a previous `--json` run did not. `/essentials:slice-check` gate 12 and
+  `/essentials:upgrade` measure what a refreshed copy would add before offering it, say "the refresh
+  adds N findings in <files>", and offer the manifest fixes first; a committed baseline also works as
+  a CI ratchet. The gate-14 hint no longer suggests a `tier` value it cannot know: `cqrs-es` when the
+  bounded context is event-sourced, otherwise remove `tier`.
+- **The pre-commit hook works in a project below the repository root** — it assumed git root =
+  project root, so in a nested project the hook never ran, and a missing script let commits through.
+  It now finds its project from its own path, lints only manifests staged inside it, and **blocks**
+  on findings, on a missing `scripts/slice-lint.py`, and when the linter exits 2. Contributors need
+  `uv`, or `python3` with `pyyaml` and `jsonschema`; only a machine with neither `uv` nor `python3`
+  still commits unchecked. `/essentials:init` activates it with a repository-relative `core.hooksPath`,
+  or offers a forwarder line when another hook setup exists, and the project README gives every other
+  clone the command. `/essentials:upgrade` reports a hook git never runs as installed but inactive and
+  offers the same activation.
+- **Leftovers of the forked-app OpenAPI pipeline are reported** — `s7-spec-generation` went silent once
+  a test wrote the spec, so `springdoc-openapi-maven-plugin`, a start/stop execution or
+  `application-openapi.*` left behind was never reported again. New Advisory checks
+  `s7-forked-pipeline` and `s7-key-order` (`springdoc.writer-with-order-by-keys: true` missing), and
+  `/essentials:upgrade` removes the residue as a checklist, warning to commit the spec's one-time
+  reformat on its own.
+- **The version stamp's format, named** — projects scaffolded before the plugin's first release carry
+  `<!-- essentials-init: v<semver> -->`; `/essentials:upgrade` replaces it with
+  `<!-- essentials-init: essentials <version> -->`, the Essentials release rather than a plugin
+  version. Tooling that parses the stamp needs the new form; upgrade now names any file outside
+  `CLAUDE.md` that mentions `essentials-init:` before it replaces the stamp.
+- **Framework-knowledge block refresh** — `/essentials:upgrade` now compares the project
+  `CLAUDE.md`'s framework-knowledge section with the plugin's and offers to replace that section alone
+  when it differs, keeping the project's stamp; before, it only checked that the heading existed.
+
 ## 0.60.0-5 — targets Essentials 0.60.0
 - **Framework docs: 0.50.1 was never released** — the event-store reference now says the polling
   transaction leak (a connection left `idle in transaction` when a subscription was disposed after an

@@ -46,7 +46,7 @@ Do **not** search the web or guess — Essentials has its own opinionated patter
 
 If the `essentials` plugin is not installed in this Claude Code session, add its marketplace with `/plugin marketplace add trustworksdk/essentials-project`, then run `/plugin install essentials@essentials-marketplace`.
 
-The comment above records the Essentials version this project was scaffolded against. Run **`/essentials:upgrade`** to bring the project up to what the installed plugin ships — a refreshed slice-rules pointer, the slice-manifest lint gate, and a conformance check against the current stack contract (S1–S11). It reports before it writes, and it never touches source or version pins.
+The comment above records the Essentials version this project was scaffolded against. Run **`/essentials:upgrade`** to bring the project up to what the installed plugin ships — a refreshed slice-rules pointer, the slice-manifest lint gate, and a conformance check against the current stack contract (S1–S11). It reports before it writes, and on an older Essentials release it also offers the move to the plugin's: `essentials.version` and only the pins that release requires, under a decision note you approve, on its own branch.
 
 ## Project pins (do not invent — these are fixed by `/essentials:init`)
 
