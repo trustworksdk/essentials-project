@@ -1763,6 +1763,8 @@ class Project:
             if not f.is_op(lp, "("):
                 continue
             recv = toks[i - 2] if i >= 2 and toks[i - 1].t in (".", "?.") else None
+            if recv is not None and recv.t == ")" and f.match.get(i - 2, 0) > 0:
+                recv = toks[f.match[i - 2] - 1]  # a getter's result: `getCommandBus().send(…)` in an EventProcessor
             name = t.t
             if name in ("send", "sendAsync", "sendAndDontWait") and recv is not None and (
                     (recv.k == "id" and COMMAND_BUS.search(recv.t)) or name != "send"):
