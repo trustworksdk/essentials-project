@@ -200,6 +200,40 @@ fixes (§3) change four things you can observe:
 
 (LN-4, LN-5, LN-6, N-6, N-7, `784da9df`…`5bae5aed`)
 
+#### 1.1.10 `essentials.immutable-jackson-module-enabled` applies by default, to the persistence mapper
+
+The property was documented with default `true` but had no effect unless set explicitly. Now:
+
+- **Default (`true`):** the persistence `JSONSerializer`/`JSONEventSerializer` registers
+  `EssentialsImmutableJacksonModule`, as it already did whenever `immutable-jackson3` was on the classpath, so
+  nothing changes there. Spring Boot's web `JsonMapper` does **not** get it, as in 0.60.0: on the web mapper the
+  module would turn a 400 for a request body Jackson cannot construct into an object with null fields.
+- **Explicit `true`:** both mappers get the module (the web mapper as before).
+- **`false`:** neither does. This is new for the persistence mapper, which ignored the property before; only
+  reading changes, the written JSON does not.
+
+New overloads: `EssentialsObjectMappers.createJackson3ObjectMapper(boolean, JacksonModule...)`,
+`createJSONSerializer(boolean)` and `EssentialsJacksonModules.modules(boolean)`. (N-11, `e2554c4d`, `dab3564e`)
+
+#### 1.1.11 A `ViewEventProcessor` warns about event types it has no handler for
+
+A processor silently ignores an event type none of its `@MessageHandler` methods accepts. For a
+`ViewEventProcessor` that matters: the view never sees that event's `EventOrder` for the aggregate, so a projection
+that checks contiguity treats the next event as a gap, and a missing handler leaves the view incomplete with nothing
+to say so. Now:
+
+- **`ViewEventProcessor`** logs a WARN per ignored event type, at most once an hour (logger
+  `…eventstore.postgresql.processor.UnhandledEventTypes`). Mark deliberate skips with `@IgnoresEventTypes` (§2).
+  At start it also WARNs about event types that a sealed supertype of a handled type permits and that it neither
+  handles nor ignores. Event tables are not scanned.
+- **`EventProcessor` and `InTransactionEventProcessor`** log it at DEBUG only: skipping types is how they are
+  meant to work.
+- All three log the event types they handle at start (INFO), and count every ignored event in
+  `essentials.eventstore.processor.unhandled_event_type` (tags `processor`, `aggregate_type`, `event_type`) when a
+  `MeterRegistry` is present.
+
+(CB-4, `9f4ddecf`, `b786b107`)
+
 ---
 
 ## 2. New features
@@ -250,6 +284,19 @@ fixes (§3) change four things you can observe:
 - **Sealed commands no decider handles are reported at startup.** `EventStreamDeciderAndAggregateTypeConfigurator`
   walks `getPermittedSubclasses()` of sealed command types and WARNs for each permitted command no decider handles;
   before, it showed only at the first send, as a `NoCommandHandlerFoundException`. (CB-4, `9f4ddecf`)
+- **`@IgnoresEventTypes({SomeEvent.class, …}, eventNames = {…})`** on a `ViewEventProcessor` marks event types
+  it skips on purpose: they, and their subtypes, are counted but not warned about (§1.1.11). `eventNames` covers
+  events persisted by name only. (CB-4, `b786b107`)
+- **The Essentials startup report.** `EssentialsStartupReport` (foundation, package `startup`) collects the startup
+  findings of the checks in this release, and every starter prints them as one block on `ApplicationReadyEvent`:
+  at ERROR if any finding is an error, at WARN if any is a warning, otherwise one INFO line "Essentials startup
+  report: no findings". Findings are grouped by severity, each with its fix. It covers removed properties, the
+  wire-format check, duplicate command registrations, sealed commands with no decider, views with unhandled event
+  types, a shard-owned queue built without a UnitOfWork factory, incomplete redelivery policies, an enqueue outside
+  a unit of work during startup, and schema `emit`/`validate` notes. Every check still logs where it runs, so
+  nothing is lost outside Spring. The report is also available as the `essentialsStartupReport` bean. Findings
+  raised on another thread or after the context refresh (from an `ApplicationRunner`, say) are logged but not in
+  the block. (`552576f1`)
 - **Wire-format check for mappers Essentials did not build.**
   `EssentialsObjectMappers.findWireFormatDeviations(ObjectMapper)` round-trips small probe types and compares them
   with the 0.50 bytes (field access, getter and `is`-getter visibility, ISO dates, numeric durations,
