@@ -52,7 +52,7 @@ Base package: `dk.trustworks.essentials.components.document_db`
 | Query conditions | `Condition<E>` | Type-safe WHERE clauses |
 | Indexes | `@Indexed`, `Index<E>` | Performance via GIN indexes on JSONB properties |
 | Custom repositories | `DelegatingDocumentDbRepository<E, ID>` | Base class for domain-specific repositories |
-| Exception | `OptimisticLockingException` | Thrown on version conflict during update |
+| Exception | `OptimisticLockingException` | Thrown on version conflict during `save`/`update`; unchecked (`RuntimeException`) since 0.60.1, so Java can `catch` it by name |
 
 ## Entity Definition
 
@@ -584,7 +584,7 @@ CREATE INDEX idx_orders_city ON orders USING gin ((data->'address'->>'city'));
 ### How It Works
 1. Entity has `version` (starts at `Version.ZERO` after `save()`)
 2. `update()` checks: `WHERE id = :id AND version = :currentVersion`
-3. If version mismatch → `OptimisticLockingException`
+3. If version mismatch → `OptimisticLockingException` (a `RuntimeException`: Java catches it by name, and Spring `@Transactional` rolls back on it)
 4. On success → version incremented
 
 ### Version States

@@ -495,8 +495,11 @@ interface DocumentDbRepository<ENTITY : VersionedEntity<ID, ENTITY>, ID> {
  *
  * This approach ensures that updates do not overwrite changes made by other processes.
  * Exception thrown if an entity has be changed
+ *
+ * Unchecked (a [RuntimeException]), so Java callers can catch it by name around [DocumentDbRepository.save]/[DocumentDbRepository.update],
+ * which declare no `throws` clause, and so a Spring `@Transactional` boundary rolls back on it by default.
  */
-class OptimisticLockingException(message: String) : Exception(message)
+class OptimisticLockingException(message: String) : RuntimeException(message)
 
 /**
  * Serializer for an [Id] annotated property within a [VersionedEntity],
