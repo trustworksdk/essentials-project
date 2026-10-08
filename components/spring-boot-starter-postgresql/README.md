@@ -352,7 +352,10 @@ essentials.schema.emit.exit=true
 | `schema.emit.exit` | `true` | Whether `emit` stops the application once the script is written. |
 
 For a locked-down database: run once with `emit`, have the script run by a user with DDL rights, and deploy with
-`validate`. Outside `create`, a `ClosingBooksSetup` bean you build needs
+`validate`. The script covers what is registered by the time the application has started - its `-- Contents:` header
+and the emit log line list each module's objects, every event-stream table with its `AggregateType` - so register
+every `AggregateType` at startup: one registered from an `ApplicationRunner`, a `@Lazy` bean or on demand is missing
+from the script and is refused by `validate` with an error naming it. Outside `create`, a `ClosingBooksSetup` bean you build needs
 `.setSchemaOwnership(essentialsComponentsProperties.getSchema().getMode().schemaOwnership())`, and the shard-owned
 queue engine still needs the right to create sequences at runtime. Your own `EssentialsSchemaContributor` beans are
 applied together with the Essentials ones.

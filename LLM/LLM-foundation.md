@@ -964,7 +964,7 @@ component creates its own schema as it is constructed.
 |---|---|
 | `EssentialsSchemaContributor` | `moduleId()`, `order()` (`SchemaOrder` constants), `contribute(SchemaContext)` → `List<SchemaChange>`. Never executes DDL |
 | `DynamicSchemaContributor` | For objects registered at any time (a table per `AggregateType`). `contribute` describes what is registered so far; `attach(SchemaChangeSink)` receives each later registration's changes |
-| `SchemaChange` | `repeatable(changeId, objectName, statements...)` - runs every time, checksum tracked; `once(...)` - runs once per `(module, changeId, objectName)`, edited-after-applied fails startup |
+| `SchemaChange` | `repeatable(changeId, objectName, statements...)` - runs every time, checksum tracked; `once(...)` - runs once per `(module, changeId, objectName)`, edited-after-applied fails startup. `.describedAs("AggregateType 'Orders'")` (0.60.1) labels the object in the emitted script, the emit log line and validate errors - not part of the ledger key or checksum |
 | `SchemaOwnership` | `COMPONENT` (default): the component applies its own schema on construction. `HARNESS`: it leaves it to a harness |
 | `SchemaMode` | `CREATE` / `VALIDATE` / `EMIT` / `EXTERNAL`; `schemaOwnership()` is `COMPONENT` only for `CREATE` |
 | `EssentialsSchemaHarness` | `new EssentialsSchemaHarness(applier, context, contributors).apply()` - orders by `order()` then `moduleId()`, drops a change described identically twice, rejects one described differently |

@@ -108,7 +108,8 @@ class EventStoreSchemaModeIT {
                                          "essentials.schema.emit.script-file=" + scriptFile)
                      .run(ctx -> assertThat(ctx).hasNotFailed());
         var script = Files.readString(scriptFile);
-        assertThat(script).contains("-- Module postgresql-event-store-gaps").contains("-- Module eventsourced-aggregates-snapshots");
+        assertThat(script).contains("-- Module postgresql-event-store-gaps").contains("-- Module eventsourced-aggregates-snapshots")
+                          .contains("-- Contents:\n").contains("\n--   postgresql-event-store-subscriptions: ");
         assertThat(exists("durable_subscriptions")).as("emit executes nothing").isFalse();
 
         execute(script);
@@ -119,7 +120,8 @@ class EventStoreSchemaModeIT {
                          assertThatThrownBy(() -> persistenceStrategy(ctx).addAggregateEventStreamConfiguration(ORDERS, AggregateIdSerializer.serializerFor(UUID.class)))
                                  .as("an event stream table nobody created is refused when registered")
                                  .isInstanceOf(SchemaValidationException.class)
-                                 .hasMessageContaining("'postgresql-event-store' change 'event-stream-table' on 'orders_events': not applied");
+                                 .hasMessageContaining("The event-stream table 'orders_events' of AggregateType 'Orders' is not in the database as described")
+                                 .hasMessageContaining("'postgresql-event-store' change 'event-stream-table' on 'orders_events' (AggregateType 'Orders'): not applied");
                      });
         assertThat(exists("orders_events")).isFalse();
     }
@@ -142,7 +144,7 @@ class EventStoreSchemaModeIT {
                          assertThat(ctx).hasNotFailed();
                          assertThatThrownBy(() -> persistenceStrategy(ctx).addAggregateEventStreamConfiguration(ORDERS, AggregateIdSerializer.serializerFor(UUID.class)))
                                  .isInstanceOf(SchemaValidationException.class)
-                                 .hasMessageContaining("'event-stream-caused-by-index' on 'orders_events': not applied");
+                                 .hasMessageContaining("'event-stream-caused-by-index' on 'orders_events' (AggregateType 'Orders'): not applied");
                      });
         assertThat(exists("orders_events_caused_by_event_id")).as("validate executes nothing").isFalse();
 

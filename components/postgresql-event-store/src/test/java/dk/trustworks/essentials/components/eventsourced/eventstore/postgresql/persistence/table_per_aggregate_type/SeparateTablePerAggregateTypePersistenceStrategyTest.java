@@ -186,6 +186,40 @@ class SeparateTablePerAggregateTypePersistenceStrategyTest {
         assertThat(strategy.findAggregateEventStreamConfiguration(aggregateType)).isPresent();
     }
 
+    @Test
+    void a_validation_failure_names_the_aggregate_type_and_its_table_and_says_how_to_fix_it() {
+        var strategy = harnessOwnedStrategy();
+        var problems = List.of("'postgresql-event-store' change 'event-stream-table' on 'orders_events' (AggregateType 'Orders'): not applied");
+        strategy.attach(changes -> {
+            throw new SchemaValidationException("The database schema does not match", problems);
+        });
+
+        assertThatThrownBy(() -> strategy.addAggregateEventStreamConfiguration(configurationFor(AggregateType.of("Orders"), "orders_events")))
+                .isInstanceOfSatisfying(SchemaValidationException.class, e -> {
+                    assertThat(e.problems()).isEqualTo(problems);
+                    assertThat(e.getCause()).isInstanceOf(SchemaValidationException.class);
+                })
+                .hasMessageContaining("The event-stream table 'orders_events' of AggregateType 'Orders' is not in the database as described")
+                .hasMessageContaining("register 'Orders' at start-up")
+                .hasMessageContaining("re-run the emit mode")
+                .hasMessageContaining("The database schema does not match");
+    }
+
+    @Test
+    void every_schema_change_names_its_aggregate_type() {
+        var strategy = harnessOwnedStrategy();
+        strategy.enableCausationIndex();
+        strategy.addAggregateEventStreamConfiguration(configurationFor(AggregateType.of("Orders"), "orders_events"));
+        strategy.addAggregateEventStreamConfiguration(configurationFor(AggregateType.of("Products"), "products_events"));
+
+        var changes = strategy.contribute(mock(SchemaContext.class));
+
+        assertThat(changes).hasSize(6)
+                           .allSatisfy(change -> assertThat(change.description()).isEqualTo(change.objectName().equals("orders_events")
+                                                                                            ? "AggregateType 'Orders'"
+                                                                                            : "AggregateType 'Products'"));
+    }
+
     private static SeparateTablePerAggregateTypePersistenceStrategy harnessOwnedStrategy() {
         return SeparateTablePerAggregateTypePersistenceStrategy.builder()
                                                                .setJdbi(mock(Jdbi.class))

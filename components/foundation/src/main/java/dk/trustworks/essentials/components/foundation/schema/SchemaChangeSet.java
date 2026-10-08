@@ -15,7 +15,7 @@
  */
 package dk.trustworks.essentials.components.foundation.schema;
 
-import java.util.List;
+import java.util.*;
 
 import static dk.trustworks.essentials.shared.FailFast.*;
 
@@ -32,5 +32,23 @@ public record SchemaChangeSet(String moduleId, int order, List<SchemaChange> cha
     public SchemaChangeSet {
         requireTrue(moduleId != null && !moduleId.isBlank(), "No moduleId provided");
         changes = List.copyOf(requireNonNull(changes, "No changes provided"));
+    }
+
+    /**
+     * @return the distinct objects the changes cover, each as {@link SchemaChange#describeObject()}, in the order they
+     * first appear - e.g. {@code [orders_events (AggregateType 'Orders'), products_events (AggregateType 'Products')]}
+     */
+    public List<String> describeObjects() {
+        var objects = new LinkedHashSet<String>();
+        changes.forEach(change -> objects.add(change.describeObject()));
+        return List.copyOf(objects);
+    }
+
+    /**
+     * @return the {@link #moduleId()} and the objects its changes cover - e.g.
+     * {@code postgresql-event-store: orders_events (AggregateType 'Orders'), products_events (AggregateType 'Products')}
+     */
+    public String describe() {
+        return moduleId + ": " + String.join(", ", describeObjects());
     }
 }

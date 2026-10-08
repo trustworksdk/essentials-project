@@ -302,10 +302,17 @@ Prefix: `essentials.schema` - what happens to the schema every Essentials compon
 - Beans: `SchemaApplier` (selected by `mode`, `@ConditionalOnMissingBean`) and `EssentialsSchemaHarnessRunner`, which
   applies every `EssentialsSchemaContributor` bean after all singletons exist and before lifecycles start. Your own
   contributor beans are applied with them.
-- Outside `create`: registering an `AggregateType` whose table is not in the ledger throws in `validate`; a
+- Outside `create`: registering an `AggregateType` whose table is not in the ledger throws in `validate` (the
+  `SchemaValidationException` names the `AggregateType` and its table, and the type stays unregistered, so a retry
+  validates again); a
   `ClosingBooksSetup` bean needs `.setSchemaOwnership(essentialsComponentsProperties.getSchema().getMode().schemaOwnership())`;
   the shard-owned engine creates each queue's sequences itself and so needs `CREATE` rights at runtime.
 - DBA flow: run once with `emit`, have the script run by a user with DDL rights, deploy with `validate`.
+- `emit` covers what is registered by the time the application has started: register every `AggregateType` at
+  startup (event-store configuration or a singleton bean). One registered from an `ApplicationRunner`, a `@Lazy` bean
+  or on demand is missing from the script (with `emit.exit=true` it never runs) and fails `validate` later. The
+  script header (`-- Contents:`) and the emit log line list every module's objects, event-stream tables with their
+  `AggregateType`; a registration after the exit was triggered is logged at WARN.
 
 ### MongoDB Starter
 

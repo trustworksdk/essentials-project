@@ -565,6 +565,10 @@ public final class SeparateTablePerAggregateTypePersistenceStrategy implements A
         schemaSink.set(requireNonNull(sink, "No sink provided"));
     }
 
+    private static String describe(SeparateTablePerAggregateEventStreamConfiguration eventStreamConfiguration) {
+        return "AggregateType '" + eventStreamConfiguration.aggregateType + "'";
+    }
+
     private List<SchemaChange> schemaChangesFor(SeparateTablePerAggregateEventStreamConfiguration eventStreamConfiguration) {
         PostgresqlUtil.checkIsValidTableOrColumnName(eventStreamConfiguration.eventStreamTableName);
         eventStreamConfiguration.eventStreamTableColumnNames.validate();
@@ -582,7 +586,9 @@ public final class SeparateTablePerAggregateTypePersistenceStrategy implements A
                                                 ListenNotify.changeNotificationTriggerStatements(eventStreamTableName, List.of(ListenNotify.SqlOperation.INSERT))
                                                             .toArray(String[]::new)));
         }
-        return changes;
+        // Names the AggregateType in the emitted script, the emit log line and validation errors
+        var description = describe(eventStreamConfiguration);
+        return changes.stream().map(change -> change.describedAs(description)).toList();
     }
 
     @Override
@@ -618,7 +624,23 @@ public final class SeparateTablePerAggregateTypePersistenceStrategy implements A
         log.info("Checking and Initializing EventStream storage for aggregate-type '{}' using event-stream table name '{}'", eventStreamConfiguration.aggregateType, eventStreamConfiguration.eventStreamTableName);
         var sink = schemaSink.get();
         if (sink != null) {
-            sink.apply(schemaChangesFor(eventStreamConfiguration));
+            try {
+                sink.apply(schemaChangesFor(eventStreamConfiguration));
+            } catch (SchemaValidationException e) {
+                // The validate mode knows only tables: say which AggregateType, and that registering it late is the usual cause
+                var namingTheAggregateType = new SchemaValidationException(msg("The event-stream table '{}' of AggregateType '{}' is not in the database as described. " +
+                                                                                       "An AggregateType registered after start-up - from an ApplicationRunner, a @Lazy bean " +
+                                                                                       "or on demand - is missing from the script the emit mode wrote: register '{}' at " +
+                                                                                       "start-up (in the event store's or persistence strategy's configuration, or from a " +
+                                                                                       "singleton bean), re-run the emit mode and have the new script run. {}",
+                                                                               eventStreamConfiguration.eventStreamTableName,
+                                                                               eventStreamConfiguration.aggregateType,
+                                                                               eventStreamConfiguration.aggregateType,
+                                                                               e.getMessage()),
+                                                                           e.problems());
+                namingTheAggregateType.initCause(e);
+                throw namingTheAggregateType;
+            }
         } else {
             log.info("[{}] Leaving event-stream table '{}' to the schema harness", eventStreamConfiguration.aggregateType, eventStreamConfiguration.eventStreamTableName);
         }

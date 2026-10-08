@@ -36,11 +36,15 @@ import static dk.trustworks.essentials.shared.FailFast.*;
  *                   because one change is routinely applied to several objects - one event-stream table per
  *                   aggregate type, or differently configured table names in one database
  * @param statements executed in order, in the same transaction as the rest of the contributor's changes
- * @param repeatable {@code true}: runs on every boot, which is how every Essentials DDL statement behaved before the
- *                   harness. {@code false}: runs once per {@code (module, changeId, objectName)} and is then skipped;
- *                   editing its statements afterwards fails startup
+ * @param repeatable  {@code true}: runs on every boot, which is how every Essentials DDL statement behaved before the
+ *                    harness. {@code false}: runs once per {@code (module, changeId, objectName)} and is then skipped;
+ *                    editing its statements afterwards fails startup
+ * @param description what the object is for, in the application's terms - e.g. {@code "AggregateType 'Orders'"} for
+ *                    an event-stream table. Empty when the contributor gave none. Shown next to the object name in the
+ *                    emitted script, the emit log line and validation errors; neither part of the ledger key nor of the
+ *                    {@link #checksum()}. Set it with {@link #describedAs(String)}
  */
-public record SchemaChange(String changeId, String objectName, List<String> statements, boolean repeatable) {
+public record SchemaChange(String changeId, String objectName, List<String> statements, boolean repeatable, String description) {
 
     public SchemaChange {
         requireTrue(changeId != null && !changeId.isBlank(), "No changeId provided");
@@ -48,6 +52,31 @@ public record SchemaChange(String changeId, String objectName, List<String> stat
         requireNonEmpty(requireNonNull(statements, "No statements provided"), "No statements provided for change '" + changeId + "'");
         statements = List.copyOf(statements);
         statements.forEach(statement -> requireTrue(!statement.isBlank(), "Change '" + changeId + "' contains a blank statement"));
+        // One line: it is written into SQL comments and log lines
+        description = description == null ? "" : description.replaceAll("[\\r\\n]+", " ").strip();
+    }
+
+    /**
+     * A change without a {@link #description()}
+     */
+    public SchemaChange(String changeId, String objectName, List<String> statements, boolean repeatable) {
+        this(changeId, objectName, statements, repeatable, "");
+    }
+
+    /**
+     * @param description what the object is for, in the application's terms - see {@link #description()}
+     * @return a copy of this change carrying {@code description}
+     */
+    public SchemaChange describedAs(String description) {
+        return new SchemaChange(changeId, objectName, statements, repeatable, description);
+    }
+
+    /**
+     * @return the {@link #objectName()}, followed by the {@link #description()} in parentheses when there is one - e.g.
+     * {@code orders_events (AggregateType 'Orders')}
+     */
+    public String describeObject() {
+        return description.isEmpty() ? objectName : objectName + " (" + description + ")";
     }
 
     /**

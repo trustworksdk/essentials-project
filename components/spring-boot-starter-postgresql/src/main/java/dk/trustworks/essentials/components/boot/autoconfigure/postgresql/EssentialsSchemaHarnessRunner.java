@@ -15,6 +15,7 @@
  */
 package dk.trustworks.essentials.components.boot.autoconfigure.postgresql;
 
+import dk.trustworks.essentials.components.foundation.postgresql.PostgresqlEmitSchemaApplier;
 import dk.trustworks.essentials.components.foundation.schema.*;
 import org.slf4j.*;
 import org.springframework.beans.factory.*;
@@ -71,7 +72,14 @@ public final class EssentialsSchemaHarnessRunner implements SmartInitializingSin
         if (mode != SchemaMode.EMIT || !exitAfterEmit) {
             return;
         }
-        log.info("Schema mode 'emit': the script is written - stopping the application");
+        if (applier instanceof PostgresqlEmitSchemaApplier emitApplier) {
+            log.info("Schema mode 'emit': the script is written to '{}' - stopping the application. It covers what was registered by now; " +
+                             "anything registered later - from an ApplicationRunner, a @Lazy bean or on demand - is not in it",
+                     emitApplier.getScriptFile().toAbsolutePath());
+            emitApplier.exitTriggered();
+        } else {
+            log.info("Schema mode 'emit': the script is written - stopping the application");
+        }
         System.exit(SpringApplication.exit(event.getApplicationContext(), () -> 0));
     }
 }
