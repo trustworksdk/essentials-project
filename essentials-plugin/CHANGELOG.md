@@ -50,6 +50,38 @@ targets, with a `-N` suffix for plugin-only releases.
   alone.
 - `render-check.py` also renders the Atlas pages: each lens mounts with no console error, an issue
   focuses its target, a deep link restores the view, a broken manifest is an error card.
+- **Atlas boards and previews.** Board cards use the classic Event Modeling colours, blue for commands,
+  orange for events and green for views, tuned to the Trustworks palette in both themes. A card names its
+  fields, columns or endpoints, ending in "+N fields" when they do not fit. A command dispatched from
+  another journey is drawn once, where it is handled, not as a second card. Hovering a card, context,
+  process or scenario shows a compact form of the detail pane. Double-clicking a Metro station (or
+  Shift+Enter) opens it in the Atlas lens. Matrix context bands end a name that does not fit in an
+  ellipsis.
+- **Copy fix prompt.** The issues dock copies a prompt for all, error, warning or info issues, grouped
+  by the command that fixes them: `/essentials:slice-check <bc> --fix-manifests` for manifest repairs,
+  `/essentials:slice-check <bc>` for what needs an audit, and `/essentials:slice-enrich --bc <bc>` for
+  the absent `flow` and scenarios. Each issue in the map JSON gains `fix: {route, bc}`. Where the
+  clipboard is blocked, the prompt opens in a dialog to copy by hand.
+- **One Atlas page per application.** On a folder holding several applications, each with its own build
+  file, `slice-index.py atlas` stops (exit 2) and names them, because slice ids are only unique within
+  one application. `--per-app DIR` writes one page per application plus an `index.html`; `map --per-app`
+  and `--before-map-dir` do the same for CI baselines. `slice-index.py apps` lists the applications.
+- **`/essentials:slice-enrich`.** Catches older `slice.yaml` manifests up on `flow`, `scenarios`,
+  `summary`, `invariants`, `tier`, projection `consistency`, `featureFlag` and translation `maps`. The new
+  `scripts/slice-enrich.py propose` finds the evidence: journeys from cause and effect, scenarios from
+  `GivenWhenThenScenario` tests, invariants from guard messages, summaries from Javadoc and KDoc, and
+  `@ConditionalOnProperty`. The model drafts only from that evidence and the user accepts per journey and
+  per slice. `slice-enrich.py apply` then writes only absent fields, keeping every other byte, and stamps
+  schema 1.4 when it writes `flow` or `scenarios`. It refuses a field that became present, and a result
+  that adds a schema error. `--dry-run` writes nothing.
+- **The manifest reconciliation law** (`references/slice/manifest-reconciliation.md` §1): an absent
+  human-owned field may be drafted from evidence and written once a person accepts it, never over a
+  value. `--fix-manifests` still writes none of them. `commands/slice-check.md` Step 4 now states how a
+  bounded context's `tier` is resolved, which `--adopt-tier` and slice-enrich share. `manifest-guide.md`
+  §3 documents the `featureFlag` shape `{ property, havingValue }`.
+- **Fixed:** `LLM-eventsourced-aggregates.md` and the Java command test template showed
+  `.thenThrows(...)`, which `GivenWhenThenScenario` does not have. They now use
+  `thenFailsWithExceptionType(...)`.
 
 ## 0.60.0-6 — targets Essentials 0.60.0
 - **`/essentials:upgrade` now moves a project to the plugin's Essentials release, code included.** A
