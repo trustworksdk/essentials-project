@@ -725,6 +725,40 @@ instance that holds the processor's lock (see
 `InTransactionEventProcessor` has no resume point and no start position: it handles events inside the `UnitOfWork`
 that appends them, never history.
 
+### Subscriber ids and several instances
+
+The processor name is the identity of everything durable a processor owns: the subscriber ids
+`<processorName>:<aggregateType>` (a `durable_subscriptions` row each, keyed by subscriber id and aggregate type), the
+queue (`EventProcessor`: the `Inbox` named `<processorName>`; `ViewEventProcessor`: `<processorName>:queue`) and the
+locks (`ViewEventProcessor`: `<processorName>:lock`; `EventProcessor`: one per subscription,
+`[<processorName>:<aggregateType>-<aggregateType>]`, plus `Inbox:<processorName>` for its default
+`SingleGlobalConsumer` inbox, which is where the `@MessageHandler`s run).
+
+- **Keep `getProcessorName()` stable across restarts and identical on every instance.** Never derive it from a host
+  name, pod name or random id. A per-instance name does not give each instance every event: each new identity starts
+  over at its [start position](#start-position) (replaying the whole history from global order 1, or, with
+  `isStartSubscriptionFromLatestEvent()`, missing everything appended before it), and the old identity's resume-point
+  rows stay behind. Nothing deletes them (`DurableSubscriptionRepository.deleteResumePoint(subscriberId, aggregateType)`
+  does, by hand).
+- **Two instances on one database split a processor's events.** Both processors are exclusive: only the instance
+  holding the processor's `FencedLock` handles events (for an `EventProcessor`, the holder of `Inbox:<processorName>`),
+  and the lock moves when that instance stops or loses it. So each event is handled once between them, never once per
+  instance. An in-process cache above a projection is evicted only
+  in the instance that handled the event.
+- **The lock holder's code decides the behaviour.** When the instances run different code (your branch and a
+  colleague's build against a shared development database, or two versions during a rolling deploy), the code of the
+  instance holding the lock is what runs. A handler added on your branch never fires while the other instance holds the
+  lock, which looks exactly like a broken handler.
+- **Finding the holder.** `GET /fenced-locks` lists each lock with `lockedByLockManagerInstanceId` (the
+  `essentials.fenced-lock-manager.instance-id`, `<hostname>:<pid>` by default). `GET /event-store/subscriptions` lists
+  every subscriber id with its durable resume point (`currentGlobalOrder`, shared by all instances) and, for the
+  instance that answers, `runningInThisInstance`, `active` (holds the lock) and `inMemoryGlobalOrder` (see
+  [LLM-admin-api.md](LLM-admin-api.md)). A `ViewEventProcessor` also logs `FencedLock '<processorName>:lock' for
+  ViewProcessor '…' … was ACQUIRED` at INFO in the instance that won it.
+
+Container reuse in tests turns every build on a host into one shared database, with the same effect - see
+[LLM-foundation-test.md § What makes this safe with Essentials](LLM-foundation-test.md#what-makes-this-safe-with-essentials).
+
 ### Awaiting a processor (`awaitProcessed`)
 
 Since 0.60.1. A barrier that returns once a processor has processed a given event — for read-your-writes flows and
