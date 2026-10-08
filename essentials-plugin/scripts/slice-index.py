@@ -1052,8 +1052,12 @@ def before_map(args, root, sha, tmp):
 
 def atlas_summary(out, data, broken):
     counts = {lvl: sum(1 for i in data["issues"] if i["level"] == lvl) for lvl in ("error", "warn", "info")}
-    line = (f"slice-index: wrote {out} — {data['meta']['sliceCount']} slices in {data['meta']['bcCount']} contexts"
-            f" · {len(data['processes'])} processes · issues {counts['error']} error, {counts['warn']} warn,"
+    def n(count, one, many):
+        return f"{count} {one if count == 1 else many}"
+    line = (f"slice-index: wrote {out} — {n(data['meta']['sliceCount'], 'slice', 'slices')}"
+            f" in {n(data['meta']['bcCount'], 'context', 'contexts')}"
+            f" · {n(len(data['processes']), 'process', 'processes')}"
+            f" · issues {counts['error']} error, {counts['warn']} warn,"
             f" {counts['info']} info")
     d = data["diff"]
     if d:
