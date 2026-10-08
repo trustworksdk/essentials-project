@@ -137,7 +137,7 @@ Subscriptions let you react to events - for building read models, sending notifi
 | `RecordExecutionTimeEventStoreInterceptor` | Always | Logs slow event store operations based on configurable thresholds |
 | `MeasurementEventStoreSubscriptionObserver` | Always | Collects metrics about subscription processing (events/second, lag, etc.) |
 | `EventStoreSubscriptionMonitorManager` | Always | Periodically checks subscription health (enabled by default, runs every minute) |
-| `SubscriberGlobalOrderMicrometerMonitor` | `management.tracing.enabled=true` | Exposes a Micrometer gauge showing each subscriber's current position |
+| `SubscriberGlobalOrderMicrometerMonitor` | A `MeterRegistry` is present and `essentials.eventstore.subscription-monitor.enabled=true` (default). Before 0.60.1: only with `management.tracing.enabled=true` | Exposes the gauge `DurableSubscriptions_EventOrder_Diff` - how many events each subscriber has yet to read (highest global order persisted - resume point + 1; `0` when caught up). A resume point ahead of the event stream (reset or restored database) reads `0` and is logged at WARN |
 | `SubscriptionStoppedMicrometerMonitor` | A `MeterRegistry` is present and `essentials.eventstore.subscription-monitor.enabled=true` (default) | Exposes the gauge `essentials.eventstore.subscription.stopped` - `1` while a subscription is stopped by its `SubscriptionErrorPolicy`, else `0`. The signal to alert on for a halted projection (the `stopped_by_error_policy` counter only records that a stop happened) |
 
 ### Admin APIs

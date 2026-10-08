@@ -1226,6 +1226,12 @@ monitorManager.start();
 The Spring Boot starter wires it whenever a `MeterRegistry` is present (not gated by `management.tracing.enabled`);
 `essentials.eventstore.subscription-monitor.enabled=false` turns it off together with every other monitor.
 
+The lag gauge `DurableSubscriptions_EventOrder_Diff` (`SubscriberGlobalOrderMicrometerMonitor`, same constructor shape plus
+the `EventStoreUnitOfWorkFactory`) is wired the same way since 0.60.1. It reads `highest global order persisted - resume
+point + 1` (the resume point is the next order to read), so `0` = caught up, `1` = one event unread; holes count as
+events. A resume point ahead of the head - a reset or restored database, where the subscriber silently skips events -
+reads `0` and logs one WARN per episode.
+
 The SPI has a single slot, so collecting statistics **composes** with the metrics observer rather than replacing it:
 
 ```java

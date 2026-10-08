@@ -142,7 +142,7 @@ See [spring-boot-starter-postgresql-event-store README](../components/spring-boo
 - `RecordExecutionTimeEventStoreInterceptor` - Performance logging
 - `MeasurementEventStoreSubscriptionObserver` - Subscription metrics
 - `EventStoreSubscriptionMonitorManager` - Subscription health monitoring (runs every 1m by default)
-- `SubscriberGlobalOrderMicrometerMonitor` - Micrometer gauge for subscriber position (only when `management.tracing.enabled=true`)
+- `SubscriberGlobalOrderMicrometerMonitor` - gauge `DurableSubscriptions_EventOrder_Diff`: events each subscriber has yet to read (`head - resumePoint + 1`, `0` when caught up). Recorded whenever a `MeterRegistry` is present (0.60.1; before only with `management.tracing.enabled=true`). A resume point ahead of the head (reset/restored DB - the subscriber skips events) reads `0` and logs a WARN
 - `SubscriptionStoppedMicrometerMonitor` - gauge `essentials.eventstore.subscription.stopped` (`1` while a subscription is stopped by its `SubscriptionErrorPolicy`, and through its automatic resumes until the failed event is handled) - the alerting signal for a halted projection; wired whenever a `MeterRegistry` is present
 
 **Admin APIs:**
