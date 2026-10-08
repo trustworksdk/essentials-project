@@ -232,8 +232,8 @@ LocalCommandBus(SendAndDontWaitErrorHandler errorHandler, CommandBusInterceptor.
 
 | Method | Blocking | Returns | Error Behavior | Durability |
 |--------|----------|---------|----------------|------------|
-| `send(cmd)` | Yes | `<R>` Result | Exception to caller | N/A |
-| `sendAsync(cmd)` | No | `Mono<R>` | Exception in Mono error channel | N/A |
+| `send(cmd)` | Yes | `<R>` Result | Exception to caller (wrapped - see [Exceptions arrive wrapped](#exceptions-arrive-wrapped-in-unitofworkexception)) | N/A |
+| `sendAsync(cmd)` | No | `Mono<R>` | Exception in Mono error channel (wrapped likewise) | N/A |
 | `sendAndDontWait(cmd)` | No | void | `SendAndDontWaitErrorHandler` callback | ❌ Lost on restart |
 | `sendAndDontWait(cmd, delay)` | No | void | `SendAndDontWaitErrorHandler` callback | ❌ Lost on restart |
 
@@ -279,6 +279,31 @@ So a throw is for a failure, not for a business rejection that must persist (an 
 rollback discards it, and `sendAndDontWait` retries it. Return an outcome instead - an `EventStreamDecider` emits a
 rejection event (e.g. `OrderRejected`), which is appended and which `send()` returns (see
 [LLM-eventsourced-aggregates.md § Command Sending](./LLM-eventsourced-aggregates.md#command-sending)).
+
+### Exceptions arrive wrapped in `UnitOfWorkException`
+
+Under the UnitOfWork interceptor, the handler's exception does not reach the caller as itself:
+`withUnitOfWork` wraps whatever it catches in `UnitOfWorkException` (foundation, `...foundation.transaction`), one level
+per enclosing `withUnitOfWork`/`usingUnitOfWork` - the interceptor's, plus every outer one the exception passes
+through. `send` called inside your own `withUnitOfWork` arrives as `UnitOfWorkException → UnitOfWorkException →
+DomainException`. So `catch (DomainException e)` around `send` never matches (`AnnotatedCommandHandler` already
+unwraps the reflective `InvocationTargetException`, so that is not the extra level).
+
+```java
+try {
+    commandBus.send(new ConfirmOrder(orderId));
+} catch (RuntimeException e) {
+    if (Exceptions.doesStackTraceContainExceptionOfType(e, OrderNotConfirmable.class)) {   // dk.trustworks.essentials.shared
+        return ResponseEntity.unprocessableEntity().build();
+    }
+    throw e;
+}
+```
+
+`doesStackTraceContainExceptionOfType` walks the whole cause chain and answers `boolean`; walk `getCause()` yourself to
+get the instance. For a queue consumer, classify by type with
+`MessageDeliveryErrorHandler.builder().stopRedeliveryOn(OrderNotConfirmable.class).build()`, which also matches anywhere
+in the cause chain (see [LLM-foundation.md § MessageDeliveryErrorHandler](./LLM-foundation.md#messagedeliveryerrorhandler)).
 
 ### CommandHandler Types
 
