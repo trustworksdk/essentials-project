@@ -1,0 +1,13 @@
+schemaVersion: "1.3"
+slice: depot.flag_lost_parcel
+kind: command
+bc: depot
+owner: depot-team
+status: live
+summary: Flag a parcel as lost.
+generator: essentials
+language: java
+handles: [FlagLostParcel]
+writes: [Parcel]
+tests:
+  unit: { present: false }

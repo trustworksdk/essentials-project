@@ -1,0 +1,297 @@
+{
+  "tool": "slice-source",
+  "format": 1,
+  "mode": "facts",
+  "root": "tests/slice-source/cases/inbox",
+  "manifestsRead": true,
+  "sourceFiles": 7,
+  "bcs": [
+    {
+      "name": "depot",
+      "path": "src/main/*/com/example/depot",
+      "dirs": [
+        "src/main/java/com/example/depot",
+        "src/main/kotlin/com/example/depot"
+      ],
+      "languages": [
+        "java",
+        "kotlin"
+      ],
+      "slices": [
+        "depot.carrier",
+        "depot.flag_lost_parcel",
+        "depot.record_collection",
+        "depot.courier"
+      ],
+      "lane": {
+        "signals": {
+          "decider": [],
+          "aggregates": null,
+          "entities": null,
+          "eventStore": []
+        },
+        "declared": [],
+        "detected": "undetermined"
+      }
+    }
+  ],
+  "slices": [
+    {
+      "id": "depot.carrier",
+      "idSource": "manifest",
+      "bc": "depot",
+      "bcPath": "src/main/*/com/example/depot",
+      "dir": "src/main/java/com/example/depot/external_systems/carrier",
+      "role": "external_systems",
+      "kind": "translation",
+      "manifest": "src/main/java/com/example/depot/external_systems/carrier/slice.yaml",
+      "language": "java",
+      "package": "com.example.depot.external_systems.carrier",
+      "files": [
+        "incoming/CarrierEvent.java",
+        "incoming/CarrierListener.java",
+        "incoming/ParcelCollected.java",
+        "incoming/ParcelLost.java"
+      ],
+      "processors": [],
+      "handlers": [
+        {
+          "class": "CarrierListener",
+          "method": "on",
+          "annotation": "KafkaListener",
+          "annotationFqn": "org.springframework.kafka.annotation.KafkaListener",
+          "role": "inbound",
+          "file": "src/main/java/com/example/depot/external_systems/carrier/incoming/CarrierListener.java",
+          "line": 33,
+          "annotationLine": 32,
+          "message": {
+            "written": "CarrierEvent",
+            "name": "CarrierEvent",
+            "fqn": "com.example.depot.external_systems.carrier.incoming.CarrierEvent",
+            "resolvedBy": "same-package"
+          },
+          "params": [
+            {
+              "name": "event",
+              "type": "CarrierEvent"
+            }
+          ],
+          "envelope": false
+        },
+        {
+          "class": "CarrierListener",
+          "method": "onNote",
+          "annotation": "RabbitListener",
+          "annotationFqn": "org.springframework.amqp.rabbit.annotation.RabbitListener",
+          "role": "inbound",
+          "file": "src/main/java/com/example/depot/external_systems/carrier/incoming/CarrierListener.java",
+          "line": 43,
+          "annotationLine": 42,
+          "message": {
+            "written": "String",
+            "name": "String",
+            "fqn": null,
+            "resolvedBy": "unresolved"
+          },
+          "params": [
+            {
+              "name": "note",
+              "type": "String"
+            }
+          ],
+          "envelope": false
+        }
+      ],
+      "handles": [],
+      "dispatches": [
+        {
+          "name": "RecordCollection",
+          "fqn": "com.example.depot.use_cases.record_collection.RecordCollection",
+          "resolvedBy": "import",
+          "via": "inbox.addMessageReceived",
+          "file": "src/main/java/com/example/depot/external_systems/carrier/incoming/CarrierListener.java",
+          "line": 35,
+          "own": false
+        }
+      ],
+      "publishes": [],
+      "subscriptions": [],
+      "mappings": [],
+      "schedules": [],
+      "notAnalysed": []
+    },
+    {
+      "id": "depot.flag_lost_parcel",
+      "idSource": "manifest",
+      "bc": "depot",
+      "bcPath": "src/main/*/com/example/depot",
+      "dir": "src/main/java/com/example/depot/use_cases/flag_lost_parcel",
+      "role": "use_cases",
+      "kind": "command",
+      "manifest": "src/main/java/com/example/depot/use_cases/flag_lost_parcel/slice.yaml",
+      "language": "java",
+      "package": "com.example.depot.use_cases.flag_lost_parcel",
+      "files": [
+        "FlagLostParcel.java"
+      ],
+      "processors": [],
+      "handlers": [],
+      "handles": [],
+      "dispatches": [],
+      "publishes": [],
+      "subscriptions": [],
+      "mappings": [],
+      "schedules": [],
+      "notAnalysed": []
+    },
+    {
+      "id": "depot.record_collection",
+      "idSource": "manifest",
+      "bc": "depot",
+      "bcPath": "src/main/*/com/example/depot",
+      "dir": "src/main/java/com/example/depot/use_cases/record_collection",
+      "role": "use_cases",
+      "kind": "command",
+      "manifest": "src/main/java/com/example/depot/use_cases/record_collection/slice.yaml",
+      "language": "java",
+      "package": "com.example.depot.use_cases.record_collection",
+      "files": [
+        "RecordCollection.java"
+      ],
+      "processors": [],
+      "handlers": [],
+      "handles": [],
+      "dispatches": [],
+      "publishes": [],
+      "subscriptions": [],
+      "mappings": [],
+      "schedules": [],
+      "notAnalysed": []
+    },
+    {
+      "id": "depot.courier",
+      "idSource": "manifest",
+      "bc": "depot",
+      "bcPath": "src/main/*/com/example/depot",
+      "dir": "src/main/kotlin/com/example/depot/external_systems/courier",
+      "role": "external_systems",
+      "kind": "translation",
+      "manifest": "src/main/kotlin/com/example/depot/external_systems/courier/slice.yaml",
+      "language": "kotlin",
+      "package": "com.example.depot.external_systems.courier",
+      "files": [
+        "incoming/CourierListener.kt"
+      ],
+      "processors": [],
+      "handlers": [
+        {
+          "class": "CourierListener",
+          "method": "on",
+          "annotation": "JmsListener",
+          "annotationFqn": "org.springframework.jms.annotation.JmsListener",
+          "role": "inbound",
+          "file": "src/main/kotlin/com/example/depot/external_systems/courier/incoming/CourierListener.kt",
+          "line": 19,
+          "annotationLine": 18,
+          "message": {
+            "written": "CourierParcelLost",
+            "name": "CourierParcelLost",
+            "fqn": "com.example.depot.external_systems.courier.incoming.CourierParcelLost",
+            "resolvedBy": "same-file"
+          },
+          "params": [
+            {
+              "name": "report",
+              "type": "CourierParcelLost"
+            }
+          ],
+          "envelope": false
+        }
+      ],
+      "handles": [],
+      "dispatches": [
+        {
+          "name": "FlagLostParcel",
+          "fqn": "com.example.depot.use_cases.flag_lost_parcel.FlagLostParcel",
+          "resolvedBy": "import",
+          "via": "inbox.addMessageReceived",
+          "file": "src/main/kotlin/com/example/depot/external_systems/courier/incoming/CourierListener.kt",
+          "line": 20,
+          "own": false
+        }
+      ],
+      "publishes": [],
+      "subscriptions": [],
+      "mappings": [],
+      "schedules": [],
+      "notAnalysed": []
+    }
+  ],
+  "messages": [
+    {
+      "name": "CourierParcelLost",
+      "type": "event",
+      "bc": "depot",
+      "found": true,
+      "identity": "parcelId: String",
+      "fields": [
+        "parcelId: String"
+      ],
+      "declaredIn": "src/main/kotlin/com/example/depot/external_systems/courier/incoming/CourierListener.kt",
+      "line": 10,
+      "alsoDeclaredIn": []
+    },
+    {
+      "name": "FlagLostParcel",
+      "type": "command",
+      "bc": "depot",
+      "found": true,
+      "identity": "parcelId: String",
+      "fields": [
+        "parcelId: String"
+      ],
+      "declaredIn": "src/main/java/com/example/depot/use_cases/flag_lost_parcel/FlagLostParcel.java",
+      "line": 3,
+      "alsoDeclaredIn": []
+    },
+    {
+      "name": "ParcelCollected",
+      "type": "event",
+      "bc": "depot",
+      "found": true,
+      "identity": "parcelId: String",
+      "fields": [
+        "parcelId: String"
+      ],
+      "declaredIn": "src/main/java/com/example/depot/external_systems/carrier/incoming/ParcelCollected.java",
+      "line": 3,
+      "alsoDeclaredIn": []
+    },
+    {
+      "name": "RecordCollection",
+      "type": "command",
+      "bc": "depot",
+      "found": true,
+      "identity": "parcelId: String",
+      "fields": [
+        "parcelId: String"
+      ],
+      "declaredIn": "src/main/java/com/example/depot/use_cases/record_collection/RecordCollection.java",
+      "line": 3,
+      "alsoDeclaredIn": []
+    }
+  ],
+  "unparsed": [],
+  "unresolved": [
+    {
+      "file": "src/main/java/com/example/depot/external_systems/carrier/incoming/CarrierListener.java",
+      "line": 38,
+      "what": "inbox target",
+      "reason": "`lostParcels` is not created in this file, so whether it forwards to a command bus is not known"
+    }
+  ],
+  "tests": {
+    "roots": [],
+    "classes": []
+  }
+}

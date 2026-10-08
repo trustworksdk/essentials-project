@@ -85,6 +85,12 @@ targets, with a `-N` suffix for plugin-only releases.
   `thenFailsWithExceptionType(...)`.
 - **Fixed:** `slice-source.py` missed a command sent through a getter's bus, `getCommandBus().send(...)`,
   the form an `EventProcessor` uses, so such an automation showed no `dispatches`.
+- **Fixed:** `slice-source.py` missed a command forwarded through an `Inbox`:
+  `addMessageReceived(cmd)` now counts as a dispatch when the same file creates that inbox with
+  `getOrCreateInbox(config, commandBus)`, the overload that sends what the inbox receives to the bus; an
+  inbox created elsewhere is listed as unresolved. Gate 11(b) also holds an inbound translation's
+  `@KafkaListener`, `@RabbitListener` and `@JmsListener` payload types, or their concrete subtypes, to
+  its `consumes`.
 
 ## 0.60.0-6 — targets Essentials 0.60.0
 - **`/essentials:upgrade` now moves a project to the plugin's Essentials release, code included.** A

@@ -126,8 +126,8 @@ The judgement fields (§1, third row) stay yours.
 |---|---|
 | `handles` | The decider's / handler's command parameter type |
 | `publishes` | Event types returned by the decider, or published on the `EventBus` |
-| `consumes` | Handler parameter types on an `EventProcessor` (automation) or inbound translator (translation) |
-| `dispatches` | Command types passed to `commandBus.send` / `sendAsync` / `sendAndDontWait` |
+| `consumes` | Handler parameter types on an `EventProcessor` (automation) or inbound translator (translation): a `@KafkaListener` / `@RabbitListener` / `@JmsListener` payload type, or each concrete subtype of it declared in the project |
+| `dispatches` | Command types passed to `commandBus.send` / `sendAsync` / `sendAndDontWait`, or to `addMessageReceived` on an `Inbox` the same file creates with `getOrCreateInbox(config, commandBus)`, the overload that sends every message the inbox receives to that bus |
 | `schedule` | The automation's `@Scheduled` (or equivalent) — `cron` verbatim, `fixedDelay`/`initialDelay` as ISO-8601 durations. Carry the `note` over from a comment if one explains the cadence; never invent one |
 | `provides` | Interfaces declared in the BC's `types/` that this slice implements **and** registers as a bean. `consumedBy` is derived by finding the slices that inject the interface — advisory, so a stale entry is reported rather than trusted |
 | `projections[].from` | Handler parameter types on the view's projector, resolved to the declared type through imports, Kotlin `import … as` aliases, typealiases and fully-qualified names |

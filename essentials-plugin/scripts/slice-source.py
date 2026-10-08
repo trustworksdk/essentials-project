@@ -1754,8 +1754,60 @@ class Project:
         out["raw"] = {k: str(v) for k, v in raw.items()}
         facts["schedules"].append(out)
 
+    def _call_args(self, f, lp):
+        """The top-level argument token ranges [(a, b), …] of the call whose `(` is at lp."""
+        rp, out = f.match[lp], []
+        a = k = lp + 1
+        while k < rp:
+            if f.is_op(k, ","):
+                out.append((a, k))
+                a = k + 1
+            k = f.match[k] + 1 if f.toks[k].k == "op" and f.toks[k].t in "([{" else k + 1
+        if a < rp:
+            out.append((a, rp))
+        return out
+
+    def _assigned_name(self, f, i):
+        """The variable or field that the call at token i is assigned to, through its receiver chain:
+        `x = inboxes.…`, `this.x = …`, `Inbox x = …`, Kotlin `val x: Inbox = …`. None when it is not assigned."""
+        k = i
+        while k >= 2 and f.toks[k - 1].t in (".", "?.") and f.is_id(k - 2):
+            k -= 2
+        if not f.is_op(k - 1, "="):
+            return None
+        j = k - 2
+        if f.kotlin and f.is_id(j) and f.is_op(j - 1, ":") and f.is_id(j - 2):
+            return f.toks[j - 2].t  # `val inbox: Inbox = …`
+        return f.toks[j].t if f.is_id(j) else None
+
+    def _inboxes(self, f):
+        """The inboxes this file creates and assigns, as two sets of names: those created with
+        `getOrCreateInbox(config, <a CommandBus>)` — the overload that sends every message the inbox
+        receives to that command bus — and those created with a message consumer of their own."""
+        forwarding, other = set(), set()
+        for i, t in enumerate(f.toks):
+            if t.k != "id" or t.t != "getOrCreateInbox" or not f.is_op(i + 1, "("):
+                continue
+            name = self._assigned_name(f, i)
+            if name is None:
+                continue
+            args = self._call_args(f, i + 1)
+            bus = False
+            if len(args) == 2 and args[1][1] - args[1][0] == 1 and f.is_id(args[1][0]):
+                arg = f.toks[args[1][0]].t
+                typ = self._local_type(f, args[1][0], arg)
+                if typ is None:  # a field, or a Kotlin primary-constructor parameter
+                    td = f.enclosing_type(i)
+                    typ = next((p.type for p in [*f.props, *(td.params if td else [])]
+                                if p.name == arg and p.type is not None), None)
+                base = typ.base if isinstance(typ, TypeRef) else typ
+                bus = bool(COMMAND_BUS.search(base.rsplit(".", 1)[-1] if base else arg))
+            (forwarding if bus else other).add(name)
+        return forwarding, other - forwarding
+
     def _calls(self, f, facts, bc_events):
         toks = f.toks
+        inboxes, other_inboxes = self._inboxes(f)
         for i, t in enumerate(toks):
             if t.k != "id":
                 continue
@@ -1770,6 +1822,14 @@ class Project:
                     (recv.k == "id" and COMMAND_BUS.search(recv.t)) or name != "send"):
                 self._call_arg(f, lp, facts["dispatches"], name, "dispatch argument",
                                lambda td: "use_cases" in td.file.path.parts)
+            elif name == "addMessageReceived" and recv is not None and recv.k == "id":
+                if recv.t in inboxes:
+                    self._call_arg(f, lp, facts["dispatches"], "inbox.addMessageReceived", "dispatch argument",
+                                   lambda td: "use_cases" in td.file.path.parts)
+                elif recv.t not in other_inboxes:
+                    self.unresolved.append(self._u(f.path, t.line, "inbox target",
+                                                   f"`{recv.t}` is not created in this file, so whether it forwards "
+                                                   f"to a command bus is not known"))
             elif name == "publish" and recv is not None and recv.k == "id" and EVENT_BUS.search(recv.t):
                 self._call_arg(f, lp, facts["publishes"], "eventBus.publish", "published event",
                                lambda td: td.name in bc_events)
@@ -2268,8 +2328,10 @@ def _check_handled_events(project, s, facts, findings, unverified, broken=False)
         unverified.append({"slice": s.id, "gate": "11(b) handled events", "id": "ESS-G11b",
                            "file": na["file"], "reason": na["reason"] + f" (line {na['line']}); its event type is not "
                                                                         f"compared with the manifest"})
-    # an inbound translation's `consumes` names the external message its ingress receives, which 11(b) does not read;
-    # only the BC's own events need a handler to check against
+    # an inbound translation's `consumes` also names the external messages its ingress receives; those are checked
+    # against the ingress handlers below, so only the BC's own events need an event handler to check against
+    if s.kind == "translation" and s.doc.get("direction") in (None, "inbound", "both"):
+        _check_inbound_messages(project, s, facts, declared, findings, unverified)
     internal = declared & project.bc_event_names(s.bc)
     if internal and not handlers and not anonymous and not broken:
         unverified.append({"slice": s.id, "gate": "11(b) handled events", "id": "ESS-G11b",
@@ -2302,6 +2364,34 @@ def _check_handled_events(project, s, facts, findings, unverified, broken=False)
         findings.append(finding(
             "Should-fix", "11(b) handled events", s.id, h["file"], h["line"],
             f"{h['class']}.{h['method']}({msg['written']}) handles {name}{how}, which is not declared in {field}",
+            "the code is right and the manifest is stale — `/essentials:slice-check --fix-manifests` "
+            "(manifest-reconciliation.md §2)"))
+
+
+def _check_inbound_messages(project, s, facts, declared, findings, unverified):
+    """A translation's ingress handlers — `@KafkaListener`, `@RabbitListener`, `@JmsListener` — receive the external
+    messages its `consumes` must name: the payload type, or each concrete subtype of it declared in the project."""
+    for h in facts["handlers"]:
+        msg = h["message"]
+        if h["role"] != "inbound" or not msg or h["envelope"]:
+            continue
+        name = msg["name"]
+        where = f"{h['class']}.{h['method']}({msg['written']})"
+        if name not in project.types_by_name:
+            unverified.append({"slice": s.id, "gate": "11(b) handled events", "id": "ESS-G11b", "file": h["file"],
+                               "reason": f"@{h['annotation']} {where} (line {h['line']}) receives {name}, which is not "
+                                         f"declared in the project, so the external message it carries is not "
+                                         f"compared with consumes"})
+            continue
+        leaves = _concrete_subtypes(project, name) or {name}
+        missing = sorted(leaves - declared)
+        if not missing:
+            continue
+        what = (f"receives {name}, which is" if leaves == {name}
+                else f"receives the supertype {name}; its subtypes {', '.join(missing)} are")
+        findings.append(finding(
+            "Should-fix", "11(b) handled events", s.id, h["file"], h["line"],
+            f"@{h['annotation']} {where} {what} not declared in consumes",
             "the code is right and the manifest is stale — `/essentials:slice-check --fix-manifests` "
             "(manifest-reconciliation.md §2)"))
 

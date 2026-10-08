@@ -1,0 +1,17 @@
+schemaVersion: "1.3"
+slice: depot.courier
+kind: translation
+bc: depot
+owner: depot-team
+status: live
+summary: Receive lost-parcel reports from the courier.
+generator: essentials
+language: kotlin
+externalSystem: courier
+direction: inbound
+consumes: [CourierParcelLost]
+dispatches: [FlagLostParcel]
+maps:
+  - { from: CourierParcelLost, to: FlagLostParcel }
+tests:
+  unit: { present: false }

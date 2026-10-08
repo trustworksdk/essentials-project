@@ -1,0 +1,18 @@
+schemaVersion: "1.3"
+slice: depot.carrier
+kind: translation
+bc: depot
+owner: depot-team
+status: live
+summary: Receive parcel events from the carrier.
+generator: essentials
+language: java
+externalSystem: carrier
+direction: inbound
+consumes: [ParcelCollected]
+dispatches: [RecordCollection, FlagLostParcel]
+maps:
+  - { from: ParcelCollected, to: RecordCollection }
+  - { from: ParcelLost, to: FlagLostParcel }
+tests:
+  unit: { present: false }

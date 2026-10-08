@@ -144,6 +144,7 @@ class ExitCodes(unittest.TestCase):
         "raw-ids": (0, 1),
         "unparsed": (3, 3),
         "tests": (3, 0),  # facts: test files unparsed; check: never reads test source
+        "inbox": (0, 1),
     }
 
     def test_case_exit_codes(self):
@@ -197,6 +198,23 @@ class Rules(unittest.TestCase):
                          ("OrderCancelled", "fqn"))
         self.assertEqual(seen[("orders.warehouse", "Placement")], ("OrderPlaced", "typealias"))
         self.assertEqual(seen[("orders.warehouse", "OrderCancelled?")], ("OrderCancelled", "import"))
+
+    def test_an_inbox_forwarding_to_the_command_bus_dispatches(self):
+        def dispatched(sid):
+            return [(d["name"], d["via"]) for d in self.slice("inbox", sid)["dispatches"]]
+        self.assertEqual(dispatched("depot.carrier"), [("RecordCollection", "inbox.addMessageReceived")])
+        self.assertEqual(dispatched("depot.courier"), [("FlagLostParcel", "inbox.addMessageReceived")])
+        unresolved = [u["reason"] for u in self.facts["inbox"]["unresolved"] if u["what"] == "inbox target"]
+        self.assertEqual(len(unresolved), 1)
+        self.assertIn("`lostParcels`", unresolved[0])
+
+    def test_an_ingress_handler_is_held_to_consumes(self):
+        msgs = [f["message"] for f in self.check["inbox"]["findings"] if f["gate"] == "11(b) handled events"]
+        self.assertEqual(len(msgs), 1)
+        self.assertIn("receives the supertype CarrierEvent; its subtypes ParcelLost are not declared", msgs[0])
+        reasons = [u["reason"] for u in self.check["inbox"]["unverified"]]
+        self.assertEqual(len(reasons), 1)
+        self.assertIn("@RabbitListener CarrierListener.onNote(String)", reasons[0])
 
     def test_java_fqn_parameter_resolves(self):
         h = [h for h in self.slice("java-clean", "orders.order_list")["handlers"]]
