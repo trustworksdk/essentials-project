@@ -16,9 +16,11 @@
 
 package dk.trustworks.essentials.components.boot.autoconfigure.mongodb;
 
+import dk.trustworks.essentials.components.foundation.fencedlock.FencedLockManager;
 import dk.trustworks.essentials.components.foundation.json.*;
 import dk.trustworks.essentials.components.foundation.test.EssentialsTestContainers;
 import dk.trustworks.essentials.jackson.immutable.EssentialsImmutableJacksonModule;
+import dk.trustworks.essentials.shared.network.Network;
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.autoconfigure.AutoConfigurations;
 import org.springframework.boot.data.mongodb.autoconfigure.DataMongoAutoConfiguration;
@@ -75,6 +77,20 @@ class StarterAutoConfigurationIT {
                     assertThat(persistenceMapper.registeredModules()).noneMatch(EssentialsImmutableJacksonModule.class::isInstance);
                     assertThat(EssentialsObjectMappers.findWireFormatDeviations(persistenceMapper)).isEmpty();
                 });
+    }
+
+    @Test
+    void the_fenced_lock_manager_instance_id_defaults_to_hostname_and_pid() {
+        contextRunner.run(ctx -> assertThat(ctx.getBean(FencedLockManager.class).getLockManagerInstanceId())
+                .isEqualTo(Network.hostName() + ":" + ProcessHandle.current().pid()));
+    }
+
+    @Test
+    void the_fenced_lock_manager_instance_id_is_bound_from_properties() {
+        contextRunner
+                .withPropertyValues("essentials.fenced-lock-manager.instance-id=order-service-node-a")
+                .run(ctx -> assertThat(ctx.getBean(FencedLockManager.class).getLockManagerInstanceId())
+                        .isEqualTo("order-service-node-a"));
     }
 
     private static tools.jackson.databind.ObjectMapper persistenceMapperOf(ApplicationContext ctx) {
