@@ -368,15 +368,39 @@ public final class SeparateTablePerAggregateTypePersistenceStrategy implements A
              schemaOwnership);
     }
 
+    /**
+     * Register an {@link AggregateType} and initialise its event-stream table - created, validated or emitted, depending
+     * on who owns this strategy's schema. A second registration of the same {@link AggregateType} is ignored.
+     * <p>
+     * The registration only stands if the initialisation succeeds: when it throws (a schema mismatch in validate mode,
+     * a DDL error) the {@link AggregateType} is unregistered again and the exception propagates, so a retry initialises
+     * the table again rather than silently doing nothing. Of several concurrent registrations of one
+     * {@link AggregateType}, exactly one initialises its table.
+     * <p>
+     * The entry is added before the initialisation - and removed again if it fails - rather than after it, so the sweeps
+     * of {@link #enableNotifyTriggers(Consumer)} and {@link #enableCausationIndex()} cannot miss a table that is being
+     * registered while they run.
+     *
+     * @param aggregateTypeConfiguration the configuration of the {@link AggregateType}'s event stream
+     * @return this strategy
+     * @throws RuntimeException whatever initialising the event-stream table threw - the {@link AggregateType} is not registered
+     */
     @Override
     public final SeparateTablePerAggregateTypePersistenceStrategy addAggregateEventStreamConfiguration(SeparateTablePerAggregateEventStreamConfiguration aggregateTypeConfiguration) {
         requireNonNull(aggregateTypeConfiguration, "No aggregateTypeConfiguration provided");
         PostgresqlUtil.checkIsValidTableOrColumnName(aggregateTypeConfiguration.eventStreamTableName);
         aggregateTypeConfiguration.eventStreamTableColumnNames.validate();
 
-        if (!aggregateTypeConfigurations.containsKey(aggregateTypeConfiguration.aggregateType)) {
-            aggregateTypeConfigurations.put(aggregateTypeConfiguration.aggregateType, aggregateTypeConfiguration);
-            initializeEventStorageFor(aggregateTypeConfiguration);
+        // putIfAbsent, not containsKey-then-put: only the registration that wins initialises the table
+        if (aggregateTypeConfigurations.putIfAbsent(aggregateTypeConfiguration.aggregateType, aggregateTypeConfiguration) == null) {
+            try {
+                initializeEventStorageFor(aggregateTypeConfiguration);
+            } catch (RuntimeException | Error e) {
+                // Left registered, the type would have no table: a retry would do nothing, and appends would fail
+                // with a bare "relation does not exist"
+                aggregateTypeConfigurations.remove(aggregateTypeConfiguration.aggregateType, aggregateTypeConfiguration);
+                throw e;
+            }
             var listener = notifyTriggerListener.get();
             if (listener != null) {
                 listener.accept(aggregateTypeConfiguration.eventStreamTableName);
