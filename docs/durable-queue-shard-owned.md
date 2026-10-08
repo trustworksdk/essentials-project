@@ -571,7 +571,7 @@ State it keeps per shard:
 |---|---|
 | `readyByKey` | `Map<key, TreeMap<key_order, row>>` — everything known but not yet delivered, ordered within each key |
 | `keysInFlight` | keys with a message currently in a handler. **At most one per key — this is the FIFO guarantee** |
-| `keysAwaitingRetry` | keys blocked by a failing message, so a later message cannot overtake it |
+| `keysAwaitingRetry` | keys blocked by a failing message, so a later message cannot overtake it — **while this owner keeps the shard**. It is memory only and `inFlight()` does not count it, so across a hand-over (rebalance, graceful stop, crash) the new owner, which reads only `visible_at <= now()`, can deliver a later message first. See §9 |
 | `highestDeliveredOrder` | per key, used to count ordering violations |
 | `activeKeys` | bounded by `keyConcurrency` (default 8), per shard |
 
@@ -720,6 +720,8 @@ sequenceDiagram
 ```
 
 The database row is durability backup, not the retry mechanism: if the owner crashes, the new owner finds the row through the head sweep and honours `visible_at`. Retries therefore cost the read path nothing.
+
+**On the ordered lane, the retry block does not survive a hand-over.** What keeps a key behind its failing message is `keysAwaitingRetry`, in the owning instance's memory. The new owner after a rebalance, a graceful stop or a crash honours `visible_at` for the failed row — and therefore does *not* see it yet — while a later `key_order` for the same key is visible and is delivered. The message being retried is overtaken, which breaks per-key order. The voluntary shed does not prevent it either: it drains keys in a handler, and `inFlight()` does not count a key waiting out a backoff. Fix planned: on takeover, load ordered rows whose `visible_at` is in the future as blocked keys, and count retry-blocked keys in `inFlight()`.
 
 **A retry lives in two places timed by two different clocks** — the table's `visible_at` by the database's `now()`, and the in-memory schedule by `System.nanoTime()`. Either can fire first. `deliver()` drops any pending schedule entry for a sequence value it accepts, so whichever path gets there first invalidates the other. Without that, the sweep delivers and deletes the row and the stale schedule entry then delivers it a second time.
 

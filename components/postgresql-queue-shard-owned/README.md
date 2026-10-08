@@ -288,23 +288,28 @@ bookkeeping error. The engine counts what that costs instead of claiming it cann
 | **`watermarkCap` fires** | A write transaction older than the cap (60 s) is stepped over rather than waited out. Its rows are still delivered — the head sweep finds them — but late, relative to their key | Find the long-running write transaction. The cap is an escape hatch, not a knob |
 | **An instance is declared dead** | Its units are taken while its handlers may still be running. The staleness gate stops it *dispatching*, not the handler already in flight | Nothing; this is the same window at-least-once delivery comes from |
 | **At-least-once redelivery** | A message handled but not yet acknowledged when its unit moves is delivered again by the successor, after the key has moved on | Make handlers idempotent — the contract requires it anyway |
+| **A unit changes owner while a key waits out a retry backoff** | The block that holds the key behind its failing message (`keysAwaitingRetry`) lives only in the owning instance's memory, and the drain before a voluntary hand-over waits for keys *in a handler*, not for keys waiting out a backoff. After a rebalance, a graceful stop or a crash, the new owner reads only rows with `visible_at <= now()`, so a later `key_order` for that key is delivered before the message still waiting to be retried | A fix is planned (the new owner will treat ordered rows not yet visible as blocking their key, and a key waiting for its retry will count as in flight). Until then: keep retry backoffs short, and if a handler needs strict per-key order across a failure, make it check the `key_order` it last applied |
 
-Three things that look like they should reorder and do not:
+Three things that look like they should reorder, and how far each one holds:
 
 - **A dead letter never reorders.** The key stops at it, and the messages behind it are dead-lettered
   too rather than delivered without it — see [Dead letters block their key](#dead-letters-block-their-key).
   Resurrecting is likewise in order, because nothing ran ahead of the parked message while the key was
   stopped.
-- **A retry never reorders.** A failing message keeps its key blocked for the whole backoff
-  (`keysAwaitingRetry`) and is put back at its key's head, so the key retries *that* message before
-  anything later. The same applies to a handler that returns while its thread is interrupted: the
-  message is requeued, not acknowledged.
-- **A voluntary hand-over never reorders.** A rebalance sheds by draining — the outgoing owner stops
-  dispatching new keys, waits out the in-flight ones, flushes its acknowledgements under the still
-  valid fence, then releases. A shed that outlasts `shedGrace` is **abandoned and the shard kept**:
-  staying unbalanced is a performance cost, releasing mid-key would be an ordering bug.
+- **A retry does not reorder while its key stays with one owner.** A failing message keeps its key
+  blocked for the whole backoff (`keysAwaitingRetry`) and is put back at its key's head, so the owner
+  retries *that* message before anything later. The same applies to a handler that returns while its
+  thread is interrupted: the message is requeued, not acknowledged. **Across a hand-over it can
+  reorder**: the block is in the owner's memory only, so after a rebalance, a graceful stop or a crash
+  a later message for the key overtakes the one waiting out its backoff — see the last row of the
+  table above. A fix is planned.
+- **A voluntary hand-over does not reorder what is in a handler.** A rebalance sheds by draining — the
+  outgoing owner stops dispatching new keys, waits out the in-flight ones, flushes its acknowledgements
+  under the still valid fence, then releases. A shed that outlasts `shedGrace` is **abandoned and the
+  shard kept**: staying unbalanced is a performance cost, releasing mid-key would be an ordering bug.
   `ShardOwnedOrderedRebalanceIT` and `ShardOwnedMultiProcessIT` assert that no key is ever in two
-  handlers while units move between instances.
+  handlers while units move between instances. A key waiting out a retry backoff is not in flight, so
+  the drain does not wait for it — the previous bullet.
 
 Note that the exact watermark does *not* remove the first row of the table. It governs the cursor, so
 a value is never stepped over while a transaction that could still commit it is running — that is what
