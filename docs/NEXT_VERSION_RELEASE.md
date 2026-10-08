@@ -401,6 +401,67 @@ Not published; listed because they are the reference for how to use the framewor
 - **Fenced-lock ownership is per lock-manager instance**, not per caller or thread: a second `tryAcquireLock` in
   the same JVM returns the same lock, and `release()` by either caller releases it for both. Javadoc and
   `LLM-foundation.md` say so, and the Singleton Worker Pattern gains an in-process guard. (QL-1, `9e211beb`)
+- **Event processors** (`LLM-postgresql-event-store.md`, and the view-slice skill for the last two):
+  - **Start position:** `isStartSubscriptionFromLatestEvent()` and `resolveStartSubscriptionFromGlobalEventOrder()`
+    apply only on a subscription's first start, and the default is global order 1. A view that starts from the
+    latest event never backfills its history; the section says how to rebuild one. (ES-6, `df1c7e7b`)
+  - **Subscriber ids and several instances:** a processor's name must stay stable across restarts, because the
+    subscriber ids, queue and lock names derive from it. Two instances on one database split a processor's
+    events, and the code of the instance holding the lock decides the behaviour. `GET /fenced-locks` and
+    `GET /event-store/subscriptions` show which instance holds what. (ES-8, `f2cca503`)
+  - **Handler failures:** a handler throws on a failure it cannot handle and never swallows it. The event is
+    redelivered and then dead-lettered. The resume point keeps advancing, and only that aggregate waits behind its
+    dead letter. Alert on `essentials.messaging.durable_queues.dead_lettered` or `DurableQueuesHealthIndicator`,
+    fix the cause, then call `resurrectDeadLetterMessage`. (ES-3, `38a50bff`)
+  - **Testing asynchronous projections**, built on the new `awaitProcessed`: await the last event you appended,
+    await the seam the code under test reads, and have an idempotency probe read the write side. `awaitProcessed`
+    sees only this JVM's processor, so poll only where it cannot see. (ES-5, `645fa6a9`)
+- **Aggregates:** the pattern table in `LLM-eventsourced-aggregates.md` gains a Snapshots column.
+  `EventStreamDecider`, `FlexAggregate` and Kotlin's `DeciderCommandHandlerAdapter` load the full stream on every
+  command; only `StatefulAggregateRepository` and the typed-error `Decider` use snapshots (ES-9, `f1327085`).
+  `LLM.md` names the three decider families (Java `Decider<C,E,ERR,S>`, Java `EventStreamDecider`/
+  `EventStreamEvolver`, Kotlin `Decider<C,E>`/`Evolver`), which are not interchangeable and do not compose
+  (DOC-9, `702dc11f`).
+- **Command bus** (`LLM-reactive.md`, `LLM-eventsourced-aggregates.md`):
+  - What a throwing handler does under `UnitOfWorkControllingCommandBusInterceptor`, for `send`, `sendAsync` and
+    `sendAndDontWait`: it rolls back its own writes, or marks a joined outer UnitOfWork rollback-only, and
+    `sendAndDontWait` redelivers. A rejection that must persist is a rejection event. (CB-1, `2c555568`)
+  - A handler's exception arrives wrapped in `UnitOfWorkException`, one level per enclosing `withUnitOfWork`, so
+    `catch (DomainException e)` never matches. Use `Exceptions.doesStackTraceContainExceptionOfType`, or
+    `MessageDeliveryErrorHandler.builder().stopRedeliveryOn(...)` for queues. (CB-2, `11392700`)
+- **UnitOfWork usage rule** (`LLM-foundation.md`, `components/foundation/README.md`): application code uses
+  `usingUnitOfWork`/`withUnitOfWork` or `@Transactional`. `getRequiredUnitOfWork`, `getOrCreateNewUnitOfWork` and a
+  UnitOfWork's own `start`/`commit`/`rollback` are framework-internal, and `getCurrentUnitOfWork` is a read-only
+  probe. The stale claim that `DurableQueues` calls `getRequiredUnitOfWork()` is corrected. (N-15, `25e4eb7b`)
+- **Hand-opened Jdbi handles:** under the PostgreSQL starter, `jdbi.useHandle(...)` joins an active UnitOfWork or
+  Spring transaction. With neither active, a write auto-commits on its own and gets no queue, inbox or outbox
+  guarantees. (QL-5, `864fedab`)
+- **Fenced locks:**
+  - The two `isLockedByThisLockManagerInstance` predicates are explained. The manager's reads the stored owner id
+    from the database and ignores the fence token; the lock object's reads local state and can be one confirmation
+    interval stale. (QL-2, `d2705d2c`)
+  - The examples released a lock with the protected `lockManager.releaseLock(lock)`, which does not compile from
+    application code. They now use `lock.release()` or try-with-resources. The `@return` Javadoc of
+    `FencedLockManager.isLockAcquiredByAnotherLockManagerInstance` said the opposite of what the method returns.
+    (N-12, `360c1e99`, `302c1058`)
+- **`LLM-reactive.md`** listed a `SendCommandException(Object, Throwable)` constructor that does not exist; it now
+  shows the real abstract `SendCommandException(Class<?>, String[, Exception])` hierarchy. (N-12, `302c1058`)
+- **Document DB** (`LLM-postgresql-document-db.md`):
+  - The Jackson 3 constructor rule: a convenience constructor saves fine and then fails every read. Put
+    `@JsonCreator` on the persistence constructor or `@JsonIgnore` on the convenience one;
+    `ConstructorDetector.EXPLICIT_ONLY` does not help. (SJ-2, `0df8ebc2`)
+  - Deleting a projection row also deletes its version, so a redelivered older event can re-create the row; use a
+    soft delete or a tombstone. A `JavaVersionedEntity` may name its `version`/`lastUpdated` backing fields freely,
+    `save`/`update` overwrite both, and a read-only one fails repository creation. (DD-4, DD-5, `abc6ab41`)
+- **Web layer:**
+  - The starters are blocking. The recommended stack is WebMvc with `spring.threads.virtual.enabled=true`; under
+    WebFlux, run the whole UnitOfWork in one `Mono.fromCallable(...).subscribeOn(Schedulers.boundedElastic())`.
+    (SB-3, `bf1839c4`)
+  - Under Jackson 3, a request body that omits a primitive fails with a 400 before `@Valid` runs, and the error
+    names no field. Set `spring.jackson.deserialization.fail-on-null-for-primitives=false`, or use a boxed type with
+    `@NotNull`. (SJ-4, `e7deaea9`)
+  - `WebTestClient.bindToServer()` uses default codecs and serializes value types as beans, not bare values. Use
+    `@AutoConfigureWebTestClient` with an injected `WebTestClient`. (SJ-5, `b760e170`)
 - **Corrections to the 0.60.0 release notes:**
   - §1.1.6 (`use-ordered-unordered-query`): "is now ignored" is true only for the Spring property
     `essentials.durable-queues.use-ordered-unordered-query`. `PostgresqlDurableQueuesBuilder.setUseOrderedUnorderedQuery`,
