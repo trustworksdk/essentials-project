@@ -42,6 +42,10 @@ scripts/test-timings.sh --csv > before.csv            # capture a baseline to di
 
 `failsafe.forkCount` defaults to 2. Over-forking Docker makes things slower, not faster — use `scripts/test-timings.sh` to tune it rather than guessing.
 
+## Release notes
+
+**RULE:** every change a framework, plugin or example user would notice adds an entry to `docs/NEXT_VERSION_RELEASE.md` in the same commit — bug fixes and behaviour changes above all. It collects everything since the last release tag; at release it becomes `docs/RELEASE-NOTES-<version>.md` (shape: `RELEASE-NOTES-0.60.0.md`) and is reset. What goes where: the file's header.
+
 ## Critical Gotchas
 
 - **`provided` scope** — all third-party integrations NOT transitive; consumers declare own deps
