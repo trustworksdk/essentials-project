@@ -44,6 +44,7 @@ import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.tuple;
+import static org.awaitility.Awaitility.waitAtMost;
 
 @Testcontainers
 public class StarterAutoConfigurationIT {
@@ -113,10 +114,14 @@ public class StarterAutoConfigurationIT {
 
             assertThat(ctx).hasSingleBean(SchedulerApi.class);
             SchedulerApi schedulerApi = ctx.getBean(SchedulerApi.class);
-            List<ApiExecutorJob> executorJobs = schedulerApi.getExecutorJobs("principal", 0, 10);
-            assertThat(executorJobs)
-                    .as("TestTtlJob must have been registered with the scheduler")
-                    .isNotEmpty();
+            // getExecutorJobs reads the scheduled-jobs table, and the scheduler writes a job there only once it holds its
+            // fenced lock - acquired asynchronously, on the lock manager's thread, after the context has started
+            waitAtMost(Duration.ofSeconds(10)).untilAsserted(() -> {
+                List<ApiExecutorJob> executorJobs = schedulerApi.getExecutorJobs("principal", 0, 10);
+                assertThat(executorJobs)
+                        .as("TestTtlJob must have been registered with the scheduler")
+                        .isNotEmpty();
+            });
         });
     }
 

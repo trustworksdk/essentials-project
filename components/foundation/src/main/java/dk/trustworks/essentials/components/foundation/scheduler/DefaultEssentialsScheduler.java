@@ -70,6 +70,13 @@ public class DefaultEssentialsScheduler implements EssentialsScheduler, Lifecycl
     private volatile boolean started;
     private volatile ShutdownContext shutdown;
     private volatile boolean lockAcquired;
+    /**
+     * Makes registering a job and the lock callbacks mutually exclusive. {@link #onLockAcquired(FencedLock)} schedules the
+     * jobs registered so far and only then sets {@link #lockAcquired}; a job registered in between, from another thread,
+     * was missing from that pass and still saw the lock as not acquired, so nothing ever scheduled it - a {@code @TTLJob}
+     * whose {@code PostgresqlTTLManager} started while the scheduler's lock was being acquired never ran.
+     */
+    private final Object jobSchedulingMonitor = new Object();
 
     private       ScheduledExecutorService       executorService;
     private final PgCronRepository               pgCronRepository;
@@ -146,19 +153,21 @@ public class DefaultEssentialsScheduler implements EssentialsScheduler, Lifecycl
     @Override
     public void schedulePgCronJob(PgCronJob job) {
         requireNonNull(job, "job cannot be null");
-        if (pgCronJobs.contains(job)) {
-            log.info("PgCronJob '{}' already exists'", job);
-            return;
-        }
-        log.debug("Scheduling PgCronJob '{}'", job);
-        pgCronJobs.add(job);
-        if (started && pgCronAvailable && lockAcquired) {
-            schedulePgCronJobInternal(job);
-        } else {
-            if (started && !pgCronAvailable) {
-                log.warn("Can't schedule job - Scheduler is started but pg_cron is not available: '{}'", job);
+        synchronized (jobSchedulingMonitor) {
+            if (pgCronJobs.contains(job)) {
+                log.info("PgCronJob '{}' already exists'", job);
+                return;
+            }
+            log.debug("Scheduling PgCronJob '{}'", job);
+            pgCronJobs.add(job);
+            if (started && pgCronAvailable && lockAcquired) {
+                schedulePgCronJobInternal(job);
             } else {
-                log.info("Can't schedule job right now - Scheduler is started '{}' pg_cron is available '{}' and lock acquired '{}': '{}'", started, pgCronAvailable, lockAcquired, job);
+                if (started && !pgCronAvailable) {
+                    log.warn("Can't schedule job - Scheduler is started but pg_cron is not available: '{}'", job);
+                } else {
+                    log.info("Can't schedule job right now - Scheduler is started '{}' pg_cron is available '{}' and lock acquired '{}': '{}'", started, pgCronAvailable, lockAcquired, job);
+                }
             }
         }
     }
@@ -166,16 +175,18 @@ public class DefaultEssentialsScheduler implements EssentialsScheduler, Lifecycl
     @Override
     public void scheduleExecutorJob(ExecutorJob job) {
         requireNonNull(job, "job cannot be null");
-        if (executorJobs.contains(job)) {
-            log.info("ExecutorJob '{}' already exists", job);
-            return;
-        }
-        log.debug("Adding ExecutorJob '{}'", job);
-        executorJobs.add(job);
-        if (started && lockAcquired) {
-            scheduleExecutorJobInternal(job);
-        } else {
-            log.info("Can't schedule job right now - Scheduler is started '{}' and lock acquired '{}': '{}'", started, lockAcquired, job);
+        synchronized (jobSchedulingMonitor) {
+            if (executorJobs.contains(job)) {
+                log.info("ExecutorJob '{}' already exists", job);
+                return;
+            }
+            log.debug("Adding ExecutorJob '{}'", job);
+            executorJobs.add(job);
+            if (started && lockAcquired) {
+                scheduleExecutorJobInternal(job);
+            } else {
+                log.info("Can't schedule job right now - Scheduler is started '{}' and lock acquired '{}': '{}'", started, lockAcquired, job);
+            }
         }
     }
 
@@ -396,12 +407,14 @@ public class DefaultEssentialsScheduler implements EssentialsScheduler, Lifecycl
     private void onLockAcquired(FencedLock lock) {
         log.info("🎉 FencedLock '{}' was ACQUIRED, lockAcquired '{}' purging stale entries, then scheduling all jobs.", lockName, lockAcquired);
 
+        // Under the monitor, so a job registered meanwhile waits and then sees lockAcquired = true - see jobSchedulingMonitor
+        synchronized (jobSchedulingMonitor) {
+            deleteJobsWithInstanceId();
 
-        deleteJobsWithInstanceId();
+            scheduleJobs();
 
-        scheduleJobs();
-
-        lockAcquired = true;
+            lockAcquired = true;
+        }
     }
 
     private void deleteJobsWithInstanceId() {
@@ -433,15 +446,18 @@ public class DefaultEssentialsScheduler implements EssentialsScheduler, Lifecycl
 
     private void onLockReleased(FencedLock lock) {
         log.info("🚨 FencedLock '{}' was RELEASED; unscheduling all pg_cron and executor tasks immediately.", lockName);
-        lockAcquired = false;
+        // Under the monitor, so a job registered meanwhile cannot be scheduled after the unscheduling below
+        synchronized (jobSchedulingMonitor) {
+            lockAcquired = false;
 
-        var instanceId = Network.hostName();
+            var instanceId = Network.hostName();
 
-        unschedulePgCronJobs(instanceId);
+            unschedulePgCronJobs(instanceId);
 
-        unscheduleExecutorJobs(instanceId);
+            unscheduleExecutorJobs(instanceId);
 
-        cleanUp("purge stale executor scheduled jobs on lock release", executorScheduledJobRepository::deleteAll);
+            cleanUp("purge stale executor scheduled jobs on lock release", executorScheduledJobRepository::deleteAll);
+        }
     }
 
     private void scheduleJobs() {
