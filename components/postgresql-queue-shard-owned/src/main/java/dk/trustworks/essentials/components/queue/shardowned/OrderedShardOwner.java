@@ -63,6 +63,13 @@ final class OrderedShardOwner implements BatchReadableOwner {
      * Per-key retry schedule. A failing message must keep its key blocked until it is retried or
      * dead-lettered — releasing the key early would let a later message overtake the one that
      * failed, which is precisely the ordering guarantee being sold.
+     * <p>
+     * <b>Rebuilt on takeover, not only remembered.</b> The schedule lives in this owner's memory, so on
+     * its own it would end with the owner: after a rebalance, a graceful stop or a crash the successor
+     * read only visible rows and delivered the key's next message while the failed one was still in its
+     * backoff (N-16). {@link #onTakeover} reloads every row a retry has pushed into the future
+     * ({@link ShardOwnedStorage#orderedRetriesInBackoff}) into this schedule, so the block outlives the
+     * owner the way {@link #deadLetterBlocks} does.
      */
     private final PriorityQueue<OrderedRetry> retrySchedule     = new PriorityQueue<>(Comparator.comparingLong(OrderedRetry::dueNanos));
     private final Map<Long, Integer>          attemptsBySeq     = new HashMap<>();
@@ -320,6 +327,36 @@ final class OrderedShardOwner implements BatchReadableOwner {
         // successor that learned this later would deliver past a dead letter in the window, which is
         // exactly what the previous owner refused to do.
         refreshDeadLetterBlocks(connection);
+        // The same reasoning for a key whose message is waiting out a retry backoff: the previous owner
+        // held it in memory, and the cursor and the sweep below read only visible rows.
+        restoreRetriesInBackoff(connection);
+    }
+
+    /**
+     * Re-create the previous owner's retry blocks from the table (N-16).
+     * <p>
+     * Each row a retry has pushed into the future goes back into {@link #retrySchedule}, due when the
+     * server says it becomes visible, and its key into {@link #keysAwaitingRetry} — exactly the state the
+     * owner that scheduled the retry was in. From there the ordinary path takes over: the key is refused
+     * by {@link #dispatchReadyKeys} until {@link #dispatchDueRetries} puts the message back at its head.
+     * The attempt count is not carried over, as it never has been across a hand-over: an owner counts
+     * attempts in {@link #attemptsBySeq} and does not read the table's {@code attempts} back.
+     */
+    private void restoreRetriesInBackoff(Connection connection) throws SQLException {
+        var retries = storage.orderedRetriesInBackoff(connection, shard);
+        if (retries.isEmpty()) {
+            return;
+        }
+        var now = System.nanoTime();
+        synchronized (stateLock) {
+            for (var retry : retries) {
+                var row = retry.row();
+                keysAwaitingRetry.add(row.key());
+                retrySchedule.add(new OrderedRetry(now + retry.delayMillis() * 1_000_000L, row.key(), row.keyOrder(), row));
+            }
+        }
+        log.debug("Ordered unit {}: took over {} message(s) waiting out a retry backoff; their keys stay blocked until each is due",
+                  shard, retries.size());
     }
 
     /**

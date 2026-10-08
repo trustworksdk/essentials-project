@@ -1282,12 +1282,74 @@ public final class ShardOwnedStorage {
         }
     }
 
+    /**
+     * Bulk attempt increment on takeover, for the rows the previous owner may have been delivering.
+     * <p>
+     * <b>Only visible rows.</b> A row whose {@code visible_at} is still in the future was not being
+     * delivered by anybody — it is either delayed or waiting out a retry backoff — so there is no
+     * unrecorded attempt to account for. Leaving it alone is also what keeps {@code attempts > 0} on a
+     * not-yet-visible row meaning "a retry pushed this out" (see {@link #orderedRetriesInBackoff}):
+     * bumping a delayed row here would make it look like a retry to the next takeover, and block its key.
+     */
     public int bumpOrderedAttemptsOnTakeover(Connection connection, int shard) throws SQLException {
         try (var statement = connection.prepareStatement(
-                "UPDATE " + ORDERED_TABLE + " SET attempts = attempts + 1 WHERE queue_id = ? AND shard = ?")) {
+                "UPDATE " + ORDERED_TABLE + " SET attempts = attempts + 1"
+                        + " WHERE queue_id = ? AND shard = ? AND visible_at <= now()")) {
             statement.setShort(1, queueId);
             statement.setInt(2, shard);
             return statement.executeUpdate();
+        }
+    }
+
+    /**
+     * An ordered row a retry has pushed into the future, and how long until it is visible again.
+     *
+     * @param row          the message, with its payload, ready to be re-dispatched when due
+     * @param delayMillis  the remaining backoff, measured by the server as an interval
+     */
+    public record OrderedRetryInBackoff(OrderedRow row, long delayMillis) {
+    }
+
+    /**
+     * The ordered rows of this shard that are waiting out a retry backoff, read by a new owner on
+     * takeover (N-16).
+     * <p>
+     * The owner that scheduled a retry keeps the message's key blocked in memory until the retry is
+     * due, so a later {@code key_order} cannot overtake the one that failed. A successor has none of
+     * that memory, and every other read it makes filters on {@code visible_at <= now()} — so without
+     * this it delivered the key's next message while the failed one was still in its backoff, after
+     * any rebalance, graceful stop or crash.
+     * <p>
+     * A retry is told apart from a delayed message by {@code attempts > 0}: {@link #scheduleRetry}
+     * always writes a positive count, an enqueue writes 0, and {@link #bumpOrderedAttemptsOnTakeover}
+     * no longer touches a row that is not yet visible. A delayed ordered message therefore still does
+     * not block its key, exactly as before. A row an older version bumped while it was delayed reads
+     * as a retry and holds its key until it is visible — the conservative direction.
+     * <p>
+     * The remaining backoff is the server's interval, never {@code visible_at} compared with a client
+     * clock. On the {@code *_visible} index; paid once per takeover.
+     */
+    public List<OrderedRetryInBackoff> orderedRetriesInBackoff(Connection connection, int shard) throws SQLException {
+        try (var statement = connection.prepareStatement(
+                "SELECT seq, msg_key, key_order, payload, payload_type,"
+                        + " CEIL(EXTRACT(EPOCH FROM (visible_at - now())) * 1000)::bigint"
+                        + " FROM " + ORDERED_TABLE
+                        + " WHERE queue_id = ? AND shard = ? AND visible_at > now() AND attempts > 0"
+                        + " ORDER BY msg_key, key_order")) {
+            statement.setShort(1, queueId);
+            statement.setInt(2, shard);
+            try (var resultSet = statement.executeQuery()) {
+                var retries = new ArrayList<OrderedRetryInBackoff>();
+                while (resultSet.next()) {
+                    retries.add(new OrderedRetryInBackoff(new OrderedRow(resultSet.getLong(1),
+                                                                         resultSet.getString(2),
+                                                                         resultSet.getLong(3),
+                                                                         resultSet.getBytes(4),
+                                                                         resultSet.getInt(5)),
+                                                          Math.max(0L, resultSet.getLong(6))));
+                }
+                return retries;
+            }
         }
     }
 
