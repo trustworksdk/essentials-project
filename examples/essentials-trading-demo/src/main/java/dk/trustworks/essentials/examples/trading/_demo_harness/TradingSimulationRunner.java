@@ -439,7 +439,8 @@ public class TradingSimulationRunner implements ApplicationRunner {
      * projection-backed probe could answer "absent" on a restart against a populated database, and this runner would
      * then seed a second time on top of existing data. The four repository wrappers are therefore consulted directly,
      * through their {@code findX} methods and inside one read-only unit of work. {@code LatestPriceQuery} is already
-     * strongly consistent — it reads the price aggregate — so the price half goes through the view slice.
+     * strongly consistent — its projection commits with the price events — so the price half goes through the view
+     * slice.
      */
     private SeedState seedDataState() {
         var firstSeedInstrument = TradingSimulationIds.INSTRUMENT_SEEDS.get(0);

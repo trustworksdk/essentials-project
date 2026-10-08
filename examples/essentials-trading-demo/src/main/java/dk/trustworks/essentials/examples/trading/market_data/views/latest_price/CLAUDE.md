@@ -4,21 +4,19 @@ Serves the current price of one instrument: `GET /api/admin/instrument-prices/{i
 
 ## The one thing to know about this slice
 
-**It has no projection, on purpose.** It reads the `InstrumentPrice` aggregate through
-`InstrumentPrices.findPrice(...)` inside a read-only transaction, which makes it the only
-strongly-consistent read in the demo.
+**Its projection runs in the transaction that appends the price event.** `LatestPriceProjection` is an
+`InTransactionEventProcessor` writing `projection_latest_price`, one row per instrument, so the row commits
+with the event that set it. That makes this the demo's only strongly-consistent read, and it needs to be:
+the bootstrap asks `LatestPriceQuery` whether a price already exists before deciding to seed, and an
+eventually-consistent answer could say "absent" on a restart against a populated database, so the bootstrap
+would seed on top of existing data.
 
-Two reasons, both in `LatestPriceQuery`'s javadoc:
+The processor is non-exclusive, so every instance projects the events it appends itself. Each row stores the
+`EventOrder` it was written from, and a write never moves it backwards.
 
-1. The demo's bootstrap asks this query whether a price already exists before deciding to seed. An
-   eventually-consistent answer could say "absent" on a restart against a populated database, and the
-   bootstrap would seed on top of existing data.
-2. A latest-price read model would be one column, keyed by the same id as the stream, rebuilt from the
-   same two events, and permanently one hop behind the aggregate it copies.
-
-This is also why `InstrumentPrice.latestPrice()` is the only public accessor on any aggregate in this
-module. It is a documented exception to § The aggregate's own bar, not a general licence — see
-`REFACTORING_PLAN.md` § Open questions.
+It used to read the `InstrumentPrice` aggregate through a public `latestPrice()` accessor, a documented
+exception to "views project". The exception is gone; do not bring the accessor back. A database created before
+the projection existed has price events and no rows, so the probe would seed again: `docker compose down -v`.
 
 ## What would make it a different slice
 

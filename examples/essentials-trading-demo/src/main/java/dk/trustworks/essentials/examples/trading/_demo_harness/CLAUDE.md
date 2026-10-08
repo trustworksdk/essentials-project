@@ -43,8 +43,8 @@ Being outside the boundary check is not permission to reach into the contexts:
 `Trades`, `Settlements` and `Instruments`, and may call their `findX(…)` methods. It must be **strongly
 consistent**: the brokerage projections are eventually consistent, so on a restart against a populated database
 a projection-backed probe could answer "absent" while the data is there, and the runner would seed a second time
-on top of existing data. The price half of the probe uses `LatestPriceQuery`, which reads the price aggregate and
-is already strongly consistent.
+on top of existing data. The price half of the probe uses `LatestPriceQuery`, whose in-transaction projection makes
+it strongly consistent already.
 
 The probe reads *existence*, never a field, and it runs once at startup.
 

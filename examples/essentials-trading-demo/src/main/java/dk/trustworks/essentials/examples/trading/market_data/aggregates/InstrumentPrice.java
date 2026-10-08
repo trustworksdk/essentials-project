@@ -80,22 +80,6 @@ public class InstrumentPrice extends AggregateRoot<InstrumentId, InstrumentPrice
         apply(new PriceUpdated(aggregateId(), newPrice));
     }
 
-    /**
-     * The current market price.
-     *
-     * <p><strong>A deliberate, documented exception to "aggregates do not expose state to the read side."</strong>
-     * Everywhere else in this demo a view slice projects the events rather than reading the write model. Here it
-     * genuinely cannot: the trade-valuation read model needs the market price <em>as of now</em>, not as of the last
-     * event it happened to have processed, and this aggregate is the authoritative store of that value. Reading it
-     * through the aggregate is the honest way to say so.
-     *
-     * <p>This is not a licence to add sibling accessors. Nothing else on this aggregate is public, and nothing on
-     * {@code Instrument} is.
-     */
-    public Amount latestPrice() {
-        return latestPrice;
-    }
-
     @EventHandler
     private void on(PriceInitialized e) {
         latestPrice = e.price();

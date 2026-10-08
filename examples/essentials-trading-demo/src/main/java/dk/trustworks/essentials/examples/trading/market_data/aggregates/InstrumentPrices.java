@@ -74,11 +74,6 @@ public class InstrumentPrices {
         return repository.load(instrumentId);
     }
 
-    public Optional<InstrumentPrice> findPrice(InstrumentId instrumentId) {
-        requireNonNull(instrumentId, "No instrumentId provided");
-        return repository.tryLoad(instrumentId);
-    }
-
     /**
      * Persists an already-constructed {@link InstrumentPrice}. Constructing it — which is what emits
      * {@code PriceInitialized} — is the initializing slice's decision, not this repository's, so it happens there.

@@ -230,9 +230,9 @@ Read straight off the event store and the archive registry, so **strongly consis
 
 - `GET /api/admin/instruments` — `instrument_details`, all instruments, **eventually consistent** (projection-backed)
 - `GET /api/admin/instruments/{instrumentId}` — `instrument_details`, likewise
-- `GET /api/admin/instrument-prices/{instrumentId}` — `latest_price`, **strongly consistent**: it is the one
-  read in the module that goes to the aggregate, because the bootstrap's idempotency probe needs an answer
-  that cannot lag
+- `GET /api/admin/instrument-prices/{instrumentId}` — `latest_price`, **strongly consistent**: its projection is
+  an `InTransactionEventProcessor`, so the row commits with the price event, because the bootstrap's
+  idempotency probe needs an answer that cannot lag
 
 ## What The Simulator Does
 

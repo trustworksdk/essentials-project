@@ -16,9 +16,9 @@
 
 package dk.trustworks.essentials.examples.trading.market_data.views.latest_price;
 
-import dk.trustworks.essentials.examples.trading.market_data.aggregates.InstrumentPrice;
-import dk.trustworks.essentials.examples.trading.market_data.aggregates.InstrumentPrices;
 import dk.trustworks.essentials.examples.trading.market_data.types.InstrumentId;
+import dk.trustworks.essentials.types.Amount;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -27,40 +27,31 @@ import java.util.Optional;
 import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 
 /**
- * Answers "what is this instrument worth right now?" by reading the {@link InstrumentPrice} aggregate directly.
- *
- * <h2>Why this view has no projection</h2>
- * Every other view slice in this demo owns a projected read model, and that is the default. This one is a
- * deliberate, narrow exception, for two reasons:
- * <ul>
- *     <li><b>Strong consistency is the requirement, not an optimisation.</b> The demo's bootstrap decides whether
- *     to seed by asking whether a price already exists. A projection is eventually consistent, so on a restart
- *     against a populated database the probe could answer "absent" while the data is very much present — and the
- *     bootstrap would seed a second time on top of it.</li>
- *     <li><b>There is nothing to project.</b> A latest-price read model would be a single column keyed by the same
- *     id as the stream, rebuilt from the same two events, and always one hop behind. Projecting it would add a
- *     table and a subscription to reproduce the aggregate's own state exactly.</li>
- * </ul>
- * This is why {@link InstrumentPrice#latestPrice()} is the one public accessor on any aggregate in this module.
- * It is not the read side leaking out of the write model in general — it is this slice, with this reason, and the
- * moment a caller wants price <em>history</em> or prices <em>across</em> instruments, that is a different read
- * model and a different slice.
+ * Answers "what is this instrument worth right now?" from the read model {@link LatestPriceProjection} owns.
  * <p>
- * See {@code REFACTORING_PLAN.md} § Open questions.
+ * The answer is strongly consistent, which the demo's bootstrap relies on: it asks this query whether a price
+ * already exists before deciding to seed. The projection is an {@code InTransactionEventProcessor}, so a price's row
+ * commits with the event that set it, and a restart against a populated database finds it.
  */
 @Service
 public class LatestPriceQuery {
-    private final InstrumentPrices instrumentPrices;
+    private final JdbcTemplate jdbcTemplate;
 
-    public LatestPriceQuery(InstrumentPrices instrumentPrices) {
-        this.instrumentPrices = requireNonNull(instrumentPrices, "No instrumentPrices provided");
+    public LatestPriceQuery(JdbcTemplate jdbcTemplate) {
+        this.jdbcTemplate = requireNonNull(jdbcTemplate, "No jdbcTemplate provided");
     }
 
     @Transactional(readOnly = true)
     public Optional<LatestPrice> findLatestPrice(InstrumentId instrumentId) {
         requireNonNull(instrumentId, "No instrumentId provided");
-        return instrumentPrices.findPrice(instrumentId)
-                               .map(instrumentPrice -> new LatestPrice(instrumentId,
-                                                                       instrumentPrice.latestPrice()));
+        return jdbcTemplate.query("""
+                                          SELECT latest_price
+                                          FROM projection_latest_price
+                                          WHERE instrument_id = ?
+                                          """,
+                                  (rs, rowNum) -> new LatestPrice(instrumentId, Amount.of(rs.getBigDecimal("latest_price"))),
+                                  instrumentId.toString())
+                           .stream()
+                           .findFirst();
     }
 }
