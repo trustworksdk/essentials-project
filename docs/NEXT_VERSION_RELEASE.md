@@ -140,6 +140,9 @@ entries are in [`essentials-plugin/CHANGELOG.md`](../essentials-plugin/CHANGELOG
   (`getCommandBus().send(...)`), and one forwarded through an `Inbox` created with
   `Inboxes.getOrCreateInbox(config, commandBus)`. Gate 11(b) now also holds an inbound translation's
   `@KafkaListener` / `@RabbitListener` / `@JmsListener` payloads to its `consumes`.
+- **Fixed: generated projects lacked objenesis.** `immutable-jackson3` declares it `provided`, and S2.1 did not
+  list it, so a project from `/essentials:init` failed its first read with `NoClassDefFoundError`. S2.1 lists it
+  now, the generated backend POM declares it, and `stack-lint` reports its absence (`s2.1-objenesis`).
 - **Fixed:** `LLM-eventsourced-aggregates.md` and the Java command test template used a rejection method
   `GivenWhenThenScenario` does not have; they now use `thenFailsWithExceptionType(...)`.
 
@@ -164,6 +167,8 @@ Not published; listed because they are the reference for how to use the framewor
   consistent and can be replayed; an existing demo database backfills the table on first start.
   `InstrumentPrice.latestPrice()` is gone. The bootstrap's idempotency probe, which needs a strongly-consistent
   answer, asks `InstrumentPrices.findPrice(...)` on the write side instead of the view. (`9a6e3e86` and the commit after it)
+- **`essentials-performance-lab` declares objenesis.** `immutable-jackson3` has it `provided`; the lab's tests got
+  it through Mockito, but the packaged application would have failed its first event read.
 - **`postgresql-cqrs`:** the `task` context, on the aggregate lane, drops its `routing/TaskCommand` marker,
   which only the decider lane uses (`f8e78176`). `AccountBalanceViewIT` now really redelivers an event to test
   the projection's idempotency (`e88f8e70`).

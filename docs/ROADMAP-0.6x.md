@@ -26,7 +26,9 @@ because a patch must not reject a setup that works today:
 
 These were meant to block the 0.60.0 tag and are not in it. The two Jackson 3 persistence fixes (`is`-getters,
 `FAIL_ON_NULL_FOR_PRIMITIVES`) are fixed for the next release; see `docs/NEXT_VERSION_RELEASE.md` §1.1.2 and §3.
-What remains of them is 0.1.
+What remains of them is 0.1. The third planned fix, making objenesis a compile dependency of `immutable-jackson3`
+(N-5, SB-1), is rejected: every third-party dependency of a module or starter stays `provided`, by design. The
+plugin's S2.1 table and its generated POM now declare objenesis instead, and SB-2 (P1) covers the framework side.
 
 ### 0.1 A startup check for mappers Essentials did not build (N-1, SJ-3)
 
@@ -260,6 +262,9 @@ the `PostgresqlDurableQueues.builder()` convention, so the documented snippet co
 `provided`/optional scope. A missing dependency therefore surfaces as a raw `NoClassDefFoundError` or
 `ClassNotFoundException` deep in a bean-creation stack, often only at first use. **Fix:** add one Spring Boot
 `FailureAnalyzer` that maps the known missing classes to the Maven coordinates to add.
+Objenesis needs one more step, because it fails at the first read rather than at startup: when
+`EssentialsJacksonModules.modules()` finds `immutable-jackson3` but not objenesis, it throws at mapper creation with
+a message naming `org.objenesis:objenesis`. The dependency stays `provided` (N-5).
 
 **`essentials.immutable-jackson-module-enabled` has no effect (N-11).** The property is documented with default
 `true`, but its condition lacks `matchIfMissing = true`. The module bean is therefore created only when the property

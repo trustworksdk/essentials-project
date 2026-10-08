@@ -30,6 +30,7 @@
       "expectFacts": {"language": "kotlin", "db": "pg-event-sourced", "web": "webflux", "frontend": "embedded",
                       "essentialsVersion": "DEV-SNAPSHOT", "essentialsBehind": null},
       "findings": [
+        {"check": "s2.1-objenesis", "file": "backend/pom.xml", "line": 16},
         {"check": "s1-kotlin-compiler-floor", "file": "pom.xml", "line": 19, "targetOnly": true, "appliesWithUpgrade": false},
         {"check": "s7-model-converter", "file": "backend/pom.xml", "line": 15, "targetOnly": true, "appliesWithUpgrade": false},
         {"check": "s1-boot-line", "file": "pom.xml", "line": 4},
@@ -77,6 +78,7 @@
       "expectFacts": {"language": "java", "db": "mongo", "web": "webmvc", "frontend": "standalone", "bootVersion": "4.1.0",
                       "frontendTooling": "other"},
       "findings": [
+        {"check": "s2.1-objenesis", "file": "backend/pom.xml", "line": 15},
         {"check": "s1-java-baseline", "file": "pom.xml", "line": 12},
         {"check": "s2-mongo-keys", "file": "backend/src/main/resources/application.yml", "line": 6},
         {"check": "s2-mongo-keys", "file": "backend/src/main/resources/application.yml", "line": 7},
@@ -110,6 +112,7 @@
       "expectFacts": {"language": "java", "db": "mongo", "web": "webmvc", "frontend": "standalone",
                       "frontendTooling": "next"},
       "findings": [
+        {"check": "s2.1-objenesis", "file": "backend/pom.xml", "line": 15},
         {"check": "s8-standalone-base-url", "file": "frontend/lib/api/mutator.ts", "line": null},
         {"check": "s8-standalone-cors-value", "file": "backend/src/main/java/com/example/shop/config/OriginsConfig.java", "line": 9},
         {"check": "s8-standalone-cors-value", "file": "backend/src/main/java/com/example/shop/config/OriginsConfig.java", "line": 12},
@@ -122,6 +125,7 @@
       "exit": 1,
       "expectFacts": {"language": "java", "db": "pg-crud", "web": "none", "frontend": "none", "bootVersion": null},
       "findings": [
+        {"check": "s2.1-objenesis", "file": "pom.xml", "line": 13},
         {"check": "s2.1-jdbc-starter", "file": "pom.xml", "line": 13},
         {"check": "s2.1-postgresql-driver", "file": "pom.xml", "line": 13},
         {"check": "s2.1-jdbi", "file": "pom.xml", "line": 13},
@@ -154,6 +158,7 @@
       "exit": 1,
       "expectFacts": {"language": "kotlin", "db": "pg-event-sourced", "web": "none"},
       "findings": [
+        {"check": "s2.1-objenesis", "file": "pom.xml", "line": 18},
         {"check": "s3.4-persistence-serializer", "file": "src/main/kotlin/com/example/ledger/PersistenceSerializerConfiguration.kt", "line": 15},
         {"check": "s1-kotlin-compiler-floor", "file": "pom.xml", "line": 40, "targetOnly": false},
         {"check": "s3.5-kotlin-jsr305", "file": "pom.xml", "line": 37},
@@ -165,6 +170,7 @@
       "expectFacts": {"language": "kotlin", "db": "pg-event-sourced", "web": "none", "bootVersion": "4.0.8",
                       "essentialsVersion": "0.50.0", "essentialsBehind": true},
       "findings": [
+        {"check": "s2.1-objenesis", "file": "pom.xml", "line": 19},
         {"check": "s1-boot-line", "file": "pom.xml", "line": 4, "targetOnly": true, "appliesWithUpgrade": true},
         {"check": "s1-kotlin-compiler-floor", "file": "pom.xml", "line": 15, "targetOnly": false, "appliesWithUpgrade": false},
         {"check": "s2-document-db", "file": "pom.xml", "line": 19, "appliesWithUpgrade": false},
@@ -177,6 +183,7 @@
       "exit": 1,
       "expectFacts": {"language": "java", "web": "webmvc"},
       "findings": [
+        {"check": "s2.1-objenesis", "file": "backend/pom.xml", "line": 15},
         {"check": "s4-typed-edge-unregistered", "file": "backend/src/main/java/com/example/shop/orders/OrderLookupController.java", "line": 16},
         {"check": "s4-typed-edge-unregistered", "file": "backend/src/main/java/com/example/shop/orders/OrderLookupController.java", "line": 17},
         {"check": "s4-typed-edge-unregistered", "file": "backend/src/main/java/com/example/shop/orders/OrderLookupController.java", "line": 22},
@@ -187,6 +194,7 @@
       "exit": 1,
       "expectFacts": {"language": "kotlin", "web": "webflux"},
       "findings": [
+        {"check": "s2.1-objenesis", "file": "backend/pom.xml", "line": 16},
         {"check": "s4-typed-edge-unregistered", "file": "backend/src/main/kotlin/com/example/golden/shipping/ShipmentLookup.kt", "line": 13},
         {"check": "s4-typed-edge-convention", "file": "backend/src/main/kotlin/com/example/golden/shipping/ShipmentLookup.kt", "line": 13},
         {"check": "s7-model-converter", "file": "backend/pom.xml", "line": 64},

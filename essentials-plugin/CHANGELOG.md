@@ -94,6 +94,11 @@ targets, with a `-N` suffix for plugin-only releases.
 - **Docs:** `LLM-immutable-jackson.md`, `LLM-types-jackson.md` and `ESS-023` in `LLM-traps.md` now say
   the Essentials mappers hide `is`-getters as well as getters and setters, and read a missing primitive
   as its default, matching the framework fix in the next Essentials release.
+- **Fixed: generated projects lacked objenesis.** `immutable-jackson3` declares it `provided`, so the
+  application must, and S2.1 did not list it: a project from `/essentials:init` started and wrote,
+  then failed its first read of an event, queue message or document with `NoClassDefFoundError`. S2.1
+  now lists `org.objenesis:objenesis`, the generated backend POM declares it at `objenesis.version`, and
+  `stack-lint` reports a project without it as `s2.1-objenesis` (Blocking).
 
 ## 0.60.0-6 — targets Essentials 0.60.0
 - **`/essentials:upgrade` now moves a project to the plugin's Essentials release, code included.** A

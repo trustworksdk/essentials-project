@@ -102,7 +102,7 @@ A Java project must not carry `kotlin-eventsourcing`: its decider family lives i
 "Cumulative" describes the Essentials components. It does **not** describe the third-party
 libraries they run on. Every Essentials integration declares its framework dependencies in
 **`provided` scope**, which is non-transitive by design — the zero-dependency-core philosophy —
-so the application names them itself. **Every one of them kills context startup**, several under a
+so the application names them itself. **Every one of them kills the application** (at context startup; objenesis at the first read), several under a
 message that never names the real cause — and **most of them compile first**. Two compile errors are
 the exception, and both only when the project's own code touches the library: `jdbi3-core` where
 code imports `Jdbi` (the generated `config/DocumentDbConfig` does), and `kotlin-reflect` for Java code
@@ -116,6 +116,7 @@ calling the document store's overloads (below).
 | `pg-crud`, `pg-event-sourced` | `kotlin-stdlib-jdk8`, `kotlin-reflect` | `NoClassDefFoundError: kotlin/jvm/internal/Intrinsics`. **Applies to pure-Java projects too** — see below |
 | `mongo` | `spring-boot-starter-data-mongodb` | Spring Data MongoDB is absent, so the Essentials Mongo auto-configuration cannot even be introspected: *"Failed to deduce bean type for `…reactiveHandlersBeanPostProcessor`"*, caused by `NoClassDefFoundError: org/springframework/data/mongodb/core/convert/MongoCustomConversions$MongoConverterConfigurationAdapter` |
 | all | `tools.jackson.core:jackson-databind` (Jackson 3) | Context startup fails with `NoClassDefFoundError` for a `tools.jackson` class. A Boot 4 web starter brings it through `spring-boot-starter-jackson`, so this bites a headless application |
+| all | `org.objenesis:objenesis` | Startup and every write succeed, then the **first read** of a persisted object (an event, a queue message, a document) fails with `NoClassDefFoundError` for an `org/objenesis` class. The starters bring `immutable-jackson3`, and Essentials registers its module in the persistence mapper whenever it is on the classpath. Tests hide it: Mockito brings objenesis in test scope. Spring Boot does not manage its version — set it from `objenesis.version` |
 | all | `reactor-core` | `NoClassDefFoundError: org/reactivestreams/Publisher` while creating the Essentials `EventBus` (`essentialsEventBus`). Satisfied transitively by WebFlux; **not** on a WebMvc stack |
 
 **The Kotlin row is the one that ambushes Java projects.** `postgresql-document-db` is written in

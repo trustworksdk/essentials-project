@@ -409,6 +409,6 @@
   "scanned": true,
   "outside": {
     "review-scan": 1,
-    "stack-lint": 1
+    "stack-lint": 2
   }
 }

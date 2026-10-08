@@ -356,6 +356,12 @@ services:
             <groupId>tools.jackson.core</groupId>
             <artifactId>jackson-databind</artifactId>
         </dependency>
+        <dependency>
+            <!-- Startup and every write succeed, then the first read of a persisted object (an event, a queue message, a document) fails with NoClassDefFoundError for an org/objenesis class. The starters bring immutable-jackson3, and Essentials registers its module in the persistence mapper whenever it is on the classpath. Tests hide it: Mockito brings objenesis in test scope. Spring Boot does not manage its version — set it from objenesis.version -->
+            <groupId>org.objenesis</groupId>
+            <artifactId>objenesis</artifactId>
+            <version>${objenesis.version}</version>
+        </dependency>
 
         <!-- ===== Development: starts backend/compose.yml on spring-boot:run ===== -->
         <dependency>
@@ -785,6 +791,8 @@ esac
         <jdbi3-bom.version>3.55.0</jdbi3-bom.version>
         <spring-modulith.version>2.0.7</spring-modulith.version>
         <jqwik.version>1.9.3</jqwik.version>
+        <!-- Not managed by Spring Boot either: a plain dependency of the backend (S2.1). -->
+        <objenesis.version>3.6</objenesis.version>
     </properties>
 
     <dependencyManagement>

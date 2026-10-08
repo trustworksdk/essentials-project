@@ -22,7 +22,7 @@ in every project generated afterwards — and in every golden under `tests/golde
 | `testcontainers-bom.version` | 2.0.5 | 2.x artifact names: `testcontainers-postgresql`, `testcontainers-mongodb`, `testcontainers-kafka` (S10) |
 | `jdbi3-bom.version` | 3.55.0 | BOM import |
 | `mockito-bom.version` | 5.23.0 | BOM import |
-| `objenesis.version` | 3.6 | |
+| `objenesis.version` | 3.6 | Not managed by Spring Boot; `provided` upstream, declared by the application (S2.1) |
 | `awaitility.version` | 4.3.0 | `awaitility-kotlin` on Kotlin |
 | `assertj.version` | 3.27.7 | |
 | jqwik | 1.9.3 | `jqwik` + `jqwik-kotlin` on Kotlin; `jqwik` alone on Java (S10) |

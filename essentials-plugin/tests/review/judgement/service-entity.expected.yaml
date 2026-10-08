@@ -30,7 +30,7 @@ deterministic:
   stack-lint:             # head minus base: one new finding; the rest is pre-existing
     new:
     - {id: ESS-S3.1, check: s3.1-jackson2-essentials-module, severity: Blocking, file: pom.xml, line: 14}
-    pre_existing: 13
+    pre_existing: 14
   slice-lint:
     new: []
   slice-source:
