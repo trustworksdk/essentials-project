@@ -262,10 +262,11 @@ a command slice always writes `publishes` and a view slice always writes `projec
 - **`dispatches` is what an automation sends**, i.e. command types.
 - **`maps` is the translation table**: `[{ from: BillingInvoiceIssued, to: RecordPayment }]`.
 - **`featureFlag` names the property a slice is switched on by.** The schema accepts any object; the
-  plugin writes `{ property: returns.self-service.enabled, havingValue: "true" }` — the two attributes of
+  plugin writes `{ property: returns.self-service.enabled, havingValue: "true" }` — the attributes of
   the `@ConditionalOnProperty` on a type in the slice's directory, which is the evidence
-  `/essentials:slice-enrich` drafts it from; `havingValue` is left out when the annotation has none.
-  Absent means the slice declares no flag.
+  `/essentials:slice-enrich` drafts it from; `havingValue` is left out when the annotation has none, and
+  `matchIfMissing: true` is added when the annotation has it, because then the slice is on unless the
+  property says otherwise. Absent means the slice declares no flag.
 - **`invariants` carry an id, text, and the component that enforces it** —
   `{ id: INV-PO-1, text: "Quantity must be positive", enforcedBy: PlaceOrderDecider }`. An invariant
   with no `enforcedBy` is a wish, not an invariant.

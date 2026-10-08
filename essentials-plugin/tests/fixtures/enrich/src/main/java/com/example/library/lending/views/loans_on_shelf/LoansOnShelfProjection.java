@@ -14,7 +14,7 @@ import org.springframework.stereotype.Service;
 import java.util.List;
 
 @Service
-@ConditionalOnProperty(prefix = "library.shelf", name = "enabled", havingValue = "true")
+@ConditionalOnProperty(prefix = "library.shelf", name = "enabled", havingValue = "true", matchIfMissing = true)
 public class LoansOnShelfProjection extends ViewEventProcessor {
     public LoansOnShelfProjection(ViewEventProcessorDependencies dependencies) {
         super(dependencies);

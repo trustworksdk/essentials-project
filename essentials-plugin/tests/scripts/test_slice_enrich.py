@@ -225,7 +225,8 @@ class Propose(Base):
         view = self.slice_of(data, "lending.loans_on_shelf")["proposals"]
         self.assertEqual({c["projection"]: c["value"] for c in view["consistency"]},
                          {"LoansOnShelfProjection": "eventual", "ShelfCountProjection": "strong"})
-        self.assertEqual(view["featureFlag"]["value"], {"property": "library.shelf.enabled", "havingValue": "true"})
+        self.assertEqual(view["featureFlag"]["value"], {"property": "library.shelf.enabled", "havingValue": "true",
+                                                           "matchIfMissing": True})
         self.assertTrue(view["summary"]["evidence"][0]["path"].endswith("CLAUDE.md"))
         self.assertEqual(self.slice_of(data, "lending.borrow_book")["proposals"]["tier"]["value"], "cqrs-es")
         self.assertNotIn("tier", self.slice_of(data, "accounts.open_account")["proposals"])  # lane undetermined

@@ -13,7 +13,7 @@ import org.springframework.stereotype.Service;
 import java.util.List;
 
 @Service
-@ConditionalOnProperty(prefix = "library.shelf", name = "enabled", havingValue = "true")
+@ConditionalOnProperty(prefix = "library.shelf", name = "enabled", havingValue = "true", matchIfMissing = true)
 public class ShelfCountProjection extends InTransactionEventProcessor {
     public ShelfCountProjection(EventProcessorDependencies dependencies) {
         super(dependencies);

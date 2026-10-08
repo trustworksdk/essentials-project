@@ -450,18 +450,19 @@
         "featureFlag": {
           "value": {
             "property": "library.shelf.enabled",
-            "havingValue": "true"
+            "havingValue": "true",
+            "matchIfMissing": true
           },
           "evidence": [
             {
               "path": "src/main/java/com/example/library/lending/views/loans_on_shelf/LoansOnShelfProjection.java",
               "line": 17,
-              "text": "@ConditionalOnProperty(prefix=\"library.shelf\", name=\"enabled\", havingValue=\"true\")"
+              "text": "@ConditionalOnProperty(prefix=\"library.shelf\", name=\"enabled\", havingValue=\"true\", matchIfMissing=true)"
             },
             {
               "path": "src/main/java/com/example/library/lending/views/loans_on_shelf/ShelfCountProjection.java",
               "line": 16,
-              "text": "@ConditionalOnProperty(prefix=\"library.shelf\", name=\"enabled\", havingValue=\"true\")"
+              "text": "@ConditionalOnProperty(prefix=\"library.shelf\", name=\"enabled\", havingValue=\"true\", matchIfMissing=true)"
             }
           ]
         }

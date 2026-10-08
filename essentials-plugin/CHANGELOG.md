@@ -79,7 +79,7 @@ targets, with a `-N` suffix for plugin-only releases.
   human-owned field may be drafted from evidence and written once a person accepts it, never over a
   value. `--fix-manifests` still writes none of them. `commands/slice-check.md` Step 4 now states how a
   bounded context's `tier` is resolved, which `--adopt-tier` and slice-enrich share. `manifest-guide.md`
-  §3 documents the `featureFlag` shape `{ property, havingValue }`.
+  §3 documents the `featureFlag` shape `{ property, havingValue, matchIfMissing }`.
 - **Fixed:** `LLM-eventsourced-aggregates.md` and the Java command test template showed
   `.thenThrows(...)`, which `GivenWhenThenScenario` does not have. They now use
   `thenFailsWithExceptionType(...)`.

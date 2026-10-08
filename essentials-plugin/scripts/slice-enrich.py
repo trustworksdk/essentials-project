@@ -760,7 +760,7 @@ def consistency_proposals(project, row, doc):
 
 
 def feature_flag_proposal(files):
-    """@ConditionalOnProperty on a type of the slice → {property, havingValue} (manifest-guide.md §3).
+    """@ConditionalOnProperty on a type of the slice → {property, havingValue, matchIfMissing} (manifest-guide.md §3).
     Several annotations that disagree give the evidence and no value."""
     found = []
     for f, _ in files:
@@ -778,6 +778,8 @@ def feature_flag_proposal(files):
                     value = {"property": f"{prefix.rstrip('.')}.{name}" if prefix else name}
                     if (having := arg("havingValue")) is not None:
                         value["havingValue"] = having
+                    if "matchIfMissing" in args and literal(f, args["matchIfMissing"]) == (True, True):
+                        value["matchIfMissing"] = True  # on unless set otherwise; false is Spring's default
                 found.append((value, ev(f.rel, a.line, f.text(a.start, a.end))))
     if not found:
         return None
@@ -948,7 +950,7 @@ def scalar(value, key=None):
     return json.dumps(s, ensure_ascii=False)
 
 
-KEY_ORDER = ["name", "id", "text", "enforcedBy", "property", "havingValue", "from", "to", "given", "when",
+KEY_ORDER = ["name", "id", "text", "enforcedBy", "property", "havingValue", "matchIfMissing", "from", "to", "given", "when",
              "then", "event", "command", "query", "state", "external", "schedule", "with", "error", "message",
              "nothing", "readModel", "rows", "test", "note"]
 
