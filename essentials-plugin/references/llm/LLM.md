@@ -79,6 +79,12 @@ Consolidated view of all component modules [LLM-components.md](LLM-components.md
 | **kotlin-eventsourcing** | Kotlin DSL for event sourcing | [LLM-kotlin-eventsourcing.md](LLM-kotlin-eventsourcing.md) |
 | **admin-api-spec** / **spring-boot-starter-admin-api** | HTTP admin/monitoring API over the admin SPIs | [LLM-admin-api.md](LLM-admin-api.md) |
 
+**Three decider families**, which are not interchangeable and do not compose (each has its own command-handler
+adapter and accepts only its own type): Java `aggregates.decider.Decider<C,E,ERR,S>` (typed errors,
+`CommandHandler.deciderBasedCommandHandler`), Java `EventStreamDecider`/`EventStreamEvolver`
+(`EventStreamDeciderCommandHandlerAdapter`) in **eventsourced-aggregates**, and Kotlin `Decider<C,E>`/`Evolver`
+(`DeciderCommandHandlerAdapter`) in **kotlin-eventsourcing**.
+
 ### Spring Boot Starters
 
 **Docs:** [LLM-spring-boot-starter-modules.md](LLM-spring-boot-starter-modules.md)
@@ -213,7 +219,7 @@ Store-and-forward pattern:
 Domain modeling:
 - `StatefulAggregate` - State from events
 - `Aggregate` - Modern aggregate pattern
-- `Decider` / `EventStreamDecider` + `EventStreamEvolver` - Functional style
+- `Decider` (typed errors) / `EventStreamDecider` + `EventStreamEvolver` - Functional style; two separate families, plus Kotlin's `Decider`/`Evolver` (see the note under the Components table)
 - `AggregateRepository` / `StatefulAggregateRepository` - Load/save
 
 ### Database Schema Harness
