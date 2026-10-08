@@ -65,42 +65,6 @@ without any signal.
 
 Bug fixes only; no API breaks.
 
-### `MultiTableChangeListener`
-
-**Robustness fixes (LN-2 to LN-6, N-6, N-7).** `MultiTableChangeListener` fans PostgreSQL LISTEN/NOTIFY out to the
-event store and the queues. It has several silent-failure bugs:
-- It holds a pooled connection forever and never detects a half-open socket. It logs connection failures only at
-  DEBUG.
-- It schedules polling in the constructor, so `stop()` followed by `start()` never resumes.
-- A reconnect can drop the LISTENs for other channels, and `stop()` never closes the connection.
-- One non-JSON NOTIFY payload drops the whole poll batch whenever a duplicate filter is registered, which it always
-  is when the PostgreSQL queue is used. The batch includes event-store and queue wake-ups.
-- De-duplication is shared across channels instead of being per channel.
-- Mixed-case channel names never match, and `TableChangeNotification.equals` is not null-safe.
-
-**Fix:**
-- Rebuild the LISTEN connection loop on the design of the shard-owned queue's `ShardWakeupListener`:
-  `Connection.isValid()` probing with WARN logging, scheduling in `start()`, re-LISTEN on reconnect, and closing the
-  connection on stop.
-- De-duplicate per channel, with no key for non-JSON payloads.
-- Make `equals`/`hashCode` null- and class-safe.
-- Normalise channel names with `toLowerCase(Locale.ROOT)`.
-
-**Build the documented `MultiTableChangeListener.builder()` (N-14).** `LLM/LLM-foundation.md` shows a builder that
-does not exist, so the snippet does not compile. Build it rather than delete the snippet. Its `set…` names follow
-the `PostgresqlDurableQueues.builder()` convention, so the documented snippet compiles unchanged.
-- **Required:** `setJdbi`, `setJsonSerializer`, `setEventBus`.
-- **Optional, with the starter's defaults:** `setPollingInterval` (50 ms), `setFilterDuplicateNotifications` (true).
-- **Home for the new listener options,** so they need no new constructor overloads:
-  - a liveness-check interval;
-  - the log level and rate for connection loss;
-  - the per-channel de-duplication policy;
-  - the poll thread name;
-  - an optional dedicated connection outside the pool: `setListenerJdbi(Jdbi)` / `setListenerDataSource(DataSource)`
-    on the builder, and `essentials.multi-table-change-listener.dedicated-connection=true` in the starter.
-- **Compatibility:** keep the 5-argument constructor (stable API), and switch the starter and the internal call
-  sites to the builder. It is additive, so it can ship in a patch together with the robustness fixes.
-
 ### Spring Boot starters
 
 **Missing optional dependencies fail without saying what is missing (SB-2).** Every third-party integration has
@@ -196,8 +160,8 @@ shows up only as stale data.
     payload limit, uses bind parameters and joins the caller's transaction, so delivery happens on commit.
   - Liveness checks with a WARN on connection loss, a `ListenerReconnected` signal, and opt-in health and metrics.
   - The Javadoc states that delivery is at most once, with no replay across a reconnect.
-- Do not build it on `MultiTableChangeListener`. Extract the shared LISTEN-connection loop instead, so that class
-  gets the reconnect fixes too.
+- Do not build it on `MultiTableChangeListener`. Reuse the LISTEN-connection loop it got in 0.60.1 (liveness probe,
+  re-LISTEN on reconnect, close on stop) by extracting it.
 
 ### Fenced locks
 

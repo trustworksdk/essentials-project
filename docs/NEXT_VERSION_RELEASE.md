@@ -9,7 +9,7 @@ _Add an entry in the same commit as the change. Cite the commit or PR. Write it 
 changes for them, and what they must do, if anything. Purely internal refactors, test-only changes and CI
 plumbing that no user sees go in §7 at most, as one line._
 
-**So far:** no breaking change, eight framework changes with a behaviour change (§1.1), additive features
+**So far:** no breaking change, nine framework changes with a behaviour change (§1.1), additive features
 (§2), bug fixes (§3), plugin releases `0.60.0-6` and `0.60.0-7`, and example and tooling updates. Nothing here requires a migration
 step. The persisted
 format changes for one shape only, back to what 0.50 wrote: a type with a public `is`-getter (§1.1.2).
@@ -182,6 +182,24 @@ Also on the shard-owned ordered lane: the attempt bump at takeover now skips row
 messages and messages waiting out a retry backoff), so their `attempts` no longer goes up on a hand-over.
 (N-16, `dacd9ebb`)
 
+#### 1.1.9 `MultiTableChangeListener` behaves differently at the edges
+
+`MultiTableChangeListener` fans PostgreSQL LISTEN/NOTIFY out to the event store and the queues. Its robustness
+fixes (§3) change four things you can observe:
+
+- **Polling is scheduled in `start()`**, so `stop()` followed by `start()` resumes; before, it never did. A
+  listener that is never started through `Lifecycle` (the try-with-resources use) still starts polling on its first
+  `listenToNotificationsFor(...)`.
+- **Duplicates are detected per channel.** Notifications from different tables no longer collapse into one.
+- **Channel names are lower-cased** (`ListenNotify.resolveTableChangeChannelName`, `Locale.ROOT`). Before, a
+  mixed-case table name never delivered a notification: `LISTEN` folds an unquoted name to lower case, `pg_notify`
+  does not.
+- **`TableChangeNotification.equals`/`hashCode`** are null-safe and compare the concrete class. Before, a payload
+  without `table_name` threw an NPE, and two different notification types for the same table were equal. A
+  subclass that carries state must override both.
+
+(LN-4, LN-5, LN-6, N-6, N-7, `784da9df`…`5bae5aed`)
+
 ---
 
 ## 2. New features
@@ -203,6 +221,16 @@ messages and messages waiting out a retry backoff), so their `attempts` no longe
   send can no longer silently commit outside the business transaction. `Inbox.addMessageReceived` is unaffected:
   it opens its own unit of work. (RN-2, `3c783626`)
 
+- **`MultiTableChangeListener.builder()`**, as `LLM-foundation.md` already documented. Required: `setJdbi`,
+  `setJsonSerializer`, `setEventBus`. Optional: `setPollingInterval`, `setFilterDuplicateNotifications`,
+  `setChannelDeduplicationPolicy` (new `ChannelDeduplicationPolicy`), `setLivenessCheckInterval`,
+  `setConnectionLossLogLevel`, `setConnectionLossLogInterval`, `setPollThreadName`, and
+  `setListenerJdbi`/`setListenerDataSource` for a LISTEN connection outside the pool. The 5-argument constructor
+  stays. (N-14, `60256d4e`)
+- **`essentials.multi-table-change-listener.dedicated-connection=true`** (PostgreSQL starter, default `false`) gives
+  the listener its own LISTEN connection outside the pool, built from the same `JdbcConnectionDetails`.
+  (N-14, `60256d4e`)
+
 The plugin's features are in [§4](#4-the-essentials-claude-code-plugin).
 
 ---
@@ -221,6 +249,9 @@ The plugin's features are in [§4](#4-the-essentials-claude-code-plugin).
 | Schema harness | In `essentials.schema.mode=validate`, an event-stream table error now names the `AggregateType` as well as the table, and says to register the type at startup and re-run `emit`. The `emit` script starts with a `-- Contents:` header listing each module's tables and their aggregate types, the emit log line lists the same, and a registration that arrives after the emit exit was triggered logs a WARN | RN-5, `07d23d7d` |
 | Command bus | Two configurators registering the same command type failed only at the first `send`, with a `MultipleCommandHandlersFoundException` listing `EventStreamDeciderCommandHandlerAdapter@hash` entries. The adapter's `toString()` now names its `AggregateType` and deciders, and `EventStreamDeciderAndAggregateTypeConfigurator` WARNs at construction when a command type it registers is already handled by one of its adapters on that bus | CB-3, `7c0183fa` |
 | Durable queues (shard-owned) | On the ordered lane, a message waiting out its retry backoff blocked its key only in the owning instance's memory. After a rebalance, a graceful stop or a crash, the new owner delivered the key's next message first, breaking per-key order. On takeover the new owner now reloads the rows a retry pushed into the future (`visible_at > now()`, `attempts > 0`) and blocks their keys until each retry is due; the docs that called out the gap are updated. A delayed ordered message still does not block its key. The PostgreSQL and MongoDB engines were checked and never had this gap: they pick the next message per key with a query over all of the key's messages | N-16, RN-4, `dacd9ebb` |
+| `MultiTableChangeListener` | A half-open LISTEN connection was never detected, and a lost one was logged only at DEBUG, so the listener could go silent for good and every event-store and queue wake-up fell back to polling. It now probes the connection with `Connection.isValid()` every 10 s, logs a loss at WARN (at most once a minute) and reconnects on the next poll | LN-2, LN-3, N-7, `5bae5aed` |
+| `MultiTableChangeListener` | A `listenToNotificationsFor(...)` between a failed poll and the next one reopened the connection with only its own `LISTEN`, so every other table went silent. A new connection now listens to every registered table. `stop()` now runs `UNLISTEN *` and closes the connection; before, a pooled session was left listening | LN-3, `5bae5aed` |
+| `MultiTableChangeListener` | One NOTIFY whose payload was not JSON dropped the whole poll batch, event-store and queue wake-ups included, whenever a duplicate filter was registered, which the PostgreSQL queue always does. Such a payload now has no duplicate key and is never dropped | LN-5, N-6, `b88ad079` |
 | Durable queues (MongoDB) | Handing such a message back on an interrupted thread used to fail silently: the MongoDB driver refuses a connection on an interrupted thread (`Interrupted waiting for lock`), the failure was logged at DEBUG, and the message stayed marked as being delivered until the stuck-message reset. The hand-back now clears the interrupt flag for its write and restores it afterwards | `6ba568b5` |
 
 ---
