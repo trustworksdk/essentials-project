@@ -1,4 +1,4 @@
-schemaVersion: "1.1"
+schemaVersion: "1.4"
 slice: market_data.update_price
 kind: command
 bc: market_data
@@ -29,6 +29,8 @@ invariants:
 forbidden:
   - cross-slice-internal:market_data
   - benchmark-jdbc-price-table
+tier: cqrs-es
+flow: market-prices
 tests:
   unit: { present: false }
   integration: { present: false }

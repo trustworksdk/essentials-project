@@ -1,4 +1,4 @@
-schemaVersion: "1.1"
+schemaVersion: "1.4"
 slice: brokerage.trade_valuation
 kind: view
 bc: brokerage
@@ -36,6 +36,10 @@ invariants:
 forbidden:
   - cross-slice-internal:brokerage
   - cross-bc-writemodel:market_data
+tier: cqrs-es
+flow:
+  - market-prices
+  - trade-lifecycle
 tests:
   unit: { present: false }
   integration: { present: false }

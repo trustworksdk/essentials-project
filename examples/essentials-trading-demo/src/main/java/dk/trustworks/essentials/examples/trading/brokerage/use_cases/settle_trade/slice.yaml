@@ -1,4 +1,4 @@
-schemaVersion: "1.1"
+schemaVersion: "1.4"
 slice: brokerage.settle_trade
 kind: automation
 bc: brokerage
@@ -27,6 +27,12 @@ invariants:
     enforcedBy: SettleTradeProcessor
 forbidden:
   - cross-slice-internal:brokerage
+tier: cqrs-es
+featureFlag:
+  property: trading-demo.simulation.trade-lifecycle
+  havingValue: automated
+  matchIfMissing: true
+flow: trade-lifecycle
 tests:
   unit: { present: false }
   integration: { present: true, path: "src/test/java/dk/trustworks/essentials/examples/trading/brokerage/SettleTradeAutomationTest.java" }

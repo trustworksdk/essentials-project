@@ -1,4 +1,4 @@
-schemaVersion: "1.1"
+schemaVersion: "1.4"
 slice: brokerage.place_trade
 kind: command
 bc: brokerage
@@ -21,6 +21,8 @@ invariants:
     enforcedBy: Trade
 forbidden:
   - cross-slice-internal:brokerage
+tier: cqrs-es
+flow: trade-lifecycle
 tests:
   unit: { present: false }
   integration: { present: false }

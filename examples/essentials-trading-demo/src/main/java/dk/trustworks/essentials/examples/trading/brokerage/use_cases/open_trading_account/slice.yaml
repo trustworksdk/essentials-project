@@ -1,4 +1,4 @@
-schemaVersion: "1.1"
+schemaVersion: "1.4"
 slice: brokerage.open_trading_account
 kind: command
 bc: brokerage
@@ -24,6 +24,8 @@ invariants:
     enforcedBy: TradingAccounts
 forbidden:
   - cross-slice-internal:brokerage
+tier: cqrs-es
+flow: trading-account
 tests:
   unit: { present: false }
   integration: { present: false }

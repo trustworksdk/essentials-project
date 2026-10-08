@@ -25,6 +25,7 @@ invariants:
     enforcedBy: AccountGenerationArchivesQuery
 forbidden:
   - cross-slice-internal:brokerage
+tier: cqrs-es
 tests:
   unit: { present: false }
   integration: { present: false }

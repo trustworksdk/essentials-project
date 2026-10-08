@@ -21,6 +21,7 @@ invariants:
     enforcedBy: LatestPriceQuery
 forbidden:
   - cross-slice-internal:market_data
+tier: cqrs-es
 tests:
   unit: { present: false }
   integration: { present: false }

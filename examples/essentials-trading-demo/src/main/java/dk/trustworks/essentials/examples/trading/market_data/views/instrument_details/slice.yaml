@@ -1,4 +1,4 @@
-schemaVersion: "1.1"
+schemaVersion: "1.4"
 slice: market_data.instrument_details
 kind: view
 bc: market_data
@@ -30,6 +30,8 @@ invariants:
     enforcedBy: InstrumentDetailsProjection
 forbidden:
   - cross-slice-internal:market_data
+tier: cqrs-es
+flow: instrument-lifecycle
 tests:
   unit: { present: false }
   integration: { present: false }

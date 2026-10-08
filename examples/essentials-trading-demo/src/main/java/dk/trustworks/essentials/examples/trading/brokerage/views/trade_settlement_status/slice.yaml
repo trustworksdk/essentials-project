@@ -1,4 +1,4 @@
-schemaVersion: "1.1"
+schemaVersion: "1.4"
 slice: brokerage.trade_settlement_status
 kind: view
 bc: brokerage
@@ -36,6 +36,8 @@ invariants:
     enforcedBy: SettlementStatusView
 forbidden:
   - cross-slice-internal:brokerage
+tier: cqrs-es
+flow: trade-lifecycle
 tests:
   unit: { present: false }
   integration: { present: false }

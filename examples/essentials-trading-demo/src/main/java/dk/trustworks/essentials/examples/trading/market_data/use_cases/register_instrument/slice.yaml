@@ -1,4 +1,4 @@
-schemaVersion: "1.1"
+schemaVersion: "1.4"
 slice: market_data.register_instrument
 kind: command
 bc: market_data
@@ -24,6 +24,8 @@ invariants:
     enforcedBy: RegisterInstrument
 forbidden:
   - cross-slice-internal:market_data
+tier: cqrs-es
+flow: instrument-lifecycle
 tests:
   unit: { present: false }
   integration: { present: false }
