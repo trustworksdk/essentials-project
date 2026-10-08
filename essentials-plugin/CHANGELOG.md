@@ -99,6 +99,14 @@ targets, with a `-N` suffix for plugin-only releases.
   then failed its first read of an event, queue message or document with `NoClassDefFoundError`. S2.1
   now lists `org.objenesis:objenesis`, the generated backend POM declares it at `objenesis.version`, and
   `stack-lint` reports a project without it as `s2.1-objenesis` (Blocking).
+- **Docs for the next Essentials release (0.60.1).** The LLM docs describe the 0.60.1 fixes and additions,
+  each labelled "since 0.60.1": `awaitProcessed` and `AppendedEvents` for integration tests, `@IgnoresEventTypes`
+  and the unhandled-event-type WARN on views, the startup report, the wire-format check and removed-property
+  errors, the `MultiTableChangeListener` builder, the enqueue-outside-a-unit-of-work guard, redelivery-policy
+  warnings, shard-owned ordering across a handover, `hostname:pid` lock-manager and shard-owned ids, the
+  document DB fixes (unchecked `OptimisticLockingException`, private `@Id`, `getById`, reserved words), and the
+  empty `LongRange`. `LLM-traps.md` gains `ESS-124` (per-instance fenced-lock ownership) and `ESS-125`
+  (a view skipping an event type).
 
 ## 0.60.0-6 — targets Essentials 0.60.0
 - **`/essentials:upgrade` now moves a project to the plugin's Essentials release, code included.** A
