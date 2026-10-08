@@ -173,43 +173,6 @@ resume point is ahead of the head.
   - Update `LongRangeTest.test_empty_range` and add a release-note line.
 - The typed ranges in P2 build on this.
 
-### Document DB
-
-**`OptimisticLockingException` is checked (DD-1).**
-- **Problem:** it extends `Exception` but is thrown from Kotlin `update`/`save` without `@Throws`.
-- **Consequence:** javac rejects a Java `catch` for it, so Java callers must catch `Exception`.
-- **Fix:** make it extend `RuntimeException`. Do not add `@Throws`, which would force every Java caller to handle it.
-
-**A private `@Id` fails on every read (DD-3).**
-- **Problem:** an entity with a non-public `@Id` field passes `EntityConfiguration.configureEntity`, then fails every
-  read with an access exception.
-- **Consequence:** in a projection, every message is dead-lettered and the view stays empty, with no error at
-  startup.
-- **Fix:**
-  - Make the id property accessible at configuration time, or fail fast naming the entity and the field.
-  - Add a factory overload for `CharSequenceType` ids that is usable from Java; today only a raw-typed call compiles.
-  - Add a test that reads an entity with a private id.
-
-**`getById` throws a bare NPE (DD-5).** `DocumentDbRepository.getById` is `findById(id)!!`. A missing document
-therefore throws a `NullPointerException` without the entity type or id. **Fix:** throw a descriptive not-found
-exception naming both.
-
-### Fenced locks
-
-**Document per-instance re-entrancy (QL-1).** `FencedLockManager.tryAcquireLock` is re-entrant per lock-manager
-instance:
-- a second acquire in the same JVM returns the same `FencedLock`;
-- a `release()` by either caller releases the lock for both.
-
-When two components in one JVM use the same lock name, this breaks the documented singleton-worker pattern. **Fix
-now:** say in the Javadoc and the docs that ownership is per lock-manager instance, not per caller or thread. The
-API fix is in P2.
-
-**The default lock-manager id is the hostname (N-8, ES-8).** Two JVMs on one host, or two containers that share a
-hostname, both appear to own a lock in the lock table and in diagnostics. The fence token still protects
-correctness, but admin views and logs mislead. **Fix:** default to `hostname:pid`, and add a starter property to set
-the id explicitly.
-
 ### Command bus
 
 **A duplicate command registration fails only at first send (CB-3).**
@@ -359,22 +322,6 @@ Changing the default is deferred to the next major.
   `types-openapi`. It needs an exemption from the `ban-jackson-2` enforcer rule.
 - Add a `types-assertj` module with an `EssentialsAssertions.assertThat(CharSequenceType)` entry point.
 
-### Document DB
-
-**Do not apply the SQL reserved-word check to JSON property names (DD-2).** The document DB checks every entity
-property name, recursively, against the SQL reserved-keyword list:
-- It rejects ordinary names, including properties of JDK types such as `Optional.value` and `URI.path`.
-- The error never says that a reserved keyword is the cause.
-
-Property names reach SQL only as quoted JSONB path segments, bind names or prefixed index names, so the check
-protects nothing.
-
-**Fix:**
-- For JSON property and path segments, check only the character class and the length. Keep the reserved-word check
-  for table names.
-- Name "reserved keyword" in the message when it is the cause.
-- Do not recurse into `java.*` types.
-
 ### Handler coverage
 
 **Make unhandled event types visible (CB-4).** Event processors allow unmatched messages, so they silently drop any
@@ -465,9 +412,7 @@ Edit `LLM/` only; `essentials-plugin/references/llm/` is generated from it.
 
 ### Fenced locks and the unit of work
 
-- **Lock ownership and predicates (QL-1, QL-2).**
-  - Ownership is per lock-manager instance: a second `tryAcquireLock` in the same JVM returns the same lock, and its
-    `release()` releases it for everyone. Correct the "Singleton Worker Pattern" to match.
+- **Lock predicates (QL-2).** Per-instance ownership (QL-1) is documented; what remains is the two predicates.
   - `FencedLockManager.isLockedByThisLockManagerInstance(LockName)` looks the owner id up in the database and ignores
     the fence token.
   - `FencedLock.isLockedByThisLockManagerInstance()` reads the lock object's state and can be one confirmation

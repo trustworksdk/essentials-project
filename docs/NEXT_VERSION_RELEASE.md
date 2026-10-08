@@ -9,8 +9,9 @@ _Add an entry in the same commit as the change. Cite the commit or PR. Write it 
 changes for them, and what they must do, if anything. Purely internal refactors, test-only changes and CI
 plumbing that no user sees go in §7 at most, as one line._
 
-**So far:** no breaking change, two framework bug fixes with a behaviour change (§1.1), plugin releases
-`0.60.0-6` and `0.60.0-7`, and example and tooling updates. Nothing here requires a migration step. The persisted
+**So far:** no breaking change, four framework changes with a behaviour change (§1.1), two additive features
+(§2), plugin releases `0.60.0-6` and `0.60.0-7`, and example and tooling updates. Nothing here requires a migration
+step. The persisted
 format changes for one shape only, back to what 0.50 wrote: a type with a public `is`-getter (§1.1.2).
 
 ---
@@ -30,7 +31,8 @@ format changes for one shape only, back to what 0.50 wrote: a type with a public
 
 ## 1. Breaking — what you MUST apply
 
-None so far. No public API changed, and no configuration key was added, renamed or removed.
+None so far. No public API was removed or changed incompatibly, and no configuration key was renamed or removed;
+the additions are listed in §2.
 
 ### 1.1 ⚠️ Silent behaviour changes
 
@@ -102,11 +104,39 @@ Pinned by `EssentialsObjectMappersWireFormatTest` (`postgresql-event-store`), `E
 and `EssentialTypesJacksonModuleTest`. A startup check that also catches a mapper Essentials did not build is still
 open; see `docs/ROADMAP-0.6x.md` §0.1.
 
+#### 1.1.3 `OptimisticLockingException` is unchecked
+
+`postgresql-document-db`'s `OptimisticLockingException` now extends `RuntimeException` instead of `Exception`. It
+was always thrown from Kotlin without `@Throws`, so Java code could not catch it by name and had to catch
+`Exception`. What changes for you:
+
+- Java code can now `catch (OptimisticLockingException e)`.
+- A `catch (RuntimeException e)` now catches it too.
+- **Spring `@Transactional` now rolls back on it** by default, since Spring rolls back on unchecked exceptions.
+  Before, a checked exception escaping a `@Transactional` method committed the transaction.
+
+Binary-compatible: code compiled against 0.60.0 runs unchanged. (DD-1, `e632ec31`)
+
+#### 1.1.4 The default fenced-lock-manager id is `<hostname>:<pid>`
+
+When no lock-manager id is configured, the PostgreSQL and MongoDB fenced lock managers now default to
+`<hostname>:<pid>` instead of the bare hostname. Two JVMs on one host, or two containers sharing a hostname, no
+longer appear as the same owner. The lock table, the admin API and the log lines show the new holder string.
+Mutual exclusion has always come from the fence token, so a rolling upgrade that mixes old and new instances is
+safe. To keep a fixed id, set `essentials.fenced-lock-manager.instance-id` (see §2). (N-8, `206c7e58`)
+
 ---
 
 ## 2. New features
 
-No framework features so far. The plugin's are in [§4](#4-the-essentials-claude-code-plugin).
+- **`essentials.fenced-lock-manager.instance-id`** (PostgreSQL and MongoDB starters) sets the fenced-lock-manager
+  id explicitly; `FencedLockManagerSettings.defaultLockManagerInstanceId()` returns the default (§1.1.4).
+  (N-8, `206c7e58`)
+- **`DocumentDbRepositoryFactory.createForCharSequenceTypeId(Class|KClass)`** creates a repository for an entity
+  whose id is a Java `CharSequenceType`. Until now only a raw-typed `create(...)` compiled from Java, and it failed
+  at runtime. (DD-3, `47285813`)
+
+The plugin's features are in [§4](#4-the-essentials-claude-code-plugin).
 
 ---
 
@@ -116,6 +146,9 @@ No framework features so far. The plugin's are in [§4](#4-the-essentials-claude
 |---|---|---|
 | Durable queues | A message in flight when its consumer stops is no longer dead-lettered; see [§1.1.1](#111-a-message-in-flight-when-its-consumer-stops-is-redelivered-not-dead-lettered) | `6ba568b5` |
 | JSON (all Essentials mappers) | A document persisted before a primitive component was added failed every read with `Cannot map null into type int`: Jackson 3 enables `FAIL_ON_NULL_FOR_PRIMITIVES` by default, and Essentials left it on. It is now disabled, so the missing primitive reads as `0`/`false`, as under Jackson 2. Only reading changes; the written bytes do not | with §1.1.2 |
+| Document DB | An entity with a non-public `@Id` field (Java `@Id private OrderId id`) failed every save, update and delete with `IllegalCallableAccessException`, which dead-lettered every projection message while startup looked fine. The field is now made accessible when the repository is created; if the JVM refuses, creation fails naming the entity and the field | DD-3, `47285813` |
+| Document DB | `getById` threw a bare `NullPointerException` when nothing was found. It now throws `DocumentEntityNotFoundException`, naming the entity class and the id. It extends `NullPointerException`, so code that caught the old NPE still works | DD-5, `1b828ae2` |
+| Document DB | Entity property names and JSON path segments were checked against the SQL reserved-keyword list, recursively and into JDK types, so ordinary names (`order`, `user`, `key`, `path`, `Optional.value`, `URI.path`) were rejected without saying why. They are now checked only for allowed characters and a 63-character maximum; they reach SQL only quoted or bound. Table names still reject reserved words, and that error now says "is a reserved SQL keyword" | DD-2, `ca2b2662` |
 | Durable queues (MongoDB) | Handing such a message back on an interrupted thread used to fail silently: the MongoDB driver refuses a connection on an interrupted thread (`Interrupted waiting for lock`), the failure was logged at DEBUG, and the message stayed marked as being delivered until the stuck-message reset. The hand-back now clears the interrupt flag for its write and restores it afterwards | `6ba568b5` |
 
 ---
@@ -182,6 +215,9 @@ Not published; listed because they are the reference for how to use the framewor
 - **`LLM/LLM-traps.md`** gains `ESS-119`–`ESS-123` for 0.60 upgrade symptoms: `QueuedMessageCounts` equality,
   the removed CDC live-drain stall alert, and three groups of compile errors (Jackson 2 serializers and WAL
   filters, `useOrderedUnorderedQuery`, the removed 0.50 `forRemoval` members) (`e088534c`).
+- **Fenced-lock ownership is per lock-manager instance**, not per caller or thread: a second `tryAcquireLock` in
+  the same JVM returns the same lock, and `release()` by either caller releases it for both. Javadoc and
+  `LLM-foundation.md` say so, and the Singleton Worker Pattern gains an in-process guard. (QL-1, `9e211beb`)
 - **Design documents:** `docs/slice-atlas-design.md` and `docs/slice-enrich-design.md` (`764af560`, `73d1993f`).
 
 ---
