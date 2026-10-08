@@ -20,6 +20,15 @@ because a patch must not reject a setup that works today:
 - N-15's "the shard-owned builder requires a UnitOfWork factory" becomes a WARN.
 - QL-3's redelivery-policy validation WARNs in 0.60.1 and fails from 0.61.
 
+Added to 0.60.1 on 2026-10-08:
+- **CB-4 per processor type:** only `ViewEventProcessor` WARNs about an ignored event type (with an
+  `@IgnoresEventTypes` opt-out); `EventProcessor` and `InTransactionEventProcessor` log at DEBUG and count, because
+  skipping is normal there. A view's handled and unhandled types are summarised at startup.
+- **N-11 scope:** `essentials.immutable-jackson-module-enabled` defaults to `true` for the persistence mapper only;
+  Boot's web mapper keeps the 0.60.0 behaviour (module only with an explicit `true`).
+- **A startup report:** the Essentials startup findings are collected and printed as one block when the
+  application is ready.
+
 ---
 
 ## 0. Planned for 0.60.0 but never shipped
