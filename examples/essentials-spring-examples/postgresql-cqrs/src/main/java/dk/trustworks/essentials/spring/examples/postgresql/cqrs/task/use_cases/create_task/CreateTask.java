@@ -17,7 +17,6 @@
 package dk.trustworks.essentials.spring.examples.postgresql.cqrs.task.use_cases.create_task;
 
 import dk.trustworks.essentials.spring.examples.postgresql.cqrs.task.types.TaskId;
-import dk.trustworks.essentials.spring.examples.postgresql.cqrs.task.routing.TaskCommand;
 
 /**
  * Create a task, opening it with the given text.
@@ -28,5 +27,5 @@ import dk.trustworks.essentials.spring.examples.postgresql.cqrs.task.routing.Tas
  * <p>The opening text does not become a comment here -- {@code TaskCreated} carries it, and the
  * {@code comment_on_task_created} automation turns it into one by issuing {@code AddComment}.
  */
-public record CreateTask(TaskId taskId, String comment) implements TaskCommand {
+public record CreateTask(TaskId taskId, String comment) {
 }

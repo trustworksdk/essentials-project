@@ -34,15 +34,13 @@ This was wrong until recently — `createTask(taskId, comment)` built the aggreg
 somewhere no command, handler or endpoint could reach. All four repository wrappers in this module now have
 the same shape; see `banking/CLAUDE.md` for the same note.
 
-## `routing/TaskCommand`
+## No `routing/`
 
-`TaskCommand` is the BC-private marker interface every command in this context implements — the law's
-`routing/` concept. It is deliberately **not** sealed: that is what lets a new command slice add a file
-without editing an existing one. It is BC-private; a foreign context implementing it would route its command
-into this aggregate.
-
-Note that `banking` and `shipping` have no equivalent — this context is the only one here that demonstrates
-the pattern.
+The context has no `routing/` directory, and that is the law, not an omission: `routing/` is decider-lane-only
+(`rules/slice-design.md` § Aggregate style). On this lane each command handler already holds the `TaskId` and hands
+it to `Tasks`, so there is no decider to filter and no command-to-stream resolver to feed. A `TaskCommand` marker
+interface lived here once and answered neither question; `slice-check` gate 17 reports one as a decider-style
+vestige. `CreateTask` and `AddComment` are routed by type alone, like the commands in `banking` and `shipping`.
 
 ## `TaskEvent` is sealed
 
@@ -53,12 +51,11 @@ single sanctioned cross-slice edit in the law.
 
 ## Boundaries
 
-The importable surface is `events/` and `types/`. `routing/` and `aggregates/` are BC-private. Nothing
+The importable surface is `events/` and `types/`. `aggregates/` is BC-private. Nothing
 outside `task` imports from it today.
 
 ## Directories beside the slices
 
 - `events/` — `TaskEvent` and its variants, one per file
 - `types/` — `TaskId`, `Comment`
-- `routing/` — `TaskCommand`
 - `aggregates/` — `Task` and its repository wrapper `Tasks`
