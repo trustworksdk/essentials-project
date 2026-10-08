@@ -554,7 +554,7 @@ Two callers in one JVM that share a lock name and must not overlap (a `@Schedule
 ### Usage
 
 ```java
-// Synchronous
+// Synchronous - close() calls release(), but is declared `throws Exception`: catch or declare it, or use try/finally
 try (FencedLock lock = lockManager.acquireLock(LockName.of("MyLock"))) {
     performCriticalWork();
 }

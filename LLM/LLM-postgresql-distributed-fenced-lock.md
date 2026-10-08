@@ -135,11 +135,12 @@ All `FencedLockManager` API methods inherited from foundation. See [LLM-foundati
 import dk.trustworks.essentials.components.foundation.fencedlock.LockName;
 
 // Short-running locks with automatic release
-try (var handle = lockManager.acquireLock(
-        LockName.of("order-processor")) {
+try (var handle = lockManager.acquireLock(LockName.of("order-processor"))) {
     processOrders(handle.getCurrentToken());
-} 
+}
 ```
+
+`FencedLock.close()` calls `release()` but is declared `throws Exception`, so the enclosing method must catch or declare `Exception`. Where it cannot, use `try`/`finally` with `lock.release()`.
 
 ### Pattern: Try-Acquire (Non-Blocking)
 
@@ -152,7 +153,7 @@ if (lock.isPresent()) {
     try {
         processOrders(lock.get().getCurrentToken());
     } finally {
-        lockManager.releaseLock(lock.get());
+        lock.get().release();
     }
 }
 ```
@@ -289,11 +290,14 @@ Ownership is per lock-manager instance, not per caller or thread. While this man
 // ❌ WRONG - Lock not released on exception
 FencedLock lock = lockManager.acquireLock(lockName);
 doWork(lock.getCurrentToken());
-lockManager.releaseLock(lock);  // Never called if doWork() throws
+lock.release();  // Never called if doWork() throws
 
-// ✅ RIGHT - Try-with-resources
-try (var handle = lockManager.acquireLock(lockName)) {
-    doWork(handle.getCurrentToken());
+// ✅ RIGHT - try/finally (or try-with-resources, see "Try-With-Resources" above)
+FencedLock lock = lockManager.acquireLock(lockName);
+try {
+    doWork(lock.getCurrentToken());
+} finally {
+    lock.release();
 }
 ```
 

@@ -585,7 +585,8 @@ try {
     lock.release();
 }
 
-// Try-with-resources pattern
+// Try-with-resources pattern - close() calls release(), but is declared `throws Exception`,
+// so the enclosing method must catch or declare it
 try (FencedLock lock = lockManager.acquireLock(LockName.of("MyLock"))) {
     performCriticalWork();
 }

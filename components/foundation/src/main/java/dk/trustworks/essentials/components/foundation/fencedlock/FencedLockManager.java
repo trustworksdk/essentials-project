@@ -112,7 +112,8 @@ public interface FencedLockManager extends Lifecycle {
      * Is the lock already acquired by another JVM node
      *
      * @param lockName the name of the lock
-     * @return true of the lock is acquired by this JVM node
+     * @return true if the lock is acquired by another {@link FencedLockManager} instance (another JVM node), false if it
+     * is not locked or is locked by this {@link FencedLockManager} instance
      */
     boolean isLockAcquiredByAnotherLockManagerInstance(LockName lockName);
 
