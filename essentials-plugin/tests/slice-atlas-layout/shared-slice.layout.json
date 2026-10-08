@@ -1,7 +1,7 @@
 {
  "atlas": {
   "bounds": {
-   "h": 1152,
+   "h": 1408,
    "w": 1152,
    "x": 0,
    "y": 0
@@ -10,7 +10,7 @@
   "cards": [
    {
     "ghost": false,
-    "h": 72,
+    "h": 88,
     "id": "checkout@orders|orders.place_order|trigger|POST /api/orders",
     "lane": "trigger",
     "name": "POST /api/orders",
@@ -24,7 +24,7 @@
    },
    {
     "ghost": false,
-    "h": 72,
+    "h": 88,
     "id": "checkout@orders|orders.place_order|command|PlaceOrder",
     "lane": "action",
     "name": "PlaceOrder",
@@ -34,11 +34,11 @@
     "slice": "orders.place_order",
     "w": 168,
     "x": 228,
-    "y": 256
+    "y": 272
    },
    {
     "ghost": false,
-    "h": 72,
+    "h": 88,
     "id": "checkout@orders|orders.place_order|event|OrderPlaced",
     "lane": "stream:Order",
     "name": "OrderPlaced",
@@ -48,11 +48,11 @@
     "slice": "orders.place_order",
     "w": 168,
     "x": 228,
-    "y": 352
+    "y": 384
    },
    {
     "ghost": false,
-    "h": 72,
+    "h": 88,
     "id": "checkout@orders|orders.order_history|trigger|GET /api/orders/history",
     "lane": "trigger",
     "name": "GET /api/orders/history",
@@ -66,7 +66,7 @@
    },
    {
     "ghost": false,
-    "h": 72,
+    "h": 88,
     "id": "checkout@orders|orders.order_history|view|OrderHistory",
     "lane": "action",
     "name": "OrderHistory",
@@ -76,11 +76,11 @@
     "slice": "orders.order_history",
     "w": 168,
     "x": 436,
-    "y": 256
+    "y": 272
    },
    {
     "ghost": false,
-    "h": 72,
+    "h": 88,
     "id": "returns@orders|orders.return_order|trigger|POST /api/orders/{id}/return",
     "lane": "trigger",
     "name": "POST /api/orders/{id}/return",
@@ -90,11 +90,11 @@
     "slice": "orders.return_order",
     "w": 168,
     "x": 228,
-    "y": 668
+    "y": 716
    },
    {
     "ghost": false,
-    "h": 72,
+    "h": 88,
     "id": "returns@orders|orders.return_order|command|ReturnOrder",
     "lane": "action",
     "name": "ReturnOrder",
@@ -104,11 +104,11 @@
     "slice": "orders.return_order",
     "w": 168,
     "x": 228,
-    "y": 764
+    "y": 828
    },
    {
     "ghost": false,
-    "h": 72,
+    "h": 88,
     "id": "returns@orders|orders.return_order|event|OrderReturned",
     "lane": "stream:Order",
     "name": "OrderReturned",
@@ -118,11 +118,11 @@
     "slice": "orders.return_order",
     "w": 168,
     "x": 228,
-    "y": 860
+    "y": 940
    },
    {
     "ghost": false,
-    "h": 72,
+    "h": 88,
     "id": "returns@orders|orders.order_history|view|OrderHistory",
     "lane": "action",
     "name": "OrderHistory",
@@ -132,11 +132,11 @@
     "slice": "orders.order_history",
     "w": 168,
     "x": 436,
-    "y": 764
+    "y": 828
    },
    {
     "ghost": false,
-    "h": 72,
+    "h": 88,
     "id": "returns@orders|orders.refund_on_return|automation|refund_on_return",
     "lane": "trigger",
     "name": "refund_on_return",
@@ -146,25 +146,11 @@
     "slice": "orders.refund_on_return",
     "w": 168,
     "x": 644,
-    "y": 668
+    "y": 716
    },
    {
     "ghost": false,
-    "h": 72,
-    "id": "returns@orders|orders.refund_on_return|command|RefundOrder",
-    "lane": "action",
-    "name": "RefundOrder",
-    "portal": false,
-    "role": "command",
-    "segment": "returns@orders",
-    "slice": "orders.refund_on_return",
-    "w": 168,
-    "x": 644,
-    "y": 764
-   },
-   {
-    "ghost": false,
-    "h": 72,
+    "h": 88,
     "id": "returns@orders|orders.refund_order|command|RefundOrder",
     "lane": "action",
     "name": "RefundOrder",
@@ -174,11 +160,11 @@
     "slice": "orders.refund_order",
     "w": 168,
     "x": 852,
-    "y": 764
+    "y": 828
    },
    {
     "ghost": false,
-    "h": 72,
+    "h": 88,
     "id": "returns@orders|orders.refund_order|event|OrderRefunded",
     "lane": "stream:Order",
     "name": "OrderRefunded",
@@ -188,12 +174,12 @@
     "slice": "orders.refund_order",
     "w": 168,
     "x": 852,
-    "y": 860
+    "y": 940
    }
   ],
   "contexts": [
    {
-    "h": 1024,
+    "h": 1280,
     "id": "orders",
     "w": 1024,
     "x": 64,
@@ -228,12 +214,6 @@
    {
     "cross": false,
     "from": "returns@orders|orders.refund_on_return|automation|refund_on_return",
-    "kind": "dispatches",
-    "to": "returns@orders|orders.refund_on_return|command|RefundOrder"
-   },
-   {
-    "cross": false,
-    "from": "returns@orders|orders.refund_on_return|command|RefundOrder",
     "kind": "dispatches",
     "to": "returns@orders|orders.refund_order|command|RefundOrder"
    },
@@ -276,7 +256,7 @@
     "slice": "orders.place_order",
     "w": 192,
     "x": 216,
-    "y": 448
+    "y": 496
    },
    {
     "h": 132,
@@ -284,7 +264,7 @@
     "slice": "orders.order_history",
     "w": 192,
     "x": 424,
-    "y": 448
+    "y": 496
    },
    {
     "h": 64,
@@ -292,7 +272,7 @@
     "slice": "orders.return_order",
     "w": 192,
     "x": 216,
-    "y": 956
+    "y": 1052
    },
    {
     "h": 64,
@@ -300,7 +280,7 @@
     "slice": "orders.refund_on_return",
     "w": 192,
     "x": 632,
-    "y": 956
+    "y": 1052
    },
    {
     "h": 64,
@@ -308,7 +288,7 @@
     "slice": "orders.refund_order",
     "w": 192,
     "x": 840,
-    "y": 956
+    "y": 1052
    }
   ],
   "segments": [
@@ -328,26 +308,26 @@
       "x": 424
      }
     ],
-    "h": 484,
+    "h": 532,
     "id": "checkout@orders",
     "lanes": [
      {
-      "h": 96,
+      "h": 112,
       "id": "trigger",
       "label": "Trigger",
       "y": 148
      },
      {
-      "h": 96,
+      "h": 112,
       "id": "action",
       "label": "Command · View",
-      "y": 244
+      "y": 260
      },
      {
-      "h": 96,
+      "h": 112,
       "id": "stream:Order",
       "label": "Events · Order",
-      "y": 340
+      "y": 372
      }
     ],
     "process": "checkout",
@@ -383,32 +363,32 @@
       "x": 840
      }
     ],
-    "h": 416,
+    "h": 464,
     "id": "returns@orders",
     "lanes": [
      {
-      "h": 96,
+      "h": 112,
       "id": "trigger",
       "label": "Trigger",
-      "y": 656
+      "y": 704
      },
      {
-      "h": 96,
+      "h": 112,
       "id": "action",
       "label": "Command · View",
-      "y": 752
+      "y": 816
      },
      {
-      "h": 96,
+      "h": 112,
       "id": "stream:Order",
       "label": "Events · Order",
-      "y": 848
+      "y": 928
      }
     ],
     "process": "returns",
     "w": 960,
     "x": 88,
-    "y": 620
+    "y": 668
    }
   ]
  },

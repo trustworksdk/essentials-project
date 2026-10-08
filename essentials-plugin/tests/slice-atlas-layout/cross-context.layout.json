@@ -1,7 +1,7 @@
 {
  "atlas": {
   "bounds": {
-   "h": 2176,
+   "h": 2688,
    "w": 2368,
    "x": 0,
    "y": 0
@@ -25,7 +25,7 @@
   "cards": [
    {
     "ghost": false,
-    "h": 72,
+    "h": 88,
     "id": "checkout@billing|billing.invoice_on_order|automation|invoice_on_order",
     "lane": "trigger",
     "name": "invoice_on_order",
@@ -39,21 +39,7 @@
    },
    {
     "ghost": false,
-    "h": 72,
-    "id": "checkout@billing|billing.invoice_on_order|command|IssueInvoice",
-    "lane": "action",
-    "name": "IssueInvoice",
-    "portal": false,
-    "role": "command",
-    "segment": "checkout@billing",
-    "slice": "billing.invoice_on_order",
-    "w": 168,
-    "x": 228,
-    "y": 256
-   },
-   {
-    "ghost": false,
-    "h": 72,
+    "h": 88,
     "id": "checkout@billing|billing.issue_invoice|command|IssueInvoice",
     "lane": "action",
     "name": "IssueInvoice",
@@ -63,11 +49,11 @@
     "slice": "billing.issue_invoice",
     "w": 168,
     "x": 436,
-    "y": 256
+    "y": 272
    },
    {
     "ghost": false,
-    "h": 72,
+    "h": 88,
     "id": "checkout@billing|billing.issue_invoice|event|InvoiceIssued",
     "lane": "stream:Invoice",
     "name": "InvoiceIssued",
@@ -77,11 +63,11 @@
     "slice": "billing.issue_invoice",
     "w": 168,
     "x": 436,
-    "y": 352
+    "y": 384
    },
    {
     "ghost": false,
-    "h": 72,
+    "h": 88,
     "id": "checkout@billing|billing.issue_invoice|event|InvoiceRejected",
     "lane": "stream:Invoice",
     "name": "InvoiceRejected",
@@ -91,11 +77,11 @@
     "slice": "billing.issue_invoice",
     "w": 168,
     "x": 436,
-    "y": 436
+    "y": 484
    },
    {
     "ghost": false,
-    "h": 72,
+    "h": 88,
     "id": "~billing.dunning@billing|billing.dunning|automation|0 0 6 * * *",
     "lane": "trigger",
     "name": "0 0 6 * * *",
@@ -105,25 +91,11 @@
     "slice": "billing.dunning",
     "w": 168,
     "x": 228,
-    "y": 892
+    "y": 956
    },
    {
     "ghost": false,
-    "h": 72,
-    "id": "~billing.dunning@billing|billing.dunning|command|IssueInvoice",
-    "lane": "action",
-    "name": "IssueInvoice",
-    "portal": false,
-    "role": "command",
-    "segment": "~billing.dunning@billing",
-    "slice": "billing.dunning",
-    "w": 168,
-    "x": 228,
-    "y": 988
-   },
-   {
-    "ghost": false,
-    "h": 72,
+    "h": 88,
     "id": "~billing.psp_webhook@billing|billing.psp_webhook|external|Psp",
     "lane": "trigger",
     "name": "Psp",
@@ -133,11 +105,11 @@
     "slice": "billing.psp_webhook",
     "w": 168,
     "x": 228,
-    "y": 1236
+    "y": 1332
    },
    {
     "ghost": false,
-    "h": 72,
+    "h": 88,
     "id": "~billing.psp_webhook@billing|billing.psp_webhook|command|SettleInvoice",
     "lane": "action",
     "name": "SettleInvoice",
@@ -147,11 +119,11 @@
     "slice": "billing.psp_webhook",
     "w": 168,
     "x": 228,
-    "y": 1332
+    "y": 1444
    },
    {
     "ghost": false,
-    "h": 72,
+    "h": 88,
     "id": "~billing.psp_webhook@billing|billing.psp_webhook|event|PaymentReceived",
     "lane": "events",
     "name": "PaymentReceived",
@@ -161,11 +133,11 @@
     "slice": "billing.psp_webhook",
     "w": 168,
     "x": 228,
-    "y": 1428
+    "y": 1556
    },
    {
     "ghost": false,
-    "h": 72,
+    "h": 88,
     "id": "~unattached:billing@billing|billing.invoice_list|view|InvoiceList",
     "lane": "action",
     "name": "InvoiceList",
@@ -175,11 +147,11 @@
     "slice": "billing.invoice_list",
     "w": 168,
     "x": 228,
-    "y": 1772
+    "y": 1932
    },
    {
     "ghost": false,
-    "h": 72,
+    "h": 88,
     "id": "checkout@orders|orders.place_order|trigger|POST /api/orders",
     "lane": "trigger",
     "name": "POST /api/orders",
@@ -193,7 +165,7 @@
    },
    {
     "ghost": false,
-    "h": 72,
+    "h": 88,
     "id": "checkout@orders|orders.place_order|command|PlaceOrder",
     "lane": "action",
     "name": "PlaceOrder",
@@ -203,11 +175,11 @@
     "slice": "orders.place_order",
     "w": 168,
     "x": 1092,
-    "y": 256
+    "y": 272
    },
    {
     "ghost": false,
-    "h": 72,
+    "h": 88,
     "id": "checkout@orders|orders.place_order|event|OrderPlaced",
     "lane": "stream:Order",
     "name": "OrderPlaced",
@@ -217,11 +189,11 @@
     "slice": "orders.place_order",
     "w": 168,
     "x": 1092,
-    "y": 352
+    "y": 384
    },
    {
     "ghost": false,
-    "h": 72,
+    "h": 88,
     "id": "~unattached:orders@orders|orders.order_list|trigger|GET /api/orders",
     "lane": "trigger",
     "name": "GET /api/orders",
@@ -231,11 +203,11 @@
     "slice": "orders.order_list",
     "w": 168,
     "x": 1092,
-    "y": 668
+    "y": 716
    },
    {
     "ghost": false,
-    "h": 72,
+    "h": 88,
     "id": "~unattached:orders@orders|orders.order_list|view|OrderList",
     "lane": "action",
     "name": "OrderList",
@@ -245,11 +217,11 @@
     "slice": "orders.order_list",
     "w": 168,
     "x": 1092,
-    "y": 764
+    "y": 828
    },
    {
     "ghost": false,
-    "h": 72,
+    "h": 88,
     "id": "checkout@shipping|shipping.ship_on_invoice|automation|ship_on_invoice",
     "lane": "trigger",
     "name": "ship_on_invoice",
@@ -263,21 +235,7 @@
    },
    {
     "ghost": false,
-    "h": 72,
-    "id": "checkout@shipping|shipping.ship_on_invoice|command|ShipOrder",
-    "lane": "action",
-    "name": "ShipOrder",
-    "portal": false,
-    "role": "command",
-    "segment": "checkout@shipping",
-    "slice": "shipping.ship_on_invoice",
-    "w": 168,
-    "x": 1700,
-    "y": 256
-   },
-   {
-    "ghost": false,
-    "h": 72,
+    "h": 88,
     "id": "checkout@shipping|shipping.ship_order|command|ShipOrder",
     "lane": "action",
     "name": "ShipOrder",
@@ -287,11 +245,11 @@
     "slice": "shipping.ship_order",
     "w": 168,
     "x": 1908,
-    "y": 256
+    "y": 272
    },
    {
     "ghost": false,
-    "h": 72,
+    "h": 88,
     "id": "checkout@shipping|shipping.ship_order|event|OrderShipped",
     "lane": "stream:Shipment",
     "name": "OrderShipped",
@@ -301,11 +259,11 @@
     "slice": "shipping.ship_order",
     "w": 168,
     "x": 1908,
-    "y": 352
+    "y": 384
    },
    {
     "ghost": false,
-    "h": 72,
+    "h": 88,
     "id": "~unattached:shipping@shipping|shipping.notify_carrier|external|Carrier",
     "lane": "external",
     "name": "Carrier",
@@ -315,12 +273,12 @@
     "slice": "shipping.notify_carrier",
     "w": 168,
     "x": 1700,
-    "y": 792
+    "y": 872
    }
   ],
   "contexts": [
    {
-    "h": 2048,
+    "h": 2560,
     "id": "billing",
     "w": 768,
     "x": 64,
@@ -345,12 +303,6 @@
    {
     "cross": false,
     "from": "checkout@billing|billing.invoice_on_order|automation|invoice_on_order",
-    "kind": "dispatches",
-    "to": "checkout@billing|billing.invoice_on_order|command|IssueInvoice"
-   },
-   {
-    "cross": false,
-    "from": "checkout@billing|billing.invoice_on_order|command|IssueInvoice",
     "kind": "dispatches",
     "to": "checkout@billing|billing.issue_invoice|command|IssueInvoice"
    },
@@ -406,12 +358,6 @@
     "cross": false,
     "from": "checkout@shipping|shipping.ship_on_invoice|automation|ship_on_invoice",
     "kind": "dispatches",
-    "to": "checkout@shipping|shipping.ship_on_invoice|command|ShipOrder"
-   },
-   {
-    "cross": false,
-    "from": "checkout@shipping|shipping.ship_on_invoice|command|ShipOrder",
-    "kind": "dispatches",
     "to": "checkout@shipping|shipping.ship_order|command|ShipOrder"
    },
    {
@@ -427,14 +373,8 @@
     "to": "~unattached:shipping@shipping|shipping.notify_carrier|external|Carrier"
    },
    {
-    "cross": false,
-    "from": "~billing.dunning@billing|billing.dunning|automation|0 0 6 * * *",
-    "kind": "dispatches",
-    "to": "~billing.dunning@billing|billing.dunning|command|IssueInvoice"
-   },
-   {
     "cross": true,
-    "from": "~billing.dunning@billing|billing.dunning|command|IssueInvoice",
+    "from": "~billing.dunning@billing|billing.dunning|automation|0 0 6 * * *",
     "kind": "dispatches",
     "to": "checkout@billing|billing.issue_invoice|command|IssueInvoice"
    },
@@ -506,7 +446,7 @@
     "slice": "billing.invoice_on_order",
     "w": 192,
     "x": 216,
-    "y": 532
+    "y": 596
    },
    {
     "h": 272,
@@ -514,7 +454,7 @@
     "slice": "billing.issue_invoice",
     "w": 192,
     "x": 424,
-    "y": 532
+    "y": 596
    },
    {
     "h": 64,
@@ -522,7 +462,7 @@
     "slice": "billing.dunning",
     "w": 192,
     "x": 216,
-    "y": 1084
+    "y": 1180
    },
    {
     "h": 64,
@@ -530,7 +470,7 @@
     "slice": "billing.psp_webhook",
     "w": 192,
     "x": 216,
-    "y": 1524
+    "y": 1668
    },
    {
     "h": 64,
@@ -538,7 +478,7 @@
     "slice": "billing.invoice_list",
     "w": 192,
     "x": 216,
-    "y": 1868
+    "y": 2044
    },
    {
     "h": 132,
@@ -546,7 +486,7 @@
     "slice": "orders.place_order",
     "w": 192,
     "x": 1080,
-    "y": 448
+    "y": 496
    },
    {
     "h": 64,
@@ -554,7 +494,7 @@
     "slice": "orders.order_list",
     "w": 192,
     "x": 1080,
-    "y": 860
+    "y": 940
    },
    {
     "h": 64,
@@ -562,7 +502,7 @@
     "slice": "shipping.ship_on_invoice",
     "w": 192,
     "x": 1688,
-    "y": 448
+    "y": 496
    },
    {
     "h": 64,
@@ -570,7 +510,7 @@
     "slice": "shipping.ship_order",
     "w": 192,
     "x": 1896,
-    "y": 448
+    "y": 496
    },
    {
     "h": 64,
@@ -578,7 +518,7 @@
     "slice": "shipping.notify_carrier",
     "w": 192,
     "x": 1688,
-    "y": 888
+    "y": 984
    }
   ],
   "segments": [
@@ -598,26 +538,26 @@
       "x": 424
      }
     ],
-    "h": 708,
+    "h": 772,
     "id": "checkout@billing",
     "lanes": [
      {
-      "h": 96,
+      "h": 112,
       "id": "trigger",
       "label": "Trigger",
       "y": 148
      },
      {
-      "h": 96,
+      "h": 112,
       "id": "action",
       "label": "Command · View",
-      "y": 244
+      "y": 260
      },
      {
-      "h": 180,
+      "h": 212,
       "id": "stream:Invoice",
       "label": "Events · Invoice",
-      "y": 340
+      "y": 372
      }
     ],
     "process": "checkout",
@@ -635,26 +575,26 @@
       "x": 216
      }
     ],
-    "h": 320,
+    "h": 352,
     "id": "~billing.dunning@billing",
     "lanes": [
      {
-      "h": 96,
+      "h": 112,
       "id": "trigger",
       "label": "Trigger",
-      "y": 880
+      "y": 944
      },
      {
-      "h": 96,
+      "h": 112,
       "id": "action",
       "label": "Command · View",
-      "y": 976
+      "y": 1056
      }
     ],
     "process": "~billing.dunning",
     "w": 336,
     "x": 88,
-    "y": 844
+    "y": 908
    },
    {
     "bc": "billing",
@@ -666,32 +606,32 @@
       "x": 216
      }
     ],
-    "h": 416,
+    "h": 464,
     "id": "~billing.psp_webhook@billing",
     "lanes": [
      {
-      "h": 96,
+      "h": 112,
       "id": "trigger",
       "label": "Trigger",
-      "y": 1224
-     },
-     {
-      "h": 96,
-      "id": "action",
-      "label": "Command · View",
       "y": 1320
      },
      {
-      "h": 96,
+      "h": 112,
+      "id": "action",
+      "label": "Command · View",
+      "y": 1432
+     },
+     {
+      "h": 112,
       "id": "events",
       "label": "Events",
-      "y": 1416
+      "y": 1544
      }
     ],
     "process": "~billing.psp_webhook",
     "w": 336,
     "x": 88,
-    "y": 1188
+    "y": 1284
    },
    {
     "bc": "billing",
@@ -703,26 +643,26 @@
       "x": 216
      }
     ],
-    "h": 320,
+    "h": 352,
     "id": "~unattached:billing@billing",
     "lanes": [
      {
-      "h": 96,
+      "h": 112,
       "id": "trigger",
       "label": "Trigger",
-      "y": 1664
+      "y": 1808
      },
      {
-      "h": 96,
+      "h": 112,
       "id": "action",
       "label": "Command · View",
-      "y": 1760
+      "y": 1920
      }
     ],
     "process": "~unattached:billing",
     "w": 336,
     "x": 88,
-    "y": 1628
+    "y": 1772
    },
    {
     "bc": "orders",
@@ -734,26 +674,26 @@
       "x": 1080
      }
     ],
-    "h": 484,
+    "h": 532,
     "id": "checkout@orders",
     "lanes": [
      {
-      "h": 96,
+      "h": 112,
       "id": "trigger",
       "label": "Trigger",
       "y": 148
      },
      {
-      "h": 96,
+      "h": 112,
       "id": "action",
       "label": "Command · View",
-      "y": 244
+      "y": 260
      },
      {
-      "h": 96,
+      "h": 112,
       "id": "stream:Order",
       "label": "Events · Order",
-      "y": 340
+      "y": 372
      }
     ],
     "process": "checkout",
@@ -771,26 +711,26 @@
       "x": 1080
      }
     ],
-    "h": 320,
+    "h": 352,
     "id": "~unattached:orders@orders",
     "lanes": [
      {
-      "h": 96,
+      "h": 112,
       "id": "trigger",
       "label": "Trigger",
-      "y": 656
+      "y": 704
      },
      {
-      "h": 96,
+      "h": 112,
       "id": "action",
       "label": "Command · View",
-      "y": 752
+      "y": 816
      }
     ],
     "process": "~unattached:orders",
     "w": 336,
     "x": 952,
-    "y": 620
+    "y": 668
    },
    {
     "bc": "shipping",
@@ -808,26 +748,26 @@
       "x": 1896
      }
     ],
-    "h": 416,
+    "h": 464,
     "id": "checkout@shipping",
     "lanes": [
      {
-      "h": 96,
+      "h": 112,
       "id": "trigger",
       "label": "Trigger",
       "y": 148
      },
      {
-      "h": 96,
+      "h": 112,
       "id": "action",
       "label": "Command · View",
-      "y": 244
+      "y": 260
      },
      {
-      "h": 96,
+      "h": 112,
       "id": "stream:Shipment",
       "label": "Events · Shipment",
-      "y": 340
+      "y": 372
      }
     ],
     "process": "checkout",
@@ -845,32 +785,32 @@
       "x": 1688
      }
     ],
-    "h": 416,
+    "h": 464,
     "id": "~unattached:shipping@shipping",
     "lanes": [
      {
-      "h": 96,
+      "h": 112,
       "id": "trigger",
       "label": "Trigger",
-      "y": 588
+      "y": 636
      },
      {
-      "h": 96,
+      "h": 112,
       "id": "action",
       "label": "Command · View",
-      "y": 684
+      "y": 748
      },
      {
-      "h": 96,
+      "h": 112,
       "id": "external",
       "label": "External",
-      "y": 780
+      "y": 860
      }
     ],
     "process": "~unattached:shipping",
     "w": 336,
     "x": 1560,
-    "y": 552
+    "y": 600
    }
   ]
  },

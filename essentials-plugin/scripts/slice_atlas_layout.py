@@ -32,8 +32,10 @@ atlas — the board (design §8, §10.1)
                    first `owns` (else the slice name) in `action`
       automation   automation card in `trigger`, named by its schedule (`cron`, `every <fixedDelay>`)
                    when the row carries one, else the slice name · a command card per `dispatches`
+                   that no other slice handles
       translation  external card — `trigger` lane when inbound or both, `external` lane when outbound ·
-                   command cards for `handles` + `dispatches` · event cards for `publishes`
+                   command cards for `handles`, and for each `dispatches` no other slice handles ·
+                   event cards for `publishes`
       broken row   one `error` card in `action`
 
     The trigger card of an endpoint is named after the first endpoint (`POST /api/orders`); the
@@ -41,8 +43,11 @@ atlas — the board (design §8, §10.1)
 
     Edges: trigger → command `handles` (→ the view card for a view's endpoint); command → event
     `publishes`; event → each consumer's main card `feeds` (consumers = `consumes` ∪
-    `projections[].from`); automation → its command `dispatches`; a dispatched command card → the
-    handling slice's command card `dispatches`; an inbound external card → what it dispatches (and
+    `projections[].from`); a command another slice handles is drawn once, in the handler's column:
+    the dispatcher — an automation card, an inbound external card, a command slice's first command
+    card — gets a `dispatches` edge to the handler's command card, never a copy of the command in its
+    own column. A dispatched command no slice handles gets a card in the dispatcher's column, with an
+    edge (`dispatches`, `external` from an inbound external card); an inbound external card → what it dispatches (and
     what it publishes, when it handles nothing), and an outbound translation's handled command →
     its external card, `external`. A cross-slice edge targets the column in the same segment when
     the target slice has one there, else the target's full column; `cross` is true when the two
@@ -106,7 +111,7 @@ LAYOUT_VERSION = 1
 
 # -- cards and columns (a sticky is CARD_W x CARD_H; a column pads it by COL_PAD each side)
 CARD_W = 168
-CARD_H = 72
+CARD_H = 88            # caption, name and two detail lines (lens-1-atlas.js drawCard)
 CARD_GAP = 12          # vertical gap between stacked cards in one lane of one column
 COL_PAD = 12
 COL_W = CARD_W + 2 * COL_PAD
@@ -246,12 +251,15 @@ def _guess_bc(s):
 # ---------------------------------------------------------------- one column's cards
 
 
-def column_cards(s):
+def column_cards(s, handled_elsewhere=lambda name: False):
     """The cards of a slice's full column: (cards, main, edges, dispatched).
     cards: {(role, name): lane} in insertion order; main: the (role, name) that edges from other
-    slices target; edges: [(from key, to key, kind)] inside the column; dispatched: command names."""
+    slices target; edges: [(from key, to key, kind)] inside the column; dispatched: [(command name,
+    key of the card its cross-slice edge starts at)] for each dispatched command another slice
+    handles — `handled_elsewhere(name)` — which gets no card here: one command, one card."""
     cards = {}
     edges = []
+    dispatched = []
 
     def add(role, name, lane):
         cards.setdefault((role, name), lane)
@@ -263,7 +271,13 @@ def column_cards(s):
 
     name = s["name"] if isinstance(s.get("name"), str) else str(s.get("id"))
     if s.get("error"):
-        return cards, add("error", name, "action"), edges, []
+        return cards, add("error", name, "action"), edges, dispatched
+
+    def dispatch(src, c, kind):
+        if c in handles or not handled_elsewhere(c):
+            edge(src, add("command", c, "action"), kind)
+        else:
+            dispatched.append((c, src))
 
     kind = s.get("kind")
     handles = _strs(s.get("handles"))
@@ -284,12 +298,12 @@ def column_cards(s):
             main = add("automation", _schedule_text(s) or name, "trigger")
         cmds = [add("command", c, "action") for c in handles]
         for c in dispatches:
-            edge(main, add("command", c, "action"), "dispatches")
+            dispatch(main, c, "dispatches")
         for e in publishes:
             ek = add("event", e, ev_lane)
             for c in cmds or [main]:
                 edge(c, ek, "publishes")
-        return cards, main, edges, dispatches
+        return cards, main, edges, dispatched
 
     if kind == "translation":
         inbound = (s.get("direction") or "both") in ("inbound", "both")
@@ -297,9 +311,10 @@ def column_cards(s):
         main = add("external", system, "trigger" if inbound else "external")
         cmds = [add("command", c, "action") for c in handles]
         for c in dispatches:
-            ck = add("command", c, "action")
             if inbound:
-                edge(main, ck, "external")
+                dispatch(main, c, "external")
+            else:
+                dispatch(cmds[0] if cmds else main, c, "dispatches")
         for e in publishes:
             ek = add("event", e, ev_lane)
             for c in cmds:
@@ -309,7 +324,7 @@ def column_cards(s):
         if not inbound:
             for c in cmds:
                 edge(c, main, "external")
-        return cards, main, edges, dispatches
+        return cards, main, edges, dispatched
 
     # command — and a kind this module does not know, drawn as one
     trig = _trigger_text(s, prefer_get=False)
@@ -319,12 +334,12 @@ def column_cards(s):
         for c in cmds:
             edge(t, c, "handles")
     for c in dispatches:
-        edge(cmds[0], add("command", c, "action"), "dispatches")
+        dispatch(cmds[0], c, "dispatches")
     for e in publishes:
         ek = add("event", e, ev_lane)
         for c in cmds:
             edge(c, ek, "publishes")
-    return cards, cmds[0], edges, dispatches
+    return cards, cmds[0], edges, dispatched
 
 
 # ---------------------------------------------------------------- causal rank (slice-index.py)
@@ -530,7 +545,7 @@ class _Assigned:
 class _Segment:
     """One segment laid out at origin (0, 0), then shifted into place."""
 
-    def __init__(self, seg_id, pid, b, cols, by_id):
+    def __init__(self, seg_id, pid, b, cols, by_id, handlers):
         flags = {sid: (portal, ghost) for sid, portal, ghost in cols}
         rank = slice_ranks([by_id[sid] for sid in flags])
         order = sorted(flags, key=lambda i: (rank[i], i))
@@ -538,7 +553,8 @@ class _Segment:
         plan = []
         for sid in order:
             portal, ghost = flags[sid]
-            cards, main, edges, dispatched = column_cards(by_id[sid])
+            cards, main, edges, dispatched = column_cards(
+                by_id[sid], lambda c, sid=sid: any(h != sid for h in handlers.get(c, ())))
             if portal:
                 cards, edges, dispatched = {main: cards[main]}, [], []
             plan.append((sid, portal, ghost, cards, edges, main, dispatched))
@@ -583,7 +599,7 @@ class _Segment:
                     self.event_cards.append((sid, name, cid))
             self.mains[sid] = ids[main]
             self.internal += [(ids[a], ids[z], kind) for a, z, kind in edges]
-            self.dispatch_out += [(sid, c, ids[("command", c)]) for c in dispatched]
+            self.dispatch_out += [(sid, c, ids[src]) for c, src in dispatched]
             if not portal:
                 scen = by_id[sid].get("scenarios")
                 n = len(scen) if isinstance(scen, list) else 0
@@ -633,9 +649,19 @@ def atlas_layout(data, a):
     for pid, b, sid, portal, ghost in a.columns:
         by_bc.setdefault(b, {}).setdefault(pid, []).append((sid, portal, ghost))
 
+    consumers, handlers = {}, {}
+    for s in sorted(a.live + a.ghosts, key=lambda s: s["id"]):
+        if s.get("error"):
+            continue
+        for e in _inbound(s):
+            consumers.setdefault(e, []).append(s["id"])
+        for c in _strs(s.get("handles")):
+            handlers.setdefault(c, []).append(s["id"])
+
     cells, laid = [], []
     for b in sorted(by_bc):
-        segs = [_Segment(f"{pid}@{b}", pid, b, by_bc[b][pid], a.by_id) for pid in sorted(by_bc[b], key=a.pkey)]
+        segs = [_Segment(f"{pid}@{b}", pid, b, by_bc[b][pid], a.by_id, handlers)
+                for pid in sorted(by_bc[b], key=a.pkey)]
         y, w = CTX_HEADER_H, 0
         for seg in segs:
             seg.shift(CTX_PAD, y)
@@ -659,14 +685,6 @@ def atlas_layout(data, a):
             where.setdefault(col["slice"], {})[seg.id] = seg
             if not col["portal"]:
                 primary[col["slice"]] = seg
-    consumers, handlers = {}, {}
-    for s in sorted(a.live + a.ghosts, key=lambda s: s["id"]):
-        if s.get("error"):
-            continue
-        for e in _inbound(s):
-            consumers.setdefault(e, []).append(s["id"])
-        for c in _strs(s.get("handles")):
-            handlers.setdefault(c, []).append(s["id"])
 
     def target(seg, sid, cmd=None):
         """The card of `sid` an edge from `seg` lands on: its command card `cmd` (else its main

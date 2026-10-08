@@ -18,7 +18,7 @@
   "cards": [
    {
     "ghost": false,
-    "h": 72,
+    "h": 88,
     "id": "~orders.place_order@orders|orders.place_order|trigger|POST /api/orders",
     "lane": "trigger",
     "name": "POST /api/orders",
@@ -32,7 +32,7 @@
    },
    {
     "ghost": false,
-    "h": 72,
+    "h": 88,
     "id": "~orders.place_order@orders|orders.place_order|command|PlaceOrder",
     "lane": "action",
     "name": "PlaceOrder",
@@ -42,11 +42,11 @@
     "slice": "orders.place_order",
     "w": 168,
     "x": 228,
-    "y": 256
+    "y": 272
    },
    {
     "ghost": false,
-    "h": 72,
+    "h": 88,
     "id": "~orders.place_order@orders|orders.place_order|event|OrderPlaced",
     "lane": "stream:Order",
     "name": "OrderPlaced",
@@ -56,11 +56,11 @@
     "slice": "orders.place_order",
     "w": 168,
     "x": 228,
-    "y": 352
+    "y": 384
    },
    {
     "ghost": true,
-    "h": 72,
+    "h": 88,
     "id": "~unattached:orders@orders|orders.cancel_order|trigger|POST /api/orders/{id}/cancel",
     "lane": "trigger",
     "name": "POST /api/orders/{id}/cancel",
@@ -70,11 +70,11 @@
     "slice": "orders.cancel_order",
     "w": 168,
     "x": 228,
-    "y": 808
+    "y": 856
    },
    {
     "ghost": true,
-    "h": 72,
+    "h": 88,
     "id": "~unattached:orders@orders|orders.cancel_order|command|CancelOrder",
     "lane": "action",
     "name": "CancelOrder",
@@ -84,11 +84,11 @@
     "slice": "orders.cancel_order",
     "w": 168,
     "x": 228,
-    "y": 904
+    "y": 968
    },
    {
     "ghost": true,
-    "h": 72,
+    "h": 88,
     "id": "~unattached:orders@orders|orders.cancel_order|event|OrderCancelled",
     "lane": "stream:Order",
     "name": "OrderCancelled",
@@ -98,11 +98,11 @@
     "slice": "orders.cancel_order",
     "w": 168,
     "x": 228,
-    "y": 1000
+    "y": 1080
    },
    {
     "ghost": false,
-    "h": 72,
+    "h": 88,
     "id": "~payments.refund_payment@payments|payments.refund_payment|trigger|POST /api/payments/{id}/refund",
     "lane": "trigger",
     "name": "POST /api/payments/{id}/refund",
@@ -116,7 +116,7 @@
    },
    {
     "ghost": false,
-    "h": 72,
+    "h": 88,
     "id": "~payments.refund_payment@payments|payments.refund_payment|command|RefundPayment",
     "lane": "action",
     "name": "RefundPayment",
@@ -126,11 +126,11 @@
     "slice": "payments.refund_payment",
     "w": 168,
     "x": 836,
-    "y": 256
+    "y": 272
    },
    {
     "ghost": false,
-    "h": 72,
+    "h": 88,
     "id": "~payments.refund_payment@payments|payments.refund_payment|event|PaymentRefunded",
     "lane": "stream:Payment",
     "name": "PaymentRefunded",
@@ -140,11 +140,11 @@
     "slice": "payments.refund_payment",
     "w": 168,
     "x": 836,
-    "y": 352
+    "y": 384
    },
    {
     "ghost": false,
-    "h": 72,
+    "h": 88,
     "id": "~unattached:payments@payments|payments.start_payment|automation|start_payment",
     "lane": "trigger",
     "name": "start_payment",
@@ -154,25 +154,11 @@
     "slice": "payments.start_payment",
     "w": 168,
     "x": 836,
-    "y": 600
+    "y": 648
    },
    {
     "ghost": false,
-    "h": 72,
-    "id": "~unattached:payments@payments|payments.start_payment|command|ChargePayment",
-    "lane": "action",
-    "name": "ChargePayment",
-    "portal": false,
-    "role": "command",
-    "segment": "~unattached:payments@payments",
-    "slice": "payments.start_payment",
-    "w": 168,
-    "x": 836,
-    "y": 696
-   },
-   {
-    "ghost": false,
-    "h": 72,
+    "h": 88,
     "id": "~unattached:payments@payments|payments.charge_payment|command|ChargePayment",
     "lane": "action",
     "name": "ChargePayment",
@@ -182,11 +168,11 @@
     "slice": "payments.charge_payment",
     "w": 168,
     "x": 1044,
-    "y": 696
+    "y": 760
    },
    {
     "ghost": false,
-    "h": 72,
+    "h": 88,
     "id": "~unattached:payments@payments|payments.charge_payment|event|PaymentCharged",
     "lane": "stream:Payment",
     "name": "PaymentCharged",
@@ -196,11 +182,11 @@
     "slice": "payments.charge_payment",
     "w": 168,
     "x": 1044,
-    "y": 792
+    "y": 872
    },
    {
     "ghost": false,
-    "h": 72,
+    "h": 88,
     "id": "~unattached:payments@payments|payments.charge_payment|event|PaymentFailed",
     "lane": "stream:Payment",
     "name": "PaymentFailed",
@@ -210,11 +196,11 @@
     "slice": "payments.charge_payment",
     "w": 168,
     "x": 1044,
-    "y": 876
+    "y": 972
    },
    {
     "ghost": false,
-    "h": 72,
+    "h": 88,
     "id": "~unattached:payments@payments|payments.payment_list|trigger|GET /api/payments",
     "lane": "trigger",
     "name": "GET /api/payments",
@@ -224,11 +210,11 @@
     "slice": "payments.payment_list",
     "w": 168,
     "x": 1252,
-    "y": 600
+    "y": 648
    },
    {
     "ghost": false,
-    "h": 72,
+    "h": 88,
     "id": "~unattached:payments@payments|payments.payment_list|view|payment_list_view",
     "lane": "action",
     "name": "payment_list_view",
@@ -238,11 +224,11 @@
     "slice": "payments.payment_list",
     "w": 168,
     "x": 1252,
-    "y": 696
+    "y": 760
    },
    {
     "ghost": true,
-    "h": 72,
+    "h": 88,
     "id": "~unattached:payments@payments|payments.retry_payment|automation|retry_payment",
     "lane": "trigger",
     "name": "retry_payment",
@@ -252,25 +238,11 @@
     "slice": "payments.retry_payment",
     "w": 168,
     "x": 1460,
-    "y": 600
-   },
-   {
-    "ghost": true,
-    "h": 72,
-    "id": "~unattached:payments@payments|payments.retry_payment|command|ChargePayment",
-    "lane": "action",
-    "name": "ChargePayment",
-    "portal": false,
-    "role": "command",
-    "segment": "~unattached:payments@payments",
-    "slice": "payments.retry_payment",
-    "w": 168,
-    "x": 1460,
-    "y": 696
+    "y": 648
    },
    {
     "ghost": false,
-    "h": 72,
+    "h": 88,
     "id": "~unattached:reminders@reminders|reminders.send_reminder|command|SendReminder",
     "lane": "action",
     "name": "SendReminder",
@@ -280,11 +252,11 @@
     "slice": "reminders.send_reminder",
     "w": 168,
     "x": 1956,
-    "y": 256
+    "y": 272
    },
    {
     "ghost": false,
-    "h": 72,
+    "h": 88,
     "id": "~unattached:reminders@reminders|reminders.send_reminder|event|ReminderSent",
     "lane": "stream:Reminder",
     "name": "ReminderSent",
@@ -294,11 +266,11 @@
     "slice": "reminders.send_reminder",
     "w": 168,
     "x": 1956,
-    "y": 352
+    "y": 384
    },
    {
     "ghost": false,
-    "h": 72,
+    "h": 88,
     "id": "~unattached:reminders@reminders|reminders.schedule_next|automation|schedule_next",
     "lane": "trigger",
     "name": "schedule_next",
@@ -309,20 +281,6 @@
     "w": 168,
     "x": 2164,
     "y": 160
-   },
-   {
-    "ghost": false,
-    "h": 72,
-    "id": "~unattached:reminders@reminders|reminders.schedule_next|command|SendReminder",
-    "lane": "action",
-    "name": "SendReminder",
-    "portal": false,
-    "role": "command",
-    "segment": "~unattached:reminders@reminders",
-    "slice": "reminders.schedule_next",
-    "w": 168,
-    "x": 2164,
-    "y": 256
    }
   ],
   "contexts": [
@@ -341,7 +299,7 @@
     "y": 64
    },
    {
-    "h": 512,
+    "h": 768,
     "id": "reminders",
     "w": 768,
     "x": 1792,
@@ -431,35 +389,17 @@
     "cross": false,
     "from": "~unattached:payments@payments|payments.retry_payment|automation|retry_payment",
     "kind": "dispatches",
-    "to": "~unattached:payments@payments|payments.retry_payment|command|ChargePayment"
-   },
-   {
-    "cross": false,
-    "from": "~unattached:payments@payments|payments.retry_payment|command|ChargePayment",
-    "kind": "dispatches",
     "to": "~unattached:payments@payments|payments.charge_payment|command|ChargePayment"
    },
    {
     "cross": false,
     "from": "~unattached:payments@payments|payments.start_payment|automation|start_payment",
     "kind": "dispatches",
-    "to": "~unattached:payments@payments|payments.start_payment|command|ChargePayment"
-   },
-   {
-    "cross": false,
-    "from": "~unattached:payments@payments|payments.start_payment|command|ChargePayment",
-    "kind": "dispatches",
     "to": "~unattached:payments@payments|payments.charge_payment|command|ChargePayment"
    },
    {
     "cross": false,
     "from": "~unattached:reminders@reminders|reminders.schedule_next|automation|schedule_next",
-    "kind": "dispatches",
-    "to": "~unattached:reminders@reminders|reminders.schedule_next|command|SendReminder"
-   },
-   {
-    "cross": false,
-    "from": "~unattached:reminders@reminders|reminders.schedule_next|command|SendReminder",
     "kind": "dispatches",
     "to": "~unattached:reminders@reminders|reminders.send_reminder|command|SendReminder"
    },
@@ -493,7 +433,7 @@
     "slice": "orders.place_order",
     "w": 192,
     "x": 216,
-    "y": 448
+    "y": 496
    },
    {
     "h": 64,
@@ -501,7 +441,7 @@
     "slice": "orders.cancel_order",
     "w": 192,
     "x": 216,
-    "y": 1096
+    "y": 1192
    },
    {
     "h": 64,
@@ -509,7 +449,7 @@
     "slice": "payments.refund_payment",
     "w": 192,
     "x": 824,
-    "y": 448
+    "y": 496
    },
    {
     "h": 64,
@@ -517,7 +457,7 @@
     "slice": "payments.start_payment",
     "w": 192,
     "x": 824,
-    "y": 972
+    "y": 1084
    },
    {
     "h": 412,
@@ -525,7 +465,7 @@
     "slice": "payments.charge_payment",
     "w": 192,
     "x": 1032,
-    "y": 972
+    "y": 1084
    },
    {
     "h": 64,
@@ -533,7 +473,7 @@
     "slice": "payments.payment_list",
     "w": 192,
     "x": 1240,
-    "y": 972
+    "y": 1084
    },
    {
     "h": 64,
@@ -541,7 +481,7 @@
     "slice": "payments.retry_payment",
     "w": 192,
     "x": 1448,
-    "y": 972
+    "y": 1084
    },
    {
     "h": 64,
@@ -549,7 +489,7 @@
     "slice": "reminders.send_reminder",
     "w": 192,
     "x": 1944,
-    "y": 448
+    "y": 496
    },
    {
     "h": 64,
@@ -557,7 +497,7 @@
     "slice": "reminders.schedule_next",
     "w": 192,
     "x": 2152,
-    "y": 448
+    "y": 496
    }
   ],
   "segments": [
@@ -571,26 +511,26 @@
       "x": 216
      }
     ],
-    "h": 624,
+    "h": 672,
     "id": "~orders.place_order@orders",
     "lanes": [
      {
-      "h": 96,
+      "h": 112,
       "id": "trigger",
       "label": "Trigger",
       "y": 148
      },
      {
-      "h": 96,
+      "h": 112,
       "id": "action",
       "label": "Command · View",
-      "y": 244
+      "y": 260
      },
      {
-      "h": 96,
+      "h": 112,
       "id": "stream:Order",
       "label": "Events · Order",
-      "y": 340
+      "y": 372
      }
     ],
     "process": "~orders.place_order",
@@ -608,32 +548,32 @@
       "x": 216
      }
     ],
-    "h": 416,
+    "h": 464,
     "id": "~unattached:orders@orders",
     "lanes": [
      {
-      "h": 96,
+      "h": 112,
       "id": "trigger",
       "label": "Trigger",
-      "y": 796
+      "y": 844
      },
      {
-      "h": 96,
+      "h": 112,
       "id": "action",
       "label": "Command · View",
-      "y": 892
+      "y": 956
      },
      {
-      "h": 96,
+      "h": 112,
       "id": "stream:Order",
       "label": "Events · Order",
-      "y": 988
+      "y": 1068
      }
     ],
     "process": "~unattached:orders",
     "w": 336,
     "x": 88,
-    "y": 760
+    "y": 808
    },
    {
     "bc": "payments",
@@ -645,26 +585,26 @@
       "x": 824
      }
     ],
-    "h": 416,
+    "h": 464,
     "id": "~payments.refund_payment@payments",
     "lanes": [
      {
-      "h": 96,
+      "h": 112,
       "id": "trigger",
       "label": "Trigger",
       "y": 148
      },
      {
-      "h": 96,
+      "h": 112,
       "id": "action",
       "label": "Command · View",
-      "y": 244
+      "y": 260
      },
      {
-      "h": 96,
+      "h": 112,
       "id": "stream:Payment",
       "label": "Events · Payment",
-      "y": 340
+      "y": 372
      }
     ],
     "process": "~payments.refund_payment",
@@ -700,32 +640,32 @@
       "x": 1448
      }
     ],
-    "h": 848,
+    "h": 912,
     "id": "~unattached:payments@payments",
     "lanes": [
      {
-      "h": 96,
+      "h": 112,
       "id": "trigger",
       "label": "Trigger",
-      "y": 588
+      "y": 636
      },
      {
-      "h": 96,
+      "h": 112,
       "id": "action",
       "label": "Command · View",
-      "y": 684
+      "y": 748
      },
      {
-      "h": 180,
+      "h": 212,
       "id": "stream:Payment",
       "label": "Events · Payment",
-      "y": 780
+      "y": 860
      }
     ],
     "process": "~unattached:payments",
     "w": 960,
     "x": 696,
-    "y": 552
+    "y": 600
    },
    {
     "bc": "reminders",
@@ -743,26 +683,26 @@
       "x": 2152
      }
     ],
-    "h": 416,
+    "h": 464,
     "id": "~unattached:reminders@reminders",
     "lanes": [
      {
-      "h": 96,
+      "h": 112,
       "id": "trigger",
       "label": "Trigger",
       "y": 148
      },
      {
-      "h": 96,
+      "h": 112,
       "id": "action",
       "label": "Command · View",
-      "y": 244
+      "y": 260
      },
      {
-      "h": 96,
+      "h": 112,
       "id": "stream:Reminder",
       "label": "Events · Reminder",
-      "y": 340
+      "y": 372
      }
     ],
     "process": "~unattached:reminders",

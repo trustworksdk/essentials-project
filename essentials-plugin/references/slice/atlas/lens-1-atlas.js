@@ -16,7 +16,7 @@
   'use strict';
 
   /* Level-of-detail thresholds, in scale k (screen px per world px). Tuned on the layout's real
-     sizes (scripts/slice_atlas_layout.py: 168 × 72 stickies, segments 336 / 544 / 960 wide at the
+     sizes (scripts/slice_atlas_layout.py: 168 × 88 stickies, segments 336 / 544 / 960 wide at the
      10th / 50th / 90th percentile of the 60-context estate in tests/scripts/test_slice_atlas_layout.py)
      and on the page of tests/fixtures/atlas/, so that at the entry of each level no text is below
      Atlas.MIN_TEXT_PX (11) and a compact name shows at least 16 characters:
@@ -128,19 +128,6 @@
   const grow = (r, d) => ({ x: r.x - d, y: r.y - d, w: r.w + 2 * d, h: r.h + 2 * d });
   const rectOf = (o) => ({ x: o.x, y: o.y, w: o.w, h: o.h });
   const plural = (n, one, many) => n + ' ' + (n === 1 ? one : (many || one + 's'));
-  /** Break s into at most max chunks of n characters; continuation chunks are indented. */
-  function wrap(s, n, max) {
-    s = String(s);
-    if (s.length <= n) return [s];
-    const out = [s.slice(0, n)];
-    let rest = s.slice(n);
-    while (rest.length && out.length < max) {
-      const room = n - 2;
-      out.push('  ' + (out.length === max - 1 && rest.length > room ? rest.slice(0, room - 1) + '…' : rest.slice(0, room)));
-      rest = rest.slice(room);
-    }
-    return out;
-  }
   /** Break a name into at most max lines of n characters, preferring a break after a space, `/`,
       `_`, `.` or `-`, or before a camel-case hump, in the second half of the line; the last line
       is truncated with an ellipsis. Never returns a line longer than n. */
@@ -585,6 +572,56 @@
       if (c.role === 'error') return arr(s.flags).map(f => f.text).concat(['manifest did not parse']);
       return [];
     }
+    /** What a card lists at L3 — names only, the types stay in the hover and the detail panel —
+        and the noun its overflow counts in: { items, noun, strong }, strong = the first item is the
+        identity property. A trigger leaves out the endpoint it is already named after. */
+    function cardItems(c) {
+      const s = ctx.index.slice(c.slice) || {};
+      const bare = (f) => String(f).split(':')[0].trim();
+      if (c.role === 'command' || c.role === 'event') {
+        const m = ctx.index.message(c.role, c.name);
+        if (!m) return { items: [], noun: 'field' };
+        const idf = m.identity ? bare(m.identity) : null;
+        const rest = arr(m.fields).map(bare).filter(f => f !== idf);
+        return { items: (idf ? [idf] : []).concat(rest), noun: 'field', strong: !!idf };
+      }
+      if (c.role === 'view') {
+        const rms = arr(s.readModels);
+        const rm = rms.find(r => r.name === c.name) || rms[0];
+        return { items: rm ? arr(rm.columns).map(col => typeof col === 'string' ? bare(col) : col.name) : [], noun: 'column' };
+      }
+      if (c.role === 'trigger') {
+        const eps = arr(s.endpoints);
+        const named = eps.findIndex(e => e.method + ' ' + e.path === c.name);
+        const items = named >= 0 && eps[named].auth ? ['auth ' + eps[named].auth] : [];
+        eps.forEach((e, i) => { if (i !== named) items.push(e.method + ' ' + e.path); });
+        return { items, noun: 'endpoint' };
+      }
+      return { items: cardDetail(c), noun: 'line' };
+    }
+    /** Pack items into at most room lines of chars characters, joined by ", ". When some do not fit,
+        the last line ends in "+N <noun>s", N counting the items not shown. Returns [{ text, strong }],
+        strong set on the first line when it holds only the identity property. */
+    function packItems(ci, chars, room) {
+      const items = ci.items.map(it => trunc(String(it), chars));
+      const text = (xs) => xs.join(', ');
+      const lines = [];
+      items.forEach(it => {
+        const cur = lines[lines.length - 1];
+        if (cur && text(cur.concat([it])).length <= chars) cur.push(it);
+        else lines.push([it]);
+      });
+      const shown = lines.slice(0, room);
+      let hidden = items.length - shown.reduce((n, l) => n + l.length, 0);
+      const out = shown.map(text);
+      if (hidden > 0) {
+        const last = shown[shown.length - 1];
+        const tail = () => '+' + plural(hidden, ci.noun);
+        while (last.length && (text(last) + ' ' + tail()).length > chars) { last.pop(); hidden++; }
+        out[out.length - 1] = last.length ? text(last) + ' ' + tail() : tail();
+      }
+      return out.map((t, i) => ({ text: t, strong: i === 0 && !!ci.strong && t === items[0] }));
+    }
     function drawCard(c, lvl, k, kk) {
       const st = diffState(c.slice, c);
       const cls = ['st', 'r-' + c.role];
@@ -616,14 +653,9 @@
         if (nm) g.append(nm);
         const lh = WORLD_SMALL * LINE, room = Math.floor((c.y + c.h - 4 - y) / lh);
         const chars = Math.max(4, Math.floor((c.w - 2 * padX) / (MONO_W * WORLD_SMALL)));
-        const strongFirst = c.role === 'command' || c.role === 'event';   // the identity property
-        let rows = [];
-        (c.portal ? [] : cardDetail(c)).forEach((line, li) =>
-          wrap(line, chars, 2).forEach(text => rows.push({ text, cls: li === 0 && strongFirst ? 'atlas-cell atlas-strong' : 'atlas-cell' })));
-        if (room > 0 && rows.length) {
-          if (rows.length > room) rows = rows.slice(0, room - 1).concat([{ text: '+' + (rows.length - room + 1) + ' more', cls: 'atlas-muted' }]);
-          rows.forEach((r, i) => {
-            const t = wtext(c.x + padX, y + (i + 1) * lh, r.text, WORLD_SMALL, k, r.cls);
+        if (room > 0 && !c.portal) {
+          packItems(cardItems(c), chars, room).forEach((r, i) => {
+            const t = wtext(c.x + padX, y + (i + 1) * lh, r.text, WORLD_SMALL, k, r.strong ? 'atlas-cell atlas-strong' : 'atlas-cell');
             if (t) g.append(t);
           });
         }
@@ -652,7 +684,7 @@
       const st = diffState(c.slice, c);
       if (st) f.append(document.createTextNode('\n' + st + ' in this change'));
       const lines = cardDetail(c);
-      if (lines.length && S.level === 2) f.append(document.createTextNode('\n\n' + lines.slice(0, 8).join('\n') + (lines.length > 8 ? '\n…' : '')));
+      if (lines.length) f.append(document.createTextNode('\n\n' + lines.slice(0, 8).join('\n') + (lines.length > 8 ? '\n…' : '')));
       return f;
     }
     function drawEdge(e, a, z, i) {

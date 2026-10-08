@@ -17,13 +17,13 @@
  "drawnElements": {
   "L0": 120,
   "L1": 374,
-  "L2": 2269,
-  "L3": 2696,
+  "L2": 2087,
+  "L3": 2514,
   "matrixCells": 354,
   "metro": 603
  },
- "layoutBytes": 614991,
- "layoutSha256": "ebf59aeed4331e3a74f31857d2f15e63087b30ee722fac84cc2a730e5add5ce3",
+ "layoutBytes": 584069,
+ "layoutSha256": "ff34650293f25ea26ea431df7e2192348289e4e05ef55a5ee9658470af5bb4e5",
  "oneSliceAdditions": {
   "cellGrewPastAStep": [
    "c00",
