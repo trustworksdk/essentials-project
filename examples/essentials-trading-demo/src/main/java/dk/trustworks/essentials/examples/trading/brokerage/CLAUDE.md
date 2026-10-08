@@ -15,6 +15,11 @@ command type, their one API file, their handler and their test.
 command; the trade → settlement → account chain is driven synchronously by the demo harness. See
 `REFACTORING_PLAN.md` for why that was left alone.
 
+> Reviewed 2026-10-08 (`/essentials:slice-check`): the paragraph above predates
+> `use_cases/settle_trade`, an automation (`kind: automation`) that now drives trade → settlement → account
+> through the command bus, one event's handler sending the next command. The harness drives the chain only
+> under `trading-demo.simulation.trade-lifecycle=scripted`, where the automation is inactive.
+
 | Group | Slices |
 |---|---|
 | Account commands | `open_trading_account`, `deposit_cash`, `reserve_funds`, `release_funds`, `apply_trade_settlement`, `close_books`, `close_books_and_open_next_period`, `archive_generation`, `update_closing_books_settings` |
