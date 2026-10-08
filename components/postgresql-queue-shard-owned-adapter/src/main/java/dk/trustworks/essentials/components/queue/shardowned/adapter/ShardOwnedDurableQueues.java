@@ -26,6 +26,7 @@ import dk.trustworks.essentials.components.queue.shardowned.ShardOwnedSchema;
 // Message and QueuedMessage. Those three are written out in full wherever an engine one is meant, so
 // that no reader has to work out which namespace a bare name came from.
 import dk.trustworks.essentials.components.queue.shardowned.spi.DeadLetter;
+import dk.trustworks.essentials.components.queue.shardowned.spi.MessageId;
 import dk.trustworks.essentials.components.queue.shardowned.spi.MessageQueue;
 import dk.trustworks.essentials.components.queue.shardowned.spi.MessageQueues;
 import dk.trustworks.essentials.components.queue.shardowned.spi.QueueDepth;
@@ -36,6 +37,7 @@ import java.sql.SQLException;
 import java.time.Duration;
 import java.util.*;
 import java.util.concurrent.*;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 import static dk.trustworks.essentials.shared.FailFast.*;
 import static dk.trustworks.essentials.shared.interceptor.DefaultInterceptorChain.sortInterceptorsByOrder;
@@ -59,9 +61,15 @@ import static dk.trustworks.essentials.shared.interceptor.InterceptorChain.newIn
  * transaction. {@code Inboxes.handleMessage} opens its own {@code UnitOfWork} inside the handler, so
  * nothing changes for it.
  * <p>
- * Enqueueing <em>is</em> transactional. With a {@link HandleAwareUnitOfWork} in progress the messages
- * are written on that unit of work's own connection, so they commit or roll back with the caller's
- * work. That is the Outbox's entire purpose and it is preserved exactly.
+ * Enqueueing <em>is</em> transactional. The enqueue runs inside
+ * {@link UnitOfWorkFactory#withUnitOfWork(dk.trustworks.essentials.shared.functional.CheckedFunction)}, as
+ * {@code PostgresqlDurableQueues} does, and the messages are written on that {@link HandleAwareUnitOfWork}'s own
+ * connection, so they commit or roll back with the caller's work. That joins an Essentials {@code UnitOfWork} in
+ * progress <em>and</em> a plain Spring transaction ({@code @Transactional}, {@code TransactionTemplate}) when the
+ * factory is Spring-aware. Until 0.60.1 only an already-bound {@code UnitOfWork} was joined, so under a plain Spring
+ * transaction the enqueue committed on its own and survived a rollback. Outside any transaction the factory starts a
+ * unit of work and commits it. Built without a {@link UnitOfWorkFactory}, every enqueue commits on its own, and the
+ * builder says so once at WARN.
  *
  * <h2>Queue entry ids carry the queue name</h2>
  * See {@link QueueEntryIdCodec}. Ids minted here look like {@code orders:u-3-1042}, and an id from a
@@ -151,6 +159,8 @@ public class ShardOwnedDurableQueues implements DurableQueues {
 
     private volatile boolean started;
 
+    private final AtomicBoolean warnedAboutUnitOfWorkWithoutConnection = new AtomicBoolean();
+
     ShardOwnedDurableQueues(MessageQueues queues,
                             JSONSerializer jsonSerializer,
                             UnitOfWorkFactory<? extends UnitOfWork> unitOfWorkFactory,
@@ -164,6 +174,11 @@ public class ShardOwnedDurableQueues implements DurableQueues {
         requireTrue(autoRegisterShardCount == 0 || dataSource != null,
                     "autoRegisterShardCount needs a dataSource to register with");
         requireTrue(autoRegisterShardCount >= 0, "autoRegisterShardCount must not be negative");
+        if (unitOfWorkFactory == null) {
+            log.warn("ShardOwnedDurableQueues was built without a UnitOfWorkFactory: every enqueue commits on its own connection "
+                     + "and is NOT rolled back with the caller's transaction, so an Outbox on this engine is not transactional. "
+                     + "Call setUnitOfWorkFactory(...) on the builder - from 0.61 the builder will require one.");
+        }
     }
 
     public static ShardOwnedDurableQueuesBuilder builder() {
@@ -289,13 +304,48 @@ public class ShardOwnedDurableQueues implements DurableQueues {
         var queue    = resolve(queueName);
         var messages = messagesToQueue.stream().map(message -> toEngineMessage(message, delay)).toList();
 
-        var ids = onQueue(queueName, "queue " + messages.size() + " message(s) on '" + queueName + "'",
-                          () -> {
-                              var connection = currentTransactionConnection();
-                              return connection == null ? queue.enqueue(messages)
-                                                        : queue.enqueue(connection, messages);
-                          });
+        var what     = "queue " + messages.size() + " message(s) on '" + queueName + "'";
+
+        List<MessageId> ids;
+        if (unitOfWorkFactory == null) {
+            ids = onQueue(queueName, what, () -> queue.enqueue(messages));
+        } else {
+            try {
+                // withUnitOfWork, not getCurrentUnitOfWork(): it joins an Essentials UnitOfWork already bound AND a plain
+                // Spring transaction (@Transactional / TransactionTemplate) nothing has bound one to yet - the Spring-aware
+                // factories create one for that transaction. Outside any transaction it starts a UnitOfWork and commits it.
+                ids = unitOfWorkFactory.withUnitOfWork(unitOfWork -> unitOfWork instanceof HandleAwareUnitOfWork handleAwareUnitOfWork
+                                                                     ? onQueue(queueName, what, () -> queue.enqueue(handleAwareUnitOfWork.handle().getConnection(), messages))
+                                                                     : enqueueOnOwnConnection(queue, queueName, what, messages, unitOfWork));
+            } catch (UnitOfWorkException e) {
+                // withUnitOfWork wraps whatever the enqueue threw. The queue-naming DurableQueueException is what this
+                // adapter has always thrown for a failed enqueue, so callers keep getting it.
+                if (e.getCause() instanceof DurableQueueException durableQueueException) {
+                    throw durableQueueException;
+                }
+                throw e;
+            }
+        }
         return ids.stream().map(id -> QueueEntryIdCodec.encode(queueName, id)).toList();
+    }
+
+    /**
+     * The unit of work in progress carries no JDBC connection (it is not a {@link HandleAwareUnitOfWork} - a MongoDB
+     * one, say), so the enqueue cannot join it and commits on the engine's own connection. Said once, at WARN: it is a
+     * wiring mistake the application can fix, and a rollback will not undo these rows.
+     */
+    private List<MessageId> enqueueOnOwnConnection(MessageQueue queue,
+                                                   QueueName queueName,
+                                                   String what,
+                                                   List<dk.trustworks.essentials.components.queue.shardowned.spi.Message> messages,
+                                                   UnitOfWork unitOfWork) {
+        if (warnedAboutUnitOfWorkWithoutConnection.compareAndSet(false, true)) {
+            log.warn("[{}] The UnitOfWork in progress ({}) is not a HandleAwareUnitOfWork, so the shard-owned engine cannot write "
+                     + "on its connection: this and every later such enqueue commits on its own and is NOT rolled back with the "
+                     + "caller's work. Configure a HandleAwareUnitOfWorkFactory (JDBI) over the engine's DataSource. Logged once.",
+                     queueName, unitOfWork.getClass().getName());
+        }
+        return onQueue(queueName, what, () -> queue.enqueue(messages));
     }
 
     /**
@@ -769,24 +819,6 @@ public class ShardOwnedDurableQueues implements DurableQueues {
                                             null,
                                             true,
                                             deadLetter.lastError());
-    }
-
-    /**
-     * The JDBC connection of the {@link UnitOfWork} in progress, or {@code null} if there is none.
-     * <p>
-     * This is what makes a transactional enqueue transactional: handing the engine the caller's own
-     * connection means the rows commit or roll back with the caller's work, which is the Outbox's
-     * whole purpose. Without a unit of work the engine opens its own connection and commits the batch
-     * on its own, which is what a caller outside a transaction is asking for.
-     */
-    private java.sql.Connection currentTransactionConnection() {
-        if (unitOfWorkFactory == null) {
-            return null;
-        }
-        return unitOfWorkFactory.getCurrentUnitOfWork()
-                                .filter(HandleAwareUnitOfWork.class::isInstance)
-                                .map(unitOfWork -> ((HandleAwareUnitOfWork) unitOfWork).handle().getConnection())
-                                .orElse(null);
     }
 
     /**

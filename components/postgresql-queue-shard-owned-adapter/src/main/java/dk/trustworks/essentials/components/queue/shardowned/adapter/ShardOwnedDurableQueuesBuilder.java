@@ -64,9 +64,14 @@ public class ShardOwnedDurableQueuesBuilder {
     }
 
     /**
-     * Optional. When present and a {@code HandleAwareUnitOfWork} is in progress, enqueued messages are
-     * written on that unit of work's connection and commit with the caller's own work — which is what
-     * makes an Outbox an Outbox. Without one, every enqueue commits on its own.
+     * Strongly recommended, and required from 0.61. Every enqueue runs inside
+     * {@code unitOfWorkFactory.withUnitOfWork(...)} and is written on the {@code HandleAwareUnitOfWork}'s
+     * connection, so it commits with the caller's own work — an Essentials {@code UnitOfWork}, or with a
+     * Spring-aware factory (as the Spring Boot starter wires) a plain {@code @Transactional} /
+     * {@code TransactionTemplate} transaction. That is what makes an Outbox an Outbox.
+     * <p>
+     * Without one, every enqueue commits on its own and a rollback of the caller's work does not undo it;
+     * {@link #build()} logs a WARN saying so.
      */
     public ShardOwnedDurableQueuesBuilder setUnitOfWorkFactory(UnitOfWorkFactory<? extends UnitOfWork> unitOfWorkFactory) {
         this.unitOfWorkFactory = unitOfWorkFactory;

@@ -80,6 +80,15 @@ framework derives the names (`Inbox:<processorName>`, `<processorName>:queue`, `
 queue an Inbox, Outbox or command bus invents has to be registered before it is used, under exactly
 the name the framework derives. Worth it only if you would rather a typo fail than become a queue.
 
+**An enqueue through `DurableQueues` joins the caller's transaction — give the adapter a
+`UnitOfWorkFactory`.** `ShardOwnedDurableQueues` runs every enqueue inside `withUnitOfWork` on the
+`HandleAwareUnitOfWork`'s connection, so an `Outbox.sendMessage` rolls back with an Essentials
+`UnitOfWork` *and* with a plain Spring `@Transactional`/`TransactionTemplate` when the factory is
+Spring-aware (the starter wires `SpringTransactionAwareJdbiUnitOfWorkFactory`). 0.60.0 joined only an
+already-bound `UnitOfWork`, so under a plain Spring transaction the enqueue committed on its own and
+survived the rollback. Built without `setUnitOfWorkFactory(...)`, every enqueue commits on its own and
+`build()` WARNs; 0.61 will refuse to build.
+
 **The lane is chosen by the message, not by the consumer.** `Message.of` is unordered,
 `Message.ordered` carries a key, and one `consume` serves both. A *second* `consume` on the same
 queue is therefore a separate competing consumer with its own instance identity — not "the other
