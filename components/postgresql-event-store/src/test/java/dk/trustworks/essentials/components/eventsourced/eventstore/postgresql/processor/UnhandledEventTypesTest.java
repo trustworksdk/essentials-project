@@ -57,7 +57,7 @@ class UnhandledEventTypesTest {
         eventStore = mock(EventStore.class);
         when(eventStore.getEventStoreSubscriptionObserver()).thenReturn(new MeasurementEventStoreSubscriptionObserver(MeasurementTaker.none(), null, meterRegistry));
         clock = new MutableClock(Instant.parse("2026-10-08T10:00:00Z"));
-        unhandledEventTypes = new UnhandledEventTypes("OrderProjector", eventStore, new PatternMatchingMessageHandler(new OrderProjector()), clock);
+        unhandledEventTypes = unhandledEventTypesFor(new OrderProjector(), UnhandledEventTypes.Reporting.WARN);
 
         logger = (ch.qos.logback.classic.Logger) LoggerFactory.getLogger(UnhandledEventTypes.class);
         logAppender = new ListAppender<>();
@@ -108,6 +108,98 @@ class UnhandledEventTypesTest {
         assertThat(warnings()).hasSize(2);
     }
 
+    /**
+     * Skipping events is normal for an EventProcessor and an InTransactionEventProcessor - only a ViewEventProcessor
+     * (Reporting.WARN) warns; the others count and log at DEBUG
+     */
+    @Test
+    void a_processor_reporting_at_debug_counts_an_unhandled_event_but_never_warns() {
+        var debugReporting = unhandledEventTypesFor(new OrderProjector(), UnhandledEventTypes.Reporting.DEBUG);
+        logger.setLevel(Level.DEBUG);
+        try {
+            assertThat(debugReporting.reportIfUnhandled(event(new OrderShipped()))).isFalse();
+            assertThat(debugReporting.reportIfUnhandled(event(new OrderShipped()))).isFalse();
+        } finally {
+            logger.setLevel(null);
+        }
+
+        assertThat(unhandledCounter(OrderShipped.class)).isEqualTo(2);
+        assertThat(warnings()).isEmpty();
+        assertThat(logAppender.list).filteredOn(event -> event.getLevel() == Level.DEBUG)
+                                    .extracting(ILoggingEvent::getFormattedMessage)
+                                    .anySatisfy(message -> assertThat(message).contains("[OrderProjector] Ignored a '" + EventType.of(OrderShipped.class) + "' event"));
+    }
+
+    @Test
+    void an_event_type_listed_in_IgnoresEventTypes_is_counted_but_not_warned_about() {
+        var view = unhandledEventTypesFor(new OrderViewIgnoringShipments(), UnhandledEventTypes.Reporting.WARN);
+
+        assertThat(view.reportIfUnhandled(event(new OrderShipped()))).isFalse();
+        assertThat(view.reportIfUnhandled(event(new ExpressShipment()))).as("a subtype of a listed type").isFalse();
+        assertThat(view.reportIfUnhandled(namedEvent("LegacyOrderArchived"))).isFalse();
+
+        assertThat(unhandledCounter(OrderShipped.class)).isEqualTo(1);
+        assertThat(unhandledCounter(ExpressShipment.class)).isEqualTo(1);
+        assertThat(warnings()).isEmpty();
+
+        view.reportIfUnhandled(event(new OrderCancelled()));
+        view.reportIfUnhandled(namedEvent("SomeOtherName"));
+        assertThat(warnings()).hasSize(2);
+    }
+
+    @Test
+    void the_view_summary_lists_the_types_a_sealed_event_type_permits_that_the_view_neither_handles_nor_ignores() {
+        var summary = UnhandledEventTypes.summarizeView(new SealedOrderView(), new PatternMatchingMessageHandler(new SealedOrderView()));
+
+        assertThat(summary.handledTypes()).containsExactly("Placed");
+        assertThat(summary.deliberatelyIgnored()).containsExactly("Archived");
+        assertThat(summary.sealedTypesChecked()).containsExactly(SealedOrderEvent.class.getName());
+        // Nested sealed types are walked; Archived is ignored on purpose; Placed is handled
+        assertThat(summary.unhandledTypes()).containsExactly(LineAdded.class, LineRemoved.class, Shipped.class);
+    }
+
+    @Test
+    void a_handler_for_the_sealed_supertype_leaves_nothing_unhandled() {
+        var summary = UnhandledEventTypes.summarizeView(new CatchAllOrderView(), new PatternMatchingMessageHandler(new CatchAllOrderView()));
+
+        assertThat(summary.unhandledTypes()).isEmpty();
+    }
+
+    @Test
+    void a_view_handling_no_sealed_event_type_has_nothing_to_check() {
+        var summary = UnhandledEventTypes.summarizeView(new OrderProjector(), new PatternMatchingMessageHandler(new OrderProjector()));
+
+        assertThat(summary.sealedTypesChecked()).isEmpty();
+        assertThat(summary.unhandledTypes()).isEmpty();
+    }
+
+    @Test
+    void the_view_summary_warns_once_at_start_about_the_unhandled_sealed_event_types() {
+        UnhandledEventTypes.logViewSummary("SealedOrderView", new SealedOrderView(), new PatternMatchingMessageHandler(new SealedOrderView()));
+
+        assertThat(warnings()).singleElement().asString()
+                              .startsWith("[SealedOrderView] The sealed event type(s) [" + SealedOrderEvent.class.getName() + "] permit 3 type(s)")
+                              .contains(Shipped.class.getName())
+                              .contains("@IgnoresEventTypes");
+        assertThat(logAppender.list).filteredOn(event -> event.getLevel() == Level.INFO)
+                                    .extracting(ILoggingEvent::getFormattedMessage)
+                                    .singleElement().asString()
+                                    .contains("handles these event/message types: [Placed]")
+                                    .contains("ignores these on purpose (@IgnoresEventTypes): [Archived]");
+    }
+
+    private UnhandledEventTypes unhandledEventTypesFor(Object processor, UnhandledEventTypes.Reporting reporting) {
+        return new UnhandledEventTypes("OrderProjector", eventStore, processor, new PatternMatchingMessageHandler(processor), reporting, clock);
+    }
+
+    private PersistedEvent namedEvent(String eventName) {
+        var event = mock(PersistedEvent.class);
+        when(event.aggregateType()).thenReturn(ORDERS);
+        when(event.globalEventOrder()).thenReturn(GlobalEventOrder.of(nextGlobalEventOrder++));
+        when(event.event()).thenReturn(new EventJSON(EssentialsJSONEventSerializers.create(), EventName.of(eventName), "{}"));
+        return event;
+    }
+
     private double unhandledCounter(Class<?> eventType) {
         var counter = meterRegistry.find(MeasurementEventStoreSubscriptionObserver.PROCESSOR_UNHANDLED_EVENT_TYPE_METRIC)
                                    .tag("processor", "OrderProjector")
@@ -138,10 +230,54 @@ class UnhandledEventTypesTest {
         }
     }
 
+    @IgnoresEventTypes(value = OrderShipped.class, eventNames = "LegacyOrderArchived")
+    public static class OrderViewIgnoringShipments {
+        @MessageHandler
+        void on(OrderPlaced event) {
+        }
+    }
+
     public record OrderPlaced() {
     }
 
-    public record OrderShipped() {
+    public static class ExpressShipment extends OrderShipped {
+    }
+
+    public sealed interface SealedOrderEvent permits Placed, Shipped, Archived, OrderLineEvent {
+    }
+
+    public record Placed() implements SealedOrderEvent {
+    }
+
+    public record Shipped() implements SealedOrderEvent {
+    }
+
+    public record Archived() implements SealedOrderEvent {
+    }
+
+    public sealed interface OrderLineEvent extends SealedOrderEvent permits LineAdded, LineRemoved {
+    }
+
+    public record LineAdded() implements OrderLineEvent {
+    }
+
+    public record LineRemoved() implements OrderLineEvent {
+    }
+
+    @IgnoresEventTypes(Archived.class)
+    public static class SealedOrderView {
+        @MessageHandler
+        void on(Placed event) {
+        }
+    }
+
+    public static class CatchAllOrderView {
+        @MessageHandler
+        void on(SealedOrderEvent event) {
+        }
+    }
+
+    public static class OrderShipped {
     }
 
     public record OrderCancelled() {

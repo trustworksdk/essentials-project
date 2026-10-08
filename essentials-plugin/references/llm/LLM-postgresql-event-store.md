@@ -690,8 +690,8 @@ void on(OrderConfirmed event, OrderedMessage message) {
 
 > ⚠️ **Two different requirements, often conflated.**
 > - `@MessageHandler` is **mandatory**: an un-annotated method is not a handler. A `ViewEventProcessor` allows unmatched
->   messages, so the event is skipped — no exception, the handler just never runs. Since 0.60.1 the skip is visible: see
->   [Unhandled event types](#unhandled-event-types).
+>   messages, so the event is skipped — no exception, the handler just never runs. Since 0.60.1 the skip is a WARN
+>   (opt out per type with `@IgnoresEventTypes`): see [Unhandled event types](#unhandled-event-types).
 > - `OrderedMessage` is **optional to the dispatcher** (single-argument handlers are invoked normally) but **required for a
 >   versioned projection**: `message.getOrder()` is the `EventOrder` your update compares against the stored version (see
 >   *Version = EventOrder Pattern* above). Without it, a redelivered event is applied twice. A handler with no versioned
@@ -758,16 +758,32 @@ Await the **last** event the assertion depends on, on the processor that writes 
 ### Unhandled event types
 
 Since 0.60.1 (CB-4). Every processor allows unmatched messages, so an event type without a `@MessageHandler` was dropped
-without a trace. Now:
+without a trace. How loudly it is reported now depends on the processor, because only a view is harmed by a skip:
 
-- At `start()` each processor logs one INFO line listing the event/message types its `@MessageHandler`s accept.
-- Each ignored event is reported to `EventStoreSubscriptionObserver.eventTypeNotHandledByProcessor(processorName, event)`
+| Processor | Ignored event | At `start()` |
+|---|---|---|
+| `ViewEventProcessor` | Counted + **WARN** per event type, at most once an hour, with the number ignored since the last one | INFO: handled types and the `@IgnoresEventTypes` list; **WARN** for the types a sealed event type permits that the view neither handles nor ignores |
+| `EventProcessor`, `InTransactionEventProcessor` | Counted + DEBUG - skipping events is normal there | INFO: handled types |
+
+Why the view WARNs: a view that silently skips an event type does not see every `EventOrder` of that aggregate, so a
+projection checking that the order is contiguous breaks, and the view is incomplete with no one noticing.
+
+- **Opt out per type** with `@IgnoresEventTypes` on the view class. Listed types (a supertype covers its subtypes) are
+  still counted, but neither WARN mentions them. `eventNames` matches events persisted by event name only (no Java type).
+  ```java
+  @IgnoresEventTypes(value = {OrderShipped.class, OrderLineEvent.class}, eventNames = "LegacyOrderArchived")
+  public class OrderSummaryView extends ViewEventProcessor { ... }
+  ```
+- **The start-up check only sees sealed hierarchies.** For each sealed supertype of a handled type it walks
+  `getPermittedSubclasses()` recursively; an event type that shares no sealed supertype with a handled one is found
+  only when it is delivered (the per-event WARN). A permitted `non-sealed` branch the view handles part of is not
+  reported. The event tables are never read. Every handled type's sealed supertypes count, so a sealed type spanning
+  several aggregates WARNs about the other aggregates' events too - list it (or its branches) in `@IgnoresEventTypes`.
+- **Counter:** each ignored event is reported to `EventStoreSubscriptionObserver.eventTypeNotHandledByProcessor(processorName, event)`
   (default no-op). `MeasurementEventStoreSubscriptionObserver` counts it as
   `essentials.eventstore.processor.unhandled_event_type` (tags `processor`, `aggregate_type`, `event_type`, optional
-  `Module`) whenever it has a `MeterRegistry` — the starter wires that when one is present.
-- A WARN per processor and event type, at most once per hour, with the number ignored since the last one. Logger
-  `dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.processor.UnhandledEventTypes` — turn it down
-  in the logging configuration when processors ignore types on purpose. There is no per-type opt-out annotation.
+  `Module`) whenever it has a `MeterRegistry` - the starter wires that when one is present.
+- Logger: `dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.processor.UnhandledEventTypes`.
 
 ## In-Memory Projections
 
@@ -1592,11 +1608,12 @@ notices depends on the dispatcher:
 
 | Dispatcher | Unmatched message/event |
 |---|---|
-| `EventProcessor`, `InTransactionEventProcessor`, `ViewEventProcessor` | Ignored — they call `allowUnmatchedMessages()` |
+| `ViewEventProcessor` | Ignored — it calls `allowUnmatchedMessages()`; since 0.60.1 counted and WARNed about (see [Unhandled event types](#unhandled-event-types)) |
+| `EventProcessor`, `InTransactionEventProcessor` | Ignored — they call `allowUnmatchedMessages()`; since 0.60.1 counted and logged at DEBUG |
 | Aggregates (`AggregateRoot`, `FlexAggregate`, `AggregateState`), `AnnotationBasedInMemoryProjector` | Ignored — an aggregate need not handle every event |
 | `PatternMatchingMessageHandler`, `PatternMatchingQueuedMessageHandler`, `PatternMatchingPersistedEventHandler` | `IllegalArgumentException`, unless `allowUnmatchedMessages()` / `allowUnmatchedEvents()` was called |
 
-In the first two rows a forgotten annotation drops the event with no error: a projection simply never updates, an
+In the first three rows a forgotten annotation drops the event with no error: a projection simply never updates, an
 aggregate's state never changes. In the last row, on a durable queue, the `IllegalArgumentException` is a permanent
 error and dead-letters the message on its first delivery (see
 [LLM-foundation.md § The built-in permanent-error list](LLM-foundation.md#the-built-in-permanent-error-list)).

@@ -274,7 +274,7 @@ public abstract class InTransactionEventProcessor implements Lifecycle {
                      useExclusively ? "exclusively" : "non-exclusively",
                      subscribeToEventsRelatedTo);
             UnhandledEventTypes.logHandledMessageTypes(processorName, this);
-            unhandledEventTypes = new UnhandledEventTypes(processorName, eventStore, patternMatchingHandlerDelegate);
+            unhandledEventTypes = new UnhandledEventTypes(processorName, eventStore, this, patternMatchingHandlerDelegate, UnhandledEventTypes.Reporting.DEBUG);
 
             subscribeInTransaction(subscribeToEventsRelatedTo);
         }

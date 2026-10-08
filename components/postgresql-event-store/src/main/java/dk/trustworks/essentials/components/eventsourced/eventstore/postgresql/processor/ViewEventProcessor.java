@@ -60,6 +60,12 @@ import static dk.trustworks.essentials.shared.MessageFormatter.msg;
  *  <li>The event's {@link PersistedEvent#eventOrder()} becomes the {@link OrderedMessage#getOrder()}</li>
  * </ul>
  * <p>
+ * <h3>Event types the view has no {@code @MessageHandler} for are WARNed about</h3>
+ * A view that skips an event type does not see every {@code EventOrder} of the aggregate, so an ignored event type is
+ * logged at WARN (at most once an hour per type) and counted. At start the view also WARNs about the types a sealed
+ * event type it handles part of permits that it has no handler for. List the types it ignores on purpose in
+ * {@link IgnoresEventTypes} on the view class: they are still counted, but not warned about.
+ * <p>
  * <h3>Validation failures inside a {@code @MessageHandler} dead-letter the message immediately</h3>
  * Once an event has been queued, the {@link DurableQueueConsumer} classifies a set of exception types as permanent
  * errors and marks the message as a Poison-Message/Dead-Letter-Message on the <em>first</em> delivery attempt,
@@ -149,8 +155,8 @@ public abstract class ViewEventProcessor extends AbstractEventProcessor {
                     subscribeToEventsRelatedTo);
         this.durableQueueName = QueueName.of(processorName + ":queue");
         this.lockName = LockName.of(processorName + ":lock");
-        UnhandledEventTypes.logHandledMessageTypes(processorName, this);
-        this.unhandledEventTypes = new UnhandledEventTypes(processorName, eventStore, patternMatchingMessageHandlerDelegate);
+        UnhandledEventTypes.logViewSummary(processorName, this, patternMatchingMessageHandlerDelegate);
+        this.unhandledEventTypes = new UnhandledEventTypes(processorName, eventStore, this, patternMatchingMessageHandlerDelegate, UnhandledEventTypes.Reporting.WARN);
         fencedLockManager.acquireLockAsync(lockName,
                                            LockCallback.builder()
                                                        .onLockAcquired(lock -> {

@@ -301,7 +301,7 @@ public abstract class EventProcessor extends AbstractEventProcessor {
 
             setupMessageHandlerDelegate();
             UnhandledEventTypes.logHandledMessageTypes(processorName, this);
-            unhandledEventTypes = new UnhandledEventTypes(processorName, eventStore, patternMatchingInboxMessageHandlerDelegate);
+            unhandledEventTypes = new UnhandledEventTypes(processorName, eventStore, this, patternMatchingInboxMessageHandlerDelegate, UnhandledEventTypes.Reporting.DEBUG);
             inbox = inboxes.getOrCreateInbox(InboxConfig.builder()
                                                         .inboxName(InboxName.of(processorName))
                                                         .messageConsumptionMode(getInboxMessageConsumptionMode())
@@ -406,7 +406,7 @@ public abstract class EventProcessor extends AbstractEventProcessor {
      * The default implementation checks if the concrete {@link EventProcessor} class has an {@literal @MessageHandler} annotated method that
      * handles the event. Only events with a corresponding {@link MessageHandler} annotated method will be forwarded to the {@link Inbox} and thereby delegates to the
      * {@link MessageHandler} annotated method. An event it doesn't forward is reported as an ignored event type: a
-     * rate-limited WARN and {@code EventStoreSubscriptionObserver#eventTypeNotHandledByProcessor}
+     * DEBUG log line (skipping events is normal for an {@link EventProcessor}) and {@code EventStoreSubscriptionObserver#eventTypeNotHandledByProcessor}
      *
      * @param event          the event to forward
      * @param forwardToInbox the {@link Inbox} the event should be forwarded to
