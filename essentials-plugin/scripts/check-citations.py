@@ -125,6 +125,7 @@ from __future__ import annotations
 import argparse
 import os
 import re
+import subprocess
 import sys
 from pathlib import Path
 
@@ -518,13 +519,29 @@ def check_text(rel, text, patterns, contract, prose, restatement_rule=True, law=
     return findings
 
 
+def git_ignored(root: Path):
+    """Paths under ROOT that git ignores, relative to it (directories end in /); empty outside a work tree.
+
+    Local output such as evals/results/ quotes the pins it measured; it is never committed, so it is
+    never a citation."""
+    try:
+        r = subprocess.run(["git", "-C", str(root), "ls-files", "-oi", "--exclude-standard", "--directory"],
+                           capture_output=True, text=True, timeout=60)
+    except (OSError, subprocess.SubprocessError):
+        return ()
+    return tuple(line for line in r.stdout.splitlines() if line) if r.returncode == 0 else ()
+
+
 def scan(root: Path, patterns, contract, law):
     findings = []
+    ignored = git_ignored(root)
     for dirpath, dirnames, filenames in os.walk(root):
         dirnames[:] = sorted(d for d in dirnames if d not in SKIP_DIRS)
         for filename in sorted(filenames):
             path = Path(dirpath) / filename
             rel = path.relative_to(root).as_posix()
+            if any(rel == i or (i.endswith("/") and rel.startswith(i)) for i in ignored):
+                continue
             pin_rules = not (rel in EXEMPT_FILES or rel.startswith(EXEMPT_DIRS))
             law_rule = not (rel in LAW_EXEMPT_FILES or rel.startswith(LAW_EXEMPT_DIRS))
             if not (pin_rules or law_rule):
