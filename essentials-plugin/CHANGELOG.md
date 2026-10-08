@@ -83,6 +83,8 @@ targets, with a `-N` suffix for plugin-only releases.
 - **Fixed:** `LLM-eventsourced-aggregates.md` and the Java command test template showed
   `.thenThrows(...)`, which `GivenWhenThenScenario` does not have. They now use
   `thenFailsWithExceptionType(...)`.
+- **Fixed:** `slice-source.py` missed a command sent through a getter's bus, `getCommandBus().send(...)`,
+  the form an `EventProcessor` uses, so such an automation showed no `dispatches`.
 
 ## 0.60.0-6 — targets Essentials 0.60.0
 - **`/essentials:upgrade` now moves a project to the plugin's Essentials release, code included.** A
