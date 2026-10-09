@@ -107,6 +107,16 @@ targets, with a `-N` suffix for plugin-only releases.
   document DB fixes (unchecked `OptimisticLockingException`, private `@Id`, `getById`, reserved words), and the
   empty `LongRange`. `LLM-traps.md` gains `ESS-124` (per-instance fenced-lock ownership) and `ESS-125`
   (a view skipping an event type).
+- **More docs for Essentials 0.60.1.** The LLM docs and the view-slice skill cover where a processor
+  subscription starts, stable processor names across instances, what a failing processor handler must do,
+  testing asynchronous projections with `awaitProcessed`, snapshot support per aggregate pattern, the three decider
+  families, what a throwing command handler does to the UnitOfWork (including the 0.60.1 `sendAndDontWait`
+  rollback) and why its exception arrives wrapped, the UnitOfWork usage rule, hand-opened Jdbi handles, the two
+  lock-ownership predicates, the document-DB constructor rule and version contract, blocking starters under
+  WebFlux, omitted primitives in request bodies, and hand-built `WebTestClient`s. Wrong examples are fixed: the
+  protected `releaseLock(lock)` and a `SendCommandException` constructor that does not exist. `LLM-traps.md`
+  gains `ESS-126` (catching a command handler's exception inside `@Transactional` commits its writes) and
+  `ESS-127` (a processor handler that catches and logs loses the event).
 
 ## 0.60.0-6 — targets Essentials 0.60.0
 - **`/essentials:upgrade` now moves a project to the plugin's Essentials release, code included.** A
