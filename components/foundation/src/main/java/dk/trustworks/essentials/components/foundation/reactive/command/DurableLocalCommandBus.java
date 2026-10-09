@@ -26,6 +26,7 @@ import org.slf4j.*;
 
 import java.time.Duration;
 import java.util.*;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static dk.trustworks.essentials.shared.Exceptions.rethrowIfCriticalError;
 import static dk.trustworks.essentials.shared.FailFast.*;
@@ -189,25 +190,39 @@ public final class DurableLocalCommandBus extends AbstractCommandBus implements 
                   CommandHandler.class.getSimpleName(),
                   commandHandler.toString());
 
-        CommandBusInterceptorChain.newInterceptorChain(queuedMessage,
-                                                       commandHandler,
-                                                       interceptors,
-                                                       (interceptor, commandBusInterceptorChain) -> {
-                                                           interceptor.interceptSendAndDontWait(queuedMessage, commandBusInterceptorChain);
-                                                           return null;
-                                                       },
-                                                       msg -> {
-                                                           try {
-                                                               return commandHandler.handle(command);
-                                                           } catch (Throwable e) {
-                                                               rethrowIfCriticalError(e);
-                                                               sendAndDontWaitErrorHandler.handleError(e,
-                                                                                                       queuedMessage,
-                                                                                                       commandHandler);
+        var handlerFailure = new AtomicReference<Throwable>();
+        try {
+            CommandBusInterceptorChain.newInterceptorChain(queuedMessage,
+                                                           commandHandler,
+                                                           interceptors,
+                                                           (interceptor, commandBusInterceptorChain) -> {
+                                                               interceptor.interceptSendAndDontWait(queuedMessage, commandBusInterceptorChain);
                                                                return null;
-                                                           }
-                                                       })
-                                  .proceed();
+                                                           },
+                                                           msg -> {
+                                                               try {
+                                                                   return commandHandler.handle(command);
+                                                               } catch (Throwable e) {
+                                                                   rethrowIfCriticalError(e);
+                                                                   // Let the failure unwind through the interceptors, so e.g. a UnitOfWork interceptor rolls back
+                                                                   // what the handler wrote, and only then hand it to the error handler (below)
+                                                                   handlerFailure.set(e);
+                                                                   throw e;
+                                                               }
+                                                           })
+                                      .proceed();
+        } catch (Throwable e) {
+            var failure = handlerFailure.get();
+            if (failure == null) {
+                // Not a command handler failure (e.g. an interceptor or the commit failed): the queue's RedeliveryPolicy decides
+                throw e;
+            }
+            // The handler's own exception, not whatever an interceptor wrapped it in on the way out.
+            // If the error handler rethrows, the DurableQueues redelivers the message; if it doesn't, the message counts as handled
+            sendAndDontWaitErrorHandler.handleError(failure,
+                                                    queuedMessage,
+                                                    commandHandler);
+        }
     }
 
     public int getParallelSendAndDontWaitConsumers() {

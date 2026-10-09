@@ -949,6 +949,18 @@ commandBus.sendAndDontWait(new SendReminderCommand(customerId), Duration.ofHours
 OrderId result = commandBus.send(new CreateOrderCommand(...));
 ```
 
+### When a queued command's handler throws
+
+The `SendAndDontWaitErrorHandler` decides retry, not rollback (since 0.60.1). The handler's exception first unwinds
+through the interceptors - `UnitOfWorkControllingCommandBusInterceptor` (both Spring Boot starters add it) rolls back
+what the handler wrote, or marks the queue consumer's `UnitOfWork` rollback-only - and the error handler is then called
+once with the handler's own exception. The default `RethrowingSendAndDontWaitErrorHandler` rethrows, so the queue
+redelivers per the `RedeliveryPolicy`; a handler that does not rethrow drops the command, and the message is
+acknowledged with nothing committed. Before 0.60.1 a non-rethrowing error handler committed the handler's partial
+writes. Keep the interceptor when building the bus by hand: without it nothing marks the PostgreSQL queue consumer's
+`UnitOfWork` (which the handler's writes join) rollback-only, so a non-rethrowing error handler still lets it commit. Details:
+[LLM-reactive.md § When a handler throws](./LLM-reactive.md#when-a-handler-throws-rejections).
+
 ### Commands are persisted
 
 A command sent with `sendAndDontWait` is stored as JSON in the durable-queue table (the command object is the queued

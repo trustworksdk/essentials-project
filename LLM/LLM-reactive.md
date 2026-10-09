@@ -267,13 +267,25 @@ With foundation's `UnitOfWorkControllingCommandBusInterceptor` (both Spring Boot
   handler wrote before it threw.
 - under `sendAsync` never touches the caller's `UnitOfWork`: the handler runs on another thread in its own, and the
   `Mono` signals the error.
-- under `sendAndDontWait` on a `DurableLocalCommandBus` (default `RethrowingSendAndDontWaitErrorHandler`) rolls back
-  and **redelivers** the queued command per its `RedeliveryPolicy` (default `DEFAULT_REDELIVERY_POLICY`: linear
-  backoff 150 ms, capped at 1 s, 20 redeliveries), then dead-letters it. The queue's built-in permanent-error list
-  applies, so an `IllegalArgumentException` dead-letters at once (see
-  [LLM-foundation.md § The built-in permanent-error list](./LLM-foundation.md#the-built-in-permanent-error-list)). On a
-  plain `LocalCommandBus` the default `FallbackSendAndDontWaitErrorHandler` logs and drops the failure, and because it
-  catches inside the interceptor chain, the `UnitOfWork` commits what the handler wrote before it threw.
+- under `sendAndDontWait` **rolls back the handler's writes on every bus and with every `SendAndDontWaitErrorHandler`**
+  (since 0.60.1). The exception unwinds through the interceptor chain first - so the `UnitOfWork` rolls back, or an
+  outer one the delivery runs in is marked rollback-only - and only then reaches the `SendAndDontWaitErrorHandler`,
+  as the exception the handler threw (not the `UnitOfWorkException` wrapper), exactly once. What the error handler does
+  next decides only whether the command is tried again:
+  - on a `DurableLocalCommandBus` with the default `RethrowingSendAndDontWaitErrorHandler`, the rethrow reaches the
+    durable queue, which **redelivers** the command per its `RedeliveryPolicy` (default `DEFAULT_REDELIVERY_POLICY`:
+    linear backoff 150 ms, capped at 1 s, 20 redeliveries), then dead-letters it. The queue's built-in permanent-error
+    list applies, so an `IllegalArgumentException` dead-letters at once (see
+    [LLM-foundation.md § The built-in permanent-error list](./LLM-foundation.md#the-built-in-permanent-error-list)).
+  - an error handler that does not rethrow (the plain `LocalCommandBus` default `FallbackSendAndDontWaitErrorHandler`,
+    or one you set on a `DurableLocalCommandBus`) logs and drops the failure: nothing is retried, nothing is committed.
+
+  Before 0.60.1 the bus called the error handler *inside* the chain, so a non-rethrowing one made the handler look
+  successful and the `UnitOfWork` committed whatever it wrote before throwing - by default on a plain
+  `LocalCommandBus`. An interceptor that throws on its own (not the handler) still bypasses the error handler; on a
+  `DurableLocalCommandBus` the queue's `RedeliveryPolicy` handles that failure. An interceptor's
+  `interceptSendAndDontWait` now sees the handler's exception come out of `chain.proceed()`, as it already did for
+  `send`/`sendAsync` - `RecordExecutionTimeCommandBusInterceptor` times failed deliveries the same way.
 
 So a throw is for a failure, not for a business rejection that must persist (an audit row, a "rejected" status): the
 rollback discards it, and `sendAndDontWait` retries it. Return an outcome instead - an `EventStreamDecider` emits a
@@ -365,6 +377,10 @@ public interface SendAndDontWaitErrorHandler {
 **Implementations:**
 - `FallbackSendAndDontWaitErrorHandler` - Logs error, swallows exception (no retry)
 - `RethrowingSendAndDontWaitErrorHandler` - Logs error, rethrows exception (enables retry with DurableQueues)
+
+Since 0.60.1 `handleError` runs after the handler's exception has unwound through the interceptor chain, so any
+`UnitOfWork` an interceptor opened is already rolled back whichever implementation you use; it receives the handler's
+own exception, never a wrapper (see [When a handler throws](#when-a-handler-throws-rejections)).
 
 ### Exceptions
 
