@@ -127,7 +127,7 @@ safe. To keep a fixed id, set `essentials.fenced-lock-manager.instance-id` (see 
 
 #### 1.1.5 New warnings: enqueue outside a transaction, and incomplete redelivery policies
 
-Three new WARN log lines. Nothing else changes, but each points at a setup that does not do what it appears to:
+Four new WARN log lines. Nothing else changes, but each points at a setup that does not do what it appears to:
 
 - **A `DurableQueues` enqueue outside a unit of work.** The first `queueMessage`/`queueMessages` per
   `DurableQueues` instance that runs with no Essentials `UnitOfWork` and no Spring transaction logs a WARN with its
@@ -143,6 +143,11 @@ Three new WARN log lines. Nothing else changes, but each points at a setup that 
   unset delays, a multiplier below 1.0 or unset, or `setMaximumNumberOfRedeliveries` never called. Unset means 0
   redeliveries, so the first failure dead-letters the message. The 0.61 release will throw
   `IllegalArgumentException`. (QL-3, `5537eae3`)
+- **A `DurableLocalCommandBus` without the UnitOfWork interceptor.** `start()` logs one WARN when the bus has a
+  `SendAndDontWaitErrorHandler` that does not rethrow and no `UnitOfWorkControllingCommandBusInterceptor`. In that
+  setup a failed `sendAndDontWait` handler's partial writes commit with the message acknowledgement, because on
+  PostgreSQL they join the queue consumer's UnitOfWork. Add the interceptor. The starters' bus always has it.
+  (`35210f04`)
 
 #### 1.1.6 An empty `LongRange` reads nothing
 
@@ -352,6 +357,7 @@ The plugin's features are in [§4](#4-the-essentials-claude-code-plugin).
 | `immutable-jackson3` | With `immutable-jackson3` on the classpath but no `org.objenesis:objenesis`, an application started and wrote, then every read failed with `NoClassDefFoundError`. Creating the persistence mapper now throws an `IllegalStateException` naming the dependency. Objenesis stays `provided` | SB-2, N-5, `e26d0459` |
 | Durable queues (MongoDB) | Handing such a message back on an interrupted thread used to fail silently: the MongoDB driver refuses a connection on an interrupted thread (`Interrupted waiting for lock`), the failure was logged at DEBUG, and the message stayed marked as being delivered until the stuck-message reset. The hand-back now clears the interrupt flag for its write and restores it afterwards | `6ba568b5` |
 | Command bus | A `sendAndDontWait` handler that wrote in its UnitOfWork and then threw had those writes committed whenever the `SendAndDontWaitErrorHandler` did not rethrow: the default on a plain `LocalCommandBus` (`FallbackSendAndDontWaitErrorHandler`), or a custom handler on `DurableLocalCommandBus`. The writes are now rolled back before the error handler runs; see [§1.1.12](#1112-a-failed-sendanddontwait-handlers-writes-roll-back-the-error-handler-runs-afterwards) | `f722edb8` |
+| `ViewEventProcessor` | When the fenced lock was released while the lock-acquired callback was still starting up (for example, the lock manager stopping at that moment), the release callback threw a `NullPointerException`. It never cancelled the exclusive durable-queue consumer or stopped the subscriptions created right after, so a processor that had lost its lock kept consuming. The two callbacks are now mutually exclusive, a release always cancels the consumer and stops the subscriptions that exist, and an acquire that fails part-way stops the subscriptions it created. Present since 0.60.0 | `72abb871` |
 | Scheduler | A job registered with `DefaultEssentialsScheduler` while the scheduler was acquiring its fenced lock could be silently dropped: it stayed in the job list but was never scheduled until the lock was next re-acquired. This typically hit a `@TTLJob` whose `PostgresqlTTLManager` started at the same moment, so its TTL delete never ran. Registration now waits for the lock callback to finish and always sees the lock state it leaves | `35fafdaa` |
 
 ---
