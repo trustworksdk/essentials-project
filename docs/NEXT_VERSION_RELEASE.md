@@ -234,6 +234,26 @@ to say so. Now:
 
 (CB-4, `9f4ddecf`, `b786b107`)
 
+#### 1.1.12 A failed `sendAndDontWait` handler's writes roll back; the error handler runs afterwards
+
+On `LocalCommandBus` and `DurableLocalCommandBus`, a `sendAndDontWait` handler's exception used to be caught inside
+the interceptor chain and handed straight to the `SendAndDontWaitErrorHandler`. When that handler did not rethrow,
+the interceptors saw a normal return, so `UnitOfWorkControllingCommandBusInterceptor` committed whatever the handler
+wrote before it threw (§3). Now the exception unwinds through the interceptors first, and the error handler is called
+after the chain. What changes for you:
+
+- A failed handler's writes are rolled back, whatever the error handler does.
+- `SendAndDontWaitErrorHandler.handleError` still runs exactly once and still receives the handler's own exception.
+  It is no longer called if an interceptor swallows that exception.
+- A `CommandBusInterceptor.interceptSendAndDontWait` now sees the handler's exception come out of
+  `chain.proceed()`, as under `send` and `sendAsync`. The execution-time metrics of `sendAndDontWait` now include
+  failed deliveries.
+- With a rethrowing error handler, the durable queue now receives the original exception rather than a
+  `UnitOfWorkException` wrapping it. Redelivery and dead-letter classification walk the whole cause chain, so they
+  are unchanged.
+
+(`f722edb8`)
+
 ---
 
 ## 2. New features
@@ -331,6 +351,7 @@ The plugin's features are in [§4](#4-the-essentials-claude-code-plugin).
 | Spring Boot starters | A missing `provided` library surfaced as a bare `NoClassDefFoundError` or `ClassNotFoundException` deep in bean creation. The startup failure report now names the Maven coordinates to add: jdbi3-core/postgres, the PostgreSQL driver, kotlin-stdlib/kotlin-reflect, Spring Data MongoDB, spring-boot-starter-jdbc, Jackson 3, objenesis and reactor-core | SB-2, `e26d0459` |
 | `immutable-jackson3` | With `immutable-jackson3` on the classpath but no `org.objenesis:objenesis`, an application started and wrote, then every read failed with `NoClassDefFoundError`. Creating the persistence mapper now throws an `IllegalStateException` naming the dependency. Objenesis stays `provided` | SB-2, N-5, `e26d0459` |
 | Durable queues (MongoDB) | Handing such a message back on an interrupted thread used to fail silently: the MongoDB driver refuses a connection on an interrupted thread (`Interrupted waiting for lock`), the failure was logged at DEBUG, and the message stayed marked as being delivered until the stuck-message reset. The hand-back now clears the interrupt flag for its write and restores it afterwards | `6ba568b5` |
+| Command bus | A `sendAndDontWait` handler that wrote in its UnitOfWork and then threw had those writes committed whenever the `SendAndDontWaitErrorHandler` did not rethrow: the default on a plain `LocalCommandBus` (`FallbackSendAndDontWaitErrorHandler`), or a custom handler on `DurableLocalCommandBus`. The writes are now rolled back before the error handler runs; see [§1.1.12](#1112-a-failed-sendanddontwait-handlers-writes-roll-back-the-error-handler-runs-afterwards) | `f722edb8` |
 | Scheduler | A job registered with `DefaultEssentialsScheduler` while the scheduler was acquiring its fenced lock could be silently dropped: it stayed in the job list but was never scheduled until the lock was next re-acquired. This typically hit a `@TTLJob` whose `PostgresqlTTLManager` started at the same moment, so its TTL delete never ran. Registration now waits for the lock callback to finish and always sees the lock state it leaves | `35fafdaa` |
 
 ---
