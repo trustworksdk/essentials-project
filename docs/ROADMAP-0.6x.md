@@ -65,6 +65,16 @@ Additive features.
   `findCommandHandlersCapableOfHandling(Class)` default method; today the configurator tracks its own adapters per
   bus.
 
+### Command bus
+
+**Mark a Spring-managed transaction rollback-only when a command fails (CB-5).**
+`SpringTransactionAwareUnitOfWork.markAsRollbackOnly` only logs at DEBUG when Spring manages the transaction. So
+inside a `@Transactional`, a caller that catches the exception from `commandBus.send` commits whatever the handler
+wrote before it threw, and a typed `Decider`'s `HandlerResult.error` mark is lost the same way. Plain Spring marks the
+shared transaction rollback-only when an inner `@Transactional` method throws. **Fix:** mark the Spring transaction
+rollback-only too (`TransactionStatus.setRollbackOnly()`). Not in a patch: a caller that catches today would then get
+`UnexpectedRollbackException` at commit, so it needs a migration note. 0.60.1 documents it as `ESS-126`.
+
 ### Event store
 
 **A cross-instance `awaitProcessed` (ES-4 follow-up).** 0.60.1's `awaitProcessed` sees only the processor in this

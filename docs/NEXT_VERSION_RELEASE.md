@@ -331,6 +331,7 @@ The plugin's features are in [§4](#4-the-essentials-claude-code-plugin).
 | Spring Boot starters | A missing `provided` library surfaced as a bare `NoClassDefFoundError` or `ClassNotFoundException` deep in bean creation. The startup failure report now names the Maven coordinates to add: jdbi3-core/postgres, the PostgreSQL driver, kotlin-stdlib/kotlin-reflect, Spring Data MongoDB, spring-boot-starter-jdbc, Jackson 3, objenesis and reactor-core | SB-2, `e26d0459` |
 | `immutable-jackson3` | With `immutable-jackson3` on the classpath but no `org.objenesis:objenesis`, an application started and wrote, then every read failed with `NoClassDefFoundError`. Creating the persistence mapper now throws an `IllegalStateException` naming the dependency. Objenesis stays `provided` | SB-2, N-5, `e26d0459` |
 | Durable queues (MongoDB) | Handing such a message back on an interrupted thread used to fail silently: the MongoDB driver refuses a connection on an interrupted thread (`Interrupted waiting for lock`), the failure was logged at DEBUG, and the message stayed marked as being delivered until the stuck-message reset. The hand-back now clears the interrupt flag for its write and restores it afterwards | `6ba568b5` |
+| Scheduler | A job registered with `DefaultEssentialsScheduler` while the scheduler was acquiring its fenced lock could be silently dropped: it stayed in the job list but was never scheduled until the lock was next re-acquired. This typically hit a `@TTLJob` whose `PostgresqlTTLManager` started at the same moment, so its TTL delete never ran. Registration now waits for the lock callback to finish and always sees the lock state it leaves | `35fafdaa` |
 
 ---
 
@@ -462,6 +463,8 @@ Not published; listed because they are the reference for how to use the framewor
     `@NotNull`. (SJ-4, `e7deaea9`)
   - `WebTestClient.bindToServer()` uses default codecs and serializes value types as beans, not bare values. Use
     `@AutoConfigureWebTestClient` with an injected `WebTestClient`. (SJ-5, `b760e170`)
+- **`LLM/LLM-traps.md`** gains `ESS-126` (inside a Spring `@Transactional`, catching a command handler's exception
+  commits the handler's writes) and `ESS-127` (a processor handler that catches and logs loses the event).
 - **Corrections to the 0.60.0 release notes:**
   - §1.1.6 (`use-ordered-unordered-query`): "is now ignored" is true only for the Spring property
     `essentials.durable-queues.use-ordered-unordered-query`. `PostgresqlDurableQueuesBuilder.setUseOrderedUnorderedQuery`,
