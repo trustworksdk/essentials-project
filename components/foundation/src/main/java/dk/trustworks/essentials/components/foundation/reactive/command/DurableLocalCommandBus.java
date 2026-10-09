@@ -59,6 +59,7 @@ public final class DurableLocalCommandBus extends AbstractCommandBus implements 
 
     private boolean              started;
     private DurableQueueConsumer durableQueueConsumer;
+    private boolean              missingUnitOfWorkInterceptorWarned;
 
     /**
      * Builder for a {@link DurableLocalCommandBusBuilder}
@@ -116,12 +117,41 @@ public final class DurableLocalCommandBus extends AbstractCommandBus implements 
         if (!started) {
             log.info("Starting...");
             started = true;
+            warnIfAFailedHandlersWritesCanBeCommitted();
             durableQueueConsumer = durableQueues.consumeFromQueue(commandQueueName,
                                                                   commandQueueRedeliveryPolicy,
                                                                   parallelSendAndDontWaitConsumers,
                                                                   this::processSendAndDontWaitMessage);
             log.info("Started");
         }
+    }
+
+    /**
+     * A {@link SendAndDontWaitErrorHandler} that does not rethrow lets the queued message count as handled. Without a
+     * {@link UnitOfWorkControllingCommandBusInterceptor} nothing rolls back what the failed command handler wrote before it
+     * threw: on PostgreSQL those writes join the queue consumer's own {@link dk.trustworks.essentials.components.foundation.transaction.UnitOfWork},
+     * which then commits them together with the acknowledgement. Both Spring Boot starters always add the interceptor,
+     * so only a hand-built bus can end up like this. Checked at {@link #start()}, because interceptors can still be
+     * added with {@link #addInterceptor(CommandBusInterceptor)} after construction. WARN only (a patch release must not
+     * reject a setup that starts today); logged once per bus.
+     */
+    private void warnIfAFailedHandlersWritesCanBeCommitted() {
+        if (missingUnitOfWorkInterceptorWarned ||
+                sendAndDontWaitErrorHandler instanceof RethrowingSendAndDontWaitErrorHandler ||
+                interceptors.stream().anyMatch(interceptor -> interceptor instanceof UnitOfWorkControllingCommandBusInterceptor)) {
+            return;
+        }
+        missingUnitOfWorkInterceptorWarned = true;
+        log.warn("[{}] {} uses the non-rethrowing {} '{}' but has no {}: when a sendAndDontWait command handler throws, the message is acknowledged " +
+                         "and the writes the handler made before it threw are committed (on PostgreSQL they join the queue consumer's UnitOfWork), " +
+                         "instead of being rolled back. Add the interceptor: commandBus.addInterceptor(new {}(unitOfWorkFactory)) - " +
+                         "or DurableLocalCommandBus.builder().addInterceptors(...) - as the Spring Boot starters do",
+                 commandQueueName,
+                 DurableLocalCommandBus.class.getSimpleName(),
+                 SendAndDontWaitErrorHandler.class.getSimpleName(),
+                 sendAndDontWaitErrorHandler.getClass().getSimpleName(),
+                 UnitOfWorkControllingCommandBusInterceptor.class.getSimpleName(),
+                 UnitOfWorkControllingCommandBusInterceptor.class.getSimpleName());
     }
 
     @Override

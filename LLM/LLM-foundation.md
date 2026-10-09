@@ -958,7 +958,8 @@ once with the handler's own exception. The default `RethrowingSendAndDontWaitErr
 redelivers per the `RedeliveryPolicy`; a handler that does not rethrow drops the command, and the message is
 acknowledged with nothing committed. Before 0.60.1 a non-rethrowing error handler committed the handler's partial
 writes. Keep the interceptor when building the bus by hand: without it nothing marks the PostgreSQL queue consumer's
-`UnitOfWork` (which the handler's writes join) rollback-only, so a non-rethrowing error handler still lets it commit. Details:
+`UnitOfWork` (which the handler's writes join) rollback-only, so a non-rethrowing error handler still lets it commit.
+Since 0.60.1 `start()` logs one WARN for a bus that has a non-rethrowing error handler and no such interceptor. Details:
 [LLM-reactive.md § When a handler throws](./LLM-reactive.md#when-a-handler-throws-rejections).
 
 ### Commands are persisted
