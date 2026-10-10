@@ -115,8 +115,9 @@ enqueue commits or rolls back with the caller's writes - which is what an Outbox
 `SpringTransactionAwareJdbiUnitOfWorkFactory` a plain Spring `@Transactional`/`TransactionTemplate` is joined too.
 
 An enqueue **outside** any `UnitOfWork` or Spring transaction commits on its own and is not undone by a later
-rollback of the caller's work - e.g. `Outbox.sendMessage` called before the business transaction starts. The first one
-per `DurableQueues` logs a WARN with its call site. Opt in to failing instead with
+rollback of the caller's work - e.g. `Outbox.sendMessage` called before the business transaction starts. Each call
+site's first one logs a WARN with its stack trace (up to 32 call sites per `DurableQueues`), so a deliberate standalone
+enqueue cannot hide another one. Opt in to failing instead with
 `setRequireActiveUnitOfWorkForEnqueue(true)` on the builder, or in Spring Boot
 `essentials.durable-queues.require-active-unit-of-work-for-enqueue=true`: such an enqueue then throws
 `NoActiveUnitOfWorkException` and queues nothing. A plain Spring `@Transactional`/`TransactionTemplate` counts as

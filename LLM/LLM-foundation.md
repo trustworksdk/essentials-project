@@ -159,7 +159,7 @@ public void processOrder(Order order) {
 }
 ```
 
-A `DurableQueues` enqueue joins an active UnitOfWork or Spring transaction, or runs on its own (PostgreSQL through `withUnitOfWork`, MongoDB as a plain `MongoTemplate` write). An enqueue outside both therefore commits on its own and is not rolled back with the caller's work. The first one per `DurableQueues` instance WARNs; `essentials.durable-queues.require-active-unit-of-work-for-enqueue=true` (builder: `setRequireActiveUnitOfWorkForEnqueue(true)`) makes it throw `NoActiveUnitOfWorkException` instead — see [LLM-postgresql-queue.md § Transactions](./LLM-postgresql-queue.md#transactions).
+A `DurableQueues` enqueue joins an active UnitOfWork or Spring transaction, or runs on its own (PostgreSQL through `withUnitOfWork`, MongoDB as a plain `MongoTemplate` write). An enqueue outside both therefore commits on its own and is not rolled back with the caller's work. Each call site's first one WARNs, with its stack trace (up to 32 call sites per `DurableQueues` instance); `essentials.durable-queues.require-active-unit-of-work-for-enqueue=true` (builder: `setRequireActiveUnitOfWorkForEnqueue(true)`) makes it throw `NoActiveUnitOfWorkException` instead — see [LLM-postgresql-queue.md § Transactions](./LLM-postgresql-queue.md#transactions).
 
 **When to use explicit `usingUnitOfWork` / `withUnitOfWork`:**
 1. No transaction exists - starts new transaction

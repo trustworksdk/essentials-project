@@ -129,12 +129,16 @@ safe. To keep a fixed id, set `essentials.fenced-lock-manager.instance-id` (see 
 
 Four new WARN log lines. Nothing else changes, but each points at a setup that does not do what it appears to:
 
-- **A `DurableQueues` enqueue outside a unit of work.** The first `queueMessage`/`queueMessages` per
-  `DurableQueues` instance that runs with no Essentials `UnitOfWork` and no Spring transaction logs a WARN with its
-  call site. The enqueue commits on its own, so a later rollback of your business change does not undo it. This
+- **A `DurableQueues` enqueue outside a unit of work.** A `queueMessage`/`queueMessages` that runs with no
+  Essentials `UnitOfWork` and no Spring transaction logs a WARN with its stack trace, once per call site: the first
+  stack frame outside Essentials, the JDK, Reactor, Kotlin and Spring. Up to 32 call sites are logged per
+  `DurableQueues` instance, then one line says further ones are not. Keying on the call site means a deliberate
+  standalone enqueue (`sendAndDontWait` from a controller, say) cannot use up the only WARN and hide an
+  `Outbox.sendMessage` elsewhere. Each call site that enqueues while the application is starting is also listed in
+  the startup report. The enqueue commits on its own, so a later rollback of your business change does not undo it. This
   covers `Outbox.sendMessage` and `DurableLocalCommandBus.sendAndDontWait` called outside a transaction. To make it
   fail instead, set `essentials.durable-queues.require-active-unit-of-work-for-enqueue=true` (§2).
-  (RN-2, `3c783626`)
+  (RN-2, `3c783626`, `8d349587`)
 - **A shard-owned queue built without a UnitOfWork factory.** Building `ShardOwnedDurableQueues` without
   `setUnitOfWorkFactory(...)` logs a WARN that every enqueue commits on its own. The 0.61 release will refuse to
   build it. The starters always set one. (N-15, `4248f0b3`)
@@ -273,7 +277,12 @@ after the chain. What changes for you:
 - **Schema descriptions:** `SchemaChange.describedAs(String)`, `description()` and `describeObject()`,
   `SchemaChangeSet.describe()`/`describeObjects()`, and `PostgresqlEmitSchemaApplier.exitTriggered()`/
   `isExitTriggered()`. A `SchemaChange` built with the 4-argument constructor keeps working; the description is not
-  part of the checksum, so no recorded schema history changes. (RN-5, `07d23d7d`)
+  part of the checksum, so no recorded schema history changes. `description` is a fifth record component, which
+  you notice in two places only: a record pattern over `SchemaChange` (`case SchemaChange(var id, var object, var
+  statements, var repeatable)`) needs a fifth binding, and `equals`/`hashCode` include the description, so two
+  changes that differ only in their description are no longer equal. Nothing in Essentials compares changes that
+  way: duplicate contributions are still matched on module, change id and object name, and checked by checksum.
+  (RN-5, `07d23d7d`)
 - **`essentials.durable-queues.require-active-unit-of-work-for-enqueue`** (default `false`), also
   `setRequireActiveUnitOfWorkForEnqueue(...)` on the PostgreSQL, MongoDB and shard-owned builders. When `true`, an
   enqueue with no active `UnitOfWork` or Spring transaction throws `NoActiveUnitOfWorkException`, so an `Outbox`
@@ -299,7 +308,12 @@ after the chain. What changes for you:
   counts. `InTransactionEventProcessor` has the same methods and returns at once. It sees only the processor in this
   JVM: a `ViewEventProcessor` whose lock another instance holds times out. Integration tests can replace guessed
   Awaitility timeouts with it; `LLM-postgresql-event-store.md` § "Awaiting a processor" has an example.
-  (ES-4, `944633a4`)
+  The gap check asks the event store through the new role interface `AwaitedGapInspector` (`isAwaitedAsGap`), which
+  `PostgresqlEventStore` and `CdcEventStore` implement; it covers transient-gap rows and the middle of a wide gap
+  that is awaited in memory only. **An `EventStore` of yours that decorates one of them must implement
+  `AwaitedGapInspector` and forward it to its delegate**, like `forgetGapMiddlesAwaitedInMemory`. Otherwise the check
+  is off, the processor logs one WARN, and an event that committed after a later one can be reported processed
+  before its gap fill was handled. (ES-4, `944633a4`, `6ff9ca9e`)
 - **`AppendedEvents.recordDuring(() -> commandBus.send(cmd))`** (`eventsourced-aggregates`) returns what `send`
   returned plus the `PersistedEvent`s an `EventStreamDeciderCommandHandlerAdapter` appended, so a caller has an
   order to wait for. Same thread only (`send`, not `sendAsync`). (ES-4, `944633a4`)
@@ -358,6 +372,8 @@ The plugin's features are in [§4](#4-the-essentials-claude-code-plugin).
 | Durable queues (MongoDB) | Handing such a message back on an interrupted thread used to fail silently: the MongoDB driver refuses a connection on an interrupted thread (`Interrupted waiting for lock`), the failure was logged at DEBUG, and the message stayed marked as being delivered until the stuck-message reset. The hand-back now clears the interrupt flag for its write and restores it afterwards | `6ba568b5` |
 | Command bus | A `sendAndDontWait` handler that wrote in its UnitOfWork and then threw had those writes committed whenever the `SendAndDontWaitErrorHandler` did not rethrow: the default on a plain `LocalCommandBus` (`FallbackSendAndDontWaitErrorHandler`), or a custom handler on `DurableLocalCommandBus`. The writes are now rolled back before the error handler runs; see [§1.1.12](#1112-a-failed-sendanddontwait-handlers-writes-roll-back-the-error-handler-runs-afterwards) | `f722edb8` |
 | `ViewEventProcessor` | When the fenced lock was released while the lock-acquired callback was still starting up (for example, the lock manager stopping at that moment), the release callback threw a `NullPointerException`. It never cancelled the exclusive durable-queue consumer or stopped the subscriptions created right after, so a processor that had lost its lock kept consuming. The two callbacks are now mutually exclusive, a release always cancels the consumer and stops the subscriptions that exist, and an acquire that fails part-way stops the subscriptions it created. Present since 0.60.0 | `72abb871` |
+| `MultiTableChangeListener` | A `start()` that ran while `stop()` was tearing down could leave the listener reporting `isStarted()` as `true` with nothing polling, until the next `stop()`/`start()`: `stop()` cleared its started flag before cancelling the poll task, so the racing `start()` found the old task, skipped scheduling, and the task was then cancelled. The teardown of the poll task now happens under the same lock as the flag | `1bfbe58d` |
+| Command bus | Two `EventStreamDeciderAndAggregateTypeConfigurator`s sharing a `CommandBus` and configured on different threads could corrupt the list behind the duplicate-command-type WARN, or throw `ConcurrentModificationException` from it: one appended to it without holding the lock the other iterated it under. Both now hold it | `a20947b2` |
 | Scheduler | A job registered with `DefaultEssentialsScheduler` while the scheduler was acquiring its fenced lock could be silently dropped: it stayed in the job list but was never scheduled until the lock was next re-acquired. This typically hit a `@TTLJob` whose `PostgresqlTTLManager` started at the same moment, so its TTL delete never ran. Registration now waits for the lock callback to finish and always sees the lock state it leaves | `35fafdaa` |
 
 ---
