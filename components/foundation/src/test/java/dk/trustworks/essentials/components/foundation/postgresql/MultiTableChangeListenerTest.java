@@ -21,14 +21,17 @@ import ch.qos.logback.classic.spi.ILoggingEvent;
 import ch.qos.logback.core.read.ListAppender;
 import dk.trustworks.essentials.components.foundation.json.JSONSerializer;
 import dk.trustworks.essentials.reactive.EventBus;
-import org.jdbi.v3.core.Jdbi;
-import org.jdbi.v3.core.ConnectionException;
+import org.jdbi.v3.core.*;
 import org.junit.jupiter.api.Test;
+import org.postgresql.*;
 import org.slf4j.LoggerFactory;
 import org.testcontainers.shaded.org.awaitility.Awaitility;
 
-import java.sql.SQLException;
+import java.sql.*;
 import java.time.Duration;
+import java.util.*;
+import java.util.concurrent.*;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 import static org.assertj.core.api.Assertions.*;
 import static org.mockito.Mockito.*;
@@ -103,6 +106,124 @@ class MultiTableChangeListenerTest {
                     });
         } finally {
             logger.detachAppender(appender);
+        }
+    }
+    /**
+     * Review F-034: {@code stop()} used to close whatever LISTEN connection was current once it had waited for the poll
+     * thread, outside the monitor. A {@code start()} that ran in that window found the old connection still open, kept
+     * it - and then lost it to the finishing {@code stop()}, so notifications sent before the next poll reopened it were
+     * gone, although {@code start()} promises that every registered table is LISTENed to when it returns.<br>
+     * Driven deterministically: the old poll thread is held inside {@link EventBus#publish(Object)} (outside the
+     * connection lock, ignoring the interrupt), so {@code stop()} sits in its wait for that thread while {@code start()}
+     * runs.
+     */
+    @Test
+    void a_start_racing_a_stop_keeps_the_connection_it_opened_and_keeps_polling() throws Exception {
+        var channel        = ListenNotify.resolveTableChangeChannelName("table1");
+        var openedHandles  = new CopyOnWriteArrayList<Handle>();
+        var pendingNotices = new ConcurrentLinkedQueue<PGNotification>(List.of(notificationOn(channel)));
+        var jdbi           = mock(Jdbi.class);
+        when(jdbi.open()).thenAnswer(invocation -> {
+            var handle = listenHandleDelivering(pendingNotices);
+            openedHandles.add(handle);
+            return handle;
+        });
+        var jsonSerializer = mock(JSONSerializer.class);
+        when(jsonSerializer.deserialize(anyString(), eq(MultiTableChangeListenerIT.Table1Notification.class)))
+                .thenAnswer(invocation -> new MultiTableChangeListenerIT.Table1Notification());
+
+        var firstPublishStarted = new CountDownLatch(1);
+        var releaseFirstPublish = new CountDownLatch(1);
+        var firstPublish        = new AtomicBoolean(true);
+        var published           = new LinkedBlockingQueue<>();
+        var eventBus            = mock(EventBus.class);
+        doAnswer(invocation -> {
+            if (firstPublish.getAndSet(false)) {
+                firstPublishStarted.countDown();
+                awaitIgnoringInterrupts(releaseFirstPublish);
+            }
+            published.add(invocation.getArgument(0));
+            return null;
+        }).when(eventBus).publish(any());
+
+        var listener = new MultiTableChangeListener<MultiTableChangeListenerIT.TestTableNotification>(jdbi, Duration.ofMillis(10), jsonSerializer, eventBus, false);
+        listener.start();
+        listener.listenToNotificationsFor("table1", MultiTableChangeListenerIT.Table1Notification.class);
+        assertThat(firstPublishStarted.await(5, TimeUnit.SECONDS)).as("the first poll reached publish").isTrue();
+        var connectionOfTheStoppedListener = openedHandles.getFirst();
+
+        var stopper = Executors.newSingleThreadExecutor();
+        try {
+            var stopping = stopper.submit(listener::stop);
+            Awaitility.waitAtMost(Duration.ofSeconds(5)).until(() -> !listener.isStarted());
+
+            listener.start();
+            assertThat(openedHandles).as("start() opened a connection of its own").hasSize(2);
+            var connectionOfTheStartedListener = openedHandles.getLast();
+
+            releaseFirstPublish.countDown();
+            stopping.get(10, TimeUnit.SECONDS);
+
+            verify(connectionOfTheStoppedListener).execute("UNLISTEN *");
+            verify(connectionOfTheStoppedListener).close();
+            verify(connectionOfTheStartedListener, never()).execute("UNLISTEN *");
+            verify(connectionOfTheStartedListener, never()).close();
+            assertThat(listener.isStarted()).isTrue();
+
+            // ... and the restarted listener polls the connection it opened
+            pendingNotices.add(notificationOn(channel));
+            assertThat(published.poll(5, TimeUnit.SECONDS)).as("the notification held back in publish").isNotNull();
+            assertThat(published.poll(5, TimeUnit.SECONDS)).as("a notification sent after start() returned").isNotNull();
+            assertThat(openedHandles).as("nothing had to reopen the connection").hasSize(2);
+        } finally {
+            releaseFirstPublish.countDown();
+            stopper.shutdownNow();
+            listener.stop();
+        }
+    }
+
+    /**
+     * A mocked LISTEN connection whose {@code getNotifications()} hands out the queued notifications, one per poll
+     */
+    private static Handle listenHandleDelivering(Queue<PGNotification> pendingNotices) throws SQLException {
+        var pgConnection = mock(PGConnection.class);
+        when(pgConnection.getNotifications()).thenAnswer(invocation -> {
+            var notification = pendingNotices.poll();
+            return notification == null ? new PGNotification[0] : new PGNotification[]{notification};
+        });
+        var connection = mock(Connection.class);
+        when(connection.getAutoCommit()).thenReturn(true);
+        when(connection.unwrap(PGConnection.class)).thenReturn(pgConnection);
+        var handle = mock(Handle.class);
+        when(handle.getConnection()).thenReturn(connection);
+        return handle;
+    }
+
+    private static PGNotification notificationOn(String channel) {
+        var notification = mock(PGNotification.class);
+        when(notification.getName()).thenReturn(channel);
+        when(notification.getParameter()).thenReturn("{}");
+        return notification;
+    }
+
+    /**
+     * Holds the poll thread past {@code stop()}'s interrupt, as a publish to a subscriber that does not react to
+     * interrupts would
+     */
+    private static void awaitIgnoringInterrupts(CountDownLatch latch) {
+        var interrupted = false;
+        while (true) {
+            try {
+                if (latch.await(10, TimeUnit.SECONDS)) {
+                    break;
+                }
+                throw new IllegalStateException("The test never released the poll thread");
+            } catch (InterruptedException e) {
+                interrupted = true;
+            }
+        }
+        if (interrupted) {
+            Thread.currentThread().interrupt();
         }
     }
 }
