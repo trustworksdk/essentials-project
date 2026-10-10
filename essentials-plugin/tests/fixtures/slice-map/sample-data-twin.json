@@ -1009,6 +1009,7 @@
         "orders.place_order",
         "orders.shipment_board_v2"
       ],
+      "memberText": "declares no `flow:` — grouped into a process by cause and effect; /essentials:slice-enrich drafts its journey",
       "fix": {
         "route": "author",
         "bc": "orders"
@@ -1084,6 +1085,7 @@
         "orders.place_order",
         "orders.shipment_board_v2"
       ],
+      "memberText": "declares no scenarios — its board shows invariants and test kinds instead; /essentials:slice-enrich drafts them from its tests",
       "fix": {
         "route": "author",
         "bc": "orders"

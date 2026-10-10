@@ -31,6 +31,8 @@ Issue codes and levels (an issue annotates; the map grades nothing):
 
 Each issue carries `fix: {route, bc}` — which command owns its repair (FIX_ROUTES), and the context to
 run it on. The page turns the routes into a prompt (the dock's Copy); the map itself repairs nothing.
+An issue aggregated per context also carries `members` (the folded slice ids) and `memberText` (their
+per-slice wording): see aggregate().
 """
 
 from __future__ import annotations
@@ -51,16 +53,26 @@ TECHNICAL_COLUMNS = ("id", "version", "createdAt", "updatedAt", "lastModified", 
 
 # An adoption issue (no flow, no scenarios) that fires on at least AGGREGATE_MIN slices and on more than
 # half of a context's slices fires once for the context, with the count. Below that it fires per slice.
-AGGREGATED_CODES = ("flow-undeclared", "scenario-none")
-AGGREGATE_MIN = 3
-# Each aggregated code's per-slice text, and the slice-row field whose absence raises it.
-SLICE_TEXT = {
-    "flow-undeclared": "declares no `flow:` — grouped into a process by cause and effect; "
-                       "/essentials:slice-enrich drafts its journey",
-    "scenario-none": "declares no scenarios — its board shows invariants and test kinds instead; "
-                     "/essentials:slice-enrich drafts them from its tests",
+# Per aggregated code: `field`, the slice-row field whose emptiness raises it; `slice`, the per-slice
+# text; `context`, the folded text, formatted with n (slices folded), total (the context's slices), bc.
+AGGREGATED = {
+    "flow-undeclared": {
+        "field": "flows",
+        "slice": "declares no `flow:` — grouped into a process by cause and effect; "
+                 "/essentials:slice-enrich drafts its journey",
+        "context": "{n} of {total} slices in `{bc}` declare no flow — grouped into processes by cause and "
+                   "effect; /essentials:slice-enrich drafts their journeys",
+    },
+    "scenario-none": {
+        "field": "scenarios",
+        "slice": "declares no scenarios — its board shows invariants and test kinds instead; "
+                 "/essentials:slice-enrich drafts them from its tests",
+        "context": "{n} of {total} slices in `{bc}` declare no scenarios — their boards show invariants and "
+                   "test kinds instead; /essentials:slice-enrich drafts scenarios from their tests",
+    },
 }
-AGGREGATED_FIELD = {"flow-undeclared": "flows", "scenario-none": "scenarios"}
+AGGREGATED_CODES = tuple(AGGREGATED)
+AGGREGATE_MIN = 3
 
 PROCESS_COLOURS = 12
 LEVEL_RANK = {"error": 0, "warn": 1, "info": 2}
@@ -573,7 +585,8 @@ def with_fixes(issues, rows):
 def aggregate(issues, rows):
     """Fold an adoption issue that fires on most of a context's slices into one for the context. The
     context issue lists the folded slice ids as `members`, so diff() can compare per slice whichever
-    side of the threshold each map sits on."""
+    side of the threshold each map sits on, and carries the per-slice wording as `memberText`, so the
+    Diff lens can name a new per-slice issue it holds only as a folded id."""
     total: dict[str, int] = {}
     bc_of = {}
     for s in rows:
@@ -589,12 +602,10 @@ def aggregate(issues, rows):
     for (code, bc), group in sorted(groups.items()):
         if len(group) >= AGGREGATE_MIN and 2 * len(group) > total[bc]:
             folded |= {id(i) for i in group}
-            text = (f"{len(group)} of {total[bc]} slices in `{bc}` declare no flow — grouped into processes "
-                    "by cause and effect; /essentials:slice-enrich drafts their journeys" if code == "flow-undeclared"
-                    else f"{len(group)} of {total[bc]} slices in `{bc}` declare no scenarios — their boards show "
-                    "invariants and test kinds instead; /essentials:slice-enrich drafts scenarios from their tests")
+            text = AGGREGATED[code]["context"].format(n=len(group), total=total[bc], bc=bc)
             out.append({**issue(code, group[0]["level"], text, "context", bc),
-                        "members": sorted(i["target"]["id"] for i in group)})
+                        "members": sorted(i["target"]["id"] for i in group),
+                        "memberText": AGGREGATED[code]["slice"]})
     return [i for i in issues if id(i) not in folded] + out
 
 
@@ -612,14 +623,14 @@ def unfold(issues, rows):
             continue
         members = i.get("members")
         if not isinstance(members, list):
-            field = AGGREGATED_FIELD[code]
+            field = AGGREGATED[code]["field"]
             members = [s["id"] for s in rows if s.get("bc") == t["id"] and not s.get("error") and field in s
                        and not s[field]] or None
         if not members:
             out.setdefault(i["id"], i)
             continue
         for sid in members:
-            one = issue(code, i["level"], SLICE_TEXT[code], "slice", sid)
+            one = issue(code, i["level"], AGGREGATED[code]["slice"], "slice", sid)
             if "fix" in i:
                 one["fix"] = dict(i["fix"])
             out.setdefault(one["id"], one)
@@ -684,9 +695,9 @@ def atlas_issues(rows, scope, messages, tests, facts_given):
             continue
         sid = s["id"]
         if not s["flows"]:
-            out.append(issue("flow-undeclared", "info", SLICE_TEXT["flow-undeclared"], "slice", sid))
+            out.append(issue("flow-undeclared", "info", AGGREGATED["flow-undeclared"]["slice"], "slice", sid))
         if not s["scenarios"]:
-            out.append(issue("scenario-none", "info", SLICE_TEXT["scenario-none"], "slice", sid))
+            out.append(issue("scenario-none", "info", AGGREGATED["scenario-none"]["slice"], "slice", sid))
         for name, problem in s.get("_scenario_problems") or []:
             out.append(issue("scenario-malformed", "warn",
                              (f"scenario `{name}` " if name else "") + problem + " — kept as far as it parses",

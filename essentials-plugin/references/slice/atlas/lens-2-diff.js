@@ -336,11 +336,14 @@
     ul = group('New issues · ' + M.issues.new.length, 'new', !M.issues.new.length);
     M.issues.new.forEach(id => {
       const i = ctx.index.issue(id);
+      const sid = foldedSlice(i, id);
       const li = html('li', 'lvl-' + (i ? i.level : 'info'));
-      const b = html('button', 'lnk', i ? i.text : id);
+      // A per-slice issue this map folded into one for its context: name the slice, never the
+      // context's own text, which would repeat once per new slice.
+      const b = html('button', 'lnk', !i ? id : sid ? sid + ' ' + (i.memberText || '— folded into ' + i.id) : i.text);
       b.type = 'button';
-      b.addEventListener('click', () => ctx.markIssue(id));
-      li.append(b, html('span', 'sub', id));
+      b.addEventListener('click', () => openNew(ctx, id));
+      li.append(b, html('span', 'sub', sid ? id + ' · folded into ' + i.id : id));
       ul.append(li);
     });
     ul = group('Fixed issues · ' + M.issues.fixed.length, 'fixed', !M.issues.fixed.length);
@@ -410,11 +413,26 @@
     toggleList(true, true, 'edges');
     S.ctx.toast(type + ' ' + list[i] + ' is gone from the map — its removed edges are in the list');
   }
+  /** The slice id of a new issue id this map holds folded into a context issue `i`, else null. */
+  function foldedSlice(i, id) {
+    return i && i.id !== id && id.startsWith(i.code + ':') ? id.slice(i.code.length + 1) : null;
+  }
+  /** One new issue, from the list or the walk: a folded one focuses its slice, any other is selected
+      as in the dock. */
+  function openNew(ctx, id) {
+    const sid = foldedSlice(ctx.index.issue(id), id);
+    if (sid) ctx.focusTarget({ kind: 'slice', id: sid });
+    else ctx.markIssue(id);
+  }
   function walkIssues() {
     if (!S) return;
-    // Folded per-slice ids resolve to their context issue: walk each issue of the map once.
-    const ids = [...new Set(S.model.issues.new.map(id => S.ctx.index.issue(id)).filter(Boolean).map(i => i.id))];
-    if (ids.length) S.ctx.markIssue(ids[step('issue', ids.length, 1)]);
+    // One stop per id the summary counts and the list shows, a folded per-slice id included.
+    const ids = S.model.issues.new;
+    if (!ids.length) return;
+    const i = step('issue', ids.length, 1);
+    openNew(S.ctx, ids[i]);
+    // A folded one focuses a slice whose card does not carry the issue: say which issue it is.
+    if (foldedSlice(S.ctx.index.issue(ids[i]), ids[i])) S.ctx.toast('new issue ' + (i + 1) + ' / ' + ids.length + ': ' + ids[i]);
   }
   function onKey(e) {
     if (!S || !S.board || e.defaultPrevented || e.metaKey || e.ctrlKey || e.altKey) return;

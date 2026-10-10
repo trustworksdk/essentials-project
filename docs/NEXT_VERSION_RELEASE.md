@@ -389,6 +389,10 @@ entries are in [`essentials-plugin/CHANGELOG.md`](../essentials-plugin/CHANGELOG
   Diff, Lineage, Matrix, Metro), Event Modeling colours and a copyable fix prompt per issue. On a folder holding
   several applications it writes one page per application plus an index page. `/essentials:slice-map --html` is
   retired in its favour.
+  The Diff lens compares issues per slice even where a map folds a context's "no flow" or "no scenarios"
+  issues into one, so crossing the fold threshold reports only the slices that changed. Each such new issue is
+  listed under its slice, in the per-slice wording rather than the context's text once per slice, and selecting
+  "+N new issues" walks the same N entries the list shows.
 - **`slice.yaml` schema 1.4** adds optional `flow:` (the journeys a slice belongs to) and `scenarios:`
   (given / when / then over the slice's own messages, each linked to its test).
 - **`/essentials:slice-enrich`** drafts the absent human-owned manifest fields (`flow`, `scenarios`, `summary`,

@@ -574,7 +574,7 @@ class FoldedDiff(unittest.TestCase):
     def side(flowed, unflowed):
         rows = [{"id": f"orders.s{n}", "kind": "command", "bc": "orders", "scenarios": [{"name": "x"}],
                  "flows": ["checkout"] if n < flowed else []} for n in range(flowed + unflowed)]
-        issues = [slice_atlas.issue("flow-undeclared", "info", slice_atlas.SLICE_TEXT["flow-undeclared"],
+        issues = [slice_atlas.issue("flow-undeclared", "info", slice_atlas.AGGREGATED["flow-undeclared"]["slice"],
                                     "slice", s["id"]) for s in rows if not s["flows"]]
         return {"slices": rows, "issues": slice_atlas.with_fixes(slice_atlas.aggregate(issues, rows), rows)}
 
@@ -583,6 +583,8 @@ class FoldedDiff(unittest.TestCase):
         self.assertEqual([i["id"] for i in after["issues"]], ["flow-undeclared:orders"])
         self.assertEqual(after["issues"][0]["members"], ["orders.s4", "orders.s5", "orders.s6", "orders.s7",
                                                          "orders.s8"])
+        # the per-slice wording the Diff lens names a folded new id with, not the context's own text
+        self.assertEqual(after["issues"][0]["memberText"], slice_atlas.AGGREGATED["flow-undeclared"]["slice"])
         d = slice_atlas.diff(before, after)
         self.assertEqual(d["issues"]["new"], ["flow-undeclared:orders.s6", "flow-undeclared:orders.s7",
                                               "flow-undeclared:orders.s8"])
@@ -597,7 +599,7 @@ class FoldedDiff(unittest.TestCase):
         self.assertEqual([i["id"] for i in fixed], ["flow-undeclared:orders.s2", "flow-undeclared:orders.s3"])
         # a renderable per-slice issue, as the map would have carried it unfolded
         self.assertEqual(fixed[0]["target"], {"kind": "slice", "id": "orders.s2", "part": None})
-        self.assertEqual(fixed[0]["text"], slice_atlas.SLICE_TEXT["flow-undeclared"])
+        self.assertEqual(fixed[0]["text"], slice_atlas.AGGREGATED["flow-undeclared"]["slice"])
         self.assertEqual(fixed[0]["fix"], {"route": "author", "bc": "orders"})
 
     def test_a_before_map_without_members_unfolds_from_its_rows(self):

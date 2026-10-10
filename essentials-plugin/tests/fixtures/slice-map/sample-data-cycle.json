@@ -652,6 +652,7 @@
         "payments.retry_payment",
         "payments.start_payment"
       ],
+      "memberText": "declares no `flow:` — grouped into a process by cause and effect; /essentials:slice-enrich drafts its journey",
       "fix": {
         "route": "author",
         "bc": "payments"
@@ -722,6 +723,7 @@
         "payments.retry_payment",
         "payments.start_payment"
       ],
+      "memberText": "declares no scenarios — its board shows invariants and test kinds instead; /essentials:slice-enrich drafts them from its tests",
       "fix": {
         "route": "author",
         "bc": "payments"

@@ -100,6 +100,7 @@
     }
    ],
    "new": [
+    "flow-undeclared:orders.cancel_order",
     "scenario-test-missing:shipping.ship_order:scenario:ships a paid order",
     "map-parse-error:orders.refund"
    ]
@@ -399,6 +400,11 @@
    "code": "flow-undeclared",
    "id": "flow-undeclared:orders",
    "level": "info",
+   "memberText": "declares no `flow:` — grouped into a process by cause and effect; /essentials:slice-enrich drafts its journey",
+   "members": [
+    "orders.cancel_order",
+    "orders.refund"
+   ],
    "source": "atlas",
    "target": {
     "id": "orders",

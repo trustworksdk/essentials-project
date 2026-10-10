@@ -1767,6 +1767,7 @@
         "orders.cancellation_mailer",
         "orders.order_history"
       ],
+      "memberText": "declares no `flow:` — grouped into a process by cause and effect; /essentials:slice-enrich drafts its journey",
       "fix": {
         "route": "author",
         "bc": "orders"

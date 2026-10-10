@@ -50,6 +50,8 @@ what it saw into the DOM for the dump. Each page is loaded several times, each w
     deep link     `#lens=atlas&focus=<slice>&q=<name>&theme=dark`: the same view comes back — lens,
                   focus, card, search text, theme
     stale focus   `#focus=<an id the map lacks>`: the "Not in this map" toast, not a failure
+    diff issues   `#lens=diff&diff.list=1` on a page with new issues: the summary's count is the list's, and
+                  a per-slice id folded into a context issue (`members`) is named by its slice
 
 plus the unrendered-template trap for `atlas.html`. Pan, zoom, levels of detail and hover stay by eye.
 
@@ -743,6 +745,35 @@ def check_atlas_page(ap: AtlasPage, data, ids):
             rep.check(shown(by_id(root, "card")) and title is not None and title.all_text() == sid,
                       f"deep link: the card for {sid!r} is not open")
             rep.check(bool(stickies(root, sid, "sel")), f"deep link: {sid!r} is not selected on the board")
+
+    # The Diff lens's new issues: the summary counts what the list shows, and a per-slice id the map
+    # folded into a context issue is named by its slice, never by the context's own text.
+    d_issues = (data.get("diff") or {}).get("issues") or {}
+    new_ids = arr(d_issues.get("new"))
+    if "diff" in ids and new_ids and ((data.get("diff") or {}).get("before") or {}).get("issuesKnown") is not False:
+        root, _ = ap.load("diff issues", "lens=diff&diff.list=1")
+        if root is not None:
+            heads = root.find(lambda n: n.tag == "h3" and n.attrs.get("data-anchor") == "new")
+            sib = heads[0].parent.children if heads and heads[0].parent else []
+            ul = next((n for n in sib[sib.index(heads[0]) + 1:] if n.tag == "ul"), None) if heads else None
+            rows = [li for li in ul.children if li.tag == "li"] if ul is not None else []
+            rep.check(len(rows) == len(new_ids), f"diff issues: the list shows {len(rows)} new issues, the data "
+                      f"names {len(new_ids)}")
+            bold = [b.all_text() for btn in root.find(lambda n: n.tag == "button" and {"diff-n", "new"} <= n.classes)
+                    for b in btn.children if b.tag == "b"]
+            rep.check(bold == [f"+{len(new_ids)}"], f"diff issues: the summary counts {bold}, expected +{len(new_ids)}")
+            plain = {i["id"] for i in issues}
+            for ctx_issue in issues:
+                for sid in arr(ctx_issue.get("members")):
+                    fid = f"{ctx_issue['code']}:{sid}"
+                    if fid not in new_ids or fid in plain:
+                        continue
+                    row = next((li for li in rows if any(n.tag == "span" and (n.all_text() + " ").startswith(fid + " ")
+                                                         for n in li.children)), None)
+                    label = next((n.all_text() for n in row.children if n.tag == "button"), "") if row else ""
+                    rep.check(row is not None and label.startswith(sid + " ") and ctx_issue["text"] not in label,
+                              f"diff issues: folded {fid!r} reads {label!r} — expected its slice and per-slice "
+                              f"wording, not the context issue's text")
 
     # A stale id is a toast, never a failure.
     root, _ = ap.load("stale focus", "focus=" + STALE_ID)

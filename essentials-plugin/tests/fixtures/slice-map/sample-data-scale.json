@@ -4655,6 +4655,7 @@
         "bc01.create_thing",
         "bc01.thing_list"
       ],
+      "memberText": "declares no `flow:` — grouped into a process by cause and effect; /essentials:slice-enrich drafts its journey",
       "fix": {
         "route": "author",
         "bc": "bc01"
@@ -4677,6 +4678,7 @@
         "bc02.follow_upstream",
         "bc02.thing_list"
       ],
+      "memberText": "declares no `flow:` — grouped into a process by cause and effect; /essentials:slice-enrich drafts its journey",
       "fix": {
         "route": "author",
         "bc": "bc02"
@@ -4699,6 +4701,7 @@
         "bc03.follow_upstream",
         "bc03.thing_list"
       ],
+      "memberText": "declares no `flow:` — grouped into a process by cause and effect; /essentials:slice-enrich drafts its journey",
       "fix": {
         "route": "author",
         "bc": "bc03"
@@ -4722,6 +4725,7 @@
         "bc04.partner_feed",
         "bc04.thing_list"
       ],
+      "memberText": "declares no `flow:` — grouped into a process by cause and effect; /essentials:slice-enrich drafts its journey",
       "fix": {
         "route": "author",
         "bc": "bc04"
@@ -4744,6 +4748,7 @@
         "bc05.follow_upstream",
         "bc05.thing_list"
       ],
+      "memberText": "declares no `flow:` — grouped into a process by cause and effect; /essentials:slice-enrich drafts its journey",
       "fix": {
         "route": "author",
         "bc": "bc05"
@@ -4767,6 +4772,7 @@
         "bc06.thing_list",
         "bc06.thing_report"
       ],
+      "memberText": "declares no `flow:` — grouped into a process by cause and effect; /essentials:slice-enrich drafts its journey",
       "fix": {
         "route": "author",
         "bc": "bc06"
@@ -4789,6 +4795,7 @@
         "bc07.follow_upstream",
         "bc07.thing_list"
       ],
+      "memberText": "declares no `flow:` — grouped into a process by cause and effect; /essentials:slice-enrich drafts its journey",
       "fix": {
         "route": "author",
         "bc": "bc07"
@@ -4812,6 +4819,7 @@
         "bc08.partner_feed",
         "bc08.thing_list"
       ],
+      "memberText": "declares no `flow:` — grouped into a process by cause and effect; /essentials:slice-enrich drafts its journey",
       "fix": {
         "route": "author",
         "bc": "bc08"
@@ -4834,6 +4842,7 @@
         "bc09.follow_upstream",
         "bc09.thing_list"
       ],
+      "memberText": "declares no `flow:` — grouped into a process by cause and effect; /essentials:slice-enrich drafts its journey",
       "fix": {
         "route": "author",
         "bc": "bc09"
@@ -4856,6 +4865,7 @@
         "bc10.follow_upstream",
         "bc10.thing_list"
       ],
+      "memberText": "declares no `flow:` — grouped into a process by cause and effect; /essentials:slice-enrich drafts its journey",
       "fix": {
         "route": "author",
         "bc": "bc10"
@@ -4878,6 +4888,7 @@
         "bc11.create_thing",
         "bc11.thing_list"
       ],
+      "memberText": "declares no `flow:` — grouped into a process by cause and effect; /essentials:slice-enrich drafts its journey",
       "fix": {
         "route": "author",
         "bc": "bc11"
@@ -4902,6 +4913,7 @@
         "bc12.thing_list",
         "bc12.thing_report"
       ],
+      "memberText": "declares no `flow:` — grouped into a process by cause and effect; /essentials:slice-enrich drafts its journey",
       "fix": {
         "route": "author",
         "bc": "bc12"
@@ -4924,6 +4936,7 @@
         "bc01.create_thing",
         "bc01.thing_list"
       ],
+      "memberText": "declares no scenarios — its board shows invariants and test kinds instead; /essentials:slice-enrich drafts them from its tests",
       "fix": {
         "route": "author",
         "bc": "bc01"
@@ -4946,6 +4959,7 @@
         "bc02.follow_upstream",
         "bc02.thing_list"
       ],
+      "memberText": "declares no scenarios — its board shows invariants and test kinds instead; /essentials:slice-enrich drafts them from its tests",
       "fix": {
         "route": "author",
         "bc": "bc02"
@@ -4968,6 +4982,7 @@
         "bc03.follow_upstream",
         "bc03.thing_list"
       ],
+      "memberText": "declares no scenarios — its board shows invariants and test kinds instead; /essentials:slice-enrich drafts them from its tests",
       "fix": {
         "route": "author",
         "bc": "bc03"
@@ -4991,6 +5006,7 @@
         "bc04.partner_feed",
         "bc04.thing_list"
       ],
+      "memberText": "declares no scenarios — its board shows invariants and test kinds instead; /essentials:slice-enrich drafts them from its tests",
       "fix": {
         "route": "author",
         "bc": "bc04"
@@ -5013,6 +5029,7 @@
         "bc05.follow_upstream",
         "bc05.thing_list"
       ],
+      "memberText": "declares no scenarios — its board shows invariants and test kinds instead; /essentials:slice-enrich drafts them from its tests",
       "fix": {
         "route": "author",
         "bc": "bc05"
@@ -5036,6 +5053,7 @@
         "bc06.thing_list",
         "bc06.thing_report"
       ],
+      "memberText": "declares no scenarios — its board shows invariants and test kinds instead; /essentials:slice-enrich drafts them from its tests",
       "fix": {
         "route": "author",
         "bc": "bc06"
@@ -5058,6 +5076,7 @@
         "bc07.follow_upstream",
         "bc07.thing_list"
       ],
+      "memberText": "declares no scenarios — its board shows invariants and test kinds instead; /essentials:slice-enrich drafts them from its tests",
       "fix": {
         "route": "author",
         "bc": "bc07"
@@ -5081,6 +5100,7 @@
         "bc08.partner_feed",
         "bc08.thing_list"
       ],
+      "memberText": "declares no scenarios — its board shows invariants and test kinds instead; /essentials:slice-enrich drafts them from its tests",
       "fix": {
         "route": "author",
         "bc": "bc08"
@@ -5103,6 +5123,7 @@
         "bc09.follow_upstream",
         "bc09.thing_list"
       ],
+      "memberText": "declares no scenarios — its board shows invariants and test kinds instead; /essentials:slice-enrich drafts them from its tests",
       "fix": {
         "route": "author",
         "bc": "bc09"
@@ -5125,6 +5146,7 @@
         "bc10.follow_upstream",
         "bc10.thing_list"
       ],
+      "memberText": "declares no scenarios — its board shows invariants and test kinds instead; /essentials:slice-enrich drafts them from its tests",
       "fix": {
         "route": "author",
         "bc": "bc10"
@@ -5147,6 +5169,7 @@
         "bc11.create_thing",
         "bc11.thing_list"
       ],
+      "memberText": "declares no scenarios — its board shows invariants and test kinds instead; /essentials:slice-enrich drafts them from its tests",
       "fix": {
         "route": "author",
         "bc": "bc11"
@@ -5171,6 +5194,7 @@
         "bc12.thing_list",
         "bc12.thing_report"
       ],
+      "memberText": "declares no scenarios — its board shows invariants and test kinds instead; /essentials:slice-enrich drafts them from its tests",
       "fix": {
         "route": "author",
         "bc": "bc12"

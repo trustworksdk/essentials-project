@@ -382,7 +382,7 @@ and the one in the JSON would win silently. `flows[]` stays because it carries t
 | `slices[].schedule` | the automation's `schedule` (`cron`, `fixedDelay`, `initialDelay`, `timeZone`, `note`); `null` when absent |
 | `slices[].doc` | the slice's `CLAUDE.md` converted to a fixed safe HTML subset, every character escaped first; `null` when absent |
 | `processes` | journeys: `{id, name, declared, color, bcs, sliceIds (causal order), entries, links: [{to, via}]}` — a declared `flow:` name, a derived `~<entry slice id>`, or `~unattached:<bc>` |
-| `issues` | every Step 4 result: `{id, code, level, text, target: {kind: slice \| message \| process \| context, id, part}, source: map \| source \| atlas, fix: {route: repair \| audit \| author, bc}}`, sorted by level then id. `fix` names who owns the repair — `slice_atlas.py` `FIX_ROUTES`; the page's Copy words it, the map repairs nothing |
+| `issues` | every Step 4 result: `{id, code, level, text, target: {kind: slice \| message \| process \| context, id, part}, source: map \| source \| atlas, fix: {route: repair \| audit \| author, bc}}`, sorted by level then id. `fix` names who owns the repair — `slice_atlas.py` `FIX_ROUTES`; the page's Copy words it, the map repairs nothing. A context issue folded by the aggregation rule (`flow-undeclared`, `scenario-none`) also carries `members: [slice id]`, the slices it stands for — the diff compares per slice, and the page resolves a per-slice id `<code>:<slice id>` to it — and `memberText`, the per-slice wording the Diff lens names such an id with |
 | `lineage` | `{fields: {normalised field name: ["msg:<type>:<Name>" \| "rm:<ReadModel>"]}, technicalColumns}` |
 
 `atlas` alone adds `diff` (`null` without a baseline; added, removed and changed slices, added and

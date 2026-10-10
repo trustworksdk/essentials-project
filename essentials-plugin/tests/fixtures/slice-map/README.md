@@ -31,7 +31,7 @@ The Atlas page (`references/slice/atlas/`) is checked from two inputs, neither o
 The Atlas lays nothing out in the browser, so these checks are about the page working at all: every
 lens mounts from a deep link with no console error, the incomplete-map banner, the unparsed manifest
 drawn as an error card, a dock click that focuses its target, a deep link that restores the view, a
-stale id that toasts. A probe script, prepended to the harness's copy of each page and never to the page
+stale id that toasts, and the Diff lens's new issues counted as listed, a folded one named by its slice. A probe script, prepended to the harness's copy of each page and never to the page
 itself, records the errors and performs the click. `TEST-GUIDE.md` § The Atlas pages lists each check.
 
 ## Running it

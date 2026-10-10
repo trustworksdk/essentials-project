@@ -168,6 +168,7 @@ unhandled rejection and `console.error`, and every row also fails on any of thos
 | A5 | `#lens=atlas`, then the probe clicks the first issue on a parsed slice | as A4 for that issue, plus the target's sticky is selected on the board (`.sel`) and an issue marker (`.mark`) is drawn |
 | A6 | `#lens=atlas&focus=<a command slice>&q=<its name>&theme=dark` | the view comes back: the Atlas lens, the card open on that slice, the slice selected on the board, the search box holding the name with a count, `data-theme="dark"`, and the hash unchanged in those keys |
 | A7 | `#focus=render-check.not_in_this_map` | a "Not in this map" toast, and nothing fails |
+| A8 | `#lens=diff&diff.list=1`, on a page whose diff has new issues (`atlas-sample`) | the summary's `+N new issues` is the number of rows under "New issues", and a new id the map folded into a context issue (`flow-undeclared:orders.cancel_order`) reads as its slice and the per-slice wording, not the context issue's text |
 
 Which issue, slice and name a row uses is read from the page's own data, so the rows hold for any map
 that has a parsed command slice and an issue on a parsed slice; both fixtures have them, and the row
@@ -176,7 +177,8 @@ fails rather than skips when one is missing.
 **By eye**, in a browser: pan and zoom through the four levels of detail (contexts, journeys, the board,
 the board with payloads and scenario stacks), text never under 11 px, portals flying to their original
 column, the minimap, hover cards, `↑`/`↓` walking the dock, `1`–`5`, `/`, `Esc`, the theme toggle, the
-Diff lens's summary bar and "changes + 1 hop" filter on `atlas-sample`, and the phone-width layout. A DOM
+Diff lens's summary bar and "changes + 1 hop" filter on `atlas-sample` (selecting `+N new issues` walks N
+stops, a folded one focusing its slice with a toast naming the issue), and the phone-width layout. A DOM
 dump sees the state after a load, never the motion that got there.
 
 **By eye, per application:** `slice-index.py atlas tests/fixtures/atlas-multi --per-app <dir>` writes
