@@ -97,7 +97,7 @@ import static dk.trustworks.essentials.shared.FailFast.*;
  * - backfillFlux: Generates a flux of events during backfill, supporting pagination and optional gap handling.
  * - backfillOnePageAndEmit: Processes a single page of backfill operations, with support for emitting events to a consumer.
  */
-public class CdcEventStore<CONFIG extends AggregateEventStreamConfiguration> implements ConfigurableEventStore<CONFIG> {
+public class CdcEventStore<CONFIG extends AggregateEventStreamConfiguration> implements ConfigurableEventStore<CONFIG>, AwaitedGapInspector {
 
     private static final Logger log = LoggerFactory.getLogger(CdcEventStore.class);
 
@@ -1629,6 +1629,24 @@ public class CdcEventStore<CONFIG extends AggregateEventStreamConfiguration> imp
     public void forgetGapMiddlesAwaitedInMemory(SubscriberId subscriberId, AggregateType aggregateType) {
         gapMiddlesAwaitedAcrossSubscribes.forget(subscriberId, aggregateType);
         eventStore.forgetGapMiddlesAwaitedInMemory(subscriberId, aggregateType);
+    }
+
+    /**
+     * True when {@code globalEventOrder} lies in the middle of a wide gap a CDC subscription of the subscriber took over
+     * from an earlier one, or left for the next ({@link GapMiddlesAwaitedAcrossSubscribes}); when it is one of the
+     * subscriber's transient gaps recorded by this event store's gap handler, the one its CDC subscriptions record gaps
+     * with; or when the delegate - which serves the subscription while CDC is not active - is an
+     * {@link AwaitedGapInspector} that awaits it. Not seen: the middle of a wide gap the running CDC subscription found
+     * itself, which its {@link CdcDeliveryTracker} awaits in memory only until the subscription ends.
+     */
+    @Override
+    public boolean isAwaitedAsGap(SubscriberId subscriberId, AggregateType aggregateType, GlobalEventOrder globalEventOrder) {
+        requireNonNull(subscriberId, "No subscriberId provided");
+        requireNonNull(aggregateType, "No aggregateType provided");
+        requireNonNull(globalEventOrder, "No globalEventOrder provided");
+        return gapMiddlesAwaitedAcrossSubscribes.isAwaited(subscriberId, aggregateType, globalEventOrder.longValue()) ||
+                (recordsGaps() && eventStreamGapHandler.gapHandlerFor(subscriberId).getTransientGapsFor(aggregateType).contains(globalEventOrder)) ||
+                (eventStore instanceof AwaitedGapInspector delegate && delegate.isAwaitedAsGap(subscriberId, aggregateType, globalEventOrder));
     }
 
     @Override

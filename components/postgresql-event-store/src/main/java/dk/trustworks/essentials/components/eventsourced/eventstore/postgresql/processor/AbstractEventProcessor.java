@@ -17,7 +17,6 @@
 package dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.processor;
 
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.*;
-import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.cdc.CdcEventStore;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.serializer.AggregateIdSerializer;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.subscription.EventStoreSubscriptionManager;
@@ -86,6 +85,12 @@ public abstract class AbstractEventProcessor implements Lifecycle {
     protected          List<MessageHandlerInterceptor> messageHandlerInterceptors;
 
     protected QueueName durableQueueName;
+
+    /**
+     * Whether {@link #awaitProcessed(AggregateType, GlobalEventOrder, Duration)} has logged that the event store is no
+     * {@link AwaitedGapInspector} - logged once per processor
+     */
+    private final AtomicBoolean warnedEventStoreIsNoAwaitedGapInspector = new AtomicBoolean();
 
     /**
      * Resolves a unique {@link SubscriberId} by combining the processor name and aggregate type.
@@ -573,7 +578,9 @@ public abstract class AbstractEventProcessor implements Lifecycle {
      * The event counts as processed when <b>both</b> hold:
      * <ol>
      *     <li>the processor's subscription for the aggregate type has moved its resume point past the event, and has not
-     *     skipped it as a transient gap that it still has to handle - so the subscription is done with it</li>
+     *     skipped it as a transient gap that it still has to handle - so the subscription is done with it. The event store
+     *     answers the second half when it is an {@link AwaitedGapInspector}, as the Essentials event stores are; one that
+     *     is not - a decorator that does not forward it - cannot be asked, and a WARN says so once per processor</li>
      *     <li>no message for the event's aggregate is queued in the processor's queue - an {@link EventProcessor} only
      *     forwards the event to its Inbox, and a {@link ViewEventProcessor} queues an event whose direct handling failed
      *     (and every later event of the same aggregate behind it). Dead letters count as queued, so an event that was
@@ -753,16 +760,19 @@ public abstract class AbstractEventProcessor implements Lifecycle {
             return Progress.PROCESSED;
         }
 
+        /**
+         * Asks the event store, when it is an {@link AwaitedGapInspector}, whether the subscriber still awaits the event as
+         * a gap. One that is not cannot be asked: the check is off, and a WARN says so once per processor
+         */
         private boolean isAwaitedAsTransientGap(EventStoreSubscription subscription) {
-            EventStore candidate = eventStore;
-            while (candidate != null) {
-                if (candidate instanceof PostgresqlEventStore<?> postgresqlEventStore) {
-                    return postgresqlEventStore.getEventStreamGapHandler()
-                                               .gapHandlerFor(subscription.subscriberId())
-                                               .getTransientGapsFor(aggregateType)
-                                               .contains(globalEventOrder);
-                }
-                candidate = candidate instanceof CdcEventStore<?> cdcEventStore ? cdcEventStore.getDelegate() : null;
+            if (eventStore instanceof AwaitedGapInspector awaitedGapInspector) {
+                return awaitedGapInspector.isAwaitedAsGap(subscription.subscriberId(), aggregateType, globalEventOrder);
+            }
+            if (warnedEventStoreIsNoAwaitedGapInspector.compareAndSet(false, true)) {
+                log.warn("[{}] awaitProcessed cannot tell whether an event that committed after a later one (a transient gap) is still to be handled: " +
+                                 "the event store '{}' does not implement {}, so such an event can be reported as processed before the processor handled it. " +
+                                 "An EventStore that decorates a PostgresqlEventStore or CdcEventStore should implement {} and forward to its delegate",
+                         getProcessorName(), eventStore.getClass().getName(), AwaitedGapInspector.class.getSimpleName(), AwaitedGapInspector.class.getSimpleName());
             }
             return false;
         }

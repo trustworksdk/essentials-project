@@ -64,7 +64,7 @@ import static dk.trustworks.essentials.shared.interceptor.DefaultInterceptorChai
  * @param <CONFIG> The concrete {@link AggregateEventStreamConfiguration}
  */
 @SuppressWarnings("OptionalUsedAsFieldOrParameterType")
-public final class PostgresqlEventStore<CONFIG extends AggregateEventStreamConfiguration> implements ConfigurableEventStore<CONFIG> {
+public final class PostgresqlEventStore<CONFIG extends AggregateEventStreamConfiguration> implements ConfigurableEventStore<CONFIG>, AwaitedGapInspector {
     private static final Logger       log              = LoggerFactory.getLogger(PostgresqlEventStore.class);
     private static final SubscriberId NO_SUBSCRIBER_ID = SubscriberId.of("NoSubscriberId");
 
@@ -225,6 +225,22 @@ public final class PostgresqlEventStore<CONFIG extends AggregateEventStreamConfi
     @Override
     public void forgetGapMiddlesAwaitedInMemory(SubscriberId subscriberId, AggregateType aggregateType) {
         gapMiddlesAwaitedAcrossSubscribes.forget(subscriberId, aggregateType);
+    }
+
+    /**
+     * True when {@code globalEventOrder} is one of the subscriber's transient gaps recorded by the
+     * {@link #getEventStreamGapHandler() gap handler}, or lies in the middle of a wide gap the subscriber's polls await in
+     * memory only ({@link GapMiddlesAwaitedAcrossSubscribes}) - such a middle has no transient-gap row
+     */
+    @Override
+    public boolean isAwaitedAsGap(SubscriberId subscriberId, AggregateType aggregateType, GlobalEventOrder globalEventOrder) {
+        requireNonNull(subscriberId, "No subscriberId provided");
+        requireNonNull(aggregateType, "No aggregateType provided");
+        requireNonNull(globalEventOrder, "No globalEventOrder provided");
+        return gapMiddlesAwaitedAcrossSubscribes.isAwaited(subscriberId, aggregateType, globalEventOrder.longValue()) ||
+                eventStreamGapHandler.gapHandlerFor(subscriberId)
+                                     .getTransientGapsFor(aggregateType)
+                                     .contains(globalEventOrder);
     }
 
     @Override
