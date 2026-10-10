@@ -260,7 +260,7 @@ public final class PostgresqlDurableQueuesBuilder {
 
     /**
      * Should {@code queueMessage}/{@code queueMessages} fail when called outside a {@code UnitOfWork} or Spring
-     * transaction? Default {@code false}: such an enqueue commits on its own, and the first one is logged at WARN.
+     * transaction? Default {@code false}: such an enqueue commits on its own, and each call site's first one is logged at WARN.
      * See {@link EnqueueOutsideUnitOfWorkGuard}.
      *
      * @param requireActiveUnitOfWorkForEnqueue {@code true} to make such an enqueue throw {@code NoActiveUnitOfWorkException}

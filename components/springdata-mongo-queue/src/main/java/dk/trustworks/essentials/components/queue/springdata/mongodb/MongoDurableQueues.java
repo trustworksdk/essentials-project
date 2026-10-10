@@ -388,7 +388,7 @@ public final class MongoDurableQueues implements DurableQueues {
 
     /**
      * Should {@code queueMessage}/{@code queueMessages} fail when called outside a {@link UnitOfWork} or Spring transaction?
-     * Default {@code false}: such an enqueue commits on its own, and the first one is logged at WARN. In Spring Boot:
+     * Default {@code false}: such an enqueue commits on its own, and each call site's first one is logged at WARN. In Spring Boot:
      * {@value EnqueueOutsideUnitOfWorkGuard#REQUIRE_ACTIVE_UNIT_OF_WORK_FOR_ENQUEUE_PROPERTY}. See {@link EnqueueOutsideUnitOfWorkGuard}.
      *
      * @param requireActiveUnitOfWorkForEnqueue {@code true} to throw {@link NoActiveUnitOfWorkException} instead
@@ -1735,7 +1735,7 @@ public final class MongoDurableQueues implements DurableQueues {
         /**
          * @param requireActiveUnitOfWorkForEnqueue should {@code queueMessage}/{@code queueMessages} fail when called outside
          *                                          a {@code UnitOfWork} or Spring transaction? Default {@code false}: such an
-         *                                          enqueue commits on its own, and the first one is logged at WARN. See
+         *                                          enqueue commits on its own, and each call site's first one is logged at WARN. See
          *                                          {@link EnqueueOutsideUnitOfWorkGuard}
          * @return this builder
          */

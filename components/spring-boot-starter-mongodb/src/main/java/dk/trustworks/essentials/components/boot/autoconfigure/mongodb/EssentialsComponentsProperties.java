@@ -277,7 +277,7 @@ public class EssentialsComponentsProperties {
          * transaction? Property {@code essentials.durable-queues.require-active-unit-of-work-for-enqueue}, default {@code false}.
          * <p>
          * Such an enqueue commits on its own and is not rolled back with any business work around it. With this {@code false}
-         * it goes ahead and the first one per {@code DurableQueues} is logged at WARN with its call site; with {@code true} it
+         * it goes ahead and each call site's first one is logged at WARN with its stack trace (up to 32 call sites per {@code DurableQueues}); with {@code true} it
          * throws {@code NoActiveUnitOfWorkException} and nothing is queued. {@code Inbox.addMessageReceived} starts a
          * {@code UnitOfWork} itself and is unaffected.
          *

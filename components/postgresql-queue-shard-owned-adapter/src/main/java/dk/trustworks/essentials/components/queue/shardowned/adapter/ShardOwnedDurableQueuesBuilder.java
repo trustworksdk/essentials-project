@@ -123,7 +123,7 @@ public class ShardOwnedDurableQueuesBuilder {
 
     /**
      * Should {@code queueMessage}/{@code queueMessages} fail when called outside a {@code UnitOfWork} or Spring
-     * transaction? Default {@code false}: such an enqueue commits on its own, and the first one is logged at WARN. See
+     * transaction? Default {@code false}: such an enqueue commits on its own, and each call site's first one is logged at WARN. See
      * {@link dk.trustworks.essentials.components.foundation.messaging.queue.EnqueueOutsideUnitOfWorkGuard}. Needs
      * {@link #setUnitOfWorkFactory(UnitOfWorkFactory)}: without a factory every enqueue would fail.
      */

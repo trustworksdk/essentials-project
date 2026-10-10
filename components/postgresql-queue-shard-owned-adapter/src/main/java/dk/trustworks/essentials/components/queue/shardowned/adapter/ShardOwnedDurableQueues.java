@@ -221,7 +221,7 @@ public class ShardOwnedDurableQueues implements DurableQueues {
 
     /**
      * Should {@code queueMessage}/{@code queueMessages} fail when called outside a {@link UnitOfWork} or Spring transaction?
-     * Default {@code false}: such an enqueue commits on its own, and the first one is logged at WARN. In Spring Boot:
+     * Default {@code false}: such an enqueue commits on its own, and each call site's first one is logged at WARN. In Spring Boot:
      * {@value EnqueueOutsideUnitOfWorkGuard#REQUIRE_ACTIVE_UNIT_OF_WORK_FOR_ENQUEUE_PROPERTY}. See {@link EnqueueOutsideUnitOfWorkGuard}.
      * Without a {@link UnitOfWorkFactory} every enqueue is outside one, so requiring it then fails every enqueue - the
      * builder refuses that combination.
