@@ -438,13 +438,17 @@ public final class MultiTableChangeListener<T extends TableChangeNotification> i
      */
     @Override
     public void stop() {
+        ScheduledExecutorService executor;
         synchronized (this) {
             if (!started) {
                 return;
             }
             started = false;
+            // Detached under the same monitor that start() takes, so a start() racing this stop() cannot find the old
+            // pollTask still set, skip scheduling, and then have it cancelled - started but not polling
+            executor = detachPolling();
         }
-        stopListening();
+        awaitPollThreadAndCloseConnection(executor);
     }
 
     @Override
@@ -454,14 +458,16 @@ public final class MultiTableChangeListener<T extends TableChangeNotification> i
 
     @Override
     public void close() {
+        ScheduledExecutorService executor;
         synchronized (this) {
             if (started) {
                 log.info("Ignoring call to close as MultiTableChangeListener was started using Lifecycle methods");
                 return;
             }
             closed = true;
+            executor = detachPolling();
         }
-        stopListening();
+        awaitPollThreadAndCloseConnection(executor);
     }
 
     /**
@@ -511,18 +517,28 @@ public final class MultiTableChangeListener<T extends TableChangeNotification> i
                                                           TimeUnit.MILLISECONDS);
     }
 
-    private void stopListening() {
+    /**
+     * Caller holds {@code this}. Cancels the poll task and hands back its executor, for
+     * {@link #awaitPollThreadAndCloseConnection(ScheduledExecutorService)} to finish outside the monitor
+     */
+    private ScheduledExecutorService detachPolling() {
         log.info("Stopping MultiTableChangeListener");
-        ScheduledExecutorService executor;
-        synchronized (this) {
-            pollingActive = false;
-            if (pollTask != null) {
-                pollTask.cancel(true);
-                pollTask = null;
-            }
-            executor = executorService;
-            executorService = null;
+        pollingActive = false;
+        if (pollTask != null) {
+            pollTask.cancel(true);
+            pollTask = null;
         }
+        var executor = executorService;
+        executorService = null;
+        return executor;
+    }
+
+    /**
+     * Outside the monitor: waiting for the poll thread and closing the connection can block. A {@link #start()} that runs
+     * meanwhile has its own executor; should it open the connection before this closes it, its poll loop reopens it and
+     * LISTENs to every channel again
+     */
+    private void awaitPollThreadAndCloseConnection(ScheduledExecutorService executor) {
         if (executor != null) {
             executor.shutdownNow();
             try {
