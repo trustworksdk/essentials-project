@@ -22,8 +22,9 @@ import org.slf4j.*;
 
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Predicate;
+import java.util.stream.Collectors;
 
 import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 
@@ -38,10 +39,13 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
  * <ul>
  *     <li>Not required (the default): the enqueue goes ahead and commits on its own, and is logged at WARN once per
  *         call site, with its stack trace, so the application can find every such site - a deliberate standalone
- *         enqueue logged first does not hide a hazardous one elsewhere. The call site is the first stack frame outside
- *         the framework and the JDK (or, with none, the first one outside the {@link DurableQueues} implementation);
- *         up to {@value #MAX_WARNED_CALL_SITES} call sites per {@link DurableQueues} instance are logged, then one line
- *         saying further ones are not.</li>
+ *         enqueue logged first does not hide a hazardous one elsewhere. The call site is the first
+ *         {@value #CALL_SITE_FRAMES} stack frames outside the framework and the JDK, so callers that reach the enqueue
+ *         through one application wrapper (a gateway around {@code Outbox.sendMessage}, say) are still told apart (with
+ *         no such frame, it is the first frame outside the {@link DurableQueues} implementation). Up to
+ *         {@value #MAX_WARNED_CALL_SITES} call sites per {@link DurableQueues} instance are logged; the last of them is
+ *         followed by one line saying further ones are not, and from then on the guard no longer looks at the
+ *         stack.</li>
  *     <li>Required ({@link #setRequireActiveUnitOfWork(boolean)}, in Spring Boot the property
  *         {@value #REQUIRE_ACTIVE_UNIT_OF_WORK_FOR_ENQUEUE_PROPERTY}): the enqueue fails with a
  *         {@link NoActiveUnitOfWorkException} and nothing is queued. Note that this includes every framework caller that
@@ -67,6 +71,11 @@ public final class EnqueueOutsideUnitOfWorkGuard {
     public static final int MAX_WARNED_CALL_SITES = 32;
 
     /**
+     * How many application frames, innermost first, make up one call site
+     */
+    static final int CALL_SITE_FRAMES = 3;
+
+    /**
      * Class name prefixes of frames that are never "the call site": the framework itself, the JDK and the libraries an
      * enqueue is routinely called through
      */
@@ -85,18 +94,25 @@ public final class EnqueueOutsideUnitOfWorkGuard {
     private static final String SPRING_TRANSACTION_AWARE_UNIT_OF_WORK_FACTORY =
             "dk.trustworks.essentials.components.foundation.transaction.spring.SpringTransactionAwareUnitOfWorkFactory";
 
-    private final    Logger            log;
-    private final    Predicate<String> isFrameworkClass;
-    private final    Set<String>   warnedCallSites            = ConcurrentHashMap.newKeySet();
-    private final    AtomicBoolean warnedCallSiteCapReached   = new AtomicBoolean();
-    private volatile boolean       requireActiveUnitOfWork;
+    private final    Logger                   log;
+    private final    Predicate<String>        isFrameworkClass;
+    /**
+     * Grows past {@link #MAX_WARNED_CALL_SITES} only by the threads racing in with a new call site as the cap is reached
+     */
+    private final    Set<List<CallSiteFrame>> warnedCallSites     = ConcurrentHashMap.newKeySet();
+    /**
+     * Call sites added to {@link #warnedCallSites} - checked before the stack is walked, and the only thing that decides
+     * whether a WARN is logged, so the cap holds however many threads race past the check
+     */
+    private final    AtomicInteger            warnedCallSiteCount = new AtomicInteger();
+    private volatile boolean                  requireActiveUnitOfWork;
 
     /**
      * @param durableQueuesType the {@link DurableQueues} implementation the guard belongs to; its logger is used, so the
      *                          WARN appears under the engine that let the enqueue through
      */
     public EnqueueOutsideUnitOfWorkGuard(Class<?> durableQueuesType) {
-        this(durableQueuesType, className -> FRAMEWORK_CLASS_PREFIXES.stream().anyMatch(className::startsWith));
+        this(durableQueuesType, EnqueueOutsideUnitOfWorkGuard::isFrameworkClassByDefault);
     }
 
     /**
@@ -153,28 +169,27 @@ public final class EnqueueOutsideUnitOfWorkGuard {
                                                   + REQUIRE_ACTIVE_UNIT_OF_WORK_FOR_ENQUEUE_PROPERTY + "' is enabled. "
                                                   + "Enqueue inside unitOfWorkFactory.usingUnitOfWork(...) or a Spring @Transactional/TransactionTemplate.");
         }
-        if (!warnedCallSiteCapReached.get()) {
-            warnOncePerCallSite(queueName, callSite());
+        if (warnedCallSiteCount.get() >= MAX_WARNED_CALL_SITES) {
+            // The cap is reached: no stack walk at all
+            return;
+        }
+        var callSite = callSite();
+        if (!warnedCallSites.add(callSite.key())) {
+            return;
+        }
+        var warnedSoFar = warnedCallSiteCount.incrementAndGet();
+        if (warnedSoFar > MAX_WARNED_CALL_SITES) {
+            // Lost the race for the last slot
+            return;
+        }
+        warn(queueName, callSite.describe());
+        if (warnedSoFar == MAX_WARNED_CALL_SITES) {
+            log.warn("[{}] Messages have been enqueued outside a UnitOfWork/transaction from {} call sites - further call sites are not logged",
+                     queueName, MAX_WARNED_CALL_SITES);
         }
     }
 
-    /**
-     * Package-private for tests
-     */
-    void warnOncePerCallSite(QueueName queueName, String callSite) {
-        if (warnedCallSites.contains(callSite)) {
-            return;
-        }
-        if (warnedCallSites.size() >= MAX_WARNED_CALL_SITES) {
-            if (warnedCallSiteCapReached.compareAndSet(false, true)) {
-                log.warn("[{}] Messages are enqueued outside a UnitOfWork/transaction from more than {} call sites - further call sites are not logged",
-                         queueName, MAX_WARNED_CALL_SITES);
-            }
-            return;
-        }
-        if (!warnedCallSites.add(callSite)) {
-            return;
-        }
+    private void warn(QueueName queueName, String callSite) {
         log.warn("[{}] A message was enqueued outside a UnitOfWork/transaction from '{}', so it committed on its own and is NOT rolled back with " +
                  "any surrounding business work. If the enqueue should commit together with that work, enqueue inside a UnitOfWork or a " +
                  "Spring transaction; set '{}=true' to make such an enqueue fail instead. Logged once per call site; the " +
@@ -189,22 +204,79 @@ public final class EnqueueOutsideUnitOfWorkGuard {
     }
 
     /**
-     * @return the first frame outside the framework and the JDK; with none (an enqueue the framework makes on its own,
-     * or a framework test), the first frame outside this guard and the {@link DurableQueues} implementation
+     * Package-private for tests
+     *
+     * @param className a stack frame's class name
+     * @return whether the default call-site resolution treats the class as framework - never the call site
      */
-    private String callSite() {
-        return STACK_WALKER.walk(frames -> {
-            var candidates = frames.filter(frame -> frame.getDeclaringClass() != EnqueueOutsideUnitOfWorkGuard.class
-                                                    && !DurableQueues.class.isAssignableFrom(frame.getDeclaringClass()))
-                                   .limit(MAX_FRAMES_INSPECTED)
-                                   .toList();
-            return candidates.stream()
-                             .filter(frame -> !isFrameworkClass.test(frame.getClassName()))
-                             .findFirst()
-                             .or(() -> candidates.stream().findFirst())
-                             .map(frame -> frame.getClassName() + "." + frame.getMethodName() + "(" + frame.getFileName() + ":" + frame.getLineNumber() + ")")
-                             .orElse("an unknown call site");
+    static boolean isFrameworkClassByDefault(String className) {
+        for (var prefix : FRAMEWORK_CLASS_PREFIXES) {
+            if (className.startsWith(prefix)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * One pass over the stack that stops at the {@value #CALL_SITE_FRAMES}th application frame.
+     *
+     * @return the first {@value #CALL_SITE_FRAMES} frames outside the framework and the JDK (fewer when the stack has
+     * fewer); with none (an enqueue the framework makes on its own, or a framework test), the first frame outside this
+     * guard and the {@link DurableQueues} implementation
+     */
+    private ResolvedCallSite callSite() {
+        return STACK_WALKER.walk(stream -> {
+            var frames = stream.filter(frame -> frame.getDeclaringClass() != EnqueueOutsideUnitOfWorkGuard.class
+                                                && !DurableQueues.class.isAssignableFrom(frame.getDeclaringClass()))
+                               .limit(MAX_FRAMES_INSPECTED)
+                               .iterator();
+            StackWalker.StackFrame       firstOutsideTheQueues = null;
+            List<StackWalker.StackFrame> applicationFrames     = new ArrayList<>(CALL_SITE_FRAMES);
+            while (frames.hasNext() && applicationFrames.size() < CALL_SITE_FRAMES) {
+                var frame = frames.next();
+                if (firstOutsideTheQueues == null) {
+                    firstOutsideTheQueues = frame;
+                }
+                if (!isFrameworkClass.test(frame.getClassName())) {
+                    applicationFrames.add(frame);
+                }
+            }
+            if (!applicationFrames.isEmpty()) {
+                return new ResolvedCallSite(applicationFrames);
+            }
+            return new ResolvedCallSite(firstOutsideTheQueues != null ? List.of(firstOutsideTheQueues) : List.of());
         });
+    }
+
+    /**
+     * One frame of a call-site key. The bytecode index tells apart two calls on different lines of one method without
+     * the line-number lookup, which is left to a call site that is actually logged.
+     */
+    private record CallSiteFrame(String className, String methodName, int byteCodeIndex) {
+    }
+
+    /**
+     * @param frames the call site's frames, innermost first; empty when none was found
+     */
+    private record ResolvedCallSite(List<StackWalker.StackFrame> frames) {
+        List<CallSiteFrame> key() {
+            return frames.stream()
+                         .map(frame -> new CallSiteFrame(frame.getClassName(), frame.getMethodName(), frame.getByteCodeIndex()))
+                         .toList();
+        }
+
+        /**
+         * @return {@code Class.method(File:line)} per frame, innermost first, joined by {@code " <- "}
+         */
+        String describe() {
+            if (frames.isEmpty()) {
+                return "an unknown call site";
+            }
+            return frames.stream()
+                         .map(frame -> frame.getClassName() + "." + frame.getMethodName() + "(" + frame.getFileName() + ":" + frame.getLineNumber() + ")")
+                         .collect(Collectors.joining(" <- "));
+        }
     }
 
     /**

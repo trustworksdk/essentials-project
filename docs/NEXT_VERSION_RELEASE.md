@@ -130,11 +130,13 @@ safe. To keep a fixed id, set `essentials.fenced-lock-manager.instance-id` (see 
 Four new WARN log lines. Nothing else changes, but each points at a setup that does not do what it appears to:
 
 - **A `DurableQueues` enqueue outside a unit of work.** A `queueMessage`/`queueMessages` that runs with no
-  Essentials `UnitOfWork` and no Spring transaction logs a WARN with its stack trace, once per call site: the first
-  stack frame outside Essentials, the JDK, Reactor, Kotlin and Spring. Up to 32 call sites are logged per
-  `DurableQueues` instance, then one line says further ones are not. Keying on the call site means a deliberate
-  standalone enqueue (`sendAndDontWait` from a controller, say) cannot use up the only WARN and hide an
-  `Outbox.sendMessage` elsewhere. Each call site that enqueues while the application is starting is also listed in
+  Essentials `UnitOfWork` and no Spring transaction logs a WARN with its stack trace, once per call site. A call site
+  is the first three stack frames outside Essentials, the JDK, Reactor, Kotlin and Spring, so two callers that both
+  go through your own wrapper (a messaging gateway around `Outbox.sendMessage`, say) are two call sites, and the WARN
+  names all three frames. Up to 32 call sites are logged per `DurableQueues` instance; the 32nd is followed by one
+  line saying further ones are not, and from then on the check no longer looks at the stack. Keying on the call site
+  means a deliberate standalone enqueue (`sendAndDontWait` from a controller, say) cannot use up the only WARN and
+  hide an `Outbox.sendMessage` elsewhere. Each call site that enqueues while the application is starting is also listed in
   the startup report. The enqueue commits on its own, so a later rollback of your business change does not undo it. This
   covers `Outbox.sendMessage` and `DurableLocalCommandBus.sendAndDontWait` called outside a transaction. To make it
   fail instead, set `essentials.durable-queues.require-active-unit-of-work-for-enqueue=true` (§2).

@@ -53,20 +53,83 @@ class EnqueueOutsideUnitOfWorkGuardTest {
         logger.detachAppender(appender);
     }
 
+    /**
+     * By package this test class is a framework class, so tests that resolve the call site say which classes play the
+     * application: this test class, plus {@code applicationClasses}
+     */
+    private static EnqueueOutsideUnitOfWorkGuard guardWithApplicationClasses(Class<?>... applicationClasses) {
+        var application = new HashSet<String>();
+        application.add(EnqueueOutsideUnitOfWorkGuardTest.class.getName());
+        Arrays.stream(applicationClasses).map(Class::getName).forEach(application::add);
+        return new EnqueueOutsideUnitOfWorkGuard(DurableQueues.class, className -> !application.contains(className));
+    }
+
     @Test
     void an_enqueue_outside_a_unit_of_work_is_warned_about_once_per_call_site() {
-        // By package this test class is a framework class, so it plays the application here
-        var guard = new EnqueueOutsideUnitOfWorkGuard(DurableQueues.class, className -> !className.equals(EnqueueOutsideUnitOfWorkGuardTest.class.getName()));
+        var guard = guardWithApplicationClasses();
 
-        enqueueFromTheFirstCallSite(guard);
+        for (var i = 0; i < 2; i++) {
+            enqueueFromTheFirstCallSite(guard);
+        }
         enqueueFromTheSecondCallSite(guard);
-        enqueueFromTheFirstCallSite(guard);
 
         assertThat(warnings())
-                .as("a benign call site logged first must not hide another one")
+                .as("the same call site twice is one WARN, and a benign call site logged first must not hide another one")
                 .hasSize(2)
                 .satisfiesExactly(first -> assertThat(first).contains("enqueueFromTheFirstCallSite"),
                                   second -> assertThat(second).contains("enqueueFromTheSecondCallSite"));
+    }
+
+    @Test
+    void the_call_site_skips_the_framework_frames_between_the_application_and_the_enqueue() {
+        var guard = guardWithApplicationClasses();
+
+        sendThroughTheOutboxFromTheFirstCallSite(guard);
+        sendThroughTheOutboxFromTheSecondCallSite(guard);
+
+        assertThat(warnings())
+                .as("two application call sites reaching the enqueue through the same framework path")
+                .hasSize(2)
+                .satisfiesExactly(first -> assertThat(first).contains("sendThroughTheOutboxFromTheFirstCallSite").doesNotContain("FakeOutbox"),
+                                  second -> assertThat(second).contains("sendThroughTheOutboxFromTheSecondCallSite").doesNotContain("FakeOutbox"));
+    }
+
+    @Test
+    void callers_behind_one_application_wrapper_are_distinct_call_sites() {
+        var guard = guardWithApplicationClasses(ApplicationGateway.class);
+
+        sendThroughTheGatewayFromTheFirstCaller(guard);
+        sendThroughTheGatewayFromTheSecondCaller(guard);
+
+        assertThat(warnings())
+                .as("the wrapper is the innermost application frame for both, so the key must reach past it")
+                .hasSize(2)
+                .satisfiesExactly(first -> assertThat(first).contains("ApplicationGateway.send").contains("sendThroughTheGatewayFromTheFirstCaller"),
+                                  second -> assertThat(second).contains("ApplicationGateway.send").contains("sendThroughTheGatewayFromTheSecondCaller"));
+    }
+
+    @Test
+    void with_no_application_frame_the_call_site_is_the_first_frame_outside_the_guard_and_the_durable_queues() {
+        var guard = new EnqueueOutsideUnitOfWorkGuard(DurableQueues.class, className -> true);
+
+        FakeOutbox.send(guard);
+        FakeOutbox.send(guard);
+
+        assertThat(warnings())
+                .as("an enqueue the framework makes on its own")
+                .singleElement()
+                .satisfies(warning -> assertThat(warning).contains(FakeOutbox.class.getName() + ".send(").doesNotContain(" <- "));
+    }
+
+    @Test
+    void the_default_call_site_resolution_treats_the_framework_jdk_and_spring_as_framework() {
+        assertThat(EnqueueOutsideUnitOfWorkGuard.isFrameworkClassByDefault("dk.trustworks.essentials.components.foundation.messaging.eip.store_and_forward.Outbox")).isTrue();
+        assertThat(EnqueueOutsideUnitOfWorkGuard.isFrameworkClassByDefault("dk.trustworks.essentials.components.foundation.reactive.command.DurableLocalCommandBus")).isTrue();
+        assertThat(EnqueueOutsideUnitOfWorkGuard.isFrameworkClassByDefault("dk.trustworks.essentials.components.queue.postgresql.PostgresqlDurableQueues")).isTrue();
+        assertThat(EnqueueOutsideUnitOfWorkGuard.isFrameworkClassByDefault("java.lang.Thread")).isTrue();
+        assertThat(EnqueueOutsideUnitOfWorkGuard.isFrameworkClassByDefault("org.springframework.transaction.support.TransactionTemplate")).isTrue();
+        assertThat(EnqueueOutsideUnitOfWorkGuard.isFrameworkClassByDefault("reactor.core.publisher.Mono")).isTrue();
+        assertThat(EnqueueOutsideUnitOfWorkGuard.isFrameworkClassByDefault("com.acme.orders.OrderService")).isFalse();
     }
 
     @Test
@@ -80,14 +143,23 @@ class EnqueueOutsideUnitOfWorkGuardTest {
 
     @Test
     void after_the_maximum_number_of_call_sites_one_line_says_further_ones_are_not_logged() {
-        var guard = new EnqueueOutsideUnitOfWorkGuard(DurableQueues.class);
+        var guard   = guardWithApplicationClasses();
+        var sites   = EnqueueOutsideUnitOfWorkGuard.MAX_WARNED_CALL_SITES + 5;
+        assertThat(sites).as("enqueueFromCallSite tells apart 4^3 call sites").isLessThanOrEqualTo(64);
 
-        for (var i = 0; i < EnqueueOutsideUnitOfWorkGuard.MAX_WARNED_CALL_SITES + 5; i++) {
-            guard.warnOncePerCallSite(QUEUE, "CallSite.number" + i + "(CallSite.java:1)");
+        for (var site = 0; site < sites; site++) {
+            enqueueFromCallSite(guard, site, EnqueueOutsideUnitOfWorkGuard.CALL_SITE_FRAMES);
+        }
+        for (var site = 0; site < sites; site++) {
+            enqueueFromCallSite(guard, site, EnqueueOutsideUnitOfWorkGuard.CALL_SITE_FRAMES);
         }
 
         var warnings = warnings();
         assertThat(warnings).hasSize(EnqueueOutsideUnitOfWorkGuard.MAX_WARNED_CALL_SITES + 1);
+        assertThat(warnings.subList(0, EnqueueOutsideUnitOfWorkGuard.MAX_WARNED_CALL_SITES))
+                .as("each a distinct call site")
+                .doesNotHaveDuplicates()
+                .allSatisfy(warning -> assertThat(warning).contains("enqueueFromCallSite"));
         assertThat(warnings.getLast()).contains("further call sites are not logged");
     }
 
@@ -97,6 +169,65 @@ class EnqueueOutsideUnitOfWorkGuardTest {
 
     private static void enqueueFromTheSecondCallSite(EnqueueOutsideUnitOfWorkGuard guard) {
         guard.checkEnqueue(QUEUE, factoryWith(null));
+    }
+
+    private static void sendThroughTheOutboxFromTheFirstCallSite(EnqueueOutsideUnitOfWorkGuard guard) {
+        FakeOutbox.send(guard);
+    }
+
+    private static void sendThroughTheOutboxFromTheSecondCallSite(EnqueueOutsideUnitOfWorkGuard guard) {
+        FakeOutbox.send(guard);
+    }
+
+    private static void sendThroughTheGatewayFromTheFirstCaller(EnqueueOutsideUnitOfWorkGuard guard) {
+        ApplicationGateway.send(guard);
+    }
+
+    private static void sendThroughTheGatewayFromTheSecondCaller(EnqueueOutsideUnitOfWorkGuard guard) {
+        ApplicationGateway.send(guard);
+    }
+
+    /**
+     * A distinct call site per {@code site} (0-63) without a method per site: each of the {@code depth} frames calls on
+     * from one of four call instructions, picked by one base-4 digit of {@code site}, so the innermost
+     * {@value EnqueueOutsideUnitOfWorkGuard#CALL_SITE_FRAMES} frames - the call-site key - differ per site
+     */
+    private static void enqueueFromCallSite(EnqueueOutsideUnitOfWorkGuard guard, int site, int depth) {
+        var rest = site / 4;
+        if (depth == 1) {
+            switch (site % 4) {
+                case 0 -> guard.checkEnqueue(QUEUE, false);
+                case 1 -> guard.checkEnqueue(QUEUE, false);
+                case 2 -> guard.checkEnqueue(QUEUE, false);
+                default -> guard.checkEnqueue(QUEUE, false);
+            }
+            return;
+        }
+        switch (site % 4) {
+            case 0 -> enqueueFromCallSite(guard, rest, depth - 1);
+            case 1 -> enqueueFromCallSite(guard, rest, depth - 1);
+            case 2 -> enqueueFromCallSite(guard, rest, depth - 1);
+            default -> enqueueFromCallSite(guard, rest, depth - 1);
+        }
+    }
+
+    /**
+     * Stands in for {@code Outbox}/{@code DurableLocalCommandBus}: a framework class between the application and the
+     * enqueue
+     */
+    private static final class FakeOutbox {
+        static void send(EnqueueOutsideUnitOfWorkGuard guard) {
+            guard.checkEnqueue(QUEUE, factoryWith(null));
+        }
+    }
+
+    /**
+     * An application's own wrapper around the framework - a messaging gateway every caller goes through
+     */
+    private static final class ApplicationGateway {
+        static void send(EnqueueOutsideUnitOfWorkGuard guard) {
+            FakeOutbox.send(guard);
+        }
     }
 
     private List<String> warnings() {
