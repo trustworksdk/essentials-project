@@ -51,6 +51,7 @@ class CdcEventStoreSequenceJumpIT extends AbstractLogicalReplicationPostgresIT {
     private static final long JUMP = 1_000_000;
 
     private PostgresqlEventStore<SeparateTablePerAggregateEventStreamConfiguration> eventStore;
+    private CdcEventStore<SeparateTablePerAggregateEventStreamConfiguration>        cdcEventStore;
     private CdcEventBus                                                             cdcBus;
     private EventStoreSubscriptionManager                                           eventStoreSubscriptionManager;
     private ExecutorService                                                         inFlightWriter;
@@ -66,7 +67,7 @@ class CdcEventStoreSequenceJumpIT extends AbstractLogicalReplicationPostgresIT {
 
         cdcBus = new CdcEventBus();
         var availability = new CdcAvailability();
-        var cdcEventStore = new CdcEventStore<>(eventStore,
+        cdcEventStore = new CdcEventStore<>(eventStore,
                                                 unitOfWorkFactory,
                                                 new PostgresqlEventStreamGapHandler<>(unitOfWorkFactory),
                                                 cdcBus,
@@ -135,6 +136,9 @@ class CdcEventStoreSequenceJumpIT extends AbstractLogicalReplicationPostgresIT {
         assertThat(transientGapCount(subscriberId)).isPositive()
                                                    .isLessThanOrEqualTo(2L * CdcDeliveryTracker.MAX_AWAITED_ORDERS_PER_GAP_END);
         assertThat(permanentGapCount()).isZero();
+        // Only the running subscription's delivery tracker knows that it still awaits the middle - awaitProcessed asks
+        assertThat(cdcEventStore.isAwaitedAsGap(subscriberId, ORDERS, GlobalEventOrder.of(inMiddleOrder)))
+                .as("the middle of the gap the running subscription found itself").isTrue();
 
         // Both writers commit, within the gap timeout: the event at the lower end of the gap and the one in its middle
         // are delivered
@@ -144,6 +148,8 @@ class CdcEventStoreSequenceJumpIT extends AbstractLogicalReplicationPostgresIT {
         publish(inFlightOrder);
         publish(inMiddleOrder);
         await().atMost(Duration.ofSeconds(15)).untilAsserted(() -> assertThat(received).contains(inFlightOrder, inMiddleOrder));
+        // Awaited no longer once the subscriber is done with it
+        await().atMost(Duration.ofSeconds(15)).untilAsserted(() -> assertThat(cdcEventStore.isAwaitedAsGap(subscriberId, ORDERS, GlobalEventOrder.of(inMiddleOrder))).isFalse());
 
         // And later events keep coming
         appendOrders(1);
@@ -155,6 +161,8 @@ class CdcEventStoreSequenceJumpIT extends AbstractLogicalReplicationPostgresIT {
         assertThat(transientGapCount(subscriberId)).isLessThanOrEqualTo(2L * CdcDeliveryTracker.MAX_AWAITED_ORDERS_PER_GAP_END);
         assertThat(permanentGapCount()).isZero();
         subscription.stop();
+        // The ended subscription's tracker is not kept
+        await().atMost(Duration.ofSeconds(15)).untilAsserted(() -> assertThat(cdcEventStore.runningDeliveryTrackerCount()).isZero());
     }
 
     /**

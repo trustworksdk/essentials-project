@@ -30,11 +30,13 @@ import dk.trustworks.essentials.components.foundation.types.SubscriberId;
  * An event store that does not implement this interface cannot be asked, and {@code awaitProcessed} then reports such
  * an event as processed as soon as the resume point has moved past it (it logs a WARN once per processor).
  * <p>
- * The event stores Essentials provides implement it: {@link PostgresqlEventStore} from its gap handler's transient gaps
- * and the middles of wide gaps its polls await in memory only, and
- * {@link dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.cdc.CdcEventStore} by forwarding to the
- * event store it decorates. <b>An event store that decorates one of them must implement it too, and forward to its
- * delegate</b> - the same as {@link EventStore#forgetGapMiddlesAwaitedInMemory(SubscriberId, AggregateType)}.
+ * The event stores Essentials provides implement it, and answer for every gap their subscriptions still await:
+ * {@link PostgresqlEventStore} from its gap handler's transient gaps and the middles of wide gaps its polls await in
+ * memory only, and {@link dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.cdc.CdcEventStore} from
+ * its gap handler's transient gaps, the middles of wide gaps its subscriptions await in memory only - those the running
+ * subscription found itself included - and by forwarding to the event store it decorates. <b>An event store that
+ * decorates one of them must implement it too, and forward to its delegate</b> - the same as
+ * {@link EventStore#forgetGapMiddlesAwaitedInMemory(SubscriberId, AggregateType)}.
  */
 public interface AwaitedGapInspector {
     /**
@@ -42,7 +44,8 @@ public interface AwaitedGapInspector {
      * @param aggregateType    the aggregate type it subscribes to
      * @param globalEventOrder the global event order of an event of that aggregate type
      * @return true if the subscriber still awaits {@code globalEventOrder} as a gap - its subscription moved past it and
-     * will still hand its event to the subscriber - false if not, or if this event store cannot tell
+     * will still hand its event to the subscriber, or handed it on and the subscriber is not done with it yet - false if
+     * it does not await it
      */
     boolean isAwaitedAsGap(SubscriberId subscriberId, AggregateType aggregateType, GlobalEventOrder globalEventOrder);
 }

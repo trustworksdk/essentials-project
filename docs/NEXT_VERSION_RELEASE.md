@@ -312,7 +312,8 @@ after the chain. What changes for you:
   Awaitility timeouts with it; `LLM-postgresql-event-store.md` § "Awaiting a processor" has an example.
   The gap check asks the event store through the new role interface `AwaitedGapInspector` (`isAwaitedAsGap`), which
   `PostgresqlEventStore` and `CdcEventStore` implement; it covers transient-gap rows and the middle of a wide gap
-  that is awaited in memory only. **An `EventStore` of yours that decorates one of them must implement
+  that is awaited in memory only - under CDC also one the running subscription found itself, which only its
+  delivery tracker knows about. **An `EventStore` of yours that decorates one of them must implement
   `AwaitedGapInspector` and forward it to its delegate**, like `forgetGapMiddlesAwaitedInMemory`. Otherwise the check
   is off, the processor logs one WARN, and an event that committed after a later one can be reported processed
   before its gap fill was handled. (ES-4, `944633a4`, `6ff9ca9e`)
