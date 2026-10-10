@@ -224,7 +224,10 @@ public class EventStreamDeciderAndAggregateTypeConfigurator {
         for (var adapter : adapters) {
             createdAdapters.add(adapter);
             commandBus.addCommandHandler(adapter);
-            ADAPTERS_REGISTERED_PER_COMMAND_BUS.computeIfAbsent(commandBus, bus -> new ArrayList<>()).add(adapter);
+            // Under the map's monitor, like the iteration in adaptersOnTheCommandBusIncluding: the per-bus list is a plain ArrayList
+            synchronized (ADAPTERS_REGISTERED_PER_COMMAND_BUS) {
+                ADAPTERS_REGISTERED_PER_COMMAND_BUS.computeIfAbsent(commandBus, bus -> new ArrayList<>()).add(adapter);
+            }
 
             log.info("Successfully registered EventStreamDeciderCommandHandlerAdapter for aggregate type '{}'",
                      adapter.getConfiguration().aggregateType());
