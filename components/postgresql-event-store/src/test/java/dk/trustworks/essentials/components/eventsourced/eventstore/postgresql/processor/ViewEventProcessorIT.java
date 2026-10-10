@@ -448,6 +448,68 @@ public class ViewEventProcessorIT {
     }
 
     /**
+     * ES-4: two writers whose global-event-orders commit out of order. The subscription moves its resume point past the
+     * earlier event while it is still uncommitted, so the resume point alone would release the barrier before the event
+     * was handled - the barrier also waits for the subscription's transient gap at that global-event-order to be filled
+     */
+    @Test
+    public void awaitProcessed_waits_for_an_event_that_committed_after_a_later_one() throws Exception {
+        var lateOrderId       = EventProcessorIT.OrderId.random();
+        var laterOrderId      = EventProcessorIT.OrderId.random();
+        var lateEventAppended = new CompletableFuture<GlobalEventOrder>();
+        var commitLateEvent   = new CountDownLatch(1);
+        var lateWriter        = Executors.newSingleThreadExecutor();
+        try {
+            // UnitOfWork A: appends the first event and stays open - on its own thread, as a UnitOfWork is bound to its thread
+            var lateWriterDone = lateWriter.submit(() -> unitOfWorkFactory.usingUnitOfWork(uow -> {
+                try {
+                    var appended = eventStore.appendToStream(TEST_ORDERS, lateOrderId, List.of(new EventProcessorIT.OrderPlacedEvent(lateOrderId, "Load late order details")));
+                    lateEventAppended.complete(appended.firstEvent().globalEventOrder());
+                } catch (RuntimeException e) {
+                    lateEventAppended.completeExceptionally(e);
+                    throw e;
+                }
+                assertThat(commitLateEvent.await(30, TimeUnit.SECONDS)).isTrue();
+            }));
+            var lateGlobalEventOrder = lateEventAppended.get(10, TimeUnit.SECONDS);
+
+            // UnitOfWork B: appends and commits the second event
+            var laterGlobalEventOrder = unitOfWorkFactory.withUnitOfWork(() -> eventStore.appendToStream(TEST_ORDERS, laterOrderId, List.of(new EventProcessorIT.OrderPlacedEvent(laterOrderId, "Load later order details")))
+                                                                                        .firstEvent()
+                                                                                        .globalEventOrder());
+            assertThat(laterGlobalEventOrder.longValue()).isGreaterThan(lateGlobalEventOrder.longValue());
+
+            // The subscription moves past the second event, leaving the uncommitted first one as a transient gap
+            var subscriberId = AbstractEventProcessor.resolveSubscriberId(TEST_ORDERS, testProcessor.getProcessorName());
+            Awaitility.waitAtMost(Duration.ofSeconds(10))
+                      .untilAsserted(() -> {
+                          assertThat(testProcessor.hasHandledLoadOrder(laterOrderId)).isTrue();
+                          assertThat(eventStoreSubscriptionManager.getCurrentEventOrder(subscriberId, TEST_ORDERS))
+                                  .hasValueSatisfying(order -> assertThat(order.longValue()).isGreaterThan(laterGlobalEventOrder.longValue()));
+                      });
+            assertThat(testProcessor.hasHandledLoadOrder(lateOrderId)).isFalse();
+
+            assertThatThrownBy(() -> testProcessor.awaitProcessed(TEST_ORDERS, lateGlobalEventOrder, Duration.ofMillis(300)))
+                    .isInstanceOfSatisfying(AwaitProcessedTimeoutException.class, e -> {
+                        assertThat((Object) e.getGlobalEventOrder()).isEqualTo(lateGlobalEventOrder);
+                        assertThat(e.getResumeFromAndIncluding()).hasValueSatisfying(resumePoint -> assertThat(resumePoint.longValue()).isGreaterThan(laterGlobalEventOrder.longValue()));
+                        assertThat(e.getReason()).contains("transient gap");
+                    });
+
+            // Commit UnitOfWork A: the barrier returns only once the subscription has handled the late event
+            commitLateEvent.countDown();
+            lateWriterDone.get(10, TimeUnit.SECONDS);
+            testProcessor.awaitProcessed(TEST_ORDERS, lateGlobalEventOrder, Duration.ofSeconds(10));
+
+            // No polling: the barrier only returns once the gap fill has been handled
+            assertThat(testProcessor.hasHandledLoadOrder(lateOrderId)).isTrue();
+        } finally {
+            commitLateEvent.countDown();
+            lateWriter.shutdownNow();
+        }
+    }
+
+    /**
      * A {@link MessageHandlerInterceptor} written in Kotlin, or one that sneaky-throws, can raise a checked exception
      * around the direct handler. It must be rolled back to the savepoint like any other failure, so the handler's
      * partial writes are undone before the event is queued in the same transaction - not committed with it
@@ -725,6 +787,10 @@ public class ViewEventProcessorIT {
         private final ConcurrentMap<AggregateType, GlobalEventOrder> resetPoints = new ConcurrentHashMap<>();
         private Consumer<ConcurrentMap<AggregateType, GlobalEventOrder>> resetCallback;
         private final AtomicInteger orderPlacedEventCounter = new AtomicInteger(0);
+        /**
+         * The orders whose "Load" {@link EventProcessorIT.OrderPlacedEvent} was handled
+         */
+        private final Set<String> handledLoadOrders = ConcurrentHashMap.newKeySet();
         private final ConcurrentMap<String, AtomicInteger> sqlFailureAttempts = new ConcurrentHashMap<>();
         private final ConcurrentMap<String, AtomicInteger> interceptorFailureAttempts = new ConcurrentHashMap<>();
         /**
@@ -867,6 +933,7 @@ public class ViewEventProcessorIT {
             var unitOfWork = eventStore.getUnitOfWorkFactory().getRequiredUnitOfWork();
             if (event.orderDetails.startsWith("Load")) {
                 orderPlacedEventCounter.incrementAndGet();
+                handledLoadOrders.add(event.orderId.toString());
             } else if (event.orderDetails.startsWith("Fail")) {
                 throw new RuntimeException(event.orderDetails);
             } else if (event.orderDetails.equals(APPENDS_EVENT_THEN_FAILS)) {
@@ -910,6 +977,10 @@ public class ViewEventProcessorIT {
 
         public AtomicInteger getOrderPlacedEventCounter() {
             return orderPlacedEventCounter;
+        }
+
+        public boolean hasHandledLoadOrder(EventProcessorIT.OrderId orderId) {
+            return handledLoadOrders.contains(orderId.toString());
         }
 
         public int getAppendedEventsBeforeFailing() {
