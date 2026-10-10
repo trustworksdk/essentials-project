@@ -120,7 +120,8 @@ enqueue commits or rolls back with the caller's writes, which is what an Outbox 
 An enqueue **outside** any `UnitOfWork` or Spring transaction commits on its own and is not undone by a later
 rollback of the caller's work - e.g. `Outbox.sendMessage` called before the business transaction starts. Each call
 site's first one logs a WARN with its stack trace (up to 32 call sites per `DurableQueues`), so a deliberate standalone
-enqueue cannot hide another one. Opt in to failing instead with
+enqueue cannot hide another one. A call site is the first three stack frames outside Essentials, the JDK and Spring, so
+two callers of one application wrapper (a gateway around `Outbox.sendMessage`) are two call sites. Opt in to failing instead with
 `setRequireActiveUnitOfWorkForEnqueue(true)` on the builder, or in Spring Boot
 `essentials.durable-queues.require-active-unit-of-work-for-enqueue=true`: such an enqueue then throws
 `NoActiveUnitOfWorkException` and queues nothing. A plain Spring `@Transactional`/`TransactionTemplate` counts as

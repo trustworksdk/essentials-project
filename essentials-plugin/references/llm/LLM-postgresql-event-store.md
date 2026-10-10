@@ -813,9 +813,11 @@ What "processed" means per processor type:
   handles it later as a gap fill, and the barrier waits for that.
 - The gap check asks the event store through the role interface `AwaitedGapInspector`
   (`isAwaitedAsGap(subscriberId, aggregateType, globalEventOrder)`), which `PostgresqlEventStore` and `CdcEventStore`
-  implement. An `EventStore` you write that decorates one of them must implement it and forward to its delegate, like
-  `forgetGapMiddlesAwaitedInMemory`. Otherwise the check is off (one WARN per processor), and an event that committed
-  after a later one can be reported processed before its gap fill was handled.
+  implement: transient-gap rows and the middles of wide gaps awaited in memory only - under CDC also one the running
+  subscription found itself. An `EventStore` you write that decorates one of them must implement it and forward to
+  its delegate, like `forgetGapMiddlesAwaitedInMemory`. Otherwise the check is off (one WARN per processor, logged
+  when it starts), and an event that committed after a later one can be reported processed before its gap fill was
+  handled.
 - Dead letters count as queued, so a dead-lettered event is **never** reported processed — the call times out.
 - Conservative: a later event of the same aggregate still queued holds the barrier too.
 - On timeout it throws `AwaitProcessedTimeoutException` naming the processor, aggregate type, global event order, the
