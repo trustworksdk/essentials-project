@@ -165,6 +165,7 @@ public abstract class ViewEventProcessor extends AbstractEventProcessor {
         this.durableQueueName = QueueName.of(processorName + ":queue");
         this.lockName = LockName.of(processorName + ":lock");
         UnhandledEventTypes.logViewSummary(processorName, this, patternMatchingMessageHandlerDelegate);
+        warnOnceIfEventStoreIsNoAwaitedGapInspector();
         this.unhandledEventTypes = new UnhandledEventTypes(processorName, eventStore, this, patternMatchingMessageHandlerDelegate, UnhandledEventTypes.Reporting.WARN);
         fencedLockManager.acquireLockAsync(lockName,
                                            LockCallback.builder()

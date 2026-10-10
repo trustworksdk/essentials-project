@@ -512,7 +512,7 @@ public class ViewEventProcessorIT {
             assertThatThrownBy(() -> testProcessor.awaitProcessed(TEST_ORDERS, lateCommit.lateGlobalEventOrder(), Duration.ofMillis(300)))
                     .isInstanceOfSatisfying(AwaitProcessedTimeoutException.class, e -> {
                         assertThat(e.getResumeFromAndIncluding()).hasValueSatisfying(resumePoint -> assertThat(resumePoint.longValue()).isGreaterThan(lateCommit.laterGlobalEventOrder().longValue()));
-                        assertThat(e.getReason()).doesNotContain("transient gap")
+                        assertThat(e.getReason()).doesNotContain("awaited as a gap")
                                                  .contains("no event with that global-event-order exists");
                     });
 
@@ -525,7 +525,7 @@ public class ViewEventProcessorIT {
     }
 
     /**
-     * The barrier times out on the late event while it is uncommitted, naming the transient gap, and returns only once the
+     * The barrier times out on the late event while it is uncommitted, saying it is awaited as a gap, and returns only once the
      * subscription has handled it after it committed
      */
     private void assertAwaitProcessedWaitsForTheLateEvent(LateCommit lateCommit) throws Exception {
@@ -533,7 +533,7 @@ public class ViewEventProcessorIT {
                 .isInstanceOfSatisfying(AwaitProcessedTimeoutException.class, e -> {
                     assertThat((Object) e.getGlobalEventOrder()).isEqualTo(lateCommit.lateGlobalEventOrder());
                     assertThat(e.getResumeFromAndIncluding()).hasValueSatisfying(resumePoint -> assertThat(resumePoint.longValue()).isGreaterThan(lateCommit.laterGlobalEventOrder().longValue()));
-                    assertThat(e.getReason()).contains("transient gap");
+                    assertThat(e.getReason()).contains("awaited as a gap");
                 });
 
         // Commit UnitOfWork A: the barrier returns only once the subscription has handled the late event

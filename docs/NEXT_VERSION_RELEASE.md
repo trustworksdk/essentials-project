@@ -315,8 +315,8 @@ after the chain. What changes for you:
   that is awaited in memory only - under CDC also one the running subscription found itself, which only its
   delivery tracker knows about. **An `EventStore` of yours that decorates one of them must implement
   `AwaitedGapInspector` and forward it to its delegate**, like `forgetGapMiddlesAwaitedInMemory`. Otherwise the check
-  is off, the processor logs one WARN, and an event that committed after a later one can be reported processed
-  before its gap fill was handled. (ES-4, `944633a4`, `6ff9ca9e`)
+  is off, the processor logs one WARN when it starts, and an event that committed after a later one can be reported
+  processed before its gap fill was handled. (ES-4, `944633a4`, `6ff9ca9e`)
 - **`AppendedEvents.recordDuring(() -> commandBus.send(cmd))`** (`eventsourced-aggregates`) returns what `send`
   returned plus the `PersistedEvent`s an `EventStreamDeciderCommandHandlerAdapter` appended, so a caller has an
   order to wait for. Same thread only (`send`, not `sendAsync`). (ES-4, `944633a4`)

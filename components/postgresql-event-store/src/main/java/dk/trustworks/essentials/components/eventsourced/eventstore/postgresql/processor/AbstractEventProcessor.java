@@ -87,8 +87,8 @@ public abstract class AbstractEventProcessor implements Lifecycle {
     protected QueueName durableQueueName;
 
     /**
-     * Whether {@link #awaitProcessed(AggregateType, GlobalEventOrder, Duration)} has logged that the event store is no
-     * {@link AwaitedGapInspector} - logged once per processor
+     * Whether the processor has logged that the event store is no {@link AwaitedGapInspector} - logged once per processor,
+     * when it starts (see {@link #warnOnceIfEventStoreIsNoAwaitedGapInspector()})
      */
     private final AtomicBoolean warnedEventStoreIsNoAwaitedGapInspector = new AtomicBoolean();
 
@@ -580,7 +580,8 @@ public abstract class AbstractEventProcessor implements Lifecycle {
      *     <li>the processor's subscription for the aggregate type has moved its resume point past the event, and has not
      *     skipped it as a transient gap that it still has to handle - so the subscription is done with it. The event store
      *     answers the second half when it is an {@link AwaitedGapInspector}, as the Essentials event stores are; one that
-     *     is not - a decorator that does not forward it - cannot be asked, and a WARN says so once per processor</li>
+     *     is not - a decorator that does not forward it - cannot be asked, and a WARN says so once per processor, when it
+     *     starts</li>
      *     <li>no message for the event's aggregate is queued in the processor's queue - an {@link EventProcessor} only
      *     forwards the event to its Inbox, and a {@link ViewEventProcessor} queues an event whose direct handling failed
      *     (and every later event of the same aggregate behind it). Dead letters count as queued, so an event that was
@@ -685,6 +686,21 @@ public abstract class AbstractEventProcessor implements Lifecycle {
     }
 
     /**
+     * Called when the processor starts: when the event store is no {@link AwaitedGapInspector},
+     * {@link #awaitProcessed(AggregateType, GlobalEventOrder, Duration)} cannot ask it whether the subscriber still awaits an
+     * event as a gap, so it says so - once per processor, and when the processor starts rather than once an
+     * {@code awaitProcessed} may already have returned early
+     */
+    final void warnOnceIfEventStoreIsNoAwaitedGapInspector() {
+        if (!(eventStore instanceof AwaitedGapInspector) && warnedEventStoreIsNoAwaitedGapInspector.compareAndSet(false, true)) {
+            log.warn("[{}] awaitProcessed cannot tell whether an event the subscription moved past while it was uncommitted (a gap) is still to be handled: " +
+                             "the event store '{}' does not implement {}, so such an event can be reported as processed before the processor handled it. " +
+                             "An EventStore that decorates a PostgresqlEventStore or CdcEventStore should implement {} and forward to its delegate",
+                     getProcessorName(), eventStore.getClass().getName(), AwaitedGapInspector.class.getSimpleName(), AwaitedGapInspector.class.getSimpleName());
+        }
+    }
+
+    /**
      * Used by {@link #awaitProcessed(AggregateType, GlobalEventOrder, Duration)}: is a message for the given aggregate
      * still queued in this processor's queue (Dead Letter Messages included)?<br>
      * {@link EventProcessor} and {@link ViewEventProcessor} implement it; the default throws
@@ -737,8 +753,8 @@ public abstract class AbstractEventProcessor implements Lifecycle {
             if (resumeFromAndIncluding.isEmpty() || resumeFromAndIncluding.get().longValue() <= globalEventOrder.longValue()) {
                 return Progress.notYet(resumeFromAndIncluding, "the subscription hasn't moved past the event yet");
             }
-            if (isAwaitedAsTransientGap(subscription.get())) {
-                return Progress.notYet(resumeFromAndIncluding, "the subscription moved past the event while it was uncommitted and still has to handle it (transient gap)");
+            if (isAwaitedAsGap(subscription.get())) {
+                return Progress.notYet(resumeFromAndIncluding, "the subscription moved past the event while it was uncommitted and still has to handle it (awaited as a gap)");
             }
             var aggregateId = serializedAggregateId;
             if (aggregateId == null) {
@@ -762,18 +778,15 @@ public abstract class AbstractEventProcessor implements Lifecycle {
 
         /**
          * Asks the event store, when it is an {@link AwaitedGapInspector}, whether the subscriber still awaits the event as
-         * a gap. One that is not cannot be asked: the check is off, and a WARN says so once per processor
+         * a gap - a transient gap, or the middle of a wide gap awaited in memory only. One that is not cannot be asked: the
+         * check is off, as the WARN logged when the processor started says
          */
-        private boolean isAwaitedAsTransientGap(EventStoreSubscription subscription) {
+        private boolean isAwaitedAsGap(EventStoreSubscription subscription) {
             if (eventStore instanceof AwaitedGapInspector awaitedGapInspector) {
                 return awaitedGapInspector.isAwaitedAsGap(subscription.subscriberId(), aggregateType, globalEventOrder);
             }
-            if (warnedEventStoreIsNoAwaitedGapInspector.compareAndSet(false, true)) {
-                log.warn("[{}] awaitProcessed cannot tell whether an event that committed after a later one (a transient gap) is still to be handled: " +
-                                 "the event store '{}' does not implement {}, so such an event can be reported as processed before the processor handled it. " +
-                                 "An EventStore that decorates a PostgresqlEventStore or CdcEventStore should implement {} and forward to its delegate",
-                         getProcessorName(), eventStore.getClass().getName(), AwaitedGapInspector.class.getSimpleName(), AwaitedGapInspector.class.getSimpleName());
-            }
+            // For a processor whose start did not log it
+            warnOnceIfEventStoreIsNoAwaitedGapInspector();
             return false;
         }
 

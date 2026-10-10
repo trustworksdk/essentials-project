@@ -300,6 +300,7 @@ public abstract class EventProcessor extends AbstractEventProcessor {
                      subscribeToEventsRelatedTo);
 
             setupMessageHandlerDelegate();
+            warnOnceIfEventStoreIsNoAwaitedGapInspector();
             UnhandledEventTypes.logHandledMessageTypes(processorName, this);
             unhandledEventTypes = new UnhandledEventTypes(processorName, eventStore, this, patternMatchingInboxMessageHandlerDelegate, UnhandledEventTypes.Reporting.DEBUG);
             inbox = inboxes.getOrCreateInbox(InboxConfig.builder()
