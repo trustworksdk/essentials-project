@@ -33,11 +33,14 @@ import java.util.*;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.*;
 import java.util.function.*;
+import org.slf4j.*;
 
 import static dk.trustworks.essentials.shared.MessageFormatter.msg;
 import static org.assertj.core.api.Assertions.assertThat;
 
 public abstract class DurableQueuesIT<DURABLE_QUEUES extends DurableQueues, UOW extends UnitOfWork, UOW_FACTORY extends UnitOfWorkFactory<UOW>> {
+    private static final Logger log = LoggerFactory.getLogger(DurableQueuesIT.class);
+
     protected UOW_FACTORY         unitOfWorkFactory;
     protected DURABLE_QUEUES      durableQueues;
     protected ProxyJSONSerializer jsonSerializerProxy;
@@ -412,7 +415,7 @@ public abstract class DurableQueuesIT<DURABLE_QUEUES extends DurableQueues, UOW 
                       var newDeadLetterMessages = durableQueues.getDeadLetterMessages(queueName, DurableQueues.QueueingSortOrder.ASC, 0, 20);
                       if (!newDeadLetterMessages.isEmpty()) {
                           newDeadLetterMessages.forEach(queuedMessage -> {
-                              System.out.println("Resurrected new DeadLetterMessage: " + queuedMessage);
+                              log.info("Resurrected new DeadLetterMessage: {}", queuedMessage);
                               usingDurableQueue(() -> durableQueues.resurrectDeadLetterMessage(queuedMessage.getId(), Duration.ofMillis(10)));
                           });
                       }
@@ -651,9 +654,9 @@ public abstract class DurableQueuesIT<DURABLE_QUEUES extends DurableQueues, UOW 
             @Override
             public Optional<QueuedMessage> intercept(MarkAsDeadLetterMessage operation, InterceptorChain<MarkAsDeadLetterMessage, Optional<QueuedMessage>, DurableQueuesInterceptor> interceptorChain) {
                 var queuedMessage = durableQueues.getQueuedMessage(operation.queueEntryId).get();
-                System.out.println("MarkAsDeadLetterMessage: " + queuedMessage);
+                log.info("MarkAsDeadLetterMessage: {}", queuedMessage);
                 if (queuedMessage.getTotalDeliveryAttempts() < totalExpectedDeliveries + 1) {
-                    System.out.println("---------------> Overriding decision to mark as dead letter message for message " + operation.queueEntryId + ". Total delivery attempts is " + queuedMessage.getTotalDeliveryAttempts());
+                    log.info("---------------> Overriding decision to mark as dead letter message for message {}. Total delivery attempts is {}", operation.queueEntryId, queuedMessage.getTotalDeliveryAttempts());
                     // Complete marking as dead letter message
                     if (interceptorChain.proceed().isEmpty()) {
                         throw new RuntimeException(msg("Failed to mark message '{}' as Dead Letter Message", operation.queueEntryId));
@@ -663,7 +666,7 @@ public abstract class DurableQueuesIT<DURABLE_QUEUES extends DurableQueues, UOW 
                                                                     Duration.ofSeconds(1));
                 } else {
                     // Continue and Mark as Dead Letter Message
-                    System.out.println("---------------> Gave up on Redelivery");
+                    log.info("---------------> Gave up on Redelivery");
                     return interceptorChain.proceed();
                 }
             }

@@ -53,6 +53,7 @@ import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Consumer;
 import java.util.stream.IntStream;
+import org.slf4j.*;
 
 import static dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.persistence.table_per_aggregate_type.SeparateTablePerAggregateTypeEventStreamConfigurationFactory.standardSingleTenantConfiguration;
 import static dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.processor.EventProcessorIT.TestOrderEventProcessor.TEST_ORDERS;
@@ -69,6 +70,8 @@ import static org.assertj.core.api.Assertions.*;
  */
 @Testcontainers
 public class EventProcessorIT {
+    private static final Logger log = LoggerFactory.getLogger(EventProcessorIT.class);
+
     public static final EventMetaData META_DATA = EventMetaData.of("Key1", "Value1", "Key2", "Value2");
 
     private Jdbi                                                                    jdbi;
@@ -359,14 +362,14 @@ public class EventProcessorIT {
         testProcessor.setResetCallback(resetPoints -> {
             Awaitility.waitAtMost(Duration.ofSeconds(2)).untilAsserted(() -> {
                 var currentEventOrder = eventStoreSubscriptionManager.getCurrentEventOrder(subscriberId, TEST_ORDERS);
-                System.out.println("After resetting: Current event order: " + currentEventOrder.get());
+                log.info("After resetting: Current event order: {}", currentEventOrder.get());
                 assertThat(currentEventOrder)
                         .hasValueSatisfying(order ->
                                                     assertThat(order.longValue()).isEqualTo(1)
                                            )
                         .describedAs("After resetting: Current event order");
                 var currentResumePoint = durableSubscriptionRepository.getResumePoint(subscriberId, TEST_ORDERS);
-                System.out.println("After resetting: Current resume point: " + currentEventOrder.get());
+                log.info("After resetting: Current resume point: {}", currentEventOrder.get());
                 assertThat(currentResumePoint)
                         .hasValueSatisfying(resumePoint -> assertThat(resumePoint.getResumeFromAndIncluding().longValue()).isEqualTo(1))
                         .describedAs("After resetting: Current resume point");
@@ -377,14 +380,14 @@ public class EventProcessorIT {
         // Check subscriptions catchup again
         Awaitility.waitAtMost(Duration.ofSeconds(3)).untilAsserted(() -> {
             var currentEventOrder = eventStoreSubscriptionManager.getCurrentEventOrder(subscriberId, TEST_ORDERS);
-            System.out.println("After resetting: Current event order: " + currentEventOrder.get());
+            log.info("After resetting: Current event order: {}", currentEventOrder.get());
             assertThat(currentEventOrder)
                     .hasValueSatisfying(order ->
                                                 assertThat(order.longValue()).isEqualTo(11)
                                        )
                     .describedAs("After resetting: Current event order");
             var currentResumePoint = durableSubscriptionRepository.getResumePoint(subscriberId, TEST_ORDERS);
-            System.out.println("After resetting: Current resume point: " + currentEventOrder.get());
+            log.info("After resetting: Current resume point: {}", currentEventOrder.get());
             assertThat(currentResumePoint)
                     .hasValueSatisfying(resumePoint -> assertThat(resumePoint.getResumeFromAndIncluding().longValue()).isEqualTo(11))
                     .describedAs("After resetting: Current resume point");
@@ -619,7 +622,7 @@ public class EventProcessorIT {
 
         @CmdHandler
         public void handle(FailingCommandSentUsingAsyncAndDontWaitViaCommandBus cmd) {
-            System.out.println("*** Handling FailingCommand: " + cmd.reason);
+            log.info("*** Handling FailingCommand: {}", cmd.reason);
             throw new RuntimeException(cmd.reason);
         }
 
@@ -628,7 +631,7 @@ public class EventProcessorIT {
 
         @MessageHandler
         public void handle(FailingCommandSentViaInbox cmd) {
-            System.out.println("*** Handling FailingCommand: " + cmd.reason);
+            log.info("*** Handling FailingCommand: {}", cmd.reason);
             throw new RuntimeException(cmd.reason);
         }
 

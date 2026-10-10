@@ -60,7 +60,6 @@ class EssentialTypesJacksonModuleTest {
                                                        TransferTime.now());
 
         var serialized = objectMapper.writeValueAsString(testSubject);
-        System.out.println(serialized);
         var deserializedSubject = objectMapper.readValue(serialized.getBytes(StandardCharsets.UTF_8), SerializationTestSubject.class);
 
         assertThat(deserializedSubject.getAccountId()).isInstanceOf(AccountId.class);

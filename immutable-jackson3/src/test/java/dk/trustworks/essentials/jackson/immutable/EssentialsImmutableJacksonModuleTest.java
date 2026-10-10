@@ -39,7 +39,6 @@ class EssentialsImmutableJacksonModuleTest {
                                              Money.of("1234.56", CurrencyCode.DKK));
 
         var serialized = objectMapper.writeValueAsString(testSubject);
-        System.out.println(serialized);
 
         var deserializedSubject = objectMapper.readValue(serialized.getBytes(StandardCharsets.UTF_8), ImmutableOrder.class);
         assertThat(deserializedSubject).isEqualTo(testSubject);
@@ -66,7 +65,6 @@ class EssentialsImmutableJacksonModuleTest {
                                                                 Money.of(amount.add(percentage.of(amount)), CurrencyCode.DKK));
 
         var serialized = objectMapper.writeValueAsString(testSubject);
-        System.out.println(serialized);
 
         var deserializedSubject = objectMapper.readValue(serialized.getBytes(StandardCharsets.UTF_8), ImmutableSerializationTestSubject.class);
         assertThat(deserializedSubject).isEqualTo(testSubject);

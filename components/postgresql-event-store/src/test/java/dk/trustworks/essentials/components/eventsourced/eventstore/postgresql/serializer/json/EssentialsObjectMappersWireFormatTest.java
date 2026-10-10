@@ -28,6 +28,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.*;
 import java.time.*;
 import java.util.*;
+import org.slf4j.*;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -46,6 +47,8 @@ import static org.assertj.core.api.Assertions.assertThat;
  * }</pre>
  */
 class EssentialsObjectMappersWireFormatTest {
+    private static final Logger log = LoggerFactory.getLogger(EssentialsObjectMappersWireFormatTest.class);
+
 
     private static final String GOLDEN_RESOURCE = "/wire-format/queue-payload.json";
     private static final Path   GOLDEN_SOURCE   = Path.of("src", "test", "resources", "wire-format", "queue-payload.json");
@@ -62,7 +65,7 @@ class EssentialsObjectMappersWireFormatTest {
         if (Boolean.getBoolean("wireformat.regenerate")) {
             Files.createDirectories(GOLDEN_SOURCE.getParent());
             Files.writeString(GOLDEN_SOURCE, serialized + System.lineSeparator(), StandardCharsets.UTF_8);
-            System.out.println("Regenerated " + GOLDEN_SOURCE.toAbsolutePath());
+            log.info("Regenerated {}", GOLDEN_SOURCE.toAbsolutePath());
             return;
         }
 
@@ -129,7 +132,7 @@ class EssentialsObjectMappersWireFormatTest {
         if (Boolean.getBoolean("wireformat.regenerate")) {
             Files.createDirectories(SHAPES_GOLDEN_SOURCE.getParent());
             Files.writeString(SHAPES_GOLDEN_SOURCE, serialized + System.lineSeparator(), StandardCharsets.UTF_8);
-            System.out.println("Regenerated " + SHAPES_GOLDEN_SOURCE.toAbsolutePath());
+            log.info("Regenerated {}", SHAPES_GOLDEN_SOURCE.toAbsolutePath());
             return;
         }
 

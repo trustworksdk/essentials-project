@@ -23,10 +23,13 @@ import org.junit.jupiter.api.*;
 import java.time.Duration;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicInteger;
+import org.slf4j.*;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
 public abstract class DBFencedLockManagerIT<LOCK_MANAGER extends DBFencedLockManager<?, ?>> {
+    private static final Logger log = LoggerFactory.getLogger(DBFencedLockManagerIT.class);
+
     private LOCK_MANAGER lockManagerNode1;
     private LOCK_MANAGER lockManagerNode2;
 
@@ -91,7 +94,7 @@ public abstract class DBFencedLockManagerIT<LOCK_MANAGER extends DBFencedLockMan
 
     @AfterEach
     void cleanup() {
-        System.out.println("*******  Cleaning up  *******");
+        log.info("*******  Cleaning up  *******");
         if (lockManagerNode1 != null) {
             lockManagerNode1.stop();
             lockManagerNode1 = null;
@@ -488,12 +491,12 @@ public abstract class DBFencedLockManagerIT<LOCK_MANAGER extends DBFencedLockMan
         assertThat(lockNode1Callback.lockReleased).isNull();
 
         // When disrupt network connection for both nodes
-        System.out.println("------ Disrupting the database connection ------");
+        log.info("------ Disrupting the database connection ------");
         disruptDatabaseConnection();
 
         // Then Node 1 should NOT have released the lock and node 2 should not have acquired the lock
         Thread.sleep(2000);
-        System.out.println("------ Checking the node 1 didn't release the lock ------");
+        log.info("------ Checking the node 1 didn't release the lock ------");
         assertThat(lockNode1Callback.lockReleased).isNull();
         assertThat(lockNode1Callback.lockAcquired.isLocked()).isTrue();
         assertThat(lockNode1Callback.lockAcquired.isLockedByThisLockManagerInstance()).isTrue();
@@ -502,25 +505,25 @@ public abstract class DBFencedLockManagerIT<LOCK_MANAGER extends DBFencedLockMan
         assertThat(lockNode2Callback.lockReleased).isNull();
 
         // Restoring the connection could potentially result in node 2 overtaking the timed out lock
-        System.out.println("------ Restoring the database connection ------");
+        log.info("------ Restoring the database connection ------");
         restoreDatabaseConnection();
 
         Awaitility.waitAtMost(Duration.ofSeconds(10)).until(this::isConnectionRestored);
-        System.out.println("------ Checking which node has the lock ------");
+        log.info("------ Checking which node has the lock ------");
         if (lockNode1Callback.lockReleased != null) {
-            System.out.println("====== Node 1 lost the lock and node 2 should have acquired it ======");
+            log.info("====== Node 1 lost the lock and node 2 should have acquired it ======");
             assertThat(lockNode2Callback.lockAcquired).isNotNull();
             assertThat(lockNode2Callback.lockReleased).isNull();
             assertThat(lockManagerNode2.isLockAcquiredByAnotherLockManagerInstance(lockName)).isFalse();
             assertThat(lockManagerNode2.isLockedByThisLockManagerInstance(lockName)).isTrue();
             assertThat(lockManagerNode2.isLockAcquired(lockName)).isTrue();
-            System.out.println("Lock token in DB " + lockManagerNode2.lookupLock(lockName).get().getCurrentToken());
+            log.info("Lock token in DB {}", lockManagerNode2.lookupLock(lockName).get().getCurrentToken());
             assertThat(lockNode2Callback.lockAcquired.getCurrentToken()).isEqualTo(lockManagerNode2.getInitialTokenValue()+1);
             assertThat(lockManagerNode1.isLockedByThisLockManagerInstance(lockName)).isFalse();
             assertThat(lockManagerNode1.isLockAcquired(lockName)).isTrue();
             assertThat(lockManagerNode1.isLockAcquiredByAnotherLockManagerInstance(lockName)).isTrue();
         } else {
-            System.out.println("====== Node 1 kept the lock and node 2 should not have acquired it ======");
+            log.info("====== Node 1 kept the lock and node 2 should not have acquired it ======");
             assertThat(lockNode2Callback.lockAcquired).isNull();
             assertThat(lockNode2Callback.lockReleased).isNull();
             assertThat(lockNode1Callback.lockReleased).isNull();
