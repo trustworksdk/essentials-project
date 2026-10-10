@@ -566,6 +566,52 @@ class Diff(unittest.TestCase):
         self.assertIn("--before-ref", r.stderr)
 
 
+class FoldedDiff(unittest.TestCase):
+    """The Diff lens compares issues per slice, whichever side of the aggregation threshold each map
+    sits on (aggregate() folds `flow-undeclared` once AGGREGATE_MIN slices and more than half lack it)."""
+
+    @staticmethod
+    def side(flowed, unflowed):
+        rows = [{"id": f"orders.s{n}", "kind": "command", "bc": "orders", "scenarios": [{"name": "x"}],
+                 "flows": ["checkout"] if n < flowed else []} for n in range(flowed + unflowed)]
+        issues = [slice_atlas.issue("flow-undeclared", "info", slice_atlas.SLICE_TEXT["flow-undeclared"],
+                                    "slice", s["id"]) for s in rows if not s["flows"]]
+        return {"slices": rows, "issues": slice_atlas.with_fixes(slice_atlas.aggregate(issues, rows), rows)}
+
+    def test_crossing_the_threshold_reports_only_the_added_slices(self):
+        before, after = self.side(4, 2), self.side(4, 5)  # 2 of 6 per slice -> 5 of 9 folded
+        self.assertEqual([i["id"] for i in after["issues"]], ["flow-undeclared:orders"])
+        self.assertEqual(after["issues"][0]["members"], ["orders.s4", "orders.s5", "orders.s6", "orders.s7",
+                                                         "orders.s8"])
+        d = slice_atlas.diff(before, after)
+        self.assertEqual(d["issues"]["new"], ["flow-undeclared:orders.s6", "flow-undeclared:orders.s7",
+                                              "flow-undeclared:orders.s8"])
+        self.assertEqual(d["issues"]["fixed"], [])
+
+    def test_dropping_below_the_threshold_reports_no_new_issue(self):
+        before, after = self.side(2, 4), self.side(4, 2)  # 4 of 6 folded -> 2 of 6 per slice
+        self.assertEqual([i["id"] for i in before["issues"]], ["flow-undeclared:orders"])
+        d = slice_atlas.diff(before, after)
+        self.assertEqual(d["issues"]["new"], [])
+        fixed = d["issues"]["fixed"]
+        self.assertEqual([i["id"] for i in fixed], ["flow-undeclared:orders.s2", "flow-undeclared:orders.s3"])
+        # a renderable per-slice issue, as the map would have carried it unfolded
+        self.assertEqual(fixed[0]["target"], {"kind": "slice", "id": "orders.s2", "part": None})
+        self.assertEqual(fixed[0]["text"], slice_atlas.SLICE_TEXT["flow-undeclared"])
+        self.assertEqual(fixed[0]["fix"], {"route": "author", "bc": "orders"})
+
+    def test_a_before_map_without_members_unfolds_from_its_rows(self):
+        before, after = self.side(2, 4), self.side(2, 5)  # both folded; before written by older code
+        before["issues"][0].pop("members")
+        d = slice_atlas.diff(before, after)
+        self.assertEqual(d["issues"], {"new": ["flow-undeclared:orders.s6"], "fixed": []})
+        for row in before["slices"]:  # rows that cannot say either: compared by the context id
+            row.pop("flows")
+        d = slice_atlas.diff(before, after)
+        self.assertEqual(len(d["issues"]["new"]), 5)
+        self.assertEqual([i["id"] for i in d["issues"]["fixed"]], ["flow-undeclared:orders"])
+
+
 def manifest(path: Path, sid: str, kind: str = "command", extra: str = ""):
     path.mkdir(parents=True, exist_ok=True)
     (path / "slice.yaml").write_text(f'schemaVersion: "1.4"\nslice: {sid}\nkind: {kind}\nbc: {sid.split(".")[0]}\n'

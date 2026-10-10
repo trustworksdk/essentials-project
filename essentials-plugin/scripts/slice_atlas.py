@@ -53,6 +53,14 @@ TECHNICAL_COLUMNS = ("id", "version", "createdAt", "updatedAt", "lastModified", 
 # half of a context's slices fires once for the context, with the count. Below that it fires per slice.
 AGGREGATED_CODES = ("flow-undeclared", "scenario-none")
 AGGREGATE_MIN = 3
+# Each aggregated code's per-slice text, and the slice-row field whose absence raises it.
+SLICE_TEXT = {
+    "flow-undeclared": "declares no `flow:` — grouped into a process by cause and effect; "
+                       "/essentials:slice-enrich drafts its journey",
+    "scenario-none": "declares no scenarios — its board shows invariants and test kinds instead; "
+                     "/essentials:slice-enrich drafts them from its tests",
+}
+AGGREGATED_FIELD = {"flow-undeclared": "flows", "scenario-none": "scenarios"}
 
 PROCESS_COLOURS = 12
 LEVEL_RANK = {"error": 0, "warn": 1, "info": 2}
@@ -563,7 +571,9 @@ def with_fixes(issues, rows):
 
 
 def aggregate(issues, rows):
-    """Fold an adoption issue that fires on most of a context's slices into one for the context."""
+    """Fold an adoption issue that fires on most of a context's slices into one for the context. The
+    context issue lists the folded slice ids as `members`, so diff() can compare per slice whichever
+    side of the threshold each map sits on."""
     total: dict[str, int] = {}
     bc_of = {}
     for s in rows:
@@ -583,8 +593,37 @@ def aggregate(issues, rows):
                     "by cause and effect; /essentials:slice-enrich drafts their journeys" if code == "flow-undeclared"
                     else f"{len(group)} of {total[bc]} slices in `{bc}` declare no scenarios — their boards show "
                     "invariants and test kinds instead; /essentials:slice-enrich drafts scenarios from their tests")
-            out.append(issue(code, group[0]["level"], text, "context", bc))
+            out.append({**issue(code, group[0]["level"], text, "context", bc),
+                        "members": sorted(i["target"]["id"] for i in group)})
     return [i for i in issues if id(i) not in folded] + out
+
+
+def unfold(issues, rows):
+    """id -> issue with every context issue aggregate() folded expanded back into its per-slice issues,
+    so a context crossing the fold threshold between two maps changes no issue id. A map written before
+    the fold recorded `members` names none: its folded slices are recovered from its own rows (an
+    unbroken slice of that context whose row lacks the field), and when the rows do not carry the field
+    either, the context issue is kept as it is — then that context's issues compare by the context id."""
+    out = {}
+    for i in issues:
+        code, t = i["code"], i["target"]
+        if code not in AGGREGATED_CODES or t["kind"] != "context":
+            out.setdefault(i["id"], i)
+            continue
+        members = i.get("members")
+        if not isinstance(members, list):
+            field = AGGREGATED_FIELD[code]
+            members = [s["id"] for s in rows if s.get("bc") == t["id"] and not s.get("error") and field in s
+                       and not s[field]] or None
+        if not members:
+            out.setdefault(i["id"], i)
+            continue
+        for sid in members:
+            one = issue(code, i["level"], SLICE_TEXT[code], "slice", sid)
+            if "fix" in i:
+                one["fix"] = dict(i["fix"])
+            out.setdefault(one["id"], one)
+    return out
 
 
 def field_name(field: str) -> str:
@@ -645,11 +684,9 @@ def atlas_issues(rows, scope, messages, tests, facts_given):
             continue
         sid = s["id"]
         if not s["flows"]:
-            out.append(issue("flow-undeclared", "info", "declares no `flow:` — grouped into a process by cause "
-                             "and effect; /essentials:slice-enrich drafts its journey", "slice", sid))
+            out.append(issue("flow-undeclared", "info", SLICE_TEXT["flow-undeclared"], "slice", sid))
         if not s["scenarios"]:
-            out.append(issue("scenario-none", "info", "declares no scenarios — its board shows invariants and "
-                             "test kinds instead; /essentials:slice-enrich drafts them from its tests", "slice", sid))
+            out.append(issue("scenario-none", "info", SLICE_TEXT["scenario-none"], "slice", sid))
         for name, problem in s.get("_scenario_problems") or []:
             out.append(issue("scenario-malformed", "warn",
                              (f"scenario `{name}` " if name else "") + problem + " — kept as far as it parses",
@@ -770,7 +807,9 @@ def diff(before, after):
     """Before and after maps matched by stable ids (design §10.2): slice id, (from, to, kind) for an
     edge, issue id. A removed slice carries its whole before-row. A before map that predates the
     Atlas lacks some keys (`flows`, `scenarios`, `schedule`, `doc`, `issues`): a field the before row
-    does not carry is not compared, and `issuesKnown` is false — then no issue is called new or fixed."""
+    does not carry is not compared, and `issuesKnown` is false — then no issue is called new or fixed.
+    Issues compare unfolded (unfold()): `new` and `fixed` name per-slice issues even where a map folded
+    them into one for the context, so the fold threshold never turns into a count of its own."""
     b_rows, a_rows = {}, {}
     for s in before.get("slices") or []:
         b_rows.setdefault(s["id"], s)
@@ -804,8 +843,8 @@ def diff(before, after):
         messages[key] = {"added": sorted(an - bn), "removed": sorted(bn - an)}
 
     known = isinstance(before.get("issues"), list)
-    b_issues = {i["id"]: i for i in before.get("issues") or []}
-    a_ids = {i["id"] for i in after["issues"]}
+    b_issues = unfold(before.get("issues") or [], before.get("slices") or [])
+    a_ids = set(unfold(after["issues"], after["slices"]))
     return {
         "before": {"sha": (before.get("meta") or {}).get("sha"), "sliceCount": len(before.get("slices") or []),
                    "ref": None, "issuesKnown": known},

@@ -998,6 +998,17 @@
         "part": null
       },
       "source": "atlas",
+      "members": [
+        "orders.cancel_order",
+        "orders.customer_summary",
+        "orders.customer_summary_v2",
+        "orders.order_list",
+        "orders.order_list_v2",
+        "orders.order_stats",
+        "orders.order_totals",
+        "orders.place_order",
+        "orders.shipment_board_v2"
+      ],
       "fix": {
         "route": "author",
         "bc": "orders"
@@ -1062,6 +1073,17 @@
         "part": null
       },
       "source": "atlas",
+      "members": [
+        "orders.cancel_order",
+        "orders.customer_summary",
+        "orders.customer_summary_v2",
+        "orders.order_list",
+        "orders.order_list_v2",
+        "orders.order_stats",
+        "orders.order_totals",
+        "orders.place_order",
+        "orders.shipment_board_v2"
+      ],
       "fix": {
         "route": "author",
         "bc": "orders"

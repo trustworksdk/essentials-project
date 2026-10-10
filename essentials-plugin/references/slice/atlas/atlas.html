@@ -523,7 +523,8 @@ const ATLAS = /* __ATLAS_DATA__ */ null;
        .slicesOf(bc)           [slice] of a context, by id
        .publishers(evt) .consumers(evt)       slice ids (consumers = consumes ∪ projections[].from)
        .handlers(cmd)   .dispatchers(cmd)     slice ids
-       .issue(id)              Issue or null
+       .issue(id)              Issue or null; the id of a per-slice issue folded into a context issue
+                               (listed in its `members`) resolves to that context issue
    ctx.diff                 null without ATLAS.diff, else:
        .state(sliceId)         'added' | 'removed' | 'changed' | null
        .changes(sliceId)       [{field, added, removed, from, to}] of a changed slice, else []
@@ -784,6 +785,8 @@ const Atlas = (() => {
     arr(D.processes).forEach(p => { processes.set(p.id, p); arr(p.sliceIds).forEach(id => push(procsOf, id, p)); });
     arr(D.contexts).forEach(c => contexts.set(c.id, c));
     arr(D.issues).forEach(i => { issues.set(i.id, i); const t = i.target || {}; push(byTarget, t.kind + '|' + t.id, i); });
+    // The diff names per-slice issues even where this map folded them into one for the context.
+    arr(D.issues).forEach(i => arr(i.members).forEach(sid => { const m = i.code + ':' + sid; if (!issues.has(m)) issues.set(m, i); }));
     const changed = new Map();
     const added = new Set(diff && diff.slices ? arr(diff.slices.added) : []);
     if (diff && diff.slices) arr(diff.slices.changed).forEach(c => changed.set(c.id, arr(c.fields)));
@@ -792,7 +795,8 @@ const Atlas = (() => {
       arr(diff.edges.added).forEach(e => { eAdd.add(e.from + '>' + e.to + '>' + e.kind); pAdd.add(e.from + '>' + e.to); });
       arr(diff.edges.removed).forEach(e => { eRem.add(e.from + '>' + e.to + '>' + e.kind); pRem.add(e.from + '>' + e.to); });
     }
-    const newIssues = new Set(diff && diff.issues ? arr(diff.issues.new) : []);
+    const newIssues = new Set();
+    if (diff && diff.issues) arr(diff.issues.new).forEach(id => { newIssues.add(id); const i = issues.get(id); if (i) newIssues.add(i.id); });
     index = {
       slice: (id) => slices.get(id) || ghosts.get(id) || null,
       isGhost: (id) => !slices.has(id) && ghosts.has(id),
@@ -1452,6 +1456,7 @@ const Atlas = (() => {
     o = o || {};
     const iss = index.issue(id);
     if (!iss) { toast('Issue not in this map: ' + id); setHash({ issue: null }); return; }
+    id = iss.id;
     selectDockRow(id);
     if (notInMap(iss.target)) {
       // The issue is real but names something the map does not hold: keep the row, draw nothing.

@@ -1762,6 +1762,11 @@
         "part": null
       },
       "source": "atlas",
+      "members": [
+        "orders.cancel_order",
+        "orders.cancellation_mailer",
+        "orders.order_history"
+      ],
       "fix": {
         "route": "author",
         "bc": "orders"

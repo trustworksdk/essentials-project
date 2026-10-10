@@ -4649,6 +4649,12 @@
         "part": null
       },
       "source": "atlas",
+      "members": [
+        "bc01.close_on_create",
+        "bc01.close_thing",
+        "bc01.create_thing",
+        "bc01.thing_list"
+      ],
       "fix": {
         "route": "author",
         "bc": "bc01"
@@ -4665,6 +4671,12 @@
         "part": null
       },
       "source": "atlas",
+      "members": [
+        "bc02.close_thing",
+        "bc02.create_thing",
+        "bc02.follow_upstream",
+        "bc02.thing_list"
+      ],
       "fix": {
         "route": "author",
         "bc": "bc02"
@@ -4681,6 +4693,12 @@
         "part": null
       },
       "source": "atlas",
+      "members": [
+        "bc03.close_thing",
+        "bc03.create_thing",
+        "bc03.follow_upstream",
+        "bc03.thing_list"
+      ],
       "fix": {
         "route": "author",
         "bc": "bc03"
@@ -4697,6 +4715,13 @@
         "part": null
       },
       "source": "atlas",
+      "members": [
+        "bc04.close_thing",
+        "bc04.create_thing",
+        "bc04.follow_upstream",
+        "bc04.partner_feed",
+        "bc04.thing_list"
+      ],
       "fix": {
         "route": "author",
         "bc": "bc04"
@@ -4713,6 +4738,12 @@
         "part": null
       },
       "source": "atlas",
+      "members": [
+        "bc05.close_thing",
+        "bc05.create_thing",
+        "bc05.follow_upstream",
+        "bc05.thing_list"
+      ],
       "fix": {
         "route": "author",
         "bc": "bc05"
@@ -4729,6 +4760,13 @@
         "part": null
       },
       "source": "atlas",
+      "members": [
+        "bc06.close_on_create",
+        "bc06.close_thing",
+        "bc06.create_thing",
+        "bc06.thing_list",
+        "bc06.thing_report"
+      ],
       "fix": {
         "route": "author",
         "bc": "bc06"
@@ -4745,6 +4783,12 @@
         "part": null
       },
       "source": "atlas",
+      "members": [
+        "bc07.close_thing",
+        "bc07.create_thing",
+        "bc07.follow_upstream",
+        "bc07.thing_list"
+      ],
       "fix": {
         "route": "author",
         "bc": "bc07"
@@ -4761,6 +4805,13 @@
         "part": null
       },
       "source": "atlas",
+      "members": [
+        "bc08.close_thing",
+        "bc08.create_thing",
+        "bc08.follow_upstream",
+        "bc08.partner_feed",
+        "bc08.thing_list"
+      ],
       "fix": {
         "route": "author",
         "bc": "bc08"
@@ -4777,6 +4828,12 @@
         "part": null
       },
       "source": "atlas",
+      "members": [
+        "bc09.close_thing",
+        "bc09.create_thing",
+        "bc09.follow_upstream",
+        "bc09.thing_list"
+      ],
       "fix": {
         "route": "author",
         "bc": "bc09"
@@ -4793,6 +4850,12 @@
         "part": null
       },
       "source": "atlas",
+      "members": [
+        "bc10.close_thing",
+        "bc10.create_thing",
+        "bc10.follow_upstream",
+        "bc10.thing_list"
+      ],
       "fix": {
         "route": "author",
         "bc": "bc10"
@@ -4809,6 +4872,12 @@
         "part": null
       },
       "source": "atlas",
+      "members": [
+        "bc11.close_on_create",
+        "bc11.close_thing",
+        "bc11.create_thing",
+        "bc11.thing_list"
+      ],
       "fix": {
         "route": "author",
         "bc": "bc11"
@@ -4825,6 +4894,14 @@
         "part": null
       },
       "source": "atlas",
+      "members": [
+        "bc12.close_thing",
+        "bc12.create_thing",
+        "bc12.follow_upstream",
+        "bc12.partner_feed",
+        "bc12.thing_list",
+        "bc12.thing_report"
+      ],
       "fix": {
         "route": "author",
         "bc": "bc12"
@@ -4841,6 +4918,12 @@
         "part": null
       },
       "source": "atlas",
+      "members": [
+        "bc01.close_on_create",
+        "bc01.close_thing",
+        "bc01.create_thing",
+        "bc01.thing_list"
+      ],
       "fix": {
         "route": "author",
         "bc": "bc01"
@@ -4857,6 +4940,12 @@
         "part": null
       },
       "source": "atlas",
+      "members": [
+        "bc02.close_thing",
+        "bc02.create_thing",
+        "bc02.follow_upstream",
+        "bc02.thing_list"
+      ],
       "fix": {
         "route": "author",
         "bc": "bc02"
@@ -4873,6 +4962,12 @@
         "part": null
       },
       "source": "atlas",
+      "members": [
+        "bc03.close_thing",
+        "bc03.create_thing",
+        "bc03.follow_upstream",
+        "bc03.thing_list"
+      ],
       "fix": {
         "route": "author",
         "bc": "bc03"
@@ -4889,6 +4984,13 @@
         "part": null
       },
       "source": "atlas",
+      "members": [
+        "bc04.close_thing",
+        "bc04.create_thing",
+        "bc04.follow_upstream",
+        "bc04.partner_feed",
+        "bc04.thing_list"
+      ],
       "fix": {
         "route": "author",
         "bc": "bc04"
@@ -4905,6 +5007,12 @@
         "part": null
       },
       "source": "atlas",
+      "members": [
+        "bc05.close_thing",
+        "bc05.create_thing",
+        "bc05.follow_upstream",
+        "bc05.thing_list"
+      ],
       "fix": {
         "route": "author",
         "bc": "bc05"
@@ -4921,6 +5029,13 @@
         "part": null
       },
       "source": "atlas",
+      "members": [
+        "bc06.close_on_create",
+        "bc06.close_thing",
+        "bc06.create_thing",
+        "bc06.thing_list",
+        "bc06.thing_report"
+      ],
       "fix": {
         "route": "author",
         "bc": "bc06"
@@ -4937,6 +5052,12 @@
         "part": null
       },
       "source": "atlas",
+      "members": [
+        "bc07.close_thing",
+        "bc07.create_thing",
+        "bc07.follow_upstream",
+        "bc07.thing_list"
+      ],
       "fix": {
         "route": "author",
         "bc": "bc07"
@@ -4953,6 +5074,13 @@
         "part": null
       },
       "source": "atlas",
+      "members": [
+        "bc08.close_thing",
+        "bc08.create_thing",
+        "bc08.follow_upstream",
+        "bc08.partner_feed",
+        "bc08.thing_list"
+      ],
       "fix": {
         "route": "author",
         "bc": "bc08"
@@ -4969,6 +5097,12 @@
         "part": null
       },
       "source": "atlas",
+      "members": [
+        "bc09.close_thing",
+        "bc09.create_thing",
+        "bc09.follow_upstream",
+        "bc09.thing_list"
+      ],
       "fix": {
         "route": "author",
         "bc": "bc09"
@@ -4985,6 +5119,12 @@
         "part": null
       },
       "source": "atlas",
+      "members": [
+        "bc10.close_thing",
+        "bc10.create_thing",
+        "bc10.follow_upstream",
+        "bc10.thing_list"
+      ],
       "fix": {
         "route": "author",
         "bc": "bc10"
@@ -5001,6 +5141,12 @@
         "part": null
       },
       "source": "atlas",
+      "members": [
+        "bc11.close_on_create",
+        "bc11.close_thing",
+        "bc11.create_thing",
+        "bc11.thing_list"
+      ],
       "fix": {
         "route": "author",
         "bc": "bc11"
@@ -5017,6 +5163,14 @@
         "part": null
       },
       "source": "atlas",
+      "members": [
+        "bc12.close_thing",
+        "bc12.create_thing",
+        "bc12.follow_upstream",
+        "bc12.partner_feed",
+        "bc12.thing_list",
+        "bc12.thing_report"
+      ],
       "fix": {
         "route": "author",
         "bc": "bc12"

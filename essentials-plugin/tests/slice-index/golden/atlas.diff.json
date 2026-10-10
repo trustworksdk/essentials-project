@@ -88,6 +88,7 @@
       }
     ],
     "new": [
+      "flow-undeclared:orders.amend_order",
       "map-endpoint-missing:orders.amend_order:6 endpoint route@src/main/java/com/example/orders/use_cases/amend_order/slice.yaml",
       "map-not-checked:shipping.shipment_list:11(b) handled events",
       "scenario-none:orders.amend_order",

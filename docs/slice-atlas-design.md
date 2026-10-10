@@ -156,7 +156,9 @@ grades nothing.
 
 **Aggregation rule.** An issue that would fire on most slices of a context fires once per context with
 a count ("31 of 40 slices in `orders` declare no flow"). Otherwise a project that has not adopted the
-optional fields gets a dock with 300 entries and stops reading it.
+optional fields gets a dock with 300 entries and stops reading it. The context issue lists the folded
+slice ids as `members`, and the diff (§10.2) unfolds both maps before comparing, so a context crossing the
+threshold between baseline and change reports the slices that changed, not the fold.
 
 ## 6. Contract: `flow:`
 

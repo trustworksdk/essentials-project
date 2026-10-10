@@ -646,6 +646,12 @@
         "part": null
       },
       "source": "atlas",
+      "members": [
+        "payments.charge_payment",
+        "payments.payment_list",
+        "payments.retry_payment",
+        "payments.start_payment"
+      ],
       "fix": {
         "route": "author",
         "bc": "payments"
@@ -710,6 +716,12 @@
         "part": null
       },
       "source": "atlas",
+      "members": [
+        "payments.charge_payment",
+        "payments.payment_list",
+        "payments.retry_payment",
+        "payments.start_payment"
+      ],
       "fix": {
         "route": "author",
         "bc": "payments"

@@ -412,7 +412,8 @@
   }
   function walkIssues() {
     if (!S) return;
-    const ids = S.model.issues.new.filter(id => S.ctx.index.issue(id));
+    // Folded per-slice ids resolve to their context issue: walk each issue of the map once.
+    const ids = [...new Set(S.model.issues.new.map(id => S.ctx.index.issue(id)).filter(Boolean).map(i => i.id))];
     if (ids.length) S.ctx.markIssue(ids[step('issue', ids.length, 1)]);
   }
   function onKey(e) {
