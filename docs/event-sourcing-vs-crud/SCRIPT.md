@@ -59,7 +59,7 @@ The film follows the order most teams actually go through:
 | **Chaos toggles** | ⚡ SMTP down, ⚡ gateway slow, ⚡ Kafka down. Each is greyed out ("not yet") until the story introduces its side effect: SMTP from Day 2, gateway from Day 9, Kafka from Day 30. Once live they can be flipped at any step, and both panes react. |
 | **Diff beats (◆)** | The only places code appears, as git-style diffs. Five main beats plus one supporting beat (◆2b). Code uses the real Essentials Kotlin API where it exists. |
 | **Terminal strip** | Chapter 10 only: a Claude Code-style terminal docked at the bottom of each pane, with a directory tree and *files added* / *existing files edited* counters beside it. |
-| **Illustrative tag** | Anything not in the webshop demo, `examples/essentials-webshop-demo` on the `presentation` branch (the email, the dashboard, the classic aggregate, the CSV import, the admin edit path) carries a small *illustrative* tag. |
+| **Illustrative tag** | Anything not in `examples/essentials-webshop-demo` (the email, the dashboard, the classic aggregate, the CSV import, the admin edit path) carries a small *illustrative* tag. |
 
 Navigation: step through with ←/→ or click; chapters are reachable from the progress track; each chapter opens
 with an intro card and a **re-establishing shot** so it stands on its own. A ☀ button (or `H`) switches to the light
@@ -1161,10 +1161,7 @@ What the page is built from, beyond what the storyboards show.
   real fallback stacks.
 - **Language:** English only.
 
-### Look and feel, from the module6 deck
-
-The deck is `presentation/module6/deck.html` on the `presentation` branch.
-
+### Look and feel, from `presentation/module6/deck.html`
 
 - **Canvas:** `#canvas` is `width: min(100%, 1600px); aspect-ratio: 16 / 9; max-height: calc(100vh - 48px);
   container-type: size; overflow: hidden`, centred in a grid body with 24 px padding. Every size is in `cqh`, so
@@ -1216,8 +1213,7 @@ The deck is `presentation/module6/deck.html` on the `presentation` branch.
 ### Real code the panels quote
 
 All paths are under `examples/essentials-webshop-demo/src/main/kotlin/dk/trustworks/essentials/examples/webshop/`
-on the `presentation` branch; the demo is not part of the release. The page quotes the code itself, so it stands on
-its own, and its title card says where the demo lives. Quotes trim comments only and change nothing else.
+on this branch. Trim comments only; change nothing else.
 
 | Used in | File |
 |---|---|
@@ -1225,7 +1221,7 @@ its own, and its title card says where the demo lives. Quotes trim comments only
 | 5.0–5.8 | `sales/events/ProductEvent.kt`, `sales/use_cases/change_product_price/ChangeProductPriceDecider.kt`, `sales/views/products_for_sale/ProductsForSaleViewProjection.kt`, `ProductForSaleView.kt` |
 | 6.4–6.7 | `sales/use_cases/place_order/PlaceOrderDecider.kt`, `sales/use_cases/cancel_order/CancelOrderDecider.kt`, `sales/use_cases/remove_item_from_shopping_basket/RemoveItemFromShoppingBasketDecider.kt`, `BasketLinesEvolver.kt` |
 | 7.4 | `sales/events/*.kt`, `payment/events/CreditCardHoldEvent.kt` (event names) |
-| 10.3–10.4 | `slice.yaml` / `CLAUDE.md` shape: `examples/essentials-spring-examples/postgresql-cqrs/**/slice.yaml` and the plugin's `essentials-plugin/tests/fixtures/worked-example/` |
+| 10.3–10.4 | `slice.yaml` / `CLAUDE.md` shape: `examples/essentials-spring-examples/postgresql-cqrs/**/slice.yaml` and the plugin's `essentials-plugin/tests/fixtures/worked-example/` (the plugin is on `main`, not on this branch) |
 
 Framework facts the script relies on, with their source:
 
@@ -1243,7 +1239,7 @@ Framework facts the script relies on, with their source:
 
 - **Phone layout.** Stack the panes vertically below about 600 px?
 - **Hosting.** GitHub does not render `.html` from `docs/`. Options: GitHub Pages, open the file locally, or link
-  it from the module6 deck on the `presentation` branch.
+  it from the module6 deck.
 
 ## Design decisions
 

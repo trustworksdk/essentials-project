@@ -1,0 +1,18 @@
+======== PER-MESSAGE COST AGAINST PAYLOAD SIZE, 16 MB per run x 3 reps ========
+payload B         msgs   baseline WAL    shard-owned   difference   TOASTed
+200               2000           1896            540       -71,5%        no
+1800              2000           3512           2145       -38,9%        no
+8000              2000          10491           9341       -11,0%       yes
+64000              200          71986          70836        -1,6%       yes
+The advantage is a fixed saving — a narrower row and no claim write — against a payload
+cost both engines pay. It therefore shrinks as a PERCENTAGE while staying the same
+number of bytes. Quote the headline figure with the payload size it was measured at.
+==========================================================================
+======== PER-MESSAGE COST, 20000 messages x 3 reps, 200-byte payloads ========
+arm                 WAL B/msg      IQR    deadTup/msg     tupUpd+Del
+baseline                 1907     1,1%           1,96          39283
+shard-owned               541     3,1%           1,00          20000
+WAL bytes per message: -71,6%  (distributions are separated)
+STORAGE-LAYER COMPARISON ONLY: the baseline carries JSON serialization, an interceptor
+chain and a UnitOfWork per operation that the shard-owned engine does not yet have.
+========================================================================
