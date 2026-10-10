@@ -362,14 +362,14 @@ public class EventProcessorIT {
         testProcessor.setResetCallback(resetPoints -> {
             Awaitility.waitAtMost(Duration.ofSeconds(2)).untilAsserted(() -> {
                 var currentEventOrder = eventStoreSubscriptionManager.getCurrentEventOrder(subscriberId, TEST_ORDERS);
-                log.info("After resetting: Current event order: {}", currentEventOrder.get());
+                log.info("After resetting: Current event order: {}", currentEventOrder);
                 assertThat(currentEventOrder)
                         .hasValueSatisfying(order ->
                                                     assertThat(order.longValue()).isEqualTo(1)
                                            )
                         .describedAs("After resetting: Current event order");
                 var currentResumePoint = durableSubscriptionRepository.getResumePoint(subscriberId, TEST_ORDERS);
-                log.info("After resetting: Current resume point: {}", currentEventOrder.get());
+                log.info("After resetting: Current resume point: {}", currentResumePoint);
                 assertThat(currentResumePoint)
                         .hasValueSatisfying(resumePoint -> assertThat(resumePoint.getResumeFromAndIncluding().longValue()).isEqualTo(1))
                         .describedAs("After resetting: Current resume point");
@@ -380,14 +380,14 @@ public class EventProcessorIT {
         // Check subscriptions catchup again
         Awaitility.waitAtMost(Duration.ofSeconds(3)).untilAsserted(() -> {
             var currentEventOrder = eventStoreSubscriptionManager.getCurrentEventOrder(subscriberId, TEST_ORDERS);
-            log.info("After resetting: Current event order: {}", currentEventOrder.get());
+            log.info("After resetting: Current event order: {}", currentEventOrder);
             assertThat(currentEventOrder)
                     .hasValueSatisfying(order ->
                                                 assertThat(order.longValue()).isEqualTo(11)
                                        )
                     .describedAs("After resetting: Current event order");
             var currentResumePoint = durableSubscriptionRepository.getResumePoint(subscriberId, TEST_ORDERS);
-            log.info("After resetting: Current resume point: {}", currentEventOrder.get());
+            log.info("After resetting: Current resume point: {}", currentResumePoint);
             assertThat(currentResumePoint)
                     .hasValueSatisfying(resumePoint -> assertThat(resumePoint.getResumeFromAndIncluding().longValue()).isEqualTo(11))
                     .describedAs("After resetting: Current resume point");
