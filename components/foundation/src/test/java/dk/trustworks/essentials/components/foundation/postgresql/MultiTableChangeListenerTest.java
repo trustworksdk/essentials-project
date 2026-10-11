@@ -20,6 +20,7 @@ import ch.qos.logback.classic.*;
 import ch.qos.logback.classic.spi.ILoggingEvent;
 import ch.qos.logback.core.read.ListAppender;
 import dk.trustworks.essentials.components.foundation.json.JSONSerializer;
+import dk.trustworks.essentials.components.foundation.lifecycle.ShutdownContext;
 import dk.trustworks.essentials.reactive.EventBus;
 import org.jdbi.v3.core.*;
 import org.junit.jupiter.api.Test;
@@ -179,6 +180,52 @@ class MultiTableChangeListenerTest {
             releaseFirstPublish.countDown();
             stopper.shutdownNow();
             listener.stop();
+        }
+    }
+
+    /**
+     * Review F-050: {@code stop()} used to wait for the connection lock while holding the listener's monitor. A
+     * {@code listenToNotificationsFor} holds that lock while it borrows a connection from the pool - up to the pool's
+     * connection timeout - so the stop, and with it every other {@code synchronized} section, the shutdown signal included,
+     * waited for the borrow. Now the stop waits for it outside the monitor, and still closes the connection the borrow
+     * produced, which belongs to the run it ended.
+     */
+    @Test
+    void a_stop_waiting_for_a_connection_borrow_does_not_hold_up_the_shutdown_signal() throws Exception {
+        var borrowStarted = new CountDownLatch(1);
+        var releaseBorrow = new CountDownLatch(1);
+        var openedHandles = new CopyOnWriteArrayList<Handle>();
+        var jdbi          = mock(Jdbi.class);
+        when(jdbi.open()).thenAnswer(invocation -> {
+            borrowStarted.countDown();
+            awaitIgnoringInterrupts(releaseBorrow);
+            var handle = listenHandleDelivering(new ConcurrentLinkedQueue<>());
+            openedHandles.add(handle);
+            return handle;
+        });
+        // Polls far apart, so the only borrow is the one listenToNotificationsFor makes
+        var listener = new MultiTableChangeListener<MultiTableChangeListenerIT.TestTableNotification>(jdbi, Duration.ofSeconds(30), mock(JSONSerializer.class), mock(EventBus.class), false);
+        listener.start();
+
+        var threads = Executors.newFixedThreadPool(2);
+        try {
+            var listening = threads.submit(() -> listener.listenToNotificationsFor("table1", MultiTableChangeListenerIT.Table1Notification.class));
+            assertThat(borrowStarted.await(5, TimeUnit.SECONDS)).as("listenToNotificationsFor is borrowing a connection").isTrue();
+            var stopping = threads.submit(listener::stop);
+            Awaitility.waitAtMost(Duration.ofSeconds(5)).until(() -> !listener.isStarted());
+
+            var signalling = CompletableFuture.runAsync(() -> listener.shutdownStarting(ShutdownContext.startingNow(Duration.ofSeconds(10))));
+            assertThatCode(() -> signalling.get(5, TimeUnit.SECONDS)).as("the shutdown signal is not held up behind the borrow").doesNotThrowAnyException();
+            assertThat(stopping.isDone()).as("stop() waits for the borrow").isFalse();
+
+            releaseBorrow.countDown();
+            listening.get(10, TimeUnit.SECONDS);
+            stopping.get(10, TimeUnit.SECONDS);
+            assertThat(openedHandles).hasSize(1);
+            verify(openedHandles.getFirst()).close();
+        } finally {
+            releaseBorrow.countDown();
+            threads.shutdownNow();
         }
     }
 

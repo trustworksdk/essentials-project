@@ -153,11 +153,13 @@ public final class MultiTableChangeListener<T extends TableChangeNotification> i
     private          ScheduledExecutorService executorService;
     private          ScheduledFuture<?>       pollTask;
     /**
-     * Bumped by every {@link #detachPolling()}, which holds both {@code this} and {@code connectionLock} to write it, so it
-     * can be read under either. Each poll task carries the value it was scheduled with: a poll of a stopped generation that
-     * is still in flight must not use - or, failing, close - the connection a later {@link #start()} opened
+     * Bumped by every {@link #detachPolling()}, under {@code this}; volatile, because the connection code reads it under
+     * {@code connectionLock} alone. Each poll task carries the value it was scheduled with, and each LISTEN connection the
+     * value it was opened in ({@link #handleGeneration}): a poll of a stopped generation that is still in flight must not
+     * use - or, failing, close - the connection a later {@link #start()} opened, and a stop closes only connections of the
+     * generations it ended
      */
-    private          long                     pollGeneration;
+    private volatile long                     pollGeneration;
     /**
      * Set once the application is shutting down: polling has been cancelled and {@code UNLISTEN} is skipped - see
      * {@link #shutdownStarting(ShutdownContext)}
@@ -165,13 +167,23 @@ public final class MultiTableChangeListener<T extends TableChangeNotification> i
     private volatile ShutdownContext          shutdown;
 
     // -- Connection state - guarded by connectionLock --------------------------------------------------------------------
-    private final Object  connectionLock = new Object();
-    private       Handle  handle;
-    private       long    lastLivenessCheckNanos;
-    private       boolean connectionLossReported;
-    private       boolean anyConnectionLossLogged;
-    private       long    lastConnectionLossLoggedNanos;
-    private       long    connectionLossesSinceLastReport;
+    private final Object       connectionLock   = new Object();
+    private       Handle       handle;
+    /**
+     * The {@link #pollGeneration} {@link #handle} was opened in. A handle of an older generation belongs to a stopped run:
+     * the {@link #stop()} that ended it closes it, and nothing of a later generation uses it
+     */
+    private       long         handleGeneration;
+    /**
+     * Connections of a stopped run that a later generation found still set and took out of {@link #handle} before the
+     * {@link #stop()} that ended the run got to them; that stop - or any later one - closes them
+     */
+    private final List<Handle> retiredHandles   = new ArrayList<>();
+    private       long         lastLivenessCheckNanos;
+    private       boolean      connectionLossReported;
+    private       boolean      anyConnectionLossLogged;
+    private       long         lastConnectionLossLoggedNanos;
+    private       long         connectionLossesSinceLastReport;
 
     /**
      * Create a {@link MultiTableChangeListener} that takes its LISTEN connection from {@code jdbi}, probes it every
@@ -337,12 +349,14 @@ public final class MultiTableChangeListener<T extends TableChangeNotification> i
             log.info("Setting up Table change LISTENER for '{}'", tableName);
             startPollingIfNotLifecycleManaged();
             synchronized (connectionLock) {
+                var generation = pollGeneration;
                 try {
-                    if (handle == null) {
+                    var connection = currentConnection(generation);
+                    if (connection == null) {
                         // A new connection LISTENs to every registered channel, this one included
-                        openConnectionIfNeeded();
+                        openConnectionIfNeeded(generation);
                     } else {
-                        handle.execute("LISTEN " + channel);
+                        connection.execute("LISTEN " + channel);
                     }
                 } catch (Throwable e) {
                     rethrowIfCriticalError(e);
@@ -440,7 +454,10 @@ public final class MultiTableChangeListener<T extends TableChangeNotification> i
 
     /**
      * Stops polling and closes the LISTEN connection. The registered tables are kept, so a later {@link #start()}
-     * LISTENs to them again.
+     * LISTENs to them again.<br>
+     * It waits for a {@link #listenToNotificationsFor(String, Class)} that is borrowing the connection from the pool, but
+     * not while holding the listener's monitor, so {@link #shutdownStarting(ShutdownContext)} and a racing
+     * {@link #start()} are not held up behind that wait.
      */
     @Override
     public void stop() {
@@ -451,8 +468,8 @@ public final class MultiTableChangeListener<T extends TableChangeNotification> i
             }
             started = false;
             // Detached under the same monitor that start() takes, so a start() racing this stop() cannot find the old
-            // pollTask still set, skip scheduling, and then have it cancelled - started but not polling - nor find the
-            // old connection still set, reuse it, and then have it closed
+            // pollTask still set, skip scheduling, and then have it cancelled - started but not polling. The connection
+            // is not touched here: the generation bumped here keeps a racing start() off the old one
             detached = detachPolling();
         }
         awaitPollThreadAndCloseConnection(detached);
@@ -511,7 +528,7 @@ public final class MultiTableChangeListener<T extends TableChangeNotification> i
         if (!listenForNotificationsRelatedToTables.isEmpty()) {
             synchronized (connectionLock) {
                 try {
-                    openConnectionIfNeeded();
+                    openConnectionIfNeeded(pollGeneration);
                 } catch (Throwable e) {
                     rethrowIfCriticalError(e);
                     connectionFailed("opening the LISTEN connection", e);
@@ -526,24 +543,30 @@ public final class MultiTableChangeListener<T extends TableChangeNotification> i
     }
 
     /**
-     * The poll executor and the LISTEN connection one {@link #stop()}/{@link #close()} took away from the listener, for
-     * {@link #awaitPollThreadAndCloseConnection(DetachedPolling)} to shut down outside the monitor
+     * What one {@link #stop()}/{@link #close()} took away from the listener under the monitor, for
+     * {@link #awaitPollThreadAndCloseConnection(DetachedPolling)} to shut down outside it
      *
-     * @param executor the poll executor, {@code null} if polling was never scheduled
-     * @param handle   the LISTEN connection, {@code null} if none was open
+     * @param executor   the poll executor, {@code null} if polling was never scheduled
+     * @param generation the {@link #pollGeneration} the stop started: every LISTEN connection opened in an older one
+     *                   belongs to the run it ended
      */
-    private record DetachedPolling(ScheduledExecutorService executor, Handle handle) {
+    private record DetachedPolling(ScheduledExecutorService executor, long generation) {
     }
 
     /**
-     * Caller holds {@code this}. Cancels the poll task and takes the executor and the LISTEN connection away from the
-     * listener, so a {@link #start()} that runs before {@link #awaitPollThreadAndCloseConnection(DetachedPolling)} has
-     * finished schedules its own poll task and opens its own connection, which this stop never touches.<br>
-     * The poll task is cancelled first, so a poll holding {@code connectionLock} is interrupted before this waits for the
-     * lock (its connection work is bounded by the network timeout and the liveness-probe timeout anyway). A poll that is
-     * past its connection work keeps running on the detached executor; it can no longer reach the detached connection,
-     * which is only ever read through {@link #handle} under {@code connectionLock}, and {@link #pollGeneration} keeps it
-     * off the connection of a later {@link #start()}.
+     * Caller holds {@code this} - and only the bookkeeping happens here: cancel the poll task, take the executor and bump
+     * {@link #pollGeneration}. The LISTEN connection is taken under {@code connectionLock} by
+     * {@link #awaitPollThreadAndCloseConnection(DetachedPolling)}, after the monitor is released: a
+     * {@link #listenToNotificationsFor(String, Class)} holds {@code connectionLock} while it borrows a connection from the
+     * pool, which can take as long as the pool's connection timeout, and waiting for that inside the monitor would block
+     * every other {@code synchronized} section of the listener - {@link #shutdownStarting(ShutdownContext)} included.<br>
+     * A {@link #start()} that runs before the stop has finished schedules its own poll task. The bumped generation keeps
+     * it off the old connection: it opens - and keeps - its own, and the stop closes only connections of the generations
+     * it ended.<br>
+     * The poll task is cancelled with an interrupt, so a poll holding {@code connectionLock} is interrupted before the stop
+     * waits for the lock (its connection work is bounded by the network timeout and the liveness-probe timeout anyway). A
+     * poll that is past its connection work keeps running on the detached executor; {@link #pollGeneration} keeps it off
+     * the connection of a later {@link #start()}.
      */
     private DetachedPolling detachPolling() {
         log.info("Stopping MultiTableChangeListener");
@@ -554,21 +577,21 @@ public final class MultiTableChangeListener<T extends TableChangeNotification> i
         }
         var executor = executorService;
         executorService = null;
-        Handle detachedHandle;
-        synchronized (connectionLock) {
-            pollGeneration++;
-            detachedHandle = handle;
-            handle = null;
-        }
-        return new DetachedPolling(executor, detachedHandle);
+        return new DetachedPolling(executor, ++pollGeneration);
     }
 
     /**
-     * Outside the monitor: waiting for the poll thread and closing the connection can block. It closes only the connection
-     * {@link #detachPolling()} took away, never the current one, so a {@link #start()} that runs meanwhile keeps the
-     * connection it opened and LISTENs on - the guarantee its Javadoc gives
+     * Outside the monitor: taking the connection, waiting for the poll thread and closing the connection can all block.
+     * It closes only connections opened before the stop's generation - never one a {@link #start()} that ran meanwhile
+     * opened, so that start keeps the connection it opened and LISTENs on, the guarantee its Javadoc gives
      */
     private void awaitPollThreadAndCloseConnection(DetachedPolling detached) {
+        List<Handle> detachedHandles;
+        synchronized (connectionLock) {
+            retireConnectionIfOlderThan(detached.generation());
+            detachedHandles = List.copyOf(retiredHandles);
+            retiredHandles.clear();
+        }
         var executor = detached.executor();
         if (executor != null) {
             executor.shutdownNow();
@@ -580,7 +603,7 @@ public final class MultiTableChangeListener<T extends TableChangeNotification> i
                 Thread.currentThread().interrupt();
             }
         }
-        closeConnection(detached.handle());
+        detachedHandles.forEach(this::closeConnection);
         log.info("Stopped MultiTableChangeListener");
     }
 
@@ -603,7 +626,7 @@ public final class MultiTableChangeListener<T extends TableChangeNotification> i
                 return;
             }
             try {
-                var connection = openConnectionIfNeeded();
+                var connection = openConnectionIfNeeded(generation);
                 if (connection == null) {
                     return;
                 }
@@ -722,12 +745,36 @@ public final class MultiTableChangeListener<T extends TableChangeNotification> i
     // -- The LISTEN connection - every method below but closeConnection(Handle) is called with connectionLock held -------
 
     /**
-     * @return the open LISTEN connection, opening it - and LISTENing to every registered channel on it - if there is none;
-     * {@code null} if polling is not active, because only the poll loop may own a connection
+     * @param generation the {@link #pollGeneration} the caller acts in, read before {@link #pollingActive}
+     * @return the LISTEN connection of {@code generation}, or {@code null} if there is none. A connection of an older
+     * generation belongs to a stopped run: it is moved to {@link #retiredHandles} for the stop that ended that run, never
+     * returned
      */
-    private Handle openConnectionIfNeeded() throws SQLException {
-        if (handle != null) {
-            return handle;
+    private Handle currentConnection(long generation) {
+        retireConnectionIfOlderThan(generation);
+        return handle;
+    }
+
+    /**
+     * Moves {@link #handle} to {@link #retiredHandles} if it was opened before {@code generation}
+     */
+    private void retireConnectionIfOlderThan(long generation) {
+        if (handle != null && handleGeneration < generation) {
+            retiredHandles.add(handle);
+            handle = null;
+        }
+    }
+
+    /**
+     * @param generation the {@link #pollGeneration} the caller acts in, read before {@link #pollingActive}; a connection
+     *                   this opens is stamped with it
+     * @return the open LISTEN connection of {@code generation}, opening it - and LISTENing to every registered channel on it
+     * - if there is none; {@code null} if polling is not active, because only the poll loop may own a connection
+     */
+    private Handle openConnectionIfNeeded(long generation) throws SQLException {
+        var current = currentConnection(generation);
+        if (current != null) {
+            return current;
         }
         if (!pollingActive) {
             return null;
@@ -749,6 +796,7 @@ public final class MultiTableChangeListener<T extends TableChangeNotification> i
             throw e;
         }
         handle = newHandle;
+        handleGeneration = generation;
         lastLivenessCheckNanos = System.nanoTime();
         if (connectionLossReported) {
             log.info("Re-established the LISTEN connection - listening to {} table(s) again: {}",
@@ -818,7 +866,7 @@ public final class MultiTableChangeListener<T extends TableChangeNotification> i
     }
 
     /**
-     * Normal close of a connection {@link #detachPolling()} took away: {@code UNLISTEN *} first, so a connection that goes
+     * Normal close of a connection a stop took away: {@code UNLISTEN *} first, so a connection that goes
      * back to a pool does not carry LISTENs - and a growing backlog of notifications - to its next borrower. Skipped when
      * shutting down: the database may be gone, and the pool is closed right after.<br>
      * Needs no {@code connectionLock}: once detached, nothing but this method references the connection.
