@@ -689,13 +689,15 @@ public abstract class AbstractEventProcessor implements Lifecycle {
      * Called when the processor starts: when the event store is no {@link AwaitedGapInspector},
      * {@link #awaitProcessed(AggregateType, GlobalEventOrder, Duration)} cannot ask it whether the subscriber still awaits an
      * event as a gap, so it says so - once per processor, and when the processor starts rather than once an
-     * {@code awaitProcessed} may already have returned early
+     * {@code awaitProcessed} may already have returned early. Worded conditionally, as it is logged whether or not the
+     * application ever calls {@code awaitProcessed}: one that does not can see from the line itself that it does not apply
      */
     final void warnOnceIfEventStoreIsNoAwaitedGapInspector() {
         if (!(eventStore instanceof AwaitedGapInspector) && warnedEventStoreIsNoAwaitedGapInspector.compareAndSet(false, true)) {
-            log.warn("[{}] awaitProcessed cannot tell whether an event the subscription moved past while it was uncommitted (a gap) is still to be handled: " +
-                             "the event store '{}' does not implement {}, so such an event can be reported as processed before the processor handled it. " +
-                             "An EventStore that decorates a PostgresqlEventStore or CdcEventStore should implement {} and forward to its delegate",
+            log.warn("[{}] If you call awaitProcessed on this processor, it can report an event as processed before the processor handled it: " +
+                             "the event store '{}' does not implement {}, so awaitProcessed cannot tell whether an event the subscription moved past " +
+                             "while it was uncommitted (a gap) is still to be handled. To fix it, have the EventStore that decorates the PostgresqlEventStore " +
+                             "or CdcEventStore implement {} and forward to its delegate. An application that never calls awaitProcessed can ignore this",
                      getProcessorName(), eventStore.getClass().getName(), AwaitedGapInspector.class.getSimpleName(), AwaitedGapInspector.class.getSimpleName());
         }
     }

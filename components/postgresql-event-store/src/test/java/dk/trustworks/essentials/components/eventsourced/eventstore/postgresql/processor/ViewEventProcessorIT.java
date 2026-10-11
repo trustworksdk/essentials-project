@@ -503,7 +503,8 @@ public class ViewEventProcessorIT {
     /**
      * ES-4 behind an application decorator that is no {@link AwaitedGapInspector}: the barrier cannot ask whether the
      * event is still awaited as a gap, so that check is off - it no longer reports the transient gap, only what it can see
-     * - and the processor WARNs about it exactly once, however often it is awaited. When it WARNs is not pinned
+     * - and the processor WARNs about it exactly once, however often it is awaited. That the WARN is logged at start is
+     * pinned by {@link #a_processor_behind_a_decorator_that_is_no_AwaitedGapInspector_WARNs_once_at_start_before_any_awaitProcessed()}
      */
     @Test
     @WithDecoratedEventStore(forwardsAwaitedGapInspector = false)
@@ -522,6 +523,20 @@ public class ViewEventProcessorIT {
         });
 
         assertThat(awaitedGapInspectorWarnings()).hasSize(1);
+    }
+
+    /**
+     * The WARN about an event store that is no {@link AwaitedGapInspector} comes when the processor starts - before an
+     * {@code awaitProcessed} could have returned early - and is worded so that an application that never calls
+     * {@code awaitProcessed} can see it does not apply
+     */
+    @Test
+    @WithDecoratedEventStore(forwardsAwaitedGapInspector = false)
+    public void a_processor_behind_a_decorator_that_is_no_AwaitedGapInspector_WARNs_once_at_start_before_any_awaitProcessed() {
+        // setup() has started the processor; nothing has called awaitProcessed
+        assertThat(awaitedGapInspectorWarnings()).singleElement()
+                                                 .satisfies(warning -> assertThat(warning.getFormattedMessage()).contains("If you call awaitProcessed on this processor")
+                                                                                                                .contains("ignore this"));
     }
 
     /**
