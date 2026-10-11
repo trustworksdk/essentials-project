@@ -37,6 +37,10 @@ import dk.trustworks.essentials.components.foundation.types.SubscriberId;
  * subscription found itself included - and by forwarding to the event store it decorates. <b>An event store that
  * decorates one of them must implement it too, and forward to its delegate</b> - the same as
  * {@link EventStore#forgetGapMiddlesAwaitedInMemory(SubscriberId, AggregateType)}.
+ * <p>
+ * A {@code CdcEventStore} over an event store that does not implement it gives a full answer only while CDC is active:
+ * while it is not, the delegate's polls serve the subscriptions, and the middles of wide gaps those polls await in memory
+ * only are known to the delegate alone. {@code CdcEventStore} logs a WARN about it when it is built.
  */
 public interface AwaitedGapInspector {
     /**

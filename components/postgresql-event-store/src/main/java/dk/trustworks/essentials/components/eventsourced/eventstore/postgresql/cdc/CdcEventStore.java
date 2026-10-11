@@ -169,6 +169,11 @@ public class CdcEventStore<CONFIG extends AggregateEventStreamConfiguration> imp
      * subscribe of the subscriber that starts before the old one's end has run cannot hide either tracker
      */
     private final ConcurrentMap<SubscriberAndAggregateType, Set<CdcDeliveryTracker>> runningDeliveryTrackers = new ConcurrentHashMap<>();
+    /**
+     * Whether the delegate is a {@link PostgresqlEventStore} with the very gap handler this event store has: then its
+     * {@link #isAwaitedAsGap} reads the subscriber's transient gaps already, and this one does not read them a second time
+     */
+    private final boolean                                                     delegateReadsTheSameTransientGaps;
 
     /**
      * Create a {@link CdcEventStoreBuilder} that names every argument and accepts both plain values and
@@ -264,6 +269,24 @@ public class CdcEventStore<CONFIG extends AggregateEventStreamConfiguration> imp
             backfillToLiveTransitionTimer = null;
         }
         validateDeprecatedLiveDrainStallThreshold(eventBusProperties);
+        this.delegateReadsTheSameTransientGaps = delegate instanceof PostgresqlEventStore<?> postgresqlEventStore &&
+                postgresqlEventStore.getEventStreamGapHandler() == eventStreamGapHandler;
+        warnIfDelegateIsNoAwaitedGapInspector(delegate);
+    }
+
+    /**
+     * While CDC is not active the delegate serves the subscriptions, and only the delegate knows about the middles of
+     * wide gaps its polls await in memory only: if it cannot be asked ({@link AwaitedGapInspector}), {@link #isAwaitedAsGap}
+     * cannot tell about those, so {@code awaitProcessed} can return early - logged once, when this event store is built,
+     * in the words of the processor's own start-time WARN
+     */
+    private static void warnIfDelegateIsNoAwaitedGapInspector(ConfigurableEventStore<?> delegate) {
+        if (!(delegate instanceof AwaitedGapInspector)) {
+            log.warn("awaitProcessed cannot tell whether an event a subscription moved past while it was uncommitted (a gap) is still to be handled while CDC is not active: " +
+                             "the event store '{}' that this CdcEventStore decorates does not implement {}, so such an event can be reported as processed before the processor handled it. " +
+                             "An EventStore that decorates a PostgresqlEventStore should implement {} and forward to its delegate",
+                     delegate.getClass().getName(), AwaitedGapInspector.class.getSimpleName(), AwaitedGapInspector.class.getSimpleName());
+        }
     }
 
     /**
@@ -1705,7 +1728,12 @@ public class CdcEventStore<CONFIG extends AggregateEventStreamConfiguration> imp
      * itself and awaits in memory only among them, or a fill from such a middle the subscriber is not done with
      * ({@link CdcDeliveryTracker#isAwaited}); when it is one of the subscriber's transient gaps recorded by this event
      * store's gap handler, the one its CDC subscriptions record gaps with; or when the delegate - which serves the
-     * subscription while CDC is not active - is an {@link AwaitedGapInspector} that awaits it.
+     * subscription while CDC is not active - is an {@link AwaitedGapInspector} that awaits it. A delegate that is no
+     * {@link AwaitedGapInspector} is reported with a WARN when this event store is built: then the middles of wide gaps
+     * its polls await in memory only go unanswered, so the answer is complete only while CDC is active.
+     * <p>
+     * The transient gaps are read once per call: when the delegate is a {@link PostgresqlEventStore} with this event
+     * store's own gap handler - as wired by default - its answer covers them, and this one does not read them too.
      * <p>
      * Asks a running subscription's tracker under the tracker's monitor, which its delivering threads take for every event
      * - briefly, and never the bus thread's.
@@ -1717,7 +1745,8 @@ public class CdcEventStore<CONFIG extends AggregateEventStreamConfiguration> imp
         requireNonNull(globalEventOrder, "No globalEventOrder provided");
         return gapMiddlesAwaitedAcrossSubscribes.isAwaited(subscriberId, aggregateType, globalEventOrder.longValue()) ||
                 isAwaitedByARunningSubscription(subscriberId, aggregateType, globalEventOrder.longValue()) ||
-                (recordsGaps() && eventStreamGapHandler.gapHandlerFor(subscriberId).getTransientGapsFor(aggregateType).contains(globalEventOrder)) ||
+                (recordsGaps() && !delegateReadsTheSameTransientGaps &&
+                        eventStreamGapHandler.gapHandlerFor(subscriberId).getTransientGapsFor(aggregateType).contains(globalEventOrder)) ||
                 (eventStore instanceof AwaitedGapInspector delegate && delegate.isAwaitedAsGap(subscriberId, aggregateType, globalEventOrder));
     }
 

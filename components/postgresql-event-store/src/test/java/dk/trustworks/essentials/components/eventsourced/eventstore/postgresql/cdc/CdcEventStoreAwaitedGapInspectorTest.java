@@ -16,6 +16,9 @@
 
 package dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.cdc;
 
+import ch.qos.logback.classic.Level;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.read.ListAppender;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.gap.*;
@@ -25,6 +28,7 @@ import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.ty
 import dk.trustworks.essentials.components.foundation.types.SubscriberId;
 import dk.trustworks.essentials.types.LongRange;
 import org.junit.jupiter.api.Test;
+import org.slf4j.LoggerFactory;
 
 import java.time.Duration;
 import java.util.List;
@@ -113,6 +117,131 @@ class CdcEventStoreAwaitedGapInspectorTest {
         cdcEventStore.deliveryTrackerEnded(SUBSCRIBER, ORDERS, tracker);
         assertThat(cdcEventStore.isAwaitedAsGap(SUBSCRIBER, ORDERS, GlobalEventOrder.of(inTheMiddle + 1))).isFalse();
         assertThat(cdcEventStore.runningDeliveryTrackerCount()).isZero();
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void does_not_read_the_transient_gaps_a_second_time_when_the_delegate_reads_them_with_the_same_gap_handler() {
+        PostgresqlEventStore<SeparateTablePerAggregateEventStreamConfiguration> delegate = mock(PostgresqlEventStore.class);
+        var gapHandler = transientGaps(GlobalEventOrder.of(3));
+        doReturn(gapHandler).when(delegate).getEventStreamGapHandler();
+        when(delegate.isAwaitedAsGap(SUBSCRIBER, ORDERS, GlobalEventOrder.of(3))).thenReturn(true);
+        var cdcEventStore = cdcEventStore(delegate, gapHandler);
+
+        assertThat(cdcEventStore.isAwaitedAsGap(SUBSCRIBER, ORDERS, GlobalEventOrder.of(3))).isTrue();
+        assertThat(cdcEventStore.isAwaitedAsGap(SUBSCRIBER, ORDERS, GlobalEventOrder.of(4))).isFalse();
+        verify(gapHandler, never()).gapHandlerFor(any());
+        verify(delegate).isAwaitedAsGap(SUBSCRIBER, ORDERS, GlobalEventOrder.of(4));
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void reads_the_transient_gaps_of_its_own_gap_handler_when_the_delegate_has_another_one() {
+        PostgresqlEventStore<SeparateTablePerAggregateEventStreamConfiguration> delegate = mock(PostgresqlEventStore.class);
+        doReturn(transientGaps()).when(delegate).getEventStreamGapHandler();
+        var gapHandler    = transientGaps(GlobalEventOrder.of(3));
+        var cdcEventStore = cdcEventStore(delegate, gapHandler);
+
+        assertThat(cdcEventStore.isAwaitedAsGap(SUBSCRIBER, ORDERS, GlobalEventOrder.of(3))).isTrue();
+        assertThat(cdcEventStore.isAwaitedAsGap(SUBSCRIBER, ORDERS, GlobalEventOrder.of(4))).isFalse();
+        verify(gapHandler, times(2)).gapHandlerFor(SUBSCRIBER);
+    }
+
+    @Test
+    void warns_once_when_built_over_an_event_store_that_is_no_awaited_gap_inspector() {
+        var warnings = new ListAppender<ILoggingEvent>();
+        var logger   = (ch.qos.logback.classic.Logger) LoggerFactory.getLogger(CdcEventStore.class);
+        warnings.start();
+        logger.addAppender(warnings);
+        try {
+            ConfigurableEventStore<SeparateTablePerAggregateEventStreamConfiguration> noInspector = mock(ConfigurableEventStore.class);
+            var cdcEventStore = cdcEventStore(noInspector, transientGaps());
+            cdcEventStore.isAwaitedAsGap(SUBSCRIBER, ORDERS, GlobalEventOrder.of(3));
+            cdcEventStore.isAwaitedAsGap(SUBSCRIBER, ORDERS, GlobalEventOrder.of(4));
+            assertThat(awaitedGapInspectorWarnings(warnings)).hasSize(1);
+            assertThat(awaitedGapInspectorWarnings(warnings).getFirst().getFormattedMessage()).contains(noInspector.getClass().getName());
+
+            ConfigurableEventStore<SeparateTablePerAggregateEventStreamConfiguration> inspector = mock(ConfigurableEventStore.class, withSettings().extraInterfaces(AwaitedGapInspector.class));
+            cdcEventStore(inspector, transientGaps());
+            assertThat(awaitedGapInspectorWarnings(warnings)).as("no WARN for a delegate that can be asked").hasSize(1);
+        } finally {
+            logger.detachAppender(warnings);
+        }
+    }
+
+    @Test
+    void keeps_asking_the_running_tracker_of_a_subscriber_while_another_of_its_trackers_ends() {
+        ConfigurableEventStore<SeparateTablePerAggregateEventStreamConfiguration> delegate = mock(ConfigurableEventStore.class, withSettings().extraInterfaces(AwaitedGapInspector.class));
+        var cdcEventStore = cdcEventStore(delegate, transientGaps());
+        // Two subscribes of the subscriber - a new one started before the old one's end has run - each awaiting the
+        // middle of a different wide gap in memory only
+        var first  = trackerAwaitingTheMiddleOfAWideGapAbove(0);
+        var second = trackerAwaitingTheMiddleOfAWideGapAbove(first.aboveTheGap());
+        cdcEventStore.deliveryTrackerRunning(SUBSCRIBER, ORDERS, first.tracker());
+        cdcEventStore.deliveryTrackerRunning(SUBSCRIBER, ORDERS, second.tracker());
+
+        assertThat(cdcEventStore.isAwaitedAsGap(SUBSCRIBER, ORDERS, GlobalEventOrder.of(first.inTheMiddle()))).isTrue();
+        assertThat(cdcEventStore.isAwaitedAsGap(SUBSCRIBER, ORDERS, GlobalEventOrder.of(second.inTheMiddle()))).isTrue();
+        assertThat(cdcEventStore.runningDeliveryTrackerCount()).as("one subscriber and aggregate type").isEqualTo(1);
+
+        cdcEventStore.deliveryTrackerEnded(SUBSCRIBER, ORDERS, first.tracker());
+        assertThat(cdcEventStore.isAwaitedAsGap(SUBSCRIBER, ORDERS, GlobalEventOrder.of(second.inTheMiddle()))).as("the second tracker still runs").isTrue();
+        assertThat(cdcEventStore.isAwaitedAsGap(SUBSCRIBER, ORDERS, GlobalEventOrder.of(first.inTheMiddle()))).as("the first tracker ended").isFalse();
+        assertThat(cdcEventStore.runningDeliveryTrackerCount()).isEqualTo(1);
+
+        cdcEventStore.deliveryTrackerEnded(SUBSCRIBER, ORDERS, second.tracker());
+        assertThat(cdcEventStore.isAwaitedAsGap(SUBSCRIBER, ORDERS, GlobalEventOrder.of(second.inTheMiddle()))).isFalse();
+        assertThat(cdcEventStore.runningDeliveryTrackerCount()).isZero();
+    }
+
+    @Test
+    void a_middle_the_running_tracker_awaits_stays_awaited_while_its_subscription_ends_and_hands_it_over() {
+        ConfigurableEventStore<SeparateTablePerAggregateEventStreamConfiguration> delegate = mock(ConfigurableEventStore.class, withSettings().extraInterfaces(AwaitedGapInspector.class));
+        var cdcEventStore = cdcEventStore(delegate, transientGaps());
+        var middles       = cdcEventStore.gapMiddlesAwaitedAcrossSubscribes();
+        var wideGap       = trackerAwaitingTheMiddleOfAWideGapAbove(0);
+        var tracker       = wideGap.tracker();
+        tracker.seedEarlierMiddles(middles.subscribe(SUBSCRIBER, ORDERS, 1, Duration.ofMinutes(2)));
+        cdcEventStore.deliveryTrackerRunning(SUBSCRIBER, ORDERS, tracker);
+        var inTheMiddle = GlobalEventOrder.of(wideGap.inTheMiddle());
+        assertThat(cdcEventStore.isAwaitedAsGap(SUBSCRIBER, ORDERS, inTheMiddle)).as("awaited by the running tracker").isTrue();
+
+        // The steps of DeliveryGate.subscriptionEnded, in its order: hand the middle over, then stop asking the tracker
+        tracker.handOverMiddlesAwaitedInMemoryOnly();
+        assertThat(cdcEventStore.isAwaitedAsGap(SUBSCRIBER, ORDERS, inTheMiddle)).as("handed over, the tracker still running").isTrue();
+        middles.subscribeEnded(tracker.earlierMiddles());
+        assertThat(cdcEventStore.isAwaitedAsGap(SUBSCRIBER, ORDERS, inTheMiddle)).as("the subscribe ended, the tracker still running").isTrue();
+        cdcEventStore.deliveryTrackerEnded(SUBSCRIBER, ORDERS, tracker);
+        assertThat(cdcEventStore.runningDeliveryTrackerCount()).isZero();
+        assertThat(cdcEventStore.isAwaitedAsGap(SUBSCRIBER, ORDERS, inTheMiddle)).as("kept for the next subscription").isTrue();
+
+        // The next subscription starts at the resume point, above the gap, and takes the middle over
+        var next = middles.subscribe(SUBSCRIBER, ORDERS, wideGap.aboveTheGap() + 1, Duration.ofMinutes(2));
+        assertThat(cdcEventStore.isAwaitedAsGap(SUBSCRIBER, ORDERS, inTheMiddle)).as("taken over by the next subscription").isTrue();
+        middles.subscribeEnded(next);
+    }
+
+    /**
+     * A tracker that delivered the order right above {@code delivered}, then one so far above it that the gap between is
+     * wider than twice {@code MAX_AWAITED_ORDERS_PER_GAP_END}: its middle is awaited in memory only, by the tracker
+     */
+    private static WideGap trackerAwaitingTheMiddleOfAWideGapAbove(long delivered) {
+        var  tracker     = CdcDeliveryTracker.startingAfter("inspector-test", delivered);
+        long belowTheGap = delivered + 1;
+        tracker.markDelivered(belowTheGap);
+        long aboveTheGap = belowTheGap + 1 + 2L * MAX_AWAITED_ORDERS_PER_GAP_END + 100;
+        tracker.markDelivered(aboveTheGap);
+        return new WideGap(tracker, belowTheGap + 1 + MAX_AWAITED_ORDERS_PER_GAP_END + 50, aboveTheGap);
+    }
+
+    private record WideGap(CdcDeliveryTracker tracker, long inTheMiddle, long aboveTheGap) {
+    }
+
+    private static List<ILoggingEvent> awaitedGapInspectorWarnings(ListAppender<ILoggingEvent> appender) {
+        return appender.list.stream()
+                            .filter(event -> event.getLevel() == Level.WARN)
+                            .filter(event -> event.getFormattedMessage().contains(AwaitedGapInspector.class.getSimpleName()))
+                            .toList();
     }
 
     private static PersistedEvent eventWithGlobalOrder(long globalOrder) {
