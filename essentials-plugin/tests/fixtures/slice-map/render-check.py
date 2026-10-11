@@ -51,7 +51,8 @@ what it saw into the DOM for the dump. Each page is loaded several times, each w
                   focus, card, search text, theme
     stale focus   `#focus=<an id the map lacks>`: the "Not in this map" toast, not a failure
     diff issues   `#lens=diff&diff.list=1` on a page with new issues: the summary's count is the list's, and
-                  a per-slice id folded into a context issue (`members`) is named by its slice
+                  a per-slice id folded into a context issue (`members`) reads as its slice and the
+                  per-slice wording (`memberText`)
 
 plus the unrendered-template trap for `atlas.html`. Pan, zoom, levels of detail and hover stay by eye.
 
@@ -771,9 +772,14 @@ def check_atlas_page(ap: AtlasPage, data, ids):
                     row = next((li for li in rows if any(n.tag == "span" and (n.all_text() + " ").startswith(fid + " ")
                                                          for n in li.children)), None)
                     label = next((n.all_text() for n in row.children if n.tag == "button"), "") if row else ""
-                    rep.check(row is not None and label.startswith(sid + " ") and ctx_issue["text"] not in label,
-                              f"diff issues: folded {fid!r} reads {label!r} — expected its slice and per-slice "
-                              f"wording, not the context issue's text")
+                    if ctx_issue.get("memberText"):
+                        want = f"{sid} {ctx_issue['memberText']}"
+                        rep.check(row is not None and label == want,
+                                  f"diff issues: folded {fid!r} reads {label!r} — expected {want!r}")
+                    else:  # a map written before the fold recorded memberText
+                        rep.check(row is not None and label.startswith(sid + " ") and ctx_issue["text"] not in label,
+                                  f"diff issues: folded {fid!r} reads {label!r} — expected its slice and per-slice "
+                                  f"wording, not the context issue's text")
 
     # A stale id is a toast, never a failure.
     root, _ = ap.load("stale focus", "focus=" + STALE_ID)

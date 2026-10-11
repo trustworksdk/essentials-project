@@ -133,14 +133,16 @@ Four new WARN log lines. Nothing else changes, but each points at a setup that d
   Essentials `UnitOfWork` and no Spring transaction logs a WARN with its stack trace, once per call site. A call site
   is the first three stack frames outside Essentials, the JDK, Reactor, Kotlin and Spring, so two callers that both
   go through your own wrapper (a messaging gateway around `Outbox.sendMessage`, say) are two call sites, and the WARN
-  names all three frames. Up to 32 call sites are logged per `DurableQueues` instance; the 32nd is followed by one
-  line saying further ones are not, and from then on the check no longer looks at the stack. Keying on the call site
+  names all three frames. The budget is counted per innermost application frame, not per call site: up to 32 such
+  frames are logged per `DurableQueues` instance, each with up to 4 of its callers, so one wrapper reached from many
+  callers cannot use the budget up and hide every other call site. The 32nd frame is followed by one line saying
+  further ones are not, and from then on the check no longer looks at the stack. Keying on the call site
   means a deliberate standalone enqueue (`sendAndDontWait` from a controller, say) cannot use up the only WARN and
   hide an `Outbox.sendMessage` elsewhere. Each call site that enqueues while the application is starting is also listed in
   the startup report. The enqueue commits on its own, so a later rollback of your business change does not undo it. This
   covers `Outbox.sendMessage` and `DurableLocalCommandBus.sendAndDontWait` called outside a transaction. To make it
   fail instead, set `essentials.durable-queues.require-active-unit-of-work-for-enqueue=true` (§2).
-  (RN-2, `3c783626`, `8d349587`)
+  (RN-2, `3c783626`, `8d349587`, `fb8559c9`)
 - **A shard-owned queue built without a UnitOfWork factory.** Building `ShardOwnedDurableQueues` without
   `setUnitOfWorkFactory(...)` logs a WARN that every enqueue commits on its own. The 0.61 release will refuse to
   build it. The starters always set one. (N-15, `4248f0b3`)
@@ -316,7 +318,10 @@ after the chain. What changes for you:
   delivery tracker knows about. **An `EventStore` of yours that decorates one of them must implement
   `AwaitedGapInspector` and forward it to its delegate**, like `forgetGapMiddlesAwaitedInMemory`. Otherwise the check
   is off, the processor logs one WARN when it starts, and an event that committed after a later one can be reported
-  processed before its gap fill was handled. (ES-4, `944633a4`, `6ff9ca9e`)
+  processed before its gap fill was handled. The WARN begins "If you call awaitProcessed on this processor" - an
+  application that never calls `awaitProcessed` can ignore it. A `CdcEventStore` built over a store that does not
+  implement `AwaitedGapInspector` logs the same kind of WARN once: it then gives a complete answer only while CDC is
+  active. (ES-4, `944633a4`, `6ff9ca9e`, `9fb0ea51`, `13c13051`, `4fa85508`, `948d5852`)
 - **`AppendedEvents.recordDuring(() -> commandBus.send(cmd))`** (`eventsourced-aggregates`) returns what `send`
   returned plus the `PersistedEvent`s an `EventStreamDeciderCommandHandlerAdapter` appended, so a caller has an
   order to wait for. Same thread only (`send`, not `sendAsync`). (ES-4, `944633a4`)
@@ -376,7 +381,7 @@ The plugin's features are in [§4](#4-the-essentials-claude-code-plugin).
 | Command bus | A `sendAndDontWait` handler that wrote in its UnitOfWork and then threw had those writes committed whenever the `SendAndDontWaitErrorHandler` did not rethrow: the default on a plain `LocalCommandBus` (`FallbackSendAndDontWaitErrorHandler`), or a custom handler on `DurableLocalCommandBus`. The writes are now rolled back before the error handler runs; see [§1.1.12](#1112-a-failed-sendanddontwait-handlers-writes-roll-back-the-error-handler-runs-afterwards) | `f722edb8` |
 | `ViewEventProcessor` | When the fenced lock was released while the lock-acquired callback was still starting up (for example, the lock manager stopping at that moment), the release callback threw a `NullPointerException`. It never cancelled the exclusive durable-queue consumer or stopped the subscriptions created right after, so a processor that had lost its lock kept consuming. The two callbacks are now mutually exclusive, a release always cancels the consumer and stops the subscriptions that exist, and an acquire that fails part-way stops the subscriptions it created. Present since 0.60.0 | `72abb871` |
 | `MultiTableChangeListener` | A `start()` that ran while `stop()` was tearing down could leave the listener reporting `isStarted()` as `true` with nothing polling, until the next `stop()`/`start()`: `stop()` cleared its started flag before cancelling the poll task, so the racing `start()` found the old task, skipped scheduling, and the task was then cancelled. The teardown of the poll task now happens under the same lock as the flag | `1bfbe58d` |
-| `MultiTableChangeListener` | A `start()` that ran while `stop()` or `close()` was finishing could lose its LISTEN connection to that stop: the stop closed whichever connection was current once it had waited for the poll thread, so the restarted listener kept the old connection and saw it closed, and notifications sent before the next poll reopened it were lost. `start()` promises every registered table is LISTENed to when it returns. A stop now takes the connection away together with the poll task and closes only that one; a racing `start()` opens and keeps its own, and a poll still in flight from the stopped run no longer touches it | review F-034 |
+| `MultiTableChangeListener` | A `start()` that ran while `stop()` or `close()` was finishing could lose its LISTEN connection to that stop: the stop closed whichever connection was current once it had waited for the poll thread, so the restarted listener kept the old connection and saw it closed, and notifications sent before the next poll reopened it were lost. `start()` promises every registered table is LISTENed to when it returns. A stop now takes the connection away together with the poll task and closes only that one; a racing `start()` opens and keeps its own, and a poll still in flight from the stopped run no longer touches it. The stop waits for that connection without holding the listener's lock, so a `listenToNotificationsFor` still borrowing a pooled connection no longer blocks the listener's other operations, the shutdown signal included | `520facbc`, `c0c60b97` |
 | Command bus | Two `EventStreamDeciderAndAggregateTypeConfigurator`s sharing a `CommandBus` and configured on different threads could corrupt the list behind the duplicate-command-type WARN, or throw `ConcurrentModificationException` from it: one appended to it without holding the lock the other iterated it under. Both now hold it | `a20947b2` |
 | Scheduler | A job registered with `DefaultEssentialsScheduler` while the scheduler was acquiring its fenced lock could be silently dropped: it stayed in the job list but was never scheduled until the lock was next re-acquired. This typically hit a `@TTLJob` whose `PostgresqlTTLManager` started at the same moment, so its TTL delete never ran. Registration now waits for the lock callback to finish and always sees the lock state it leaves | `35fafdaa` |
 

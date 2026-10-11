@@ -282,9 +282,10 @@ public class CdcEventStore<CONFIG extends AggregateEventStreamConfiguration> imp
      */
     private static void warnIfDelegateIsNoAwaitedGapInspector(ConfigurableEventStore<?> delegate) {
         if (!(delegate instanceof AwaitedGapInspector)) {
-            log.warn("awaitProcessed cannot tell whether an event a subscription moved past while it was uncommitted (a gap) is still to be handled while CDC is not active: " +
-                             "the event store '{}' that this CdcEventStore decorates does not implement {}, so such an event can be reported as processed before the processor handled it. " +
-                             "An EventStore that decorates a PostgresqlEventStore should implement {} and forward to its delegate",
+            log.warn("If you call awaitProcessed on a processor over this CdcEventStore, it can report an event as processed before the processor handled it while CDC is not active: " +
+                             "the event store '{}' that this CdcEventStore decorates does not implement {}, so awaitProcessed cannot tell whether an event a subscription moved past " +
+                             "while it was uncommitted (a gap) is still to be handled. To fix it, have the EventStore that decorates the PostgresqlEventStore implement {} " +
+                             "and forward to its delegate. An application that never calls awaitProcessed can ignore this",
                      delegate.getClass().getName(), AwaitedGapInspector.class.getSimpleName(), AwaitedGapInspector.class.getSimpleName());
         }
     }

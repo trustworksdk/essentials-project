@@ -101,8 +101,9 @@
    ],
    "new": [
     "flow-undeclared:orders.cancel_order",
-    "scenario-test-missing:shipping.ship_order:scenario:ships a paid order",
-    "map-parse-error:orders.refund"
+    "map-parse-error:orders.refund",
+    "scenario-none:billing.charge_on_order_placed",
+    "scenario-test-missing:shipping.ship_order:scenario:ships a paid order"
    ]
   },
   "messages": {
@@ -120,6 +121,34 @@
     "shipping.notify_carrier"
    ],
    "changed": [
+    {
+     "fields": [
+      {
+       "added": [],
+       "field": "scenarios",
+       "from": 1,
+       "removed": [
+        "charges a placed order"
+       ],
+       "to": 0
+      }
+     ],
+     "id": "billing.charge_on_order_placed"
+    },
+    {
+     "fields": [
+      {
+       "added": [
+        "returns"
+       ],
+       "field": "flow",
+       "from": "checkout",
+       "removed": [],
+       "to": "checkout, returns"
+      }
+     ],
+     "id": "orders.order_list"
+    },
     {
      "fields": [
       {
@@ -144,20 +173,6 @@
       }
      ],
      "id": "orders.place_order"
-    },
-    {
-     "fields": [
-      {
-       "added": [
-        "returns"
-       ],
-       "field": "flow",
-       "from": "checkout",
-       "removed": [],
-       "to": "checkout, returns"
-      }
-     ],
-     "id": "orders.order_list"
     }
    ],
    "removed": [
@@ -398,20 +413,15 @@
   },
   {
    "code": "flow-undeclared",
-   "id": "flow-undeclared:orders",
+   "id": "flow-undeclared:orders.cancel_order",
    "level": "info",
-   "memberText": "declares no `flow:` — grouped into a process by cause and effect; /essentials:slice-enrich drafts its journey",
-   "members": [
-    "orders.cancel_order",
-    "orders.refund"
-   ],
    "source": "atlas",
    "target": {
-    "id": "orders",
-    "kind": "context",
+    "id": "orders.cancel_order",
+    "kind": "slice",
     "part": null
    },
-   "text": "2 of 5 slices in orders declare no flow"
+   "text": "declares no `flow:` — grouped into a process by cause and effect; /essentials:slice-enrich drafts its journey"
   },
   {
    "code": "flow-undeclared",
@@ -441,13 +451,19 @@
    "code": "scenario-none",
    "id": "scenario-none:billing",
    "level": "info",
+   "memberText": "declares no scenarios — its board shows invariants and test kinds instead; /essentials:slice-enrich drafts them from its tests",
+   "members": [
+    "billing.charge_customer",
+    "billing.charge_on_order_placed",
+    "billing.invoice_list"
+   ],
    "source": "atlas",
    "target": {
     "id": "billing",
     "kind": "context",
     "part": null
    },
-   "text": "2 of 3 slices in billing declare no scenarios"
+   "text": "3 of 3 slices in `billing` declare no scenarios — their boards show invariants and test kinds instead; /essentials:slice-enrich drafts scenarios from their tests"
   },
   {
    "code": "scenario-none",
@@ -459,7 +475,7 @@
     "kind": "slice",
     "part": null
    },
-   "text": "slice declares no scenarios"
+   "text": "declares no scenarios — its board shows invariants and test kinds instead; /essentials:slice-enrich drafts them from its tests"
   },
   {
    "code": "scenario-unknown-field",
@@ -1128,14 +1144,6 @@
      "w": 208,
      "x": 1298,
      "y": 412
-    },
-    {
-     "h": 120,
-     "segment": "checkout@billing",
-     "slice": "billing.charge_on_order_placed",
-     "w": 208,
-     "x": 130,
-     "y": 498
     },
     {
      "h": 64,
@@ -2772,40 +2780,7 @@
    "projections": [],
    "publishes": [],
    "reads": [],
-   "scenarios": [
-    {
-     "given": [],
-     "name": "charges a placed order",
-     "note": null,
-     "test": "ChargeOnOrderPlacedTest#chargesPlacedOrder",
-     "testResolved": {
-      "line": 18,
-      "path": "backend/src/test/java/com/example/shop/billing/charge_on_order_placed/ChargeOnOrderPlacedTest.java",
-      "status": "found"
-     },
-     "then": {
-      "kind": "steps",
-      "steps": [
-       {
-        "name": "ChargeCustomer",
-        "type": "command",
-        "with": {
-         "amount": 42.5,
-         "orderId": "o-1"
-        }
-       }
-      ]
-     },
-     "when": {
-      "name": "OrderPlaced",
-      "type": "event",
-      "with": {
-       "orderId": "o-1",
-       "total": 42.5
-      }
-     }
-    }
-   ],
+   "scenarios": [],
    "serves": [],
    "status": "live",
    "summary": "Charge the customer when an order is placed",
