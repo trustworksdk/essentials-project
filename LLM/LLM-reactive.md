@@ -201,6 +201,11 @@ public interface CommandBus {
     boolean hasCommandHandler(CommandHandler handler);
     CommandHandler findCommandHandlerCapableOfHandling(Object command);
 
+    // Handler inspection - for infrastructure (diagnostics, startup checks), not routing. Since 0.60.1, default methods
+    default List<CommandHandler> getCommandHandlers();                                  // Snapshot, registration order; default List.of()
+    default List<CommandHandler> findCommandHandlersCapableOfHandling(Class<?> commandType); // No throw, no cache
+    default Map<Class<?>, List<CommandHandler>> findCommandTypesHandledByMoreThanOneCommandHandler(CommandHandler handler);
+
     // Command sending
     <R, C> R send(C command);                            // Sync, blocks until complete
     <R, C> Mono<R> sendAsync(C command);                 // Async with reactor.core.publisher.Mono<result>
@@ -208,6 +213,23 @@ public interface CommandBus {
     <C> void sendAndDontWait(C command, Duration delay); // Delayed fire-and-forget (java.time.Duration)
 }
 ```
+
+**Handler inspection (since 0.60.1):** `getCommandHandlers()` lists the registered handlers. Its `default` returns an
+empty list for a third-party `CommandBus` that does not track them - read that as "unknown", not "none".
+`AbstractCommandBus` (`LocalCommandBus`, `DurableLocalCommandBus`) returns them all. A `CommandHandler` can declare its
+command types through `default Set<Class<?>> handledCommandTypes()` (empty by default; used only for diagnostics, never
+routing). `AnnotatedCommandHandler` returns its `@CmdHandler`/`@Handler` parameter types, and
+`EventStreamDeciderCommandHandlerAdapter` its deciders' `COMMAND` type arguments.
+`findCommandTypesHandledByMoreThanOneCommandHandler(handler)` checks those declared types: which of them `handler` and
+another registered handler can both `canHandle`. An overlap on a type nobody declares is not found.
+
+**Duplicate handlers WARN at registration (since 0.60.1):** when `addCommandHandler` makes a command type handled by more
+than one handler, `AbstractCommandBus` logs a WARN naming the type and handlers. Every send of that type fails with
+`MultipleCommandHandlersFoundException`. The registration still succeeds, because an overlap that is never sent keeps
+working. If the check itself fails, that is logged at ERROR and never fails the registration.
+
+**Thread safety:** `addCommandHandler`/`removeCommandHandler` are safe from any number of threads, also while commands are
+being sent. A command type resolved during a registration is never cached past it.
 
 ### LocalCommandBus Implementation
 
@@ -326,12 +348,14 @@ in the cause chain (see [LLM-foundation.md § MessageDeliveryErrorHandler](./LLM
 public interface CommandHandler {
     boolean canHandle(Class<?> commandType);
     Object handle(Object command);
+    default Set<Class<?>> handledCommandTypes();  // Diagnostics only (duplicate-handler WARN); default empty. Since 0.60.1
 }
 
 // Annotation-based (multiple commands)
 public abstract class AnnotatedCommandHandler implements CommandHandler {
     boolean canHandle(Class<?> commandType);  // Checks @Handler/@CmdHandler methods
     Object handle(Object command);            // Dispatches to matching method
+    Set<Class<?>> handledCommandTypes();      // The @Handler/@CmdHandler parameter types
 }
 ```
 

@@ -36,7 +36,7 @@ import static org.mockito.Mockito.mock;
 /**
  * CB-4: a command a sealed command type permits, but that no {@link EventStreamDecider} handles, used to surface only at
  * its first send, as a {@link NoCommandHandlerFoundException}. The configurator now walks the permitted subclasses at
- * construction and warns.
+ * construction and warns - counting every command handler the {@link CommandBus} lists, not only the deciders.
  */
 class SealedCommandTypeCoverageTest {
     private ConfigurableEventStore<?>             eventStore;
@@ -108,6 +108,16 @@ class SealedCommandTypeCoverageTest {
     }
 
     @Test
+    void a_permitted_command_an_annotated_command_handler_on_the_command_bus_handles_is_not_warned_about() {
+        commandBus.addCommandHandler(new CancelShipmentCommandHandler());
+
+        new EventStreamDeciderAndAggregateTypeConfigurator(eventStore, commandBus, List.of(shipmentConfiguration),
+                                                           List.of(new CreateShipmentDecider(), new DispatchShipmentDecider()));
+
+        assertThat(warnings()).isEmpty();
+    }
+
+    @Test
     void a_decider_declared_on_the_sealed_command_type_that_handles_only_some_of_its_commands_is_warned_about() {
         new EventStreamDeciderAndAggregateTypeConfigurator(eventStore, commandBus, List.of(shipmentConfiguration),
                                                            List.of(new CreateAndDispatchShipmentDecider()));
@@ -173,6 +183,12 @@ class SealedCommandTypeCoverageTest {
         @Override
         public boolean canHandle(Class<?> command) {
             return CancelShipment.class.isAssignableFrom(command);
+        }
+    }
+
+    public static class CancelShipmentCommandHandler extends AnnotatedCommandHandler {
+        @CmdHandler
+        void handle(CancelShipment command) {
         }
     }
 

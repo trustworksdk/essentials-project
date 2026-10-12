@@ -16,6 +16,8 @@
 
 package dk.trustworks.essentials.reactive.command;
 
+import java.util.Set;
+
 /**
  * Common interface for all Command message handlers<br>
  * A command handler can choose support to 1 or more command types
@@ -39,4 +41,24 @@ public interface CommandHandler {
      * @return the result of handling the command (if any)
      */
     Object handle(Object command);
+
+    /**
+     * The command types this {@link CommandHandler} declares that it handles - optional, and used for diagnostics only:
+     * when a {@link CommandHandler} is added, the {@link CommandBus} checks these types (and those of the other
+     * registered {@link CommandHandler}s) for a command type that more than one {@link CommandHandler}
+     * {@link #canHandle(Class) can handle}, which would make every send of it fail with a
+     * {@link MultipleCommandHandlersFoundException} (see {@link CommandBus#findCommandTypesHandledByMoreThanOneCommandHandler(CommandHandler)}).
+     * <p>
+     * Routing never uses this method - {@link #canHandle(Class)} alone decides which {@link CommandHandler} handles a
+     * command. A declared type this handler cannot handle is ignored.
+     * <p>
+     * The default returns an empty set: the {@link CommandHandler} declares nothing, and is then only checked against
+     * the types the other {@link CommandHandler}s declare. {@link AnnotatedCommandHandler} returns the parameter types
+     * of its {@link CmdHandler}/{@link dk.trustworks.essentials.reactive.Handler} annotated methods.
+     *
+     * @return the command types this {@link CommandHandler} handles, as far as it can tell - never null
+     */
+    default Set<Class<?>> handledCommandTypes() {
+        return Set.of();
+    }
 }

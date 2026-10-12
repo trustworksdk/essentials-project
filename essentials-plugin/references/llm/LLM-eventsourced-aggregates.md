@@ -211,18 +211,28 @@ public class EventSourcingConfig {
 }
 ```
 
-Each command type must be handled by exactly one decider on the `CommandBus`, or every send of it fails
-(`MultipleCommandHandlersFoundException`, or the adapter's "Multiple deciders found"). Since 0.60.1 the configurator
-WARNs at construction when a command type a decider declares (`implements EventStreamDecider<CreateOrder, …>`, or the
-concrete permitted subtypes of a sealed one) is already handled - by another adapter of this or an earlier configurator
-on the same bus, or by a second decider of the same adapter. It does not fail: an overlap that is never sent keeps
-working. The adapter's `toString()` names its `AggregateType` and deciders, so the exception's handler list is readable.
+Each command type must be handled by exactly one command handler on the `CommandBus`, or every send of it fails
+(`MultipleCommandHandlersFoundException`, or the adapter's "Multiple deciders found"). Since 0.60.1 an overlap is
+reported at startup, but registration never fails because of it: an overlap that is never sent keeps working.
+
+The command types checked are the ones a decider declares: `implements EventStreamDecider<CreateOrder, …>`, or the
+concrete permitted subtypes of a sealed one (`EventStreamDeciderCommandHandlerAdapter.handledCommandTypes()`).
+
+- **Another command handler already handles the type** (another adapter, or an `@CmdHandler`): the `CommandBus` WARNs
+  as the adapter is registered (see `CommandBus` in [reactive](./LLM-reactive.md)). The configurator adds the overlap to
+  the `EssentialsStartupReport`, and also WARNs itself when the bus is not an `AbstractCommandBus`.
+- **Two deciders of the same adapter handle the type**: the bus sees only one handler, the adapter, so the configurator
+  WARNs about this case itself.
+
+A handler registered *after* the configurator is warned about by the bus alone. The adapter's `toString()` names its
+`AggregateType` and deciders, so the exception's handler list is readable.
 
 Since 0.60.1 the configurator also WARNs at construction for every concrete command a **sealed** command type permits
-(walked recursively via `getPermittedSubclasses()`) that no `EventStreamDecider` on the bus handles - every send of it
-would fail with `NoCommandHandlerFoundException`. Checked: the command type of a `HandlesCommandsThatInheritFromCommandType`
-aggregate configuration, and a decider's own `COMMAND` type argument when sealed. Only decider adapters can be checked,
-so a command handled elsewhere (an `@CmdHandler`, a later configurator) is reported too. Seal the command root type
+(walked recursively via `getPermittedSubclasses()`) that no command handler on the bus handles - every send of it would
+fail with `NoCommandHandlerFoundException`. Checked: the command type of a `HandlesCommandsThatInheritFromCommandType`
+aggregate configuration, and a decider's own `COMMAND` type argument when sealed. Every handler the bus lists counts
+(`CommandBus.getCommandHandlers()`): adapters of earlier configurators and `@CmdHandler`s registered before. A command
+handled only by a handler registered later is still reported. Seal the command root type
 (`sealed interface OrderCommand permits ...`) to get the check.
 
 ### Command Sending

@@ -105,6 +105,23 @@ public class EventStreamDeciderCommandHandlerAdapter implements CommandHandler {
     }
 
     /**
+     * The concrete command types this adapter's deciders declare as their {@code COMMAND} type argument
+     * ({@code implements EventStreamDecider<CreateOrder, OrderEvent>}), or - for a sealed one - its concrete permitted
+     * subtypes, as far as the decider {@link EventStreamDecider#canHandle(Class) can handle} them. A decider whose type
+     * argument cannot be resolved (a lambda, a generic base class) contributes nothing.
+     * <p>
+     * Used by the {@code CommandBus} to warn about command types handled by more than one command handler.
+     *
+     * @return the command types this adapter's deciders declare
+     */
+    @Override
+    public Set<Class<?>> handledCommandTypes() {
+        var commandTypes = new LinkedHashSet<Class<?>>();
+        deciders.forEach(decider -> commandTypes.addAll(EventStreamDeciderCommandTypes.declaredCommandTypes(decider)));
+        return Collections.unmodifiableSet(commandTypes);
+    }
+
+    /**
      * Generic command handler that routes commands to appropriate deciders.
      * <p>
      * This method is automatically called by the command handling infrastructure
