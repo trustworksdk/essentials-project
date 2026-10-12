@@ -104,7 +104,7 @@ public final class EssentialsJacksonModules {
             throw new IllegalStateException(
                     "immutable-jackson3 (" + IMMUTABLE_MODULE_CLASS_NAME + ") is on the classpath, but Objenesis, which it needs, is not. "
                             + "Add the dependency org.objenesis:objenesis to your application (compile scope; Spring Boot does not manage its "
-                            + "version - use the one Essentials builds against, its objenesis.version). Essentials declares Objenesis with "
+                            + "version - use the one Essentials builds against, its objenesis.version, or any later one). Essentials declares Objenesis with "
                             + "provided scope by design, so it is never brought in transitively. Without it every read of a persisted object "
                             + "(an event, a durable-queue message, a document) would fail with NoClassDefFoundError: org/objenesis/... "
                             + "To run without the module instead, set essentials.immutable-jackson-module-enabled=false (Spring Boot starters) or "

@@ -78,6 +78,14 @@ public final class RedeliveryPolicyBuilder {
                                     deliveryErrorHandler);
     }
 
+    /**
+     * The checks {@link #build()} runs, applied to this builder's current settings.
+     * <p>
+     * Package-private rather than private only so {@code RedeliveryPolicyBuilderChecksTest} can assert the problems
+     * found without capturing the WARN {@link #build()} logs; nothing outside this package calls it.
+     *
+     * @return the checks, already run against this builder's current settings
+     */
     RedeliveryPolicyBuilderChecks checks() {
         return new RedeliveryPolicyBuilderChecks(RedeliveryPolicyBuilder.class)
                 .delay(initialRedeliveryDelay, "setInitialRedeliveryDelay")

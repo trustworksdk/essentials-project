@@ -84,7 +84,7 @@ public final class AppendedEvents {
          * @return the last event appended during the action, if any
          */
         public Optional<PersistedEvent> lastAppendedEvent() {
-            return appendedEvents.isEmpty() ? Optional.empty() : Optional.of(appendedEvents.get(appendedEvents.size() - 1));
+            return appendedEvents.isEmpty() ? Optional.empty() : Optional.of(appendedEvents.getLast());
         }
 
         /**

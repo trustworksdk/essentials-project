@@ -268,8 +268,9 @@ public class EventStreamDeciderAndAggregateTypeConfigurator {
                 }
             }
         } catch (RuntimeException e) {
-            // A diagnostic must never fail the configuration
-            log.debug("Could not check the command types of the EventStreamDeciders for duplicate registrations", e);
+            // A diagnostic must never fail the configuration - but its own failure is logged at ERROR, as DEBUG is
+            // usually filtered out and would hide that the check did not run
+            log.error("Could not check the command types of the EventStreamDeciders for duplicate registrations", e);
         }
     }
 
@@ -352,8 +353,8 @@ public class EventStreamDeciderAndAggregateTypeConfigurator {
                 }
             });
         } catch (RuntimeException e) {
-            // A diagnostic must never fail the configuration
-            log.debug("Could not check the sealed command types of the EventStreamDeciders for commands no decider handles", e);
+            // A diagnostic must never fail the configuration - but its own failure is logged at ERROR (see above)
+            log.error("Could not check the sealed command types of the EventStreamDeciders for commands no decider handles", e);
         }
     }
 

@@ -48,6 +48,14 @@ public final class EssentialsObjectMappers {
     }
 
     /**
+     * Create a Jackson 3 {@link tools.jackson.databind.ObjectMapper} with the canonical Essentials configuration - the
+     * mapper to use for anything Essentials persists or that must read what it persisted: event payloads and metadata,
+     * durable-queue messages, documents.
+     * <p>
+     * Registers every Essentials Jackson module on the classpath ({@link EssentialsJacksonModules#modules()}), including
+     * {@code immutable-jackson3}'s module when present, followed by the <code>additionalModules</code>. Use
+     * {@link #createJackson3ObjectMapper(boolean, tools.jackson.databind.JacksonModule...)} to leave the immutable module out.
+     *
      * @param additionalModules extra modules to register, e.g. application-specific serializers
      * @return a Jackson 3 {@link tools.jackson.databind.ObjectMapper} with the canonical Essentials configuration,
      *         writing the same JSON the Jackson 2 mapper of Essentials 0.50 and earlier wrote
@@ -58,6 +66,10 @@ public final class EssentialsObjectMappers {
     }
 
     /**
+     * Create a Jackson 3 {@link tools.jackson.databind.ObjectMapper} with the canonical Essentials configuration, as
+     * {@link #createJackson3ObjectMapper(tools.jackson.databind.JacksonModule...)}, choosing whether
+     * {@code immutable-jackson3}'s module is registered.
+     *
      * @param includeImmutableModule {@code false} leaves {@code immutable-jackson3}'s {@code EssentialsImmutableJacksonModule}
      *                               out even when it is on the classpath; see {@link EssentialsJacksonModules#modules(boolean)}.
      *                               Only reading is affected - the JSON written is identical either way. Spring Boot:
@@ -133,15 +145,24 @@ public final class EssentialsObjectMappers {
     }
 
     /**
+     * Create a {@link JSONSerializer} backed by {@link #createJackson3ObjectMapper(tools.jackson.databind.JacksonModule...)}
+     * - the serializer to hand to Essentials components that take one (durable queues, the multi-table change listener),
+     * and to build test serializers with, so they write the persisted format.
+     *
      * @return a {@link JSONSerializer} using the canonical Essentials configuration
+     * @throws IllegalStateException as {@link #createJackson3ObjectMapper(tools.jackson.databind.JacksonModule...)}
      */
     public static JSONSerializer createJSONSerializer() {
         return new Jackson3JSONSerializer(createJackson3ObjectMapper());
     }
 
     /**
+     * Create a {@link JSONSerializer} as {@link #createJSONSerializer()}, choosing whether {@code immutable-jackson3}'s
+     * module is registered.
+     *
      * @param includeImmutableModule see {@link #createJackson3ObjectMapper(boolean, tools.jackson.databind.JacksonModule...)}
      * @return a {@link JSONSerializer} using the canonical Essentials configuration
+     * @throws IllegalStateException as {@link #createJackson3ObjectMapper(tools.jackson.databind.JacksonModule...)}
      */
     public static JSONSerializer createJSONSerializer(boolean includeImmutableModule) {
         return new Jackson3JSONSerializer(createJackson3ObjectMapper(includeImmutableModule));

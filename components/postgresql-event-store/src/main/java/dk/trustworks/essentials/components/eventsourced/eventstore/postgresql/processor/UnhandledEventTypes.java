@@ -110,8 +110,9 @@ final class UnhandledEventTypes {
         try {
             log.info("[{}] {} handles these event/message types: {}", processorName, processor.getClass().getSimpleName(), handledMessageTypes(processor));
         } catch (RuntimeException e) {
-            // A diagnostic must never fail the processor's start
-            log.debug("[{}] Could not resolve the message types the processor handles", processorName, e);
+            // A diagnostic must never fail the processor's start - but its own failure is logged at ERROR, as DEBUG is
+            // usually filtered out and would hide that the check did not run
+            log.error("[{}] Could not resolve the message types the processor handles", processorName, e);
         }
     }
 
@@ -141,8 +142,8 @@ final class UnhandledEventTypes {
             }
             return Optional.of(summary);
         } catch (RuntimeException | LinkageError e) {
-            // A diagnostic must never fail the processor's start
-            log.debug("[{}] Could not summarize the event types the view handles", processorName, e);
+            // A diagnostic must never fail the processor's start - but its own failure is logged at ERROR (see above)
+            log.error("[{}] Could not summarize the event types the view handles", processorName, e);
             return Optional.empty();
         }
     }
