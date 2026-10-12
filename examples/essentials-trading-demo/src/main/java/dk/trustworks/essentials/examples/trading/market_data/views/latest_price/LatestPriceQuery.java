@@ -16,9 +16,10 @@
 
 package dk.trustworks.essentials.examples.trading.market_data.views.latest_price;
 
+import dk.trustworks.essentials.components.foundation.transaction.jdbi.HandleAwareUnitOfWork;
+import dk.trustworks.essentials.components.foundation.transaction.jdbi.HandleAwareUnitOfWorkFactory;
 import dk.trustworks.essentials.examples.trading.market_data.types.InstrumentId;
 import dk.trustworks.essentials.types.Amount;
-import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -35,23 +36,22 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
  */
 @Service
 public class LatestPriceQuery {
-    private final JdbcTemplate jdbcTemplate;
+    private final HandleAwareUnitOfWorkFactory<? extends HandleAwareUnitOfWork> unitOfWorkFactory;
 
-    public LatestPriceQuery(JdbcTemplate jdbcTemplate) {
-        this.jdbcTemplate = requireNonNull(jdbcTemplate, "No jdbcTemplate provided");
+    public LatestPriceQuery(HandleAwareUnitOfWorkFactory<? extends HandleAwareUnitOfWork> unitOfWorkFactory) {
+        this.unitOfWorkFactory = requireNonNull(unitOfWorkFactory, "No unitOfWorkFactory provided");
     }
 
     @Transactional(readOnly = true)
     public Optional<LatestPrice> findLatestPrice(InstrumentId instrumentId) {
         requireNonNull(instrumentId, "No instrumentId provided");
-        return jdbcTemplate.query("""
-                                          SELECT latest_price
-                                          FROM projection_latest_price
-                                          WHERE instrument_id = ?
-                                          """,
-                                  (rs, rowNum) -> new LatestPrice(instrumentId, Amount.of(rs.getBigDecimal("latest_price"))),
-                                  instrumentId.toString())
-                           .stream()
-                           .findFirst();
+        return unitOfWorkFactory.withUnitOfWork(uow -> uow.handle().createQuery("""
+                                                                                    SELECT latest_price
+                                                                                    FROM projection_latest_price
+                                                                                    WHERE instrument_id = :instrumentId
+                                                                                    """)
+                                                                   .bind("instrumentId", instrumentId.toString())
+                                                                   .map((rs, ctx) -> new LatestPrice(instrumentId, Amount.of(rs.getBigDecimal("latest_price"))))
+                                                                   .findOne());
     }
 }

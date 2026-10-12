@@ -12,7 +12,7 @@ What lives here is the machinery that makes the demo demonstrate something:
 | `TradingLoadGeneratorManager` | Generates continuous runtime traffic, plus on-demand bursts and two benchmark scenarios |
 | `TradingLoadGeneratorController` | The harness's own admin API |
 | `TradingDashboard*` | The lightweight status screen and its SSE stream |
-| `DirectInstrumentPriceService` | A deliberately **non**-event-sourced latest-price table, written with raw JDBC, whose only purpose is to be benchmarked against the `market_data` aggregate path |
+| `DirectInstrumentPriceService` | A deliberately **non**-event-sourced latest-price table, written with plain SQL through the `UnitOfWork`'s Jdbi handle, whose only purpose is to be benchmarked against the `market_data` aggregate path |
 | `QueueLoadGenerator` | Drives the **shard-owned queue engine** on both lanes at once — sustained trickle plus on-demand spikes — and checks per-key ordering as messages arrive |
 | `QueueLoadGeneratorController` | `/api/admin/queue-load` — status, start/stop, `POST /spike?size=N`, `POST /faults?retries=N&poison=M&failures=K`, `POST /faults/blocked-key?behind=N` |
 

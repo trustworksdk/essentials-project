@@ -16,6 +16,8 @@
 
 package dk.trustworks.essentials.examples.trading.brokerage.views.trade_valuation;
 
+import dk.trustworks.essentials.components.foundation.transaction.jdbi.HandleAwareUnitOfWork;
+import dk.trustworks.essentials.components.foundation.transaction.jdbi.HandleAwareUnitOfWorkFactory;
 import dk.trustworks.essentials.examples.trading.brokerage.types.Quantity;
 import dk.trustworks.essentials.examples.trading.brokerage.types.SettlementId;
 import dk.trustworks.essentials.examples.trading.brokerage.types.TradeId;
@@ -23,8 +25,7 @@ import dk.trustworks.essentials.examples.trading.brokerage.types.TradeSide;
 import dk.trustworks.essentials.examples.trading.brokerage.types.TradingAccountId;
 import dk.trustworks.essentials.examples.trading.market_data.types.InstrumentId;
 import dk.trustworks.essentials.types.Amount;
-import org.springframework.jdbc.core.JdbcTemplate;
-import org.springframework.jdbc.core.RowMapper;
+import org.jdbi.v3.core.mapper.RowMapper;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -42,7 +43,7 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
  */
 @Service
 public class TradeValuationQuery {
-    private static final RowMapper<TradeValuation> ROW_MAPPER = (rs, rowNum) -> {
+    private static final RowMapper<TradeValuation> ROW_MAPPER = (rs, ctx) -> {
         var side              = TradeSide.valueOf(rs.getString("side"));
         var quantity          = rs.getBigDecimal("quantity");
         var executionPrice    = rs.getBigDecimal("price");
@@ -65,35 +66,34 @@ public class TradeValuationQuery {
                                   latestMarketPrice == null ? null : Amount.of(unrealizedPnl(side, executionPrice, quantity, latestMarketPrice)));
     };
 
-    private final JdbcTemplate jdbcTemplate;
+    private final HandleAwareUnitOfWorkFactory<? extends HandleAwareUnitOfWork> unitOfWorkFactory;
 
-    public TradeValuationQuery(JdbcTemplate jdbcTemplate) {
-        this.jdbcTemplate = requireNonNull(jdbcTemplate, "No jdbcTemplate provided");
+    public TradeValuationQuery(HandleAwareUnitOfWorkFactory<? extends HandleAwareUnitOfWork> unitOfWorkFactory) {
+        this.unitOfWorkFactory = requireNonNull(unitOfWorkFactory, "No unitOfWorkFactory provided");
     }
 
     @Transactional(readOnly = true)
     public Optional<TradeValuation> findTradeValuation(TradeId tradeId) {
         requireNonNull(tradeId, "No tradeId provided");
-        return jdbcTemplate.query("""
-                                          SELECT trade_id,
-                                                 account_id,
-                                                 instrument_id,
-                                                 side,
-                                                 quantity,
-                                                 price,
-                                                 gross_amount,
-                                                 executed,
-                                                 settlement_requested,
-                                                 settled,
-                                                 settlement_id,
-                                                 latest_market_price
-                                          FROM projection_trade_valuation
-                                          WHERE trade_id = ?
-                                          """,
-                                  ROW_MAPPER,
-                                  tradeId.toString())
-                           .stream()
-                           .findFirst();
+        return unitOfWorkFactory.withUnitOfWork(uow -> uow.handle().createQuery("""
+                                                                                    SELECT trade_id,
+                                                                                           account_id,
+                                                                                           instrument_id,
+                                                                                           side,
+                                                                                           quantity,
+                                                                                           price,
+                                                                                           gross_amount,
+                                                                                           executed,
+                                                                                           settlement_requested,
+                                                                                           settled,
+                                                                                           settlement_id,
+                                                                                           latest_market_price
+                                                                                    FROM projection_trade_valuation
+                                                                                    WHERE trade_id = :tradeId
+                                                                                    """)
+                                                                   .bind("tradeId", tradeId.toString())
+                                                                   .map(ROW_MAPPER)
+                                                                   .findOne());
     }
 
     /**

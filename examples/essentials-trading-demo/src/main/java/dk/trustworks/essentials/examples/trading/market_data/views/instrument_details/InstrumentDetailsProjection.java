@@ -21,13 +21,14 @@ import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.pr
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.processor.ViewEventProcessorDependencies;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.types.GlobalEventOrder;
 import dk.trustworks.essentials.components.foundation.messaging.MessageHandler;
+import dk.trustworks.essentials.components.foundation.transaction.jdbi.HandleAwareUnitOfWork;
+import dk.trustworks.essentials.components.foundation.transaction.jdbi.HandleAwareUnitOfWorkFactory;
 import dk.trustworks.essentials.examples.trading.market_data.aggregates.Instruments;
 import dk.trustworks.essentials.examples.trading.market_data.events.InstrumentRegistered;
 import dk.trustworks.essentials.examples.trading.market_data.events.InstrumentRenamed;
 import dk.trustworks.essentials.examples.trading.market_data.events.InstrumentRiskApproved;
 import dk.trustworks.essentials.examples.trading.market_data.events.InstrumentRiskRejected;
 import dk.trustworks.essentials.examples.trading.market_data.events.InstrumentSuspended;
-import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 
 import java.util.List;
@@ -40,32 +41,36 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
  * A {@link ViewEventProcessor}, so the model is eventually consistent and can be rebuilt by replay: nothing needs an
  * instrument's reference data <em>strongly</em> consistently. Like {@code views/latest_price}, it never reads the
  * aggregate.
+ * <p>
+ * Every write goes through {@code unitOfWorkFactory.usingUnitOfWork(uow -> uow.handle()…)}, which joins the
+ * {@code UnitOfWork} a {@link ViewEventProcessor} handles each event in, so the row and the processor's progress commit
+ * together. Where none is active (the DDL in the constructor) the same call opens one.
  */
 @Service
 public class InstrumentDetailsProjection extends ViewEventProcessor {
-    private final JdbcTemplate jdbcTemplate;
+    private final HandleAwareUnitOfWorkFactory<? extends HandleAwareUnitOfWork> unitOfWorkFactory;
 
     public InstrumentDetailsProjection(ViewEventProcessorDependencies dependencies,
-                                       JdbcTemplate jdbcTemplate) {
+                                       HandleAwareUnitOfWorkFactory<? extends HandleAwareUnitOfWork> unitOfWorkFactory) {
         super(dependencies);
-        this.jdbcTemplate = requireNonNull(jdbcTemplate, "No jdbcTemplate provided");
-        this.jdbcTemplate.execute("""
-                                          CREATE TABLE IF NOT EXISTS projection_instrument_details (
-                                              instrument_id VARCHAR PRIMARY KEY,
-                                              symbol VARCHAR NOT NULL,
-                                              display_name VARCHAR NOT NULL,
-                                              suspended BOOLEAN NOT NULL DEFAULT FALSE,
-                                              suspension_reason VARCHAR NULL,
-                                              risk_status VARCHAR NOT NULL DEFAULT 'PENDING',
-                                              risk_detail VARCHAR NULL,
-                                              updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
-                                          )
-                                          """);
+        this.unitOfWorkFactory = requireNonNull(unitOfWorkFactory, "No unitOfWorkFactory provided");
+        unitOfWorkFactory.usingUnitOfWork(uow -> uow.handle().execute("""
+                                                                          CREATE TABLE IF NOT EXISTS projection_instrument_details (
+                                                                              instrument_id VARCHAR PRIMARY KEY,
+                                                                              symbol VARCHAR NOT NULL,
+                                                                              display_name VARCHAR NOT NULL,
+                                                                              suspended BOOLEAN NOT NULL DEFAULT FALSE,
+                                                                              suspension_reason VARCHAR NULL,
+                                                                              risk_status VARCHAR NOT NULL DEFAULT 'PENDING',
+                                                                              risk_detail VARCHAR NULL,
+                                                                              updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+                                                                          )
+                                                                          """));
         // The two risk columns arrived after the table did, and CREATE TABLE IF NOT EXISTS is a no-op against a demo
         // database that already has it. Both statements are idempotent, so they cost one round trip at startup and
         // spare anyone with an existing demo database an "column risk_status does not exist" on the first query.
-        this.jdbcTemplate.execute("ALTER TABLE projection_instrument_details ADD COLUMN IF NOT EXISTS risk_status VARCHAR NOT NULL DEFAULT 'PENDING'");
-        this.jdbcTemplate.execute("ALTER TABLE projection_instrument_details ADD COLUMN IF NOT EXISTS risk_detail VARCHAR NULL");
+        unitOfWorkFactory.usingUnitOfWork(uow -> uow.handle().execute("ALTER TABLE projection_instrument_details ADD COLUMN IF NOT EXISTS risk_status VARCHAR NOT NULL DEFAULT 'PENDING'"));
+        unitOfWorkFactory.usingUnitOfWork(uow -> uow.handle().execute("ALTER TABLE projection_instrument_details ADD COLUMN IF NOT EXISTS risk_detail VARCHAR NULL"));
     }
 
     @Override
@@ -85,76 +90,81 @@ public class InstrumentDetailsProjection extends ViewEventProcessor {
          * event can be redelivered — and by then the risk automation may already have recorded its decision, which a
          * blanket reset to PENDING would erase.
          */
-        jdbcTemplate.update("""
-                                    INSERT INTO projection_instrument_details (
-                                        instrument_id, symbol, display_name, suspended, suspension_reason,
-                                        risk_status, risk_detail, updated_at
-                                    )
-                                    VALUES (?, ?, ?, false, NULL, 'PENDING', NULL, CURRENT_TIMESTAMP)
-                                    ON CONFLICT (instrument_id) DO UPDATE
-                                    SET symbol = EXCLUDED.symbol,
-                                        display_name = EXCLUDED.display_name,
-                                        updated_at = CURRENT_TIMESTAMP
-                                    """,
-                            event.instrumentId().toString(),
-                            event.symbol().toString(),
-                            event.displayName());
+        unitOfWorkFactory.usingUnitOfWork(uow -> uow.handle().createUpdate("""
+                                                                               INSERT INTO projection_instrument_details (
+                                                                                   instrument_id, symbol, display_name, suspended, suspension_reason,
+                                                                                   risk_status, risk_detail, updated_at
+                                                                               )
+                                                                               VALUES (:instrumentId, :symbol, :displayName, false, NULL, 'PENDING', NULL, CURRENT_TIMESTAMP)
+                                                                               ON CONFLICT (instrument_id) DO UPDATE
+                                                                               SET symbol = EXCLUDED.symbol,
+                                                                                   display_name = EXCLUDED.display_name,
+                                                                                   updated_at = CURRENT_TIMESTAMP
+                                                                               """)
+                                                             .bind("instrumentId", event.instrumentId().toString())
+                                                             .bind("symbol", event.symbol().toString())
+                                                             .bind("displayName", event.displayName())
+                                                             .execute());
     }
 
     @MessageHandler
     void handle(InstrumentRenamed event) {
-        jdbcTemplate.update("""
-                                    UPDATE projection_instrument_details
-                                    SET display_name = ?,
-                                        updated_at = CURRENT_TIMESTAMP
-                                    WHERE instrument_id = ?
-                                    """,
-                            event.displayName(),
-                            event.instrumentId().toString());
+        unitOfWorkFactory.usingUnitOfWork(uow -> uow.handle().createUpdate("""
+                                                                               UPDATE projection_instrument_details
+                                                                               SET display_name = :displayName,
+                                                                                   updated_at = CURRENT_TIMESTAMP
+                                                                               WHERE instrument_id = :instrumentId
+                                                                               """)
+                                                             .bind("displayName", event.displayName())
+                                                             .bind("instrumentId", event.instrumentId().toString())
+                                                             .execute());
     }
 
     @MessageHandler
     void handle(InstrumentSuspended event) {
-        jdbcTemplate.update("""
-                                    UPDATE projection_instrument_details
-                                    SET suspended = true,
-                                        suspension_reason = ?,
-                                        updated_at = CURRENT_TIMESTAMP
-                                    WHERE instrument_id = ?
-                                    """,
-                            event.reason(),
-                            event.instrumentId().toString());
+        unitOfWorkFactory.usingUnitOfWork(uow -> uow.handle().createUpdate("""
+                                                                               UPDATE projection_instrument_details
+                                                                               SET suspended = true,
+                                                                                   suspension_reason = :suspensionReason,
+                                                                                   updated_at = CURRENT_TIMESTAMP
+                                                                               WHERE instrument_id = :instrumentId
+                                                                               """)
+                                                             .bind("suspensionReason", event.reason())
+                                                             .bind("instrumentId", event.instrumentId().toString())
+                                                             .execute());
     }
 
     @MessageHandler
     void handle(InstrumentRiskApproved event) {
-        jdbcTemplate.update("""
-                                    UPDATE projection_instrument_details
-                                    SET risk_status = 'APPROVED',
-                                        risk_detail = ?,
-                                        updated_at = CURRENT_TIMESTAMP
-                                    WHERE instrument_id = ?
-                                    """,
-                            event.riskRating().toString(),
-                            event.instrumentId().toString());
+        unitOfWorkFactory.usingUnitOfWork(uow -> uow.handle().createUpdate("""
+                                                                               UPDATE projection_instrument_details
+                                                                               SET risk_status = 'APPROVED',
+                                                                                   risk_detail = :riskDetail,
+                                                                                   updated_at = CURRENT_TIMESTAMP
+                                                                               WHERE instrument_id = :instrumentId
+                                                                               """)
+                                                             .bind("riskDetail", event.riskRating().toString())
+                                                             .bind("instrumentId", event.instrumentId().toString())
+                                                             .execute());
     }
 
     @MessageHandler
     void handle(InstrumentRiskRejected event) {
-        jdbcTemplate.update("""
-                                    UPDATE projection_instrument_details
-                                    SET risk_status = 'REJECTED',
-                                        risk_detail = ?,
-                                        updated_at = CURRENT_TIMESTAMP
-                                    WHERE instrument_id = ?
-                                    """,
-                            event.reason(),
-                            event.instrumentId().toString());
+        unitOfWorkFactory.usingUnitOfWork(uow -> uow.handle().createUpdate("""
+                                                                               UPDATE projection_instrument_details
+                                                                               SET risk_status = 'REJECTED',
+                                                                                   risk_detail = :riskDetail,
+                                                                                   updated_at = CURRENT_TIMESTAMP
+                                                                               WHERE instrument_id = :instrumentId
+                                                                               """)
+                                                             .bind("riskDetail", event.reason())
+                                                             .bind("instrumentId", event.instrumentId().toString())
+                                                             .execute());
     }
 
     @Override
     protected void onSubscriptionsReset(AggregateType aggregateType,
                                         GlobalEventOrder resubscribeFromAndIncluding) {
-        jdbcTemplate.execute("TRUNCATE TABLE projection_instrument_details");
+        unitOfWorkFactory.usingUnitOfWork(uow -> uow.handle().execute("TRUNCATE TABLE projection_instrument_details"));
     }
 }

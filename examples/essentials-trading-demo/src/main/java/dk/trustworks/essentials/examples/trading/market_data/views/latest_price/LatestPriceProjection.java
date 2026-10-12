@@ -22,12 +22,13 @@ import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.pr
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.types.GlobalEventOrder;
 import dk.trustworks.essentials.components.foundation.messaging.MessageHandler;
 import dk.trustworks.essentials.components.foundation.messaging.queue.OrderedMessage;
+import dk.trustworks.essentials.components.foundation.transaction.jdbi.HandleAwareUnitOfWork;
+import dk.trustworks.essentials.components.foundation.transaction.jdbi.HandleAwareUnitOfWorkFactory;
 import dk.trustworks.essentials.examples.trading.market_data.aggregates.InstrumentPrices;
 import dk.trustworks.essentials.examples.trading.market_data.events.PriceInitialized;
 import dk.trustworks.essentials.examples.trading.market_data.events.PriceUpdated;
 import dk.trustworks.essentials.examples.trading.market_data.types.InstrumentId;
 import dk.trustworks.essentials.types.Amount;
-import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 
 import java.util.List;
@@ -45,23 +46,27 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
  * <p>
  * Each row stores the {@code EventOrder} it was last written from, and a write never moves it backwards, so an event
  * redelivered from the processor's retry queue cannot put an older price back.
+ * <p>
+ * The write goes through {@code unitOfWorkFactory.usingUnitOfWork(uow -> uow.handle()…)}, which joins the
+ * {@code UnitOfWork} a {@link ViewEventProcessor} handles each event in, so the row and the processor's progress commit
+ * together. Where none is active (the DDL in the constructor) the same call opens one.
  */
 @Service
 public class LatestPriceProjection extends ViewEventProcessor {
-    private final JdbcTemplate jdbcTemplate;
+    private final HandleAwareUnitOfWorkFactory<? extends HandleAwareUnitOfWork> unitOfWorkFactory;
 
     public LatestPriceProjection(ViewEventProcessorDependencies dependencies,
-                                 JdbcTemplate jdbcTemplate) {
+                                 HandleAwareUnitOfWorkFactory<? extends HandleAwareUnitOfWork> unitOfWorkFactory) {
         super(dependencies);
-        this.jdbcTemplate = requireNonNull(jdbcTemplate, "No jdbcTemplate provided");
-        this.jdbcTemplate.execute("""
-                                          CREATE TABLE IF NOT EXISTS projection_latest_price (
-                                              instrument_id VARCHAR PRIMARY KEY,
-                                              latest_price NUMERIC(19, 4) NOT NULL,
-                                              event_order BIGINT NOT NULL,
-                                              updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
-                                          )
-                                          """);
+        this.unitOfWorkFactory = requireNonNull(unitOfWorkFactory, "No unitOfWorkFactory provided");
+        unitOfWorkFactory.usingUnitOfWork(uow -> uow.handle().execute("""
+                                                                          CREATE TABLE IF NOT EXISTS projection_latest_price (
+                                                                              instrument_id VARCHAR PRIMARY KEY,
+                                                                              latest_price NUMERIC(19, 4) NOT NULL,
+                                                                              event_order BIGINT NOT NULL,
+                                                                              updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+                                                                          )
+                                                                          """));
     }
 
     @Override
@@ -85,23 +90,24 @@ public class LatestPriceProjection extends ViewEventProcessor {
     }
 
     private void project(InstrumentId instrumentId, Amount price, long eventOrder) {
-        jdbcTemplate.update("""
-                                    INSERT INTO projection_latest_price (instrument_id, latest_price, event_order, updated_at)
-                                    VALUES (?, ?, ?, CURRENT_TIMESTAMP)
-                                    ON CONFLICT (instrument_id) DO UPDATE
-                                    SET latest_price = EXCLUDED.latest_price,
-                                        event_order = EXCLUDED.event_order,
-                                        updated_at = CURRENT_TIMESTAMP
-                                    WHERE projection_latest_price.event_order < EXCLUDED.event_order
-                                    """,
-                            instrumentId.toString(),
-                            price.value(),
-                            eventOrder);
+        unitOfWorkFactory.usingUnitOfWork(uow -> uow.handle().createUpdate("""
+                                                                               INSERT INTO projection_latest_price (instrument_id, latest_price, event_order, updated_at)
+                                                                               VALUES (:instrumentId, :latestPrice, :eventOrder, CURRENT_TIMESTAMP)
+                                                                               ON CONFLICT (instrument_id) DO UPDATE
+                                                                               SET latest_price = EXCLUDED.latest_price,
+                                                                                   event_order = EXCLUDED.event_order,
+                                                                                   updated_at = CURRENT_TIMESTAMP
+                                                                               WHERE projection_latest_price.event_order < EXCLUDED.event_order
+                                                                               """)
+                                                             .bind("instrumentId", instrumentId.toString())
+                                                             .bind("latestPrice", price.value())
+                                                             .bind("eventOrder", eventOrder)
+                                                             .execute());
     }
 
     @Override
     protected void onSubscriptionsReset(AggregateType aggregateType,
                                         GlobalEventOrder resubscribeFromAndIncluding) {
-        jdbcTemplate.execute("TRUNCATE TABLE projection_latest_price");
+        unitOfWorkFactory.usingUnitOfWork(uow -> uow.handle().execute("TRUNCATE TABLE projection_latest_price"));
     }
 }

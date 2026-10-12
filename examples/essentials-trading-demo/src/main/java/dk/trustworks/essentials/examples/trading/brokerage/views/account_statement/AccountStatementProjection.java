@@ -21,6 +21,8 @@ import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.pr
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.processor.ViewEventProcessorDependencies;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.types.GlobalEventOrder;
 import dk.trustworks.essentials.components.foundation.messaging.MessageHandler;
+import dk.trustworks.essentials.components.foundation.transaction.jdbi.HandleAwareUnitOfWork;
+import dk.trustworks.essentials.components.foundation.transaction.jdbi.HandleAwareUnitOfWorkFactory;
 import dk.trustworks.essentials.examples.trading.brokerage.aggregates.TradingAccounts;
 import dk.trustworks.essentials.examples.trading.brokerage.events.AccountBooksClosed;
 import dk.trustworks.essentials.examples.trading.brokerage.events.CashDeposited;
@@ -28,7 +30,6 @@ import dk.trustworks.essentials.examples.trading.brokerage.events.FundsReleased;
 import dk.trustworks.essentials.examples.trading.brokerage.events.FundsReserved;
 import dk.trustworks.essentials.examples.trading.brokerage.events.TradeSettlementApplied;
 import dk.trustworks.essentials.examples.trading.brokerage.events.TradingAccountOpened;
-import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 
 import java.util.List;
@@ -54,29 +55,36 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
  * Idempotency is carried by the SQL rather than by an {@code OrderedMessage} version check: the opening event upserts
  * (so a replay restates the row instead of failing), and every other handler is a delta. A replay therefore has to go
  * through {@link #onSubscriptionsReset}, which truncates — re-applying a delta on top of a live row would double it.
+ * <p>
+ * <b>Every write goes through the {@link HandleAwareUnitOfWork} the handler already runs in.</b> A
+ * {@link ViewEventProcessor} handles each event in one {@code UnitOfWork}, so that the view update and the processor's
+ * progress commit together. {@code unitOfWorkFactory.usingUnitOfWork(uow -> uow.handle()…)} joins that
+ * {@code UnitOfWork} instead of opening a transaction of its own — which is what keeps a delta from committing for an
+ * event the processor then retries, and so being applied twice. Where none is active (the DDL in the constructor) the
+ * same call opens one.
  */
 @Service
 public class AccountStatementProjection extends ViewEventProcessor {
-    private final JdbcTemplate jdbcTemplate;
+    private final HandleAwareUnitOfWorkFactory<? extends HandleAwareUnitOfWork> unitOfWorkFactory;
 
     public AccountStatementProjection(ViewEventProcessorDependencies dependencies,
-                                      JdbcTemplate jdbcTemplate) {
+                                      HandleAwareUnitOfWorkFactory<? extends HandleAwareUnitOfWork> unitOfWorkFactory) {
         super(dependencies);
-        this.jdbcTemplate = requireNonNull(jdbcTemplate, "No jdbcTemplate provided");
-        this.jdbcTemplate.execute("""
-                                          CREATE TABLE IF NOT EXISTS projection_trading_account_statement (
-                                              logical_account_id VARCHAR PRIMARY KEY,
-                                              owner_id VARCHAR NOT NULL,
-                                              period_id VARCHAR NOT NULL,
-                                              current_generation INTEGER NOT NULL,
-                                              generation_count INTEGER NOT NULL,
-                                              cash_balance NUMERIC(19, 4) NOT NULL,
-                                              reserved_funds NUMERIC(19, 4) NOT NULL,
-                                              realized_pnl NUMERIC(19, 4) NOT NULL,
-                                              books_closed BOOLEAN NOT NULL,
-                                              updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
-                                          )
-                                          """);
+        this.unitOfWorkFactory = requireNonNull(unitOfWorkFactory, "No unitOfWorkFactory provided");
+        unitOfWorkFactory.usingUnitOfWork(uow -> uow.handle().execute("""
+                CREATE TABLE IF NOT EXISTS projection_trading_account_statement (
+                    logical_account_id VARCHAR PRIMARY KEY,
+                    owner_id VARCHAR NOT NULL,
+                    period_id VARCHAR NOT NULL,
+                    current_generation INTEGER NOT NULL,
+                    generation_count INTEGER NOT NULL,
+                    cash_balance NUMERIC(19, 4) NOT NULL,
+                    reserved_funds NUMERIC(19, 4) NOT NULL,
+                    realized_pnl NUMERIC(19, 4) NOT NULL,
+                    books_closed BOOLEAN NOT NULL,
+                    updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+                )
+                """));
     }
 
     /**
@@ -96,100 +104,106 @@ public class AccountStatementProjection extends ViewEventProcessor {
     @MessageHandler
     void handle(TradingAccountOpened event) {
         var generation = event.tradingAccountStreamId().generation();
-        jdbcTemplate.update("""
-                                    INSERT INTO projection_trading_account_statement (
-                                        logical_account_id,
-                                        owner_id,
-                                        period_id,
-                                        current_generation,
-                                        generation_count,
-                                        cash_balance,
-                                        reserved_funds,
-                                        realized_pnl,
-                                        books_closed,
-                                        updated_at
-                                    )
-                                    VALUES (?, ?, ?, ?, ?, ?, 0, ?, false, CURRENT_TIMESTAMP)
-                                    ON CONFLICT (logical_account_id) DO UPDATE
-                                    SET owner_id = EXCLUDED.owner_id,
-                                        period_id = EXCLUDED.period_id,
-                                        current_generation = GREATEST(projection_trading_account_statement.current_generation, EXCLUDED.current_generation),
-                                        generation_count = GREATEST(projection_trading_account_statement.generation_count, EXCLUDED.generation_count),
-                                        cash_balance = EXCLUDED.cash_balance,
-                                        reserved_funds = 0,
-                                        realized_pnl = EXCLUDED.realized_pnl,
-                                        books_closed = false,
-                                        updated_at = CURRENT_TIMESTAMP
-                                    """,
-                            event.logicalAccountId().toString(),
-                            event.ownerId().toString(),
-                            event.periodId().toString(),
-                            generation,
-                            generation,
-                            event.openingCashBalance().value(),
-                            event.openingRealizedPnl().value());
+        unitOfWorkFactory.usingUnitOfWork(uow -> uow.handle().createUpdate("""
+                                                                               INSERT INTO projection_trading_account_statement (
+                                                                                   logical_account_id,
+                                                                                   owner_id,
+                                                                                   period_id,
+                                                                                   current_generation,
+                                                                                   generation_count,
+                                                                                   cash_balance,
+                                                                                   reserved_funds,
+                                                                                   realized_pnl,
+                                                                                   books_closed,
+                                                                                   updated_at
+                                                                               )
+                                                                               VALUES (:logicalAccountId, :ownerId, :periodId, :generation, :generation,
+                                                                                       :cashBalance, 0, :realizedPnl, false, CURRENT_TIMESTAMP)
+                                                                               ON CONFLICT (logical_account_id) DO UPDATE
+                                                                               SET owner_id = EXCLUDED.owner_id,
+                                                                                   period_id = EXCLUDED.period_id,
+                                                                                   current_generation = GREATEST(projection_trading_account_statement.current_generation, EXCLUDED.current_generation),
+                                                                                   generation_count = GREATEST(projection_trading_account_statement.generation_count, EXCLUDED.generation_count),
+                                                                                   cash_balance = EXCLUDED.cash_balance,
+                                                                                   reserved_funds = 0,
+                                                                                   realized_pnl = EXCLUDED.realized_pnl,
+                                                                                   books_closed = false,
+                                                                                   updated_at = CURRENT_TIMESTAMP
+                                                                               """)
+                                                             .bind("logicalAccountId", event.logicalAccountId().toString())
+                                                             .bind("ownerId", event.ownerId().toString())
+                                                             .bind("periodId", event.periodId().toString())
+                                                             .bind("generation", generation)
+                                                             .bind("cashBalance", event.openingCashBalance().value())
+                                                             .bind("realizedPnl", event.openingRealizedPnl().value())
+                                                             .execute());
     }
 
     @MessageHandler
     void handle(CashDeposited event) {
-        jdbcTemplate.update("""
-                                    UPDATE projection_trading_account_statement
-                                    SET cash_balance = cash_balance + ?,
-                                        updated_at = CURRENT_TIMESTAMP
-                                    WHERE logical_account_id = ?
-                                    """,
-                            event.amount().value(),
-                            event.logicalAccountId().toString());
+        unitOfWorkFactory.usingUnitOfWork(uow -> uow.handle().createUpdate("""
+                                                                               UPDATE projection_trading_account_statement
+                                                                               SET cash_balance = cash_balance + :amount,
+                                                                                   updated_at = CURRENT_TIMESTAMP
+                                                                               WHERE logical_account_id = :logicalAccountId
+                                                                               """)
+                                                             .bind("amount", event.amount().value())
+                                                             .bind("logicalAccountId", event.logicalAccountId().toString())
+                                                             .execute());
     }
 
     @MessageHandler
     void handle(FundsReserved event) {
-        jdbcTemplate.update("""
-                                    UPDATE projection_trading_account_statement
-                                    SET reserved_funds = reserved_funds + ?,
-                                        updated_at = CURRENT_TIMESTAMP
-                                    WHERE logical_account_id = ?
-                                    """,
-                            event.amount().value(),
-                            event.logicalAccountId().toString());
+        unitOfWorkFactory.usingUnitOfWork(uow -> uow.handle().createUpdate("""
+                                                                               UPDATE projection_trading_account_statement
+                                                                               SET reserved_funds = reserved_funds + :amount,
+                                                                                   updated_at = CURRENT_TIMESTAMP
+                                                                               WHERE logical_account_id = :logicalAccountId
+                                                                               """)
+                                                             .bind("amount", event.amount().value())
+                                                             .bind("logicalAccountId", event.logicalAccountId().toString())
+                                                             .execute());
     }
 
     @MessageHandler
     void handle(FundsReleased event) {
-        jdbcTemplate.update("""
-                                    UPDATE projection_trading_account_statement
-                                    SET reserved_funds = reserved_funds - ?,
-                                        updated_at = CURRENT_TIMESTAMP
-                                    WHERE logical_account_id = ?
-                                    """,
-                            event.amount().value(),
-                            event.logicalAccountId().toString());
+        unitOfWorkFactory.usingUnitOfWork(uow -> uow.handle().createUpdate("""
+                                                                               UPDATE projection_trading_account_statement
+                                                                               SET reserved_funds = reserved_funds - :amount,
+                                                                                   updated_at = CURRENT_TIMESTAMP
+                                                                               WHERE logical_account_id = :logicalAccountId
+                                                                               """)
+                                                             .bind("amount", event.amount().value())
+                                                             .bind("logicalAccountId", event.logicalAccountId().toString())
+                                                             .execute());
     }
 
     @MessageHandler
     void handle(TradeSettlementApplied event) {
-        jdbcTemplate.update("""
-                                    UPDATE projection_trading_account_statement
-                                    SET cash_balance = cash_balance + ?,
-                                        realized_pnl = realized_pnl + ?,
-                                        updated_at = CURRENT_TIMESTAMP
-                                    WHERE logical_account_id = ?
-                                    """,
-                            event.cashDelta().value(),
-                            event.realizedPnlDelta().value(),
-                            event.logicalAccountId().toString());
+        unitOfWorkFactory.usingUnitOfWork(uow -> uow.handle().createUpdate("""
+                                                                               UPDATE projection_trading_account_statement
+                                                                               SET cash_balance = cash_balance + :cashDelta,
+                                                                                   realized_pnl = realized_pnl + :realizedPnlDelta,
+                                                                                   updated_at = CURRENT_TIMESTAMP
+                                                                               WHERE logical_account_id = :logicalAccountId
+                                                                               """)
+                                                             .bind("cashDelta", event.cashDelta().value())
+                                                             .bind("realizedPnlDelta", event.realizedPnlDelta().value())
+                                                             .bind("logicalAccountId", event.logicalAccountId().toString())
+                                                             .execute());
     }
 
     @MessageHandler
     void handle(AccountBooksClosed event) {
-        jdbcTemplate.update("""
-                                    UPDATE projection_trading_account_statement
-                                    SET books_closed = true,
-                                        reserved_funds = 0,
-                                        updated_at = CURRENT_TIMESTAMP
-                                    WHERE logical_account_id = ?
-                                    """,
-                            event.logicalAccountId().toString());
+        unitOfWorkFactory.usingUnitOfWork(uow -> uow.handle().createUpdate("""
+                                                                               UPDATE projection_trading_account_statement
+                                                                               SET books_closed = true,
+                                                                                   reserved_funds = 0,
+                                                                                   updated_at = CURRENT_TIMESTAMP
+                                                                               WHERE logical_account_id = :logicalAccountId
+                                                                               """)
+                                                             .bind("logicalAccountId", event.logicalAccountId().toString())
+                                                             .execute());
     }
 
     /**
@@ -199,6 +213,6 @@ public class AccountStatementProjection extends ViewEventProcessor {
     @Override
     protected void onSubscriptionsReset(AggregateType aggregateType,
                                         GlobalEventOrder resubscribeFromAndIncluding) {
-        jdbcTemplate.execute("TRUNCATE TABLE projection_trading_account_statement");
+        unitOfWorkFactory.usingUnitOfWork(uow -> uow.handle().execute("TRUNCATE TABLE projection_trading_account_statement"));
     }
 }

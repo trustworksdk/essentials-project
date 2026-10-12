@@ -16,9 +16,11 @@
 
 package dk.trustworks.essentials.examples.trading.market_data.views.instrument_details;
 
+import dk.trustworks.essentials.components.foundation.transaction.jdbi.HandleAwareUnitOfWork;
+import dk.trustworks.essentials.components.foundation.transaction.jdbi.HandleAwareUnitOfWorkFactory;
 import dk.trustworks.essentials.examples.trading.market_data.types.InstrumentId;
 import dk.trustworks.essentials.examples.trading.market_data.types.Symbol;
-import org.springframework.jdbc.core.JdbcTemplate;
+import org.jdbi.v3.core.mapper.RowMapper;
 import org.springframework.stereotype.Service;
 
 import java.util.List;
@@ -32,46 +34,43 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
  */
 @Service
 public class InstrumentDetailsQuery {
-    private final JdbcTemplate jdbcTemplate;
+    private static final RowMapper<InstrumentDetails> ROW_MAPPER =
+            (rs, ctx) -> toInstrumentDetails(rs.getString("instrument_id"),
+                                             rs.getString("symbol"),
+                                             rs.getString("display_name"),
+                                             rs.getBoolean("suspended"),
+                                             rs.getString("suspension_reason"),
+                                             rs.getString("risk_status"),
+                                             rs.getString("risk_detail"));
 
-    public InstrumentDetailsQuery(JdbcTemplate jdbcTemplate) {
-        this.jdbcTemplate = requireNonNull(jdbcTemplate, "No jdbcTemplate provided");
+    private final HandleAwareUnitOfWorkFactory<? extends HandleAwareUnitOfWork> unitOfWorkFactory;
+
+    public InstrumentDetailsQuery(HandleAwareUnitOfWorkFactory<? extends HandleAwareUnitOfWork> unitOfWorkFactory) {
+        this.unitOfWorkFactory = requireNonNull(unitOfWorkFactory, "No unitOfWorkFactory provided");
     }
 
     public List<InstrumentDetails> instruments() {
-        return jdbcTemplate.query("""
-                                          SELECT instrument_id, symbol, display_name, suspended, suspension_reason,
-                                                 risk_status, risk_detail
-                                          FROM projection_instrument_details
-                                          ORDER BY instrument_id
-                                          """,
-                                  (rs, rowNum) -> toInstrumentDetails(rs.getString("instrument_id"),
-                                                                      rs.getString("symbol"),
-                                                                      rs.getString("display_name"),
-                                                                      rs.getBoolean("suspended"),
-                                                                      rs.getString("suspension_reason"),
-                                                                      rs.getString("risk_status"),
-                                                                      rs.getString("risk_detail")));
+        return unitOfWorkFactory.withUnitOfWork(uow -> uow.handle().createQuery("""
+                                                                                    SELECT instrument_id, symbol, display_name, suspended, suspension_reason,
+                                                                                           risk_status, risk_detail
+                                                                                    FROM projection_instrument_details
+                                                                                    ORDER BY instrument_id
+                                                                                    """)
+                                                                   .map(ROW_MAPPER)
+                                                                   .list());
     }
 
     public Optional<InstrumentDetails> findInstrumentDetails(InstrumentId instrumentId) {
         requireNonNull(instrumentId, "No instrumentId provided");
-        return jdbcTemplate.query("""
-                                          SELECT instrument_id, symbol, display_name, suspended, suspension_reason,
-                                                 risk_status, risk_detail
-                                          FROM projection_instrument_details
-                                          WHERE instrument_id = ?
-                                          """,
-                                  rs -> rs.next()
-                                          ? Optional.of(toInstrumentDetails(rs.getString("instrument_id"),
-                                                                            rs.getString("symbol"),
-                                                                            rs.getString("display_name"),
-                                                                            rs.getBoolean("suspended"),
-                                                                            rs.getString("suspension_reason"),
-                                                                            rs.getString("risk_status"),
-                                                                            rs.getString("risk_detail")))
-                                          : Optional.empty(),
-                                  instrumentId.toString());
+        return unitOfWorkFactory.withUnitOfWork(uow -> uow.handle().createQuery("""
+                                                                                    SELECT instrument_id, symbol, display_name, suspended, suspension_reason,
+                                                                                           risk_status, risk_detail
+                                                                                    FROM projection_instrument_details
+                                                                                    WHERE instrument_id = :instrumentId
+                                                                                    """)
+                                                                   .bind("instrumentId", instrumentId.toString())
+                                                                   .map(ROW_MAPPER)
+                                                                   .findOne());
     }
 
     private static InstrumentDetails toInstrumentDetails(String instrumentId,

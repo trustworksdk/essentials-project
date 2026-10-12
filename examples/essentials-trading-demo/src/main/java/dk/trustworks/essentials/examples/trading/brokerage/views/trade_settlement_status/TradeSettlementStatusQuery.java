@@ -16,6 +16,8 @@
 
 package dk.trustworks.essentials.examples.trading.brokerage.views.trade_settlement_status;
 
+import dk.trustworks.essentials.components.foundation.transaction.jdbi.HandleAwareUnitOfWork;
+import dk.trustworks.essentials.components.foundation.transaction.jdbi.HandleAwareUnitOfWorkFactory;
 import dk.trustworks.essentials.examples.trading.brokerage.types.Quantity;
 import dk.trustworks.essentials.examples.trading.brokerage.types.SettlementId;
 import dk.trustworks.essentials.examples.trading.brokerage.types.SettlementStatus;
@@ -24,8 +26,7 @@ import dk.trustworks.essentials.examples.trading.brokerage.types.TradeSide;
 import dk.trustworks.essentials.examples.trading.brokerage.types.TradingAccountId;
 import dk.trustworks.essentials.examples.trading.market_data.types.InstrumentId;
 import dk.trustworks.essentials.types.Amount;
-import org.springframework.jdbc.core.JdbcTemplate;
-import org.springframework.jdbc.core.RowMapper;
+import org.jdbi.v3.core.mapper.RowMapper;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -65,28 +66,30 @@ public class TradeSettlementStatusQuery {
      * rather than wrapped directly.
      */
     private static final RowMapper<TradeSettlementStatus> ROW_MAPPER =
-            (rs, rowNum) -> new TradeSettlementStatus(TradeId.of(rs.getString("trade_id")),
-                                                      mapNullable(rs.getString("account_id"), TradingAccountId::of),
-                                                      mapNullable(rs.getString("instrument_id"), InstrumentId::of),
-                                                      mapNullable(rs.getString("side"), TradeSide::valueOf),
-                                                      mapNullable(rs.getBigDecimal("quantity"), Quantity::of),
-                                                      mapNullable(rs.getBigDecimal("price"), Amount::of),
-                                                      mapNullable(rs.getBigDecimal("gross_amount"), Amount::of),
-                                                      rs.getBoolean("executed"),
-                                                      rs.getBoolean("settlement_requested"),
-                                                      rs.getBoolean("settled"),
-                                                      mapNullable(rs.getString("settlement_id"), SettlementId::of),
-                                                      SettlementStatus.valueOf(rs.getString("settlement_status")));
+            (rs, ctx) -> new TradeSettlementStatus(TradeId.of(rs.getString("trade_id")),
+                                                   mapNullable(rs.getString("account_id"), TradingAccountId::of),
+                                                   mapNullable(rs.getString("instrument_id"), InstrumentId::of),
+                                                   mapNullable(rs.getString("side"), TradeSide::valueOf),
+                                                   mapNullable(rs.getBigDecimal("quantity"), Quantity::of),
+                                                   mapNullable(rs.getBigDecimal("price"), Amount::of),
+                                                   mapNullable(rs.getBigDecimal("gross_amount"), Amount::of),
+                                                   rs.getBoolean("executed"),
+                                                   rs.getBoolean("settlement_requested"),
+                                                   rs.getBoolean("settled"),
+                                                   mapNullable(rs.getString("settlement_id"), SettlementId::of),
+                                                   SettlementStatus.valueOf(rs.getString("settlement_status")));
 
-    private final JdbcTemplate jdbcTemplate;
+    private final HandleAwareUnitOfWorkFactory<? extends HandleAwareUnitOfWork> unitOfWorkFactory;
 
-    public TradeSettlementStatusQuery(JdbcTemplate jdbcTemplate) {
-        this.jdbcTemplate = requireNonNull(jdbcTemplate, "No jdbcTemplate provided");
+    public TradeSettlementStatusQuery(HandleAwareUnitOfWorkFactory<? extends HandleAwareUnitOfWork> unitOfWorkFactory) {
+        this.unitOfWorkFactory = requireNonNull(unitOfWorkFactory, "No unitOfWorkFactory provided");
     }
 
     @Transactional(readOnly = true)
     public List<TradeSettlementStatus> tradeSettlements() {
-        return jdbcTemplate.query(COLUMNS + "ORDER BY trade_id", ROW_MAPPER);
+        return unitOfWorkFactory.withUnitOfWork(uow -> uow.handle().createQuery(COLUMNS + "ORDER BY trade_id")
+                                                                   .map(ROW_MAPPER)
+                                                                   .list());
     }
 
     /**
@@ -97,12 +100,11 @@ public class TradeSettlementStatusQuery {
     @Transactional(readOnly = true)
     public Optional<SettlementStatusView> findSettlement(SettlementId settlementId) {
         requireNonNull(settlementId, "No settlementId provided");
-        return jdbcTemplate.query(COLUMNS + "WHERE settlement_id = ?",
-                                  ROW_MAPPER,
-                                  settlementId.toString())
-                           .stream()
-                           .findFirst()
-                           .map(SettlementStatusView::from);
+        return unitOfWorkFactory.withUnitOfWork(uow -> uow.handle().createQuery(COLUMNS + "WHERE settlement_id = :settlementId")
+                                                                   .bind("settlementId", settlementId.toString())
+                                                                   .map(ROW_MAPPER)
+                                                                   .findOne())
+                                .map(SettlementStatusView::from);
     }
 
     /**

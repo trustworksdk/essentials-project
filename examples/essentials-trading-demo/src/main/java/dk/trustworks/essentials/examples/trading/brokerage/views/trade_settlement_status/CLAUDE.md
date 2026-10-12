@@ -59,5 +59,5 @@ the key subscription progress is stored under; renaming it silently replays from
 - `TradeSettlementStatus.java` — one row of the read model / the list response body
 - `SettlementStatusView.java` — one settlement, with the derived booleans
 - `TradeSettlementStatusProjection.java` — the `EventProcessor`; owns the DDL, the index and the truncate
-- `TradeSettlementStatusQuery.java` — the two `JdbcTemplate` queries and the null-tolerant row mapper
+- `TradeSettlementStatusQuery.java` — the two Jdbi queries (through the `UnitOfWork` handle) and the null-tolerant row mapper
 - `TradeSettlementStatusAPI.java` — the slice's two endpoints
