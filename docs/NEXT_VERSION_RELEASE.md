@@ -591,6 +591,11 @@ Not published; listed because they are the reference for how to use the framewor
 - `scripts/plugin-check.sh quick` runs its steps in parallel (`--jobs N` / `PLUGIN_CHECK_JOBS`, default the CPU
   count; `--jobs 1` is the old serial run): about 8 s instead of about 37 s on 10 cores. Output and the PASS/FAIL
   table still print in CI order, and CI's `step <name>` calls are unchanged.
+- The integration tests of `postgresql-queue`, `postgresql-event-store` and `eventsourced-aggregates` — the
+  reactor's longest chain, since the event store depends on the queue — run in half as many forks as the machine has
+  CPUs (`failsafe.forkCount=0.5C`; 2 on a 4-CPU runner, as before). On a 10-CPU machine that takes ~6 min (~22%)
+  off the integration-test phase. `-Dfailsafe.forkCount=N` still overrides it. A parallel reactor (`-T`) is faster
+  still but makes `postgresql-queue-shard-owned`'s timing-sensitive tests flaky, so it stays opt-in.
 - `scripts/plugin-check.sh scaffold all` takes about 70 s instead of about 5 min. It installs only the modules the
   generated projects use (`scripts/plugin-scaffold.sh install`, the command CI runs too) with a parallel reactor and
   no versions report (`--full-install` keeps the whole reactor), and builds the init cells and slice cases from one
