@@ -20,7 +20,7 @@ import dk.trustworks.essentials.components.foundation.fencedlock.*;
 import org.awaitility.Awaitility;
 import org.junit.jupiter.api.*;
 
-import java.time.Duration;
+import java.time.*;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicInteger;
 import org.slf4j.*;
@@ -32,6 +32,10 @@ public abstract class DBFencedLockManagerIT<LOCK_MANAGER extends DBFencedLockMan
 
     private LOCK_MANAGER lockManagerNode1;
     private LOCK_MANAGER lockManagerNode2;
+    /**
+     * Set while a test has the database connection disrupted, so {@link #cleanup()} can restore it if the test fails first
+     */
+    private boolean      databaseConnectionDisrupted;
 
     protected LOCK_MANAGER getLockManagerNode1() {
         return lockManagerNode1;
@@ -71,30 +75,78 @@ public abstract class DBFencedLockManagerIT<LOCK_MANAGER extends DBFencedLockMan
 
     protected abstract boolean isConnectionRestored();
 
+    /**
+     * Bound for the lock outcome after a database outage. Far above the lock managers' 1 s confirm interval and 3 s lock
+     * timeout, because the first ticks after the outage may first have to finish operations that stalled during it, and
+     * (MongoDB) a lock document can stay write-locked until the server aborts a transaction left behind by the outage.
+     */
+    private static final Duration LOCK_OUTCOME_TIMEOUT = Duration.ofSeconds(30);
+
+    /**
+     * @return true when the database says node 1 owns the lock and has confirmed it at or after {@code since} - i.e. a
+     * confirmation that started after that point succeeded
+     */
+    private boolean isLockConfirmedByNode1Since(LockName lockName, OffsetDateTime since) {
+        return lockManagerNode1.lookupLock(lockName)
+                               .filter(lock -> lockManagerNode1.getLockManagerInstanceId().equals(lock.getLockedByLockManagerInstanceId()))
+                               .map(FencedLock::getLockLastConfirmedTimestamp)
+                               .filter(lastConfirmed -> !lastConfirmed.isBefore(since))
+                               .isPresent();
+    }
+
+    private void disruptDatabaseConnectionUntilRestored() {
+        databaseConnectionDisrupted = true;
+        disruptDatabaseConnection();
+    }
+
+    private void restoreDatabaseConnectionAndAwaitReachability() {
+        restoreDatabaseConnection();
+        databaseConnectionDisrupted = false;
+        Awaitility.waitAtMost(Duration.ofSeconds(30))
+                  .pollInterval(Duration.ofMillis(250))
+                  .until(this::isConnectionRestored);
+    }
+
+    /**
+     * How long {@link #deleteAllLocksInDBWithRetry(DBFencedLockManager)} keeps retrying. Generous on purpose: after a test
+     * has paused the database, the server can take several seconds to be reachable again, and a lock document can stay
+     * write-locked (every write a {@code WriteConflict}) until the server aborts a transaction that a commit left behind
+     * during the outage. Five quick retries (1.5 s in total) were not enough for either, and a failed cleanup fails the
+     * <em>next</em> test, which hides the one that caused it.
+     */
+    private static final Duration DELETE_ALL_LOCKS_TIMEOUT = Duration.ofSeconds(30);
+
     public static void deleteAllLocksInDBWithRetry(DBFencedLockManager<?, ?> lockManager) {
-        int maxRetries = 5;
-        int retryCount = 0;
-        while (retryCount < maxRetries) {
+        var              deadline   = System.nanoTime() + DELETE_ALL_LOCKS_TIMEOUT.toNanos();
+        var              attempt    = 0;
+        RuntimeException lastFailure;
+        do {
             try {
                 lockManager.deleteAllLocksInDB();
-                return; // Success
+                return;
             } catch (RuntimeException e) {
-                if (e.getMessage().contains("WriteConflict")) {
-                    retryCount++;
-                    try {
-                        Thread.sleep(100 * retryCount); // Exponential backoff
-                    } catch (InterruptedException ignored) {}
-                } else {
-                    throw e; // Not a transient error, rethrow
+                lastFailure = e;
+                attempt++;
+                log.debug("deleteAllLocksInDB attempt {} failed - retrying: {}", attempt, e.getMessage());
+                try {
+                    Thread.sleep(Math.min(100L * attempt, 1000L));
+                } catch (InterruptedException ie) {
+                    Thread.currentThread().interrupt();
+                    throw new RuntimeException("Interrupted while retrying deleteAllLocksInDB", ie);
                 }
             }
-        }
-        throw new RuntimeException("Failed to deleteAllLocksInDB after " + maxRetries + " retries.");
+        } while (System.nanoTime() < deadline);
+        throw new RuntimeException("Failed to deleteAllLocksInDB within " + DELETE_ALL_LOCKS_TIMEOUT + " (" + attempt + " attempts)", lastFailure);
     }
 
     @AfterEach
     void cleanup() {
         log.info("*******  Cleaning up  *******");
+        // A test that failed while the database was disrupted must not leave it unreachable for the next test
+        if (databaseConnectionDisrupted) {
+            log.info("------ Restoring the database connection left disrupted by the test ------");
+            restoreDatabaseConnectionAndAwaitReachability();
+        }
         if (lockManagerNode1 != null) {
             lockManagerNode1.stop();
             lockManagerNode1 = null;
@@ -492,7 +544,7 @@ public abstract class DBFencedLockManagerIT<LOCK_MANAGER extends DBFencedLockMan
 
         // When disrupt network connection for both nodes
         log.info("------ Disrupting the database connection ------");
-        disruptDatabaseConnection();
+        disruptDatabaseConnectionUntilRestored();
 
         // Then Node 1 should NOT have released the lock and node 2 should not have acquired the lock
         Thread.sleep(2000);
@@ -506,22 +558,50 @@ public abstract class DBFencedLockManagerIT<LOCK_MANAGER extends DBFencedLockMan
 
         // Restoring the connection could potentially result in node 2 overtaking the timed out lock
         log.info("------ Restoring the database connection ------");
-        restoreDatabaseConnection();
+        var restoredAt = OffsetDateTime.now(Clock.systemUTC());
+        restoreDatabaseConnectionAndAwaitReachability();
 
-        Awaitility.waitAtMost(Duration.ofSeconds(10)).until(this::isConnectionRestored);
+        // Which node ends up with the lock is decided asynchronously, by the lock managers' next confirm/acquire ticks after
+        // the database is reachable again - and those ticks can first have to finish the operations that stalled during the
+        // outage. So wait for the outcome to be decided rather than reading it the instant the database answers a ping:
+        // either node 1 has been told it lost the lock, or node 1 has confirmed the lock in the database since the restore
+        // (a confirm that started after the outage succeeded, so node 1 really kept it).
+        log.info("------ Waiting for the lock ownership to be decided ------");
+        Awaitility.waitAtMost(LOCK_OUTCOME_TIMEOUT)
+                  .pollInterval(Duration.ofMillis(100))
+                  .until(() -> lockNode1Callback.lockReleased != null || isLockConfirmedByNode1Since(lockName, restoredAt));
         log.info("------ Checking which node has the lock ------");
         if (lockNode1Callback.lockReleased != null) {
-            log.info("====== Node 1 lost the lock and node 2 should have acquired it ======");
-            assertThat(lockNode2Callback.lockAcquired).isNotNull();
+            log.info("====== Node 1 lost the lock - exactly one node should take it over under the next fence token ======");
+            // The timed-out lock is taken over on a later acquire tick. Usually by node 2 - but node 1's own acquireLockAsync is
+            // still running, so node 1 can win it back (e.g. while node 2's attempts still hit a write conflict left by the
+            // outage). Both are correct: what matters is that exactly one node holds it, under the next fence token.
+            var nextToken = lockManagerNode1.getInitialTokenValue() + 1;
+            Awaitility.waitAtMost(LOCK_OUTCOME_TIMEOUT)
+                      .pollInterval(Duration.ofMillis(100))
+                      .untilAsserted(() -> {
+                          var lockInDB = lockManagerNode2.lookupLock(lockName);
+                          assertThat(lockInDB).isPresent();
+                          assertThat(lockInDB.get().getCurrentToken()).isEqualTo(nextToken);
+                          var holder = lockInDB.get().getLockedByLockManagerInstanceId();
+                          assertThat(holder).isIn(lockManagerNode1.getLockManagerInstanceId(), lockManagerNode2.getLockManagerInstanceId());
+                          var holderIsNode2  = lockManagerNode2.getLockManagerInstanceId().equals(holder);
+                          var holderManager  = holderIsNode2 ? lockManagerNode2 : lockManagerNode1;
+                          var holderCallback = holderIsNode2 ? lockNode2Callback : lockNode1Callback;
+                          var otherManager   = holderIsNode2 ? lockManagerNode1 : lockManagerNode2;
+                          assertThat(holderCallback.lockAcquired).isNotNull();
+                          assertThat(holderCallback.lockAcquired.getCurrentToken()).isEqualTo(nextToken);
+                          assertThat(holderManager.isLockedByThisLockManagerInstance(lockName)).isTrue();
+                          assertThat(holderManager.isLockAcquiredByAnotherLockManagerInstance(lockName)).isFalse();
+                          assertThat(otherManager.isLockedByThisLockManagerInstance(lockName)).isFalse();
+                          assertThat(otherManager.isLockAcquired(lockName)).isTrue();
+                          assertThat(otherManager.isLockAcquiredByAnotherLockManagerInstance(lockName)).isTrue();
+                          if (!holderIsNode2) {
+                              assertThat(lockNode2Callback.lockAcquired).isNull();
+                          }
+                      });
             assertThat(lockNode2Callback.lockReleased).isNull();
-            assertThat(lockManagerNode2.isLockAcquiredByAnotherLockManagerInstance(lockName)).isFalse();
-            assertThat(lockManagerNode2.isLockedByThisLockManagerInstance(lockName)).isTrue();
-            assertThat(lockManagerNode2.isLockAcquired(lockName)).isTrue();
-            log.info("Lock token in DB {}", lockManagerNode2.lookupLock(lockName).get().getCurrentToken());
-            assertThat(lockNode2Callback.lockAcquired.getCurrentToken()).isEqualTo(lockManagerNode2.getInitialTokenValue()+1);
-            assertThat(lockManagerNode1.isLockedByThisLockManagerInstance(lockName)).isFalse();
-            assertThat(lockManagerNode1.isLockAcquired(lockName)).isTrue();
-            assertThat(lockManagerNode1.isLockAcquiredByAnotherLockManagerInstance(lockName)).isTrue();
+            log.info("Lock '{}' taken over after the outage: {}", lockName, lockManagerNode2.lookupLock(lockName).orElse(null));
         } else {
             log.info("====== Node 1 kept the lock and node 2 should not have acquired it ======");
             assertThat(lockNode2Callback.lockAcquired).isNull();
@@ -593,8 +673,8 @@ public abstract class DBFencedLockManagerIT<LOCK_MANAGER extends DBFencedLockMan
     }
 
     private static class TestLockCallback implements LockCallback {
-        FencedLock lockReleased;
-        FencedLock lockAcquired;
+        volatile FencedLock lockReleased;
+        volatile FencedLock lockAcquired;
 
         @Override
         public void lockAcquired(FencedLock lock) {
