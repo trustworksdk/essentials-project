@@ -169,6 +169,13 @@
         <!-- Test execution knobs; safe to override on the command line, e.g. -Dfailsafe.forkCount=1. -->
         <surefire.forkCount>2</surefire.forkCount>
         <failsafe.forkCount>2</failsafe.forkCount>
+        <!-- Test-skip switches: -DskipTests skips both suites, -DskipITs only failsafe, -DskipUTs only surefire.
+             Failsafe 3.6.0 no longer binds its skipTests parameter to the skipTests property (only to skipITs), so without
+             skipITs defaulting to skipTests here, -DskipTests skipped the unit tests and still ran every IT. -->
+        <skipTests>false</skipTests>
+        <skipITs>${skipTests}</skipITs>
+        <!-- Surefire-only skip (wired as surefire's skipTests below) for a run of just the ITs, e.g. a two-phase CI build. -->
+        <skipUTs>${skipTests}</skipUTs>
         <maven-compiler-plugin.version>3.16.0</maven-compiler-plugin.version>
         <versions-maven-plugin.version>2.22.0</versions-maven-plugin.version>
         <maven-enforcer-plugin.version>3.6.3</maven-enforcer-plugin.version>
@@ -672,6 +679,8 @@
                         -->
                         <forkCount>${surefire.forkCount}</forkCount>
                         <reuseForks>true</reuseForks>
+                        <!-- skipUTs defaults to skipTests (see <properties>), so -DskipTests still skips these. -->
+                        <skipTests>${skipUTs}</skipTests>
                     </configuration>
                 </plugin>
                 <plugin>
