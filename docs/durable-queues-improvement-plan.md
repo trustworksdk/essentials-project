@@ -48,6 +48,7 @@ Ordered claim under the same conditions: 1 026 ms with the current form, 827 ms 
 | B1 | Done. A queue whose poll filled every free slot is polled again, for that queue only, as soon as half its workers are free. `PostgresqlDurableQueuesSaturationIT` (2 000 messages, 8 consumers, 200 ms polling): 49 948 ms before, which is the predicted 50 000 ms ceiling, and 3 288 ms after. |
 | C1 | Done. The centralized fetcher always uses a `CentralizedQueuePollingOptimizer`, capped at 10× the polling interval without a listener and 20× with one. Opt out with `QueuePollingOptimizer.None()`. Idle queue at 20 ms polling: 28 queue-table scans in 3 s, against about 300 claim statements before. |
 | C2 | Done. A message queued by this node resets its consumer's backoff in the enqueuing unit of work's `afterCommit`. |
+| A2 | Measured, not changed: see the A2 measurements below. The worst case is long keys with fresh statistics (180 ms per claim), and a fix is a design choice. |
 | C3 | Open. |
 | C4 | Partial fill done: the unordered claim fills whatever the ordered claim left. The stuck-reset item is void, since it was already throttled. Skipping the ordered claim on queues without ordered messages is open. |
 | New: UoW callbacks | C2's test exposed a long-standing bug. `GenericHandleAwareUnitOfWork` (behind `JdbiUnitOfWorkFactory` and `EventStoreManagedUnitOfWorkFactory`) closed its handle, which clears the registered callbacks, before calling `afterCommit`/`afterRollback`, so neither ever ran. Spring's factory was unaffected. Fixed by taking a snapshot before `close()`; `GenericHandleAwareUnitOfWorkLifecycleTest` covers it. This switches on callbacks that never ran outside Spring (async snapshots, aggregate repositories), so it is the headline behaviour change in the 0.60.1 notes. |
@@ -73,6 +74,25 @@ Investigate:
   1. A `LATERAL … LIMIT 1` probe of `idx_<table>_ordered_msg` per candidate. Shard-owned already uses this pattern to force a stable nested loop with an index probe (`ShardOwnedStorage.java:1150-1179`).
   2. `DISTINCT ON (key) … ORDER BY key, key_order` to select each key's head first, then filter that head by readiness.
 - Accept a rewrite only if it is no slower with fresh statistics and is bounded with stale ones. Guard it with the same plan-shape integration test as A1.
+
+**A2 measurements (second round).** Full claim statement, 20 000 ordered messages, limit 128, PostgreSQL 17:
+
+| Barrier | 2 000 keys × 10, stale | 2 000 keys, fresh | 20 keys × 1 000, stale | 20 keys, fresh |
+| --- | --- | --- | --- | --- |
+| Current `NOT EXISTS (earlier key_order)` | 1.6 ms | 1.4 ms | 179 ms | **180 ms** |
+| `key_order = (SELECT min(key_order) …)` | 44 ms | 43 ms | 196 ms | 211 ms |
+| `(key, key_order) IN (SELECT key, min(key_order) … GROUP BY key)` | 7.9 ms | 7.3 ms | 5.7 ms | 3.2 ms |
+
+Findings:
+- **The worst case is long keys, not stale statistics.** With 20 keys there are only 20 eligible heads, so the limit is never reached. The claim walks every candidate with one index probe each (20 000 probes, 180 ms) on every poll while such a backlog exists, even with fresh statistics. Few keys with many messages each is a typical event-processor shape, and B1 polls a busy queue more often.
+- The stale-statistics case is state-dependent. The first reproduction (no column statistics yet) took about 1 s; with column statistics from an earlier `ANALYZE` it took 1.6 ms. The statement's real problem is plan instability.
+- `IN … GROUP BY key` is bounded in every state measured, but it costs 5× more in the common many-short-keys case. It also aggregates every ordered row in the queue, so it grows with the backlog.
+- `min()` and `NOT EXISTS … OFFSET 0` are rejected: no better, or worse.
+
+Options, to decide before implementing:
+1. A recursive "loose index scan" that visits each key's head through `idx_<table>_ordered_msg`: cost proportional to the number of keys, independent of messages per key.
+2. Pick per poll: the current statement, falling back to `IN … GROUP BY` when the previous claim on the queue returned fewer rows than its limit.
+3. Accept it, document it, and steer long-key workloads to the shard-owned engine, which has no claim.
 
 ### A3. Index choice inside the claim's select
 
