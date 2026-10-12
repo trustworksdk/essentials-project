@@ -19,6 +19,8 @@ Edit `LLM/` only: `essentials-plugin/references/llm/` is generated from it by `s
 ```bash
 mvn test                                              # unit only, no Docker
 mvn verify                                            # unit + integration (needs Docker)
+scripts/fast-verify.sh                                # all unit tests first (fail fast), then ITs only; see script header
+mvn verify -DskipUTs                                  # ITs only; -DskipITs = unit only; -DskipTests = neither
 mvn test -pl types -am                                # single module, unit
 mvn verify -pl components/postgresql-event-store -am  # single module, integration
 mvn clean install                                     # full build
