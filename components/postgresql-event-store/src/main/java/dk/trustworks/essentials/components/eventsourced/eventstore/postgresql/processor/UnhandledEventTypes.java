@@ -20,7 +20,7 @@ import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.Ev
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.observability.EventStoreSubscriptionObserver;
 import dk.trustworks.essentials.components.foundation.messaging.MessageHandler;
-import dk.trustworks.essentials.components.foundation.startup.EssentialsStartupReport;
+import dk.trustworks.essentials.components.foundation.startup.EssentialsRunReport;
 import dk.trustworks.essentials.components.foundation.messaging.eip.store_and_forward.PatternMatchingMessageHandler;
 import dk.trustworks.essentials.shared.reflection.Methods;
 import org.slf4j.*;
@@ -136,7 +136,7 @@ final class UnhandledEventTypes {
                      summary.deliberatelyIgnored().isEmpty() ? "" : " - and ignores these on purpose (@IgnoresEventTypes): " + summary.deliberatelyIgnored());
             if (!summary.unhandledTypes().isEmpty()) {
                 log.warn("[{}] {}. {}", processorName, summary.describeUnhandledTypes(), ViewSummary.fix());
-                EssentialsStartupReport.addToCurrent(EssentialsStartupReport.Finding.warn("ViewEventProcessor '" + processorName + "'",
+                EssentialsRunReport.addToCurrent(EssentialsRunReport.Finding.warn("ViewEventProcessor '" + processorName + "'",
                                                                                           summary.describeUnhandledTypes(),
                                                                                           ViewSummary.fix()));
             }

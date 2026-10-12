@@ -19,7 +19,7 @@ package dk.trustworks.essentials.components.eventsourced.aggregates.eventstream.
 import dk.trustworks.essentials.components.eventsourced.aggregates.eventstream.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.AggregateType;
-import dk.trustworks.essentials.components.foundation.startup.EssentialsStartupReport;
+import dk.trustworks.essentials.components.foundation.startup.EssentialsRunReport;
 import dk.trustworks.essentials.reactive.command.*;
 import org.slf4j.*;
 
@@ -235,7 +235,7 @@ public class EventStreamDeciderAndAggregateTypeConfigurator {
      * The overlaps come from {@link CommandBus#findCommandTypesHandledByMoreThanOneCommandHandler(CommandHandler)}, so the
      * command types checked are those the handlers declare in {@link CommandHandler#handledCommandTypes()} - for an
      * adapter, its deciders' {@code COMMAND} type arguments ({@link EventStreamDeciderCommandHandlerAdapter#handledCommandTypes()}).
-     * Each one is added to the {@link EssentialsStartupReport} bound to the thread. It is logged at WARN here only when the
+     * Each one is added to the {@link EssentialsRunReport} bound to the thread. It is logged at WARN here only when the
      * {@link CommandBus} is not an {@link AbstractCommandBus}, which has already logged it when the adapter was added.
      * A command handler registered after this configurator is checked - and warned about - by the {@link CommandBus} alone.
      * <p>
@@ -269,7 +269,7 @@ public class EventStreamDeciderAndAggregateTypeConfigurator {
                              commandBus.getClass().getSimpleName(),
                              MultipleCommandHandlersFoundException.class.getSimpleName());
                 }
-                EssentialsStartupReport.addToCurrent(EssentialsStartupReport.Finding.warn(
+                EssentialsRunReport.addToCurrent(EssentialsRunReport.Finding.warn(
                         "command type '" + commandType.getName() + "'",
                         "would be handled by " + handlers.size() + " command handlers: " + handlers + " - every send of it fails with a "
                                 + MultipleCommandHandlersFoundException.class.getSimpleName(),
@@ -312,7 +312,7 @@ public class EventStreamDeciderAndAggregateTypeConfigurator {
                                  deciders.size(),
                                  adapter,
                                  deciders.stream().map(candidate -> candidate.getClass().getName()).toList());
-                        EssentialsStartupReport.addToCurrent(EssentialsStartupReport.Finding.warn(
+                        EssentialsRunReport.addToCurrent(EssentialsRunReport.Finding.warn(
                                 "command type '" + commandType.getName() + "'",
                                 "would be handled by " + deciders.size() + " deciders of " + adapter + ": " + deciders.stream().map(candidate -> candidate.getClass().getName()).toList()
                                         + " - every send of it fails with 'Multiple deciders found'",
@@ -381,7 +381,7 @@ public class EventStreamDeciderAndAggregateTypeConfigurator {
                              unhandled,
                              commandBus.getClass().getSimpleName(),
                              NoCommandHandlerFoundException.class.getSimpleName());
-                    EssentialsStartupReport.addToCurrent(EssentialsStartupReport.Finding.warn(
+                    EssentialsRunReport.addToCurrent(EssentialsRunReport.Finding.warn(
                             "sealed command type '" + sealedCommandType.getName() + "'",
                             "permits " + unhandled.size() + " command type(s) that no command handler on the CommandBus handles (" + declaredAs + "): " + unhandled
                                     + " - every send of them fails with a " + NoCommandHandlerFoundException.class.getSimpleName(),

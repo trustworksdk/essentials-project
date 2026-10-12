@@ -318,17 +318,17 @@ numeric `Duration` (`30.000000000`), a missing primitive reading as its default 
 unknown properties ignored, untyped floats as `BigDecimal`, and with `types-jackson3` present, value types as JSON
 primitives. Shared by every starter: `EssentialsStartupChecksAutoConfiguration` (foundation).
 
-#### Startup Report
+#### Run Report
 
 Since 0.60.1, every starter (shared `EssentialsStartupChecksAutoConfiguration`, foundation) gives each application
-context an `EssentialsStartupReport` bean and logs it as **one block on `ApplicationReadyEvent`**: at ERROR if any
+context an `EssentialsRunReport` bean and logs it as **one block on `ApplicationReadyEvent`**: at ERROR if any
 finding is an error, at WARN if any is a warning, otherwise one INFO line `Essentials startup report: no findings`.
 The block lists the findings grouped by severity, each with its fix. Every check still logs where it runs, so nothing
-is lost without the block. Logger `dk.trustworks.essentials.components.foundation.startup.EssentialsStartupReport`.
+is lost without the block. Logger `dk.trustworks.essentials.components.foundation.startup.EssentialsRunReport`.
 
 The report keeps collecting while the application runs, and logs twice more:
 
-- **New findings, periodically** - every `essentials.startup-report.new-findings-interval` (`Duration`, default `5m`;
+- **New findings, periodically** - every `essentials.run-report.new-findings-interval` (`Duration`, default `5m`;
   `0` or negative turns it off), one block `Essentials report, N new findings since the last report` with only the
   findings not logged before, at the highest severity among them, each with how often and when it was seen. Nothing is
   logged when nothing is new.
@@ -358,7 +358,7 @@ Identical findings are kept once with a count; at most 500 distinct findings are
   `wire-format-check=fail`, a failed schema `validate`. The failure is the report.
 - **When it prints:** on `ApplicationReadyEvent`; an application stopped after `ApplicationStartedEvent` without
   becoming ready (`essentials.schema.mode=emit`) prints it as the context closes. A context not started by
-  `SpringApplication` (`ApplicationContextRunner`) prints nothing - read the `EssentialsStartupReport` bean
+  `SpringApplication` (`ApplicationContextRunner`) prints nothing - read the `EssentialsRunReport` bean
   (`getFindings()`).
 - One report per context, never shared: two contexts in one JVM never see each other's findings - and neither gets
   the runtime findings while both are open. Not exposed over the admin API or actuator.

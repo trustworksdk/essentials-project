@@ -921,7 +921,7 @@ projection checking that the order is contiguous breaks, and the view is incompl
   `Module`) whenever it has a `MeterRegistry` - the starter wires that when one is present.
 - Logger: `dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.processor.UnhandledEventTypes`. With
   a Spring Boot starter the start-up WARN is repeated in the startup report block
-  ([LLM-spring-boot-starter-modules.md § Startup Report](LLM-spring-boot-starter-modules.md#startup-report)).
+  ([LLM-spring-boot-starter-modules.md § Run Report](LLM-spring-boot-starter-modules.md#run-report)).
 
 ## In-Memory Projections
 

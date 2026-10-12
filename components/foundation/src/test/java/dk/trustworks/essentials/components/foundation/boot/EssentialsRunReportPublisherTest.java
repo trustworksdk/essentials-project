@@ -19,8 +19,8 @@ package dk.trustworks.essentials.components.foundation.boot;
 import ch.qos.logback.classic.Level;
 import ch.qos.logback.classic.spi.ILoggingEvent;
 import ch.qos.logback.core.read.ListAppender;
-import dk.trustworks.essentials.components.foundation.startup.EssentialsStartupReport;
-import dk.trustworks.essentials.components.foundation.startup.EssentialsStartupReport.*;
+import dk.trustworks.essentials.components.foundation.startup.EssentialsRunReport;
+import dk.trustworks.essentials.components.foundation.startup.EssentialsRunReport.*;
 import org.awaitility.Awaitility;
 import org.junit.jupiter.api.*;
 import org.slf4j.LoggerFactory;
@@ -41,7 +41,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  * The startup report through a real {@link SpringApplication}: one report per context, filled during the refresh,
  * printed once the application is ready
  */
-class EssentialsStartupReportPublisherTest {
+class EssentialsRunReportPublisherTest {
     private static final String REMOVED_PROPERTY = "essentials.durable-queues.transactional-mode=fully-transactional";
 
     private ListAppender<ILoggingEvent>   logAppender;
@@ -51,7 +51,7 @@ class EssentialsStartupReportPublisherTest {
     void setUp() {
         // Spring Boot's logging system would reset logback, and with it the appender attached below
         System.setProperty(LoggingSystem.SYSTEM_PROPERTY, LoggingSystem.NONE);
-        logger = (ch.qos.logback.classic.Logger) LoggerFactory.getLogger(EssentialsStartupReport.class);
+        logger = (ch.qos.logback.classic.Logger) LoggerFactory.getLogger(EssentialsRunReport.class);
         logAppender = new ListAppender<>();
         logAppender.start();
         logger.addAppender(logAppender);
@@ -66,7 +66,7 @@ class EssentialsStartupReportPublisherTest {
     @Test
     void the_report_is_printed_as_one_error_block_when_the_application_is_ready() {
         try (var context = start(ApplicationWithACheck.class, REMOVED_PROPERTY)) {
-            var report = context.getBean(EssentialsStartupReport.class);
+            var report = context.getBean(EssentialsRunReport.class);
 
             assertThat(report.getFindings()).extracting(Finding::severity, Finding::source)
                                             .containsExactlyInAnyOrder(org.assertj.core.groups.Tuple.tuple(Severity.ERROR, "property 'essentials.durable-queues.transactional-mode'"),
@@ -79,14 +79,14 @@ class EssentialsStartupReportPublisherTest {
                                                        .contains("[test check] raised while a bean was created");
             });
             // The binding ended with the refresh
-            assertThat(EssentialsStartupReport.current()).isEmpty();
+            assertThat(EssentialsRunReport.current()).isEmpty();
         }
     }
 
     @Test
     void an_application_without_findings_logs_one_info_line() {
         try (var context = start(TestApplication.class)) {
-            assertThat(context.getBean(EssentialsStartupReport.class).getFindings()).isEmpty();
+            assertThat(context.getBean(EssentialsRunReport.class).getFindings()).isEmpty();
         }
         assertThat(reportBlocks()).singleElement().satisfies(event -> {
             assertThat(event.getLevel()).isEqualTo(Level.INFO);
@@ -100,7 +100,7 @@ class EssentialsStartupReportPublisherTest {
              var clean = start(TestApplication.class)) {
             assertThat(errorSources(misconfigured)).containsExactly("property 'essentials.durable-queues.transactional-mode'");
             assertThat(errorSources(clean)).isEmpty();
-            assertThat(misconfigured.getBean(EssentialsStartupReport.class)).isNotSameAs(clean.getBean(EssentialsStartupReport.class));
+            assertThat(misconfigured.getBean(EssentialsRunReport.class)).isNotSameAs(clean.getBean(EssentialsRunReport.class));
         }
 
         // ... nor when they start at the same time on different threads
@@ -120,20 +120,20 @@ class EssentialsStartupReportPublisherTest {
 
     @Test
     void a_finding_raised_after_start_up_is_logged_as_new_and_in_the_complete_report_when_the_context_closes() throws Exception {
-        try (var context = start(ApplicationWithACheck.class, "essentials.startup-report.new-findings-interval=100ms")) {
-            var publisher = context.getBean(EssentialsStartupReportPublisher.class);
+        try (var context = start(ApplicationWithACheck.class, "essentials.run-report.new-findings-interval=100ms")) {
+            var publisher = context.getBean(EssentialsRunReportPublisher.class);
             assertThat(publisher.getNewFindingsInterval()).isEqualTo(Duration.ofMillis(100));
             assertThat(publisher.isLoggingNewFindings()).isTrue();
-            assertThat(EssentialsStartupReport.runReport()).containsSame(context.getBean(EssentialsStartupReport.class));
+            assertThat(EssentialsRunReport.runReport()).containsSame(context.getBean(EssentialsRunReport.class));
 
             // A check running after start-up, on a thread no report is bound to
             var executor = Executors.newSingleThreadExecutor();
             try {
-                executor.submit(() -> EssentialsStartupReport.addToCurrent(Finding.error("runtime check", "raised while the application ran", "fix the runtime"))).get(5, TimeUnit.SECONDS);
+                executor.submit(() -> EssentialsRunReport.addToCurrent(Finding.error("runtime check", "raised while the application ran", "fix the runtime"))).get(5, TimeUnit.SECONDS);
             } finally {
                 executor.shutdownNow();
             }
-            EssentialsStartupReport.addToCurrent(Finding.error("runtime check", "raised while the application ran", "fix the runtime"));
+            EssentialsRunReport.addToCurrent(Finding.error("runtime check", "raised while the application ran", "fix the runtime"));
 
             Awaitility.await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> assertThat(newFindingsBlocks()).singleElement().satisfies(event -> {
                 assertThat(event.getLevel()).isEqualTo(Level.ERROR);
@@ -151,19 +151,19 @@ class EssentialsStartupReportPublisherTest {
                                                    .contains("  - [test check] raised while a bean was created\n    Fix: nothing\n    Seen once, at ");
         });
         // Deregistered with the context
-        assertThat(EssentialsStartupReport.runReport()).isEmpty();
+        assertThat(EssentialsRunReport.runReport()).isEmpty();
         // Exactly one new-findings block: nothing new after the first
         assertThat(newFindingsBlocks()).hasSize(1);
     }
 
     @Test
     void a_zero_interval_turns_the_periodic_log_off_but_the_run_report_is_still_logged_on_close() {
-        EssentialsStartupReportPublisher publisher;
-        try (var context = start(TestApplication.class, "essentials.startup-report.new-findings-interval=0")) {
-            publisher = context.getBean(EssentialsStartupReportPublisher.class);
+        EssentialsRunReportPublisher publisher;
+        try (var context = start(TestApplication.class, "essentials.run-report.new-findings-interval=0")) {
+            publisher = context.getBean(EssentialsRunReportPublisher.class);
             assertThat(publisher.getNewFindingsInterval()).isZero();
             assertThat(publisher.isLoggingNewFindings()).isFalse();
-            EssentialsStartupReport.addToCurrent(Finding.info("runtime", "a note", ""));
+            EssentialsRunReport.addToCurrent(Finding.info("runtime", "a note", ""));
         }
 
         assertThat(newFindingsBlocks()).isEmpty();
@@ -175,10 +175,10 @@ class EssentialsStartupReportPublisherTest {
 
     @Test
     void the_default_interval_is_five_minutes_and_the_thread_stops_with_the_context() {
-        EssentialsStartupReportPublisher publisher;
+        EssentialsRunReportPublisher publisher;
         try (var context = start(TestApplication.class)) {
-            publisher = context.getBean(EssentialsStartupReportPublisher.class);
-            assertThat(publisher.getNewFindingsInterval()).isEqualTo(EssentialsStartupReportPublisher.DEFAULT_NEW_FINDINGS_INTERVAL).isEqualTo(Duration.ofMinutes(5));
+            publisher = context.getBean(EssentialsRunReportPublisher.class);
+            assertThat(publisher.getNewFindingsInterval()).isEqualTo(EssentialsRunReportPublisher.DEFAULT_NEW_FINDINGS_INTERVAL).isEqualTo(Duration.ofMinutes(5));
             assertThat(publisher.isLoggingNewFindings()).isTrue();
         }
         assertThat(publisher.isLoggingNewFindings()).isFalse();
@@ -207,7 +207,7 @@ class EssentialsStartupReportPublisherTest {
     }
 
     private static List<String> errorSources(ConfigurableApplicationContext context) {
-        return context.getBean(EssentialsStartupReport.class).getFindings(Severity.ERROR).stream().map(Finding::source).toList();
+        return context.getBean(EssentialsRunReport.class).getFindings(Severity.ERROR).stream().map(Finding::source).toList();
     }
 
     private static ConfigurableApplicationContext start(Class<?> applicationClass, String... properties) {
@@ -227,11 +227,11 @@ class EssentialsStartupReportPublisherTest {
     @Import(TestApplication.class)
     static class ApplicationWithACheck {
         /**
-         * Stands in for a check deep inside a component, which only knows {@link EssentialsStartupReport#addToCurrent(Finding)}
+         * Stands in for a check deep inside a component, which only knows {@link EssentialsRunReport#addToCurrent(Finding)}
          */
         @Bean
         SmartInitializingSingleton aCheckThatRunsDuringStartup() {
-            return () -> EssentialsStartupReport.addToCurrent(Finding.warn("test check", "raised while a bean was created", "nothing"));
+            return () -> EssentialsRunReport.addToCurrent(Finding.warn("test check", "raised while a bean was created", "nothing"));
         }
     }
 }

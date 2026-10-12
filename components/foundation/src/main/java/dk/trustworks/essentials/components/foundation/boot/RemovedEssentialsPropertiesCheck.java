@@ -16,8 +16,8 @@
 
 package dk.trustworks.essentials.components.foundation.boot;
 
-import dk.trustworks.essentials.components.foundation.startup.EssentialsStartupReport;
-import dk.trustworks.essentials.components.foundation.startup.EssentialsStartupReport.Finding;
+import dk.trustworks.essentials.components.foundation.startup.EssentialsRunReport;
+import dk.trustworks.essentials.components.foundation.startup.EssentialsRunReport.Finding;
 import org.slf4j.*;
 import org.springframework.beans.factory.config.*;
 import org.springframework.boot.context.properties.source.*;
@@ -82,7 +82,7 @@ public final class RemovedEssentialsPropertiesCheck implements BeanFactoryPostPr
         if (environment != null) {
             findRemovedProperties(environment).forEach(finding -> {
                 log.error(asLogMessage(finding));
-                EssentialsStartupReport.addToCurrent(finding);
+                EssentialsRunReport.addToCurrent(finding);
             });
         }
     }
@@ -97,7 +97,7 @@ public final class RemovedEssentialsPropertiesCheck implements BeanFactoryPostPr
 
     /**
      * @param environment the environment to inspect
-     * @return one {@link EssentialsStartupReport.Severity#ERROR} finding per removed {@code essentials.*} property that
+     * @return one {@link EssentialsRunReport.Severity#ERROR} finding per removed {@code essentials.*} property that
      * is still set, sorted by property name
      */
     static List<Finding> findRemovedProperties(Environment environment) {

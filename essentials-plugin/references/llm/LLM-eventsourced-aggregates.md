@@ -220,7 +220,7 @@ concrete permitted subtypes of a sealed one (`EventStreamDeciderCommandHandlerAd
 
 - **Another command handler already handles the type** (another adapter, or an `@CmdHandler`): the `CommandBus` WARNs
   as the adapter is registered (see `CommandBus` in [reactive](./LLM-reactive.md)). The configurator adds the overlap to
-  the `EssentialsStartupReport`, and also WARNs itself when the bus is not an `AbstractCommandBus`.
+  the `EssentialsRunReport`, and also WARNs itself when the bus is not an `AbstractCommandBus`.
 - **Two deciders of the same adapter handle the type**: the bus sees only one handler, the adapter, so the configurator
   WARNs about this case itself.
 
@@ -273,9 +273,10 @@ if (result instanceof OrderConfirmationRejected rejected) { /* 409/422 with reje
 ```
 
 **Getting the appended `GlobalEventOrder`** (since 0.60.1): `send` returns the event, not the `PersistedEvent`. Wrap
-the send in `AppendedEvents.recordDuring(...)` (package `...aggregates.eventstream.adapters`) to receive the
-`PersistedEvent`s the decider adapter appended - e.g. to await a processor with `awaitProcessed` (see
-`LLM-postgresql-event-store.md`, *Awaiting a processor*):
+the send in `AppendedEvents.recordDuring(...)` (`postgresql-event-store`, package
+`dk.trustworks.essentials.components.eventsourced.eventstore.postgresql`) to receive the `PersistedEvent`s appended
+during it - e.g. to await a processor with `awaitProcessed` (see `LLM-postgresql-event-store.md`, *Awaiting a
+processor*):
 
 ```java
 var recorded = AppendedEvents.recordDuring(() -> commandBus.send(new CreateOrder(orderId, customerId)));
@@ -283,10 +284,13 @@ OrderCreated event = (OrderCreated) recorded.result();                    // wha
 orderViewProcessor.awaitProcessed(recorded.lastAppendedEvent().orElseThrow(), Duration.ofSeconds(10));
 ```
 
+It records at the event store, so it works for every appender - `EventStreamDecider`, decider `CommandHandler`,
+`StatefulAggregateRepository`, `FlexAggregateRepository`, Kotlin deciders, direct `appendToStream` - once per event.
 Scoped to the calling thread (a `ScopedValue`): it sees `send`, not `sendAsync`/`sendAndDontWait` (their handler runs
-on another thread), and only appends made by `EventStreamDeciderCommandHandlerAdapter`. Recordings nest. With the
+on another thread); appends of synchronous subscribers on that thread during the action are included. Recordings nest.
+A repository that appends at commit is recorded only when its `UnitOfWork` commits during the action: with the
 `UnitOfWorkControllingCommandBusInterceptor` the events are committed when `send` returns; inside an outer
-`UnitOfWork`, await only after it commits.
+`UnitOfWork`, nothing lazy is appended until it commits - record around that commit, and await only after it.
 
 ### Testing with GivenWhenThenScenario
 

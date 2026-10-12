@@ -16,7 +16,7 @@
 
 package dk.trustworks.essentials.components.foundation.messaging;
 
-import dk.trustworks.essentials.components.foundation.startup.EssentialsStartupReport;
+import dk.trustworks.essentials.components.foundation.startup.EssentialsRunReport;
 import org.slf4j.*;
 
 import java.time.Duration;
@@ -78,7 +78,7 @@ final class RedeliveryPolicyBuilderChecks {
         if (!problems.isEmpty()) {
             log.warn("Incomplete RedeliveryPolicy built with {}: {}. From 0.61 build() will throw an IllegalArgumentException instead.",
                      builderName, String.join("; ", problems));
-            EssentialsStartupReport.addToCurrent(EssentialsStartupReport.Finding.warn("RedeliveryPolicy built with " + builderName,
+            EssentialsRunReport.addToCurrent(EssentialsRunReport.Finding.warn("RedeliveryPolicy built with " + builderName,
                                                                                       "incomplete: " + String.join("; ", problems),
                                                                                       "Call the setters named on the builder. From 0.61 build() throws an IllegalArgumentException instead"));
         }

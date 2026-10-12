@@ -220,7 +220,7 @@ concrete permitted subtypes of a sealed one (`EventStreamDeciderCommandHandlerAd
 
 - **Another command handler already handles the type** (another adapter, or an `@CmdHandler`): the `CommandBus` WARNs
   as the adapter is registered (see `CommandBus` in [reactive](./LLM-reactive.md)). The configurator adds the overlap to
-  the `EssentialsStartupReport`, and also WARNs itself when the bus is not an `AbstractCommandBus`.
+  the `EssentialsRunReport`, and also WARNs itself when the bus is not an `AbstractCommandBus`.
 - **Two deciders of the same adapter handle the type**: the bus sees only one handler, the adapter, so the configurator
   WARNs about this case itself.
 

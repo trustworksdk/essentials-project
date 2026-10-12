@@ -19,7 +19,7 @@ package dk.trustworks.essentials.components.foundation.startup;
 import ch.qos.logback.classic.Level;
 import ch.qos.logback.classic.spi.ILoggingEvent;
 import ch.qos.logback.core.read.ListAppender;
-import dk.trustworks.essentials.components.foundation.startup.EssentialsStartupReport.*;
+import dk.trustworks.essentials.components.foundation.startup.EssentialsRunReport.*;
 import org.junit.jupiter.api.*;
 import org.slf4j.LoggerFactory;
 
@@ -28,13 +28,13 @@ import java.util.concurrent.*;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-class EssentialsStartupReportTest {
+class EssentialsRunReportTest {
     private ListAppender<ILoggingEvent>   logAppender;
     private ch.qos.logback.classic.Logger logger;
 
     @BeforeEach
     void setUp() {
-        logger = (ch.qos.logback.classic.Logger) LoggerFactory.getLogger(EssentialsStartupReport.class);
+        logger = (ch.qos.logback.classic.Logger) LoggerFactory.getLogger(EssentialsRunReport.class);
         logAppender = new ListAppender<>();
         logAppender.start();
         logger.addAppender(logAppender);
@@ -47,7 +47,7 @@ class EssentialsStartupReportTest {
 
     @Test
     void an_empty_report_logs_one_info_line() {
-        new EssentialsStartupReport().log();
+        new EssentialsRunReport().log();
 
         assertThat(logAppender.list).singleElement().satisfies(event -> {
             assertThat(event.getLevel()).isEqualTo(Level.INFO);
@@ -57,7 +57,7 @@ class EssentialsStartupReportTest {
 
     @Test
     void the_block_groups_the_findings_by_severity_with_their_fix_and_is_logged_at_the_highest_severity() {
-        var report = new EssentialsStartupReport();
+        var report = new EssentialsRunReport();
         report.add(Finding.info("schema", "a note", ""));
         report.add(Finding.warn("view 'Orders'", "skips OrderShipped", "Add a @MessageHandler"));
         report.add(Finding.error("property 'essentials.x'", "is set but ignored", "Remove the property"));
@@ -78,7 +78,7 @@ class EssentialsStartupReportTest {
 
     @Test
     void warnings_without_errors_are_logged_at_warn() {
-        var report = new EssentialsStartupReport();
+        var report = new EssentialsRunReport();
         report.add(Finding.warn("a", "b", "c"));
 
         report.log();
@@ -88,35 +88,35 @@ class EssentialsStartupReportTest {
 
     @Test
     void a_finding_reaches_only_the_report_bound_to_the_current_thread() throws Exception {
-        EssentialsStartupReport.addToCurrent(Finding.warn("nothing bound", "dropped", ""));
-        assertThat(EssentialsStartupReport.current()).isEmpty();
+        EssentialsRunReport.addToCurrent(Finding.warn("nothing bound", "dropped", ""));
+        assertThat(EssentialsRunReport.current()).isEmpty();
 
-        var outer = new EssentialsStartupReport();
-        var inner = new EssentialsStartupReport();
+        var outer = new EssentialsRunReport();
+        var inner = new EssentialsRunReport();
         try (var outerBinding = outer.bindToCurrentThread()) {
-            EssentialsStartupReport.addToCurrent(Finding.warn("outer", "1", ""));
+            EssentialsRunReport.addToCurrent(Finding.warn("outer", "1", ""));
             try (var innerBinding = inner.bindToCurrentThread()) {
-                EssentialsStartupReport.addToCurrent(Finding.warn("inner", "2", ""));
+                EssentialsRunReport.addToCurrent(Finding.warn("inner", "2", ""));
                 // Another thread sees neither
                 var executor = Executors.newSingleThreadExecutor();
                 try {
-                    assertThat(executor.submit(() -> EssentialsStartupReport.current().isPresent()).get(5, TimeUnit.SECONDS)).isFalse();
+                    assertThat(executor.submit(() -> EssentialsRunReport.current().isPresent()).get(5, TimeUnit.SECONDS)).isFalse();
                 } finally {
                     executor.shutdownNow();
                 }
             }
-            assertThat(EssentialsStartupReport.current()).containsSame(outer);
-            EssentialsStartupReport.addToCurrent(Finding.warn("outer", "3", ""));
+            assertThat(EssentialsRunReport.current()).containsSame(outer);
+            EssentialsRunReport.addToCurrent(Finding.warn("outer", "3", ""));
         }
 
-        assertThat(EssentialsStartupReport.current()).isEmpty();
+        assertThat(EssentialsRunReport.current()).isEmpty();
         assertThat(outer.getFindings()).extracting(Finding::message).containsExactly("1", "3");
         assertThat(inner.getFindings()).extracting(Finding::message).containsExactly("2");
     }
 
     @Test
     void closing_a_binding_on_another_thread_or_twice_changes_nothing() throws Exception {
-        var report  = new EssentialsStartupReport();
+        var report  = new EssentialsRunReport();
         var binding = report.bindToCurrentThread();
         try {
             var executor = Executors.newSingleThreadExecutor();
@@ -125,58 +125,58 @@ class EssentialsStartupReportTest {
             } finally {
                 executor.shutdownNow();
             }
-            assertThat(EssentialsStartupReport.current()).containsSame(report);
+            assertThat(EssentialsRunReport.current()).containsSame(report);
         } finally {
             binding.close();
             binding.close();
         }
-        assertThat(EssentialsStartupReport.current()).isEmpty();
+        assertThat(EssentialsRunReport.current()).isEmpty();
     }
 
     @Test
     void without_a_bound_report_a_finding_reaches_the_run_report_only_when_exactly_one_is_registered() throws Exception {
-        assertThat(EssentialsStartupReport.runReport()).isEmpty();
-        var first  = new EssentialsStartupReport();
-        var second = new EssentialsStartupReport();
+        assertThat(EssentialsRunReport.runReport()).isEmpty();
+        var first  = new EssentialsRunReport();
+        var second = new EssentialsRunReport();
 
         // 0 registered: dropped
-        EssentialsStartupReport.addToCurrent(Finding.warn("none registered", "dropped", ""));
+        EssentialsRunReport.addToCurrent(Finding.warn("none registered", "dropped", ""));
 
         // 1 registered: reaches it, from any thread
         try (var firstRegistration = first.registerAsRunReport()) {
-            assertThat(EssentialsStartupReport.runReport()).containsSame(first);
-            assertThat(EssentialsStartupReport.current()).isEmpty();
-            EssentialsStartupReport.addToCurrent(Finding.warn("one registered", "kept", ""));
+            assertThat(EssentialsRunReport.runReport()).containsSame(first);
+            assertThat(EssentialsRunReport.current()).isEmpty();
+            EssentialsRunReport.addToCurrent(Finding.warn("one registered", "kept", ""));
             var executor = Executors.newSingleThreadExecutor();
             try {
-                executor.submit(() -> EssentialsStartupReport.addToCurrent(Finding.warn("one registered", "kept on another thread", ""))).get(5, TimeUnit.SECONDS);
+                executor.submit(() -> EssentialsRunReport.addToCurrent(Finding.warn("one registered", "kept on another thread", ""))).get(5, TimeUnit.SECONDS);
             } finally {
                 executor.shutdownNow();
             }
 
             // A report bound to the thread still wins
-            var bound = new EssentialsStartupReport();
+            var bound = new EssentialsRunReport();
             try (var binding = bound.bindToCurrentThread()) {
-                EssentialsStartupReport.addToCurrent(Finding.warn("bound", "to the bound report", ""));
+                EssentialsRunReport.addToCurrent(Finding.warn("bound", "to the bound report", ""));
             }
             assertThat(bound.getFindings()).extracting(Finding::message).containsExactly("to the bound report");
 
             // 2 registered: dropped - neither is "the" run report
             try (var secondRegistration = second.registerAsRunReport()) {
-                assertThat(EssentialsStartupReport.runReport()).isEmpty();
+                assertThat(EssentialsRunReport.runReport()).isEmpty();
                 assertThat(first.isRegisteredAsRunReport()).isTrue();
-                EssentialsStartupReport.addToCurrent(Finding.warn("two registered", "dropped", ""));
+                EssentialsRunReport.addToCurrent(Finding.warn("two registered", "dropped", ""));
             }
 
             // Back to 1
-            assertThat(EssentialsStartupReport.runReport()).containsSame(first);
+            assertThat(EssentialsRunReport.runReport()).containsSame(first);
             assertThat(second.isRegisteredAsRunReport()).isFalse();
             firstRegistration.close();
             firstRegistration.close();
         }
 
-        assertThat(EssentialsStartupReport.runReport()).isEmpty();
-        EssentialsStartupReport.addToCurrent(Finding.warn("none registered", "dropped again", ""));
+        assertThat(EssentialsRunReport.runReport()).isEmpty();
+        EssentialsRunReport.addToCurrent(Finding.warn("none registered", "dropped again", ""));
         assertThat(first.getFindings()).extracting(Finding::message).containsExactly("kept", "kept on another thread");
         assertThat(second.getFindings()).isEmpty();
     }
@@ -184,7 +184,7 @@ class EssentialsStartupReportTest {
     @Test
     void identical_findings_are_kept_once_with_their_count_and_first_and_last_seen() {
         var clock  = new MutableClock(Instant.parse("2026-10-12T08:00:00Z"));
-        var report = new EssentialsStartupReport(10, clock);
+        var report = new EssentialsRunReport(10, clock);
         var noisy  = Finding.warn("queue 'Orders'", "enqueued outside a UnitOfWork", "Use a UnitOfWork");
 
         report.add(noisy);
@@ -202,7 +202,7 @@ class EssentialsStartupReportTest {
 
     @Test
     void beyond_the_cap_distinct_findings_are_only_counted() {
-        var report = new EssentialsStartupReport(2);
+        var report = new EssentialsRunReport(2);
         report.add(Finding.warn("a", "1", ""));
         report.add(Finding.warn("b", "2", ""));
         report.add(Finding.warn("c", "3", ""));
@@ -215,12 +215,12 @@ class EssentialsStartupReportTest {
         assertThat(report.getOccurrences().getFirst().count()).isEqualTo(2);
         assertThat(report.getOverflowCount()).isEqualTo(3);
         assertThat(report.renderRunReport()).contains("Plus 3 occurrences of findings not kept - the report holds at most 2 distinct findings");
-        assertThat(new EssentialsStartupReport().getOverflowCount()).isZero();
+        assertThat(new EssentialsRunReport().getOverflowCount()).isZero();
     }
 
     @Test
     void the_periodic_log_prints_only_the_findings_not_printed_before_at_their_highest_severity() {
-        var report = new EssentialsStartupReport(2);
+        var report = new EssentialsRunReport(2);
         report.add(Finding.warn("startup", "found at start-up", ""));
         report.log();
         logAppender.list.clear();
@@ -256,7 +256,7 @@ class EssentialsStartupReportTest {
     @Test
     void the_run_report_lists_every_finding_of_the_run_with_its_occurrences() {
         var clock  = new MutableClock(Instant.parse("2026-10-12T08:00:00Z"));
-        var report = new EssentialsStartupReport(10, clock);
+        var report = new EssentialsRunReport(10, clock);
         report.add(Finding.warn("startup", "found at start-up", "Fix A"));
         report.log();
         clock.now = Instant.parse("2026-10-12T10:00:00Z");
@@ -277,7 +277,7 @@ class EssentialsStartupReportTest {
         });
         // The start-up block does not carry the occurrences
         assertThat(report.render()).doesNotContain("Seen");
-        assertThat(new EssentialsStartupReport().renderRunReport()).isEqualTo("Essentials run report: no findings over the whole run");
+        assertThat(new EssentialsRunReport().renderRunReport()).isEqualTo("Essentials run report: no findings over the whole run");
     }
 
     private static final class MutableClock extends Clock {

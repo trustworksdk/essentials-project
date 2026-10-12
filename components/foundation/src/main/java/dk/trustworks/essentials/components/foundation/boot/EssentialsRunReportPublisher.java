@@ -16,7 +16,7 @@
 
 package dk.trustworks.essentials.components.foundation.boot;
 
-import dk.trustworks.essentials.components.foundation.startup.EssentialsStartupReport;
+import dk.trustworks.essentials.components.foundation.startup.EssentialsRunReport;
 import org.slf4j.*;
 import org.springframework.beans.factory.DisposableBean;
 import org.springframework.beans.factory.config.*;
@@ -30,59 +30,59 @@ import java.time.Duration;
 import java.util.concurrent.*;
 
 /**
- * Gives every Spring application context its own {@link EssentialsStartupReport}, prints it as one block once the
+ * Gives every Spring application context its own {@link EssentialsRunReport}, prints it as one block once the
  * application is ready, keeps collecting the findings raised while it runs, and prints the complete report of the run
  * when it stops (0.60.1).
  * <ul>
  *     <li>As the first {@link BeanFactoryPostProcessor} it registers the report as the singleton {@value #REPORT_BEAN_NAME}
- *     and {@link EssentialsStartupReport#bindToCurrentThread() binds} it to the thread refreshing the context, so every
+ *     and {@link EssentialsRunReport#bindToCurrentThread() binds} it to the thread refreshing the context, so every
  *     check that runs during the refresh - the other bean factory post-processors, bean creation, the start of the
  *     {@code Lifecycle} beans - adds its findings to this context's report and no other.</li>
  *     <li>The binding ends with the refresh: at {@link ContextRefreshedEvent}, or when the context is destroyed after a
  *     failed refresh. At {@link ContextRefreshedEvent} the report is also
- *     {@link EssentialsStartupReport#registerAsRunReport() registered as the run report}, until the context closes: a
+ *     {@link EssentialsRunReport#registerAsRunReport() registered as the run report}, until the context closes: a
  *     finding raised after the refresh or on another thread - an {@code ApplicationRunner}, an enqueue outside a
  *     {@code UnitOfWork}, a processor started later - reaches it as long as it is the only report registered in the
  *     JVM. In a test JVM running several contexts at once such a finding is only logged by its check.</li>
- *     <li>On {@link ApplicationReadyEvent} it {@link EssentialsStartupReport#log() logs} the report: one block at ERROR
+ *     <li>On {@link ApplicationReadyEvent} it {@link EssentialsRunReport#log() logs} the report: one block at ERROR
  *     if there is an error, at WARN if there is a warning, otherwise one INFO line saying there are no findings. From
  *     then on, every {@value #NEW_FINDINGS_INTERVAL_PROPERTY} (default {@code 5m}; {@code 0} or negative turns it off)
- *     a daemon thread {@link EssentialsStartupReport#logNewFindings() logs the findings not logged before}, at the
+ *     a daemon thread {@link EssentialsRunReport#logNewFindings() logs the findings not logged before}, at the
  *     highest severity among them - nothing when there are none.</li>
- *     <li>When the context closes it {@link EssentialsStartupReport#logRunReport() logs the complete report of the run}
+ *     <li>When the context closes it {@link EssentialsRunReport#logRunReport() logs the complete report of the run}
  *     once - every finding, with how often and when it was first and last seen - and stops the thread. A shutdown log
  *     can be lost (the process is killed after SIGTERM, the log shipper is already gone), which is why the periodic
  *     log exists.</li>
  *     <li>An application that is stopped after {@link ApplicationStartedEvent} without ever becoming ready - the schema
  *     {@code emit} mode - gets the start-up block when the context closes, and nothing more. A context not started by
  *     {@code SpringApplication} (a test's {@code ApplicationContextRunner}) prints nothing; read the
- *     {@link EssentialsStartupReport} bean instead.</li>
+ *     {@link EssentialsRunReport} bean instead.</li>
  * </ul>
  */
-public final class EssentialsStartupReportPublisher implements BeanFactoryPostProcessor, PriorityOrdered, ApplicationListener<ApplicationEvent>,
+public final class EssentialsRunReportPublisher implements BeanFactoryPostProcessor, PriorityOrdered, ApplicationListener<ApplicationEvent>,
                                                                 ApplicationContextAware, DisposableBean {
     /**
-     * The name of the {@link EssentialsStartupReport} singleton registered in every context
+     * The name of the {@link EssentialsRunReport} singleton registered in every context
      */
-    public static final String   REPORT_BEAN_NAME               = "essentialsStartupReport";
+    public static final String   REPORT_BEAN_NAME               = "essentialsRunReport";
     /**
      * How often the findings raised after start-up that were not logged before are logged, as a {@link Duration}
      * ({@code 5m}, {@code 30s}, {@code PT5M}); {@code 0} or negative turns the periodic log off - the report of the run
      * is still logged when the context closes
      */
-    public static final String   NEW_FINDINGS_INTERVAL_PROPERTY = "essentials.startup-report.new-findings-interval";
+    public static final String   NEW_FINDINGS_INTERVAL_PROPERTY = "essentials.run-report.new-findings-interval";
     /**
      * The default of {@value #NEW_FINDINGS_INTERVAL_PROPERTY}
      */
     public static final Duration DEFAULT_NEW_FINDINGS_INTERVAL  = Duration.ofMinutes(5);
 
-    private static final Logger log = LoggerFactory.getLogger(EssentialsStartupReportPublisher.class);
+    private static final Logger log = LoggerFactory.getLogger(EssentialsRunReportPublisher.class);
 
-    private final EssentialsStartupReport              report              = new EssentialsStartupReport();
+    private final EssentialsRunReport              report              = new EssentialsRunReport();
     private       ApplicationContext                   applicationContext;
     private       Duration                             newFindingsInterval = DEFAULT_NEW_FINDINGS_INTERVAL;
-    private       EssentialsStartupReport.Binding      binding;
-    private       EssentialsStartupReport.Registration registration;
+    private       EssentialsRunReport.Binding      binding;
+    private       EssentialsRunReport.Registration registration;
     private       ScheduledExecutorService             newFindingsLogger;
     private       boolean                              started;
     private       boolean                              printed;
@@ -110,7 +110,7 @@ public final class EssentialsStartupReportPublisher implements BeanFactoryPostPr
     /**
      * @return this context's report
      */
-    public EssentialsStartupReport getReport() {
+    public EssentialsRunReport getReport() {
         return report;
     }
 

@@ -138,8 +138,8 @@ Four new WARN log lines. Nothing else changes, but each points at a setup that d
   callers cannot use the budget up and hide every other call site. The 32nd frame is followed by one line saying
   further ones are not, and from then on the check no longer looks at the stack. Keying on the call site
   means a deliberate standalone enqueue (`sendAndDontWait` from a controller, say) cannot use up the only WARN and
-  hide an `Outbox.sendMessage` elsewhere. Each call site that enqueues while the application is starting is also listed in
-  the startup report. The enqueue commits on its own, so a later rollback of your business change does not undo it. This
+  hide an `Outbox.sendMessage` elsewhere. Each such call site is also listed in
+  the run report (§2), at start-up and while the application runs. The enqueue commits on its own, so a later rollback of your business change does not undo it. This
   covers `Outbox.sendMessage` and `DurableLocalCommandBus.sendAndDontWait` called outside a transaction. To make it
   fail instead, set `essentials.durable-queues.require-active-unit-of-work-for-enqueue=true` (§2).
   (RN-2, `3c783626`, `8d349587`, `fb8559c9`)
@@ -322,28 +322,52 @@ after the chain. What changes for you:
   application that never calls `awaitProcessed` can ignore it. A `CdcEventStore` built over a store that does not
   implement `AwaitedGapInspector` logs the same kind of WARN once: it then gives a complete answer only while CDC is
   active. (ES-4, `944633a4`, `6ff9ca9e`, `9fb0ea51`, `13c13051`, `4fa85508`, `948d5852`)
-- **`AppendedEvents.recordDuring(() -> commandBus.send(cmd))`** (`eventsourced-aggregates`) returns what `send`
-  returned plus the `PersistedEvent`s an `EventStreamDeciderCommandHandlerAdapter` appended, so a caller has an
-  order to wait for. Same thread only (`send`, not `sendAsync`). (ES-4, `944633a4`)
+- **`AppendedEvents.recordDuring(() -> commandBus.send(cmd))`** (`postgresql-event-store`,
+  `dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.AppendedEvents`) returns what the action
+  returned plus every `PersistedEvent` appended during it, so a caller has an order to wait for. It records at
+  `PostgresqlEventStore.appendToStream`, so it covers every appender: `EventStreamDecider`, decider `CommandHandler`,
+  Kotlin deciders, `StatefulAggregateRepository`/`FlexAggregateRepository` (when their `UnitOfWork` commits during
+  the action) and direct `appendToStream`, each event once, including through `CdcEventStore`. Same thread only
+  (`send`, not `sendAsync`). (ES-4, `944633a4`, `736f2db6`)
 - **`Inbox` default methods** `hasOrderedMessageQueuedForKey(String)` and `getNumberOfDeadLetterMessages()`,
   implemented by the DurableQueues-based Inbox; a custom `Inbox` throws `UnsupportedOperationException` from them
   until it implements them. (ES-4, `944633a4`)
 - **Sealed commands no decider handles are reported at startup.** `EventStreamDeciderAndAggregateTypeConfigurator`
-  walks `getPermittedSubclasses()` of sealed command types and WARNs for each permitted command no decider handles;
-  before, it showed only at the first send, as a `NoCommandHandlerFoundException`. (CB-4, `9f4ddecf`)
+  walks `getPermittedSubclasses()` of sealed command types and WARNs for each permitted command no command handler on
+  the `CommandBus` handles - an `@CmdHandler` registered earlier counts; before, it showed only at the first send, as
+  a `NoCommandHandlerFoundException`. (CB-4, `9f4ddecf`, `796e4578`)
+- **`CommandBus` lists its handlers, and warns about a command type handled twice when the handler is added.**
+  `CommandBus` gains `getCommandHandlers()`, `findCommandHandlersCapableOfHandling(Class)` and
+  `findCommandTypesHandledByMoreThanOneCommandHandler(CommandHandler)`, all `default` methods, so a `CommandBus` of
+  your own still compiles; its `getCommandHandlers()` returns an empty list, which means "not tracked", not "no
+  handlers". `CommandHandler` gains `default handledCommandTypes()` (empty by default; diagnostics only, never
+  routing), implemented by `AnnotatedCommandHandler` and `EventStreamDeciderCommandHandlerAdapter`.
+  `LocalCommandBus` and `DurableLocalCommandBus` now log a WARN when an added handler makes a command type handled by
+  more than one handler - every send of it fails with `MultipleCommandHandlersFoundException` - for `@CmdHandler`
+  handlers too, not only deciders. Registration still succeeds. The duplicate WARN for deciders now comes from the
+  `CommandBus` logger instead of the `EventStreamDeciderAndAggregateTypeConfigurator` logger; the finding is still
+  added to the run report. (`796e4578`)
 - **`@IgnoresEventTypes({SomeEvent.class, …}, eventNames = {…})`** on a `ViewEventProcessor` marks event types
   it skips on purpose: they, and their subtypes, are counted but not warned about (§1.1.11). `eventNames` covers
   events persisted by name only. (CB-4, `b786b107`)
-- **The Essentials startup report.** `EssentialsStartupReport` (foundation, package `startup`) collects the startup
+- **The Essentials run report.** `EssentialsRunReport` (foundation, package `startup`) collects the
   findings of the checks in this release, and every starter prints them as one block on `ApplicationReadyEvent`:
   at ERROR if any finding is an error, at WARN if any is a warning, otherwise one INFO line "Essentials startup
   report: no findings". Findings are grouped by severity, each with its fix. It covers removed properties, the
   wire-format check, duplicate command registrations, sealed commands with no decider, views with unhandled event
   types, a shard-owned queue built without a UnitOfWork factory, incomplete redelivery policies, an enqueue outside
   a unit of work during startup, and schema `emit`/`validate` notes. Every check still logs where it runs, so
-  nothing is lost outside Spring. The report is also available as the `essentialsStartupReport` bean. Findings
-  raised on another thread or after the context refresh (from an `ApplicationRunner`, say) are logged but not in
-  the block. (`552576f1`)
+  nothing is lost outside Spring. The report is also available as the `essentialsRunReport` bean.
+  It keeps collecting while the application runs: a finding raised after start-up or on another thread (an enqueue
+  outside a `UnitOfWork`, a `ViewEventProcessor` started later) is added to the context's report when that context
+  is the only one open in the JVM; in a test JVM with several contexts open it is only logged by its check. Every
+  `essentials.run-report.new-findings-interval` (default `5m`; `0` turns it off) the findings not logged before
+  are logged as one block, and nothing is logged when nothing is new. When the context closes, the complete report
+  of the run is logged once: every finding with how often it was seen and when first and last. A shutdown log can be
+  lost (SIGTERM, log shipping), which is why the periodic block exists. Identical findings are kept once with a
+  count; at most 500 distinct findings are kept, further ones only counted. Without Spring,
+  `EssentialsRunReport.registerAsRunReport()`, `logNewFindings()` and `logRunReport()` do the same. A check that
+  cannot run now logs its own failure at ERROR instead of DEBUG. (`552576f1`, `b4614eca`, `d99a3602`)
 - **Wire-format check for mappers Essentials did not build.**
   `EssentialsObjectMappers.findWireFormatDeviations(ObjectMapper)` round-trips small probe types and compares them
   with the 0.50 bytes (field access, getter and `is`-getter visibility, ISO dates, numeric durations,
@@ -383,6 +407,7 @@ The plugin's features are in [§4](#4-the-essentials-claude-code-plugin).
 | `MultiTableChangeListener` | A `start()` that ran while `stop()` was tearing down could leave the listener reporting `isStarted()` as `true` with nothing polling, until the next `stop()`/`start()`: `stop()` cleared its started flag before cancelling the poll task, so the racing `start()` found the old task, skipped scheduling, and the task was then cancelled. The teardown of the poll task now happens under the same lock as the flag | `1bfbe58d` |
 | `MultiTableChangeListener` | A `start()` that ran while `stop()` or `close()` was finishing could lose its LISTEN connection to that stop: the stop closed whichever connection was current once it had waited for the poll thread, so the restarted listener kept the old connection and saw it closed, and notifications sent before the next poll reopened it were lost. `start()` promises every registered table is LISTENed to when it returns. A stop now takes the connection away together with the poll task and closes only that one; a racing `start()` opens and keeps its own, and a poll still in flight from the stopped run no longer touches it. The stop waits for that connection without holding the listener's lock, so a `listenToNotificationsFor` still borrowing a pooled connection no longer blocks the listener's other operations, the shutdown signal included | `520facbc`, `c0c60b97` |
 | Command bus | Two `EventStreamDeciderAndAggregateTypeConfigurator`s sharing a `CommandBus` and configured on different threads could corrupt the list behind the duplicate-command-type WARN, or throw `ConcurrentModificationException` from it: one appended to it without holding the lock the other iterated it under. Both now hold it | `a20947b2` |
+| Command bus | `addCommandHandler`/`removeCommandHandler` on `LocalCommandBus` and `DurableLocalCommandBus` were not thread-safe: handlers registered from several threads at once could be lost, and a command-type lookup running during a registration could keep the old answer cached. Registration is now thread-safe | `796e4578` |
 | Scheduler | A job registered with `DefaultEssentialsScheduler` while the scheduler was acquiring its fenced lock could be silently dropped: it stayed in the job list but was never scheduled until the lock was next re-acquired. This typically hit a `@TTLJob` whose `PostgresqlTTLManager` started at the same moment, so its TTL delete never ran. Registration now waits for the lock callback to finish and always sees the lock state it leaves | `35fafdaa` |
 
 ---
@@ -416,6 +441,8 @@ entries are in [`essentials-plugin/CHANGELOG.md`](../essentials-plugin/CHANGELOG
   now, the generated backend POM declares it, and `stack-lint` reports its absence (`s2.1-objenesis`).
 - **Fixed:** `LLM-eventsourced-aggregates.md` and the Java command test template used a rejection method
   `GivenWhenThenScenario` does not have; they now use `thenFailsWithExceptionType(...)`.
+- **Docs follow this release's framework changes:** `AppendedEvents`' new module and package, `CommandBus`
+  handler listing and its duplicate-handler WARN, and the run report (`EssentialsRunReport`).
 
 **`0.60.0-6`**
 
@@ -438,6 +465,11 @@ Not published; listed because they are the reference for how to use the framewor
   consistent and can be replayed; an existing demo database backfills the table on first start.
   `InstrumentPrice.latestPrice()` is gone. The bootstrap's idempotency probe, which needs a strongly-consistent
   answer, asks `InstrumentPrices.findPrice(...)` on the write side instead of the view. (`9a6e3e86` and the commit after it)
+- **`essentials-trading-demo`: the read side uses Jdbi through the `UnitOfWork`'s handle** instead of Spring
+  `JdbcTemplate`: every view projection and query, and the harness's direct price store, take a
+  `HandleAwareUnitOfWorkFactory` and use `uow.handle()`, matching the LLM docs, the plugin templates and the other
+  examples. A projection's write joins the `UnitOfWork` the event processor already runs the handler in, so a
+  `ViewEventProcessor`'s view row commits together with its progress. (`3e0636d2`)
 - **`essentials-performance-lab` declares objenesis.** `immutable-jackson3` has it `provided`; the lab's tests got
   it through Mockito, but the packaged application would have failed its first event read.
 - **`postgresql-cqrs`:** the `task` context, on the aggregate lane, drops its `routing/TaskCommand` marker,

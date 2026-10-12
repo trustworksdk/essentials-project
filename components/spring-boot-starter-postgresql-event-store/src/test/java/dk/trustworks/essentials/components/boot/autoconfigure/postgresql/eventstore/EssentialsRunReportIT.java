@@ -28,8 +28,8 @@ import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.se
 import dk.trustworks.essentials.components.foundation.boot.EssentialsStartupChecksAutoConfiguration;
 import dk.trustworks.essentials.components.foundation.messaging.MessageHandler;
 import dk.trustworks.essentials.components.foundation.messaging.queue.*;
-import dk.trustworks.essentials.components.foundation.startup.EssentialsStartupReport;
-import dk.trustworks.essentials.components.foundation.startup.EssentialsStartupReport.*;
+import dk.trustworks.essentials.components.foundation.startup.EssentialsRunReport;
+import dk.trustworks.essentials.components.foundation.startup.EssentialsRunReport.*;
 import dk.trustworks.essentials.shared.security.EssentialsSecurityProvider;
 import org.awaitility.Awaitility;
 import org.junit.jupiter.api.*;
@@ -52,7 +52,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  * sealed event type - started through {@link SpringApplication}, so the startup report is printed when it is ready.
  */
 @Testcontainers
-class EssentialsStartupReportIT {
+class EssentialsRunReportIT {
     static final AggregateType ORDERS = AggregateType.of("StartupReportOrders");
 
     @Container
@@ -68,7 +68,7 @@ class EssentialsStartupReportIT {
     void setUp() {
         // Spring Boot's logging system would reset logback, and with it the appender attached below
         System.setProperty(LoggingSystem.SYSTEM_PROPERTY, LoggingSystem.NONE);
-        logger = (ch.qos.logback.classic.Logger) LoggerFactory.getLogger(EssentialsStartupReport.class);
+        logger = (ch.qos.logback.classic.Logger) LoggerFactory.getLogger(EssentialsRunReport.class);
         logAppender = new ListAppender<>();
         logAppender.start();
         logger.addAppender(logAppender);
@@ -90,7 +90,7 @@ class EssentialsStartupReportIT {
                                            "--spring.datasource.password=" + postgreSQLContainer.getPassword(),
                                            "--essentials.eventstore.cdc.enabled=false",
                                            "--essentials.durable-queues.transactional-mode=fully-transactional")) {
-            var report = context.getBean(EssentialsStartupReport.class);
+            var report = context.getBean(EssentialsRunReport.class);
             assertThat(report.getFindings()).extracting(Finding::severity, Finding::source)
                                             .as("exactly the two misconfigurations - a default starter setup adds nothing")
                                             .containsExactlyInAnyOrder(org.assertj.core.groups.Tuple.tuple(Severity.ERROR, "property 'essentials.durable-queues.transactional-mode'"),
@@ -126,8 +126,8 @@ class EssentialsStartupReportIT {
                                            "--spring.datasource.username=" + postgreSQLContainer.getUsername(),
                                            "--spring.datasource.password=" + postgreSQLContainer.getPassword(),
                                            "--essentials.eventstore.cdc.enabled=false",
-                                           "--essentials.startup-report.new-findings-interval=200ms")) {
-            assertThat(EssentialsStartupReport.runReport()).containsSame(context.getBean(EssentialsStartupReport.class));
+                                           "--essentials.run-report.new-findings-interval=200ms")) {
+            assertThat(EssentialsRunReport.runReport()).containsSame(context.getBean(EssentialsRunReport.class));
 
             // At runtime, on this thread, with no report bound to it: an enqueue outside a UnitOfWork
             context.getBean(DurableQueues.class).queueMessage(QueueName.of("StartupReportRuntimeQueue"), Message.of("payload"));
@@ -148,7 +148,7 @@ class EssentialsStartupReportIT {
                                                    .contains("[DurableQueues enqueue on queue 'StartupReportRuntimeQueue' from ")
                                                    .contains("Seen once, at ");
         });
-        assertThat(EssentialsStartupReport.runReport()).isEmpty();
+        assertThat(EssentialsRunReport.runReport()).isEmpty();
     }
 
     /**

@@ -24,7 +24,7 @@ import dk.trustworks.essentials.components.eventsourced.aggregates.eventstream.a
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.ConfigurableEventStore;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.AggregateType;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.serializer.AggregateIdSerializer;
-import dk.trustworks.essentials.components.foundation.startup.EssentialsStartupReport;
+import dk.trustworks.essentials.components.foundation.startup.EssentialsRunReport;
 import dk.trustworks.essentials.reactive.command.*;
 import org.junit.jupiter.api.*;
 import org.slf4j.LoggerFactory;
@@ -38,7 +38,7 @@ import static org.mockito.Mockito.mock;
  * CB-3: two {@link EventStreamDeciderCommandHandlerAdapter}s handling one command type used to surface only at the
  * first send, as a {@link MultipleCommandHandlersFoundException} listing two {@code EventStreamDeciderCommandHandlerAdapter@hash}
  * entries. The {@link CommandBus} now warns as the adapter is added, the configurator adds it to the
- * {@link EssentialsStartupReport}, and the adapter names its aggregate type and deciders. Two deciders inside one adapter
+ * {@link EssentialsRunReport}, and the adapter names its aggregate type and deciders. Two deciders inside one adapter
  * are invisible to the {@link CommandBus}; the configurator warns about those itself.
  */
 class EventStreamDeciderDuplicateCommandRegistrationTest {
@@ -109,13 +109,13 @@ class EventStreamDeciderDuplicateCommandRegistrationTest {
     void a_command_type_handled_by_more_than_one_command_handler_is_added_to_the_startup_report_bound_to_the_thread() {
         new EventStreamDeciderAndAggregateTypeConfigurator(eventStore, commandBus, List.of(orderConfiguration), List.of(new CreateOrderDecider()));
 
-        var report = new EssentialsStartupReport();
+        var report = new EssentialsRunReport();
         try (var binding = report.bindToCurrentThread()) {
             new EventStreamDeciderAndAggregateTypeConfigurator(eventStore, commandBus, List.of(orderConfiguration), List.of(new CreateOrderDecider()));
         }
 
         assertThat(report.getFindings()).singleElement().satisfies(finding -> {
-            assertThat(finding.severity()).isEqualTo(EssentialsStartupReport.Severity.WARN);
+            assertThat(finding.severity()).isEqualTo(EssentialsRunReport.Severity.WARN);
             assertThat(finding.source()).isEqualTo("command type '" + CreateOrder.class.getName() + "'");
             assertThat(finding.message()).contains("2 command handlers").contains(MultipleCommandHandlersFoundException.class.getSimpleName());
             assertThat(finding.fix()).contains("exactly one command handler");
@@ -129,7 +129,7 @@ class EventStreamDeciderDuplicateCommandRegistrationTest {
         var annotatedCommandHandler = new CreateOrderCommandHandler();
         commandBus.addCommandHandler(annotatedCommandHandler);
 
-        var report = new EssentialsStartupReport();
+        var report = new EssentialsRunReport();
         try (var binding = report.bindToCurrentThread()) {
             new EventStreamDeciderAndAggregateTypeConfigurator(eventStore, commandBus, List.of(orderConfiguration), List.of(new CreateOrderDecider(), new ConfirmOrderDecider()));
         }

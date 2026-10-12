@@ -1140,20 +1140,20 @@ public DefaultLifecycleManager lifecycleManager() {
 }
 ```
 
-### Startup report
+### Run report (startup, runtime, shutdown)
 
-Since 0.60.1. `EssentialsStartupReport` (`dk.trustworks.essentials.components.foundation.startup`) collects the findings
+Since 0.60.1. `EssentialsRunReport` (`dk.trustworks.essentials.components.foundation.startup`) collects the findings
 of the Essentials checks so they can be printed as one block at start-up, and again, complete, when the application
-stops. Every check still logs where it runs; it also calls `EssentialsStartupReport.addToCurrent(finding)`, which adds
+stops. Every check still logs where it runs; it also calls `EssentialsRunReport.addToCurrent(finding)`, which adds
 to the report bound to the **current thread**; when none is bound (after start-up, another thread) to the **run
 report** - the report registered with `registerAsRunReport()` - but only while **exactly one** is registered in the JVM;
 otherwise it does nothing. There is no JVM-wide report (a test JVM runs many contexts at once, so with 0 or 2+
 registered a runtime finding is only logged by its check). The Spring Boot starters create, bind, register and print one
-per context - see [LLM-spring-boot-starter-modules.md § Startup Report](LLM-spring-boot-starter-modules.md#startup-report).
+per context - see [LLM-spring-boot-starter-modules.md § Run Report](LLM-spring-boot-starter-modules.md#run-report).
 Without Spring:
 
 ```java
-var report = new EssentialsStartupReport();             // keeps 500 distinct findings; new EssentialsStartupReport(n) for another cap
+var report = new EssentialsRunReport();             // keeps 500 distinct findings; new EssentialsRunReport(n) for another cap
 try (var binding = report.bindToCurrentThread()) {     // close on the same thread; bindings nest
     // build and start the Essentials components
 }
@@ -1163,8 +1163,8 @@ scheduler.scheduleWithFixedDelay(report::logNewFindings, 5, 5, TimeUnit.MINUTES)
 // on shutdown
 report.logRunReport();   // every finding of the run, with count and first/last seen
 registration.close();
-List<EssentialsStartupReport.Finding> findings = report.getFindings();       // Finding(severity, source, message, fix)
-List<EssentialsStartupReport.Occurrences> seen = report.getOccurrences();     // Occurrences(finding, count, firstSeen, lastSeen)
+List<EssentialsRunReport.Finding> findings = report.getFindings();       // Finding(severity, source, message, fix)
+List<EssentialsRunReport.Occurrences> seen = report.getOccurrences();     // Occurrences(finding, count, firstSeen, lastSeen)
 ```
 
 Identical findings (equal severity, source, message and fix) are kept once, with a count and first/last-seen time.

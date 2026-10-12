@@ -19,7 +19,7 @@ package dk.trustworks.essentials.components.queue.shardowned.adapter;
 import dk.trustworks.essentials.components.foundation.json.JSONSerializer;
 import dk.trustworks.essentials.components.foundation.messaging.queue.*;
 import dk.trustworks.essentials.components.foundation.messaging.queue.operations.*;
-import dk.trustworks.essentials.components.foundation.startup.EssentialsStartupReport;
+import dk.trustworks.essentials.components.foundation.startup.EssentialsRunReport;
 import dk.trustworks.essentials.components.foundation.transaction.*;
 import dk.trustworks.essentials.components.foundation.transaction.jdbi.HandleAwareUnitOfWork;
 import dk.trustworks.essentials.components.queue.shardowned.ShardOwnedSchema;
@@ -181,7 +181,7 @@ public class ShardOwnedDurableQueues implements DurableQueues {
             log.warn("ShardOwnedDurableQueues was built without a UnitOfWorkFactory: every enqueue commits on its own connection "
                      + "and is NOT rolled back with the caller's transaction, so an Outbox on this engine is not transactional. "
                      + "Call setUnitOfWorkFactory(...) on the builder - from 0.61 the builder will require one.");
-            EssentialsStartupReport.addToCurrent(EssentialsStartupReport.Finding.warn(
+            EssentialsRunReport.addToCurrent(EssentialsRunReport.Finding.warn(
                     "ShardOwnedDurableQueues",
                     "built without a UnitOfWorkFactory: every enqueue commits on its own connection and is NOT rolled back with the caller's transaction, "
                             + "so an Outbox on this engine is not transactional",

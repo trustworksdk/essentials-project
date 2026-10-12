@@ -19,7 +19,7 @@ projections:
     aggregateTypes: [Trades, InstrumentPrices]
     from: [TradePlaced, TradeExecuted, SettlementRequested, TradeSettled, PriceInitialized, PriceUpdated]
     consistency: eventual
-    store: jdbc
+    store: postgresql
 invariants:
   - id: INV-TV-1
     text: "The market price is projected from market_data's price events, never fetched by calling into market_data's write model"

@@ -828,9 +828,28 @@ What "processed" means per processor type:
 - Call it **after** the appending `UnitOfWork` committed; inside it the subscription cannot see the event.
 - `IllegalArgumentException` for an aggregate type the processor does not react to.
 
-Where N comes from: `eventStore.appendToStream(...)` returns the `PersistedEvent`s; a command sent to an
-`EventStreamDecider` through `commandBus.send(...)` hands them out via `AppendedEvents.recordDuring(...)` (see
-`LLM-eventsourced-aggregates.md`).
+Where N comes from: `eventStore.appendToStream(...)` returns the `PersistedEvent`s. When the append happens further
+down - a `commandBus.send(...)`, a repository - wrap the call in `AppendedEvents.recordDuring(...)`
+(`dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.AppendedEvents`, since 0.60.1):
+
+```java
+var recorded = AppendedEvents.recordDuring(() -> commandBus.send(new PlaceOrder(orderId)));
+Object returned = recorded.result();                                       // what send returned
+orderViewProcessor.awaitProcessed(recorded.lastAppendedEvent().orElseThrow(), Duration.ofSeconds(10));
+```
+
+- Records every event `PostgresqlEventStore.appendToStream` persists during the action, once each, whoever appends:
+  `EventStreamDecider` adapters, decider `CommandHandler`s, Kotlin deciders, `StatefulAggregateRepository`, direct
+  `appendToStream`. A decorator such as `CdcEventStore` delegates to it, so its appends are recorded once too.
+- Calling thread only (a `ScopedValue`): `send`, not `sendAsync`/`sendAndDontWait`, whose handler runs on another
+  thread. Synchronous subscribers that append on that thread during the action (event-bus subscribers, in-transaction
+  handlers) are recorded too. Recordings nest.
+- A repository that appends at `UnitOfWork` commit (`StatefulAggregateRepository`, `FlexAggregateRepository`, decider
+  `CommandHandler`) is recorded only if that commit happens during the action - true when the
+  `UnitOfWorkControllingCommandBusInterceptor` created the `UnitOfWork`, false inside an outer one.
+- The `GlobalEventOrder` is assigned at append, before commit; a rolled-back event stays recorded. Await only after the
+  appending `UnitOfWork` committed.
+- Several aggregate types: `recorded.highestGlobalEventOrder(aggregateType)` per type.
 
 **Integration-test example:**
 
@@ -902,7 +921,7 @@ projection checking that the order is contiguous breaks, and the view is incompl
   `Module`) whenever it has a `MeterRegistry` - the starter wires that when one is present.
 - Logger: `dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.processor.UnhandledEventTypes`. With
   a Spring Boot starter the start-up WARN is repeated in the startup report block
-  ([LLM-spring-boot-starter-modules.md § Startup Report](LLM-spring-boot-starter-modules.md#startup-report)).
+  ([LLM-spring-boot-starter-modules.md § Run Report](LLM-spring-boot-starter-modules.md#run-report)).
 
 ## In-Memory Projections
 

@@ -32,15 +32,15 @@ import org.springframework.core.Ordered;
 public class EssentialsStartupChecksAutoConfiguration {
 
     /**
-     * @return the per-context {@code EssentialsStartupReport}, bound to the refreshing thread, printed as one block
+     * @return the per-context {@code EssentialsRunReport}, bound to the refreshing thread, printed as one block
      * when the application is ready, its new runtime findings logged every
-     * {@value EssentialsStartupReportPublisher#NEW_FINDINGS_INTERVAL_PROPERTY}, and printed complete when the context
+     * {@value EssentialsRunReportPublisher#NEW_FINDINGS_INTERVAL_PROPERTY}, and printed complete when the context
      * closes
-     * @see EssentialsStartupReportPublisher
+     * @see EssentialsRunReportPublisher
      */
     @Bean
-    public static EssentialsStartupReportPublisher essentialsStartupReportPublisher() {
-        return new EssentialsStartupReportPublisher();
+    public static EssentialsRunReportPublisher essentialsRunReportPublisher() {
+        return new EssentialsRunReportPublisher();
     }
 
     /**

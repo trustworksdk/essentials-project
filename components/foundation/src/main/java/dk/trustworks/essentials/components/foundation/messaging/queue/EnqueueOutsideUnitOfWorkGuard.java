@@ -16,7 +16,7 @@
 
 package dk.trustworks.essentials.components.foundation.messaging.queue;
 
-import dk.trustworks.essentials.components.foundation.startup.EssentialsStartupReport;
+import dk.trustworks.essentials.components.foundation.startup.EssentialsRunReport;
 import dk.trustworks.essentials.components.foundation.transaction.*;
 import org.slf4j.*;
 
@@ -241,8 +241,8 @@ public final class EnqueueOutsideUnitOfWorkGuard {
                  "stack trace shows the full call path.",
                  queueName, callSite, REQUIRE_ACTIVE_UNIT_OF_WORK_FOR_ENQUEUE_PROPERTY, new EnqueueCallSite());
         // During start-up this reaches the report of the context being refreshed; at runtime the run report - when exactly
-        // one is registered in the JVM (see EssentialsStartupReport), otherwise only the WARN above
-        EssentialsStartupReport.addToCurrent(EssentialsStartupReport.Finding.warn(
+        // one is registered in the JVM (see EssentialsRunReport), otherwise only the WARN above
+        EssentialsRunReport.addToCurrent(EssentialsRunReport.Finding.warn(
                 "DurableQueues enqueue on queue '" + queueName + "' from " + callSite,
                 "a message was enqueued outside a UnitOfWork/transaction, so it committed on its own",
                 "Enqueue inside a UnitOfWork or a Spring transaction if it should commit with surrounding work; '" + REQUIRE_ACTIVE_UNIT_OF_WORK_FOR_ENQUEUE_PROPERTY

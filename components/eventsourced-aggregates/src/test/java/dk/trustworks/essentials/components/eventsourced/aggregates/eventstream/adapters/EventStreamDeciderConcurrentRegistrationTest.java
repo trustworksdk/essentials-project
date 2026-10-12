@@ -24,7 +24,7 @@ import dk.trustworks.essentials.components.eventsourced.aggregates.eventstream.a
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.ConfigurableEventStore;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.AggregateType;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.serializer.AggregateIdSerializer;
-import dk.trustworks.essentials.components.foundation.startup.EssentialsStartupReport;
+import dk.trustworks.essentials.components.foundation.startup.EssentialsRunReport;
 import dk.trustworks.essentials.reactive.command.*;
 import org.junit.jupiter.api.*;
 import org.slf4j.LoggerFactory;
@@ -95,7 +95,7 @@ class EventStreamDeciderConcurrentRegistrationTest {
         assertThat(diagnosticFailures()).as("a diagnostic failed").isEmpty();
 
         // One more CreateOrder adapter is the ninth
-        var report = new EssentialsStartupReport();
+        var report = new EssentialsRunReport();
         try (var binding = report.bindToCurrentThread()) {
             new EventStreamDeciderAndAggregateTypeConfigurator(eventStore, commandBus, List.of(orderConfiguration("Orders-last")), List.of(new CreateOrderDecider()));
         }

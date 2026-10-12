@@ -21,7 +21,7 @@ projections:
     aggregateTypes: [TradingAccounts]
     from: [TradingAccountOpened, CashDeposited, FundsReserved, FundsReleased, TradeSettlementApplied, AccountBooksClosed]
     consistency: eventual
-    store: jdbc
+    store: postgresql
 invariants:
   - id: INV-AS-1
     text: "One row per logical account, not per generation stream: a books rollover restates the row rather than adding one"

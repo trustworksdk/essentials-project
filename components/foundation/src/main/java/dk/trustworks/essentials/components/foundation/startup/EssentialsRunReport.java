@@ -48,7 +48,7 @@ import static dk.trustworks.essentials.shared.FailFast.*;
  * <p>
  * <b>Identical findings are kept once</b> ({@link Finding} equality: severity, source, message and fix), with how often,
  * when first and when last each was seen ({@link #getOccurrences()}). At most {@link #DEFAULT_MAX_DISTINCT_FINDINGS}
- * distinct findings are kept (see {@link #EssentialsStartupReport(int)}); occurrences of further distinct findings are
+ * distinct findings are kept (see {@link #EssentialsRunReport(int)}); occurrences of further distinct findings are
  * only counted ({@link #getOverflowCount()}), so a noisy runtime finding cannot grow memory without bound.
  * <p>
  * <b>Three ways to print it.</b> {@link #log()} prints the start-up block. {@link #logNewFindings()} prints only the
@@ -59,7 +59,7 @@ import static dk.trustworks.essentials.shared.FailFast.*;
  * <p>
  * Without Spring, create a report, bind it around your own start-up, {@link #log()} it, and register it for the run:
  * <pre>{@code
- * var report = new EssentialsStartupReport();
+ * var report = new EssentialsRunReport();
  * try (var binding = report.bindToCurrentThread()) {
  *     // build and start the Essentials components
  * }
@@ -72,23 +72,23 @@ import static dk.trustworks.essentials.shared.FailFast.*;
  * }</pre>
  * The report is thread-safe.
  */
-public final class EssentialsStartupReport {
+public final class EssentialsRunReport {
     /**
-     * The number of distinct findings a report created with {@link #EssentialsStartupReport()} keeps
+     * The number of distinct findings a report created with {@link #EssentialsRunReport()} keeps
      */
     public static final int DEFAULT_MAX_DISTINCT_FINDINGS = 500;
 
-    private static final Logger                                log        = LoggerFactory.getLogger(EssentialsStartupReport.class);
-    private static final ThreadLocal<EssentialsStartupReport> CURRENT    = new ThreadLocal<>();
+    private static final Logger                                log        = LoggerFactory.getLogger(EssentialsRunReport.class);
+    private static final ThreadLocal<EssentialsRunReport> CURRENT    = new ThreadLocal<>();
     /**
      * Every report {@link #registerAsRunReport() registered}, by identity. Guarded by itself.
      */
-    private static final Set<EssentialsStartupReport>         REGISTERED = Collections.newSetFromMap(new IdentityHashMap<>());
+    private static final Set<EssentialsRunReport>         REGISTERED = Collections.newSetFromMap(new IdentityHashMap<>());
     /**
      * The only registered report, or {@code null} when none or more than one is registered - what
      * {@link #addToCurrent(Finding)} falls back to. Recomputed under {@link #REGISTERED}'s lock.
      */
-    private static volatile EssentialsStartupReport           runReport;
+    private static volatile EssentialsRunReport           runReport;
 
     /**
      * How serious a {@link Finding} is
@@ -190,7 +190,7 @@ public final class EssentialsStartupReport {
     /**
      * A report that keeps up to {@link #DEFAULT_MAX_DISTINCT_FINDINGS} distinct findings
      */
-    public EssentialsStartupReport() {
+    public EssentialsRunReport() {
         this(DEFAULT_MAX_DISTINCT_FINDINGS);
     }
 
@@ -198,7 +198,7 @@ public final class EssentialsStartupReport {
      * @param maxDistinctFindings how many distinct findings to keep, at least 1; occurrences of further distinct
      *                            findings are only counted, see {@link #getOverflowCount()}
      */
-    public EssentialsStartupReport(int maxDistinctFindings) {
+    public EssentialsRunReport(int maxDistinctFindings) {
         this(maxDistinctFindings, Clock.systemUTC());
     }
 
@@ -208,7 +208,7 @@ public final class EssentialsStartupReport {
      * @param maxDistinctFindings how many distinct findings to keep
      * @param clock               the clock stamping first and last seen
      */
-    EssentialsStartupReport(int maxDistinctFindings, Clock clock) {
+    EssentialsRunReport(int maxDistinctFindings, Clock clock) {
         requireTrue(maxDistinctFindings >= 1, "maxDistinctFindings must be at least 1");
         this.maxDistinctFindings = maxDistinctFindings;
         this.clock = requireNonNull(clock, "No clock provided");
@@ -218,7 +218,7 @@ public final class EssentialsStartupReport {
      * @return the report bound to the current thread by {@link #bindToCurrentThread()}, if any. Does not fall back to
      * the {@link #runReport() run report}.
      */
-    public static Optional<EssentialsStartupReport> current() {
+    public static Optional<EssentialsRunReport> current() {
         return Optional.ofNullable(CURRENT.get());
     }
 
@@ -226,7 +226,7 @@ public final class EssentialsStartupReport {
      * @return the report {@link #addToCurrent(Finding)} falls back to when none is bound to the calling thread: the
      * report {@link #registerAsRunReport() registered} in this JVM when exactly one is, otherwise empty
      */
-    public static Optional<EssentialsStartupReport> runReport() {
+    public static Optional<EssentialsRunReport> runReport() {
         return Optional.ofNullable(runReport);
     }
 
@@ -273,7 +273,7 @@ public final class EssentialsStartupReport {
         }
     }
 
-    private static void deregister(EssentialsStartupReport report) {
+    private static void deregister(EssentialsRunReport report) {
         synchronized (REGISTERED) {
             REGISTERED.remove(report);
             recomputeRunReport();
@@ -385,7 +385,7 @@ public final class EssentialsStartupReport {
 
     /**
      * Log {@link #render()} once: at ERROR when there is an error finding, at WARN when there is a warning, otherwise
-     * at INFO (logger {@code dk.trustworks.essentials.components.foundation.startup.EssentialsStartupReport}). Marks
+     * at INFO (logger {@code dk.trustworks.essentials.components.foundation.startup.EssentialsRunReport}). Marks
      * every finding as printed, so {@link #logNewFindings()} does not repeat it.
      */
     public void log() {
@@ -444,7 +444,7 @@ public final class EssentialsStartupReport {
     @Override
     public String toString() {
         var all = getFindings();
-        return "EssentialsStartupReport{" + all.stream().collect(Collectors.groupingBy(Finding::severity, TreeMap::new, Collectors.counting())) + "}";
+        return "EssentialsRunReport{" + all.stream().collect(Collectors.groupingBy(Finding::severity, TreeMap::new, Collectors.counting())) + "}";
     }
 
     /**
@@ -551,10 +551,10 @@ public final class EssentialsStartupReport {
      * nothing more.
      */
     public static final class Registration implements AutoCloseable {
-        private final EssentialsStartupReport report;
+        private final EssentialsRunReport report;
         private       boolean                 closed;
 
-        private Registration(EssentialsStartupReport report) {
+        private Registration(EssentialsRunReport report) {
             this.report = report;
         }
 
@@ -572,12 +572,12 @@ public final class EssentialsStartupReport {
      * the report that was current before; closing it twice, or on another thread, does nothing.
      */
     public static final class Binding implements AutoCloseable {
-        private final EssentialsStartupReport report;
-        private final EssentialsStartupReport previous;
+        private final EssentialsRunReport report;
+        private final EssentialsRunReport previous;
         private final Thread                  thread;
         private       boolean                 closed;
 
-        private Binding(EssentialsStartupReport report, EssentialsStartupReport previous, Thread thread) {
+        private Binding(EssentialsRunReport report, EssentialsRunReport previous, Thread thread) {
             this.report = report;
             this.previous = previous;
             this.thread = thread;
