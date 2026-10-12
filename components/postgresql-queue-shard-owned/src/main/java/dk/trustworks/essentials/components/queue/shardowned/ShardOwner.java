@@ -368,8 +368,16 @@ final class ShardOwner implements LeasedOwner {
         synchronized (stateLock) {
             readFrom = cursor;
         }
-        var rows = storage.readFromCursor(connection, shard, readFrom, settings.readBatchSize(), fence);
+        // Not much more than can be dispatched. Rows past the free permits are not dispatched and the cursor does not
+        // move past them, so they are read again next time: reading readBatchSize (500) rows carried 24 rows - payloads
+        // included - over the wire per delivered message (ShardOwnedReadAmplificationIT). Capping the read at the free
+        // permits alone cut that to 1, but doubled the reads and the drain time: fast handlers free permits while the
+        // loop below is still dispatching, and a larger read keeps feeding them. 64, or twice the free permits for a
+        // consumer with more, kept the read count and drain time and still cut the rows read to about 5 per message.
+        var readLimit = Math.min(settings.readBatchSize(), Math.max(64, 2 * dispatch.availablePermits()));
+        var rows      = storage.readFromCursor(connection, shard, readFrom, readLimit, fence);
         metrics.cursorReads.increment();
+        metrics.cursorRowsRead.add(rows.size());
 
         for (var row : rows) {
             // Before the cursor moves, never after. A row we cannot dispatch must still be there for
@@ -605,7 +613,7 @@ final class ShardOwner implements LeasedOwner {
     }
 
     /**
-     * Failure path. Rare, so it is allowed to be expensive — one HOT update, or a dead-letter move.
+     * Failure path. Rare, so it is allowed to be expensive — one row update (and its index entry), or a dead-letter move.
      */
     private void onFailure(ShardOwnedStorage.Row row, Throwable cause) {
         try (var connection = storage.connection()) {

@@ -58,6 +58,11 @@ public final class ShardOwnerMetrics {
 
     public final LongAdder     delivered                        = new LongAdder();
     public final LongAdder     cursorReads                      = new LongAdder();
+    /**
+     * Rows the unordered lane's cursor reads returned. Divided by {@code delivered} this is the read amplification:
+     * rows carried over the wire, payloads included, per message dispatched
+     */
+    public final LongAdder     cursorRowsRead                   = new LongAdder();
     public final LongAdder     holesObserved                    = new LongAdder();
     public final LongAdder     holesResolved                    = new LongAdder();
     public final LongAdder     holesAbandoned                   = new LongAdder();
@@ -262,6 +267,7 @@ public final class ShardOwnerMetrics {
         var snapshot = new LinkedHashMap<String, Object>();
         snapshot.put("delivered", delivered.sum());
         snapshot.put("cursorReads", cursorReads.sum());
+        snapshot.put("cursorRowsRead", cursorRowsRead.sum());
         snapshot.put("holesObserved", holesObserved.sum());
         snapshot.put("holesResolved", holesResolved.sum());
         snapshot.put("holesAbandoned", holesAbandoned.sum());

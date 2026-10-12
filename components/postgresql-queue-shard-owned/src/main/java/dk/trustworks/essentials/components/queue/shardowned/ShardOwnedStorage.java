@@ -1494,9 +1494,9 @@ public final class ShardOwnedStorage {
     /**
      * Record a retry: bump the attempt count and push the message's visibility out by the backoff.
      * <p>
-     * A HOT update — {@code attempts} and {@code visible_at} are not in the primary key, and the
-     * table is created with {@code fillfactor = 80} so the new row version fits on the same page.
-     * That keeps a retry from touching any index.
+     * Not a HOT update, though it was once described as one: {@code visible_at} is indexed (the {@code _visible}
+     * index the head sweep and delayed messages need), and PostgreSQL only updates a row in place when no indexed
+     * column changes. So a retry also writes an index entry. That is acceptable on a path that only failures take.
      * <p>
      * This write is durability backup, not the retry mechanism. The owner keeps the message in an
      * in-memory timer wheel and re-dispatches from there without reading it back; the row exists so

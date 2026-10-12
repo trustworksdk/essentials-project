@@ -160,6 +160,14 @@ Retry and dead-letter writes now carry the same lease check as acknowledgements.
 longer pushes out the visibility of, or dead-letters, a message its successor is delivering. The successor
 redelivers it.
 
+### 2.3 Shard-owned: the unordered read fetches far fewer rows it cannot dispatch
+
+Each read of the unordered lane fetched up to `readBatchSize` (500) rows, but only as many as there were free
+handlers could be handed out; the rest were fetched again on the next read. That came to about 24 rows, payloads
+included, per delivered message. Reads are now capped at 64 rows, or twice the free handlers if that is more, which
+brings it to about 4. Drain time and the number of reads are unchanged, so this saves database and network I/O,
+which grows with payload size; it does not make draining faster.
+
 ## 3. Documentation
 
 - The polling-optimizer docs describe the new defaults, and the stale-statistics guidance is next to the claim

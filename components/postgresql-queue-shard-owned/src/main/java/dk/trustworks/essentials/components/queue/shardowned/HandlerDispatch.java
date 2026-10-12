@@ -89,6 +89,13 @@ record HandlerDispatch(Executor executor, Semaphore consumerPermits, int capacit
         consumerPermits.release();
     }
 
+    /**
+     * How many more handlers could start now - an upper bound on what one read can dispatch
+     */
+    public int availablePermits() {
+        return consumerPermits.availablePermits();
+    }
+
     public boolean saturated() {
         return consumerPermits.availablePermits() == 0;
     }
