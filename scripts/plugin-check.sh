@@ -28,10 +28,13 @@
 #       Run the named steps exactly as the plugin-docs job does. Under GitHub Actions (GITHUB_ACTIONS=true) a failure
 #       prints the job's ::error:: annotation, locally plain text. One step exits with its own status; several exit
 #       1 if any failed, else 3 if any was skipped.
-#   scripts/plugin-check.sh quick [--base REF] [--chrome PATH]
+#   scripts/plugin-check.sh quick [--base REF] [--chrome PATH] [--jobs N]
 #       Every step in CI order, continuing past failures, then a PASS/FAIL/SKIPPED table; exit 1 if any failed.
 #       render-check.py's exit 3 (no Chrome, nothing checked; the arm64 devcontainer) is SKIPPED, never PASS, and
-#       does not fail a local run; under GitHub Actions it is a failure, as in the job.
+#       does not fail a local run; under GitHub Actions it is a failure, as in the job. --jobs N (also
+#       PLUGIN_CHECK_JOBS; default: the CPU count) runs up to N steps at once, each step's output held back and
+#       printed whole in CI order, so the log and the table read as a serial run's; llm-sync runs alone, first.
+#       --jobs 1 runs one step at a time with live output.
 #   scripts/plugin-check.sh manual
 #       The checks no CI step runs (counts and greps over the plugin): PASS/FAIL where the expectation is mechanical,
 #       READ where the output has to be compared by eye. Exit 1 if any failed.
@@ -88,6 +91,7 @@ export UV_PYTHON=${UV_PYTHON:-3.11}
 mvn_cmd=${MVN:-mvn}
 base=${PLUGIN_CHECK_BASE:-}
 chrome=${PLUGIN_CHECK_CHROME:-}
+max_jobs=${PLUGIN_CHECK_JOBS:-}
 dry_run=false
 no_install=false
 force=false
@@ -454,22 +458,114 @@ print_summary() {
     printf '%s\n' "${summary_rows[@]}"
 }
 
-# run_steps_into_summary STEP... : runs each, records PASS / FAIL / SKIPPED
+# record_step NAME STATUS SECONDS: a step's exit status as PASS / FAIL / SKIPPED
+record_step() {
+    if [ "$2" -eq 0 ]; then
+        record "$1" PASS "$3"
+    elif [ "$2" -eq 3 ] && [ "$1" = render-check ] && ! in_ci; then
+        record "$1" SKIPPED "$3" "no Chrome: nothing was checked (pass --chrome PATH)"
+    else
+        record "$1" FAIL "$3" "exit $2"
+    fi
+}
+
+# run_steps_into_summary STEP... : runs each, one at a time, records PASS / FAIL / SKIPPED
 run_steps_into_summary() {
     local name started status
     for name in "$@"; do
         started=$(date +%s)
         run_step "$name"
         status=$?
-        if [ "$status" -eq 0 ]; then
-            record "$name" PASS $(($(date +%s) - started))
-        elif [ "$status" -eq 3 ] && [ "$name" = render-check ] && ! in_ci; then
-            record "$name" SKIPPED $(($(date +%s) - started)) "no Chrome: nothing was checked (pass --chrome PATH)"
-        else
-            record "$name" FAIL $(($(date +%s) - started)) "exit $status"
-        fi
+        record_step "$name" "$status" $(($(date +%s) - started))
         echo
     done
+}
+
+# Steps nothing else may run beside: every earlier step has finished before one starts, and no later step starts until
+# it has. llm-sync rewrites essentials-plugin/references/llm/ (through *.sync-tmp files) that later steps read. Every
+# other step writes only to its own mkdtemp/TemporaryDirectory paths and reads the tree, so they run side by side.
+exclusive_steps=" llm-sync "
+
+is_exclusive() {
+    case $exclusive_steps in *" $1 "*) return 0 ;; esac
+    return 1
+}
+
+cpu_count() {
+    nproc 2>/dev/null || getconf _NPROCESSORS_ONLN 2>/dev/null || echo 4
+}
+
+# kill_tree PID: TERM a step's subshell and everything under it. Background jobs of a non-interactive bash ignore
+# SIGINT, so a Ctrl-C would otherwise leave the steps running.
+kill_tree() {
+    local child
+    for child in $(pgrep -P "$1" 2>/dev/null); do
+        kill_tree "$child"
+    done
+    kill -TERM "$1" 2>/dev/null
+}
+
+par_tmp=""
+par_pids=()
+
+par_abort() {
+    local pid
+    for pid in "${par_pids[@]}"; do
+        [ -z "$pid" ] || kill_tree "$pid"
+    done
+    [ -z "$par_tmp" ] || rm -rf "$par_tmp"
+    exit 130
+}
+
+# run_steps_parallel JOBS STEP... : as run_steps_into_summary, but up to JOBS steps at once. Each step's output (stdout
+# and stderr) goes to a file and is printed whole once the steps before it have been printed, so the log, the table and
+# the exit status are a serial run's; only the seconds differ.
+run_steps_parallel() {
+    local jobs=$1
+    shift
+    local names=("$@") n=$# next=0 printed=0 running=0 i status secs
+    local done_=()
+    par_pids=()
+    par_tmp=$(mktemp -d "${TMPDIR:-/tmp}/plugin-check.XXXXXX") || die "cannot create a temporary directory"
+    trap par_abort INT TERM
+    while [ "$printed" -lt "$n" ]; do
+        while [ "$next" -lt "$n" ] && [ "$running" -lt "$jobs" ]; do
+            if is_exclusive "${names[$next]}" && [ "$running" -gt 0 ]; then
+                break
+            fi
+            if [ "$next" -gt 0 ] && is_exclusive "${names[$((next - 1))]}" && [ -z "${done_[$((next - 1))]:-}" ]; then
+                break
+            fi
+            # The EXIT trap writes the status even when a step calls exit; .rc appears whole (mv), never half-written.
+            (
+                started=$(date +%s)
+                trap 'echo "$? $(($(date +%s) - started))" >"$par_tmp/$next.rc.part" && mv "$par_tmp/$next.rc.part" "$par_tmp/$next.rc"' EXIT
+                run_step "${names[$next]}" >"$par_tmp/$next.out" 2>&1 </dev/null
+            ) &
+            par_pids[next]=$!
+            next=$((next + 1))
+            running=$((running + 1))
+        done
+        for ((i = printed; i < next; i++)); do
+            if [ -z "${done_[i]:-}" ] && [ -f "$par_tmp/$i.rc" ]; then
+                wait "${par_pids[i]}" 2>/dev/null
+                par_pids[i]=""
+                done_[i]=1
+                running=$((running - 1))
+            fi
+        done
+        while [ "$printed" -lt "$next" ] && [ -n "${done_[printed]:-}" ]; do
+            cat "$par_tmp/$printed.out"
+            read -r status secs <"$par_tmp/$printed.rc"
+            record_step "${names[$printed]}" "$status" "$secs"
+            echo
+            printed=$((printed + 1))
+        done
+        [ "$printed" -ge "$n" ] || sleep 0.1
+    done
+    trap - INT TERM
+    rm -rf "$par_tmp"
+    par_tmp=""
 }
 
 # ---- manual -----------------------------------------------------------------------------------------------------
@@ -754,7 +850,7 @@ cmd_changed() {
 
     echo
     echo "Needs:"
-    [ -z "${needs[quick]+set}" ] || echo "  quick              every plugin-docs step (about a minute, no Docker)"
+    [ -z "${needs[quick]+set}" ] || echo "  quick              every plugin-docs step (side by side: seconds, no Docker)"
     [ -z "${needs[manual]+set}" ] || echo "  manual             the checks no CI step runs (seconds)"
     [ -z "${needs[matrix]+set}" ] || echo "  scaffold matrix    the nine init cells (Docker, minutes)"
     if [ -n "${needs[slices]+set}" ]; then
@@ -1154,13 +1250,15 @@ EOF
 command=$1
 shift
 
-# --base / --chrome for the subcommands that run steps.
+# --base / --chrome for the subcommands that run steps; --jobs for quick alone.
 parse_step_options() {
     rest=()
+    jobs_given=false
     while [ $# -gt 0 ]; do
         case $1 in
             --base) [ $# -ge 2 ] || die "--base needs a ref"; base=$2; shift 2 ;;
             --chrome) [ $# -ge 2 ] || die "--chrome needs a path"; chrome=$2; shift 2 ;;
+            --jobs) [ $# -ge 2 ] || die "--jobs needs a number"; max_jobs=$2; jobs_given=true; shift 2 ;;
             --dry-run) dry_run=true; shift ;;
             --no-install) no_install=true; shift ;;
             --force) force=true; shift ;;
@@ -1179,6 +1277,7 @@ case $command in
         done ;;
     step)
         parse_step_options "$@"
+        ! $jobs_given || die "step: --jobs is a quick option (step runs its names one at a time, as CI does)"
         [ ${#rest[@]} -ge 1 ] || die "step needs at least one name; 'list' shows them"
         for name in "${rest[@]}"; do
             is_step "$name" || die "unknown step '$name'; 'list' shows them"
@@ -1202,8 +1301,14 @@ case $command in
     quick)
         parse_step_options "$@"
         [ ${#rest[@]} -eq 0 ] || die "quick: unexpected argument '${rest[0]}'"
+        [ -n "$max_jobs" ] || max_jobs=$(cpu_count)
+        case $max_jobs in '' | *[!0-9]* | 0) die "quick: --jobs (PLUGIN_CHECK_JOBS) must be a positive number, not '$max_jobs'" ;; esac
         need_tools git uv
-        run_steps_into_summary "${steps[@]}"
+        if [ "$max_jobs" -eq 1 ]; then
+            run_steps_into_summary "${steps[@]}"
+        else
+            run_steps_parallel "$max_jobs" "${steps[@]}"
+        fi
         print_summary quick
         exit "$worst" ;;
     manual)
@@ -1222,6 +1327,7 @@ case $command in
     release)
         parse_step_options "$@"
         [ ${#rest[@]} -eq 0 ] || die "release: unexpected argument '${rest[0]}'"
+        ! $jobs_given || die "release: --jobs is a quick option"
         need_tools git uv
         cmd_release
         exit $? ;;
