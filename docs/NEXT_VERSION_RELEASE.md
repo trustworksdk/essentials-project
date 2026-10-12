@@ -443,6 +443,7 @@ entries are in [`essentials-plugin/CHANGELOG.md`](../essentials-plugin/CHANGELOG
   `GivenWhenThenScenario` does not have; they now use `thenFailsWithExceptionType(...)`.
 - **Docs follow this release's framework changes:** `AppendedEvents`' new module and package, `CommandBus`
   handler listing and its duplicate-handler WARN, and the run report (`EssentialsRunReport`).
+- **Fixed:** `/essentials:slice-enrich` no longer suggests a hand edit for a value `apply` refused.
 
 **`0.60.0-6`**
 

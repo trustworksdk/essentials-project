@@ -123,6 +123,9 @@ targets, with a `-N` suffix for plugin-only releases.
   `CommandBus` lists its handlers and warns about a command type handled twice (`LLM-reactive.md`). The startup report
   is now the run report, `EssentialsRunReport`: runtime findings, a periodic block of new ones
   (`essentials.run-report.new-findings-interval`) and the complete report on shutdown.
+- **Fixed: `/essentials:slice-enrich` suggested a hand edit for a value `apply` refused.** When `apply` refuses a
+  `consistency` on a projection written as a flow mapping, the report now gives the refusal as worded and no
+  workaround; before, it could tell the user to add the value by hand or rewrite the projection in block style.
 
 ## 0.60.0-6 — targets Essentials 0.60.0
 - **`/essentials:upgrade` now moves a project to the plugin's Essentials release, code included.** A

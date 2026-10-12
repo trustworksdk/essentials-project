@@ -176,7 +176,7 @@ before writing it.
 | `slice-enrich.py apply` | What it means here |
 |---|---|
 | 0 | every accepted field written, or already present with the accepted value (`unchanged`, which is what a second run reports). With `--dry-run`, the unified diffs come first, then the `would write` lines |
-| 1 | some entries refused, the rest written. A refusal is a field that became present with another value since `propose` (that manifest is left untouched), a projection written as a flow mapping (its `consistency` is refused, not rewritten), or a result that adds a schema error the file did not already have. Report each as the script words it; never write the refused value by hand |
+| 1 | some entries refused, the rest written. A refusal is a field that became present with another value since `propose` (that manifest is left untouched), a projection written as a flow mapping (its `consistency` is refused, not rewritten), or a result that adds a schema error the file did not already have. Report each as the script words it; never write the refused value by hand, and never tell the user to (no hand edit, no rewriting a flow-mapped projection in block style to get it in) - the refusal line is the whole report on it |
 | 2 | could not run. Nothing is written. Stop and say why |
 
 Skip the second `slice-lint.py` under `--dry-run`. Otherwise compare its findings with Step 2's: a
@@ -185,7 +185,7 @@ file, and do not repair it here.
 
 ## Step 7 — Report
 
-`apply`'s lines, verbatim: per manifest, the fields written or refused. Then, once each:
+`apply`'s lines, verbatim: per manifest, the fields written or refused. A refused field gets no workaround: no hand edit, no offer to rewrite the manifest so `apply` accepts it. Then, once each:
 
 - the journeys accepted, with their member counts;
 - the manifests skipped, and why (`skipped[]`, plus every slice or field the user skipped);
