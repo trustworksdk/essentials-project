@@ -36,6 +36,19 @@
     <name>postgresql-event-store</name>
     <packaging>jar</packaging>
 
+    <properties>
+        <!--
+          Integration-test forks for the reactor's longest chain: postgresql-queue -> postgresql-event-store ->
+          eventsourced-aggregates (this module depends on postgresql-queue, test scope, so it cannot start before it).
+          Those three modules set this; the other two point here. 0.5C = half the CPUs, so a 4-CPU CI runner keeps the
+          root default of 2 and a bigger machine gets more; -Dfailsafe.forkCount=N on the command line still wins.
+          Measured 2026-10-12, 10 CPUs (= 5 forks) / 15 GiB, `mvn verify -DskipUTs`, serial reactor, against fc=2:
+          postgresql-queue 3:53 -> 2:00, postgresql-event-store 8:14 -> 4:20, eventsourced-aggregates 1:39 -> 1:08
+          (two runs, within 3%): 6:20 off a 29:00 phase, about 22%. Peak RAM 9.9 GiB of 15 (was 9.3).
+        -->
+        <failsafe.forkCount>0.5C</failsafe.forkCount>
+    </properties>
+
 
 
     <dependencies>

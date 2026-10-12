@@ -651,6 +651,8 @@
                           Integration tests dominate this build's wall clock, and each fork runs its own Testcontainers
                           containers - so forkCount trades Docker memory for wall clock. Override per machine with
                           -Dfailsafe.forkCount=1 (constrained/CI) or a higher value; over-forking Docker regresses wall clock.
+                          postgresql-queue, postgresql-event-store and eventsourced-aggregates override it to 0.5C (the
+                          reactor's longest chain); why and the numbers: components/postgresql-event-store/pom.xml.
                           Do NOT combine forkCount > 1 with -Dessentials.test.containers.reuse=true: reused containers are
                           shared across forks, and most suites reset their storage in @BeforeEach.
                         -->

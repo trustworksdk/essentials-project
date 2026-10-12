@@ -158,7 +158,10 @@ class ShardOwnedRowLeaseSessionIT {
         try (var queue = queue("row-3")) {
             queue.enqueue(messages(5, "lapse-"));
 
-            var session = queue.openSession(SessionScope.BATCH, Duration.ofMillis(700));
+            // The lease has to outlast everything up to the "consumer sees nothing" assertion below: the
+            // polls, the consumer acquiring its shards and the 500 ms settle. 700 ms did not on a loaded
+            // build (parallel reactor) - the lease lapsed first and the consumer was handed every row.
+            var session = queue.openSession(SessionScope.BATCH, Duration.ofSeconds(5));
             var pulled = new ArrayList<QueueSession.PulledMessage>();
             for (var attempt = 0; attempt < 20 && pulled.size() < 5; attempt++) {
                 pulled.addAll(session.poll(5 - pulled.size()));

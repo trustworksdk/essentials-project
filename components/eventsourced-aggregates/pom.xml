@@ -35,6 +35,11 @@
     <name>eventsourced-aggregates</name>
     <packaging>jar</packaging>
 
+    <properties>
+        <!-- More IT forks on the reactor's longest chain; why and the numbers: components/postgresql-event-store/pom.xml. -->
+        <failsafe.forkCount>0.5C</failsafe.forkCount>
+    </properties>
+
     <dependencies>
         <dependency>
             <groupId>io.micrometer</groupId>
