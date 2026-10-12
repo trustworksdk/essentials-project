@@ -236,9 +236,9 @@ public class EventStreamDeciderCommandHandlerAdapter implements CommandHandler {
     }
 
     /**
-     * Persists a new event to the event store, and hands the {@link PersistedEvent} to {@link AppendedEvents} - so a
-     * caller that wraps {@code commandBus.send(...)} in {@link AppendedEvents#recordDuring(java.util.function.Supplier)}
-     * learns its {@link PersistedEvent#globalEventOrder()}.
+     * Persists a new event to the event store - which hands it to {@link AppendedEvents}, so a caller that wraps
+     * {@code commandBus.send(...)} in {@link AppendedEvents#recordDuring(java.util.function.Supplier)} learns its
+     * {@link PersistedEvent#globalEventOrder()}.
      *
      * @param aggregateId The aggregate ID to persist the event for
      * @param event       The event to persist
@@ -249,8 +249,6 @@ public class EventStreamDeciderCommandHandlerAdapter implements CommandHandler {
                 aggregateId,
                 List.of(event));
         var persistedEvent = persistedEventStream.firstEvent();
-        // Hand the appended event - and with it its GlobalEventOrder - to a caller that records the appends (ES-4)
-        AppendedEvents.appended(persistedEvent);
         log.debug(
                 "[{}:{}] Persisted Event '{}' with Event-Order '{}' and Global-Event-Order '{}'",
                 configuration.aggregateType(),

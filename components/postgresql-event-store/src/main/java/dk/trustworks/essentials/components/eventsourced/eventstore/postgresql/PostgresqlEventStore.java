@@ -314,6 +314,8 @@ public final class PostgresqlEventStore<CONFIG extends AggregateEventStreamConfi
                                                                                                                 operation.getAppendEventsAfterEventOrder(),
                                                                                                                 operation.getEventsToAppend());
                                                                        unitOfWork.registerEventsPersisted(stream.eventList());
+                                                                       // Every append passes here once, whichever decorator or appender started it (ES-4)
+                                                                       AppendedEvents.appended(stream.eventList());
                                                                        return stream;
                                                                    })
                 .proceed();

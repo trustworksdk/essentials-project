@@ -230,7 +230,8 @@ behind the dead letter. Say in the report that the team alerts on `essentials.me
 
 When filling the projector IT's "await the projection" TODO, call `awaitProcessed` on the projector with the **last**
 event the test appended (`appendToStream(...).lastEvent()`, or `AppendedEvents.recordDuring(...)` around the
-`commandBus.send`), then read the row once. Do not poll the view under a guessed timeout. `awaitProcessed` sees only
+`commandBus.send` - import `dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.AppendedEvents`; it
+records every append, decider or repository), then read the row once. Do not poll the view under a guessed timeout. `awaitProcessed` sees only
 the projector in this JVM; poll with an assertion and a deadline only for what it cannot see — a seam downstream of the
 projector, or a projector whose lock another instance holds. An existence check that must not lag (an idempotency
 probe) reads the write side, never this view. See `references/llm/LLM-postgresql-event-store.md` § Testing
