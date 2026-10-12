@@ -26,7 +26,6 @@ import dk.trustworks.essentials.components.foundation.transaction.*;
 import dk.trustworks.essentials.components.foundation.transaction.jdbi.*;
 import dk.trustworks.essentials.components.queue.postgresql.jdbi.*;
 import dk.trustworks.essentials.reactive.*;
-import dk.trustworks.essentials.shared.Exceptions;
 import dk.trustworks.essentials.shared.collections.Lists;
 import org.jdbi.v3.core.Handle;
 import org.jdbi.v3.core.mapper.RowMapper;
@@ -940,7 +939,7 @@ public final class PostgresqlDurableQueues implements BatchMessageFetchingCapabl
             }
 
             if (causeOfEnqueuing.isPresent()) {
-                update.bind("lastDeliveryError", causeOfEnqueuing.map(Exceptions::getStackTrace).get());
+                update.bind("lastDeliveryError", causeOfEnqueuing.map(DeliveryErrorDescription::describe).get());
             } else {
                 update.bindNull("lastDeliveryError", Types.VARCHAR);
             }
@@ -1047,7 +1046,7 @@ public final class PostgresqlDurableQueues implements BatchMessageFetchingCapabl
                                                    var nextDeliveryTimestamp = Instant.now().plus(operation.getDeliveryDelay());
                                                    var result = unitOfWorkFactory.getRequiredUnitOfWork().handle().createQuery(durableQueuesSql.getRetryMessageSql())
                                                                                  .bind("nextDeliveryTimestamp", nextDeliveryTimestamp)
-                                                                                 .bind("lastDeliveryError", operation.getCauseForRetry() != null ? Exceptions.getStackTrace(operation.getCauseForRetry()) : RetryMessage.MANUALLY_REQUESTED_REDELIVERY)
+                                                                                 .bind("lastDeliveryError", operation.getCauseForRetry() != null ? DeliveryErrorDescription.describe(operation.getCauseForRetry()) : RetryMessage.MANUALLY_REQUESTED_REDELIVERY)
                                                                                  .bind("id", operation.queueEntryId)
                                                                                  .map(queuedMessageMapper)
                                                                                  .findOne();
@@ -1130,7 +1129,7 @@ public final class PostgresqlDurableQueues implements BatchMessageFetchingCapabl
                                                                  updateResult.getQueueName(),
                                                                  isOrderedMessage ? "Ordered " : "",
                                                                  operation.getQueueEntryId(),
-                                                                 isOrderedMessage ? "(key: " + ((OrderedMessage) updateResult).getKey() + ", order: " + ((OrderedMessage) updateResult).getOrder() + ")" : "",
+                                                                 isOrderedMessage ? "(key: " + ((OrderedMessage) updateResult.getMessage()).getKey() + ", order: " + ((OrderedMessage) updateResult.getMessage()).getOrder() + ")" : "",
                                                                  nextDeliveryTimestamp,
                                                                  updateResult);
                                                        return result;

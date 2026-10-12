@@ -145,6 +145,15 @@ var durableQueues = PostgresqlDurableQueues.builder()
 
 **Benefits:** Reduced database load, batch fetching, built-in ordering coordination
 
+**Throughput ceiling:** the fetcher polls once per interval and claims at most each queue's free worker slots, so a
+queue handles at most `parallelConsumers / pollingInterval` messages per second - 400 msg/s for 8 consumers at
+20 ms, however fast the handler is. Raise `parallelConsumers` or shorten the interval to go faster.
+
+**Draining tables and stale statistics:** a queue table that drains to empty and is then analyzed tells the planner
+it has no rows. The claim statements are written to stay fast regardless, except for the ordered claim's per-key
+ordering check. If ordered queues regularly drain and refill, keep the table's statistics fresh, for example with
+`ALTER TABLE durable_queues SET (autovacuum_analyze_scale_factor = 0, autovacuum_analyze_threshold = 1000)`.
+
 ### DefaultDurableQueueConsumer (Traditional)
 
 Individual polling threads per consumer:

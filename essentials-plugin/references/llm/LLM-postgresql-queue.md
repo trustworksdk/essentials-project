@@ -446,6 +446,26 @@ PostgresqlDurableQueues.builder()
     .build();
 ```
 
+### Throughput ceiling per consumer
+
+The `CentralizedMessageFetcher` polls once per `centralizedMessageFetcherPollingInterval` and claims at most each
+queue's free worker slots. A queue therefore handles at most `parallelConsumers / pollingInterval` messages per
+second, even with a no-op handler: 8 consumers at 20 ms is 400 msg/s. Above that, the backlog grows. To go faster,
+raise `parallelConsumers` or shorten the interval.
+
+### Stale statistics on a draining queue table
+
+A queue table that drains to empty and is then analyzed (by autovacuum or by hand) records `reltuples = 0` while
+keeping its pages. When the next burst arrives, the planner expects no rows. The claim statements select the rows
+to update by primary-key array, so the unordered claim stays fast (4 ms instead of 185 ms at 20 000 queued
+messages). The ordered claim's per-key `NOT EXISTS` barrier can still degrade to a nested loop over the queue
+(about 1 s at 20 000 ordered messages). If ordered queues regularly drain and refill, keep the table's statistics
+fresh with per-table autovacuum settings:
+
+```sql
+ALTER TABLE durable_queues SET (autovacuum_analyze_scale_factor = 0, autovacuum_analyze_threshold = 1000);
+```
+
 ## Security
 
 ### ⚠️ Critical: SQL Injection Risk
