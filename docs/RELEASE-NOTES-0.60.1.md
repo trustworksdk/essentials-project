@@ -1,13 +1,37 @@
 # Essentials 0.60.1 — Release Notes
 
-0.60.1 is a patch release for the durable queues. It fixes claim performance after a queue table has drained,
-fixes a delivery-mode bug and makes stored delivery errors readable in `postgresql-queue`. In the shard-owned
-engine it fixes four failure-path bugs and makes attempt counts survive a change of owner.
+0.60.1 is a patch release, mostly for the durable queues.
+
+- `postgresql-queue`:
+  - claims stay fast after a queue table has drained;
+  - a busy queue is no longer held to one poll per polling interval;
+  - idle queues back off without LISTEN/NOTIFY;
+  - a delivery-mode bug is fixed;
+  - stored delivery errors are readable.
+- Shard-owned engine: four failure-path bugs are fixed, and attempt counts survive a change of owner.
+- Units of work: a long-standing bug is fixed where the JDBI and event-store units of work never ran `afterCommit`
+  or `afterRollback` callbacks (see §1.0).
 
 There are no API removals, no schema changes and no change to the persisted message format. A few behaviours
 change in ways a test or a dashboard can notice; they are listed first.
 
 ## 1. Behaviour changes — read this first
+
+### 1.0 ⚠️ `afterCommit` / `afterRollback` callbacks now run outside Spring (`foundation`)
+
+`GenericHandleAwareUnitOfWork` is the unit of work behind `JdbiUnitOfWorkFactory` and the event store's
+`EventStoreManagedUnitOfWorkFactory`. Its `commit()` and `rollback()` closed the JDBI handle before calling the
+registered callbacks, and closing the handle cleared them. So no `UnitOfWorkLifecycleCallback#afterCommit` or
+`#afterRollback` ever ran with these factories. The code has been ordered this way since the first commit of this
+repository.
+
+Spring's `SpringTransactionAwareUnitOfWorkFactory` has its own commit path and was never affected. Persisted-event
+callbacks (`PersistedEventsCommitLifecycleCallback`) use a separate mechanism and were never affected either.
+
+They run now. If you build units of work with `JdbiUnitOfWorkFactory` or `EventStoreManagedUnitOfWorkFactory`,
+code that was silently skipped now executes. This includes Essentials' own callbacks, for example
+`AsyncAggregateSnapshotRepository`, which writes snapshots after commit, and the aggregate repositories'
+after-commit and after-rollback handling. Your own callbacks run too.
 
 ### 1.1 `QueuedMessage.getDeliveryMode()` returns `IN_ORDER` for ordered messages (`postgresql-queue`)
 
@@ -61,7 +85,32 @@ back. It also charged every queued row an attempt on every takeover, including c
 
 The `takeoverAttemptBumps` metric therefore drops to zero for clean handovers and to a small number for crashes.
 
+### 1.6 Idle queues back off without LISTEN/NOTIFY (`postgresql-queue`)
+
+Without a `MultiTableChangeListener`, a queue consumed through the `CentralizedMessageFetcher` used to get no
+polling optimizer. Every queue was polled every interval forever, with two claim statements per poll. It now gets a
+`CentralizedQueuePollingOptimizer`, capped at 10× the polling interval (200 ms at the default 20 ms). Measured on an
+idle queue: 28 queue-table scans in 3 s, against about 300 claim statements before.
+
+- A message queued by this node resets the backoff when its transaction commits.
+- A message queued by another node waits at most the cap after the queue has been idle.
+- A `centralizedQueuePollingOptimizerFactory` you set is now used even without a listener. Before, it was ignored.
+- To opt out, use `setCentralizedQueuePollingOptimizerFactory(queueName -> QueuePollingOptimizer.None())`.
+
+The Spring Boot starter always creates a listener, so Spring applications see no change.
+
 ## 2. Fixes
+
+### 2.0 A busy queue is no longer held to one poll per interval (`postgresql-queue`)
+
+A poll claims at most a queue's free worker slots. Polling once per interval capped a queue at
+`parallelConsumers / pollingInterval` messages per second however fast its handler was: 400 msg/s for 8 consumers at
+the default 20 ms. A queue whose poll filled every free slot is now polled again as soon as half its workers are free.
+Measured: 2 000 messages, 8 consumers, 200 ms polling drained in 3.3 s, against 50 s before
+(`PostgresqlDurableQueuesSaturationIT`).
+
+A poll whose ordered claim finds fewer messages than there are free slots also fills the remaining slots with
+unordered messages in the same poll. Before, the unordered messages waited for the next poll.
 
 ### 2.1 Claims stay fast after a queue table drains (`postgresql-queue`)
 
@@ -83,6 +132,6 @@ redelivers it.
 
 ## 3. Documentation
 
-- The `CentralizedMessageFetcher`'s throughput ceiling, `parallelConsumers / pollingInterval` per queue, is now
-  documented next to the polling settings.
+- The polling-optimizer docs describe the new defaults, and the stale-statistics guidance is next to the claim
+  settings.
 - The `essentials` Claude Code plugin is updated to `0.60.0-6` with the documentation above.

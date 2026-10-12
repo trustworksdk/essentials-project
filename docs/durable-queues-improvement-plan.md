@@ -10,7 +10,7 @@ Compatibility rule for every item: central APIs change only additively in a mino
 | --- | --- |
 | 1. Claim by primary key | Reproduced for the unordered claim, but only when the table was **drained and then analyzed** (`reltuples = 0`, `relpages > 0`). A table analyzed when brand new and empty plans fine. The rewrite does little for the ordered claim (see A2). |
 | 2. Fixed-rate polling cap | Confirmed in code: `CentralizedMessageFetcher.java:158`, with slots capped by `calculateAvailableWorkerSlotsPerQueue`. |
-| 3. Empty queues polled at full rate | Confirmed for the builder without a `MultiTableChangeListener`. Each poll also runs `resetMessagesStuckBeingDeliveredAcrossMultipleQueues`, which the report missed. The Spring starter always creates a listener, so Spring users already have the optimizer. |
+| 3. Empty queues polled at full rate | Confirmed for the builder without a `MultiTableChangeListener`. The Spring starter always creates a listener, so Spring users already have the optimizer. (An earlier version of this plan said each poll also ran the stuck-message reset. That was wrong: the method is called on every poll, but it runs its SQL at most once per `messageHandlingTimeout` per queue.) |
 | 4. Virtual threads | The code claim is correct, but the likely bottleneck is connections, not threads (see D). |
 | 5. `getDeliveryMode()` | Confirmed: `DefaultQueuedMessage.java:111`. |
 | 6. Dead-letter stack trace, `minimumIdle` | Confirmed: `UnitOfWorkFactory.java:124` wraps the exception, and nothing overrides HikariCP's `minimumIdle`. |
@@ -40,6 +40,18 @@ Ordered claim under the same conditions: 1 026 ms with the current form, 827 ms 
 | F4 | Done: a new SPI outcome, `spi.RedeliveryRequested(delay)`, which the adapter's `markForRedeliveryIn` uses. The requested delay is honoured, the attempt counts, and the request never dead-letters the message, matching the classic queue. |
 
 `ShardOwnedFailurePathIT` covers F2–F4 (6 tests). All 6 fail against the previous code.
+
+### Second round
+
+| Item | Status |
+| --- | --- |
+| B1 | Done. A queue whose poll filled every free slot is polled again, for that queue only, as soon as half its workers are free. `PostgresqlDurableQueuesSaturationIT` (2 000 messages, 8 consumers, 200 ms polling): 49 948 ms before, which is the predicted 50 000 ms ceiling, and 3 288 ms after. |
+| C1 | Done. The centralized fetcher always uses a `CentralizedQueuePollingOptimizer`, capped at 10× the polling interval without a listener and 20× with one. Opt out with `QueuePollingOptimizer.None()`. Idle queue at 20 ms polling: 28 queue-table scans in 3 s, against about 300 claim statements before. |
+| C2 | Done. A message queued by this node resets its consumer's backoff in the enqueuing unit of work's `afterCommit`. |
+| C3 | Open. |
+| C4 | Partial fill done: the unordered claim fills whatever the ordered claim left. The stuck-reset item is void, since it was already throttled. Skipping the ordered claim on queues without ordered messages is open. |
+| New: UoW callbacks | C2's test exposed a long-standing bug. `GenericHandleAwareUnitOfWork` (behind `JdbiUnitOfWorkFactory` and `EventStoreManagedUnitOfWorkFactory`) closed its handle, which clears the registered callbacks, before calling `afterCommit`/`afterRollback`, so neither ever ran. Spring's factory was unaffected. Fixed by taking a snapshot before `close()`; `GenericHandleAwareUnitOfWorkLifecycleTest` covers it. This switches on callbacks that never ran outside Spring (async snapshots, aggregate repositories), so it is the headline behaviour change in the 0.60.1 notes. |
+
 
 ## Workstream A — Claim SQL (classic `postgresql-queue`)
 
