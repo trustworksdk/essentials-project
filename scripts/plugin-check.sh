@@ -38,12 +38,16 @@
 #   scripts/plugin-check.sh manual
 #       The checks no CI step runs (counts and greps over the plugin): PASS/FAIL where the expectation is mechanical,
 #       READ where the output has to be compared by eye. Exit 1 if any failed.
-#   scripts/plugin-check.sh scaffold [matrix|slices|all] [--no-install] [--force] [--dry-run] [plugin-scaffold args]
-#       The scaffold builds the `scaffold ·` CI jobs run (default: all, i.e. matrix then slices). First the reactor
-#       install `mvn clean install -DskipTests -DskipDependencyCheck=true` from the repository root (--no-install skips
-#       it), then scripts/plugin-scaffold.sh with the remaining arguments (--cell/--case, --jobs, --work, ...).
-#       Refuses when mvn, java or Docker is missing (Docker not needed with --compile-only) and, before the install,
-#       when another Maven process is running (--force overrides): two builds in one target/ corrupt each other.
+#   scripts/plugin-check.sh scaffold [matrix|slices|all] [--no-install|--full-install] [--force] [--dry-run]
+#                                    [--jobs N] [plugin-scaffold args]
+#       The scaffold builds the `scaffold ·` CI jobs run (default: all, the nine cells and the ten slice cases in one
+#       queue). First the reactor install, `scripts/plugin-scaffold.sh install`: the modules the generated projects
+#       depend on and what they need, the subset CI's scaffold-install builds (--full-install: the whole reactor;
+#       --no-install skips it). Then scripts/plugin-scaffold.sh with the remaining arguments (--cell/--case, --work,
+#       ...). --jobs N (also PLUGIN_CHECK_SCAFFOLD_JOBS; default: half the CPU count) builds up to N cases at once,
+#       each verify with its own database container. Refuses when mvn, java or Docker is missing (Docker not needed
+#       with --compile-only) and, before the install, when another Maven process is running (--force overrides): two
+#       builds in one target/ corrupt each other.
 #   scripts/plugin-check.sh evals [--changed [BASE]] [--case GLOB] [--runs N] [--dry-run] [-- claude args]
 #       evals/build.py --check, then `claude plugin eval` with the flags of essentials-plugin/evals/README.md § Run it.
 #       --changed: one run per eval case whose directory differs from BASE (default: merge base with origin/main),
@@ -53,10 +57,14 @@
 #       Which of the above the change since BASE (default: merge base with origin/main) needs, and why: every changed
 #       path mapped to the essentials-plugin/CLAUDE.md companion row (or scaffold-job input) it triggers, then the
 #       commands to run. Committed, staged, unstaged and untracked changes all count. Deterministic; runs nothing.
-#   scripts/plugin-check.sh release [--base REF] [--chrome PATH] [--no-install] [--force] [--dry-run]
+#   scripts/plugin-check.sh release [--base REF] [--chrome PATH] [--no-install|--full-install] [--force] [--no-evals]
+#                                   [--dry-run]
 #       quick, manual, scaffold all, evals over every case, `claude plugin validate` for the plugin and the marketplace,
-#       and CHANGELOG.md's top heading against plugin.json's version and the essentials.version pin. Continues past
-#       failures; a SKIPPED render-check fails a release (it needs a Chrome). Then prints what no script can check.
+#       and CHANGELOG.md's top heading against plugin.json's version and the essentials.version pin. The scaffold (the
+#       one part that runs Maven) runs beside the others, which run one after another; each part's output is held back
+#       and printed whole, in that order, so the log and the summary read as a serial run's. Continues past failures;
+#       a SKIPPED render-check fails a release (it needs a Chrome), and so does --no-evals (every part but the evals,
+#       e.g. when they ran on their own). Then prints what no script can check.
 #
 # --base REF is what the ess-ids and plugin-version steps compare with (also PLUGIN_CHECK_BASE). CI passes HEAD^1, the
 # base side of a pull request's merge commit or the previous commit on a push; maven.yml says so on those two lines,
@@ -92,8 +100,11 @@ mvn_cmd=${MVN:-mvn}
 base=${PLUGIN_CHECK_BASE:-}
 chrome=${PLUGIN_CHECK_CHROME:-}
 max_jobs=${PLUGIN_CHECK_JOBS:-}
+scaffold_jobs=${PLUGIN_CHECK_SCAFFOLD_JOBS:-}
 dry_run=false
 no_install=false
+full_install=false
+no_evals=false
 force=false
 verbose=false
 
@@ -507,6 +518,7 @@ kill_tree() {
 
 par_tmp=""
 par_pids=()
+rel_tmp=""
 
 par_abort() {
     local pid
@@ -959,6 +971,14 @@ scaffold_concurrency_guard() {
     fi
 }
 
+# check_scaffold_options SUBCOMMAND: dies on a contradiction or a bad job count, before anything runs.
+check_scaffold_options() {
+    ! { $no_install && $full_install; } || die "$1: --no-install and --full-install are exclusive"
+    case $scaffold_jobs in
+        *[!0-9]* | 0*) die "$1: --jobs (PLUGIN_CHECK_SCAFFOLD_JOBS) must be a positive number, not '$scaffold_jobs'" ;;
+    esac
+}
+
 # run_scaffold MODE ARG... -> exit status of the worst build
 run_scaffold() {
     local mode=$1
@@ -973,8 +993,12 @@ run_scaffold() {
     done
     scaffold_preflight "$compile_only"
 
-    local install=("$mvn_cmd" clean install -DskipTests -DskipDependencyCheck=true)
-    [ -z "$maven_repo" ] || install+=("-Dmaven.repo.local=$maven_repo")
+    # The subset CI's scaffold-install builds, from the same command (plugin-scaffold.sh install); --full-install for
+    # the whole reactor. Measured on a 10-CPU devcontainer, the subset with -T 1C and no versions:display-* reports
+    # takes ~25 s; the former full serial install took ~120 s.
+    local install=(scripts/plugin-scaffold.sh install)
+    ! $full_install || install+=(--full)
+    [ -z "$maven_repo" ] || install+=(--maven-repo "$maven_repo")
     if ! $no_install; then
         scaffold_concurrency_guard
         if $dry_run; then
@@ -984,17 +1008,18 @@ run_scaffold() {
         fi
     fi
 
-    local modes=("$mode") m status=0 rc
-    [ "$mode" != all ] || modes=(matrix slices)
-    for m in "${modes[@]}"; do
-        if $dry_run; then
-            show scripts/plugin-scaffold.sh "$m" "${args[@]}"
-            continue
-        fi
-        x "$repo" scripts/plugin-scaffold.sh "$m" "${args[@]}"
-        rc=$?
-        [ "$rc" -le "$status" ] || status=$rc
-    done
+    # Half the CPUs: all 19 cases took 170 s at 1 job, 90 s at 2, 67 s at 3, 48-51 s at 5 and 45 s at 8 on a 10-CPU,
+    # 16 GB machine, where 8 jobs took the memory within 2.5 GB of full and 5 left 5 GB free.
+    local jobs=$scaffold_jobs
+    [ -n "$jobs" ] || jobs=$(($(cpu_count) / 2))
+    [ "$jobs" -ge 1 ] || jobs=1
+    local status=0
+    if $dry_run; then
+        show scripts/plugin-scaffold.sh "$mode" --jobs "$jobs" "${args[@]}"
+    else
+        x "$repo" scripts/plugin-scaffold.sh "$mode" --jobs "$jobs" "${args[@]}"
+        status=$?
+    fi
     if [ "$mode" != slices ]; then
         echo "plugin-check scaffold: the frontend legs are not automated; run them by hand in each cell with a frontend"
         echo "  (essentials-plugin/CLAUDE.md § Before committing)."
@@ -1011,6 +1036,8 @@ cmd_scaffold() {
     while [ $# -gt 0 ]; do
         case $1 in
             --no-install) no_install=true ;;
+            --full-install) full_install=true ;;
+            --jobs) [ $# -ge 2 ] || die "--jobs needs a number"; scaffold_jobs=$2; shift ;;
             --force) force=true ;;
             --dry-run) dry_run=true ;;
             -h | --help) usage 0 ;;
@@ -1018,6 +1045,7 @@ cmd_scaffold() {
         esac
         shift
     done
+    check_scaffold_options scaffold
     run_scaffold "$mode" "${pass[@]}"
 }
 
@@ -1180,50 +1208,157 @@ check_changelog() {
     esac
 }
 
+# The parts of a release, in the order their output and summary rows are printed. `scaffold` is the one part that runs
+# Maven, so it runs on its own beside the others, which run one after another: never two Maven builds in one checkout,
+# and nothing else here writes where the scaffold reads (the quick steps write to their own temporary directories,
+# the evals to their sandboxes and evals/results/).
+release_parts=(quick manual scaffold evals validate-plugin validate-marketplace changelog)
+release_lane=(quick manual evals validate-plugin validate-marketplace changelog)
+
+release_part_quick() {
+    local jobs
+    jobs=$(cpu_count)
+    if [ "$jobs" -le 1 ]; then
+        run_steps_into_summary "${steps[@]}"
+    else
+        run_steps_parallel "$jobs" "${steps[@]}"
+    fi
+}
+
+release_part_manual() {
+    manual_checks
+}
+
+release_part_scaffold() {
+    local started rc
+    started=$(date +%s)
+    (run_scaffold all)
+    rc=$?
+    if [ "$rc" -eq 0 ]; then record "scaffold all" PASS $(($(date +%s) - started)); else record "scaffold all" FAIL $(($(date +%s) - started)) "exit $rc"; fi
+}
+
+release_part_evals() {
+    local started rc
+    if $no_evals; then
+        echo "plugin-check release: --no-evals, so no eval ran"
+        record "evals (all cases)" SKIPPED 0 "--no-evals: a release needs them (scripts/plugin-check.sh evals)"
+        worst=1
+        return
+    fi
+    started=$(date +%s)
+    (cmd_evals)
+    rc=$?
+    if [ "$rc" -eq 0 ]; then record "evals (all cases)" PASS $(($(date +%s) - started)); else record "evals (all cases)" FAIL $(($(date +%s) - started)) "exit $rc; read the report"; fi
+}
+
+release_validate() {
+    local started
+    started=$(date +%s)
+    if x "$repo" claude plugin validate "$1"; then
+        record "validate $1" PASS $(($(date +%s) - started))
+    else
+        record "validate $1" FAIL $(($(date +%s) - started))
+    fi
+}
+
+release_part_validate-plugin() {
+    release_validate essentials-plugin
+}
+
+release_part_validate-marketplace() {
+    release_validate .
+}
+
+release_part_changelog() {
+    if check_changelog; then record changelog-version PASS 0; else record changelog-version FAIL 0; fi
+}
+
+# release_part NAME: runs release_part_NAME in a subshell with its own summary rows. Its output goes to
+# $rel_tmp/NAME.out, its rows to NAME.rows, and last its status to NAME.rc, written whole (mv), so NAME.rc existing
+# means the part is done. The status is the worse of the function's exit status and what it recorded.
+release_part() {
+    local part=$1
+    (
+        summary_rows=()
+        worst=0
+        trap 'rc=$?; [ "$rc" -ge "$worst" ] || rc=$worst; printf "%s\n" "${summary_rows[@]}" >"$rel_tmp/$part.rows"; echo "$rc" >"$rel_tmp/$part.rc.part" && mv "$rel_tmp/$part.rc.part" "$rel_tmp/$part.rc"' EXIT
+        "release_part_$part" >"$rel_tmp/$part.out" 2>&1 </dev/null
+    )
+}
+
 cmd_release() {
-    local started rc skipped=false
+    local skipped=false row
     if $dry_run; then
-        echo "plugin-check release --dry-run: would run"
+        echo "plugin-check release --dry-run: would run, the scaffold beside the rest"
+        echo " the scaffold:"
+        run_scaffold all | sed 's/^/  /'
+        echo " beside it, one after another:"
         echo "  scripts/plugin-check.sh quick${base:+ --base $base}${chrome:+ --chrome $chrome}"
         echo "  scripts/plugin-check.sh manual"
-        run_scaffold all | sed 's/^/  /'
-        cmd_evals --dry-run | sed 's/^/  /'
+        if $no_evals; then
+            echo "  (no evals: --no-evals; the release fails without them)"
+        else
+            cmd_evals --dry-run | sed 's/^/  /'
+        fi
         echo "  (cd $repo && claude plugin validate essentials-plugin)"
         echo "  (cd $repo && claude plugin validate .)"
         echo "  CHANGELOG.md top heading == plugin.json version == essentials.version pin [-N]"
+        echo " then each part's output and the summary, in the order quick, manual, scaffold, evals, validate, changelog"
         return 0
     fi
     command -v claude >/dev/null 2>&1 || die "claude is not on PATH; a release runs the evals and claude plugin validate"
 
-    run_steps_into_summary "${steps[@]}"
+    # Its own variable: the quick part's run_steps_parallel sets and clears par_tmp inside the part's subshell. The
+    # parent's par_tmp is only for par_abort to clean up after a Ctrl-C.
+    rel_tmp=$(mktemp -d "${TMPDIR:-/tmp}/plugin-check-release.XXXXXX") || die "cannot create a temporary directory"
+    par_tmp=$rel_tmp
+    par_pids=()
+    trap par_abort INT TERM
+    release_part scaffold &
+    par_pids+=($!)
+    local scaffold_pid=$!
+    (
+        for part in "${release_lane[@]}"; do
+            release_part "$part"
+        done
+    ) &
+    par_pids+=($!)
+    local lane_pid=$! part owner rc rows
+    for part in "${release_parts[@]}"; do
+        owner=$lane_pid
+        [ "$part" != scaffold ] || owner=$scaffold_pid
+        [ -f "$rel_tmp/$part.rc" ] || echo "plugin-check release: waiting for $part (tail -f $rel_tmp/$part.out)" >&2
+        while [ ! -f "$rel_tmp/$part.rc" ] && kill -0 "$owner" 2>/dev/null; do
+            sleep 1
+        done
+        if [ ! -f "$rel_tmp/$part.rc" ]; then
+            [ ! -f "$rel_tmp/$part.out" ] || cat "$rel_tmp/$part.out"
+            record "$part" FAIL 0 "no result: the part ended without writing one"
+            echo
+            continue
+        fi
+        cat "$rel_tmp/$part.out"
+        echo
+        read -r rc <"$rel_tmp/$part.rc"
+        rows=0
+        while IFS= read -r row; do
+            [ -n "$row" ] || continue
+            summary_rows+=("$row")
+            rows=$((rows + 1))
+        done <"$rel_tmp/$part.rows"
+        if [ "$rc" -ne 0 ]; then
+            worst=1
+            [ "$rows" -gt 0 ] || record "$part" FAIL 0 "exit $rc"
+        fi
+    done
+    wait
+    trap - INT TERM
+    rm -rf "$rel_tmp"
+    rel_tmp=""
+    par_tmp=""
     for row in "${summary_rows[@]}"; do
         case $row in *render-check*SKIPPED*) skipped=true ;; esac
     done
-    manual_checks
-
-    started=$(date +%s)
-    run_scaffold all
-    rc=$?
-    if [ "$rc" -eq 0 ]; then record "scaffold all" PASS $(($(date +%s) - started)); else record "scaffold all" FAIL $(($(date +%s) - started)) "exit $rc"; fi
-
-    started=$(date +%s)
-    local saved=("${summary_rows[@]}") saved_worst=$worst
-    cmd_evals
-    rc=$?
-    summary_rows=("${saved[@]}")
-    worst=$saved_worst
-    if [ "$rc" -eq 0 ]; then record "evals (all cases)" PASS $(($(date +%s) - started)); else record "evals (all cases)" FAIL $(($(date +%s) - started)) "exit $rc; read the report"; fi
-
-    for target in essentials-plugin .; do
-        started=$(date +%s)
-        if x "$repo" claude plugin validate "$target"; then
-            record "validate $target" PASS $(($(date +%s) - started))
-        else
-            record "validate $target" FAIL $(($(date +%s) - started))
-        fi
-    done
-
-    if check_changelog; then record changelog-version PASS 0; else record changelog-version FAIL 0; fi
 
     if $skipped; then
         worst=1
@@ -1261,6 +1396,8 @@ parse_step_options() {
             --jobs) [ $# -ge 2 ] || die "--jobs needs a number"; max_jobs=$2; jobs_given=true; shift 2 ;;
             --dry-run) dry_run=true; shift ;;
             --no-install) no_install=true; shift ;;
+            --full-install) full_install=true; shift ;;
+            --no-evals) no_evals=true; shift ;;
             --force) force=true; shift ;;
             -h | --help) usage 0 ;;
             *) rest+=("$1"); shift ;;
@@ -1327,7 +1464,8 @@ case $command in
     release)
         parse_step_options "$@"
         [ ${#rest[@]} -eq 0 ] || die "release: unexpected argument '${rest[0]}'"
-        ! $jobs_given || die "release: --jobs is a quick option"
+        ! $jobs_given || die "release: --jobs is a quick and scaffold option (PLUGIN_CHECK_SCAFFOLD_JOBS sets the scaffold's)"
+        check_scaffold_options release
         need_tools git uv
         cmd_release
         exit $? ;;

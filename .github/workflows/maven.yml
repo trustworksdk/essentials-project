@@ -255,10 +255,11 @@ jobs:
   # cells and the slice templates and fixtures on rendered host projects. In parallel with `verify`, whose wall clock
   # stays untouched. The generated projects depend on DEV-SNAPSHOT artifacts, which are not on Central, so this job
   # installs the reactor subset they name once and hands it on as an artifact. The subset is read from the init pom
-  # templates, so a template that starts using another module installs it without a workflow edit. Each scaffold job
-  # keeps its own Maven cache (key: its job id), so none of them replaces the one `verify` restores.
-  # These jobs call scripts/plugin-scaffold.sh directly rather than `plugin-check.sh scaffold`: that wrapper is the local
-  # entry point (full reactor install, then both modes), and CI has its own subset install, artifact hand-off and caches.
+  # templates (scripts/plugin-scaffold.sh modules), so a template that starts using another module installs it without
+  # a workflow edit. Each scaffold job keeps its own Maven cache (key: its job id), so none of them replaces the one
+  # `verify` restores. These jobs call scripts/plugin-scaffold.sh directly rather than `plugin-check.sh scaffold`: that
+  # wrapper is the local entry point (the same subset install, then every case in one queue), and CI has its artifact
+  # hand-off and caches.
   scaffold-install:
     name: scaffold · install the reactor subset
     runs-on: ubuntu-latest
@@ -276,21 +277,12 @@ jobs:
           key: scaffold-m2-${{ github.job }}-${{ hashFiles('**/pom.xml') }}
           restore-keys: scaffold-m2-${{ github.job }}-
 
+      # The subset and the Maven command live in scripts/plugin-scaffold.sh (`modules`, `install`), which
+      # `plugin-check.sh scaffold` runs locally too.
       - name: Install the modules the generated projects depend on
         run: |
-          modules=$(python3 - <<'PY'
-          import re
-          ids = set()
-          for f in ("pom.xml.template", "backend/pom.xml.template"):
-              text = open("essentials-plugin/references/init-assets/project/" + f).read()
-              for block in re.findall(r"<dependency>(.*?)</dependency>", text, re.S):
-                  if "<groupId>dk.trustworks.essentials" in block:
-                      ids.update(re.findall(r"<artifactId>([\w.-]+)</artifactId>", block))
-          print(",".join(":" + a for a in sorted(ids)))
-          PY
-          )
-          echo "modules: $modules (and what they need, -am)"
-          mvn -B -ntp install -DskipTests -DskipDependencyCheck=true -am -pl "$modules"
+          echo "modules: $(scripts/plugin-scaffold.sh modules) (and what they need, -am)"
+          scripts/plugin-scaffold.sh install
           tar -C ~/.m2/repository -cf "$RUNNER_TEMP/essentials-reactor.tar" dk/trustworks/essentials
           # Not cached: the next run installs fresh ones.
           rm -rf ~/.m2/repository/dk/trustworks/essentials
